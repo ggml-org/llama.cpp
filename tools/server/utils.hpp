@@ -571,7 +571,7 @@ struct oaicompat_parser_options {
     bool use_jinja;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
-    const std::map<std::string,std::string> chat_template_kwargs;
+    std::map<std::string,std::string> chat_template_kwargs;
     common_chat_templates * tmpls;
     bool allow_image;
     bool allow_audio;
@@ -750,7 +750,7 @@ static json oaicompat_chat_params_parse(
     }
 
     auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
-    for (const auto & item : default_template_kwargs) {
+    for (const auto & item : opt.chat_template_kwargs) {
         inputs.chat_template_kwargs[item.first] = item.second;
     }
     for (const auto & item : chat_template_kwargs_object.items()) {
