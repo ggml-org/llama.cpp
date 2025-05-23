@@ -145,8 +145,6 @@ struct llama_hparams {
     enum llama_rope_type         rope_type               = LLAMA_ROPE_TYPE_NONE;
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
-    llama_hparams();
-
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
     // note that if n_pattern == 0, all layers are SWA
     //           if n_pattern == 1, all layers are dense

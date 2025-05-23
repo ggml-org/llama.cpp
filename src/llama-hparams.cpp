@@ -2,10 +2,6 @@
 
 #include "ggml.h"
 
-llama_hparams::llama_hparams() {
-    swa_layers.fill(false);
-}
-
 void llama_hparams::set_swa_pattern(uint32_t n_pattern) {
     for (uint32_t il = 0; il < n_layer; ++il) {
         swa_layers[il] = n_pattern == 0 || (il % n_pattern < (n_pattern - 1));
