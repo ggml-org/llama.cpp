@@ -1215,6 +1215,11 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     split.backend_id = i_gpu;
                     split.graph = *ggml_new_graph_custom(sched->ctx, split_main.graph.size, /*grads =*/ false);
                     dup_graph(sched->ctx, &split_main.graph, &split.graph, /*deep =*/ false);
+
+                    for (int n = 0; n < split.graph.n_nodes; n++) {
+                        ggml_format_name(split.graph.nodes[n], "%s (parallel %d)", split.graph.nodes[n]->name, i_gpu);
+                    }
+
                     splits_tp.push_back(split);
                 }
             }
