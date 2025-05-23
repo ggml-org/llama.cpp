@@ -13,7 +13,7 @@ import {
   SquaresPlusIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
-import { ConfirmModal, AlertModal } from './CustomModals';
+import { useModals } from './ModalProvider';
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
@@ -278,39 +278,20 @@ export default function SettingDialog({
 }) {
   const { config, saveConfig } = useAppContext();
   const [sectionIdx, setSectionIdx] = useState(0);
-  const [showResetConfirm, setShowResetConfirm] = useState(false);
-  const [alertState, setAlertState] = useState({
-    isOpen: false,
-    message: '',
-  });
 
   // clone the config object to prevent direct mutation
   const [localConfig, setLocalConfig] = useState<typeof CONFIG_DEFAULT>(
     JSON.parse(JSON.stringify(config))
   );
+  const { showConfirm, showAlert } = useModals();
 
-  const resetConfig = () => {
-    setShowResetConfirm(true);
+  const resetConfig = async () => {
+    if (await showConfirm('Are you sure you want to reset all settings?')) {
+      setLocalConfig(CONFIG_DEFAULT);
+    }
   };
 
-  const handleResetConfirm = () => {
-    setLocalConfig(CONFIG_DEFAULT);
-    setShowResetConfirm(false);
-  };
-
-  const handleResetCancel = () => {
-    setShowResetConfirm(false);
-  };
-
-  const showAlert = (message: string) => {
-    setAlertState({ isOpen: true, message });
-  };
-
-  const closeAlert = () => {
-    setAlertState({ isOpen: false, message: '' });
-  };
-
-  const handleSave = () => {
+  const handleSave = async () => {
     // copy the local config to prevent direct mutation
     const newConfig: typeof CONFIG_DEFAULT = JSON.parse(
       JSON.stringify(localConfig)
@@ -323,14 +304,14 @@ export default function SettingDialog({
       const mustBeNumeric = isNumeric(CONFIG_DEFAULT[key as SettKey]);
       if (mustBeString) {
         if (!isString(value)) {
-          showAlert(`Value for ${key} must be string`);
+          await showAlert(`Value for ${key} must be string`);
           return;
         }
       } else if (mustBeNumeric) {
         const trimmedValue = value.toString().trim();
         const numVal = Number(trimmedValue);
         if (isNaN(numVal) || !isNumeric(numVal) || trimmedValue.length === 0) {
-          showAlert(`Value for ${key} must be numeric`);
+          await showAlert(`Value for ${key} must be numeric`);
           return;
         }
         // force conversion to number
@@ -338,7 +319,7 @@ export default function SettingDialog({
         newConfig[key] = numVal;
       } else if (mustBeBoolean) {
         if (!isBoolean(value)) {
-          showAlert(`Value for ${key} must be boolean`);
+          await showAlert(`Value for ${key} must be boolean`);
           return;
         }
       } else {
@@ -356,143 +337,130 @@ export default function SettingDialog({
   };
 
   return (
-    <>
-      <ConfirmModal
-        isOpen={showResetConfirm}
-        onClose={handleResetCancel}
-        onConfirm={handleResetConfirm}
-        message="Are you sure you want to reset all settings?"
-      />
-      <AlertModal
-        isOpen={alertState.isOpen}
-        onClose={closeAlert}
-        message={alertState.message}
-      />
-      <dialog
-        className={classNames({ modal: true, 'modal-open': show })}
-        aria-label="Settings dialog"
-      >
-        <div className="modal-box w-11/12 max-w-3xl">
-          <h3 className="text-lg font-bold mb-6">Settings</h3>
-          <div className="flex flex-col md:flex-row h-[calc(90vh-12rem)]">
-            {/* Left panel, showing sections - Desktop version */}
-            <div
-              className="hidden md:flex flex-col items-stretch pr-4 mr-4 border-r-2 border-base-200"
-              role="complementary"
-              aria-description="Settings sections"
-              tabIndex={0}
-            >
-              {SETTING_SECTIONS.map((section, idx) => (
-                <button
-                  key={idx}
-                  className={classNames({
-                    'btn btn-ghost justify-start font-normal w-44 mb-1': true,
-                    'btn-active': sectionIdx === idx,
-                  })}
-                  onClick={() => setSectionIdx(idx)}
-                  dir="auto"
-                >
-                  {section.title}
-                </button>
-              ))}
-            </div>
-
-            {/* Left panel, showing sections - Mobile version */}
-            {/* This menu is skipped on a11y, otherwise it's repeated the desktop version */}
-            <div
-              className="md:hidden flex flex-row gap-2 mb-4"
-              aria-disabled={true}
-            >
-              <details className="dropdown">
-                <summary className="btn bt-sm w-full m-1">
-                  {SETTING_SECTIONS[sectionIdx].title}
-                </summary>
-                <ul className="menu dropdown-content bg-base-100 rounded-box z-[1] w-52 p-2 shadow">
-                  {SETTING_SECTIONS.map((section, idx) => (
-                    <div
-                      key={idx}
-                      className={classNames({
-                        'btn btn-ghost justify-start font-normal': true,
-                        'btn-active': sectionIdx === idx,
-                      })}
-                      onClick={() => setSectionIdx(idx)}
-                      dir="auto"
-                    >
-                      {section.title}
-                    </div>
-                  ))}
-                </ul>
-              </details>
-            </div>
-
-            {/* Right panel, showing setting fields */}
-            <div className="grow overflow-y-auto px-4">
-              {SETTING_SECTIONS[sectionIdx].fields.map((field, idx) => {
-                const key = `${sectionIdx}-${idx}`;
-                if (field.type === SettingInputType.SHORT_INPUT) {
-                  return (
-                    <SettingsModalShortInput
-                      key={key}
-                      configKey={field.key}
-                      value={localConfig[field.key]}
-                      onChange={onChange(field.key)}
-                      label={field.label as string}
-                    />
-                  );
-                } else if (field.type === SettingInputType.LONG_INPUT) {
-                  return (
-                    <SettingsModalLongInput
-                      key={key}
-                      configKey={field.key}
-                      value={localConfig[field.key].toString()}
-                      onChange={onChange(field.key)}
-                      label={field.label as string}
-                    />
-                  );
-                } else if (field.type === SettingInputType.CHECKBOX) {
-                  return (
-                    <SettingsModalCheckbox
-                      key={key}
-                      configKey={field.key}
-                      value={!!localConfig[field.key]}
-                      onChange={onChange(field.key)}
-                      label={field.label as string}
-                    />
-                  );
-                } else if (field.type === SettingInputType.CUSTOM) {
-                  return (
-                    <div key={key} className="mb-2">
-                      {typeof field.component === 'string'
-                        ? field.component
-                        : field.component({
-                            value: localConfig[field.key],
-                            onChange: onChange(field.key),
-                          })}
-                    </div>
-                  );
-                }
-              })}
-
-              <p className="opacity-40 mb-6 text-sm mt-8">
-                Settings are saved in browser's localStorage
-              </p>
-            </div>
+    <dialog
+      className={classNames({ modal: true, 'modal-open': show })}
+      aria-label="Settings dialog"
+    >
+      <div className="modal-box w-11/12 max-w-3xl">
+        <h3 className="text-lg font-bold mb-6">Settings</h3>
+        <div className="flex flex-col md:flex-row h-[calc(90vh-12rem)]">
+          {/* Left panel, showing sections - Desktop version */}
+          <div
+            className="hidden md:flex flex-col items-stretch pr-4 mr-4 border-r-2 border-base-200"
+            role="complementary"
+            aria-description="Settings sections"
+            tabIndex={0}
+          >
+            {SETTING_SECTIONS.map((section, idx) => (
+              <button
+                key={idx}
+                className={classNames({
+                  'btn btn-ghost justify-start font-normal w-44 mb-1': true,
+                  'btn-active': sectionIdx === idx,
+                })}
+                onClick={() => setSectionIdx(idx)}
+                dir="auto"
+              >
+                {section.title}
+              </button>
+            ))}
           </div>
 
-          <div className="modal-action">
-            <button className="btn" onClick={resetConfig}>
-              Reset to default
-            </button>
-            <button className="btn" onClick={onClose}>
-              Close
-            </button>
-            <button className="btn btn-primary" onClick={handleSave}>
-              Save
-            </button>
+          {/* Left panel, showing sections - Mobile version */}
+          {/* This menu is skipped on a11y, otherwise it's repeated the desktop version */}
+          <div
+            className="md:hidden flex flex-row gap-2 mb-4"
+            aria-disabled={true}
+          >
+            <details className="dropdown">
+              <summary className="btn bt-sm w-full m-1">
+                {SETTING_SECTIONS[sectionIdx].title}
+              </summary>
+              <ul className="menu dropdown-content bg-base-100 rounded-box z-[1] w-52 p-2 shadow">
+                {SETTING_SECTIONS.map((section, idx) => (
+                  <div
+                    key={idx}
+                    className={classNames({
+                      'btn btn-ghost justify-start font-normal': true,
+                      'btn-active': sectionIdx === idx,
+                    })}
+                    onClick={() => setSectionIdx(idx)}
+                    dir="auto"
+                  >
+                    {section.title}
+                  </div>
+                ))}
+              </ul>
+            </details>
+          </div>
+
+          {/* Right panel, showing setting fields */}
+          <div className="grow overflow-y-auto px-4">
+            {SETTING_SECTIONS[sectionIdx].fields.map((field, idx) => {
+              const key = `${sectionIdx}-${idx}`;
+              if (field.type === SettingInputType.SHORT_INPUT) {
+                return (
+                  <SettingsModalShortInput
+                    key={key}
+                    configKey={field.key}
+                    value={localConfig[field.key]}
+                    onChange={onChange(field.key)}
+                    label={field.label as string}
+                  />
+                );
+              } else if (field.type === SettingInputType.LONG_INPUT) {
+                return (
+                  <SettingsModalLongInput
+                    key={key}
+                    configKey={field.key}
+                    value={localConfig[field.key].toString()}
+                    onChange={onChange(field.key)}
+                    label={field.label as string}
+                  />
+                );
+              } else if (field.type === SettingInputType.CHECKBOX) {
+                return (
+                  <SettingsModalCheckbox
+                    key={key}
+                    configKey={field.key}
+                    value={!!localConfig[field.key]}
+                    onChange={onChange(field.key)}
+                    label={field.label as string}
+                  />
+                );
+              } else if (field.type === SettingInputType.CUSTOM) {
+                return (
+                  <div key={key} className="mb-2">
+                    {typeof field.component === 'string'
+                      ? field.component
+                      : field.component({
+                          value: localConfig[field.key],
+                          onChange: onChange(field.key),
+                        })}
+                  </div>
+                );
+              }
+            })}
+
+            <p className="opacity-40 mb-6 text-sm mt-8">
+              Settings are saved in browser's localStorage
+            </p>
           </div>
         </div>
-      </dialog>
-    </>
+
+        <div className="modal-action">
+          <button className="btn" onClick={resetConfig}>
+            Reset to default
+          </button>
+          <button className="btn" onClick={onClose}>
+            Close
+          </button>
+          <button className="btn btn-primary" onClick={handleSave}>
+            Save
+          </button>
+        </div>
+      </div>
+    </dialog>
   );
 }
 
