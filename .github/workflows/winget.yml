@@ -38,5 +38,5 @@ jobs:
           komac update --version ${{ env.VERSION }} \
             --urls "https://github.com/ggml-org/llama.cpp/releases/download/${{ env.VERSION }}/llama-${{ env.VERSION }}-bin-win-vulkan-x64.zip" \
             --token ${{ secrets.WINGET_GITHUB_TOKEN }} \
-            --dry-run \
+            --submit \
             ggml.llamacpp
