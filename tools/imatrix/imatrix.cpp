@@ -24,7 +24,8 @@ static void print_usage(int, char ** argv) {
     LOG("\n    %s \\\n"
             "       -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output] \\\n"
             "       [--no-ppl] [--chunk 123] [--output-frequency 10] [--save-frequency 0] \\\n"
-            "       [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...]\n" , argv[0]);
+            "       [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...] \\\n"
+            "       [--parse-special]\n" , argv[0]);
     LOG("\n");
 }
 
@@ -439,7 +440,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
     auto tim1 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenizing the input ..\n", __func__);
 
-    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, true);
+    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, true, params.parse_special);
 
     auto tim2 = std::chrono::high_resolution_clock::now();
     LOG_INF("%s: tokenization took %g ms\n",__func__,1e-3*std::chrono::duration_cast<std::chrono::microseconds>(tim2-tim1).count());
@@ -585,7 +586,6 @@ int main(int argc, char ** argv) {
     params.out_file = "imatrix.dat" ;
 
     params.n_ctx = 512;
-    params.logits_all = true;
     params.escape = false;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_IMATRIX, print_usage)) {

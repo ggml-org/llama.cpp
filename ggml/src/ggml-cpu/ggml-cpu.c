@@ -50,19 +50,6 @@
 #include "llamafile/sgemm.h"
 #endif
 
-#if defined(_MSC_VER)
-// disable "possible loss of data" to avoid hundreds of casts
-// we should just be careful :)
-#pragma warning(disable: 4244 4267)
-
-// disable POSIX deprecation warnings
-// these functions are never going away, anyway
-#pragma warning(disable: 4996)
-
-// unreachable code because of multiple instances of code after GGML_ABORT
-#pragma warning(disable: 4702)
-#endif
-
 // Note: once we move threading into a separate C++ file
 // will use std::hardware_destructive_interference_size instead of hardcoding it here
 // and we'll use C++ attribute syntax.
@@ -295,7 +282,11 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q6_K,
         .vec_dot                  = ggml_vec_dot_q6_K_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#if defined (__ARM_FEATURE_MATMUL_INT8)
+        .nrows                    = 2,
+#else
         .nrows                    = 1,
+#endif
     },
     [GGML_TYPE_IQ2_XXS] = {
         .from_float               = NULL,
@@ -2211,6 +2202,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                     } break;
 
                 case GGML_UNARY_OP_GELU:
+                case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_SILU:
                     {

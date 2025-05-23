@@ -92,7 +92,7 @@ layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};
 #ifdef MUL_MAT_ID
 layout (binding = 3) readonly buffer IDS {int data_ids[];};
 
-shared u16vec4 row_ids[3072];
+shared u16vec4 row_ids[4096];
 
 layout(buffer_reference, std430, buffer_reference_align = 2) buffer decodeBufB {
    B_TYPE b[];

@@ -88,6 +88,7 @@ class ServerProcess:
     chat_template: str | None = None
     chat_template_file: str | None = None
     server_path: str | None = None
+    mmproj_url: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -194,6 +195,8 @@ class ServerProcess:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
             server_args.extend(["--chat-template-file", self.chat_template_file])
+        if self.mmproj_url:
+            server_args.extend(["--mmproj-url", self.mmproj_url])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -377,6 +380,21 @@ class ServerPreset:
         server.n_slots = 1
         server.seed = 42
         server.server_reranking = True
+        return server
+
+    @staticmethod
+    def tinygemma3() -> ServerProcess:
+        server = ServerProcess()
+        # mmproj is already provided by HF registry API
+        server.model_hf_repo = "ggml-org/tinygemma3-GGUF"
+        server.model_hf_file = "tinygemma3-Q8_0.gguf"
+        server.mmproj_url = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/mmproj-tinygemma3.gguf"
+        server.model_alias = "tinygemma3"
+        server.n_ctx = 1024
+        server.n_batch = 32
+        server.n_slots = 2
+        server.n_predict = 4
+        server.seed = 42
         return server
 
 

@@ -68,7 +68,7 @@ class TensorNameMap:
             "output_layer",              # chatglm
             "head",                      # rwkv
             "head.out",                  # wavtokenizer
-            "language_model.lm_head",    # llama4
+            "lm_head",                   # llama4
         ),
 
         # Output norm
@@ -91,7 +91,7 @@ class TensorNameMap:
             "rwkv.ln_out",                             # rwkv6
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
-            "language_model.model.norm",               # llama4
+            "model.norm",                              # llama4
         ),
 
         # Rope frequencies
@@ -133,7 +133,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn_norm",                   # openelm
             "rwkv.blocks.{bid}.ln1",                                # rwkv6
             "model.layers.{bid}.ln1",                               # rwkv7
-            "language_model.model.layers.{bid}.input_layernorm",    # llama4
+            "model.layers.{bid}.input_layernorm",                   # llama4
         ),
 
         # Attention norm 2
@@ -173,7 +173,7 @@ class TensorNameMap:
             "model.layers.{bid}.attention.wq",                           # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
-            "language_model.model.layers.{bid}.self_attn.q_proj",        # llama4
+            "model.layers.{bid}.self_attn.q_proj",                       # llama4
         ),
 
         # Attention key
@@ -188,7 +188,7 @@ class TensorNameMap:
             "model.layers.{bid}.attention.wk",                         # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
-            "language_model.model.layers.{bid}.self_attn.k_proj",      # llama4
+            "model.layers.{bid}.self_attn.k_proj",                     # llama4
         ),
 
         # Attention value
@@ -202,7 +202,7 @@ class TensorNameMap:
             "model.layers.{bid}.attention.wv",                           # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
-            "language_model.model.layers.{bid}.self_attn.v_proj",        # llama4
+            "model.layers.{bid}.self_attn.v_proj",                       # llama4
         ),
 
         # Attention output
@@ -229,7 +229,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.dense",                    # chatglm
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
-            "language_model.model.layers.{bid}.self_attn.o_proj",           # llama4
+            "model.layers.{bid}.self_attn.o_proj",                          # llama4
         ),
 
         # Attention output norm
@@ -268,7 +268,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
-            "language_model.model.layers.{bid}.post_attention_layernorm",    # llama4
+            "model.layers.{bid}.post_attention_layernorm",                   # llama4
         ),
 
         # Post feed-forward norm
@@ -289,7 +289,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.router",           # Grok
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
-            "language_model.model.layers.{bid}.feed_forward.router", # llama4
+            "model.layers.{bid}.feed_forward.router",           # llama4
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
         ),
 
@@ -329,7 +329,7 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
-            "language_model.model.layers.{bid}.feed_forward.up_proj", # llama4
+            "model.layers.{bid}.feed_forward.up_proj",                # llama4
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -338,14 +338,14 @@ class TensorNameMap:
             "transformer.blocks.{bid}.ffn.experts.mlp.v1",    # dbrx
             "model.layers.{bid}.mlp.experts.up_proj",         # qwen2moe olmoe (merged)
             "model.layers.{bid}.block_sparse_moe.experts.w3", # phimoe (merged)
-            "language_model.model.layers.{bid}.feed_forward.experts.up_proj", # llama4
+            "model.layers.{bid}.feed_forward.experts.up_proj", # llama4
             "encoder.layers.{bid}.mlp.experts.mlp.w1",        # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
-            "model.layers.{bid}.mlp.shared_expert.up_proj",  # qwen2moe
-            "model.layers.{bid}.mlp.shared_experts.up_proj", # deepseek deepseek2
-            "language_model.model.layers.{bid}.feed_forward.shared_expert.up_proj", # llama4
+            "model.layers.{bid}.mlp.shared_expert.up_proj",          # qwen2moe
+            "model.layers.{bid}.mlp.shared_experts.up_proj",         # deepseek deepseek2
+            "model.layers.{bid}.feed_forward.shared_expert.up_proj", # llama4
         ),
 
         # AWQ-activation gate
@@ -366,22 +366,22 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.linear_1",           # refact
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
-            "language_model.model.layers.{bid}.feed_forward.gate_proj", # llama4
+            "model.layers.{bid}.feed_forward.gate_proj",  # llama4
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
-            "layers.{bid}.feed_forward.experts.w1",           # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear",     # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.w1",    # dbrx
-            "model.layers.{bid}.mlp.experts.gate_proj",       # qwen2moe olmoe (merged)
-            "model.layers.{bid}.block_sparse_moe.experts.w1", # phimoe (merged)
-            "language_model.model.layers.{bid}.feed_forward.experts.gate_proj", # llama4
+            "layers.{bid}.feed_forward.experts.w1",              # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear",        # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.w1",       # dbrx
+            "model.layers.{bid}.mlp.experts.gate_proj",          # qwen2moe olmoe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w1",    # phimoe (merged)
+            "model.layers.{bid}.feed_forward.experts.gate_proj", # llama4
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
-            "model.layers.{bid}.mlp.shared_expert.gate_proj",  # qwen2moe
-            "model.layers.{bid}.mlp.shared_experts.gate_proj", # deepseek deepseek2
-            "language_model.model.layers.{bid}.feed_forward.shared_expert.gate_proj", # llama4
+            "model.layers.{bid}.mlp.shared_expert.gate_proj",          # qwen2moe
+            "model.layers.{bid}.mlp.shared_experts.gate_proj",         # deepseek deepseek2
+            "model.layers.{bid}.feed_forward.shared_expert.gate_proj", # llama4
         ),
 
         # Feed-forward down
@@ -410,7 +410,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
-            "language_model.model.layers.{bid}.feed_forward.down_proj", # llama4
+            "model.layers.{bid}.feed_forward.down_proj",              # llama4
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -420,14 +420,15 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.experts.down_proj",          # qwen2moe olmoe (merged)
             "model.layers.{bid}.block_sparse_moe.output_linear", # granitemoe
             "model.layers.{bid}.block_sparse_moe.experts.w2",    # phimoe (merged)
-            "language_model.model.layers.{bid}.feed_forward.experts.down_proj", # llama4
+            "model.layers.{bid}.feed_forward.experts.down_proj", # llama4
             "encoder.layers.{bid}.mlp.experts.mlp.w2",           # nomic-bert-moe
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
-            "model.layers.{bid}.mlp.shared_expert.down_proj",  # qwen2moe
-            "model.layers.{bid}.mlp.shared_experts.down_proj", # deepseek deepseek2
-            "language_model.model.layers.{bid}.feed_forward.shared_expert.down_proj", # llama4
+            "model.layers.{bid}.mlp.shared_expert.down_proj",          # qwen2moe
+            "model.layers.{bid}.mlp.shared_experts.down_proj",         # deepseek deepseek2
+            "model.layers.{bid}.feed_forward.shared_expert.down_proj", # llama4
+            "model.layers.{bid}.shared_mlp.output_linear",             # granitemoe
         ),
 
         MODEL_TENSOR.ATTN_Q_NORM: (
@@ -901,10 +902,13 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ_FC: (
             "model.connector.modality_projection.proj", # SmolVLM
+            "multi_modal_projector.linear_1", # llama 4
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
             "model.mm_projector.mlp.mlp.{bid}",
+            "vision_model.vision_adapter.mlp.fc{bid}", # llama 4
+            "mlp1.{bid}", # InternVL
         ),
 
         MODEL_TENSOR.V_MMPROJ_PEG: (
@@ -913,6 +917,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_ENC_EMBD_CLS: (
             "vision_tower.vision_model.embeddings.class_embedding",
+            "vision_model.class_embedding", # llama 4
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
@@ -920,6 +925,7 @@ class TensorNameMap:
             "vpm.embeddings.patch_embedding",
             "model.vision_model.embeddings.patch_embedding", # SmolVLM
             "vision_tower.patch_conv", # pixtral
+            "vision_model.patch_embedding.linear", # llama 4
             "visual.patch_embed.proj", # qwen2vl
         ),
 
@@ -927,52 +933,70 @@ class TensorNameMap:
             "vision_tower.vision_model.embeddings.position_embedding",
             "vpm.embeddings.position_embedding",
             "model.vision_model.embeddings.position_embedding", # SmolVLM
+            "vision_model.positional_embedding_vlm", # llama 4
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
             "vpm.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
+            "vision_model.model.layers.{bid}.self_attn.q_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
+            "vision_tower.vision_model.encoder.layers.{bid}.attn.q_norm", # InternVL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.k_proj",
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
+            "vision_model.model.layers.{bid}.self_attn.k_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
+        ),
+
+        MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
+            "vision_tower.vision_model.encoder.layers.{bid}.attn.k_norm", # InternVL
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_V: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.v_proj",
             "vpm.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
+            "vision_model.model.layers.{bid}.self_attn.v_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm1",
+            "vision_tower.vision_model.encoder.layers.{bid}.norm1", # InternVL
             "vpm.encoder.layers.{bid}.layer_norm1",
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
             "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral
+            "vision_model.model.layers.{bid}.input_layernorm", # llama4
             "visual.blocks.{bid}.norm1", # qwen2vl
         ),
 
-        MODEL_TENSOR.V_ENC_OUTPUT: (
+        MODEL_TENSOR.V_ENC_ATTN_O: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.out_proj",
+            "vision_tower.vision_model.encoder.layers.{bid}.attn.proj", # InternVL
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
+            "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral
             "visual.blocks.{bid}.attn.proj", # qwen2vl
         ),
 
-        MODEL_TENSOR.V_ENC_OUTPUT_NORM: (
+        MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
             "vision_tower.vision_model.encoder.layers.{bid}.layer_norm2",
+            "vision_tower.vision_model.encoder.layers.{bid}.norm2", # InternVL
             "vpm.encoder.layers.{bid}.layer_norm2",
             "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
+            "vision_model.model.layers.{bid}.post_attention_layernorm", # llama4
             "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral
             "visual.blocks.{bid}.norm2", # qwen2vl
         ),
@@ -982,6 +1006,7 @@ class TensorNameMap:
             "vpm.encoder.layers.{bid}.mlp.fc1",
             "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3
             "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral
+            "vision_model.model.layers.{bid}.mlp.fc1", # llama4
             "visual.blocks.{bid}.mlp.fc1", # qwen2vl
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
         ),
@@ -996,18 +1021,29 @@ class TensorNameMap:
             "vpm.encoder.layers.{bid}.mlp.fc2",
             "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3
             "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral
+            "vision_model.model.layers.{bid}.mlp.fc2", # llama4
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
+        ),
+
+        MODEL_TENSOR.V_LAYER_SCALE_1: (
+            "vision_tower.vision_model.encoder.layers.{bid}.ls1", # InternVL
+        ),
+
+        MODEL_TENSOR.V_LAYER_SCALE_2: (
+            "vision_tower.vision_model.encoder.layers.{bid}.ls2", # InternVL
         ),
 
         MODEL_TENSOR.V_PRE_NORM: (
             "vision_tower.vision_model.pre_layrnorm",
             "vision_tower.ln_pre", # pixtral
+            "vision_model.layernorm_pre", # llama4
         ),
 
         MODEL_TENSOR.V_POST_NORM: (
             "vision_tower.vision_model.post_layernorm",
             "model.vision_model.post_layernorm", # SmolVLM
+            "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
         ),
 
@@ -1073,6 +1109,68 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_PATCH_MERGER: (
             "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1
+        ),
+
+        # audio (mtmd)
+
+        MODEL_TENSOR.A_ENC_EMBD_POS: (
+            "audio_tower.embed_positions", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV1D: (
+            "audio_tower.conv{bid}", # ultravox
+        ),
+
+        MODEL_TENSOR.A_PRE_NORM: (),
+
+        MODEL_TENSOR.A_POST_NORM: (
+            "audio_tower.layer_norm", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_Q: (
+            "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_K: (
+            "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_V: (
+            "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_INPUT_NORM: (
+            "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_OUTPUT: (
+            "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
+            "audio_tower.layers.{bid}.final_layer_norm", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_UP: (
+            "audio_tower.layers.{bid}.fc1", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_GATE: (),
+
+        MODEL_TENSOR.A_ENC_FFN_DOWN: (
+            "audio_tower.layers.{bid}.fc2", # ultravox
+        ),
+
+        MODEL_TENSOR.A_MMPROJ: (
+            "audio.multi_modal_projector.linear_{bid}", # ultravox
+        ),
+
+        MODEL_TENSOR.A_MM_NORM_PRE: (
+            "audio.multi_modal_projector.ln_pre", # ultravox
+        ),
+
+        MODEL_TENSOR.A_MM_NORM_MID: (
+            "audio.multi_modal_projector.ln_mid", # ultravox
         ),
     }
 

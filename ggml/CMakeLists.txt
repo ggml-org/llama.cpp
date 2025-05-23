@@ -193,6 +193,7 @@ option(GGML_RPC                             "ggml: use RPC"                     
 option(GGML_SYCL                            "ggml: use SYCL"                                  OFF)
 option(GGML_SYCL_F16                        "ggml: use 16 bit floats for sycl calculations"   OFF)
 option(GGML_SYCL_GRAPH                      "ggml: enable graphs in the SYCL backend"         ON)
+option(GGML_SYCL_DNN                        "ggml: enable oneDNN in the SYCL backend"         ON)
 set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING
@@ -366,6 +367,8 @@ if (MSVC)
         /wd4005  # Macro redefinition
         /wd4244  # Conversion from one type to another type, possible loss of data
         /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4996  # Disable POSIX deprecation warnings
+        /wd4702  # Unreachable code warnings
     )
     function(disable_msvc_warnings target_name)
         if(TARGET ${target_name})

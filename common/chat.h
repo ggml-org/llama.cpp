@@ -3,6 +3,7 @@
 #pragma once
 
 #include "common.h"
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,7 @@ struct common_chat_templates_inputs {
     common_chat_tool_choice tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     bool parallel_tool_calls = false;
     bool extract_reasoning     = true;
+    std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
 };
 
 struct common_chat_params {

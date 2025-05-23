@@ -237,15 +237,17 @@ static ggml_backend_t create_backend(const rpc_server_params & params) {
         backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr);
     }
 
-    fprintf(stderr, "%s: using %s backend\n", __func__, ggml_backend_name(backend));
+    if (backend) {
+        fprintf(stderr, "%s: using %s backend\n", __func__, ggml_backend_name(backend));
 
-    // set the number of threads
-    ggml_backend_dev_t dev = ggml_backend_get_device(backend);
-    ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
-    if (reg) {
-        auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
-        if (ggml_backend_set_n_threads_fn) {
-            ggml_backend_set_n_threads_fn(backend, params.n_threads);
+        // set the number of threads
+        ggml_backend_dev_t dev = ggml_backend_get_device(backend);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        if (reg) {
+            auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
+            if (ggml_backend_set_n_threads_fn) {
+                ggml_backend_set_n_threads_fn(backend, params.n_threads);
+            }
         }
     }
 
