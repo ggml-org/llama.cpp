@@ -1273,6 +1273,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 ggml_tensor * node_orig = graph->nodes[split.i_start + n];
                 ggml_tensor * node_sg   = split.graph.nodes[n];
                 tensor_id_tp(hash_id(node_orig), split.backend_id) = node_sg;
+                tensor_backend_id(node_sg) = split.backend_id;
             }
         }
     }
