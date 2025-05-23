@@ -1423,10 +1423,6 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
     }
     sched->n_splits = splits_tp.size();
 
-    if (sched->debug) {
-        ggml_backend_sched_print_assignments(sched, graph);
-    }
-
     // swap node_backend_ids and leaf _backend_ids with prevs
     {
         int * tmp = sched->node_backend_ids;
@@ -1478,6 +1474,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             sched->node_backend_ids[graph_copy->n_nodes] = split->backend_id;
             graph_copy->nodes[graph_copy->n_nodes++] = split->graph.nodes[j];
         }
+    }
+
+    if (sched->debug) {
+        ggml_backend_sched_print_assignments(sched, &sched->graph);
     }
 
     if (sched->n_copies > 1) {
