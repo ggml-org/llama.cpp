@@ -511,9 +511,6 @@ private:
 
     const uint32_t n_seq_max = 1;
 
-    ggml_type type_k = GGML_TYPE_F32;
-    ggml_type type_v = GGML_TYPE_F32;
-
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
