@@ -1456,10 +1456,10 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
             graph_copy->nodes[graph_copy->n_nodes++] = input_cpy;
         }
 
-        for (int j = split->i_start; j < split->i_end; j++) {
+        for (int j = 0; j < split->graph.n_nodes; j++) {
             assert(graph_copy->size > graph_copy->n_nodes);
-            sched->node_backend_ids[graph_copy->n_nodes] = tensor_backend_id(graph->nodes[j]);
-            graph_copy->nodes[graph_copy->n_nodes++] = graph->nodes[j];
+            sched->node_backend_ids[graph_copy->n_nodes] = split->backend_id;
+            graph_copy->nodes[graph_copy->n_nodes++] = split->graph.nodes[j];
         }
     }
 
