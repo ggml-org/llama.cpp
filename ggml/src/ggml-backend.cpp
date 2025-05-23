@@ -1423,7 +1423,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         fprintf(stderr, "%s: split%d backend_id=%d i_start=%d i_end=%d\n",
             __func__, int(i_split), sched->splits[i_split].backend_id, sched->splits[i_split].i_start, sched->splits[i_split].i_end);
         for (int n = 0; n < sched->splits[i_split].n_inputs; n++) {
-            fprintf(stderr, "%s:   - input %d: %s\n", __func__, n, sched->graph_inputs[n]->name);
+            fprintf(stderr, "%s:   - input %d: %s\n", __func__, n, sched->splits[i_split].inputs[n]->name);
         }
         for (int n = 0; n < sched->splits[i_split].graph.n_nodes; n++) {
             fprintf(stderr, "%s:   - node %d: %s\n", __func__, n, sched->splits[i_split].graph.nodes[n]->name);
