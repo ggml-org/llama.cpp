@@ -1171,6 +1171,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 split.backend_id = node_backend_id;
                 split.i_start = i;
                 split.n_inputs = 0;
+                split.tensor_parallel = src0_on_split_buffer;
             }
         }
         split.i_end = graph->n_nodes;
