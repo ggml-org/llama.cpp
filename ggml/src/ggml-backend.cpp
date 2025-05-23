@@ -1214,7 +1214,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                     ggml_backend_sched_split split = split_main;
                     split.backend_id = i_gpu;
                     split.graph = *ggml_new_graph_custom(sched->ctx, split_main.graph.size, /*grads =*/ false);
-                    dup_graph(sched->ctx, &split_main.graph, &split.graph, /*expand =*/ false);
+                    dup_graph(sched->ctx, &split_main.graph, &split.graph, /*deep =*/ false);
                     splits_tp.push_back(split);
                 }
             }
@@ -1228,7 +1228,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 continue;
             }
 
-            const int i_gpu  = split.backend_id;
+            const int i_gpu = split.backend_id;
             for (int n = 0; n < split.graph.n_nodes; n++) {
                 ggml_tensor * dst = split.graph.nodes[n];
                 GGML_ASSERT(dst->op == GGML_OP_MUL_MAT);

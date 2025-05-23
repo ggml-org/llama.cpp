@@ -678,7 +678,7 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
         opt_ctx->ctx_copy = ggml_init(params);
 
         opt_ctx->allocated_graph_copy = ggml_new_graph_custom(opt_ctx->ctx_copy, graph->size, /*grads =*/ true);
-        dup_graph(opt_ctx->ctx_copy, graph, opt_ctx->allocated_graph_copy, /*expand =*/ true);
+        dup_graph(opt_ctx->ctx_copy, graph, opt_ctx->allocated_graph_copy, /*deep =*/ true);
     } else {
         opt_ctx->allocated_graph_copy = graph;
     }

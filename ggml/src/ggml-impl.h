@@ -600,7 +600,7 @@ GGML_API size_t gguf_type_size(enum gguf_type type);
 GGML_API struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_params params);
 GGML_API void gguf_write_to_buf(const struct gguf_context * ctx, std::vector<int8_t> & buf, bool only_meta);
 
-static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_map, ggml_context * ctx, ggml_tensor * tensor) {
+static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_map, ggml_context * ctx, ggml_tensor * tensor, bool deep) {
     if (!tensor) {
         return nullptr;
     }
@@ -623,30 +623,33 @@ static ggml_tensor * map_tensor(std::map<ggml_tensor *, ggml_tensor *> & tensor_
     new_tensor->buffer = tensor->buffer;
     new_tensor->extra = tensor->extra;
     new_tensor->view_offs = tensor->view_offs;
-    new_tensor->view_src = map_tensor(tensor_map, ctx, tensor->view_src);
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        new_tensor->src[i] = map_tensor(tensor_map, ctx, tensor->src[i]);
+
+    if (deep) {
+        new_tensor->view_src = map_tensor(tensor_map, ctx, tensor->view_src, deep);
+        for (int i = 0; i < GGML_MAX_SRC; i++) {
+            new_tensor->src[i] = map_tensor(tensor_map, ctx, tensor->src[i], deep);
+        }
     }
 
     return new_tensor;
 }
 
-static void dup_graph(ggml_context * ctx, const ggml_cgraph * src, ggml_cgraph * dst, bool expand) {
+static void dup_graph(ggml_context * ctx, const ggml_cgraph * src, ggml_cgraph * dst, bool deep) {
     std::map<ggml_tensor *, ggml_tensor *> tensor_map;
 
-    if (expand) {
+    if (deep) {
         for (int i = 0; i < src->n_leafs; i++) {
-            ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->leafs[i]));
+            ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->leafs[i], deep));
         }
         for (int i = 0; i < src->n_nodes; i++) {
-            ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->nodes[i]));
+            ggml_build_forward_expand(dst, map_tensor(tensor_map, ctx, src->nodes[i], deep));
         }
     } else {
         for (int i = 0; i < src->n_leafs; i++) {
-            dst->leafs[dst->n_leafs++] = map_tensor(tensor_map, ctx, src->leafs[i]);
+            dst->leafs[dst->n_leafs++] = map_tensor(tensor_map, ctx, src->leafs[i], deep);
         }
         for (int i = 0; i < src->n_nodes; i++) {
-            dst->nodes[dst->n_nodes++] = map_tensor(tensor_map, ctx, src->nodes[i]);
+            dst->nodes[dst->n_nodes++] = map_tensor(tensor_map, ctx, src->nodes[i], deep);
         }
     }
     GGML_ASSERT(dst->n_leafs == src->n_leafs);
