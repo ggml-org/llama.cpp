@@ -1253,6 +1253,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 GGML_ASSERT(src0->op == GGML_OP_NONE);
                 src0 = ggml_dup_tensor_layout(sched->ctx, src0);
                 src0->data = ((void **) dst->src[0]->extra)[i_gpu]; // FIXME
+                src0->buffer = dst->src[0]->buffer;
                 dst->src[0] = src0;
                 tensor_backend_id(src0) = split.backend_id;
 
