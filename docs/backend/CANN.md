@@ -286,25 +286,20 @@ Please add the **[CANN]** prefix/tag in issues/PRs titles to help the CANN-team 
 
 ### GGML_CANN_ASYNC_MODE
 
- `GGML_CANN_ASYNC_MODE` controls whether asynchronous commit mode is enabled(default closed state), which can help speed up model execution. Yes, enable, y, 1, on ,true(case insensitive) are all valid values to enable `GGML_CANN_ASYNC_MODE`, such as `export GGML_CANN_ASYNC_MODE=yEs`.
-
-
+Enables asynchronous operator submission. Disabled by default.
 
 ### GGML_CANN_MEM_POOL
 
-three cases here:
+Specifies the memory pool management strategy:
 
-- By setting `export GGML_CANN_MEM_POOL=pRio` (the value is case-insensitive), you specify the use of a priority queue-based memory pool.
+- vmm: Utilizes a virtual memory manager pool. If hardware support for VMM is unavailable, falls back to the legacy (leg) memory pool.
 
-- Legacy memory pools are enabled when VMM is not available or when `export GGML_CANN_MEM_POOL=leg` is set.
-
-- default VMM
+- prio: Employs a priority queue-based memory pool management.
+- leg: Uses a fixed-size buffer pool.
 
 ### GGML_CANN_DISABLE_BUF_POOL_CLEAN
 
-`GGML_CANN_DISABLE_BUF_POOL_CLEAN` is used to disable the buffer pool cleaning feature.
- The values **yes**, **enable**, **y**, **1**, **on**, and **true** (case-insensitive) are all valid to enable `GGML_CANN_DISABLE_BUF_POOL_CLEAN`. such as `export GGML_CANN_DISABLE_BUF_POOL_CLEAN=yEs`.
-
+Controls automatic cleanup of the memory pool. This option is only effective when using the prio or leg memory pool strategies.
 
 ## TODO
 - Support more models and data types.
