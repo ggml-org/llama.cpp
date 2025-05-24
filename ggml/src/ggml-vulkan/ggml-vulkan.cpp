@@ -9004,6 +9004,10 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
 
     vk_context subctx = ctx->tensor_ctxs[tensor_idx].lock();
 
+#ifdef GGML_VULKAN_PERF
+    std::chrono::steady_clock::time_point start;
+#endif
+
     // always wait for the GPU work to be done for the last submit
     if (tensor_idx == subctx->exit_tensor_idx) {
         use_fence = true;
@@ -9013,6 +9017,8 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
     if (!subctx->seqs.empty()) {
 #ifdef GGML_VULKAN_CHECK_RESULTS
         ggml_vk_check_results_0(tensor);
+#endif
+#if defined(GGML_VULKAN_CHECK_RESULTS) || defined(GGML_VULKAN_PERF)
         use_fence = true;
 #endif
 
@@ -9020,6 +9026,10 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
         for (auto& cpy : subctx->in_memcpys) {
             memcpy(cpy.dst, cpy.src, cpy.n);
         }
+
+#ifdef GGML_VULKAN_PERF
+        start = std::chrono::steady_clock::now();
+#endif
 
         if (almost_ready && !ctx->almost_ready_fence_pending && !use_fence) {
             ggml_vk_submit(subctx, ctx->almost_ready_fence);
@@ -9037,6 +9047,11 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
     }
 
     if (tensor_idx == subctx->exit_tensor_idx) {
+#ifdef GGML_VULKAN_PERF
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start);
+        ctx->device->perf_logger->log_timing(tensor, duration.count());
+#endif
+
         // Do staging buffer copies
         for (auto& cpy : subctx->out_memcpys) {
             memcpy(cpy.dst, cpy.src, cpy.n);
@@ -9534,7 +9549,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         if (enqueued) {
             ++submitted_nodes;
 
-#ifndef GGML_VULKAN_CHECK_RESULTS
+#if !defined(GGML_VULKAN_CHECK_RESULTS) && !defined(GGML_VULKAN_PERF)
             if (first_node_in_batch) {
                 first_node_in_batch = false;
             }
