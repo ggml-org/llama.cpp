@@ -1220,13 +1220,13 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                         ggml_format_name(split.graph.nodes[n], "%s (parallel %d)", name.c_str(), i_gpu);
                     }
 
-                    fprintf(stderr, "%s: 10 index=%d backend_id=%d\n", __func__, int(splits_tp.size()), split.backend_id);
+                    // fprintf(stderr, "%s: 10 index=%d backend_id=%d\n", __func__, int(splits_tp.size()), split.backend_id);
                     splits_tp.push_back(split);
                 }
             }
 
             // add split on same backend last so that splits on other backends don't have to wait for it
-            fprintf(stderr, "%s: 10 index=%d backend_id=%d\n", __func__, int(splits_tp.size()), split_main.backend_id);
+            // fprintf(stderr, "%s: 10 index=%d backend_id=%d\n", __func__, int(splits_tp.size()), split_main.backend_id);
             splits_tp.push_back(split_main);
         }
 
