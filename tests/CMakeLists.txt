@@ -195,3 +195,13 @@ endif()
 if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-unified-cache-copy.cpp)
 endif()
+
+# Add llama_kv_cache_unified CRUD interface test
+if (NOT GGML_BACKEND_DL)
+    llama_build_and_test(test-kv-cache-unified.cpp)
+endif()
+
+# Add llama_batch/sbatch/ubatch test
+if (NOT GGML_BACKEND_DL)
+    llama_build_and_test(test-llama-batch.cpp)
+endif()

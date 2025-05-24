@@ -74,7 +74,8 @@ static void test_unified_cache_basic_access() {
         4,              // n_seq_max
         4,              // n_pad
         0,              // n_swa
-        LLAMA_SWA_TYPE_NONE);
+        LLAMA_SWA_TYPE_NONE
+    );
 
     std::cout << "Source cache created with size: " << src_cache->get_size() << "\n";
     std::cout << "Source cache current n: " << src_cache->get_n() << "\n";
