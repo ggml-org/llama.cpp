@@ -65,7 +65,10 @@ uint32_t llama_hparams::n_embd_v_gqa(uint32_t il) const {
     return n_embd_head_v * n_head_kv;
 }
 
-uint32_t llama_hparams::n_embd_k_s() const {
+uint32_t llama_hparams::n_embd_k_s(uint32_t il) const {
+    if (!recurrent_layer(il)) {
+        return 0;
+    }
     if (wkv_head_size != 0) {
         // for RWKV models
         return token_shift_count * n_embd;
@@ -76,7 +79,10 @@ uint32_t llama_hparams::n_embd_k_s() const {
     return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * ssm_d_inner;
 }
 
-uint32_t llama_hparams::n_embd_v_s() const {
+uint32_t llama_hparams::n_embd_v_s(uint32_t il) const {
+    if (!recurrent_layer(il)) {
+        return 0;
+    }
     if (wkv_head_size != 0) {
         // corresponds to RWKV's wkv_states size
         return n_embd * wkv_head_size;
@@ -84,6 +90,10 @@ uint32_t llama_hparams::n_embd_v_s() const {
 
     // corresponds to Mamba's ssm_states size
     return ssm_d_state * ssm_d_inner;
+}
+
+bool llama_hparams::recurrent_layer(uint32_t il) const {
+    return recurrent_layer_arr[il];
 }
 
 bool llama_hparams::is_swa(uint32_t il) const {

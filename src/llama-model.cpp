@@ -466,6 +466,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
     std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
     std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.end(),      0);
+    std::fill(
+        hparams.recurrent_layer_arr.begin(),
+        hparams.recurrent_layer_arr.end(),
+        llm_arch_is_recurrent(ml.get_arch()));
 
     std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
 
@@ -13188,6 +13192,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     llama_memory_i * res;
 
     switch (arch) {
+        // Models that need specific instantiation should be handled in the
+        // switch statement
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_NOMIC_BERT:
@@ -13196,57 +13202,108 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             {
                 res = nullptr;
             } break;
-        case LLM_ARCH_MAMBA:
-        case LLM_ARCH_RWKV6:
-        case LLM_ARCH_RWKV6QWEN2:
-        case LLM_ARCH_RWKV7:
-        case LLM_ARCH_ARWKV7:
-            {
-                res = new llama_kv_cache_recurrent(
-                        *this,
-                        GGML_TYPE_F32,
-                        GGML_TYPE_F32,
-                        cparams.offload_kqv,
-                        std::max((uint32_t) 1, cparams.n_seq_max),
-                        cparams.n_seq_max);
-            } break;
+        // Models that need standard caching should rely on recurrent/hybrid
+        // checks
         default:
             {
-                const auto padding = llama_kv_cache_unified::get_padding(cparams);
+                if (llm_arch_is_hybrid_recurrent(arch)) {
+                    // make vectors of recurrent and non-recurrent layer indices
+                    std::vector<size_t> recurrent_layers;
+                    std::vector<size_t> unified_layers;
+                    for (auto il = 0u; il < hparams.n_layer; ++il) {
+                        if (hparams.recurrent_layer(il)) {
+                            recurrent_layers.push_back(il);
+                        } else {
+                            unified_layers.push_back(il);
+                        }
+                    }
 
-                cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+                    const auto padding = llama_kv_cache_unified::get_padding(cparams);
+                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+                    LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
-                LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
+                    // initialize the children
+                    std::vector<llama_kv_cache_hybrid::child_cache> children;
+                    children.emplace_back(
+                        std::unique_ptr<llama_kv_cache>(
+                            new llama_kv_cache_recurrent(
+                                *this,
+                                [&](int32_t il) {
+                                    return hparams.recurrent_layer(il);
+                                },
+                                GGML_TYPE_F32,
+                                GGML_TYPE_F32,
+                                cparams.offload_kqv,
+                                std::max((uint32_t) 1, cparams.n_seq_max),
+                                cparams.n_seq_max)
+                        ),
+                        std::move(recurrent_layers)
+                    );
+                    children.emplace_back(
+                        std::unique_ptr<llama_kv_cache>(
+                            new llama_kv_cache_unified(
+                                *this,
+                                [&](int32_t il) {
+                                    return ! hparams.recurrent_layer(il);
+                                },
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                cparams.n_ctx,
+                                cparams.n_seq_max,
+                                padding,
+                                hparams.n_swa,
+                                hparams.swa_type)
+                        ),
+                        std::move(unified_layers)
+                    );
 
-                if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-                    GGML_ASSERT(hparams.is_swa_any());
-
-                    res = new llama_kv_cache_unified_iswa(
-                            *this,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
-                            cparams.offload_kqv,
-                            params.swa_full,
-                            cparams.n_ctx,
-                            cparams.n_seq_max,
-                            cparams.n_batch,
-                            padding);
-                } else {
-                    GGML_ASSERT(!hparams.is_swa_any());
-
-                    res = new llama_kv_cache_unified(
+                    // initialize the hybrid cache with both children
+                    res = new llama_kv_cache_hybrid(hparams, std::move(children));
+                } else if (llm_arch_is_recurrent(arch)) {
+                    res = new llama_kv_cache_recurrent(
                             *this,
                             nullptr,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
+                            GGML_TYPE_F32,
+                            GGML_TYPE_F32,
                             cparams.offload_kqv,
-                            cparams.n_ctx,
-                            cparams.n_seq_max,
-                            padding,
-                            hparams.n_swa,
-                            hparams.swa_type);
+                            std::max((uint32_t) 1, cparams.n_seq_max),
+                            cparams.n_seq_max
+                        );
+                } else {
+                    const auto padding = llama_kv_cache_unified::get_padding(cparams);
+
+                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+
+                    LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
+
+                    if (hparams.n_swa > 0) {
+                        res = new llama_kv_cache_unified_iswa(
+                                *this,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                cparams.n_ctx,
+                                params.swa_full,
+                                cparams.n_seq_max,
+                                cparams.n_batch,
+                                padding);
+                    } else {
+                        res = new llama_kv_cache_unified(
+                                *this,
+                                nullptr,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                cparams.n_ctx,
+                                cparams.n_seq_max,
+                                padding,
+                                hparams.n_swa,
+                                hparams.swa_type);
+                    }
                 }
             }
     }
@@ -13795,14 +13852,11 @@ llama_token llama_model_decoder_start_token(const llama_model * model) {
 }
 
 bool llama_model_is_recurrent(const llama_model * model) {
-    switch (model->arch) {
-        case     LLM_ARCH_MAMBA:      return true;
-        case     LLM_ARCH_RWKV6:      return true;
-        case     LLM_ARCH_RWKV6QWEN2: return true;
-        case     LLM_ARCH_RWKV7:      return true;
-        case     LLM_ARCH_ARWKV7:     return true;
-        default: return false;
-    }
+    return llm_arch_is_recurrent(model->arch);
+}
+
+bool llama_model_is_hybrid_recurrent(const llama_model * model) {
+    return llm_arch_is_hybrid_recurrent(model->arch);
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
