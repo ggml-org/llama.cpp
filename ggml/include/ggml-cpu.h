@@ -28,6 +28,9 @@ extern "C" {
         GGML_NUMA_STRATEGY_ISOLATE    = 2,
         GGML_NUMA_STRATEGY_NUMACTL    = 3,
         GGML_NUMA_STRATEGY_MIRROR     = 4,
+#ifdef GGML_USE_NUMA_MIGRATE
+        GGML_NUMA_STRATEGY_MIGRATE    = 5,
+#endif
         GGML_NUMA_STRATEGY_COUNT
     };
 

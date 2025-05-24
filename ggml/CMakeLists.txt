@@ -151,6 +151,11 @@ set(GGML_BLAS_VENDOR ${GGML_BLAS_VENDOR_DEFAULT} CACHE STRING
                                             "ggml: BLAS library vendor")
 option(GGML_LLAMAFILE                       "ggml: use LLAMAFILE"                             ${GGML_LLAMAFILE_DEFAULT})
 
+option(GGML_NUMA_MIGRATE                    "ggml: use NUMA_MIGRATE"                          OFF)
+set(GGML_NUMA_MIGRATE_NODES "2" CACHE STRING
+                                            "ggml: the number of NUMA nodes during page migration")
+option(GGML_NUMA_MIGRATE_DEBUG              "ggml: enable debugging of NUMA_MIGRATE"          OFF)
+
 option(GGML_CUDA                            "ggml: use CUDA"                                  OFF)
 option(GGML_MUSA                            "ggml: use MUSA"                                  OFF)
 option(GGML_CUDA_FORCE_MMQ                  "ggml: use mmq kernels instead of cuBLAS"         OFF)
