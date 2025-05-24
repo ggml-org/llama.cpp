@@ -1385,7 +1385,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                             }
                             ggml_tensor * concat = ggml_concat(sched->ctx, a, b, /*dim =*/ 0);
 
-                            ggml_format_name(concat, "%s#%s concat#%d", ggml_backend_name(backend), src->name, c);
+                            ggml_format_name(concat, "%s#%s cc#%d", ggml_backend_name(backend), src->name, c);
                             tensor_id_copy(src_id, split.backend_id, c) = concat;
                         }
                         const int n_inputs = split.n_inputs++;
