@@ -3484,6 +3484,12 @@ void ggml_cpu_init(void) {
             const uint64_t t_end = ggml_time_us(); UNUSED(t_end);
 
             GGML_PRINT_DEBUG("%s: GELU, Quick GELU, SILU and EXP tables initialized in %f ms\n", __func__, (t_end - t_start)/1000.0);
+
+#ifdef GGML_USE_OPENMP
+            if (!getenv("OMP_WAIT_POLICY")) {
+                putenv("OMP_WAIT_POLICY=active");
+            }
+#endif
         }
 
 #if defined(__ARM_ARCH)
