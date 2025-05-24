@@ -3665,7 +3665,7 @@ class BertModel(TextModel):
         tokenizer = SentencePieceProcessor()
         tokenizer.LoadFromFile(str(tokenizer_path))
 
-        vocab_size = self.hparams.get('vocab_size', tokenizer.vocab_size())
+        vocab_size = max(self.hparams.get('vocab_size', 0), tokenizer.vocab_size())
 
         tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
         scores: list[float] = [-10000.0] * vocab_size
@@ -3690,14 +3690,6 @@ class BertModel(TextModel):
             scores[token_id] = score
             toktypes[token_id] = toktype
 
-        if vocab_size > len(tokens):
-            pad_count = vocab_size - len(tokens)
-            logger.debug(f"Padding vocab with {pad_count} token(s) - [PAD1] through [PAD{pad_count}]")
-            for i in range(1, pad_count + 1):
-                tokens.append(bytes(f"[PAD{i}]", encoding="utf-8"))
-                scores.append(-1000.0)
-                toktypes.append(SentencePieceTokenTypes.UNUSED)
-
         # realign tokens (see HF tokenizer code)
         tokens = [b'<s>', b'<pad>', b'</s>', b'<unk>'] + tokens[3:-1]
         scores = [0.0, 0.0, 0.0, 0.0] + scores[3:-1]
@@ -3707,6 +3699,12 @@ class BertModel(TextModel):
             SentencePieceTokenTypes.CONTROL,
             SentencePieceTokenTypes.UNKNOWN,
         ] + toktypes[3:-1]
+
+        if self.model_arch == gguf.MODEL_ARCH.NOMIC_BERT_MOE:
+            # Add mask token missing from sentencepiece.bpe.model
+            tokens[250001] = "<mask>"
+            scores[250001] = 0.0
+            toktypes[250001] = SentencePieceTokenTypes.CONTROL
 
         self.gguf_writer.add_tokenizer_model("t5")
         self.gguf_writer.add_tokenizer_pre("default")
