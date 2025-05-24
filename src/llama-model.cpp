@@ -4570,6 +4570,9 @@ struct llm_build_llama : public llm_graph_context {
                 Qcur = ggml_scale(ctx0, Qcur, 1.0f);
                 Kcur = ggml_scale(ctx0, Kcur, 1.0f);
                 Vcur = ggml_scale(ctx0, Vcur, 1.0f);
+                cb(Qcur, "QcurFIXME", il);
+                cb(Kcur, "KcurFIXME", il);
+                cb(Vcur, "VcurFIXME", il);
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
