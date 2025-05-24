@@ -8,6 +8,7 @@
  - [DataType Supports](#datatype-supports)
  - [Docker](#docker)
  - [Linux](#linux)
+ - [Environment variable setup](#environment-variable-setup)
  - [TODO](#todo)
 
 
@@ -280,6 +281,25 @@ cmake --build build --config release
 ### **GitHub contribution**:
 Please add the **[CANN]** prefix/tag in issues/PRs titles to help the CANN-team check/address them without delay.
 
+
+## Environment variable setup
+
+### GGML_CANN_ASYNC_MODE
+
+Enables asynchronous operator submission. Disabled by default.
+
+### GGML_CANN_MEM_POOL
+
+Specifies the memory pool management strategy:
+
+- vmm: Utilizes a virtual memory manager pool. If hardware support for VMM is unavailable, falls back to the legacy (leg) memory pool.
+
+- prio: Employs a priority queue-based memory pool management.
+- leg: Uses a fixed-size buffer pool.
+
+### GGML_CANN_DISABLE_BUF_POOL_CLEAN
+
+Controls automatic cleanup of the memory pool. This option is only effective when using the prio or leg memory pool strategies.
 
 ## TODO
 - Support more models and data types.
