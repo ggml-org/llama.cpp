@@ -46,13 +46,13 @@ static std::vector<const char *> g_col = {
 };
 
 struct common_log_entry {
-    enum ggml_log_level level;
-
-    bool prefix;
+    std::vector<char> msg;
 
     int64_t timestamp;
 
-    std::vector<char> msg;
+    enum ggml_log_level level;
+
+    bool prefix;
 
     // signals the worker thread to stop
     bool is_end;

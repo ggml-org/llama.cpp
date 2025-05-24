@@ -26,13 +26,13 @@ struct common_chat_templates {
 struct templates_params {
     json messages;
     json tools;
-    common_chat_tool_choice tool_choice;
     json json_schema;
+    common_chat_tool_choice tool_choice;
     bool parallel_tool_calls;
     bool stream;
-    std::string grammar;
     bool add_generation_prompt = true;
     bool extract_reasoning     = true;
+    std::string grammar;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
 };
 
@@ -815,7 +815,7 @@ static common_chat_params common_chat_params_init_mistral_nemo(const common_chat
         }
         builder.add_rule("root", "\"[TOOL_CALLS]\" " + builder.add_schema("tool_calls", schema));
     });
-    data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "[TOOL_CALLS]"});
+    data.grammar_triggers.push_back({"[TOOL_CALLS]", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
     data.preserved_tokens = {
         "[TOOL_CALLS]",
     };
@@ -862,8 +862,8 @@ static common_chat_params common_chat_params_init_command_r7b(const common_chat_
         builder.add_rule("root", "\"<|START_ACTION|>\" " + builder.add_schema("tool_calls", schema) + " \"<|END_ACTION|>\"");
     });
     data.grammar_triggers.push_back({
-        COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
         "<|START_ACTION|>",
+        COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
     });
     data.preserved_tokens = {
         "<|START_ACTION|>",
@@ -1004,11 +1004,11 @@ static common_chat_params common_chat_params_init_llama_3_x(const common_chat_te
             });
             // Small models may hallucinate function names so we match anything (*at the start*) that looks like the JSON of a function call, regardless of the name.
             data.grammar_triggers.push_back({
-                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
                 "\\{\\s*(?:\"type\"\\s*:\\s*\"function\"\\s*,\\s*)?\"name\"\\s*:\\s*\"", // + name + "\"[\\s\\S]*",
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
             });
             if (!builtin_tools.empty()) {
-                data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|python_tag|>"});
+                data.grammar_triggers.push_back({"<|python_tag|>", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
                 data.preserved_tokens.push_back("<|python_tag|>");
             }
             // Allow a few empty lines on top of the usual constrained json schema space rule.
@@ -1085,10 +1085,10 @@ static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_
                 "(" + string_join(tool_rules, " | ") + ")" + (inputs.parallel_tool_calls ? "*" : "") + " "
                 "\"<｜tool▁calls▁end｜>\""
                 " space");
-            data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<｜tool▁calls▁begin｜>"});
-            data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<｜tool_calls_begin｜>"});
-            data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<｜tool calls begin｜>"});
-            data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<｜tool\\_calls\\_begin｜>"});
+            data.grammar_triggers.push_back({"<｜tool▁calls▁begin｜>", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
+            data.grammar_triggers.push_back({"<｜tool_calls_begin｜>", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
+            data.grammar_triggers.push_back({"<｜tool calls begin｜>", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
+            data.grammar_triggers.push_back({"<｜tool\\_calls\\_begin｜>", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
             data.preserved_tokens = {
                 "<think>",
                 "</think>",
@@ -1196,7 +1196,7 @@ static common_chat_params common_chat_params_init_firefunction_v2(const common_c
             }
             builder.add_rule("root", "\" functools\"? " + builder.add_schema("tool_calls", schema));
         });
-        data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, " functools["});
+        data.grammar_triggers.push_back({" functools[", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
         data.preserved_tokens = {
             " functools[",
         };
@@ -1230,20 +1230,20 @@ static common_chat_params common_chat_params_init_functionary_v3_2(const common_
                 first_tool_rules.push_back(builder.add_rule(name + "-call", "( \"assistant<|end_header_id|>\\n\" )? \"" + name + "\\n\" " + args_rule));
                 subsequent_tool_rules.push_back(builder.add_rule(name + "-call2", "\">>>" + name + "\\n\" " + args_rule));
                 data.grammar_triggers.push_back({
-                    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
                     regex_escape(name + "\n"),
-                });
-                data.grammar_triggers.push_back({
                     COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
+                });
+                data.grammar_triggers.push_back({
                     regex_escape("assistant<|end_header_id|>\n" + name + "\n"),
+                    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
                 });
                 data.grammar_triggers.push_back({
-                    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
                     regex_escape(">>>" + name + "\n"),
+                    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
                 });
                 data.grammar_triggers.push_back({
-                    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
                     ">>>assistant<|end_header_id|>\n" + name,
+                    COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
                 });
             });
             data.preserved_tokens = {
@@ -1339,12 +1339,12 @@ static common_chat_params common_chat_params_init_functionary_v3_1_llama_3_1(con
             });
             if (has_raw_python) {
                 tool_rules.push_back(builder.add_rule("python-call", "\"<|python_tag|>\" .*"));
-                data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<|python_tag|>"});
+                data.grammar_triggers.push_back({"<|python_tag|>", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
                 data.preserved_tokens.push_back("<|python_tag|>");
             }
             auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | ")) + " space";
             builder.add_rule("root", inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call);
-            data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function="});
+            data.grammar_triggers.push_back({"<function=", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
         });
         data.format = COMMON_CHAT_FORMAT_FUNCTIONARY_V3_1_LLAMA_3_1;
     } else {
@@ -1404,13 +1404,13 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
                 "\"</function>\" space"));
 
             data.grammar_triggers.push_back({
-                COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
                 "<function=" + name + ">",
+                COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
             });
             auto escaped_name = regex_escape(name);
             data.grammar_triggers.push_back({
-                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
                 "<function\\s+name\\s*=\\s*\"" + escaped_name + "\"",
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
             });
         });
         auto any_tool_call = builder.add_rule("any_tool_call", "( " + string_join(tool_rules, " | ") + " ) space");
@@ -1431,12 +1431,12 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
             "( \"```\\n\" | \"```json\\n\" | \"```xml\\n\" ) space " + wrappable_tool_call + " space \"```\" space ");
         auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
         builder.add_rule("root", inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call);
-        data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>"});
-        data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function"});
+        data.grammar_triggers.push_back({"<tool_call>", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
+        data.grammar_triggers.push_back({"<function", COMMON_GRAMMAR_TRIGGER_TYPE_WORD});
         // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
         data.grammar_triggers.push_back({
-            COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
             "(?:```(?:json|xml)?\n\\s*)?(?:<function_call>|<tools>|<xml><json>|<response>)?\\s*\\{\\s*\"", //name\"\\s*:\\s*\"" + escaped_name + "\"",
+            COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
         });
         data.preserved_tokens = {
             "<think>",

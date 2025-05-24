@@ -68,18 +68,18 @@ struct common_chat_templates_inputs {
     bool add_generation_prompt = true;
     bool use_jinja = true;
     // Parameters below only supported when use_jinja is true
-    std::vector<common_chat_tool> tools;
-    common_chat_tool_choice tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
     bool parallel_tool_calls = false;
     bool extract_reasoning     = true;
+    common_chat_tool_choice tool_choice = COMMON_CHAT_TOOL_CHOICE_AUTO;
+    std::vector<common_chat_tool> tools;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
 };
 
 struct common_chat_params {
     common_chat_format                  format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    bool                                grammar_lazy = false;
     std::string                         prompt;
     std::string                         grammar;
-    bool                                grammar_lazy = false;
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;

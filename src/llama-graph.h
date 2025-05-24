@@ -374,8 +374,6 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 struct llm_graph_params {
     ggml_context * ctx;
 
-    const llm_arch arch;
-
     const llama_hparams & hparams;
     const llama_cparams & cparams;
     const llama_ubatch  & ubatch;
@@ -388,14 +386,14 @@ struct llm_graph_params {
     const llama_memory_i      * memory;
     const llama_cross         * cross;
 
+    const llm_arch arch;
+
     int32_t n_outputs;
 
     const llm_graph_cb & cb;
 };
 
 struct llm_graph_context {
-    const llm_arch arch;
-
     const llama_hparams & hparams;
     const llama_cparams & cparams;
     const llama_ubatch  & ubatch;
@@ -412,6 +410,8 @@ struct llm_graph_context {
     const int64_t n_embd_v_gqa;
     const int64_t n_expert;
     const int64_t n_expert_used;
+
+    const llm_arch arch;
 
     const float freq_base;
     const float freq_scale;
