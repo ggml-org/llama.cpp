@@ -1596,14 +1596,14 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         const int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
 
-        bool execute_inputs = false;
+        std::vector<ggml_tensor *> active_inputs;
         // copy the input tensors to the split backend
         for (int j = 0; j < split->n_inputs; j++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[j]);
             struct ggml_tensor * input = split->inputs[j];
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
             if (input_cpy->op != GGML_OP_NONE) {
-                execute_inputs = true;
+                active_inputs.push_back(input_cpy);
                 continue;
             }
 
@@ -1635,12 +1635,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
-        if (execute_inputs) {
+        if (!active_inputs.empty()) {
             ggml_cgraph graph_inputs = {
                 /*.size             =*/ 0,
-                /*.n_nodes          =*/ split->n_inputs,
+                /*.n_nodes          =*/ int(active_inputs.size()),
                 /*.n_leafs          =*/ 0,
-                /*.nodes            =*/ split->inputs,
+                /*.nodes            =*/ active_inputs.data(),
                 /*.grads            =*/ NULL, // gradients would need visited_hash_set
                 /*.grad_accs        =*/ NULL,
                 /*.leafs            =*/ NULL,
