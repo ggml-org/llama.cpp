@@ -1633,6 +1633,23 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
+        {
+            ggml_cgraph graph_inputs = {
+                /*.size             =*/ 0,
+                /*.n_nodes          =*/ split->n_inputs,
+                /*.n_leafs          =*/ 0,
+                /*.nodes            =*/ split->inputs,
+                /*.grads            =*/ NULL, // gradients would need visited_hash_set
+                /*.grad_accs        =*/ NULL,
+                /*.leafs            =*/ NULL,
+                /*.visited_hash_set =*/ { 0, NULL, NULL },
+                /*.order            =*/ split->graph.order,
+            };
+            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &graph_inputs);
+            if (ec != GGML_STATUS_SUCCESS) {
+                return ec;
+            }
+        }
 
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
