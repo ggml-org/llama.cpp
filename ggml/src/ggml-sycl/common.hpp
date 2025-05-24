@@ -472,10 +472,10 @@ static __dpct_inline__ float warp_reduce_max(float x,
     return x;
 }
 
-/* Helper for Computing the linear offset into an 4-dimensional ggml_tensor given
+/* Helper for Computing the linear offset of a ggml_tensor given
 per-dimension sizes, strides, and indices */
 template<int N>
-static __dpct_inline__ size_t calculate_offset(const std::array<int, N> & strides, const std::array<int, N> & indices) {
+__dpct_inline__ size_t calculate_offset(const std::array<int, N> & strides, const std::array<int, N> & indices) {
     size_t offset = 0;
 #pragma unroll
     for (int i = 0; i < N; i++) {

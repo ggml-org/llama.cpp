@@ -1,5 +1,6 @@
 #include "norm.hpp"
 #include "ggml-sycl/common.hpp"
+#include "ggml-sycl/presets.hpp"
 
 static void norm_f32(const float* x, float* dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps, const sycl::nd_item<3>& item_ct1, sycl::float2* s_sum, int block_size) {
@@ -40,7 +41,7 @@ static void norm_f32(const float* x, float* dst, const int ncols, const int64_t 
         }
         item_ct1.barrier(sycl::access::fence_space::local_space);
         mean_var = 0.f;
-        const size_t nreduce = (nwarps + WARP_SIZE - 1) / WARP_SIZE;
+        const size_t nreduce = ceil_div(nwarps, WARP_SIZE);
         for (size_t i = 0; i < nreduce; i += 1)
         {
             mean_var += s_sum[wi_in_sg + i * WARP_SIZE];
@@ -184,7 +185,7 @@ static void rms_norm_f32(const float* x, float* dst, const int ncols, const int6
         }
 
         item_ct1.barrier(sycl::access::fence_space::local_space);
-        const size_t nreduce = (nwarps + WARP_SIZE - 1) / WARP_SIZE;
+        const size_t nreduce = ceil_div(nwarps, WARP_SIZE);
         tmp = 0.f;
         for (size_t i = 0; i < nreduce; i += 1)
         {
