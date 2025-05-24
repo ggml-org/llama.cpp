@@ -205,6 +205,16 @@ public:
         used++;
     }
 
+    // change the position of a non-empty cell
+    // does not modify "has_shift"
+    // note: call only if the cell is not empty
+    void pos_chg(uint32_t i, llama_pos p) {
+        assert(i < pos.size());
+        assert(pos[i] != -1);
+
+        pos[i] = p;
+    }
+
     // pos[i] = pos[i] + d
     // sets "has_shift" to true
     // note: call only if the cell is not empty

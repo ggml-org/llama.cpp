@@ -2,6 +2,11 @@
 
 #include "llama.h"
 
+#include <memory>
+#include <vector>
+
+struct llama_ubatch;
+
 struct llama_memory_params {
     // kv cache
     ggml_type type_k;
@@ -30,3 +35,15 @@ public:
 
     virtual bool get_can_edit() const = 0;
 };
+
+class llama_memory_decode_state_i {
+public:
+    virtual ~llama_memory_decode_state_i() = default;
+
+    virtual llama_ubatch * next() = 0;
+
+    // TODO: this might get reworked in the future when refactoring llama_batch
+    virtual std::vector<int64_t> & out_ids() = 0;
+};
+
+using llama_memory_decode_state_ptr = std::unique_ptr<llama_memory_decode_state_i>;

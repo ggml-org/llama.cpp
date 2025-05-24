@@ -259,9 +259,9 @@ extern "C" {
         llama_token  *  token;
         float        *  embd;
         llama_pos    *  pos;
-        int32_t      *  n_seq_id;
-        llama_seq_id ** seq_id;
-        int8_t       *  logits; // TODO: rename this to "output"
+        int32_t      *  n_seq_id; // TODO: remove, should belong to only 1 sequence
+        llama_seq_id ** seq_id;   // TODO: become llama_seq_id * seq_id;
+        int8_t       *  logits;   // TODO: rename this to "output"
     } llama_batch;
 
     enum llama_model_kv_override_type {
