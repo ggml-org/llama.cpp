@@ -75,7 +75,7 @@ def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_conte
         choice = data["choices"][0]
         if i == 0:
             # Check first role message for stream=True
-            assert choice["delta"]["content"] == ""
+            assert choice["delta"]["content"] is None
             assert choice["delta"]["role"] == "assistant"
         else:
             assert "role" not in choice["delta"]
@@ -92,7 +92,7 @@ def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_conte
             assert choice["finish_reason"] == finish_reason
         else:
             assert choice["finish_reason"] is None
-            content += choice["delta"]["content"]
+            content += choice["delta"]["content"] or ''
 
 
 def test_chat_completion_with_openai_library():
@@ -251,8 +251,9 @@ def test_chat_completion_with_timings_per_token():
     for i, data in enumerate(res):
         if i == 0:
             # Check first role message for stream=True
-            assert data["choices"][0]["delta"]["content"] == ""
+            assert data["choices"][0]["delta"]["content"] is None
             assert data["choices"][0]["delta"]["role"] == "assistant"
+            assert "timings" not in data, f'First event should not have timings: {data}'
         else:
             assert "role" not in data["choices"][0]["delta"]
             assert "timings" in data
@@ -311,7 +312,7 @@ def test_logprobs_stream():
         choice = data.choices[0]
         if i == 0:
             # Check first role message for stream=True
-            assert choice.delta.content == ""
+            assert choice.delta.content is None
             assert choice.delta.role == "assistant"
         else:
             assert choice.delta.role is None

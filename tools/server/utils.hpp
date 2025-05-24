@@ -474,26 +474,6 @@ static std::string gen_tool_call_id() {
 // other common utils
 //
 
-static bool ends_with(const std::string & str, const std::string & suffix) {
-    return str.size() >= suffix.size() && 0 == str.compare(str.size() - suffix.size(), suffix.size(), suffix);
-}
-
-static size_t find_partial_stop_string(const std::string &stop, const std::string &text) {
-    if (!text.empty() && !stop.empty()) {
-        const char text_last_char = text.back();
-        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
-            if (stop[char_index] == text_last_char) {
-                const std::string current_partial = stop.substr(0, char_index + 1);
-                if (ends_with(text, current_partial)) {
-                    return text.size() - char_index - 1;
-                }
-            }
-        }
-    }
-
-    return std::string::npos;
-}
-
 // TODO: reuse llama_detokenize
 template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
@@ -599,19 +579,16 @@ static json oaicompat_chat_params_parse(
     json llama_params;
 
     auto tools = json_value(body, "tools", json());
+    auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
+    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
 
-    if (tools.is_array() && !tools.empty()) {
-        if (stream) {
-            throw std::runtime_error("Cannot use tools with stream");
-        }
-        if (!opt.use_jinja) {
+    if (!opt.use_jinja) {
+        if (has_tools) {
             throw std::runtime_error("tools param requires --jinja flag");
         }
-    }
-    if (!opt.use_jinja) {
-        if (body.contains("tool_choice") && !body.at("tool_choice").is_null()) {
-            throw std::runtime_error("Unsupported param: tool_choice");
+        if (tool_choice != "auto") {
+            throw std::runtime_error("tool_choice param requires --jinja flag");
         }
     }
 
@@ -749,14 +726,12 @@ static json oaicompat_chat_params_parse(
     common_chat_templates_inputs inputs;
     inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
-    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(json_value(body, "tool_choice", std::string("auto")));
+    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(tool_choice);
     inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar               = grammar;
-    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.use_jinja             = opt.use_jinja;
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
-    inputs.extract_reasoning     = opt.reasoning_format != COMMON_REASONING_FORMAT_NONE;
-    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+    inputs.reasoning_format      = opt.reasoning_format;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && body.contains("grammar")) {
         throw std::runtime_error("Cannot use custom grammar constraints with tools.");
     }
@@ -774,7 +749,8 @@ static json oaicompat_chat_params_parse(
             throw std::runtime_error("Cannot have 2 or more assistant messages at the end of the list.");
         }
 
-        inputs.extract_reasoning = false;
+        /* TODO: test this properly */
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
         inputs.add_generation_prompt = true;
     }
 
@@ -799,6 +775,7 @@ static json oaicompat_chat_params_parse(
     }
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
+    llama_params["thinking_forced_open"]     = chat_params.thinking_forced_open;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
@@ -812,6 +789,9 @@ static json oaicompat_chat_params_parse(
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
     if (json_value(body, "logprobs", false)) {
+        if (has_tools && stream) {
+            throw std::runtime_error("logprobs is not supported with tools + stream");
+        }
         llama_params["n_probs"] = json_value(body, "top_logprobs", 20);
     } else if (body.contains("top_logprobs") && !body.at("top_logprobs").is_null()) {
         throw std::runtime_error("top_logprobs requires logprobs to be set to true");
