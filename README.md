@@ -279,6 +279,94 @@ The Hugging Face platform provides a variety of online tools for converting, qua
 
 To learn more about model quantization, [read this documentation](tools/quantize/README.md)
 
+## Running a Small Model with llama.cpp
+
+This guide will walk you through the steps to download a small model from Hugging Face, convert it to the GGUF format, and run it using `llama-cli`. We'll use `microsoft/phi-2` as an example, which is a good small model to start with.
+
+### 1. Choosing a Model
+
+You can find many models on Hugging Face. For this example, we'll use `microsoft/phi-2`. It's a 2.7B parameter model that offers a good balance between performance and resource requirements. You can browse other models on the [Hugging Face models page](https://huggingface.co/models).
+
+### 2. Downloading and Converting the Model
+
+`llama.cpp` uses the GGUF (GPT-Generated Unified Format) for its models. This format is optimized for rapid loading and saving of models, and for ease of reading. It's a single-file format that includes all the necessary information to run the model.
+
+To use a Hugging Face model like `phi-2` with `llama.cpp`, you first need to download its weights and then convert them to the GGUF format.
+
+**a. Download the model from Hugging Face:**
+
+It's recommended to clone the model repository using `git-lfs`. First, ensure you have `git-lfs` installed. You can usually install it with:
+
+```bash
+git lfs install
+```
+
+Then, clone the model repository. For `microsoft/phi-2`:
+
+```bash
+git clone https://huggingface.co/microsoft/phi-2
+```
+
+This will download the model files into a directory named `phi-2`.
+
+**b. Convert the model to GGUF:**
+
+`llama.cpp` provides a Python script `convert_hf_to_gguf.py` (often found in the `examples` or `tools` directory, or you might need to ensure it's in your Python path if you installed llama.cpp differently) to convert Hugging Face models to GGUF.
+
+Navigate to your `llama.cpp` directory and run the conversion script. The exact path to the script might vary based on your `llama.cpp` setup.
+
+```bash
+# Assuming you are in the root of the llama.cpp repository
+# and the phi-2 model was cloned into a directory named 'phi-2' sibling to the llama.cpp directory.
+# Adjust paths as necessary.
+
+# Example for older script name 'convert-hf-to-gguf.py'
+python3 ./examples/convert-hf-to-gguf.py ../phi-2 --outfile phi-2.gguf
+
+# Or, if the script is named 'convert_hf_to_gguf.py' and located in 'tools'
+python3 ./tools/convert_hf_to_gguf.py ../phi-2 --outfile phi-2.gguf
+
+# Some models might require specifying the output type, e.g., f16 or q8_0
+python3 ./tools/convert_hf_to_gguf.py ../phi-2 --outfile phi-2-f16.gguf --outtype f16
+```
+
+This command will create a `phi-2.gguf` (or `phi-2-f16.gguf`) file in your current directory. This is the file you'll use with `llama-cli`.
+
+*Note on `convert_hf_to_gguf.py`*: This script has evolved. Older versions were named `convert-hf-to-gguf.py` and might have been located in `examples`. Newer versions are typically `convert_hf_to_gguf.py` and located in the `tools` directory. Always check your local `llama.cpp` repository for the correct script name and location. The script itself often has options to control the quantization of the output GGUF file (e.g., `f16` for 16-bit floating point, `q8_0` for 8-bit quantization, etc.). Smaller, quantized models run faster and use less memory but might have slightly reduced accuracy.
+
+### 3. Understanding GGUF
+
+GGUF (GPT-Generated Unified Format) is a binary format designed for `llama.cpp`. Key features include:
+
+-   **Single File:** All model data (weights, metadata, vocabulary) is contained in one file.
+-   **Extensibility:** Allows adding new information to models without breaking compatibility with older versions.
+-   **Quantization Support:** Natively supports various quantization types, allowing for smaller model sizes and faster inference.
+-   **Memory Mapping (`mmap`):** Designed to be efficiently loaded using memory mapping, which speeds up model loading times significantly.
+
+### 4. Running the Model with `llama-cli`
+
+Once you have your `phi-2.gguf` file, you can run it using the `llama-cli` tool. `llama-cli` is the primary command-line interface for interacting with `llama.cpp` models.
+
+```bash
+# Assuming 'llama-cli' is built and in your PATH, or you are in the directory where it's located.
+# And 'phi-2.gguf' is in the current directory.
+
+./llama-cli -m phi-2.gguf -p "Once upon a time" -n 50
+```
+
+Explanation of the command:
+
+-   `./llama-cli`: Executes the `llama-cli` program.
+-   `-m phi-2.gguf`: Specifies the path to your GGUF model file.
+-   `-p "Once upon a time"`: Provides a prompt to the model.
+-   `-n 50`: Specifies the number of tokens (roughly, parts of words) the model should generate.
+
+You should see the model start generating text based on your prompt.
+
+This covers the basic workflow of getting a small model like `phi-2` up and running with `llama.cpp`. You can explore further options for `llama-cli` to control aspects like temperature, top-k sampling, context size, and more for different generation behaviors.
+
+---
+
 ## [`llama-cli`](tools/main)
 
 #### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.

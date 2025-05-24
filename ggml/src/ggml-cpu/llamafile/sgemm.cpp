@@ -3277,9 +3277,77 @@ class tinyBLAS_PPC {
  * @return true if this function was able to service the matmul request
  */
 bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
-                     const void *A, int64_t lda, const void *B, int64_t ldb, void *C,
+                     const void *A_void, int64_t lda, const void *B_void, int64_t ldb, void *C_void,
                      int64_t ldc, int Atype, int Btype, int Ctype) {
 
+    // Function simplified to basic triple-nested loop for C = A^T * B
+    // Original optimized implementation has been commented out.
+    // This version assumes A, B, and C are float matrices and ignores threading (params->ith, params->nth).
+
+    assert(m >= 0);
+    assert(n >= 0);
+    assert(k >= 0);
+    assert(A_void != nullptr);
+    assert(B_void != nullptr);
+    assert(C_void != nullptr);
+    assert(lda >= m); // For A^T, original A has k rows, m columns. lda is stride for original A.
+                      // If A is const float *A, A[col*lda + row]
+                      // For A^T, element (i, l) is A[l * lda + i]
+    assert(ldb >= k); // For B, element (l, j) is B[j * ldb + l]
+    assert(ldc >= m); // For C, element (i, j) is C[j * ldc + i]
+
+    // Simplifying assumption: work with floats if Atype, Btype, Ctype are F32
+    if (Atype != GGML_TYPE_F32 || Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32) {
+        // For simplicity, only handle F32. A more robust "simple" version might
+        // try to handle other types or fall back, but this is the simplest.
+        return false;
+    }
+
+    const float *A = (const float *)A_void;
+    const float *B = (const float *)B_void;
+    float *C = (float *)C_void;
+
+    // Basic triple-nested loop for C = A^T * B
+    // C is M x N
+    // A^T is M x K (A is K x M)
+    // B is K x N
+    for (int64_t i = 0; i < m; ++i) { // Iterate over rows of C (and rows of A^T)
+        for (int64_t j = 0; j < n; ++j) { // Iterate over columns of C (and columns of B)
+            float sum = 0.0f;
+            for (int64_t l = 0; l < k; ++l) { // Iterate over common dimension K
+                // A is KxM, accessed column-major (A_colmajor[row + col*K]) or row-major (A_rowmajor[row*M + col])
+                // Given A is KxM (k rows, m columns) and lda is its leading dimension (stride to get to next column's start if row-major, or next row's start if col-major)
+                // A is passed as (const void *A, int64_t lda)
+                // The comment "A is first input matrix (always transposed)" means we compute C = A_actual^T * B_actual
+                // So if A_input is KxM, A_actual^T is MxK.
+                // A_input[row_idx_A * lda + col_idx_A]
+                // A_actual^T(i, l) means element from row i, column l of A_actual^T.
+                // This corresponds to element (l, i) of A_actual.
+                // So, A_actual(l,i) = A[l*lda + i] assuming lda is for row-major KxM matrix A.
+                //
+                // B is KxN. B_actual(l,j) = B[l*ldb + j] assuming ldb is for row-major KxN matrix B.
+                // C is MxN. C_actual(i,j) = C[i*ldc + j] assuming ldc is for row-major MxN matrix C.
+
+                // Correct access for C = A^T * B, assuming A, B, C are row-major oriented in memory
+                // A is KxM (k_rows, m_cols), so A^T is MxK (m_rows, k_cols)
+                // A_transpose[i][l] is A[l][i] from original KxM A matrix.
+                // B is KxN (k_rows, n_cols)
+                // C is MxN (m_rows, n_cols)
+                // C[i][j] = sum(A_transpose[i][l] * B[l][j] for l in 0..K-1)
+                // A_transpose[i][l] (element at row i, col l of A^T) is A[l*lda + i] if A is stored as KxM row-major.
+                // B[l][j] (element at row l, col j of B) is B[l*ldb + j] if B is stored as KxN row-major.
+                // C[i][j] (element at row i, col j of C) is C[i*ldc + j] if C is stored as MxN row-major.
+                sum += A[l * lda + i] * B[l * ldb + j];
+            }
+            C[i * ldc + j] = sum;
+        }
+    }
+    (void)params; // Threading params ignored in this simplified version.
+    return true;
+
+
+    // Original implementation:
+    /*
     assert(m >= 0);
     assert(n >= 0);
     assert(k >= 0);
@@ -3541,4 +3609,5 @@ bool llamafile_sgemm(const struct ggml_compute_params * params, int64_t m, int64
     (void)Atype;
     (void)Btype;
     (void)Ctype;
+    */
 }
