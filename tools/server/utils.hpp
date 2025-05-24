@@ -585,6 +585,7 @@ struct oaicompat_parser_options {
     bool use_jinja;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
+    std::map<std::string,std::string> chat_template_kwargs;
     common_chat_templates * tmpls;
     bool allow_image;
     bool allow_audio;
@@ -757,6 +758,15 @@ static json oaicompat_chat_params_parse(
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
     inputs.extract_reasoning     = opt.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+
+    auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
+    for (const auto & item : opt.chat_template_kwargs) {
+        inputs.chat_template_kwargs[item.first] = item.second;
+    }
+    for (const auto & item : chat_template_kwargs_object.items()) {
+        inputs.chat_template_kwargs[item.key()] = item.value().dump();
+    }
+
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && body.contains("grammar")) {
         throw std::runtime_error("Cannot use custom grammar constraints with tools.");
     }
@@ -772,6 +782,10 @@ static json oaicompat_chat_params_parse(
         /* sanity check, max one assistant message at the end of the list */
         if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
             throw std::runtime_error("Cannot have 2 or more assistant messages at the end of the list.");
+        }
+
+        if (inputs.chat_template_kwargs.find("enable_thinking") != inputs.chat_template_kwargs.end()) {
+            throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
         }
 
         inputs.extract_reasoning = false;
