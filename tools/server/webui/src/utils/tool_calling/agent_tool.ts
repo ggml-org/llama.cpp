@@ -1,0 +1,70 @@
+import StorageUtils from '../storage';
+import {
+  ToolCallRequest,
+  ToolCallOutput,
+  ToolCallParameters,
+  ToolCallSpec,
+} from '../types';
+
+export abstract class AgentTool {
+  constructor(
+    public readonly id: string,
+    public readonly name: string,
+    public readonly toolDescription: string,
+    public readonly parameters: ToolCallParameters
+  ) {}
+
+  /**
+   * "Public" wrapper for the tool call processing logic.
+   * @param call The tool call object from the API response.
+   * @returns The tool call output or undefined if the tool is not enabled.
+   */
+  public async processCall(
+    call: ToolCallRequest
+  ): Promise<ToolCallOutput | undefined> {
+    if (this.enabled) {
+      try {
+        return await this._process(call);
+      } catch (error) {
+        console.error(`Error processing tool call for ${this.id}:`, error);
+        return {
+          type: 'function_call_output',
+          call_id: call.call_id,
+          output: `Error during tool execution: ${(error as Error).message}`,
+        } as ToolCallOutput;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Whether calling this tool is enabled.
+   * User can toggle the status from the settings panel.
+   * @returns enabled status.
+   */
+  public get enabled(): boolean {
+    return StorageUtils.getConfig()[`tool_${this.id}_enabled`] ?? false;
+  }
+
+  /**
+   * Specifications for the tool call.
+   * https://github.com/ggml-org/llama.cpp/blob/master/docs/function-calling.md
+   * https://platform.openai.com/docs/guides/function-calling?api-mode=responses#defining-functions
+   */
+  public get specs(): ToolCallSpec {
+    return {
+      type: 'function',
+      function: {
+        name: this.id,
+        description: this.toolDescription,
+        parameters: this.parameters,
+      },
+    };
+  }
+
+  /**
+   * The actual tool call processing logic.
+   * @param call: The tool call object from the API response.
+   */
+  protected abstract _process(call: ToolCallRequest): Promise<ToolCallOutput>;
+}

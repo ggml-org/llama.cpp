@@ -6,6 +6,7 @@ import {
   LlamaCppServerProps,
   Message,
   PendingMessage,
+  ToolCallRequest,
   ViewingChat,
 } from './types';
 import StorageUtils from './storage';
@@ -17,6 +18,7 @@ import {
 } from './misc';
 import { BASE_URL, CONFIG_DEFAULT, isDev } from '../Config';
 import { matchPath, useLocation, useNavigate } from 'react-router';
+import { AVAILABLE_TOOLS } from './tool_calling/register_tools';
 import toast from 'react-hot-toast';
 
 interface AppContextValue {
@@ -157,8 +159,8 @@ export const AppContextProvider = ({
     convId: string,
     leafNodeId: Message['id'],
     onChunk: CallbackGeneratedChunk
-  ) => {
-    if (isGenerating(convId)) return;
+  ): Promise<Message['id']> => {
+    if (isGenerating(convId)) return leafNodeId;
 
     const config = StorageUtils.getConfig();
     const currConversation = await StorageUtils.getOneConversation(convId);
@@ -204,10 +206,18 @@ export const AppContextProvider = ({
       }
       if (isDev) console.log({ messages });
 
+      // tool calling from clientside
+      const enabledTools = Array.from(
+        AVAILABLE_TOOLS,
+        ([_name, tool], _index) => tool
+      )
+        .filter((tool) => tool.enabled)
+        .map((tool) => tool.specs);
+
       // prepare params
       const params = {
         messages,
-        stream: true,
+        stream: config.streamResponse,
         cache_prompt: true,
         samplers: config.samplers,
         temperature: config.temperature,
@@ -229,6 +239,7 @@ export const AppContextProvider = ({
         dry_penalty_last_n: config.dry_penalty_last_n,
         max_tokens: config.max_tokens,
         timings_per_token: !!config.showTokensPerSecond,
+        tools: enabledTools.length > 0 ? enabledTools : undefined,
         ...(config.custom.length ? JSON.parse(config.custom) : {}),
       };
 
@@ -244,37 +255,147 @@ export const AppContextProvider = ({
         body: JSON.stringify(params),
         signal: abortController.signal,
       });
+
       if (fetchResponse.status !== 200) {
         const body = await fetchResponse.json();
         throw new Error(body?.error?.message || 'Unknown error');
       }
-      const chunks = getSSEStreamAsync(fetchResponse);
-      for await (const chunk of chunks) {
-        // const stop = chunk.stop;
-        if (chunk.error) {
-          throw new Error(chunk.error?.message || 'Unknown error');
+
+      // Tool calls results we will process later
+      const pendingMessages: PendingMessage[] = [];
+      let lastMsgId = pendingMsg.id;
+      let shouldContinueChain = false;
+
+      if (params.stream) {
+        const chunks = getSSEStreamAsync(fetchResponse);
+        for await (const chunk of chunks) {
+          // const stop = chunk.stop;
+          if (chunk.error) {
+            throw new Error(chunk.error?.message || 'Unknown error');
+          }
+          const addedContent = chunk.choices[0].delta.content;
+          const lastContent = pendingMsg.content || '';
+          if (addedContent) {
+            pendingMsg = {
+              ...pendingMsg,
+              content: lastContent + addedContent,
+            };
+          }
+          const timings = chunk.timings;
+          if (timings && config.showTokensPerSecond) {
+            // only extract what's really needed, to save some space
+            pendingMsg.timings = {
+              prompt_n: timings.prompt_n,
+              prompt_ms: timings.prompt_ms,
+              predicted_n: timings.predicted_n,
+              predicted_ms: timings.predicted_ms,
+            };
+          }
+          setPending(convId, pendingMsg);
+          onChunk(); // don't need to switch node for pending message
         }
-        const addedContent = chunk.choices[0].delta.content;
-        const lastContent = pendingMsg.content || '';
-        if (addedContent) {
+      } else {
+        const responseData = await fetchResponse.json();
+        if (responseData.error) {
+          throw new Error(responseData.error?.message || 'Unknown error');
+        }
+
+        const choice = responseData.choices[0];
+        const messageFromAPI = choice.message;
+        let newContent = '';
+
+        if (messageFromAPI.content) {
+          newContent = messageFromAPI.content;
+        }
+
+        // Process tool calls
+        if (messageFromAPI.tool_calls && messageFromAPI.tool_calls.length > 0) {
+          // Store the raw tool calls in the pendingMsg
           pendingMsg = {
             ...pendingMsg,
-            content: lastContent + addedContent,
+            tool_calls: messageFromAPI.tool_calls as ToolCallRequest[],
+          };
+
+          for (let i = 0; i < messageFromAPI.tool_calls.length; i++) {
+            const toolCall = messageFromAPI.tool_calls[i] as ToolCallRequest;
+            if (toolCall) {
+              // Set up call id
+              toolCall.call_id ??= `call_${i}`;
+
+              if (isDev) console.log({ tc: toolCall });
+
+              // Process tool call
+              const toolResult = await AVAILABLE_TOOLS.get(
+                toolCall.function.name
+              )?.processCall(toolCall);
+
+              const toolMsg: PendingMessage = {
+                id: lastMsgId + 1,
+                type: 'text',
+                convId: convId,
+                content: toolResult?.output ?? 'Error: invalid tool call!',
+                timestamp: Date.now(),
+                role: 'tool',
+                parent: lastMsgId,
+                children: [],
+              };
+              pendingMessages.push(toolMsg);
+              lastMsgId += 1;
+            }
+          }
+        }
+
+        if (newContent !== '') {
+          pendingMsg = {
+            ...pendingMsg,
+            content: newContent,
           };
         }
-        const timings = chunk.timings;
-        if (timings && config.showTokensPerSecond) {
-          // only extract what's really needed, to save some space
+
+        // Handle timings from the non-streaming response
+        const apiTimings = responseData.timings;
+        if (apiTimings && config.showTokensPerSecond) {
           pendingMsg.timings = {
-            prompt_n: timings.prompt_n,
-            prompt_ms: timings.prompt_ms,
-            predicted_n: timings.predicted_n,
-            predicted_ms: timings.predicted_ms,
+            prompt_n: apiTimings.prompt_n,
+            prompt_ms: apiTimings.prompt_ms,
+            predicted_n: apiTimings.predicted_n,
+            predicted_ms: apiTimings.predicted_ms,
           };
         }
-        setPending(convId, pendingMsg);
-        onChunk(); // don't need to switch node for pending message
+
+        for (const pendMsg of pendingMessages) {
+          setPending(convId, pendMsg);
+          onChunk(pendMsg.id); // Update UI to show the processed message
+        }
+
+        shouldContinueChain = choice.finish_reason === 'tool_calls';
       }
+
+      pendingMessages.unshift(pendingMsg);
+      if (
+        pendingMsg.content !== null ||
+        (pendingMsg.tool_calls?.length ?? 0) > 0
+      ) {
+        await StorageUtils.appendMsgChain(
+          pendingMessages as Message[],
+          leafNodeId
+        );
+      }
+
+      // if message ended due to "finish_reason": "tool_calls"
+      // resend it to assistant to process the result.
+      if (shouldContinueChain) {
+        lastMsgId = await generateMessage(convId, lastMsgId, onChunk);
+      }
+
+      setPending(convId, null);
+      onChunk(lastMsgId); // trigger scroll to bottom and switch to the last node
+
+      // Fetch messages from DB
+      const savedMsgs = await StorageUtils.getMessages(convId);
+      console.log({ savedMsgs });
+
+      return lastMsgId;
     } catch (err) {
       setPending(convId, null);
       if ((err as Error).name === 'AbortError') {
@@ -288,11 +409,7 @@ export const AppContextProvider = ({
       }
     }
 
-    if (pendingMsg.content !== null) {
-      await StorageUtils.appendMsg(pendingMsg as Message, leafNodeId);
-    }
-    setPending(convId, null);
-    onChunk(pendingId); // trigger scroll to bottom and switch to the last node
+    return pendingId;
   };
 
   const sendMessage = async (
@@ -316,7 +433,7 @@ export const AppContextProvider = ({
 
     const now = Date.now();
     const currMsgId = now;
-    StorageUtils.appendMsg(
+    await StorageUtils.appendMsg(
       {
         id: currMsgId,
         timestamp: now,

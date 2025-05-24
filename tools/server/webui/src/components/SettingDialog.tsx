@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { ReactElement, useState } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import { isDev } from '../Config';
@@ -11,8 +11,11 @@ import {
   FunnelIcon,
   HandRaisedIcon,
   SquaresPlusIcon,
+  WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
+import { AVAILABLE_TOOLS } from '../utils/tool_calling/register_tools';
+import { AgentTool } from '../utils/tool_calling/agent_tool';
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
@@ -50,8 +53,8 @@ enum SettingInputType {
 
 interface SettingFieldInput {
   type: Exclude<SettingInputType, SettingInputType.CUSTOM>;
-  label: string | React.ReactElement;
-  help?: string | React.ReactElement;
+  label: string | ReactElement;
+  help?: string | ReactElement;
   key: SettKey;
 }
 
@@ -100,6 +103,11 @@ const SETTING_SECTIONS: SettingSection[] = [
             key,
           }) as SettingFieldInput
       ),
+      {
+        type: SettingInputType.CHECKBOX,
+        label: 'Enable response streaming',
+        key: 'streamResponse',
+      },
       {
         type: SettingInputType.SHORT_INPUT,
         label: 'Paste length to file',
@@ -167,6 +175,48 @@ const SETTING_SECTIONS: SettingSection[] = [
           'Exclude thought process when sending requests to API (Recommended for DeepSeek-R1)',
         key: 'excludeThoughtOnReq',
       },
+    ],
+  },
+  {
+    title: (
+      <>
+        <WrenchScrewdriverIcon className={ICON_CLASSNAME} />
+        Tool Calling
+      </>
+    ),
+    fields: [
+      {
+        type: SettingInputType.CUSTOM,
+        key: 'custom',
+        component: () => (
+          <div className="mt-1 mb-3 p-2 bg-base-200 rounded-md text-sm">
+            <p className="font-semibold">Important Note:</p>
+            <p className="opacity-90">
+              Response streaming must be <strong>disabled</strong> to use tool
+              calling. Individual tools (listed below) will be automatically
+              disabled if streaming is enabled.
+            </p>
+          </div>
+        ),
+      },
+      ...Array.from(AVAILABLE_TOOLS.values()).map(
+        (tool: AgentTool) =>
+          ({
+            type: SettingInputType.CHECKBOX,
+            label: (
+              <>
+                <span className="font-semibold">{tool.name || tool.id}</span>
+                {tool.toolDescription && (
+                  <small className="text-xs block mt-1 opacity-70">
+                    <strong>Agent tool description: </strong>
+                    {tool.toolDescription}
+                  </small>
+                )}
+              </>
+            ),
+            key: `tool_${tool.id}_enabled` as SettKey,
+          }) as SettingFieldInput
+      ),
     ],
   },
   {
@@ -417,6 +467,11 @@ export default function SettingDialog({
                   />
                 );
               } else if (field.type === SettingInputType.CHECKBOX) {
+                const isToolToggle =
+                  typeof field.key === 'string' &&
+                  field.key.startsWith('tool_') &&
+                  field.key.endsWith('_enabled');
+                const isDisabled = isToolToggle && localConfig.streamResponse;
                 return (
                   <SettingsModalCheckbox
                     key={key}
@@ -424,6 +479,7 @@ export default function SettingDialog({
                     value={!!localConfig[field.key]}
                     onChange={onChange(field.key)}
                     label={field.label as string}
+                    disabled={isDisabled}
                   />
                 );
               } else if (field.type === SettingInputType.CUSTOM) {
@@ -531,11 +587,13 @@ function SettingsModalCheckbox({
   value,
   onChange,
   label,
+  disabled,
 }: {
   configKey: SettKey;
   value: boolean;
   onChange: (value: boolean) => void;
-  label: string;
+  label: React.ReactElement | string;
+  disabled?: boolean;
 }) {
   return (
     <div className="flex flex-row items-center mb-2">
@@ -544,6 +602,7 @@ function SettingsModalCheckbox({
         className="toggle"
         checked={value}
         onChange={(e) => onChange(e.target.checked)}
+        disabled={disabled}
       />
       <span className="ml-4">{label || configKey}</span>
     </div>

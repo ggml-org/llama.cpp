@@ -39,10 +39,11 @@ export interface Message {
   convId: string;
   type: 'text' | 'root';
   timestamp: number; // timestamp from Date.now()
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   timings?: TimingReport;
   extra?: MessageExtra[];
+  tool_calls?: ToolCallRequest[];
   // node based system for branching
   parent: Message['id'];
   children: Message['id'][];
@@ -95,6 +96,7 @@ export type APIMessageContentPart =
 
 export type APIMessage = {
   role: Message['role'];
+  tool_calls?: ToolCallRequest[];
   content: string | APIMessageContentPart[];
 };
 
@@ -124,6 +126,37 @@ export interface CanvasPyInterpreter {
 }
 
 export type CanvasData = CanvasPyInterpreter;
+
+export interface ToolCallRequest {
+  id: string;
+  type: 'function';
+  call_id: string;
+  function: {
+    name: string;
+    arguments: string; // JSON string of arguments
+  };
+}
+
+export interface ToolCallSpec {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: ToolCallParameters;
+  };
+}
+
+export interface ToolCallParameters {
+  type: 'object';
+  properties: object;
+  required: string[];
+}
+
+export interface ToolCallOutput {
+  type: 'function_call_output';
+  call_id: string;
+  output: string;
+}
 
 // a non-complete list of props, only contains the ones we need
 export interface LlamaCppServerProps {

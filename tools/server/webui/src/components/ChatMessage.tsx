@@ -1,8 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, Fragment } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
 import { classNames } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
+import { ToolCallArgsDisplay } from './tool_calling/ToolCallArgsDisplay';
+import { ToolCallResultDisplay } from './tool_calling/ToolCallResultDisplay';
 import {
   ArrowPathIcon,
   ChevronLeftIcon,
@@ -20,6 +22,7 @@ interface SplitMessage {
 
 export default function ChatMessage({
   msg,
+  chainedParts,
   siblingLeafNodeIds,
   siblingCurrIdx,
   id,
@@ -29,6 +32,7 @@ export default function ChatMessage({
   isPending,
 }: {
   msg: Message | PendingMessage;
+  chainedParts?: (Message | PendingMessage)[];
   siblingLeafNodeIds: Message['id'][];
   siblingCurrIdx: number;
   id?: string;
@@ -57,8 +61,15 @@ export default function ChatMessage({
 
   // for reasoning model, we split the message into content and thought
   // TODO: implement this as remark/rehype plugin in the future
-  const { content, thought, isThinking }: SplitMessage = useMemo(() => {
-    if (msg.content === null || msg.role !== 'assistant') {
+  const {
+    content: mainDisplayableContent,
+    thought,
+    isThinking,
+  }: SplitMessage = useMemo(() => {
+    if (
+      msg.content === null ||
+      (msg.role !== 'assistant' && msg.role !== 'tool')
+    ) {
       return { content: msg.content };
     }
     let actualContent = '';
@@ -78,11 +89,21 @@ export default function ChatMessage({
         actualContent += thinkSplit[0];
       }
     }
+
     return { content: actualContent, thought, isThinking };
   }, [msg]);
 
   if (!viewingChat) return null;
 
+  const toolCalls = msg.tool_calls ?? null;
+
+  const hasContentInMainMsg =
+    mainDisplayableContent && mainDisplayableContent.trim() !== '';
+  const hasContentInChainedParts = chainedParts?.some(
+    (part) => part.content && part.content.trim() !== ''
+  );
+  const entireTurnHasSomeDisplayableContent =
+    hasContentInMainMsg || hasContentInChainedParts;
   const isUser = msg.role === 'user';
 
   return (
@@ -141,7 +162,9 @@ export default function ChatMessage({
           {/* not editing content, render message */}
           {editingContent === null && (
             <>
-              {content === null ? (
+              {mainDisplayableContent === null &&
+              !toolCalls &&
+              !chainedParts?.length ? (
                 <>
                   {/* show loading dots for pending message */}
                   <span className="loading loading-dots loading-md"></span>
@@ -158,13 +181,53 @@ export default function ChatMessage({
                       />
                     )}
 
-                    <MarkdownDisplay
-                      content={content}
-                      isGenerating={isPending}
-                    />
+                    {msg.role === 'tool' && mainDisplayableContent ? (
+                      <ToolCallResultDisplay content={mainDisplayableContent} />
+                    ) : (
+                      mainDisplayableContent &&
+                      mainDisplayableContent.trim() !== '' && (
+                        <MarkdownDisplay
+                          content={mainDisplayableContent}
+                          isGenerating={isPending}
+                        />
+                      )
+                    )}
                   </div>
                 </>
               )}
+              {toolCalls &&
+                toolCalls.map((toolCall) => (
+                  <ToolCallArgsDisplay key={toolCall.id} toolCall={toolCall} />
+                ))}
+
+              {chainedParts?.map((part) => (
+                <Fragment key={part.id}>
+                  {part.role === 'tool' && part.content && (
+                    <ToolCallResultDisplay
+                      content={part.content}
+                      baseClassName="collapse bg-base-200 collapse-arrow mb-4 mt-2"
+                    />
+                  )}
+
+                  {part.role === 'assistant' && part.content && (
+                    <div dir="auto" className="mt-2">
+                      <MarkdownDisplay
+                        content={part.content}
+                        isGenerating={!!isPending}
+                      />
+                    </div>
+                  )}
+
+                  {part.tool_calls &&
+                    part.tool_calls.map((toolCall) => (
+                      <ToolCallArgsDisplay
+                        key={toolCall.id}
+                        toolCall={toolCall}
+                        baseClassName="collapse bg-base-200 collapse-arrow mb-4 mt-2"
+                      />
+                    ))}
+                </Fragment>
+              ))}
               {/* render timings if enabled */}
               {timings && config.showTokensPerSecond && (
                 <div className="dropdown dropdown-hover dropdown-top mt-2">
@@ -195,7 +258,7 @@ export default function ChatMessage({
       </div>
 
       {/* actions for each message */}
-      {msg.content !== null && (
+      {(entireTurnHasSomeDisplayableContent || msg.role === 'user') && (
         <div
           className={classNames({
             'flex items-center gap-2 mx-4 mt-2 mb-2': true,
@@ -251,11 +314,13 @@ export default function ChatMessage({
                 <BtnWithTooltips
                   className="btn-mini w-8 h-8"
                   onClick={() => {
-                    if (msg.content !== null) {
+                    if (entireTurnHasSomeDisplayableContent) {
                       onRegenerateMessage(msg as Message);
                     }
                   }}
-                  disabled={msg.content === null}
+                  disabled={
+                    !entireTurnHasSomeDisplayableContent || msg.content === null
+                  }
                   tooltipsContent="Regenerate response"
                 >
                   <ArrowPathIcon className="h-4 w-4" />
@@ -263,7 +328,17 @@ export default function ChatMessage({
               )}
             </>
           )}
-          <CopyButton className="btn-mini w-8 h-8" content={msg.content} />
+          {entireTurnHasSomeDisplayableContent && (
+            <CopyButton
+              className="badge btn-mini show-on-hover mr-2"
+              content={
+                msg.content ??
+                chainedParts?.find((p) => p.role === 'assistant' && p.content)
+                  ?.content ??
+                ''
+              }
+            />
+          )}
         </div>
       )}
     </div>
