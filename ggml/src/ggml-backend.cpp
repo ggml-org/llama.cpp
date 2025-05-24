@@ -802,41 +802,39 @@ static char * fmt_size(size_t size) {
     return buffer;
 }
 
-static void ggml_backend_sched_print_assignments(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
-    int cur_split = 0;
-    for (int i = 0; i < graph->n_nodes; i++) {
-        while (cur_split < sched->n_splits && i >= sched->splits[cur_split].i_start) {
-            ggml_backend_t split_backend = sched->backends[sched->splits[cur_split].backend_id];
-            GGML_LOG_DEBUG("\n## SPLIT #%d: %s # %d inputs", cur_split, ggml_backend_name(split_backend),
-                sched->splits[cur_split].n_inputs);
-            for (int j = 0; j < sched->splits[cur_split].n_inputs; j++) {
-                if (j == 0) {
-                    GGML_LOG_DEBUG(": ");
-                }
-                GGML_LOG_DEBUG("[%s (%5.5s)] ", sched->splits[cur_split].inputs[j]->name,
-                    fmt_size(ggml_nbytes(sched->splits[cur_split].inputs[j])));
+static void ggml_backend_sched_print_assignments(ggml_backend_sched_t sched, struct ggml_cgraph * /*graph*/) { // FIXME
+    for (int i_split = 0; i_split < sched->n_splits; i_split++) {
+        const ggml_backend_sched_split & split = sched->splits[i_split];
+        ggml_backend_t split_backend = sched->backends[split.backend_id];
+        GGML_LOG_DEBUG("\n## SPLIT #%d: %s # %d inputs", i_split, ggml_backend_name(split_backend), split.n_inputs);
+        for (int j = 0; j < split.n_inputs; j++) {
+            if (j == 0) {
+                GGML_LOG_DEBUG(": ");
             }
-            GGML_LOG_DEBUG("\n");
-            cur_split++;
+            GGML_LOG_DEBUG("[%s (%5.5s)] ", split.inputs[j]->name, fmt_size(ggml_nbytes(split.inputs[j])));
         }
-        struct ggml_tensor * node = graph->nodes[i];
-        if (ggml_is_view_op(node->op)) {
-            continue;
-        }
-        if (sched->debug > 1) {
-            ggml_backend_t tensor_backend = ggml_backend_sched_get_tensor_backend(sched, node);
-            GGML_LOG_DEBUG("node #%3d (%10.10s): %20.20s (%5.5s) [%5.5s %8.8s]:", i, ggml_op_name(node->op), node->name,
-                fmt_size(ggml_nbytes(node)), tensor_backend ? ggml_backend_name(tensor_backend) : "NULL", GET_CAUSE(node));
-            for (int j = 0; j < GGML_MAX_SRC; j++) {
-                struct ggml_tensor * src = node->src[j];
-                if (src == NULL) {
-                    continue;
-                }
-                ggml_backend_t src_backend = ggml_backend_sched_get_tensor_backend(sched, src);
-                GGML_LOG_DEBUG(" %20.20s (%5.5s) [%5.5s %8.8s]", src->name,
-                    fmt_size(ggml_nbytes(src)), src_backend ? ggml_backend_name(src_backend) : "NULL", GET_CAUSE(src));
+        GGML_LOG_DEBUG("\n");
+        for (int i = 0; i < split.graph.n_nodes; i++) {
+            // const ggml_tensor * node = split.graph.nodes[i]; // FIXME
+            ggml_tensor * node = split.graph.nodes[i];
+            if (ggml_is_view_op(node->op)) {
+                continue;
             }
-            GGML_LOG_DEBUG("\n");
+            if (sched->debug > 1) {
+                ggml_backend_t tensor_backend = ggml_backend_sched_get_tensor_backend(sched, node);
+                GGML_LOG_DEBUG("node #%3d#%3d (%10.10s): %20.20s (%5.5s) [%5.5s %8.8s]:", i, split.i_start + i, ggml_op_name(node->op), node->name,
+                    fmt_size(ggml_nbytes(node)), tensor_backend ? ggml_backend_name(tensor_backend) : "NULL", GET_CAUSE(node));
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    struct ggml_tensor * src = node->src[j];
+                    if (src == NULL) {
+                        continue;
+                    }
+                    ggml_backend_t src_backend = ggml_backend_sched_get_tensor_backend(sched, src);
+                    GGML_LOG_DEBUG(" %20.20s (%5.5s) [%5.5s %8.8s]", src->name,
+                        fmt_size(ggml_nbytes(src)), src_backend ? ggml_backend_name(src_backend) : "NULL", GET_CAUSE(src));
+                }
+                GGML_LOG_DEBUG("\n");
+            }
         }
     }
 }
