@@ -3702,7 +3702,7 @@ class BertModel(TextModel):
 
         if self.model_arch == gguf.MODEL_ARCH.NOMIC_BERT_MOE:
             # Add mask token missing from sentencepiece.bpe.model
-            tokens[250001] = "<mask>"
+            tokens[250001] = b'<mask>'
             scores[250001] = 0.0
             toktypes[250001] = SentencePieceTokenTypes.CONTROL
 
