@@ -1116,7 +1116,8 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
 
-            if (ggml_is_view_op(node->op) && !split.tensor_parallel) {
+            if (ggml_is_view_op(node->op)) {
+                GGML_ASSERT(!split.tensor_parallel);
                 continue;
             }
 
