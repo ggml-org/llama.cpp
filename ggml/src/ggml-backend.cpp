@@ -1357,13 +1357,13 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 }
 
                 if (tensor_id_tp(src_id, 0) != nullptr) {
-                    if (tensor_id_copy(src_id, split.backend_id, 0) == nullptr) {
+                    if (tensor_id_copy(src_id, split.backend_id, sched->cur_copy) == nullptr) {
                         GGML_ASSERT(n_gpus == 2);
                         ggml_backend_t backend = sched->backends[split.backend_id];
 
+                        ggml_tensor * a = tensor_id_tp(src_id, 0);
+                        ggml_tensor * b = tensor_id_tp(src_id, 1);
                         for (int c = 0; c < sched->n_copies; c++) {
-                            ggml_tensor * a = tensor_id_tp(src_id, 0);
-                            ggml_tensor * b = tensor_id_tp(src_id, 1);
                             if (split.backend_id == 0) {
                                 ggml_tensor * b_copy = ggml_dup_tensor_layout(sched->ctx, b);
                                 ggml_format_name(b_copy, "%s#%s part1#%d", ggml_backend_name(backend), src->name, c);
@@ -1372,6 +1372,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                                     ggml_set_input(b_copy);
                                     ggml_set_output(b_copy); // prevent ggml-alloc from overwriting the tensor
                                 }
+                                tensor_id_copy(hash_id(b), split.backend_id, c) = b_copy;
                                 b = b_copy;
                             } else {
                                 GGML_ASSERT(split.backend_id == 1);
@@ -1382,16 +1383,28 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                                     ggml_set_input(a_copy);
                                     ggml_set_output(a_copy); // prevent ggml-alloc from overwriting the tensor
                                 }
+                                tensor_id_copy(hash_id(a), split.backend_id, c) = a_copy;
                                 a = a_copy;
                             }
                             ggml_tensor * concat = ggml_concat(sched->ctx, a, b, /*dim =*/ 0);
-
                             ggml_format_name(concat, "%s#%s cc#%d", ggml_backend_name(backend), src->name, c);
                             tensor_id_copy(src_id, split.backend_id, c) = concat;
                         }
-                        const int n_inputs = split.n_inputs++;
-                        GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
-                        split.inputs[n_inputs] = src;
+                        {
+                            const int n_inputs = split.n_inputs++;
+                            GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
+                            if (split.backend_id == 0) {
+                                split.inputs[n_inputs] = b;
+                            } else {
+                                GGML_ASSERT(split.backend_id == 1);
+                                split.inputs[n_inputs] = a;
+                            }
+                        }
+                        {
+                            const int n_inputs = split.n_inputs++;
+                            GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
+                            split.inputs[n_inputs] = src;
+                        }
                     }
                     // fprintf(stderr, "%s: 100 replacing src%d=%s of %s\n", __func__, j, node->src[j]->name, node->name);
                     node->src[j] = tensor_id_copy(src_id, split.backend_id, sched->cur_copy);
@@ -1584,6 +1597,9 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[j]);
             struct ggml_tensor * input = split->inputs[j];
             struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
+            if (input_cpy->op != GGML_OP_NONE) {
+                continue;
+            }
 
             if (input->flags & GGML_TENSOR_FLAG_INPUT) {
                 // inputs from the user must be copied immediately to prevent the user overwriting the data before the copy is done
