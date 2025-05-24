@@ -1217,7 +1217,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
                     for (int n = 0; n < split.graph.n_nodes; n++) {
                         std::string name = split.graph.nodes[n]->name;
-                        ggml_format_name(split.graph.nodes[n], "%s (parallel %d)", name.c_str(), i_gpu);
+                        ggml_format_name(split.graph.nodes[n], "%s#tp%d", name.c_str(), i_gpu);
                     }
 
                     // fprintf(stderr, "%s: 10 index=%d backend_id=%d\n", __func__, int(splits_tp.size()), split.backend_id);
@@ -1261,6 +1261,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 src0 = ggml_dup_tensor_layout(sched->ctx, src0);
                 src0->data = ((void **) dst->src[0]->extra)[i_gpu]; // FIXME
                 src0->buffer = dst->src[0]->buffer;
+                ggml_format_name(src0, "%s#tp%d", dst->src[0]->name, i_gpu);
                 dst->src[0] = src0;
                 tensor_backend_id(src0) = split.backend_id;
 
