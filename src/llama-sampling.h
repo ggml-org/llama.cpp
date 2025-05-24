@@ -12,15 +12,15 @@ struct llama_grammar;
 // sampler chain
 
 struct llama_sampler_chain {
-    llama_sampler_chain_params params;
-
     std::vector<struct llama_sampler *> samplers;
+
+    llama_sampler_chain_params params;
 
     // timing
 
-    mutable int64_t t_sample_us;
-
     mutable int32_t n_sample;
+
+    mutable int64_t t_sample_us;
 };
 
 struct llama_sampler * llama_sampler_init_dry_testing(

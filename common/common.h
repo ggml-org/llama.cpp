@@ -51,8 +51,8 @@ struct cpu_params {
     int      n_threads                   = -1;
     bool     cpumask[GGML_MAX_N_THREADS] = {false}; // CPU affinity mask.
     bool     mask_valid                  = false;   // Default: any CPU
-    enum ggml_sched_priority  priority   = GGML_SCHED_PRIO_NORMAL;  // Scheduling prio : (0 - normal, 1 - medium, 2 - high, 3 - realtime)
     bool     strict_cpu                  = false;   // Use strict CPU placement
+    enum ggml_sched_priority  priority   = GGML_SCHED_PRIO_NORMAL;  // Scheduling prio : (0 - normal, 1 - medium, 2 - high, 3 - realtime)
     uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
 };
 
@@ -119,8 +119,8 @@ enum common_grammar_trigger_type {
 };
 
 struct common_grammar_trigger {
-    common_grammar_trigger_type type;
     std::string value;
+    common_grammar_trigger_type type;
     llama_token token = LLAMA_TOKEN_NULL;
 };
 
@@ -156,6 +156,11 @@ struct common_params_sampling {
     bool    no_perf            = false; // disable performance metrics
     bool    timing_per_token   = false;
 
+    bool                                grammar_lazy = false;
+    std::string                         grammar; // optional BNF-like grammar to constrain sampling
+    std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
+    std::set<llama_token>               preserved_tokens;
+
     std::vector<std::string> dry_sequence_breakers = {"\n", ":", "\"", "*"};     // default sequence breakers for DRY
 
 
@@ -170,11 +175,6 @@ struct common_params_sampling {
         COMMON_SAMPLER_TYPE_XTC,
         COMMON_SAMPLER_TYPE_TEMPERATURE,
     };
-
-    std::string                         grammar; // optional BNF-like grammar to constrain sampling
-    bool                                grammar_lazy = false;
-    std::vector<common_grammar_trigger> grammar_triggers; // optional triggers (for lazy grammars)
-    std::set<llama_token>               preserved_tokens;
 
     std::vector<llama_logit_bias> logit_bias; // logit biases to apply
 
@@ -240,13 +240,13 @@ struct common_params {
     float   defrag_thold          =  0.1f; // KV cache defragmentation threshold
 
     // offload params
+    enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
+
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
     int32_t n_gpu_layers      = -1;  // number of layers to store in VRAM (-1 - use default)
     int32_t main_gpu          = 0;   // the GPU that is used for scratch and small tensors
     float   tensor_split[128] = {0}; // how split tensors should be distributed across GPUs
-
-    enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
 
     struct cpu_params cpuparams;
     struct cpu_params cpuparams_batch;
@@ -283,10 +283,9 @@ struct common_params {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
 
-    bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_adapter_lora_apply)
-    std::vector<common_adapter_lora_info> lora_adapters; // lora adapter path with user defined scale
-
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
+
+    std::vector<common_adapter_lora_info> lora_adapters; // lora adapter path with user defined scale
 
     int32_t verbosity                  = 0;
     int32_t control_vector_layer_start = -1; // layer range for control vector
@@ -296,13 +295,15 @@ struct common_params {
     int32_t ppl_output_type = 0;     // = 0 -> ppl output is as usual, = 1 -> ppl output is num_tokens, ppl, one per line
                                      //                                       (which is more convenient to use for plotting)
                                      //
+
+    bool lora_init_without_apply = false; // only load lora to memory, but do not apply it to ctx (user can manually apply lora later using llama_adapter_lora_apply)
+
     bool   hellaswag        = false; // compute HellaSwag score over random tasks from datafile supplied in prompt
-    size_t hellaswag_tasks  = 400;   // number of tasks to use when computing the HellaSwag score
-
     bool   winogrande       = false; // compute Winogrande score over random tasks from datafile supplied in prompt
-    size_t winogrande_tasks = 0;     // number of tasks to use when computing the Winogrande score. If 0, all tasks will be computed
-
     bool   multiple_choice  = false;  // compute TruthfulQA score over random tasks from datafile supplied in prompt
+
+    size_t hellaswag_tasks  = 400;   // number of tasks to use when computing the HellaSwag score
+    size_t winogrande_tasks = 0;     // number of tasks to use when computing the Winogrande score. If 0, all tasks will be computed
     size_t multiple_choice_tasks = 0; // number of tasks to use when computing the TruthfulQA score. If 0, all tasks will be computed
 
     bool   kl_divergence    = false; // compute KL divergence
@@ -337,23 +338,28 @@ struct common_params {
 
     bool single_turn       = false; // single turn chat conversation
 
-    ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
-    ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+    // options multimodal models (see tools/mtmd)
+    bool mmproj_use_gpu = true;     // use GPU for multimodal model
+    bool no_mmproj = false;         // explicitly disable multimodal model
 
-    common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
+    // options embedding
+    bool embedding         = false; // get only sentence embedding
+    bool reranking         = false; // enable reranking support on server
 
     // multimodal models (see tools/mtmd)
     struct common_params_model mmproj;
-    bool mmproj_use_gpu = true;     // use GPU for multimodal model
-    bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
 
     // embedding
-    bool embedding         = false; // get only sentence embedding
-    int32_t embd_normalize = 2;     // normalisation for embeddings (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
     std::string embd_out   = "";    // empty = default, "array" = [[],[]...], "json" = openai style, "json+" = same "json" + cosine similarity matrix
     std::string embd_sep   = "\n";  // separator of embeddings
-    bool reranking         = false; // enable reranking support on server
+    int32_t embd_normalize = 2;     // normalisation for embeddings (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)
+
+    common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
+
+    ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
+    ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
+
 
     // server params
     int32_t port           = 8080;         // server listens on this network port
@@ -362,18 +368,13 @@ struct common_params {
     int32_t n_threads_http = -1;           // number of threads to process HTTP requests (TODO: support threadpool)
     int32_t n_cache_reuse  = 0;            // min chunk size to reuse from the cache via KV shifting
 
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
-    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
     bool prefill_assistant = true;                                                                          // if true, any trailing assistant message will be prefilled into the response
-
-    std::vector<std::string> api_keys;
-
-    std::string ssl_file_key  = "";                                                                         // NOLINT
-    std::string ssl_file_cert = "";                                                                         // NOLINT
 
     // "advanced" endpoints are disabled by default for better security
     bool webui            = true;
@@ -383,21 +384,19 @@ struct common_params {
 
     bool log_json = false;
 
+    std::vector<std::string> api_keys;
+
+    std::string ssl_file_key  = "";                                                                         // NOLINT
+    std::string ssl_file_cert = "";                                                                         // NOLINT
+
     std::string slot_save_path;
 
     float slot_prompt_similarity = 0.5f;
 
-    // batched-bench params
-    bool is_pp_shared = false;
-
-    std::vector<int32_t> n_pp;
-    std::vector<int32_t> n_tg;
-    std::vector<int32_t> n_pl;
-
     // retrieval params
-    std::vector<std::string> context_files; // context files to embed
-
     int32_t chunk_size = 64; // chunk size for context embedding
+
+    std::vector<std::string> context_files; // context files to embed
 
     std::string chunk_separator = "\n"; // chunk separator for context embedding
 
@@ -414,12 +413,19 @@ struct common_params {
     bool compute_ppl    = true;  // whether to compute perplexity
     bool parse_special  = false; // whether to parse special tokens during imatrix tokenization
 
+    // batched-bench params
+    bool is_pp_shared = false;
+
+    std::vector<int32_t> n_pp;
+    std::vector<int32_t> n_tg;
+    std::vector<int32_t> n_pl;
+
     // cvector-generator params
     int n_pca_batch = 100;
     int n_pca_iterations = 1000;
-    dimre_method cvector_dimre_method = DIMRE_METHOD_PCA;
     std::string cvector_positive_file = "tools/cvector-generator/positive.txt";
     std::string cvector_negative_file = "tools/cvector-generator/negative.txt";
+    dimre_method cvector_dimre_method = DIMRE_METHOD_PCA;
 
     bool spm_infill = false; // suffix/prefix/middle pattern for infill
 
