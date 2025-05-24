@@ -93,6 +93,7 @@ enum rpc_cmd {
     RPC_CMD_INIT_TENSOR,
     RPC_CMD_GET_ALLOC_SIZE,
     RPC_CMD_HELLO,
+    RPC_CMD_LOAD_TENSOR,
     RPC_CMD_COUNT,
 };
 
@@ -161,6 +162,18 @@ struct rpc_msg_set_tensor_hash_rsp {
     uint8_t result;
 };
 
+struct rpc_msg_load_tensor_req {
+    uint64_t model_hash;
+    rpc_tensor tensor;
+    uint64_t file_offset;
+    uint64_t tensor_offset;
+    uint64_t size;
+};
+
+struct rpc_msg_load_tensor_rsp {
+    uint8_t result;
+};
+
 struct rpc_msg_get_tensor_req {
     rpc_tensor tensor;
     uint64_t offset;
@@ -213,6 +226,24 @@ struct ggml_backend_rpc_buffer_context {
 
 // RPC helper functions
 
+typedef uint64_t fnv_ctx_t;
+
+static void fnv_init(fnv_ctx_t * ctx) {
+    *ctx = 0xcbf29ce484222325ULL;
+}
+
+static void fnv_update(fnv_ctx_t * ctx, const uint8_t * data, size_t len) {
+    const uint64_t fnv_prime = 0x100000001b3ULL;
+    for (size_t i = 0; i < len; ++i) {
+        *ctx ^= data[i];
+        *ctx *= fnv_prime;
+    }
+}
+
+static void fnv_final(fnv_ctx_t * ctx, uint64_t * digest) {
+    *digest = *ctx;
+}
+
 // Computes FNV-1a hash of the data
 static uint64_t fnv_hash(const uint8_t * data, size_t len) {
     const uint64_t fnv_prime = 0x100000001b3ULL;
@@ -223,6 +254,87 @@ static uint64_t fnv_hash(const uint8_t * data, size_t len) {
         hash *= fnv_prime;
     }
     return hash;
+}
+
+static bool get_model_hash_from_file(const char * model_file, uint64_t * hash) {
+    // try loading the hash from model_file + '.rpc'
+    std::string rpc_file = std::string(model_file) + ".rpc";
+    // the hash file must exist, must be exactly 16 bytes and must be a valid hash written in hex
+    if (!fs::exists(rpc_file)) {
+        return false;
+    }
+    std::ifstream file(rpc_file, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+    std::string hash_str;
+    file.seekg(0, std::ios::end);
+    size_t file_size = file.tellg();
+    if (file_size != 16) {
+        return false;
+    }
+    file.seekg(0, std::ios::beg);
+    hash_str.resize(file_size);
+    file.read(&hash_str[0], file_size);
+    if ((size_t)file.gcount() != file_size) {
+        return false;
+    }
+    if (hash_str.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos) {
+        return false;
+    }
+    *hash = std::stoull(hash_str, nullptr, 16);
+    return true;
+}
+
+static bool get_model_hash(const char * model_file, uint64_t * hash) {
+    // model path -> (hash_exist, hash_value)
+    static std::unordered_map<std::string, std::pair<bool, uint64_t>> model_hashes;
+    if (model_hashes.find(model_file) != model_hashes.end()) {
+        *hash = model_hashes[model_file].second;
+        return model_hashes[model_file].first;
+    }
+    if (get_model_hash_from_file(model_file, hash)) {
+        model_hashes[model_file] = {true, *hash};
+        return true;
+    }
+    model_hashes[model_file] = {false, 0};
+    return false;
+}
+
+static bool generate_model_hash(const char * model_file, uint64_t * hash) {
+    ggml_context * ctx = nullptr;
+    struct gguf_init_params params = {
+        /* .no_alloc = */ false,
+        /* .ctx      = */ &ctx,
+    };
+    gguf_context_ptr ctx_gguf { gguf_init_from_file(model_file, params) };
+    if (!ctx_gguf) {
+        return false;
+    }
+    fnv_ctx_t fnv_ctx;
+    fnv_init(&fnv_ctx);
+    size_t data_offset = gguf_get_data_offset(ctx_gguf.get());
+    fnv_update(&fnv_ctx, (const uint8_t*)&data_offset, sizeof(data_offset));
+    const int n_tensors = gguf_get_n_tensors(ctx_gguf.get());
+    for (int i = 0; i < n_tensors; ++i) {
+        const char * name = gguf_get_tensor_name(ctx_gguf.get(), i);
+        ggml_tensor * cur = ggml_get_tensor(ctx, name);
+        auto n_bytes = ggml_nbytes(cur);
+        fnv_update(&fnv_ctx, (const uint8_t*)cur->data, n_bytes);
+    }
+    fnv_final(&fnv_ctx, hash);
+    // save the model hash to model_file + '.rpc' in hex format
+    std::string hash_file = std::string(model_file) + ".rpc";
+    std::ofstream file(hash_file, std::ios::binary);
+    if (!file.is_open()) {
+        return false;
+    }
+    file << std::hex << std::setfill('0') << std::setw(16) << *hash;
+    if (!file) {
+        return false;
+    }
+    file.close();
+    return true;
 }
 
 static std::shared_ptr<socket_t> make_socket(sockfd_t fd) {
@@ -605,6 +717,24 @@ static bool ggml_backend_rpc_buffer_cpy_tensor(ggml_backend_buffer_t buffer, con
     return response.result;
 }
 
+static bool ggml_backend_rpc_buffer_load_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const char * path, size_t file_offset, size_t tensor_offset, size_t size) {
+    ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
+    uint64_t hash;
+    if (!get_model_hash(path, &hash)) {
+        return false;
+    }
+    rpc_msg_load_tensor_req request;
+    request.model_hash = hash;
+    request.tensor = serialize_tensor(tensor);
+    request.file_offset = file_offset;
+    request.tensor_offset = tensor_offset;
+    request.size = size;
+    rpc_msg_load_tensor_rsp response;
+    bool status = send_rpc_cmd(ctx->sock, RPC_CMD_LOAD_TENSOR, &request, sizeof(request), &response, sizeof(response));
+    GGML_ASSERT(status);
+    return response.result;
+}
+
 static void ggml_backend_rpc_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
     rpc_msg_buffer_clear_req request = {ctx->remote_ptr, value};
@@ -854,8 +984,8 @@ void ggml_backend_rpc_get_device_memory(const char * endpoint, size_t * free, si
 
 class rpc_server {
 public:
-    rpc_server(ggml_backend_t backend, const char * cache_dir)
-        : backend(backend), cache_dir(cache_dir) {
+    rpc_server(ggml_backend_t backend, const std::unordered_map<uint64_t, std::string> & model_hashes, const char * cache_dir)
+        : backend(backend), cache_dir(cache_dir), model_hashes(model_hashes) {
     }
     ~rpc_server();
 
@@ -868,6 +998,7 @@ public:
     bool buffer_clear(const rpc_msg_buffer_clear_req & request);
     bool set_tensor(const std::vector<uint8_t> & input);
     bool set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rpc_msg_set_tensor_hash_rsp & response);
+    bool load_tensor(const rpc_msg_load_tensor_req & request, rpc_msg_load_tensor_rsp & response);
     bool get_tensor(const rpc_msg_get_tensor_req & request, std::vector<uint8_t> & response);
     bool copy_tensor(const rpc_msg_copy_tensor_req & request, rpc_msg_copy_tensor_rsp & response);
     bool graph_compute(const std::vector<uint8_t> & input, rpc_msg_graph_compute_rsp & response);
@@ -886,6 +1017,7 @@ private:
     ggml_backend_t backend;
     const char * cache_dir;
     std::unordered_set<ggml_backend_buffer_t> buffers;
+    const std::unordered_map<uint64_t, std::string> & model_hashes;
 };
 
 void rpc_server::hello(rpc_msg_hello_rsp & response) {
@@ -1104,6 +1236,18 @@ bool rpc_server::get_cached_file(uint64_t hash, std::vector<uint8_t> & data) {
     return true;
 }
 
+static bool read_model_data(const char * path, size_t file_offset, size_t size, std::vector<uint8_t> & data) {
+    FILE * f = fopen(path, "rb");
+    if (f == nullptr) {
+        return false;
+    }
+    fseek(f, file_offset, SEEK_SET);
+    data.resize(size);
+    size_t read_size = fread(data.data(), 1, size, f);
+    fclose(f);
+    return read_size == size;
+}
+
 bool rpc_server::set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rpc_msg_set_tensor_hash_rsp & response)
 {
     std::vector<uint8_t> cached_file;
@@ -1142,6 +1286,50 @@ bool rpc_server::set_tensor_hash(const rpc_msg_set_tensor_hash_req & request, rp
         }
     }
     ggml_backend_tensor_set(tensor, cached_file.data(), request.offset, size);
+    response.result = 1;
+    return true;
+}
+
+bool rpc_server::load_tensor(const rpc_msg_load_tensor_req & request, rpc_msg_load_tensor_rsp & response) {
+    if (model_hashes.find(request.model_hash) == model_hashes.end()) {
+        response.result = 0;
+        return true;
+    }
+    std::string path = model_hashes.at(request.model_hash);
+    std::vector<uint8_t> model_data;
+    if (!read_model_data(path.c_str(), request.file_offset, request.size, model_data)) {
+        response.result = 0;
+        return true;
+    }
+    struct ggml_init_params params {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx_ptr { ggml_init(params) };
+    GGML_ASSERT(ctx_ptr != nullptr);
+    ggml_context * ctx = ctx_ptr.get();
+    ggml_tensor * tensor = deserialize_tensor(ctx, &request.tensor);
+    if (tensor == nullptr) {
+        GGML_LOG_ERROR("[%s] error deserializing tensor\n", __func__);
+        return false;
+    }
+    GGML_PRINT_DEBUG("[%s] buffer: %p, data: %p, offset: %" PRIu64 ", size: %zu\n", __func__, (void*)tensor->buffer, tensor->data, request.tensor_offset, request.size);
+
+    // sanitize tensor->data
+    {
+        const size_t p0 = (size_t) ggml_backend_buffer_get_base(tensor->buffer);
+        const size_t p1 = p0 + ggml_backend_buffer_get_size(tensor->buffer);
+
+        if (request.tensor.data + request.tensor_offset < p0
+         || request.tensor.data + request.tensor_offset >= p1
+         || request.size > (p1 - request.tensor.data - request.tensor_offset)) {
+            GGML_LOG_ERROR("[%s] tensor data region (data=0x%" PRIx64 ", offset=%" PRIu64 ", size=%" PRIu64 ") out of buffer bounds [0x%zx, 0x%zx)\n",
+                           __func__, request.tensor.data, request.tensor_offset, request.size, p0, p1);
+            return false;
+        }
+    }
+    ggml_backend_tensor_set(tensor, model_data.data(), request.tensor_offset, request.size);
     response.result = 1;
     return true;
 }
@@ -1368,9 +1556,11 @@ rpc_server::~rpc_server() {
     }
 }
 
-static void rpc_serve_client(ggml_backend_t backend, const char * cache_dir,
+static void rpc_serve_client(ggml_backend_t backend,
+                             const std::unordered_map<uint64_t, std::string> & model_hashes,
+                             const char * cache_dir,
                              sockfd_t sockfd, size_t free_mem, size_t total_mem) {
-    rpc_server server(backend, cache_dir);
+    rpc_server server(backend, model_hashes, cache_dir);
     uint8_t cmd;
     if (!recv_data(sockfd, &cmd, 1)) {
         return;
@@ -1514,6 +1704,20 @@ static void rpc_serve_client(ggml_backend_t backend, const char * cache_dir,
                 }
                 break;
             }
+            case RPC_CMD_LOAD_TENSOR: {
+                rpc_msg_load_tensor_req request;
+                if (!recv_msg(sockfd, &request, sizeof(request))) {
+                    return;
+                }
+                rpc_msg_load_tensor_rsp response;
+                if (!server.load_tensor(request, response)) {
+                    return;
+                }
+                if (!send_msg(sockfd, &response, sizeof(response))) {
+                    return;
+                }
+                break;
+            }
             case RPC_CMD_INIT_TENSOR: {
                 rpc_msg_init_tensor_req request;
                 if (!recv_msg(sockfd, &request,sizeof(request))) {
@@ -1590,7 +1794,7 @@ static void rpc_serve_client(ggml_backend_t backend, const char * cache_dir,
 }
 
 void ggml_backend_rpc_start_server(ggml_backend_t backend, const char * endpoint,
-                                   const char * cache_dir,
+                                   const char * model_file, const char * cache_dir,
                                    size_t free_mem, size_t total_mem) {
     printf("Starting RPC server v%d.%d.%d\n",
         RPC_PROTO_MAJOR_VERSION,
@@ -1599,6 +1803,21 @@ void ggml_backend_rpc_start_server(ggml_backend_t backend, const char * endpoint
     printf("  endpoint       : %s\n", endpoint);
     printf("  local cache    : %s\n", cache_dir ? cache_dir : "n/a");
     printf("  backend memory : %zu MB\n", free_mem / (1024 * 1024));
+
+    std::unordered_map<uint64_t, std::string> model_hashes;
+    if (model_file != nullptr) {
+        uint64_t model_hash;
+        if (!get_model_hash(model_file, &model_hash)) {
+            printf("Generating model hash for file: %s\n", model_file);
+            if (!generate_model_hash(model_file, &model_hash)) {
+                fprintf(stderr, "Failed to generate model hash for file: %s\n", model_file);
+                return;
+            }
+        }
+        printf("  model file     : %s\n", model_file);
+        printf("  model hash     : %" PRIx64 "\n", model_hash);
+        model_hashes[model_hash] = model_file;
+    }
 
     std::string host;
     int port;
@@ -1628,7 +1847,7 @@ void ggml_backend_rpc_start_server(ggml_backend_t backend, const char * endpoint
         }
         printf("Accepted client connection, free_mem=%zu, total_mem=%zu\n", free_mem, total_mem);
         fflush(stdout);
-        rpc_serve_client(backend, cache_dir, client_socket->fd, free_mem, total_mem);
+        rpc_serve_client(backend, model_hashes, cache_dir, client_socket->fd, free_mem, total_mem);
         printf("Client connection closed\n");
         fflush(stdout);
     }
@@ -1761,6 +1980,9 @@ static void * ggml_backend_rpc_get_proc_address(ggml_backend_reg_t reg, const ch
     }
     if (std::strcmp(name, "ggml_backend_rpc_start_server") == 0) {
         return (void *)ggml_backend_rpc_start_server;
+    }
+    if (std::strcmp(name, "ggml_backend_tensor_load") == 0) {
+        return (void *)ggml_backend_rpc_buffer_load_tensor;
     }
     return NULL;
 
