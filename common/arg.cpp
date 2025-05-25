@@ -3181,6 +3181,32 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
+    add_opt(common_arg(
+        {"-ctkd", "--cache-type-k-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for K for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_k)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_k = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_K_DRAFT"));
+    add_opt(common_arg(
+        {"-ctvd", "--cache-type-v-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for V for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_v)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_v = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_V_DRAFT"));
 
     add_opt(common_arg(
         {"-mv", "--model-vocoder"}, "FNAME",
