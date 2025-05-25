@@ -91,11 +91,11 @@ void ggml_cuda_mul_mat_q(
 
     // If src0 is a temporary compute buffer, clear any potential padding.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
-        GGML_ASSERT(ggml_is_contiguously_allocated(src0));
-        GGML_ASSERT(!src0->view_src);
         const size_t size_data  = ggml_nbytes(src0);
         const size_t size_alloc = ggml_backend_buffer_get_alloc_size(src0->buffer, src0);
         if (size_alloc > size_data) {
+            GGML_ASSERT(ggml_is_contiguously_allocated(src0));
+            GGML_ASSERT(!src0->view_src);
             CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
         }
     }
@@ -122,6 +122,7 @@ void ggml_cuda_mul_mat_q(
             const int64_t s13 = src1->nb[3] / ts_src1;
             quantize_mmq_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type,
                 ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+            CUDA_CHECK(cudaGetLastError());
         }
 
         const int64_t s12 = ne11*ne10_padded * sizeof(block_q8_1)/(QK8_1*sizeof(int));
@@ -205,6 +206,7 @@ void ggml_cuda_mul_mat_q(
         const int64_t s13 = src1->nb[2] / ts_src1;
         quantize_mmq_q8_1_cuda(src1_d, ids_src1_dev, src1_q8_1.get(), src0->type,
             ne10, s11, s12, s13, ne10_padded, ne11_flat, ne12_flat, ne13_flat, stream);
+        CUDA_CHECK(cudaGetLastError());
     }
 
     const int64_t s12 = ne11*ne10_padded * sizeof(block_q8_1)/(QK8_1*sizeof(int));

@@ -16,6 +16,8 @@ export const CONFIG_DEFAULT = {
   showTokensPerSecond: false,
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
+  pasteLongTextToFileLen: 2500,
+  pdfAsImage: false,
   // make sure these default values are in sync with `common.h`
   samplers: 'edkypmxt',
   temperature: 0.8,
@@ -43,6 +45,8 @@ export const CONFIG_DEFAULT = {
 export const CONFIG_INFO: Record<string, string> = {
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
   systemMessage: 'The starting message that defines how model should behave.',
+  pasteLongTextToFileLen:
+    'On pasting long text, it will be converted to a file. You can control the file length by setting the value of this parameter. Value 0 means disable.',
   samplers:
     'The order at which samplers are applied, in simplified way. Default is "dkypmxt": dry->top_k->typ_p->top_p->min_p->xtc->temperature',
   temperature:
