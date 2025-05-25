@@ -196,6 +196,13 @@ public:
         return false;
     }
 
+    int seq_count(uint32_t i) const {
+        assert(i < pos.size());
+        assert(pos[i] != -1);
+
+        return seq[i].count();
+    }
+
     bool seq_has(uint32_t i, llama_seq_id seq_id) const {
         assert(i < pos.size());
         assert(seq_id >= 0);
@@ -272,6 +279,16 @@ public:
         pos[i] = p;
 
         used.insert(i);
+    }
+
+    // change the position of a non-empty cell
+    // does not modify "has_shift"
+    // note: call only if the cell is not empty
+    void pos_chg(uint32_t i, llama_pos p) {
+        assert(i < pos.size());
+        assert(pos[i] != -1);
+
+        pos[i] = p;
     }
 
     // pos[i] = pos[i] + d

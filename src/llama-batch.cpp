@@ -4,6 +4,21 @@
 #include <cstring>
 #include <algorithm>
 
+void llama_ubatch::update() {
+    if (equal_seqs) {
+        // TODO: for now don't compute min/max for recurrent batches since we don't need this.
+        //       the batches will be refactored anyway, so we'll fix this later
+        return;
+    }
+
+    for (uint32_t i = 0; i < n_tokens; ++i) {
+        const llama_seq_id s = seq_id[i][0];
+
+        seq_pos_min[s] = seq_pos_min[s] == -1 ? pos[i] : std::min(seq_pos_min[s], pos[i]);
+        seq_pos_max[s] = seq_pos_max[s] == -1 ? pos[i] : std::max(seq_pos_max[s], pos[i]);
+    }
+}
+
 llama_ubatch llama_sbatch::reserve_ubatch(size_t n_ubatch, bool has_embd) {
     // clear empty sequences
     // the previous ubatch is assumed to be gone,
@@ -15,24 +30,33 @@ llama_ubatch llama_sbatch::reserve_ubatch(size_t n_ubatch, bool has_embd) {
             break;
         }
     }
-    ubatch_token.resize(!has_embd ? n_ubatch : 0);
-    ubatch_embd.resize(has_embd ? n_embd * n_ubatch : 0);
-    ubatch_pos.resize(n_ubatch);
-    ubatch_n_seq_id.resize(n_ubatch);
-    ubatch_seq_id.resize(n_ubatch);
-    ubatch_output.resize(n_ubatch);
+
+    udatas.push_back({});
+
+    auto & udata = udatas.back();
+
+    udata.token.resize(!has_embd ? n_ubatch : 0);
+    udata.embd.resize(has_embd ? n_embd * n_ubatch : 0);
+    udata.pos.resize(n_ubatch);
+    udata.n_seq_id.resize(n_ubatch);
+    udata.seq_id.resize(n_ubatch);
+    udata.output.resize(n_ubatch);
+
     llama_ubatch ubatch = {
         /*equal_seqs   =*/ true,
         /*n_tokens     =*/ 0,
         /*n_seq_tokens =*/ 0,
         /*n_seqs       =*/ 0,
-        /*token        =*/ !has_embd ? ubatch_token.data() : nullptr,
-        /*embd         =*/ has_embd  ? ubatch_embd.data()  : nullptr,
-        /*pos          =*/ ubatch_pos.data(),
-        /*n_seq_id     =*/ ubatch_n_seq_id.data(),
-        /*seq_id       =*/ ubatch_seq_id.data(),
-        /*output       =*/ ubatch_output.data(),
+        /*seq_pos_min  =*/ {-1},
+        /*seq_pos_max  =*/ {-1},
+        /*token        =*/ !has_embd ? udata.token.data() : nullptr,
+        /*embd         =*/ has_embd  ? udata.embd.data()  : nullptr,
+        /*pos          =*/ udata.pos.data(),
+        /*n_seq_id     =*/ udata.n_seq_id.data(),
+        /*seq_id       =*/ udata.seq_id.data(),
+        /*output       =*/ udata.output.data(),
     };
+
     return ubatch;
 }
 
@@ -148,6 +172,7 @@ llama_ubatch llama_sbatch::split_simple(size_t n_ubatch) {
         GGML_ASSERT(seq.size() == 1 && s.n_seq_id == 0); // don't mix with other splits
         add_seq_to_ubatch(ubatch, s, length);
     }
+    ubatch.update();
     return ubatch;
 }
 
@@ -175,6 +200,7 @@ llama_ubatch llama_sbatch::split_equal(size_t n_ubatch) {
             if (length + n_tokens_in_ubatch > n_ubatch) { break; }
         }
     }
+    ubatch.update();
     return ubatch;
 }
 
@@ -187,6 +213,7 @@ llama_ubatch llama_sbatch::split_seq(size_t n_ubatch) {
         GGML_ASSERT(s.n_seq_id > 0); // should not be mixed with simple splits
         add_seq_to_ubatch(ubatch, s, length);
     }
+    ubatch.update();
     return ubatch;
 }
 

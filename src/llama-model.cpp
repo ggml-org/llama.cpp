@@ -13228,7 +13228,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             params.swa_full,
                             cparams.n_ctx,
                             cparams.n_seq_max,
-                            cparams.n_batch,
+                            cparams.n_ubatch,
                             padding);
                 } else {
                     GGML_ASSERT(!hparams.is_swa_any());

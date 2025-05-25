@@ -259,14 +259,8 @@ llama_context::llama_context(
 
     // reserve worst-case graph
     if (!hparams.vocab_only && memory) {
-        const uint32_t n_seqs = 1; // TODO: worst-case number of sequences
+        const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
-
-        llama_token token = model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-
-        // restore later
-        // TODO: something cleaner
-        const auto n_outputs_save = n_outputs;
 
         LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
 
@@ -285,17 +279,8 @@ llama_context::llama_context(
 
         // reserve pp graph first so that buffers are only allocated once
         {
-            llama_ubatch ubatch_pp = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
-
-            // max number of outputs
-            n_outputs = ubatch_pp.n_tokens;
-
-            LLAMA_LOG_DEBUG("%s: reserving graph for n_tokens = %d, n_seqs = %d\n", __func__, ubatch_pp.n_tokens, ubatch_pp.n_seqs);
-
-            auto * gf = graph_init();
-            graph_build(ctx_compute.get(), gf, ubatch_pp, LLM_GRAPH_TYPE_DEFAULT);
-
-            if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens);
+            if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
 
@@ -305,16 +290,8 @@ llama_context::llama_context(
 
         // reserve with tg graph to get the number of splits and nodes
         {
-            llama_ubatch ubatch_tg = { true, 1, 1, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
-
-            n_outputs = ubatch_tg.n_tokens;
-
-            LLAMA_LOG_DEBUG("%s: reserving graph for n_tokens = %d, n_seqs = %d\n", __func__, ubatch_tg.n_tokens, ubatch_tg.n_seqs);
-
-            auto * gf = graph_init();
-            graph_build(ctx_compute.get(), gf, ubatch_tg, LLM_GRAPH_TYPE_DEFAULT);
-
-            if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+            auto * gf = graph_reserve(1, 1, 1);
+            if (!gf) {
                 throw std::runtime_error("failed to allocate compute tg buffers");
             }
 
@@ -324,21 +301,11 @@ llama_context::llama_context(
 
         // reserve again with pp graph to avoid ggml-alloc reallocations during inference
         {
-            llama_ubatch ubatch_pp = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
-
-            n_outputs = ubatch_pp.n_tokens;
-
-            LLAMA_LOG_DEBUG("%s: reserving graph for n_tokens = %d, n_seqs = %d\n", __func__, ubatch_pp.n_tokens, ubatch_pp.n_seqs);
-
-            auto * gf = graph_init();
-            graph_build(ctx_compute.get(), gf, ubatch_pp, LLM_GRAPH_TYPE_DEFAULT);
-
-            if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens);
+            if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
         }
-
-        n_outputs = n_outputs_save;
 
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
@@ -454,33 +421,22 @@ const llama_kv_cache * llama_context::get_kv_self() const {
 }
 
 void llama_context::kv_self_update() {
-    bool need_reserve = false;
+    if (!memory) {
+        return;
+    }
 
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
-    need_reserve = kv_self->update(*this);
-
-    // reserve a worst case graph if needed
-    if (need_reserve) {
-        LLAMA_LOG_DEBUG("%s: reserving a worst case graph\n", __func__);
-
-        // build worst-case graph
-        uint32_t n_seqs = 1; // TODO: worst-case number of sequences
-        uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
-
-        // simulate full KV cache
+    if (kv_self->update(*this)) {
+        // if the KV cache did any computation, we have to reserve a new worst-case graph
         kv_self->set_full();
 
-        llama_token token = model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
-        llama_ubatch ubatch = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
+        const uint32_t n_seqs   = cparams.n_seq_max;
+        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        auto * gf = graph_init();
-        graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_DEFAULT);
-
-        // initialize scheduler with the worst-case graph
-        ggml_backend_sched_reset(sched.get());
-        if (!ggml_backend_sched_reserve(sched.get(), gf)) {
-            LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens);
+        if (!gf) {
+            LLAMA_LOG_ERROR("%s: failed to reserve graph after the KV cache update\n", __func__);
         }
     }
 }
@@ -737,8 +693,6 @@ int llama_context::encode(llama_batch & inp_batch) {
 
     n_outputs = n_tokens;
 
-    //batch_manager->prepare(ubatch);
-
     ggml_backend_sched_reset(sched.get());
     ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
 
@@ -889,8 +843,6 @@ int llama_context::decode(llama_batch & inp_batch) {
     const int64_t n_tokens_all = batch.n_tokens;
     const int64_t n_embd       = hparams.n_embd;
 
-    llama_kv_cache_guard kv_guard(kv_self);
-
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
     // TODO: move the validation to the llama_batch_allocr
@@ -936,7 +888,28 @@ int llama_context::decode(llama_batch & inp_batch) {
         n_outputs_all = 1;
     }
 
-    llama_sbatch sbatch = kv_self->sbatch_init(batch, /* logits_all */ n_outputs_all == n_tokens_all);
+    // handle any pending defrags/shifts
+    kv_self_update();
+
+    auto decode_state = kv_self->init(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ n_outputs_all == n_tokens_all);
+    if (!decode_state) {
+        return -2;
+    }
+
+    switch (decode_state->get_status()) {
+        case LLAMA_MEMORY_STATUS_SUCCESS:
+            {
+            } break;
+        case LLAMA_MEMORY_STATUS_FAILED_PREPARE:
+            {
+                // not a fatal error, we can re-try with a different batch
+                return 1;
+            }
+        case LLAMA_MEMORY_STATUS_FAILED_COMPUTE:
+            {
+                return -2;
+            }
+    }
 
     // reserve output buffer
     if (output_reserve(n_outputs_all) < n_outputs_all) {
@@ -944,13 +917,10 @@ int llama_context::decode(llama_batch & inp_batch) {
         return -2;
     };
 
-    // handle any pending defrags/shifts
-    kv_self_update();
-
     int64_t n_outputs_prev = 0;
 
-    while (sbatch.n_tokens > 0) {
-        llama_ubatch ubatch = kv_self->ubatch_next(sbatch, cparams.n_ubatch, embd_pooled);
+    while (const auto * ubatch_ptr = decode_state->next()) {
+        const auto & ubatch = *ubatch_ptr;
 
         // count the outputs in this u_batch
         {
@@ -967,11 +937,6 @@ int llama_context::decode(llama_batch & inp_batch) {
 
             // needs to happen before the graph is built
             n_outputs = n_outputs_new;
-        }
-
-        // find KV slot
-        if (!kv_self->find_slot(ubatch)) {
-            return 1;
         }
 
         ggml_backend_sched_reset(sched.get());
@@ -1084,9 +1049,6 @@ int llama_context::decode(llama_batch & inp_batch) {
         n_outputs_prev += n_outputs;
     }
 
-    // finalize the batch processing
-    kv_guard.commit();
-
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
 
@@ -1094,7 +1056,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     {
         bool sorted_output = true;
 
-        auto & out_ids = sbatch.out_ids;
+        auto & out_ids = decode_state->out_ids();
 
         GGML_ASSERT(out_ids.size() == (size_t) n_outputs_all);
 
@@ -1252,6 +1214,39 @@ ggml_cgraph * llama_context::graph_init() {
     ctx_compute.reset(ggml_init(params));
 
     return ggml_new_graph_custom(ctx_compute.get(), graph_max_nodes(), false);
+}
+
+ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs) {
+    LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
+
+    // store the n_outputs as it is, and restore it afterwards
+    // TODO: not sure if needed, might simplify in the future by removing this
+    const auto save_n_outputs = this->n_outputs;
+
+    this->n_outputs = n_outputs;
+
+    llama_token token = model.vocab.token_bos(); // not actually used by llama_build_graph, but required to choose between token and embedding inputs graph
+    llama_ubatch ubatch = { true, n_tokens, n_tokens / n_seqs, n_seqs, {-1}, {-1}, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
+
+    auto * gf = graph_init();
+    auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_DEFAULT);
+
+    this->n_outputs = save_n_outputs;
+
+    if (!res) {
+        LLAMA_LOG_ERROR("%s: failed to build worst-case graph\n", __func__);
+        return nullptr;
+    }
+
+    ggml_backend_sched_reset(sched.get());
+
+    // initialize scheduler with the specified graph
+    if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+        LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
+        return nullptr;
+    }
+
+    return gf;
 }
 
 llm_graph_result_ptr llama_context::graph_build(
@@ -1951,7 +1946,6 @@ void llama_context::opt_epoch_iter(
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
     kv_self->clear();
-    llama_kv_cache_guard kv_guard(kv_self);
 
     for (uint32_t pos_ctx = 0; pos_ctx < n_ctx; pos_ctx += n_batch) {
         batch.n_tokens = n_batch;
@@ -1974,7 +1968,11 @@ void llama_context::opt_epoch_iter(
 
         int64_t n_outputs_all = n_tokens_all;
 
-        llama_sbatch sbatch = kv_self->sbatch_init(batch, /*logits_all =*/ true);
+        auto decode_state = kv_self->init(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ true);
+        if (!decode_state || decode_state->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
+            LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
+            break;
+        }
 
         // reserve output buffer
         if (output_reserve(n_outputs_all) < n_outputs_all) {
@@ -1982,17 +1980,11 @@ void llama_context::opt_epoch_iter(
             GGML_ABORT("TODO: handle this error");
         };
 
-        for (uint32_t pos_batch = 0; pos_batch < n_batch; pos_batch += n_ubatch) {
-            llama_ubatch ubatch = kv_self->ubatch_next(sbatch, cparams.n_ubatch, embd_pooled);
+        uint32_t pos_batch = 0;
+        while (const auto * ubatch_ptr = decode_state->next()) {
+            const auto & ubatch = *ubatch_ptr;
 
             n_outputs = ubatch.n_tokens;
-
-            // TODO: not sure if this is needed
-            if (!kv_self->find_slot(ubatch)) {
-                LLAMA_LOG_WARN("%s: failed to find KV cache slot for ubatch of size %d\n", __func__, ubatch.n_tokens);
-
-                GGML_ABORT("TODO: handle this error");
-            }
 
             auto * gf = graph_init();
             auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_DEFAULT);
@@ -2027,10 +2019,10 @@ void llama_context::opt_epoch_iter(
                 callback(train, opt_ctx, dataset, result, idata_in_loop + (pos_ctx + pos_batch)/n_ubatch + 1, ndata_in_loop, t_loop_start);
             }
             ggml_free(ctx_compute_opt);
+
+            pos_batch += ubatch.n_tokens;
         }
     }
-
-    kv_guard.commit();
 }
 
 void llama_context::opt_epoch(

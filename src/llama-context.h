@@ -47,6 +47,7 @@ struct llama_context {
           llama_kv_cache * get_kv_self();
     const llama_kv_cache * get_kv_self() const;
 
+    // TODO: remove
     void kv_self_update();
 
     enum llama_pooling_type pooling_type() const;
@@ -183,6 +184,9 @@ public:
     ggml_status graph_compute(
             ggml_cgraph * gf,
                    bool   batched);
+
+    // reserve a graph
+    ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs);
 
 private:
     llm_graph_result_ptr graph_build(
