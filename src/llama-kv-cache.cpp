@@ -570,6 +570,7 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
 
         bool found = true;
         for (uint32_t i = 0; i < n_tokens; i++) {
+            const llama_pos    pos    = ubatch.pos[i];
             const llama_seq_id seq_id = ubatch.seq_id[i][0];
 
             // can we use this cell? either:
@@ -578,10 +579,12 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
             const bool can_use =
                     cells.is_empty(head_cur + i) ||
                     (
-                        cells.pos_get(head_cur + i) <= ubatch.pos[i] && // causal mask
-                        cells.seq_has(head_cur + i, seq_id) &&          // sequence mask
-                        cells.seq_count(head_cur + i) == 1 &&
-                        is_masked_swa(cells.pos_get(head_cur + i), ubatch.seq_pos_min[seq_id]) // SWA mask
+                        cells.seq_has  (head_cur + i, seq_id) && // sequence mask
+                        cells.seq_count(head_cur + i) == 1    &&
+                        (
+                            cells.pos_get  (head_cur + i) >= pos ||                                // causal mask
+                            is_masked_swa(cells.pos_get(head_cur + i), ubatch.seq_pos_min[seq_id]) // SWA mask
+                        )
                     );
 
             if (!can_use) {
