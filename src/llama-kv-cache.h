@@ -135,6 +135,7 @@ public:
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
 
+    // find places for the provided ubatches in the cache, returns the head locations
     // return empty vector on failure
     std::vector<uint32_t> prepare(const std::vector<llama_ubatch> & ubatches);
 
