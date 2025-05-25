@@ -33,7 +33,6 @@ struct llama_kv_cache : public llama_memory_i {
     // process any pending defrag/shift/etc. operations
     // optionally call once before processing a new batch
     // return true if any operations were performed
-    // will reserve a new worst-case graph if needed
     virtual bool update(llama_context & lctx) = 0;
 
     // schedule a defrag if the fragmentation threshold is exceeded. otherwise, do nothing
@@ -240,7 +239,6 @@ private:
 
 // utilizes two instances of llama_kv_cache_unified
 //   the first instance is for the non-SWA layers of the model and the second instance is for the SWA layers
-//   upon successful processing of the batch, the SWA cache removes old tokens outside the n_swa window
 
 class llama_kv_cache_unified_iswa : public llama_kv_cache {
 public:
