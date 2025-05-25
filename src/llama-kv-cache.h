@@ -252,7 +252,7 @@ public:
                          bool   swa_full,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
-                     uint32_t   n_ubatch,
+                     uint32_t   n_batch,
                      uint32_t   n_pad);
 
     ~llama_kv_cache_unified_iswa() = default;
