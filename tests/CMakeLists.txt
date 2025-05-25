@@ -188,17 +188,14 @@ target_compile_features(test-qlutattn-quants PRIVATE cxx_std_11)
 
 # Add mixed precision KV cache test
 if (NOT GGML_BACKEND_DL)
-    llama_build_and_test(test-kv-cache-mixed.cpp)
+    llama_build_and_test(test-mixed-kv-cache.cpp)
 endif()
 
 # Add unified cache copy test
 if (NOT GGML_BACKEND_DL)
-    llama_build_and_test(test-unified-cache-copy.cpp)
-endif()
-
-# Add llama_kv_cache_unified CRUD interface test
-if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-kv-cache-unified.cpp)
+    llama_build_and_test(test-unified-cache-copy.cpp)
+    llama_build_and_test(test-kv-cache-debug.cpp)
 endif()
 
 # Add llama_batch/sbatch/ubatch test
