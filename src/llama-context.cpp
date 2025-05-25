@@ -221,7 +221,7 @@ llama_context::llama_context(
         bool pipeline_parallel =
             model.n_devices() > 1 &&
             model.params.n_gpu_layers > (int) model.hparams.n_layer &&
-            model.params.split_mode == LLAMA_SPLIT_MODE_LAYER &&
+            (model.params.split_mode == LLAMA_SPLIT_MODE_LAYER || model.params.split_mode == LLAMA_SPLIT_MODE_ROW) &&
             cparams.offload_kqv &&
             !model.has_tensor_overrides();
 
