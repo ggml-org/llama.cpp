@@ -7,6 +7,7 @@
 #include "llama-adapter.h"
 
 #include "ggml-cpp.h"
+#include "ggml-opt.h"
 
 #include <map>
 #include <vector>
@@ -133,6 +134,32 @@ struct llama_context {
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
 
+    //
+    // training
+    //
+
+    void opt_init(struct llama_model * model, struct llama_opt_params lopt_params);
+
+    void opt_epoch(
+            ggml_opt_dataset_t      dataset,
+            ggml_opt_result_t       result_train,
+            ggml_opt_result_t       result_eval,
+            int64_t                 idata_split,
+            ggml_opt_epoch_callback callback_train,
+            ggml_opt_epoch_callback callback_eval);
+
+    void opt_epoch_iter(
+            ggml_opt_dataset_t               dataset,
+            ggml_opt_result_t                result,
+            const std::vector<llama_token> & tokens,
+            const std::vector<llama_token> & labels_sparse,
+            llama_batch                    & batch,
+            ggml_opt_epoch_callback          callback,
+            bool                             train,
+            int64_t                          idata_in_loop,
+            int64_t                          ndata_in_loop,
+            int64_t                          t_loop_start);
+
 private:
     //
     // output
@@ -211,6 +238,9 @@ private:
     std::vector<ggml_backend_ptr> backends;
 
     ggml_context_ptr ctx_compute;
+
+    // training
+    ggml_opt_context_t opt_ctx = nullptr;
 
     ggml_threadpool_t threadpool       = nullptr;
     ggml_threadpool_t threadpool_batch = nullptr;

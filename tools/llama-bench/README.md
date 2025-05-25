@@ -20,10 +20,20 @@ Performance testing tool for llama.cpp.
 ## Syntax
 
 ```
-usage: ./llama-bench [options]
+usage: llama-bench [options]
 
 options:
   -h, --help
+  --numa <distribute|isolate|numactl>       numa mode (default: disabled)
+  -r, --repetitions <n>                     number of times to repeat each test (default: 5)
+  --prio <0|1|2|3>                          process/thread priority (default: 0)
+  --delay <0...N> (seconds)                 delay between each test (default: 0)
+  -o, --output <csv|json|jsonl|md|sql>      output format printed to stdout (default: md)
+  -oe, --output-err <csv|json|jsonl|md|sql> output format printed to stderr (default: none)
+  -v, --verbose                             verbose output
+  --progress                                print test progress indicators
+
+test parameters:
   -m, --model <filename>                    (default: models/7B/ggml-model-q4_0.gguf)
   -p, --n-prompt <n>                        (default: 512)
   -n, --n-gen <n>                           (default: 128)
@@ -33,28 +43,27 @@ options:
   -ub, --ubatch-size <n>                    (default: 512)
   -ctk, --cache-type-k <t>                  (default: f16)
   -ctv, --cache-type-v <t>                  (default: f16)
-  -t, --threads <n>                         (default: 8)
+  -dt, --defrag-thold <f>                   (default: -1)
+  -t, --threads <n>                         (default: system dependent)
   -C, --cpu-mask <hex,hex>                  (default: 0x0)
   --cpu-strict <0|1>                        (default: 0)
   --poll <0...100>                          (default: 50)
   -ngl, --n-gpu-layers <n>                  (default: 99)
-  -rpc, --rpc <rpc_servers>                 (default: )
+  -rpc, --rpc <rpc_servers>                 (default: none)
   -sm, --split-mode <none|layer|row>        (default: layer)
   -mg, --main-gpu <i>                       (default: 0)
   -nkvo, --no-kv-offload <0|1>              (default: 0)
   -fa, --flash-attn <0|1>                   (default: 0)
   -mmp, --mmap <0|1>                        (default: 1)
-  --numa <distribute|isolate|numactl>       (default: disabled)
   -embd, --embeddings <0|1>                 (default: 0)
   -ts, --tensor-split <ts0/ts1/..>          (default: 0)
-  -r, --repetitions <n>                     (default: 5)
-  --prio <0|1|2|3>                          (default: 0)
-  --delay <0...N> (seconds)                 (default: 0)
-  -o, --output <csv|json|jsonl|md|sql>      (default: md)
-  -oe, --output-err <csv|json|jsonl|md|sql> (default: none)
-  -v, --verbose                             (default: 0)
+  -ot --override-tensors <tensor name pattern>=<buffer type>;...
+                                            (default: disabled)
+  -nopo, --no-op-offload <0|1>              (default: 0)
 
-Multiple values can be given for each parameter by separating them with ',' or by specifying the parameter multiple times.
+Multiple values can be given for each parameter by separating them with ','
+or by specifying the parameter multiple times. Ranges can be given as
+'first-last' or 'first-last+step' or 'first-last*mult'.
 ```
 
 llama-bench can perform three types of tests:
@@ -70,10 +79,6 @@ Each test is repeated the number of times given by `-r`, and the results are ave
 Using the `-d <n>` option, each test can be run at a specified context depth, prefilling the KV cache with `<n>` tokens.
 
 For a description of the other options, see the [main example](../main/README.md).
-
-Note:
-
-- When using SYCL backend, there would be hang issue in some cases. Please set `--mmp 0`.
 
 ## Examples
 

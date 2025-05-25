@@ -45,7 +45,7 @@ class SentencePieceTokenTypes(IntEnum):
 
 class ModelType(IntEnum):
     TEXT = 1
-    VISION = 2
+    MMPROJ = 2
 
 
 AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
@@ -54,7 +54,7 @@ AnyModel = TypeVar("AnyModel", bound="type[ModelBase]")
 class ModelBase:
     _model_classes: dict[ModelType, dict[str, type[ModelBase]]] = {
         ModelType.TEXT: {},
-        ModelType.VISION: {},
+        ModelType.MMPROJ: {},
     }
 
     dir_model: Path
@@ -88,7 +88,7 @@ class ModelBase:
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
-                type(self) is VisionModel:
+                type(self) is MmprojModel:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
 
         self.dir_model = dir_model
@@ -308,6 +308,8 @@ class ModelBase:
                             gguf.MODEL_TENSOR.TIME_MIX_LERP_FUSED,
                             gguf.MODEL_TENSOR.POSNET_NORM1,
                             gguf.MODEL_TENSOR.POSNET_NORM2,
+                            gguf.MODEL_TENSOR.V_ENC_EMBD_POS,
+                            gguf.MODEL_TENSOR.A_ENC_EMBD_POS,
                         )
                     )
                     or not new_name.endswith(".weight")
@@ -437,7 +439,7 @@ class ModelBase:
         assert names
 
         def func(modelcls: AnyModel) -> AnyModel:
-            model_type = ModelType.VISION if modelcls.model_arch == gguf.MODEL_ARCH.CLIP_VISION else ModelType.TEXT
+            model_type = ModelType.MMPROJ if modelcls.model_arch == gguf.MODEL_ARCH.MMPROJ else ModelType.TEXT
             for name in names:
                 cls._model_classes[model_type][name] = modelcls
             return modelcls
@@ -1113,60 +1115,87 @@ class TextModel(ModelBase):
             self.gguf_writer.add_pooling_type(pooling_type)
 
 
-class VisionModel(ModelBase):
-    model_type = ModelType.VISION
-    model_arch = gguf.MODEL_ARCH.CLIP_VISION
+class MmprojModel(ModelBase):
+    model_type = ModelType.MMPROJ
+    model_arch = gguf.MODEL_ARCH.MMPROJ
     preprocessor_config: dict[str, Any]
     global_config: dict[str, Any]
+
+    has_vision_encoder: bool = True # by default
+    has_audio_encoder: bool = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        if self.model_arch != gguf.MODEL_ARCH.CLIP_VISION:
-            raise TypeError("VisionModel must be subclassed with model_arch = gguf.MODEL_ARCH.CLIP_VISION")
+        if self.model_arch != gguf.MODEL_ARCH.MMPROJ:
+            raise TypeError("MmprojModel must be subclassed with model_arch = gguf.MODEL_ARCH.MMPROJ")
+
+        if self.has_vision_encoder and self.has_audio_encoder:
+            raise NotImplementedError("both vision + audio not supported yet")
 
         # get n_embd of the text model
         if "text_config" not in self.hparams:
             self.hparams["text_config"] = {}
+        if "audio_config" not in self.hparams:
+            self.hparams["audio_config"] = {}
         text_config = {**self.hparams, **self.hparams["text_config"]}
         self.n_embd_text = text_config.get("hidden_size", text_config.get("n_embd", 0))
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
-        if "vision_config" not in self.hparams:
-            raise ValueError("vision_config not found in hparams")
         # move vision config to the top level, while preserving the original hparams in global_config
         self.global_config = self.hparams
-        self.hparams = self.hparams["vision_config"]
+
+        if "vision_config" in self.hparams:
+            self.hparams = self.hparams["vision_config"]
+        elif "audio_config" in self.hparams:
+            self.hparams = self.hparams["audio_config"]
+        else:
+            raise ValueError("vision_config / audio_config not found in hparams")
 
         self.block_count = self.find_hparam(["n_layers", "num_hidden_layers", "n_layer", "num_layers", "depth"])
-        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.CLIP_VISION, self.block_count)
+        self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
 
         # load preprocessor config
         with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
             self.preprocessor_config = json.load(f)
 
     def set_type(self):
-        self.gguf_writer.add_type(gguf.GGUFType.CLIP_VISION)
+        self.gguf_writer.add_type(gguf.GGUFType.MMPROJ)
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_file_type(self.ftype)
-        self.gguf_writer.add_vision_projection_dim(self.n_embd_text)
-        self.gguf_writer.add_vision_has_vision_encoder(True)
 
-        # vision config
-        self.gguf_writer.add_vision_image_size(self.find_hparam(["image_size"]))
-        self.gguf_writer.add_vision_patch_size(self.find_hparam(["patch_size"]))
-        self.gguf_writer.add_vision_embedding_length(self.find_hparam(["hidden_size"]))
-        self.gguf_writer.add_vision_feed_forward_length(self.find_hparam(["intermediate_size"]))
-        self.gguf_writer.add_vision_block_count(self.block_count)
-        self.gguf_writer.add_vision_head_count(self.find_hparam(["num_attention_heads"]))
+        if self.has_vision_encoder:
+            self.gguf_writer.add_clip_has_vision_encoder(True)
+            self.gguf_writer.add_vision_projection_dim(self.n_embd_text)
 
-        # preprocessor config
-        self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
-        self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
+            # vision config
+            self.gguf_writer.add_vision_image_size(self.find_hparam(["image_size"]))
+            self.gguf_writer.add_vision_patch_size(self.find_hparam(["patch_size"]))
+            self.gguf_writer.add_vision_embedding_length(self.find_hparam(["hidden_size"]))
+            self.gguf_writer.add_vision_feed_forward_length(self.find_hparam(["intermediate_size"]))
+            self.gguf_writer.add_vision_block_count(self.block_count)
+            self.gguf_writer.add_vision_head_count(self.find_hparam(["num_attention_heads"]))
+
+            # preprocessor config
+            self.gguf_writer.add_vision_image_mean(self.preprocessor_config["image_mean"])
+            self.gguf_writer.add_vision_image_std(self.preprocessor_config["image_std"])
+
+        elif self.has_audio_encoder:
+            self.gguf_writer.add_clip_has_audio_encoder(True)
+            self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
+
+            # audio config
+            self.gguf_writer.add_audio_embedding_length(self.find_hparam(["hidden_size"]))
+            self.gguf_writer.add_audio_feed_forward_length(self.find_hparam(["intermediate_size"]))
+            self.gguf_writer.add_audio_block_count(self.block_count)
+            self.gguf_writer.add_audio_head_count(self.find_hparam(["num_attention_heads"]))
+
+        else:
+            raise ValueError("MmprojModel must have either vision or audio encoder")
 
     def write_vocab(self):
-        raise ValueError("VisionModel does not support vocab writing")
+        raise ValueError("MmprojModel does not support vocab writing")
 
 
 @ModelBase.register("GPTNeoXForCausalLM")
@@ -1950,7 +1979,7 @@ class LlamaModel(TextModel):
     "LlavaForConditionalGeneration", # pixtral
     "Mistral3ForConditionalGeneration", # mistral small 3.1
 )
-class LlavaVisionModel(VisionModel):
+class LlavaVisionModel(MmprojModel):
     img_break_tok_id = -1
 
     def __init__(self, *args, **kwargs):
@@ -1976,7 +2005,7 @@ class LlavaVisionModel(VisionModel):
         super().set_gguf_parameters()
         hparams = self.hparams
         if hparams["model_type"] == "pixtral":
-            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.PIXTRAL)
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PIXTRAL)
             self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
 
             # hidden_act
@@ -2015,7 +2044,7 @@ class LlavaVisionModel(VisionModel):
 
 
 @ModelBase.register("Idefics3ForConditionalGeneration", "SmolVLMForConditionalGeneration")
-class SmolVLMModel(VisionModel):
+class SmolVLMModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         if self.hparams["model_type"] == "smolvlm_vision":
@@ -2027,7 +2056,7 @@ class SmolVLMModel(VisionModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.IDEFICS3)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.IDEFICS3)
         self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
         self.gguf_writer.add_vision_projector_scale_factor(self.global_config.get("scale_factor", 2))
         self.gguf_writer.add_vision_use_gelu(True)
@@ -2069,6 +2098,9 @@ class Llama4Model(LlamaModel):
         self.gguf_writer.add_expert_feed_forward_length(self.hparams["intermediate_size_moe"])
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        if name.startswith("language_model."):
+            name = name.replace("language_model.", "")
+
         # split the gate_up into gate and up
         if "gate_up_proj" in name:
             name_up = name.replace("gate_up_proj", "up_proj.weight")
@@ -2087,6 +2119,26 @@ class Llama4Model(LlamaModel):
         if "multi_modal_projector" in name or "vision_model" in name:
             return []
         return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Llama4ForConditionalGeneration")
+class Llama4VisionModel(MmprojModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.LLAMA4)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams["norm_eps"])
+        self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / self.hparams["pixel_shuffle_ratio"]))
+        assert self.hparams["hidden_act"] == "gelu"
+        self.gguf_writer.add_vision_use_gelu(True)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid # unused
+        if "multi_modal_projector" in name or "vision_model" in name:
+            # process vision tensors
+            if "positional_embedding_vlm" in name and ".weight" not in name:
+                name += ".weight"
+            return [(self.map_tensor_name(name), data_torch)]
+        return []
 
 
 @ModelBase.register("Mistral3ForConditionalGeneration")
@@ -2621,7 +2673,7 @@ class Qwen2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
+@ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
 class Qwen2VLModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2VL
 
@@ -2645,8 +2697,8 @@ class Qwen2VLModel(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
-@ModelBase.register("Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
-class Qwen2VLVisionModel(VisionModel):
+@ModelBase.register("Qwen2VLModel", "Qwen2VLForConditionalGeneration", "Qwen2_5_VLForConditionalGeneration")
+class Qwen2VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.hparams["image_size"] = self.hparams.get("image_size", 560)
@@ -2661,9 +2713,9 @@ class Qwen2VLVisionModel(VisionModel):
         super().set_gguf_parameters()
         hparams = self.hparams
         if self.global_config['model_type'] == 'qwen2_vl':
-            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN2VL)
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN2VL)
         elif self.global_config['model_type'] == 'qwen2_5_vl':
-            self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.QWEN25VL)
+            self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN25VL)
             self.gguf_writer.add_vision_use_silu(True)
             # find n_wa_pattern (window attention pattern)
             fullatt_block_indexes = hparams.get("fullatt_block_indexes")
@@ -2722,11 +2774,11 @@ class Qwen2VLVisionModel(VisionModel):
 
 
 @ModelBase.register("InternVisionModel")
-class InternVisionModel(VisionModel):
+class InternVisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.INTERNVL)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.INTERNVL)
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
         # hidden_act
         if hparams["hidden_act"] == "silu":
@@ -3984,11 +4036,11 @@ class Gemma3Model(TextModel):
 
 
 @ModelBase.register("Gemma3ForConditionalGeneration")
-class Gemma3VisionModel(VisionModel):
+class Gemma3VisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_vision_projector_type(gguf.VisionProjectorType.GEMMA3)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GEMMA3)
         # default values below are taken from HF tranformers code
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams.get("layer_norm_eps", 1e-6))
         self.gguf_writer.add_vision_use_gelu(True)
@@ -5746,10 +5798,19 @@ class GraniteModel(LlamaModel):
             logger.info("gguf: (granite) logits_scale = %s", logits_scale)
 
 
-@ModelBase.register("GraniteMoeForCausalLM")
+@ModelBase.register("GraniteMoeForCausalLM", "GraniteMoeSharedForCausalLM")
 class GraniteMoeModel(GraniteModel):
     """Conversion for IBM's GraniteMoeForCausalLM"""
     model_arch = gguf.MODEL_ARCH.GRANITE_MOE
+
+    def set_gguf_parameters(self):
+        """GraniteMoeShared uses GraniteMoe parameters plus the following:
+        - shared_intermediate_size
+        """
+        super().set_gguf_parameters()
+        if shared_feed_forward_length := self.hparams.get("shared_intermediate_size"):
+            self.gguf_writer.add_expert_shared_feed_forward_length(shared_feed_forward_length)
+            logger.info("gguf: (granitemoeshared) shared_feed_forward_length = %s", shared_feed_forward_length)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         """In modeling_granitemoe, the JetMoe implementation of parallel experts
@@ -5761,10 +5822,19 @@ class GraniteMoeModel(GraniteModel):
         if name.endswith("block_sparse_moe.input_linear.weight"):
             ffn_dim = self.hparams["intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * intermediate_size"
-            gate, up = data_torch[..., :ffn_dim, :], data_torch[..., ffn_dim:, :]
+            gate, up = data_torch.split(ffn_dim, dim=-2)
             return [
                 (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_EXP, bid), gate),
                 (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
+            ]
+
+        if name.endswith("shared_mlp.input_linear.weight"):
+            ffn_dim = self.hparams["shared_intermediate_size"]
+            assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
+            gate, up = data_torch.split(ffn_dim, dim=-2)
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), up),
             ]
 
         return super().modify_tensors(data_torch, name, bid)
@@ -5916,6 +5986,52 @@ class ChameleonModel(TextModel):
         data_torch = data_torch.repeat_interleave(n_heads, 0)
         return data_torch
 
+
+@ModelBase.register("UltravoxModel")
+class UltravoxModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA # dummy
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        raise NotImplementedError("Ultravox does not have text decoder. Please use --mmproj argument")
+
+
+@ModelBase.register("UltravoxModel")
+class UltravoxAudioModel(MmprojModel):
+    has_vision_encoder = False # no vision encoder
+    has_audio_encoder = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hparams["hidden_size"] = self.hparams["d_model"]
+        self.hparams["intermediate_size"] = self.hparams["encoder_ffn_dim"]
+        self.hparams["num_attention_heads"] = self.hparams["encoder_attention_heads"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ULTRAVOX)
+        self.gguf_writer.add_audio_num_mel_bins(self.hparams["num_mel_bins"])
+        self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
+        self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, new_name, n_dims  # unused
+        if ".conv" in name and ".weight" in name:
+            return gguf.GGMLQuantizationType.F16
+        return False
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # prevent clash naming with vision tensors
+        if name.startswith("multi_modal_projector"):
+            name = "audio." + name
+
+        if "conv1.bias" in name or "conv2.bias" in name:
+            # transpose conv1 and conv2 bias
+            data_torch = data_torch.unsqueeze(-1)
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 ###### CONVERSION LOGIC ######
 
@@ -6092,13 +6208,15 @@ def split_str_to_n_bytes(split_str: str) -> int:
 
 
 def get_model_architecture(hparams: dict[str, Any], model_type: ModelType) -> str:
+    # TODO @ngxson : this won't work correctly if the model has both audio & vision encoders
+    # maybe we should fallback to text model's arch in that case, since not many models have both
     text_config = hparams.get("text_config", {})
     vision_config = hparams.get("vision_config", {})
     arch = hparams["architectures"][0]
     # if "architectures" is found in the sub-config, use that instead
     if model_type == ModelType.TEXT and text_config.get("architectures") is not None:
         arch = text_config["architectures"][0]
-    elif model_type == ModelType.VISION and vision_config.get("architectures") is not None:
+    elif model_type == ModelType.MMPROJ and vision_config.get("architectures") is not None:
         arch = vision_config["architectures"][0]
     return arch
 
@@ -6161,7 +6279,7 @@ def main() -> None:
 
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
-        model_type = ModelType.VISION if args.mmproj else ModelType.TEXT
+        model_type = ModelType.MMPROJ if args.mmproj else ModelType.TEXT
         hparams = ModelBase.load_hparams(dir_model)
         model_architecture = get_model_architecture(hparams, model_type)
         logger.info(f"Model architecture: {model_architecture}")

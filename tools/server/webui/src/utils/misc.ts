@@ -89,6 +89,14 @@ export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
           type: 'image_url',
           image_url: { url: extra.base64Url },
         });
+      } else if (extra.type === 'audioFile') {
+        contentArr.push({
+          type: 'input_audio',
+          input_audio: {
+            data: extra.base64Data,
+            format: /wav/.test(extra.mimeType) ? 'wav' : 'mp3',
+          },
+        });
       } else {
         throw new Error('Unknown extra type');
       }
