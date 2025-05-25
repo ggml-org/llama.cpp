@@ -574,7 +574,7 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
 
             // can we use this cell? either:
             //  - the cell is empty
-            //  - the cell is occupied only by the same sequence, and the sequence is not masked
+            //  - the cell is occupied only by the same sequence, and the pos is masked
             const bool can_use =
                     cells.is_empty(head_cur + i) ||
                     (
@@ -2277,7 +2277,7 @@ llama_memory_decode_state_ptr llama_kv_cache_recurrent::init(const llama_batch &
 }
 
 bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {
-    // simply remember the full state
+    // simply remember the full state because it is very small for this type of cache
     // TODO: optimize
     auto org_cells = cells;
     auto org_used = used;
