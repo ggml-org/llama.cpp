@@ -185,7 +185,7 @@ public:
             ggml_cgraph * gf,
                    bool   batched);
 
-    // reserve a graph
+    // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs);
 
 private:
