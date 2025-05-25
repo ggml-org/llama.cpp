@@ -31,7 +31,7 @@ cd ../posix-kernel/
 
 cd ../../
 
-export MLIR_SDK_VERSION=/proj/work/rel/sw/sdk-r.0.1.1
+export MLIR_SDK_VERSION=/proj/work/rel/sw/sdk-r.0.1.2
 #Compile for posix with build-posix as a target folder
 
 echo 'building llama.cp, ggml for tsavorite  and other binary for posix'
