@@ -1721,14 +1721,14 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
                      bool   swa_full,
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
-                 uint32_t   n_ubatch,
+                 uint32_t   n_batch,
                  uint32_t   n_pad) : hparams(model.hparams) {
     llama_kv_cache_unified::layer_filter_cb filter_base = [&](int32_t il) { return !model.hparams.is_swa(il); };
     llama_kv_cache_unified::layer_filter_cb filter_swa  = [&](int32_t il) { return  model.hparams.is_swa(il); };
 
     const uint32_t size_base = kv_size;
 
-    uint32_t size_swa = std::min(size_base, GGML_PAD(hparams.n_swa*n_seq_max + n_ubatch, n_pad));
+    uint32_t size_swa = std::min(size_base, GGML_PAD(hparams.n_swa*n_seq_max + n_batch, n_pad));
 
     // when using full-size SWA cache, we set the SWA cache size to be equal to the base cache size
     if (swa_full) {
