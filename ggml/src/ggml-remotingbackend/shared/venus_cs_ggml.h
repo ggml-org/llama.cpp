@@ -67,17 +67,27 @@ vn_decode_ggml_tensor(struct vn_cs_decoder *dec) {
 
 
 static inline void
-vn_encode_apir_buffer_type_handle_t(struct vn_cs_encoder *enc, apir_buffer_type_handle_t *handle) {
-  vn_cs_encoder_write(enc, sizeof(*handle), handle, sizeof(*handle));
+vn_encode_ggml_buffer_type(struct vn_cs_encoder *enc, ggml_backend_buffer_type_t buft) {
+  apir_buffer_type_host_handle_t handle = ggml_buffer_type_to_apir_handle(buft);
+  vn_cs_encoder_write(enc, sizeof(handle), &handle, sizeof(handle));
 }
 
 static inline ggml_backend_buffer_type_t
-vn_decode_ggml_buft(struct vn_cs_decoder *dec) {
-  apir_buffer_type_handle_t handle;
+vn_decode_ggml_buffer_type(struct vn_cs_decoder *dec) {
+  apir_buffer_type_host_handle_t handle;
 
   vn_cs_decoder_read(dec, sizeof(handle), &handle, sizeof(handle));
 
   return (ggml_backend_buffer_type_t) handle;
+}
+
+static inline apir_buffer_type_host_handle_t
+vn_decode_apir_buffer_type_host_handle(struct vn_cs_decoder *dec) {
+  apir_buffer_type_host_handle_t handle;
+
+  vn_cs_decoder_read(dec, sizeof(handle), &handle, sizeof(handle));
+
+  return handle;
 }
 
 /* *** ggml_backend_type_t *** */

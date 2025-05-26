@@ -89,8 +89,7 @@ backend_device_get_buffer_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *
 
   ggml_backend_buffer_type_t bufft = dev->iface.get_buffer_type(dev);
 
-  apir_buffer_type_handle_t buft_handle = (apir_buffer_type_handle_t) bufft;
-  vn_encode_apir_buffer_type_handle_t(enc, &buft_handle);
+  vn_encode_ggml_buffer_type(enc, bufft);
 
   return 0;
 }

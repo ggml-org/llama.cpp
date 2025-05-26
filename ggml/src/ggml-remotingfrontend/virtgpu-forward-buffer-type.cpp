@@ -7,8 +7,7 @@ apir_buffer_type_get_name(struct virtgpu *gpu, ggml_backend_buffer_type_t buft) 
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME);
 
-  apir_buffer_type_handle_t handle = (apir_buffer_type_handle_t) buft->context;
-  vn_encode_apir_buffer_type_handle_t(encoder, &handle);
+  vn_encode_ggml_buffer_type(encoder, buft);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
@@ -35,8 +34,7 @@ apir_buffer_type_get_alignment(struct virtgpu *gpu, ggml_backend_buffer_type_t b
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_GET_ALIGNMENT);
 
-  apir_buffer_type_handle_t handle = (apir_buffer_type_handle_t) buft->context;
-  vn_encode_apir_buffer_type_handle_t(encoder, &handle);
+  vn_encode_ggml_buffer_type(encoder, buft);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
@@ -57,8 +55,7 @@ apir_buffer_type_get_max_size(struct virtgpu *gpu, ggml_backend_buffer_type_t bu
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_GET_MAX_SIZE);
 
-  apir_buffer_type_handle_t handle = (apir_buffer_type_handle_t) buft->context;
-  vn_encode_apir_buffer_type_handle_t(encoder, &handle);
+  vn_encode_ggml_buffer_type(encoder, buft);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
@@ -79,8 +76,7 @@ apir_buffer_type_is_host(struct virtgpu *gpu, ggml_backend_buffer_type_t buft) {
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_IS_HOST);
 
-  apir_buffer_type_handle_t handle = (apir_buffer_type_handle_t) buft->context;
-  vn_encode_apir_buffer_type_handle_t(encoder, &handle);
+  vn_encode_ggml_buffer_type(encoder, buft);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
@@ -115,15 +111,18 @@ apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t bu
 
   vn_encode_virtgpu_shmem_res_id(encoder, buffer_context.shmem->res_id);
 #else
-  apir_buffer_type_handle_t buft_handle = (apir_buffer_type_handle_t) buft->context;
-  vn_encode_apir_buffer_type_handle_t(encoder, &buft_handle);
+  vn_encode_ggml_buffer_type(encoder, buft);
 #endif
   vn_encode_size_t(encoder, &size);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
-  vn_decode_apir_buffer_host_handle_t(decoder, &buffer_context.host_handle);
+#if APIR_ALLOC_FROM_HOST_PTR
+  buffer_context.buft_host_handle = vn_decode_apir_buffer_type_host_handle(decoder);
+#endif
 
+  vn_decode_apir_buffer_host_handle_t(decoder, &buffer_context.host_handle);
+  
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
   return buffer_context;
