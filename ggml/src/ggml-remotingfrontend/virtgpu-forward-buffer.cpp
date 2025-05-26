@@ -1,13 +1,13 @@
 #include "virtgpu-forward-impl.h"
 
 void *
-apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle) {
+apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_context_t *buffer_context) {
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_GET_BASE);
 
-  vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
+  vn_encode_apir_buffer_host_handle_t(encoder, &buffer_context->host_handle);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
@@ -22,18 +22,18 @@ apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle) {
 }
 
 void
-apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
 		       ggml_tensor *tensor, const void *data, size_t offset, size_t size) {
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
 #if 0
   INFO("Calling (%p)->set_tensor(tensor=%p, data=%p, offset=%lu, size=%lu",
-    buffer_handle, tensor, data, offset, size);
+       buffer_context->host_handle, tensor, data, offset, size);
 #endif
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_SET_TENSOR);
 
-  vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
+  vn_encode_apir_buffer_host_handle_t(encoder, &buffer_context->host_handle);
   vn_encode_ggml_tensor(encoder, tensor);
 
   struct vn_renderer_shmem *shmem;
@@ -64,15 +64,26 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
   return;
 }
 
+#if APIR_ALLOC_FROM_HOST_PTR
 void
-apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
+		       const ggml_tensor *tensor, void *data, size_t offset, size_t size) {
+  UNUSED(gpu);
+  UNUSED(tensor);
+  char *buffer_base_addr = (char *) buffer_context->shmem->mmap_ptr;
+
+  memcpy(data, buffer_base_addr+offset, size);
+}
+#else
+void
+apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
 		       const ggml_tensor *tensor, void *data, size_t offset, size_t size) {
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_GET_TENSOR);
 
-  vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
+  vn_encode_apir_buffer_host_handle_t(encoder, &buffer_context->host_handle);
   vn_encode_ggml_tensor(encoder, tensor);
 
   struct vn_renderer_shmem *shmem;
@@ -100,16 +111,17 @@ apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
     virtgpu_shmem_destroy(gpu, shmem->shmem);
   }
 }
+#endif
 
 void
-apir_buffer_clear(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+apir_buffer_clear(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
 		  uint8_t value) {
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_CLEAR);
 
-  vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
+  vn_encode_apir_buffer_host_handle_t(encoder, &buffer_context->host_handle);
   vn_encode_uint8_t(encoder, &value);
 
   REMOTE_CALL(gpu, encoder, decoder);
@@ -119,15 +131,17 @@ apir_buffer_clear(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
 
 
 void
-apir_buffer_free_buffer(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle) {
+apir_buffer_free_buffer(struct virtgpu *gpu, apir_buffer_context_t *buffer_context) {
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_FREE_BUFFER);
 
-  vn_encode_apir_buffer_handle_t(encoder, &buffer_handle);
+  vn_encode_apir_buffer_host_handle_t(encoder, &buffer_context->host_handle);
 
   REMOTE_CALL(gpu, encoder, decoder);
-
+#if APIR_ALLOC_FROM_HOST_PTR
+  virtgpu_shmem_destroy(gpu, buffer_context->shmem->shmem);
+#endif
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 }

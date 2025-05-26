@@ -13,8 +13,11 @@
 #define DEV_TO_GPU(name) \
   ((struct ggml_backend_remoting_device_context *) (name)->context)->gpu
 
-#define BUFFER_TO_HANDLE(name) \
-  ((struct ggml_backend_remoting_buffer_context *) (name)->context)->handle
+#define BUFFER_TO_APIR_CONTEXT(name) \
+  &((struct ggml_backend_remoting_buffer_context *) (name)->context)->apir_context
+
+#define BUFFER_TO_HOST_HANDLE(name) \
+  ((struct ggml_backend_remoting_buffer_context *) (name)->context)->apir_context.host_handle
 
 #define GET_DEVICE_CONTEXT() \
   (struct ggml_backend_remoting_device_context *) ggml_backend_remoting_get_device(0)->context \
@@ -76,19 +79,10 @@ struct ggml_backend_remoting_device_context {
 };
 
 struct ggml_backend_remoting_buffer_context {
-  apir_buffer_handle_t handle;
+  apir_buffer_context_t apir_context;
 
   struct virtgpu *gpu;
 };
-
-static inline apir_buffer_handle_t ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer) {
-  struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) buffer->context;
-
-  if (!context) {
-    return 0;
-  }
-  return context->handle;
-}
 
 extern const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface;
 extern const struct ggml_backend_device_i ggml_backend_remoting_device_interface;

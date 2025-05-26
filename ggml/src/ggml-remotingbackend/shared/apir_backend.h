@@ -14,8 +14,17 @@
 
 #define APIR_BACKEND_FORWARD_INDEX_INVALID 6
 
+#define APIR_ALLOC_FROM_HOST_PTR 0
+
 typedef uintptr_t apir_buffer_type_handle_t;
-typedef uintptr_t apir_buffer_handle_t;
+typedef uintptr_t apir_buffer_host_handle_t;
+
+typedef struct {
+  apir_buffer_host_handle_t host_handle;
+#if APIR_ALLOC_FROM_HOST_PTR
+  struct vn_renderer_shmem *shmem;
+#endif
+} apir_buffer_context_t;
 
 typedef uint32_t (*apir_backend_initialize_t)(void);
 typedef void (*apir_backend_deinit_t)(void);

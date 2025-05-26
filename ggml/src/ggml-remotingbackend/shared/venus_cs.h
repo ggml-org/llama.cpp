@@ -525,18 +525,18 @@ vn_decode_apir_buffer_type_handle_t(struct vn_cs_decoder *dec, apir_buffer_type_
   vn_decode(dec, sizeof(apir_buffer_type_handle_t), val, sizeof(apir_buffer_type_handle_t));
 }
 
-/* apir_buffer_handle_t */
+/* apir_buffer_host_handle_t */
 
 static inline void
-vn_encode_apir_buffer_handle_t(struct vn_cs_encoder *enc, const apir_buffer_handle_t *val)
+vn_encode_apir_buffer_host_handle_t(struct vn_cs_encoder *enc, const apir_buffer_host_handle_t *val)
 {
-  vn_encode(enc, sizeof(apir_buffer_handle_t), val, sizeof(apir_buffer_handle_t));
+  vn_encode(enc, sizeof(apir_buffer_host_handle_t), val, sizeof(apir_buffer_host_handle_t));
 }
 
 static inline void
-vn_decode_apir_buffer_handle_t(struct vn_cs_decoder *dec, apir_buffer_handle_t *val)
+vn_decode_apir_buffer_host_handle_t(struct vn_cs_decoder *dec, apir_buffer_host_handle_t *val)
 {
-  vn_decode(dec, sizeof(apir_buffer_handle_t), val, sizeof(apir_buffer_handle_t));
+  vn_decode(dec, sizeof(apir_buffer_host_handle_t), val, sizeof(apir_buffer_host_handle_t));
 }
 
 /* uintptr_t */

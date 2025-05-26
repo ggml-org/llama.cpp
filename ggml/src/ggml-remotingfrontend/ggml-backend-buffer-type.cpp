@@ -14,7 +14,7 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   }
 
   context->gpu = gpu;
-  context->handle = apir_buffer_type_alloc_buffer(gpu, buft, size);
+  context->apir_context = apir_buffer_type_alloc_buffer(gpu, buft, size);
 
   ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
 

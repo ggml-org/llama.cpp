@@ -4,10 +4,10 @@
 #include "venus_cs_ggml-rpc.h"
 
 // needs
-// ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer);
+// ggml_buffer_to_apir_host_handle(ggml_backend_buffer_t buffer);
 
 static inline void
-vn_encode_ggml_buffer_handle(struct vn_cs_encoder *enc, const apir_buffer_handle_t *handle);
+vn_encode_ggml_buffer_host_handle(struct vn_cs_encoder *enc, const apir_buffer_host_handle_t *handle);
 
 static inline ggml_backend_buffer_t
 vn_decode_ggml_buffer(struct vn_cs_decoder *dec);
@@ -86,8 +86,9 @@ vn_decode_ggml_buft(struct vn_cs_decoder *dec) {
 // same logic as for ggml_backend_buffer_type_t
 
 static inline void
-vn_encode_ggml_buffer_handle(struct vn_cs_encoder *enc, const apir_buffer_handle_t *handle) {
-  vn_cs_encoder_write(enc, sizeof(*handle), &handle, sizeof(*handle));
+vn_encode_ggml_buffer(struct vn_cs_encoder *enc, const ggml_backend_buffer_t buffer) {
+  apir_buffer_host_handle_t handle = BUFFER_TO_HOST_HANDLE(buffer);
+  vn_cs_encoder_write(enc, sizeof(handle), &handle, sizeof(handle));
 }
 
 static inline ggml_backend_buffer_t

@@ -60,16 +60,32 @@ backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec
 uint32_t
 backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
+#if APIR_ALLOC_FROM_HOST_PTR
+  uint32_t shmem_res_id;
+  vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
+
+  void *shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
+  if (!shmem_data) {
+    FATAL("Couldn't get the shmem addr from virgl :/");
+  }
+#else
   ggml_backend_buffer_type_t buft;
   buft = vn_decode_ggml_buft(dec);
-
+#endif
   size_t size;
   vn_decode_size_t(dec, &size);
 
-  WARNING("NEED TO ALLOCATE FROM PTR INSTEAD");
-  ggml_backend_buffer_t buffer = buft->iface.alloc_buffer(buft, size);
-  apir_buffer_handle_t *buffer_handle = (apir_buffer_handle_t *) buffer;
-  vn_encode_ggml_buffer_handle(enc, buffer_handle);
+  ggml_backend_buffer_t buffer;
+#if APIR_ALLOC_FROM_HOST_PTR
+  WARNING("USING FROM_HOST_PTR\n\n");
+  buffer = dev->iface.buffer_from_host_ptr(dev, shmem_data, size, size);
+#else
+  WARNING("USING ALLOC_BUFFER");
+  buffer = buft->iface.alloc_buffer(buft, size);
+  WARNING("USING ALLOC_BUFFER--> %p", buffer);
+#endif
+  
+  vn_encode_ggml_buffer(enc, buffer);
 
   if (buffer) {
     track_backend_buffer(buffer);

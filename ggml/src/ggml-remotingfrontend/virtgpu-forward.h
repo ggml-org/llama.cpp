@@ -23,19 +23,19 @@ const char *apir_buffer_type_get_name(struct virtgpu *gpu, ggml_backend_buffer_t
 size_t apir_buffer_type_get_alignment(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);
 size_t apir_buffer_type_get_max_size(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);
 bool apir_buffer_type_is_host(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);
-apir_buffer_handle_t apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t buffer_buft, size_t size);
+apir_buffer_context_t apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t buffer_buft, size_t size);
 
 /* buffer */
 
-void *apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle);
-enum ggml_status apir_buffer_init_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle, ggml_tensor *tensor);
-void apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+void *apir_buffer_get_base(struct virtgpu *gpu, apir_buffer_context_t *buffer_context);
+enum ggml_status apir_buffer_init_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_context, ggml_tensor *tensor);
+void apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
 			    ggml_tensor *tensor, const void *data, size_t offset, size_t size);
-void apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+void apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
 			    const ggml_tensor *tensor, void *data, size_t offset, size_t size);
-void apir_buffer_clear(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle,
+void apir_buffer_clear(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
 		       uint8_t value);
-void apir_buffer_free_buffer(struct virtgpu *gpu, apir_buffer_handle_t buffer_handle);
+void apir_buffer_free_buffer(struct virtgpu *gpu, apir_buffer_context_t *buffer_context);
 
 /* backend */
 
