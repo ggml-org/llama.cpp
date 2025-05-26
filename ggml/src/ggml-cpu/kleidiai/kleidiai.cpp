@@ -3,7 +3,9 @@
 //
 #include <arm_neon.h>
 #include <assert.h>
+#include <atomic>
 #include <cfloat>
+#include <stdexcept>
 #include <stdint.h>
 #include <string.h>
 #if defined(__linux__)

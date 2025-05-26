@@ -319,32 +319,27 @@ inline void ggml_sycl_op_repeat(ggml_backend_sycl_context & ctx, ggml_tensor *ds
 
 
 void ggml_sycl_add(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     ggml_sycl_op_add(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sub(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     ggml_sycl_op_sub(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_mul(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     ggml_sycl_op_mul(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_div(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     ggml_sycl_op_div(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_repeat(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s\n", __func__);
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_repeat(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 

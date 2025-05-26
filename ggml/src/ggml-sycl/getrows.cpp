@@ -257,8 +257,7 @@ static void get_rows_sycl_float(ggml_backend_sycl_context & ctx, const ggml_tens
     GGML_UNUSED(ctx);
 }
 
-void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-
+void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[1]->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
@@ -308,4 +307,3 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
             GGML_ABORT("fatal error");
     }
 }
-

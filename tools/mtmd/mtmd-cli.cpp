@@ -37,10 +37,10 @@ static volatile bool g_is_interrupted = false;
 static void show_additional_info(int /*argc*/, char ** argv) {
     LOG(
         "Experimental CLI for multimodal\n\n"
-        "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> -p <prompt>\n\n"
+        "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> --audio <audio> -p <prompt>\n\n"
         "  -m and --mmproj are required\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
-        "  --image and -p are optional, if NOT provided, the CLI will run in chat mode\n"
+        "  --image, --audio and -p are optional, if NOT provided, the CLI will run in chat mode\n"
         "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
         argv[0]
     );
@@ -142,7 +142,7 @@ struct mtmd_cli_context {
         );
     }
 
-    bool load_image(const std::string & fname) {
+    bool load_media(const std::string & fname) {
         mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(fname.c_str()));
         if (!bmp.ptr) {
             return false;
@@ -243,7 +243,7 @@ int main(int argc, char ** argv) {
     common_params params;
     params.sampling.temp = 0.2; // lower temp by default for better quality
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_LLAVA, show_additional_info)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MTMD, show_additional_info)) {
         return 1;
     }
 
@@ -283,14 +283,14 @@ int main(int argc, char ** argv) {
 
     if (is_single_turn) {
         g_is_generating = true;
-        if (params.prompt.find("<__image__>") == std::string::npos) {
-            params.prompt += " <__image__>";
+        if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
+            params.prompt += mtmd_default_marker();
         }
         common_chat_msg msg;
         msg.role = "user";
         msg.content = params.prompt;
         for (const auto & image : params.image) {
-            if (!ctx.load_image(image)) {
+            if (!ctx.load_media(image)) {
                 return 1; // error is already printed by libmtmd
             }
         }
@@ -303,7 +303,12 @@ int main(int argc, char ** argv) {
 
     } else {
         LOG("\n Running in chat mode, available commands:");
-        LOG("\n   /image <path>    load an image");
+        if (mtmd_support_vision(ctx.ctx_vision.get())) {
+            LOG("\n   /image <path>    load an image");
+        }
+        if (mtmd_support_audio(ctx.ctx_vision.get())) {
+            LOG("\n   /audio <path>    load an audio");
+        }
         LOG("\n   /clear           clear the chat history");
         LOG("\n   /quit or /exit   exit the program");
         LOG("\n");
@@ -333,15 +338,17 @@ int main(int argc, char ** argv) {
                 continue;
             }
             g_is_generating = true;
-            if (line == "/image" || line.find("/image ") == 0) {
+            bool is_image = line == "/image" || line.find("/image ") == 0;
+            bool is_audio = line == "/audio" || line.find("/audio ") == 0;
+            if (is_image || is_audio) {
                 if (line.size() < 8) {
-                    LOG_ERR("ERR: Missing image filename\n");
+                    LOG_ERR("ERR: Missing media filename\n");
                     continue;
                 }
-                std::string image = line.substr(7);
-                if (ctx.load_image(image)) {
-                    LOG("Image %s loaded\n", image.c_str());
-                    content += "<__image__>";
+                std::string media_path = line.substr(7);
+                if (ctx.load_media(media_path)) {
+                    LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
+                    content += mtmd_default_marker();
                 }
                 // else, error is already printed by libmtmd
                 continue;

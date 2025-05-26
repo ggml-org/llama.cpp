@@ -655,7 +655,6 @@ inline void ggml_sycl_op_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -688,7 +687,6 @@ inline void ggml_sycl_op_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -722,7 +720,6 @@ inline void ggml_sycl_op_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -754,7 +751,6 @@ inline void ggml_sycl_op_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -786,7 +782,6 @@ inline void ggml_sycl_op_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -818,7 +813,6 @@ inline void ggml_sycl_op_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -850,7 +844,6 @@ inline void ggml_sycl_op_tanh(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -883,7 +876,6 @@ inline void ggml_sycl_op_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -917,7 +909,6 @@ inline void ggml_sycl_op_hardsigmoid(ggml_backend_sycl_context & ctx, ggml_tenso
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -949,7 +940,6 @@ inline void ggml_sycl_op_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor 
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -981,7 +971,6 @@ inline void ggml_sycl_op_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1013,7 +1002,6 @@ inline void ggml_sycl_op_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1045,7 +1033,6 @@ inline void ggml_sycl_op_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1078,7 +1065,6 @@ inline void ggml_sycl_op_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1110,7 +1096,6 @@ inline void ggml_sycl_op_sin(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1142,7 +1127,6 @@ inline void ggml_sycl_op_cos(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1174,7 +1158,6 @@ inline void ggml_sycl_op_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1206,7 +1189,6 @@ inline void ggml_sycl_op_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1241,7 +1223,6 @@ inline void ggml_sycl_op_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1273,7 +1254,6 @@ inline void ggml_sycl_op_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1315,7 +1295,6 @@ inline void ggml_sycl_op_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * 
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1350,7 +1329,6 @@ inline void ggml_sycl_op_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1388,7 +1366,6 @@ inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * ds
             }
         default:
             GGML_ABORT("GGML tensor type not supported!\n");
-            break;
     }
 }
 
@@ -1414,146 +1391,121 @@ inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor *dst) 
 
 
 void ggml_sycl_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_sqrt(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sin(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_sin(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_cos(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_cos(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_acc(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     ggml_sycl_op_acc(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_gelu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_gelu(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_silu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_silu(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_gelu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_gelu_quick(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_tanh(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_tanh(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_relu(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_sigmoid(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_hardsigmoid(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_hardsigmoid(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_hardswish(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_hardswish(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
-
 void ggml_sycl_exp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_exp(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_log(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_log(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_neg(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_neg(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_step(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_step(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_leaky_relu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_leaky_relu(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_sqr(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_upscale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_upscale(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_pad(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_pad(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_clamp(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_sgn(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_abs(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }
 
 void ggml_sycl_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    GGML_SYCL_DEBUG("call %s: DST Tensor type: %s\n", __func__, ggml_type_name(dst->type));
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_elu(ctx, dst);
-    GGML_SYCL_DEBUG("call %s done\n", __func__);
 }

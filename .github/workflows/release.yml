@@ -1,4 +1,4 @@
-name: Create Release
+name: Release
 
 on:
   workflow_dispatch: # allows manual triggering
@@ -227,6 +227,69 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip
           name: llama-bin-ubuntu-vulkan-x64.zip
 
+  windows-cpu:
+    runs-on: windows-latest
+
+    strategy:
+      matrix:
+        include:
+          - arch: 'x64'
+          - arch: 'arm64'
+
+    steps:
+      - name: Clone
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: windows-latest-cmake-cpu-${{ matrix.arch }}
+          variant: ccache
+          evict-old-files: 1d
+
+      - name: Install Ninja
+        run: |
+          choco install ninja
+
+      - name: libCURL
+        id: get_libcurl
+        uses: ./.github/actions/windows-setup-curl
+        with:
+          architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
+
+      - name: Build
+        shell: cmd
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch }}
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
+            -DGGML_OPENMP=ON ^
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
+            ${{ env.CMAKE_ARGS }}
+          cmake --build build --config Release
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        env:
+          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
+        run: |
+          Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.42.34433\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
+          7z a llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-bin-win-cpu-${{ matrix.arch }}.zip
+          name: llama-bin-win-cpu-${{ matrix.arch }}.zip
+
   windows:
     runs-on: windows-latest
 
@@ -237,47 +300,30 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: 'cpu-x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF'
-          #- build: 'openblas-x64'
-          #  defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
-          - build: 'vulkan-x64'
-            defines: '-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_VULKAN=ON'
-          - build: 'cpu-arm64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DGGML_NATIVE=OFF'
-          - build: 'opencl-adreno-arm64'
+          - backend: 'vulkan'
+            arch: 'x64'
+            defines: '-DGGML_VULKAN=ON'
+            target: 'ggml-vulkan'
+          - backend: 'opencl-adreno'
+            arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
+            target: 'ggml-opencl'
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-${{ matrix.build }}
+          key: windows-latest-cmake-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
 
-      - name: Download OpenBLAS
-        id: get_openblas
-        if: ${{ matrix.build == 'openblas-x64' }}
-        run: |
-          curl.exe -o $env:RUNNER_TEMP/openblas.zip -L "https://github.com/xianyi/OpenBLAS/releases/download/v${env:OPENBLAS_VERSION}/OpenBLAS-${env:OPENBLAS_VERSION}-x64.zip"
-          curl.exe -o $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt -L "https://github.com/xianyi/OpenBLAS/raw/v${env:OPENBLAS_VERSION}/LICENSE"
-          mkdir $env:RUNNER_TEMP/openblas
-          tar.exe -xvf $env:RUNNER_TEMP/openblas.zip -C $env:RUNNER_TEMP/openblas
-          $vcdir = $(vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
-          $msvc = $(join-path $vcdir $('VC\Tools\MSVC\'+$(gc -raw $(join-path $vcdir 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt')).Trim()))
-          $lib =  $(join-path $msvc 'bin\Hostx64\x64\lib.exe')
-          & $lib /machine:x64 "/def:${env:RUNNER_TEMP}/openblas/lib/libopenblas.def" "/out:${env:RUNNER_TEMP}/openblas/lib/openblas.lib" /name:openblas.dll
-
       - name: Install Vulkan SDK
         id: get_vulkan
-        if: ${{ matrix.build == 'vulkan-x64' }}
+        if: ${{ matrix.backend == 'vulkan' }}
         run: |
           curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/VulkanSDK-${env:VULKAN_VERSION}-Installer.exe"
           & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
@@ -291,7 +337,7 @@ jobs:
 
       - name: Install OpenCL Headers and Libs
         id: install_opencl
-        if: ${{ matrix.build == 'opencl-adreno-arm64' }}
+        if: ${{ matrix.backend == 'opencl-adreno' && matrix.arch == 'arm64' }}
         run: |
           git clone https://github.com/KhronosGroup/OpenCL-Headers
           cd OpenCL-Headers
@@ -309,44 +355,22 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP/opencl-arm64-release"
           cmake --build build-arm64-release --target install --config release
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-
       - name: Build
         id: cmake_build
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cmake -S . -B build ${{ matrix.defines }} `
-            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include" `
-            ${{ env.CMAKE_ARGS }}
-          cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
-
-      - name: Add libopenblas.dll
-        id: add_libopenblas_dll
-        if: ${{ matrix.build == 'openblas-x64' }}
-        run: |
-          cp $env:RUNNER_TEMP/openblas/bin/libopenblas.dll ./build/bin/Release/openblas.dll
-          cp $env:RUNNER_TEMP/OpenBLAS.LICENSE.txt ./build/bin/Release/OpenBLAS-${env:OPENBLAS_VERSION}.txt
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
+          cmake -S . -B build ${{ matrix.defines }} -DGGML_NATIVE=OFF -DGGML_CPU=OFF -DGGML_BACKEND_DL=ON -DLLAMA_CURL=OFF
+          cmake --build build --config Release --target ${{ matrix.target }}
 
       - name: Pack artifacts
         id: pack_artifacts
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          Copy-Item $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\Release\libcurl-x64.dll
-          7z a llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}.zip .\build\bin\Release\*
+          7z a llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip .\build\bin\Release\${{ matrix.target }}.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-${{ matrix.build }}.zip
-          name: llama-bin-win-${{ matrix.build }}.zip
+          path: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
+          name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
     runs-on: windows-2019
@@ -359,8 +383,6 @@ jobs:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
-        with:
-            fetch-depth: 0
 
       - name: Install ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -379,45 +401,30 @@ jobs:
         run: |
           choco install ninja
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-
       - name: Build
         id: cmake_build
         shell: cmd
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake -S . -B build -G "Ninja Multi-Config" ^
-            -DGGML_NATIVE=OFF ^
             -DGGML_BACKEND_DL=ON ^
-            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_CPU=OFF ^
             -DGGML_CUDA=ON ^
-            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
-            ${{ env.CMAKE_ARGS }}
+            -DLLAMA_CURL=OFF
           set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
-          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
-          cmake --build build --config Release
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
+          cmake --build build --config Release -j %NINJA_JOBS% --target ggml-cuda
 
       - name: Pack artifacts
         id: pack_artifacts
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cp $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\Release\libcurl-x64.dll
-          7z a llama-${{ steps.tag.outputs.name }}-bin-win-cuda${{ matrix.cuda }}-x64.zip .\build\bin\Release\*
+          7z a llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip .\build\bin\Release\ggml-cuda.dll
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-cuda${{ matrix.cuda }}-x64.zip
-          name: llama-bin-win-cuda${{ matrix.cuda }}-x64.zip
+          path: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+          name: llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
       - name: Copy and pack Cuda runtime
         run: |
@@ -425,13 +432,13 @@ jobs:
           $dst='.\build\bin\cudart\'
           robocopy "${{env.CUDA_PATH}}\bin" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
           robocopy "${{env.CUDA_PATH}}\lib" $dst cudart64_*.dll cublas64_*.dll cublasLt64_*.dll
-          7z a cudart-llama-bin-win-cuda${{ matrix.cuda }}-x64.zip $dst\*
+          7z a cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip $dst\*
 
       - name: Upload Cuda runtime
         uses: actions/upload-artifact@v4
         with:
-          path: cudart-llama-bin-win-cuda${{ matrix.cuda }}-x64.zip
-          name: cudart-llama-bin-win-cuda${{ matrix.cuda }}-x64.zip
+          path: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
+          name: cudart-llama-bin-win-cuda-${{ matrix.cuda }}-x64.zip
 
   windows-sycl:
     runs-on: windows-latest
@@ -441,15 +448,14 @@ jobs:
         shell: bash
 
     env:
-      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/b380d914-366b-4b77-a74a-05e3c38b3514/intel-oneapi-base-toolkit-2025.0.0.882_offline.exe
+      WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7cd9bba0-7aab-4e30-b3ae-2221006a4a05/intel-oneapi-base-toolkit-2025.1.1.34_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
@@ -462,15 +468,18 @@ jobs:
         run:  |
           scripts/install-oneapi.bat $WINDOWS_BASEKIT_URL $WINDOWS_DPCPP_MKL
 
-      # TODO: add libcurl support ; we will also need to modify win-build-sycl.bat to accept user-specified args
-
       - name: Build
         id: cmake_build
-        run:  examples/sycl/win-build-sycl.bat
-
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
+        shell: cmd
+        run: |
+          call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force
+          cmake -G "Ninja" -B build ^
+            -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=icx ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DGGML_BACKEND_DL=ON -DBUILD_SHARED_LIBS=ON ^
+            -DGGML_CPU=OFF -DGGML_SYCL=ON ^
+            -DLLAMA_CURL=OFF
+          cmake --build build --target ggml-sycl -j
 
       - name: Build the release package
         id: pack_artifacts
@@ -495,12 +504,12 @@ jobs:
           cp "${{ env.ONEAPI_ROOT }}/tbb/latest/bin/tbb12.dll" ./build/bin
 
           echo "cp oneAPI running time dll files to ./build/bin done"
-          7z a llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip ./build/bin/*
+          7z a llama-bin-win-sycl-x64.zip ./build/bin/*
 
       - name: Upload the release package
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-sycl-x64.zip
+          path: llama-bin-win-sycl-x64.zip
           name: llama-bin-win-sycl-x64.zip
 
   windows-hip:
@@ -508,14 +517,14 @@ jobs:
 
     strategy:
       matrix:
-        gpu_target: [gfx1100, gfx1101, gfx1030]
+        include:
+          - name: "radeon"
+            gpu_targets: "gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
         id: checkout
         uses: actions/checkout@v4
-        with:
-            fetch-depth: 0
 
       - name: Clone rocWMMA repository
         id: clone_rocwmma
@@ -525,7 +534,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-hip-release
+          key: windows-latest-cmake-hip-${{ matrix.name }}-x64
           evict-old-files: 1d
 
       - name: Install
@@ -543,50 +552,39 @@ jobs:
         run: |
           & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
 
-      - name: libCURL
-        id: get_libcurl
-        uses: ./.github/actions/windows-setup-curl
-
       - name: Build
         id: cmake_build
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
           $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DAMDGPU_TARGETS=${{ matrix.gpu_target }} `
+            -DGGML_BACKEND_DL=ON `
+            -DGGML_NATIVE=OFF `
+            -DGGML_CPU=OFF `
+            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
-            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include" `
-            ${{ env.CMAKE_ARGS }}
-          cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
+            -DLLAMA_CURL=OFF
+          cmake --build build --target ggml-hip -j ${env:NUMBER_OF_PROCESSORS}
           md "build\bin\rocblas\library\"
           cp "${env:HIP_PATH}\bin\hipblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas.dll" "build\bin\"
           cp "${env:HIP_PATH}\bin\rocblas\library\*" "build\bin\rocblas\library\"
 
-      - name: Determine tag name
-        id: tag
-        uses: ./.github/actions/get-tag-name
-
       - name: Pack artifacts
         id: pack_artifacts
-        env:
-          CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cp $env:CURL_PATH\bin\libcurl-x64.dll .\build\bin\libcurl-x64.dll
-          7z a llama-${{ steps.tag.outputs.name }}-bin-win-hip-x64-${{ matrix.gpu_target }}.zip .\build\bin\*
+          7z a llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: llama-${{ steps.tag.outputs.name }}-bin-win-hip-x64-${{ matrix.gpu_target }}.zip
-          name: llama-bin-win-hip-x64-${{ matrix.gpu_target }}.zip
+          path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
+          name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode-build:
     runs-on: macos-latest
@@ -648,14 +646,16 @@ jobs:
     runs-on: ubuntu-latest
 
     needs:
-      - ubuntu-22-cpu
-      - ubuntu-22-vulkan
       - windows
+      - windows-cpu
       - windows-cuda
       - windows-sycl
       - windows-hip
+      - ubuntu-22-cpu
+      - ubuntu-22-vulkan
       - macOS-arm64
       - macOS-x64
+      - ios-xcode-build
 
     steps:
       - name: Clone
@@ -673,10 +673,43 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: ./artifact
+          merge-multiple: true
 
       - name: Move artifacts
         id: move_artifacts
-        run: mkdir -p ./artifact/release && mv ./artifact/*/*.zip ./artifact/release
+        run: |
+          mkdir -p release
+
+          echo "Adding CPU backend files to existing zips..."
+          for arch in x64 arm64; do
+            cpu_zip="artifact/llama-bin-win-cpu-${arch}.zip"
+            temp_dir=$(mktemp -d)
+            echo "Extracting CPU backend for $arch..."
+            unzip "$cpu_zip" -d "$temp_dir"
+
+            echo "Adding CPU files to $arch zips..."
+            for target_zip in artifact/llama-bin-win-*-${arch}.zip; do
+              if [[ "$target_zip" == "$cpu_zip" ]]; then
+                continue
+              fi
+              echo "Adding CPU backend to $(basename "$target_zip")"
+              realpath_target_zip=$(realpath "$target_zip")
+              (cd "$temp_dir" && zip -r "$realpath_target_zip" .)
+            done
+
+            rm -rf "$temp_dir"
+          done
+
+          echo "Renaming and moving zips to release..."
+          for zip_file in artifact/llama-bin-win-*.zip; do
+            base_name=$(basename "$zip_file" .zip)
+            zip_name="llama-${{ steps.tag.outputs.name }}-${base_name#llama-}.zip"
+            echo "Moving $zip_file to release/$zip_name"
+            mv "$zip_file" "release/$zip_name"
+          done
+
+          echo "Moving other artifacts..."
+          mv -v artifact/*.zip release
 
       - name: Create release
         id: create_release
@@ -695,7 +728,7 @@ jobs:
             const path = require('path');
             const fs = require('fs');
             const release_id = '${{ steps.create_release.outputs.id }}';
-            for (let file of await fs.readdirSync('./artifact/release')) {
+            for (let file of await fs.readdirSync('./release')) {
               if (path.extname(file) === '.zip') {
                 console.log('uploadReleaseAsset', file);
                 await github.repos.uploadReleaseAsset({
@@ -703,7 +736,7 @@ jobs:
                   repo: context.repo.repo,
                   release_id: release_id,
                   name: file,
-                  data: await fs.readFileSync(`./artifact/release/${file}`)
+                  data: await fs.readFileSync(`./release/${file}`)
                 });
               }
             }

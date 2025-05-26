@@ -2192,6 +2192,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_UNARY_OP_SILU:
                     ggml_cuda_op_silu(ctx, dst);
                     break;
+                case GGML_UNARY_OP_GELU_ERF:
+                    ggml_cuda_op_gelu_erf(ctx, dst);
+                    break;
                 case GGML_UNARY_OP_GELU_QUICK:
                     ggml_cuda_op_gelu_quick(ctx, dst);
                     break;
@@ -2977,6 +2980,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_HARDSIGMOID:
                 case GGML_UNARY_OP_HARDSWISH:
+                case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_EXP:
@@ -3222,7 +3226,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 #endif // FLASH_ATTN_AVAILABLE
             if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
                 const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
-                if (!new_mma_available(cc) || cc < GGML_CUDA_CC_AMPERE) {
+                if (!new_mma_available(cc)) {
                     return false;
                 }
                 const int gqa_ratio = op->src[0]->ne[2] / op->src[1]->ne[2];
