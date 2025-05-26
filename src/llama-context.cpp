@@ -701,7 +701,7 @@ int llama_context::encode(llama_batch & inp_batch) {
                 return -1;
             }
 
-            if (batch.seq_id && batch.seq_id[i][0] > LLAMA_MAX_PARALLEL_SEQUENCES) {
+            if (batch.seq_id && (batch.seq_id[i][0] < 0 || batch.seq_id[i][0] >= LLAMA_MAX_PARALLEL_SEQUENCES)) {
                 LLAMA_LOG_ERROR("%s: invalid seq_id[%d] = %d > %d\n", __func__, i, batch.seq_id[i][0], LLAMA_MAX_PARALLEL_SEQUENCES);
                 throw -1;
             }
@@ -901,8 +901,8 @@ int llama_context::decode(llama_batch & inp_batch) {
                 return -1;
             }
 
-            if (batch.seq_id && batch.seq_id[i][0] > LLAMA_MAX_PARALLEL_SEQUENCES) {
-                LLAMA_LOG_ERROR("%s: invalid seq_id[%" PRId64 "] = %d > %d\n", __func__, i, batch.seq_id[i][0], LLAMA_MAX_PARALLEL_SEQUENCES);
+            if (batch.seq_id && (batch.seq_id[i][0] < 0 || batch.seq_id[i][0] >= LLAMA_MAX_PARALLEL_SEQUENCES)) {
+                LLAMA_LOG_ERROR("%s: invalid seq_id[%" PRId64 "] = %d >= %d\n", __func__, i, batch.seq_id[i][0], LLAMA_MAX_PARALLEL_SEQUENCES);
                 return -1;
             }
         }
