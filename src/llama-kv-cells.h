@@ -6,6 +6,7 @@
 #include <bitset>
 #include <cassert>
 #include <vector>
+#include <set>
 
 // meta information about KV cells that can be part of multiple sequences at the same time
 // TODO: add unit tests
@@ -18,8 +19,13 @@ public:
             seq[i].reset();
         }
 
-        used      = 0;
         has_shift = false;
+
+        used.clear();
+
+        for (uint32_t s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            seq_pos[s].clear();
+        }
     }
 
     void reset_shift() {
@@ -50,7 +56,25 @@ public:
     }
 
     uint32_t get_used() const {
-        return used;
+        return used.size();
+    }
+
+    // the index of the first cell that is used
+    // return 0 if no cells are used
+    uint32_t used_min() const {
+        return used.empty() ? 0 : *used.begin();
+    }
+
+    // the index of the last cell that is used + 1
+    // return 0 if no cells are used
+    uint32_t used_max_p1() const {
+#if 0
+        if (!seq_pos[0].empty()) printf("kv_cells: min[0] = %5d, max[0] = %5d\n", *seq_pos[0].begin(), *seq_pos[0].rbegin());
+        if (!seq_pos[1].empty()) printf("kv_cells: min[1] = %5d, max[1] = %5d\n", *seq_pos[1].begin(), *seq_pos[1].rbegin());
+        if (!seq_pos[2].empty()) printf("kv_cells: min[2] = %5d, max[2] = %5d\n", *seq_pos[2].begin(), *seq_pos[2].rbegin());
+#endif
+
+        return used.empty() ? 0 : *used.rbegin() + 1;
     }
 
     bool get_has_shift() const {
@@ -69,6 +93,9 @@ public:
         pos  [isrc] = -1;
         shift[isrc] =  0;
         seq  [isrc].reset();
+
+        used.erase (isrc);
+        used.insert(idst);
     }
 
     // copy the state of cells [i, i + n) (used for save/restore the state of the cells)
@@ -95,15 +122,23 @@ public:
 
         for (uint32_t j = 0; j < other.pos.size(); ++j) {
             if (pos[i + j] == -1 && other.pos[j] != -1) {
-                used++;
+                used.insert(i + j);
             }
 
             if (pos[i + j] != -1 && other.pos[j] == -1) {
-                used--;
+                used.erase(i + j);
+            }
+
+            if (pos[i + j] != -1) {
+                seq_pos_rm(i + j);
             }
 
             pos[i + j] = other.pos[j];
             seq[i + j] = other.seq[j];
+
+            if (pos[i + j] != -1) {
+                seq_pos_add(i + j);
+            }
 
             assert(shift[i + j] == 0);
         }
@@ -118,11 +153,12 @@ public:
         assert(seq_id >= 0);
 
         seq[i].reset(seq_id);
+        seq_pos[seq_id].erase(pos[i]);
 
         if (seq[i].none()) {
             pos[i] = -1;
 
-            used--;
+            used.erase(i);
 
             return true;
         }
@@ -135,17 +171,22 @@ public:
         assert(i < pos.size());
 
         if (seq[i].test(seq_id)) {
+            seq_pos_rm(i);
             seq[i].reset();
+
             seq[i].set(seq_id);
+            seq_pos[seq_id].insert(pos[i]);
 
             return false;
         }
 
         if (seq[i].any()) {
+            seq_pos_rm(i);
             seq[i].reset();
+
             pos[i] = -1;
 
-            used--;
+            used.erase(i);
 
             return true;
         }
@@ -169,6 +210,29 @@ public:
         assert(!seq[i].test(seq_id));
 
         seq[i].set(seq_id);
+        seq_pos[seq_id].insert(pos[i]);
+    }
+
+    llama_pos seq_pos_min(llama_seq_id seq_id) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_PARALLEL_SEQUENCES);
+
+        if (seq_pos[seq_id].empty()) {
+            return -1;
+        }
+
+        return *seq_pos[seq_id].begin();
+    }
+
+    llama_pos seq_pos_max(llama_seq_id seq_id) const {
+        assert(seq_id >= 0);
+        assert(seq_id < LLAMA_MAX_PARALLEL_SEQUENCES);
+
+        if (seq_pos[seq_id].empty()) {
+            return -1;
+        }
+
+        return *seq_pos[seq_id].rbegin();
     }
 
     // note: call only if the cell is not empty
@@ -202,7 +266,8 @@ public:
         assert(pos[i] == -1);
 
         pos[i] = p;
-        used++;
+
+        used.insert(i);
     }
 
     // pos[i] = pos[i] + d
@@ -218,10 +283,12 @@ public:
         has_shift = true;
 
         if (pos[i] < 0) {
-            pos[i] = -1;
-            seq[i].reset();
+            seq_pos_rm(i);
 
-            used--;
+            seq[i].reset();
+            pos[i] = -1;
+
+            used.erase(i);
 
             return true;
         }
@@ -245,9 +312,10 @@ public:
     }
 
 private:
-    uint32_t used = 0; // used cells (i.e. pos[i] != -1, allowed to not have any seq_id)
-
     bool has_shift = false;
+
+    // set of indices of used cells (i.e. pos[i] != -1, allowed to not have any seq_id)
+    std::set<uint32_t> used;
 
     std::vector<llama_pos> pos;
 
@@ -268,6 +336,32 @@ private:
     //
     std::vector<llama_pos> shift;
 
-    std::vector<std::bitset<LLAMA_MAX_PARALLEL_SEQUENCES>> seq;
-};
+    using bits_t = std::bitset<LLAMA_MAX_PARALLEL_SEQUENCES>;
 
+    // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
+    std::vector<bits_t> seq;
+
+    // the set seq_pos[s] tells us which positions are currently occupied by the s-th sequence
+    // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
+    std::set<llama_pos> seq_pos[LLAMA_MAX_PARALLEL_SEQUENCES];
+
+    // helper functions for updating `seq_pos`, once cell at a time:
+
+    // remove cell i
+    void seq_pos_rm(uint32_t i) {
+        for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            if (seq[i].test(s)) {
+                seq_pos[s].erase(pos[i]);
+            }
+        }
+    }
+
+    // add cell i
+    void seq_pos_add(uint32_t i) {
+        for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            if (seq[i].test(s)) {
+                seq_pos[s].insert(pos[i]);
+            }
+        }
+    }
+};

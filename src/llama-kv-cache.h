@@ -246,10 +246,6 @@ private:
     // return true if cells have been moved
     bool defrag_prepare(int32_t n_max_nodes);
 
-    // find how many cells are currently in use
-    // TODO: optimize
-    uint32_t cell_max() const;
-
     size_t total_size() const;
 
     size_t size_k_bytes() const;
