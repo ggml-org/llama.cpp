@@ -1415,16 +1415,42 @@ static void quantize_q8_1(const float * __restrict__ x, void * __restrict__ vy, 
 }
 
 template <int ElementsPerWI>
-static __dpct_inline__ void quantize_and_reorder_q8_1(const float * __restrict__ x, int8_t * quant_ptr,
-                                                      sycl::half2 * ds_ptr, const sycl::nd_item<1> & it) {
+static __dpct_inline__ void quantize_and_reorder_q8_1(const float * __restrict__ x, void * reordered_q8_tensor,
+                                                      const int kx, const int kx_padded, const sycl::nd_item<1> & it) {
+    /*
+        quantize and reorders the resultant q8 tensor in a per row fashion
+        Each sub-group calculates one quant block
+        work_group_size = sub_group_size;
+
+        |------------------------------ Matrix Pitch -------------------------|
+        |------- Matrix Width --------|
+        q_00 q_01 q_02 ..... q_0n-1 q_n ds00 ds01 ... ds0n/32 ... padding ... |
+        .                             .                                       |
+        .                             .                                       |
+        .                             .                                   Matrix Height
+        .                             .                                       |
+        .                             .                                       |
+        q_n0 q_n1 q_n2 ..... q_nn-1 q_n dsn0 dsn1 ... dsnn/32 ... padding ... | 
+    */
+
     auto subgroup_id = it.get_group(0);
     auto wi_id       = it.get_local_id(0);
+
+    const int num_blocks_per_row = kx / QK8_1;
+    auto      row                = subgroup_id / num_blocks_per_row;
+    auto      col                = subgroup_id % num_blocks_per_row;
+
+    auto row_offset = row * (kx_padded / QK8_1) * sizeof(block_q8_1);
+    auto col_offset = QK8_1 * col + wi_id * ElementsPerWI;
+
+    auto quant_ptr = (int8_t *) ((char *) reordered_q8_tensor + row_offset + col_offset);
+    auto ds_ptr    = (sycl::half2 *) ((char *) reordered_q8_tensor + row_offset + kx + col * sizeof(sycl::half2));
 
     sycl::vec<float, ElementsPerWI>  wi_f32_vals;
     sycl::vec<int8_t, ElementsPerWI> quantized_values;
 
     auto float_ptr_offset = subgroup_id * QK8_1 + ElementsPerWI * wi_id;
-    wi_f32_vals           = *reinterpret_cast<const sycl::vec<float, ElementsPerWI>*>(x + float_ptr_offset);
+    wi_f32_vals           = *reinterpret_cast<const sycl::vec<float, ElementsPerWI> *>(x + float_ptr_offset);
 
     float sum  = 0.0f;
     float amax = 0.0f;
@@ -1435,22 +1461,21 @@ static __dpct_inline__ void quantize_and_reorder_q8_1(const float * __restrict__
         amax                = sycl::fmax(amax, sycl::fabs(wi_f32_vals[i]));
         quantized_values[i] = 0;
     }
-    sum           = sycl::reduce_over_group(it.get_group(), sum, sycl::plus<float>());
-    amax          = sycl::reduce_over_group(it.get_group(), amax, sycl::maximum<float>());
-    const float d = amax == 0 ? 1 : amax / 127;
+    sum     = sycl::reduce_over_group(it.get_group(), sum, sycl::plus<float>());
+    amax    = sycl::reduce_over_group(it.get_group(), amax, sycl::maximum<float>());
+    float d = amax == 0 ? 1 : amax / 127;
 
 #pragma unroll(ElementsPerWI)
     for (int i = 0; i < ElementsPerWI; i++) {
         quantized_values[i] = sycl::round(wi_f32_vals[i] / d);
     }
 
-    *reinterpret_cast<sycl::vec<int8_t, ElementsPerWI>*>(quant_ptr + subgroup_id * QK8_1) = quantized_values;
-    auto my_val = *reinterpret_cast<sycl::vec<int8_t, ElementsPerWI>*>(quant_ptr + subgroup_id * QK8_1);
-    ds_ptr[subgroup_id] = sycl::half2(sycl::half(d), sycl::half(sum));
-    auto ds_values = ds_ptr[subgroup_id];
-    float sum_value = ds_values[0];
-    float d_value = ds_values[1];
-    //sycl::ext::oneapi::experimental::printf("%d %d %f %f \n", static_cast<int>(subgroup_id), my_val[0], sum_value, d_value);
+    d = amax == 0 ? 0 : d;
+
+    *reinterpret_cast<sycl::vec<int8_t, ElementsPerWI> *>(quant_ptr) = quantized_values;
+    if (wi_id == 0) {
+        *ds_ptr = sycl::half2(sycl::half(d), sycl::half(sum));
+    }
 }
 
 static void mul_mat_p021_f16_f32(
@@ -1737,24 +1762,18 @@ static  void pool2d_nchw_kernel(
         o_ptr[cur_oh * ow + cur_ow] = res;
 }
 
-static void quantize_row_q8_1_sycl(const float *x, void *vy, const int kx,
-                                   const int ky, const int kx_padded,
-                                   queue_ptr stream) {
-    std::cout << "Hey I am here" << std::endl;
-    if (g_ggml_sycl_disable_optimize == 0) {
-        std::cout << "hey here I am  tada" << std::endl;
+static void quantize_row_q8_1_sycl(const float * x, void * vy, const int kx, const int ky, const int kx_padded,
+                                   bool reorder_q8_tensor, queue_ptr stream) {
+    if (reorder_q8_tensor) {
         auto local_range      = std::size_t(WARP_SIZE);
         auto num_quant_blocks = ky * (kx / QK8_1);
         auto global_range     = num_quant_blocks * local_range;
-        // since we reorder in the same pointer.
-        auto quant_block_ptr  = (int8_t *) vy;
-        auto ds_ptr           = (sycl::half2 *) ((char *) (vy) + num_quant_blocks * QK8_1 * sizeof(int8_t));
         stream->parallel_for(sycl::nd_range<1>({ global_range }, { local_range }),
-                                               [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                                                   quantize_and_reorder_q8_1<QK8_1 / WARP_SIZE>(x, quant_block_ptr, ds_ptr, it);
-                                               });
+                             [=](sycl::nd_item<1> it) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                                 quantize_and_reorder_q8_1<QK8_1 / WARP_SIZE>(x, vy, kx, kx_padded, it);
+                             });
     } else {
-        const int block_num_x = (kx_padded + SYCL_QUANTIZE_BLOCK_SIZE - 1) / SYCL_QUANTIZE_BLOCK_SIZE;
+        const int            block_num_x = (kx_padded + SYCL_QUANTIZE_BLOCK_SIZE - 1) / SYCL_QUANTIZE_BLOCK_SIZE;
         const sycl::range<3> num_blocks(1, ky, block_num_x);
         int constexpr QUANT_BLOCK_TILE = QK8_1 / WARP_SIZE;
         static_assert(QK8_1 % WARP_SIZE == 0);
@@ -2475,7 +2494,11 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
             dev[i].src1_ddq = dev[i].src1_ddq_alloc.alloc(ctx.pool(i), nrows1*src1_padded_col_size*q8_1_ts/q8_1_bs);
 
             if (src1_on_device && src1_is_contiguous) {
-                quantize_row_q8_1_sycl(dev[i].src1_ddf, dev[i].src1_ddq, ne10, nrows1, src1_padded_col_size, stream);
+                bool reorder_q8_tensor = false;
+                if (src0->extra && ((ggml_tensor_extra_gpu *)src0->extra)->optimized_feature.reorder) {
+                    reorder_q8_tensor = true;
+                }
+                quantize_row_q8_1_sycl(dev[i].src1_ddf, dev[i].src1_ddq, ne10, nrows1, src1_padded_col_size, reorder_q8_tensor, stream);
                 //dev[i].src1_ddq = dev[i].src1_ddq_alloc.alloc(ctx.pool(i), (ggml_nelements / QK8_1) * sizeof(block_q8_1));
                 /*
                 DPCT1010:90: SYCL uses exceptions to report errors and does not
@@ -2580,7 +2603,7 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                 }
 
                 if (convert_src1_to_q8_1 && !src1_is_contiguous) {
-                    quantize_row_q8_1_sycl(src1_ddf_i, src1_ddq_i, ne10, src1_ncols, src1_padded_col_size, stream);
+                    quantize_row_q8_1_sycl(src1_ddf_i, src1_ddq_i, ne10, src1_ncols, src1_padded_col_size, false, stream);
                     /*
                     DPCT1010:92: SYCL uses exceptions to report errors and does
                     not use the error codes. The call was replaced with 0. You

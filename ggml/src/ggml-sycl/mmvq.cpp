@@ -30,8 +30,6 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
     static_assert(blocks_per_subgroup > 0);
     static_assert(block_elements_per_subgroup > 0);
 
-    const block_q8_1 * y = (const block_q8_1 *) vy;
-
     float partial_sum = 0.0f;
     for (int i = sg.get_local_linear_id() / block_elements_per_subgroup; i < blocks_per_row; i += blocks_per_subgroup) {
         const int ibx       = row * blocks_per_row + i;  // x block index
@@ -42,7 +40,7 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
         // Y block index that aligns with ibx
         const int iby = i * block_type::block_to_q8_1_ratio();
         const int8_t* q8_1_quant_ptr = (const int8_t*)vy + iby * QK8_1;
-        sycl::half2 q8_1_ds_ptr = *(sycl::half2*)((char*)vy + ncols + iby * sizeof(sycl::half2)); 
+        sycl::half2 q8_1_ds_ptr = *(const sycl::half2*)((const char*)vy + ncols + iby * sizeof(sycl::half2)); 
 
 #pragma unroll
         for (int elem = 0; elem < block_elements_per_subgroup; elem += WARP_SIZE) {
@@ -543,9 +541,6 @@ static void reorder_mul_mat_vec_q4_0_q8_1_sycl(const void * vx, const void * vy,
     GGML_ASSERT(ncols % QK4_0 == 0);
     const int        block_num_y   = ceil_div(nrows, GGML_SYCL_MMV_Y);
     constexpr size_t num_subgroups = 16;
-    // std::cout << "Hey I am in " << __func__ << std::endl;
-    // std::cout << "nrows: " << nrows << " ncols: " << ncols << std::endl;
-    // std::cout << "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=" << std::endl;
     GGML_ASSERT(block_num_y % num_subgroups == 0);
 
     const sycl::range<3> global_size(1, GGML_SYCL_MMV_Y, (block_num_y * WARP_SIZE));
@@ -1030,7 +1025,6 @@ void ggml_sycl_op_mul_mat_vec_q(ggml_backend_sycl_context & ctx, const ggml_tens
     // nrows_dst == nrows of the matrix that the kernel writes into
 
     for (int i = 0; i < src1_ncols; i++) {
-        // std::cout << "Hey I am launching a kernel ! " << std::endl;;
         const size_t src1_ddq_i_offset = i * src1_padded_col_size * q8_1_ts / q8_1_bs;
         const char * src1_ddq_i_bs     = src1_ddq_i + src1_ddq_i_offset;
         float *      dst_dd_i_bs       = dst_dd_i + i * dst->ne[0];
