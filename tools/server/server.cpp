@@ -3394,13 +3394,7 @@ struct server_context {
                 batch.logits   + i,
             };
 
-            int ret = 0;
-
-            if (do_encode) {
-                ret = llama_encode(ctx, batch_view);
-            } else {
-                ret = llama_decode(ctx, batch_view);
-            }
+            const int ret = llama_decode(ctx, batch_view);
 
             metrics.on_decoded(slots);
 

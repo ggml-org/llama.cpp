@@ -852,7 +852,7 @@ int llama_context::encode(llama_batch & inp_batch) {
 
 int llama_context::decode(llama_batch & inp_batch) {
     if (!memory) {
-        LLAMA_LOG_WARN("%s: cannot decode batches with this context (use llama_encode() instead)\n", __func__);
+        LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(inp_batch);
     }
 
