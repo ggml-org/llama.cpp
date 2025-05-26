@@ -88,7 +88,8 @@ template<typename T>
 static void gelu_erf(const T * x, T * dst, const int k, const sycl::nd_item<3> &item_ct1) {
     const T SQRT_2_INV = static_cast<T>(0.70710678118654752440084436210484f);
     for(auto i = item_ct1.get_global_id(2); i < (const size_t)k; i += item_ct1.get_global_range(2)) {
-        dst[i] = static_cast<T>(0.5f)*x[i]*(static_cast<T>(1.0f) + sycl::erf(x[i]*SQRT_2_INV));
+       auto x_i = x[i];
+        dst[i] = static_cast<T>(0.5f) * x_i * (static_cast<T>(1.0f) + sycl::erf(x_i * SQRT_2_INV));
     }
 }
 
