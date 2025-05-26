@@ -692,13 +692,14 @@ extern "C" {
     // This will be applied:
     //   - lazily on next llama_decode()
     //   - explicitly with llama_kv_self_update()
+    // TODO: deprecate and always update the cache lazily [TAG: API_KV_NO_DEFRAG]
     LLAMA_API void llama_kv_self_defrag(struct llama_context * ctx);
 
     // Check if the context supports KV cache shifting
     LLAMA_API bool llama_kv_self_can_shift(const struct llama_context * ctx);
 
     // Apply the KV cache updates (such as K-shifts, defragmentation, etc.)
-    // TODO: deprecate and always update the cache lazily
+    // TODO: deprecate and always update the cache lazily [TAG: API_KV_NO_DEFRAG]
     LLAMA_API void llama_kv_self_update(struct llama_context * ctx);
 
     //
