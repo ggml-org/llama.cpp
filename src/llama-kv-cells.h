@@ -277,8 +277,12 @@ public:
         assert(i < pos.size());
         assert(pos[i] != -1);
 
+        seq_pos_rm(i);
+
         pos[i]   += d;
         shift[i] += d;
+
+        seq_pos_add(i);
 
         has_shift = true;
 
@@ -305,8 +309,12 @@ public:
 
         const llama_pos p_old = pos[i];
 
+        seq_pos_rm(i);
+
         pos[i]   /= d;
         shift[i] += p_old - pos[i];
+
+        seq_pos_add(i);
 
         has_shift = true;
     }
