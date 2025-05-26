@@ -803,6 +803,12 @@ class TextModel(ModelBase):
         if chkhsh == "d5f1dd6f980fec569fb218a81a7658ac45fc56b38c5a0adeb1c232fbe04ef5ec":
             # ref: https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base
             res = "seed-coder"
+        if chkhsh == "7f2212c1b7fec62b4b75447509a4ecc8acd82813ce90d715dd99c1460a52d978":
+            # ref: https://huggingface.co/facebook/opt-13b
+            res = "gpt-2"
+        if chkhsh == "2c934e5e1c8275b75011b9942836389a87eaa1a63116104e52424515e7649c46":
+            # ref: https://huggingface.co/SousChef/OPT-13B-Erebus (OPT-13B-Erebus model)
+            res = "gpt-2"
 
         if res is None:
             logger.warning("\n")
@@ -3902,7 +3908,7 @@ class GemmaModel(TextModel):
     def set_gguf_parameters(self):
         hparams = self.hparams
         block_count = hparams["num_hidden_layers"]
-
+        
         self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
         self.gguf_writer.add_block_count(block_count)
@@ -4014,7 +4020,7 @@ class Gemma3Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-
+        
         if name.startswith("language_model."):
             name = name.replace("language_model.", "")
 
@@ -4520,7 +4526,7 @@ class OlmoModel(TextModel):
             data_torch = LlamaModel.permute(data_torch, n_head, n_head)
         if name.endswith("k_proj.weight"):
             data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
-
+            
         return [(self.map_tensor_name(name), data_torch)]
 
 
@@ -5231,7 +5237,7 @@ class T5Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-
+        
         # T5 based models contain shared token embeddings tensors saved randomly as either "encoder.embed_tokens.weight",
         # "decoder.embed_tokens.weight" or "shared.weight" tensor. In some models there are even multiple of them stored
         # in the safetensors files. We use the first tensor from these three as the token embeddings for both encoder
@@ -6122,6 +6128,26 @@ class LazyTorchTensor(gguf.LazyBase):
             return args[0].numpy()
 
         return cls._wrap_fn(func)(*args, **kwargs)
+
+
+@ModelBase.register("OPTForCausalLM")
+class OPTModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.OPT
+
+    def set_vocab(self):
+        # OPT typically uses GPT2 tokenizer
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        
+        # OPT-specific parameters that are not handled by the base class
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # OPT model uses standard tensor mapping - let the mapping handle the conversion
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 def parse_args() -> argparse.Namespace:
