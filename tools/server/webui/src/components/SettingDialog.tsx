@@ -104,11 +104,6 @@ const SETTING_SECTIONS: SettingSection[] = [
           }) as SettingFieldInput
       ),
       {
-        type: SettingInputType.CHECKBOX,
-        label: 'Enable response streaming',
-        key: 'streamResponse',
-      },
-      {
         type: SettingInputType.SHORT_INPUT,
         label: 'Paste length to file',
         key: 'pasteLongTextToFileLen',
@@ -185,20 +180,6 @@ const SETTING_SECTIONS: SettingSection[] = [
       </>
     ),
     fields: [
-      {
-        type: SettingInputType.CUSTOM,
-        key: 'custom',
-        component: () => (
-          <div className="mt-1 mb-3 p-2 bg-base-200 rounded-md text-sm">
-            <p className="font-semibold">Important Note:</p>
-            <p className="opacity-90">
-              Response streaming must be <strong>disabled</strong> to use tool
-              calling. Individual tools (listed below) will be automatically
-              disabled if streaming is enabled.
-            </p>
-          </div>
-        ),
-      },
       ...Array.from(AVAILABLE_TOOLS.values()).map(
         (tool: AgentTool) =>
           ({
@@ -467,11 +448,6 @@ export default function SettingDialog({
                   />
                 );
               } else if (field.type === SettingInputType.CHECKBOX) {
-                const isToolToggle =
-                  typeof field.key === 'string' &&
-                  field.key.startsWith('tool_') &&
-                  field.key.endsWith('_enabled');
-                const isDisabled = isToolToggle && localConfig.streamResponse;
                 return (
                   <SettingsModalCheckbox
                     key={key}
@@ -479,7 +455,6 @@ export default function SettingDialog({
                     value={!!localConfig[field.key]}
                     onChange={onChange(field.key)}
                     label={field.label as string}
-                    disabled={isDisabled}
                   />
                 );
               } else if (field.type === SettingInputType.CUSTOM) {

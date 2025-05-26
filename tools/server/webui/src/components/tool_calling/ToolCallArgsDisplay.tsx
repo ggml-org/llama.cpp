@@ -15,7 +15,7 @@ export const ToolCallArgsDisplay = ({
       <div className="collapse-content">
         <div className="font-bold mb-1">Arguments:</div>
         <pre className="whitespace-pre-wrap bg-base-300 p-2 rounded">
-          {JSON.stringify(JSON.parse(toolCall.function.arguments), null, 2)}
+          {toolCall.function.arguments}
         </pre>
       </div>
     </details>

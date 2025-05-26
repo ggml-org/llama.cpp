@@ -217,7 +217,7 @@ export const AppContextProvider = ({
       // prepare params
       const params = {
         messages,
-        stream: config.streamResponse,
+        stream: true,
         cache_prompt: true,
         samplers: config.samplers,
         temperature: config.temperature,
@@ -266,58 +266,44 @@ export const AppContextProvider = ({
       let lastMsgId = pendingMsg.id;
       let shouldContinueChain = false;
 
-      if (params.stream) {
-        const chunks = getSSEStreamAsync(fetchResponse);
-        for await (const chunk of chunks) {
-          // const stop = chunk.stop;
-          if (chunk.error) {
-            throw new Error(chunk.error?.message || 'Unknown error');
-          }
-          const addedContent = chunk.choices[0].delta.content;
-          const lastContent = pendingMsg.content || '';
-          if (addedContent) {
-            pendingMsg = {
-              ...pendingMsg,
-              content: lastContent + addedContent,
-            };
-          }
-          const timings = chunk.timings;
-          if (timings && config.showTokensPerSecond) {
-            // only extract what's really needed, to save some space
-            pendingMsg.timings = {
-              prompt_n: timings.prompt_n,
-              prompt_ms: timings.prompt_ms,
-              predicted_n: timings.predicted_n,
-              predicted_ms: timings.predicted_ms,
-            };
-          }
-          setPending(convId, pendingMsg);
-          onChunk(); // don't need to switch node for pending message
-        }
-      } else {
-        const responseData = await fetchResponse.json();
-        if (responseData.error) {
-          throw new Error(responseData.error?.message || 'Unknown error');
+      const chunks = getSSEStreamAsync(fetchResponse);
+      for await (const chunk of chunks) {
+        // const stop = chunk.stop;
+        if (chunk.error) {
+          throw new Error(chunk.error?.message || 'Unknown error');
         }
 
-        const choice = responseData.choices[0];
-        const messageFromAPI = choice.message;
-        let newContent = '';
-
-        if (messageFromAPI.content) {
-          newContent = messageFromAPI.content;
-        }
-
-        // Process tool calls
-        if (messageFromAPI.tool_calls && messageFromAPI.tool_calls.length > 0) {
-          // Store the raw tool calls in the pendingMsg
+        const choice = chunk.choices[0];
+        const addedContent = choice.delta.content;
+        const lastContent = pendingMsg.content || '';
+        if (addedContent) {
           pendingMsg = {
             ...pendingMsg,
-            tool_calls: messageFromAPI.tool_calls as ToolCallRequest[],
+            content: lastContent + addedContent,
           };
+        }
 
-          for (let i = 0; i < messageFromAPI.tool_calls.length; i++) {
-            const toolCall = messageFromAPI.tool_calls[i] as ToolCallRequest;
+        const addedToolCalls = choice.delta.tool_calls;
+        if (addedToolCalls) {
+          let lastToolCalls = pendingMsg.tool_calls;
+          if (lastToolCalls) {
+            for (let i = 0; i < lastToolCalls.length; ++i) {
+              // Merge previous arguments with new ones
+              lastToolCalls[i].function.arguments +=
+                addedToolCalls[i].function.arguments;
+            }
+          } else {
+            // addedTools contains definitions of tool calls
+            lastToolCalls = addedToolCalls;
+          }
+          pendingMsg = {
+            ...pendingMsg,
+            tool_calls: lastToolCalls,
+          };
+        } else if (pendingMsg.tool_calls && pendingMsg.tool_calls.length > 0) {
+          // Finished tool calls, execute them
+          for (let i = 0; i < pendingMsg.tool_calls.length; i++) {
+            const toolCall = pendingMsg.tool_calls[i] as ToolCallRequest;
             if (toolCall) {
               // Set up call id
               toolCall.call_id ??= `call_${i}`;
@@ -343,32 +329,22 @@ export const AppContextProvider = ({
               lastMsgId += 1;
             }
           }
+
+          shouldContinueChain = choice.finish_reason === 'tool_calls';
         }
 
-        if (newContent !== '') {
-          pendingMsg = {
-            ...pendingMsg,
-            content: newContent,
-          };
-        }
-
-        // Handle timings from the non-streaming response
-        const apiTimings = responseData.timings;
-        if (apiTimings && config.showTokensPerSecond) {
+        const timings = chunk.timings;
+        if (timings && config.showTokensPerSecond) {
+          // only extract what's really needed, to save some space
           pendingMsg.timings = {
-            prompt_n: apiTimings.prompt_n,
-            prompt_ms: apiTimings.prompt_ms,
-            predicted_n: apiTimings.predicted_n,
-            predicted_ms: apiTimings.predicted_ms,
+            prompt_n: timings.prompt_n,
+            prompt_ms: timings.prompt_ms,
+            predicted_n: timings.predicted_n,
+            predicted_ms: timings.predicted_ms,
           };
         }
-
-        for (const pendMsg of pendingMessages) {
-          setPending(convId, pendMsg);
-          onChunk(pendMsg.id); // Update UI to show the processed message
-        }
-
-        shouldContinueChain = choice.finish_reason === 'tool_calls';
+        setPending(convId, pendingMsg);
+        onChunk(); // don't need to switch node for pending message
       }
 
       pendingMessages.unshift(pendingMsg);

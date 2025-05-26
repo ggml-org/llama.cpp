@@ -44,7 +44,6 @@ export const CONFIG_DEFAULT = {
   // experimental features
   pyIntepreterEnabled: false,
   // Fields for tool calling
-  streamResponse: true,
   ...Object.fromEntries(
     Array.from(AVAILABLE_TOOLS.values()).map((tool: AgentTool) => [
       `tool_${tool.id}_enabled`,
