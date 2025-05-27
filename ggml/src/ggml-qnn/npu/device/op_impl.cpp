@@ -5,6 +5,8 @@
 #include <hexagon_types.h>
 #include <HTP/core/intrinsics.h>
 
+#include <type_traits>
+
 #include "op_mul_mat.hpp"
 #include "quants.hpp"
 
@@ -17,7 +19,7 @@ inline void vec_op_impl(const _TyData * src0, const _TyData * src1, size_t count
     HVX_Vector * iptr0     = ((HVX_Vector *) src0);
     HVX_Vector * iptr0_end = ((HVX_Vector *) src0) + (count / kElementsPerVector);
     HVX_Vector * iptr1     = ((HVX_Vector *) src1);
-    HVX_Vector * optr      = ((HVX_Vector *) dst);
+    HVX_Vector * optr      = ((HVX_Vector *) dst);  // framework will ensure the dst is aligned
     HVX_Vector   prev0     = *iptr0++;
     HVX_Vector   prev1     = *iptr1++;
 
@@ -108,6 +110,12 @@ template <typename _TyData> struct get_data_type<void (*)(const _TyData *, const
     using type = _TyData;
 };
 
+template <typename _TyData, typename _TyParam>
+struct get_data_type<void (*)(const _TyData *, size_t, _TyParam, _TyData *)> {
+    using type       = _TyData;
+    using param_type = typename std::remove_cv<typename std::remove_reference<_TyData>::type>::type;
+};
+
 template <auto _RowFunc> bool element_wise_op(hexagon::tensor * out, hexagon::compute_params * params) {
     using data_type = typename get_data_type<decltype(_RowFunc)>::type;
 
@@ -166,6 +174,16 @@ template <auto _RowFunc> bool element_wise_op(hexagon::tensor * out, hexagon::co
     return true;
 }
 
+bool is_same_shape(const npu_device_tensor_spec & src, const npu_device_tensor_spec & dst) {
+    for (size_t i = 0; i < DEVICE_TENSOR_MAX_DIMS; ++i) {
+        if (src.ne[i] != dst.ne[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool is_element_wise_op_supported(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1,
                                   const npu_device_tensor_spec & dst, npu_device_tensor_op op) {
     if (op != NPU_OP_ADD && op != NPU_OP_SUB && op != NPU_OP_MUL) {
@@ -196,12 +214,149 @@ bool is_element_wise_op_supported(const npu_device_tensor_spec & src0, const npu
         return false;
     }
 
-    for (size_t i = 0; i < DEVICE_TENSOR_MAX_DIMS; ++i) {
-        if (src0.ne[i] != dst.ne[i]) {
-            DEVICE_LOG_DEBUG("[%s]src0.ne[%zu] and dst.ne[%zu] not match: %lld vs %lld\n", hexagon::op_get_name(op), i,
-                             i, (long long) src0.ne[i], (long long) dst.ne[i]);
-            return false;
+    if (!is_same_shape(src0, dst)) {
+        DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", hexagon::op_get_name(op));
+        return false;
+    }
+
+    return true;
+}
+
+void rms_norm_vec_f32(const float * src, size_t count, float eps, float * dst) {
+    constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(float);
+
+    HVX_Vector * src_vec_ptr = ((HVX_Vector *) src);
+    HVX_Vector * src_vec_end = ((HVX_Vector *) src) + (count / kElementsPerVector);
+    HVX_Vector   prev        = *src_vec_ptr++;
+    HVX_Vector   sum         = Q6_V_vzero();
+    while (src_vec_ptr < src_vec_end) {
+        HVX_Vector curr = *src_vec_ptr++;
+        HVX_Vector s0   = Q6_V_valign_VVR(curr, prev, (size_t) src);
+        sum             = Q6_Vqf32_vadd_Vqf32Vqf32(sum, Q6_Vqf32_vmpy_VsfVsf(s0, s0));
+        prev            = curr;
+    }
+
+    if ((src_vec_end - ((HVX_Vector *) src)) > 0) {
+        // handle the last vector
+        bool       src_ptr_aligned = hexagon::is_addr_aligned(src_vec_ptr);
+        HVX_Vector curr            = src_ptr_aligned ? prev : *src_vec_ptr;
+        src_vec_ptr                = src_ptr_aligned ? src_vec_ptr : src_vec_ptr + 1;
+        HVX_Vector s0              = Q6_V_valign_VVR(curr, prev, (size_t) src);
+        sum                        = Q6_Vqf32_vadd_Vqf32Vqf32(sum, Q6_Vqf32_vmpy_VsfVsf(s0, s0));
+        prev                       = curr;
+    }
+
+    const size_t leftover       = count % kElementsPerVector;
+    const size_t leftover_bytes = leftover * sizeof(float);
+    if (leftover > 0) {
+        // handle the leftover elements
+        HVX_Vector curr =
+            (leftover_bytes + hexagon::unaligned_bytes(src_vec_ptr) > hexagon::kBytesPerVector) ? *src_vec_ptr : prev;
+        curr = Q6_V_valign_VVR(curr, prev, (size_t) src);
+        sum  = Q6_Vqf32_vadd_Vqf32Vqf32(sum,
+                                        Q6_V_valign_VVR(Q6_Vqf32_vmpy_VsfVsf(curr, curr), Q6_V_vzero(), leftover_bytes));
+    }
+
+    const float mean  = hexagon::vec_reduction_f32(sum) / count;  // TODO: figure out how to do division in vector
+    const float scale = 1.0f / sqrtf(mean + eps);                 // TODO: use buildin blas sqrtf?
+
+    HVX_Vector scale_vec     = Q6_V_vsplat_R(reinterpret_cast<const uint32_t &>(scale));
+    src_vec_ptr              = ((HVX_Vector *) src);
+    prev                     = *src_vec_ptr++;
+    HVX_Vector * dst_vec_ptr = ((HVX_Vector *) dst);  // framework will ensure the dst is aligned
+    while (src_vec_ptr < src_vec_end) {
+        HVX_Vector curr = *src_vec_ptr++;
+        HVX_Vector s0   = Q6_V_valign_VVR(curr, prev, (size_t) src);
+        *dst_vec_ptr++  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0, scale_vec));
+        prev            = curr;
+    }
+
+    if ((src_vec_end - ((HVX_Vector *) src)) > 0) {
+        // handle the last vector
+        bool       src_ptr_aligned = hexagon::is_addr_aligned(src_vec_ptr);
+        HVX_Vector curr            = src_ptr_aligned ? prev : *src_vec_ptr;
+        src_vec_ptr                = src_ptr_aligned ? src_vec_ptr : src_vec_ptr + 1;
+        HVX_Vector s0              = Q6_V_valign_VVR(curr, prev, (size_t) src);
+        *dst_vec_ptr++             = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0, scale_vec));
+        prev                       = curr;
+    }
+
+    if (leftover > 0) {
+        // handle the leftover elements
+        HVX_Vector curr =
+            (leftover_bytes + hexagon::unaligned_bytes(src_vec_ptr) > hexagon::kBytesPerVector) ? *src_vec_ptr : prev;
+        curr = Q6_V_valign_VVR(curr, prev, (size_t) src);
+        q6op_vstu_variable_ARV(dst_vec_ptr, leftover_bytes, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(curr, scale_vec)));
+    }
+}
+
+// TODO: merge with element_wise_op?
+template <auto _RowFunc> bool unary_op(hexagon::tensor * out, hexagon::compute_params * params) {
+    using data_type  = typename get_data_type<decltype(_RowFunc)>::type;
+    using param_type = typename get_data_type<decltype(_RowFunc)>::param_type;
+
+    if (!out) {
+        return false;
+    }
+
+    static_assert(DEVICE_TENSOR_MAX_DIMS == 4, "element_wise_op requires max dims 4");
+    auto * src0 = out->get_src(0);
+    if (!src0) {
+        return true;  // skip if no src
+    }
+
+    const auto * src0_ptr      = reinterpret_cast<const uint8_t *>(src0->get_read_buffer());
+    auto *       dst_ptr       = reinterpret_cast<uint8_t *>(out->get_write_buffer());
+    auto         total_rows    = out->get_ne(3) * out->get_ne(2) * out->get_ne(1);
+    const auto   rows_per_cube = out->get_ne(2) * out->get_ne(1);
+    const auto   start_end     = hexagon::get_thread_work_slice(total_rows, params->tidx, params->tcnt);
+    if (start_end.first >= start_end.second) {
+        return true;
+    }
+
+    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER(out, params->tidx);
+
+    const auto   param           = out->get_op_param<param_type>(0);
+    const size_t valid_row_bytes = src0->get_ne(0) * sizeof(data_type);
+    for (int64_t ir = start_end.first; ir < start_end.second; ++ir) {
+        const auto i03 = ir / rows_per_cube;
+        const auto i02 = ir / out->get_ne(1) - i03 * out->get_ne(2);
+        const auto i01 = ir % out->get_ne(1);  // TODO: should we use divide instead of mod?
+
+        auto * src0_row = src0_ptr + i03 * src0->get_nb(3) + i02 * src0->get_nb(2) + i01 * src0->get_nb(1);
+        auto * dst_row  = dst_ptr + i03 * out->get_nb(3) + i02 * out->get_nb(2) + i01 * out->get_nb(1);
+        if (ir + 1 < start_end.second) {
+            hexagon::l2fetch_row(src0_row + src0->get_nb(1), valid_row_bytes);
         }
+
+        _RowFunc(reinterpret_cast<const data_type *>(src0_row), static_cast<size_t>(out->get_ne(0)), param,
+                 reinterpret_cast<data_type *>(dst_row));
+    }
+
+    return true;
+}
+
+bool is_unary_op_supported(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1,
+                           const npu_device_tensor_spec & dst, npu_device_tensor_op op) {
+    if (op != NPU_OP_RMS_NORM) {
+        DEVICE_LOG_DEBUG("[%s]unsupported\n", hexagon::op_get_name(op));
+        return false;
+    }
+
+    if (dst.type != src0.type) {
+        DEVICE_LOG_DEBUG("[%s]src0.type and dst.type mismatch: %s vs %s\n", hexagon::op_get_name(op),
+                         hexagon::get_type_name(src0.type), hexagon::get_type_name(dst.type));
+        return false;
+    }
+
+    if (dst.type != NPU_DATA_TYPE_F32) {
+        DEVICE_LOG_DEBUG("[%s]unsupported data type: %s\n", hexagon::op_get_name(op), hexagon::get_type_name(dst.type));
+        return false;
+    }
+
+    if (!is_same_shape(src0, dst)) {
+        DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", hexagon::op_get_name(op));
+        return false;
     }
 
     return true;
@@ -211,6 +366,7 @@ struct op_capabilities {
     npu_device_tensor_op               op;
     hexagon::op_is_supported_func_type is_supported;
     hexagon::compute_func_type         compute_funcs[NPU_DATA_TYPE_COUNT];
+    bool                               requires_thread_barrier = false;
 };
 
 constexpr const op_capabilities kOpCapabilities[] = {
@@ -219,22 +375,36 @@ constexpr const op_capabilities kOpCapabilities[] = {
      {
             hexagon::mul_mat_f32,  // NPU_DATA_TYPE_F32
             nullptr,               // NPU_DATA_TYPE_F16
-        }, },
-    { NPU_OP_ADD,
-     is_element_wise_op_supported, {
-          element_wise_op<vec_op_f32_f32<vadd_f32_f32>>,  // NPU_DATA_TYPE_F32
-          element_wise_op<vec_op_f16_f16<vadd_f16_f16>>,  // NPU_DATA_TYPE_F16
-      } },
-    { NPU_OP_SUB,
-     is_element_wise_op_supported, {
-          element_wise_op<vec_op_f32_f32<vsub_f32_f32>>,  // NPU_DATA_TYPE_F32
-          element_wise_op<vec_op_f16_f16<vsub_f16_f16>>,  // NPU_DATA_TYPE_F16
-      } },
-    { NPU_OP_MUL,
-     is_element_wise_op_supported, {
-          element_wise_op<vec_op_f32_f32<vmul_f32_f32>>,  // NPU_DATA_TYPE_F32
-          element_wise_op<vec_op_f16_f16<vmul_f16_f16>>,  // NPU_DATA_TYPE_F16
-      } },
+        },       true,
+     },
+    {
+     NPU_OP_ADD,              is_element_wise_op_supported,
+     {
+            element_wise_op<vec_op_f32_f32<vadd_f32_f32>>,  // NPU_DATA_TYPE_F32
+            element_wise_op<vec_op_f16_f16<vadd_f16_f16>>,  // NPU_DATA_TYPE_F16
+        }, false,
+     },
+    {
+     NPU_OP_SUB,           is_element_wise_op_supported,
+     {
+            element_wise_op<vec_op_f32_f32<vsub_f32_f32>>,  // NPU_DATA_TYPE_F32
+            element_wise_op<vec_op_f16_f16<vsub_f16_f16>>,  // NPU_DATA_TYPE_F16
+        },          false,
+     },
+    {
+     NPU_OP_MUL,     is_element_wise_op_supported,
+     {
+            element_wise_op<vec_op_f32_f32<vmul_f32_f32>>,  // NPU_DATA_TYPE_F32
+            element_wise_op<vec_op_f16_f16<vmul_f16_f16>>,  // NPU_DATA_TYPE_F16
+        },       false,
+     },
+    {
+     NPU_OP_RMS_NORM,              is_unary_op_supported,
+     {
+            unary_op<rms_norm_vec_f32>,  // NPU_DATA_TYPE_F32
+            nullptr,                     // NPU_DATA_TYPE_F16
+        }, false,
+     },
 };
 
 static_assert(kOpCapabilities[NPU_OP_MUL_MAT].compute_funcs[NPU_DATA_TYPE_F32] == hexagon::mul_mat_f32,
@@ -243,6 +413,8 @@ static_assert(kOpCapabilities[NPU_OP_MUL_MAT].compute_funcs[NPU_DATA_TYPE_F32] =
 static_assert(std::size(kOpCapabilities) == NPU_OP_COUNT);
 static_assert(kOpCapabilities[NPU_OP_MUL_MAT].op == NPU_OP_MUL_MAT, "kOpArray[NPU_OP_MUL_MAT].op != NPU_OP_MUL_MAT");
 static_assert(kOpCapabilities[NPU_OP_MUL].op == NPU_OP_MUL, "kOpArray[NPU_OP_MUL].op != NPU_OP_MUL");
+static_assert(kOpCapabilities[NPU_OP_RMS_NORM].op == NPU_OP_RMS_NORM,
+              "kOpArray[NPU_OP_RMS_NORM].op != NPU_OP_RMS_NORM");
 
 hexagon::compute_func_type get_compute_func_impl(npu_device_tensor_op op, npu_device_tensor_data_type type) {
     if (op >= NPU_OP_COUNT) {
@@ -258,6 +430,14 @@ namespace hexagon {
 
 compute_func_type get_compute_func(tensor * dst) {
     return get_compute_func_impl(dst->get_op(), dst->get_type());
+}
+
+bool requires_thread_barrier(npu_device_tensor_op op) {
+    if (op >= NPU_OP_COUNT) {
+        return false;
+    }
+
+    return kOpCapabilities[op].requires_thread_barrier;
 }
 
 bool support_op(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1,

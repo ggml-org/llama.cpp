@@ -6,9 +6,9 @@
 #include <vector>
 
 #include "convert.hpp"
+#include "event_tracer.hpp"
 #include "ggml-qnn.h"
 #include "op-config.hpp"
-#include "profiler.hpp"
 #include "qnn-lib.hpp"
 
 namespace qnn {

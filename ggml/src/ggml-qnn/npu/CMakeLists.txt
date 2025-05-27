@@ -231,6 +231,11 @@ else()
 
     build_idl(idl/hexagon_npu.idl hexagon_npu_skel_OBJS)
 
+    add_subdirectory(${HEXAGON_SDK_ROOT}/libs/qprintf qprintf_dir)
+    target_include_directories(hexagon_npu_skel_OBJS PUBLIC
+        ${HEXAGON_SDK_ROOT}/libs/qprintf/inc/
+    )
+
     # disable warnings for the skel
     set_source_files_properties(
         ${skel_srcs}
@@ -239,12 +244,12 @@ else()
     )
 
     add_library(hexagon_npu_skel SHARED $<TARGET_OBJECTS:hexagon_npu_skel_OBJS>)
-
     target_link_libraries(hexagon_npu_skel
         ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++abi.a
         ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++.a
     )
     set_target_properties(hexagon_npu_skel PROPERTIES OUTPUT_NAME "hexagon_npu_skel_${HEXAGON_ARCH}")
+    target_link_libraries(hexagon_npu_skel qprintf_static)
 
     copy_binaries(hexagon_npu_skel)
 endif()

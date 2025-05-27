@@ -4,10 +4,10 @@
 #include <algorithm>
 #include <unordered_map>
 
+#include "event_tracer.hpp"
 #include "ggml-impl.h"
 #include "logger.hpp"
 #include "op-config.hpp"
-#include "profiler.hpp"
 #include "tensor.hpp"
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
@@ -411,8 +411,8 @@ bool qnn_graph::build_graph_from_ggml_graph(const ggml_cgraph * cgraph) {
             GGML_TYPE_COUNT > GGML_TYPE_Q8_0 && GGML_TYPE_Q8_0 > GGML_TYPE_F16 && GGML_TYPE_F16 > GGML_TYPE_F32,
             "GGML_TYPE enum order is not correct");
 
-        QNN_SCOPED_PERFORMANCE_TRACKER("[%s][%s]build_graph_from_ggml_graph", get_backend_name(_device),
-                                       _graph_name.c_str());
+        SCOPED_PERFORMANCE_TRACKER("[%s][%s]build_graph_from_ggml_graph", get_backend_name(_device),
+                                   _graph_name.c_str());
 
         auto override_data_type = get_override_data_type(inputs, outputs);
         if (override_data_type != GGML_TYPE_COUNT) {
@@ -466,8 +466,7 @@ bool qnn_graph::execute(const ggml_cgraph * cgraph, std::shared_ptr<qnn_convert_
     ggml_tensor_array_t inputs;
     ggml_tensor_array_t outputs;
     {
-        QNN_SCOPED_PERFORMANCE_TRACKER("[%s][%s]get_io_tensors_from_graph", get_backend_name(_device),
-                                       _graph_name.c_str());
+        SCOPED_PERFORMANCE_TRACKER("[%s][%s]get_io_tensors_from_graph", get_backend_name(_device), _graph_name.c_str());
 #ifdef NDEBUG
         get_io_tensors_from_graph(cgraph, inputs, outputs);
 #else
@@ -478,7 +477,7 @@ bool qnn_graph::execute(const ggml_cgraph * cgraph, std::shared_ptr<qnn_convert_
     }
 
     {
-        QNN_SCOPED_PERFORMANCE_TRACKER("[%s][%s]bind_tensors", get_backend_name(_device), _graph_name.c_str());
+        SCOPED_PERFORMANCE_TRACKER("[%s][%s]bind_tensors", get_backend_name(_device), _graph_name.c_str());
         auto override_data_type = get_override_data_type(inputs, outputs);
         if (override_data_type != GGML_TYPE_COUNT) {
             QNN_LOG_DEBUG("[%s][%s]override_data_type: %s\n", get_backend_name(_device), _graph_name.c_str(),
@@ -502,7 +501,7 @@ bool qnn_graph::execute(const ggml_cgraph * cgraph, std::shared_ptr<qnn_convert_
     }
 
     {
-        QNN_SCOPED_PERFORMANCE_TRACKER("[%s][%s]execute", get_backend_name(_device), _graph_name.c_str());
+        SCOPED_PERFORMANCE_TRACKER("[%s][%s]execute", get_backend_name(_device), _graph_name.c_str());
         auto & qnn_tensor_inputs  = _qnn_tensor_inputs;
         auto & qnn_tensor_outputs = _qnn_tensor_outputs;
         auto   error              = _qnn_interface->qnn_graph_execute(_graph_handle, qnn_tensor_inputs.data(),
@@ -529,7 +528,7 @@ bool qnn_graph::execute(const ggml_cgraph * cgraph, std::shared_ptr<qnn_convert_
 }
 
 bool qnn_graph::finalize() {
-    QNN_SCOPED_PERFORMANCE_TRACKER("[%s][%s]finalize", get_backend_name(_device), _graph_name.c_str());
+    SCOPED_PERFORMANCE_TRACKER("[%s][%s]finalize", get_backend_name(_device), _graph_name.c_str());
 
     if (!qnn::add_op_to_graph(_graph_handle, _operations)) {
         QNN_LOG_ERROR("[%s]add nodes failed\n", _graph_name.c_str());

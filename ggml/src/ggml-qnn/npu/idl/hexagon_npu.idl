@@ -4,6 +4,7 @@
 
 const uint32_t DEVICE_TENSOR_MAX_DIMS = 4;
 const uint32_t DEVICE_TENSOR_MAX_SRC = 2;
+const uint32_t DEVICE_TENSOR_MAX_OP_PARAMS = 4;
 const uint32_t QUANT_BLOCK_SIZE = 32;
 const uint32_t QUANT_K_BLOCK_SIZE = 256;
 const uint32_t QUANT_K_SCALE_SIZE = 12;
@@ -38,6 +39,7 @@ interface npu_device : remote_handle64{
         NPU_OP_ADD,
         NPU_OP_SUB,
         NPU_OP_MUL,
+        NPU_OP_RMS_NORM,
         NPU_OP_COUNT
     };
 
@@ -53,6 +55,12 @@ interface npu_device : remote_handle64{
     struct tensor_spec {
         ne_type ne;
         tensor_data_type type;
+    };
+
+    struct tensor_update_config {
+        tensor_op op;
+        int32_t params[DEVICE_TENSOR_MAX_OP_PARAMS];
+        tensor_handle_t src_handles[DEVICE_TENSOR_MAX_SRC];
     };
 
     struct tensor_config {
@@ -82,15 +90,9 @@ interface npu_device : remote_handle64{
         rout tensor_handle_t tensor_handle
     );
 
-    AEEResult tensor_set_src(
+    AEEResult tensor_update_params(
         in tensor_handle_t tensor_handle,
-        in uint64_t index,
-        in tensor_handle_t src
-    );
-
-    AEEResult tensor_set_op(
-        in tensor_handle_t tensor_handle,
-        in tensor_op op
+        in tensor_update_config config
     );
 
     AEEResult tensor_free(
@@ -104,6 +106,12 @@ interface npu_device : remote_handle64{
     AEEResult graph_set_tensor(
         in graph_handle_t graph_handle,
         in sequence<tensor_handle_t> tensor_handles
+    );
+
+    AEEResult graph_set_tensor_with_param(
+        in graph_handle_t graph_handle,
+        in sequence<tensor_handle_t> tensor_handles,
+        in sequence<tensor_update_config> tensor_params
     );
 
     AEEResult graph_compute(

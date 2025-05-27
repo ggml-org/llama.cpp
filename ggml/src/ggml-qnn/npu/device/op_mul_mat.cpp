@@ -3,44 +3,43 @@
 #include <HTP/core/intrinsics.h>
 
 #include "quants.hpp"
+#include "thread_pool.hpp"  // TODO: remove this dependency
 #include "vtcm_mem.hpp"
 
 namespace {
 
-inline float vec_reduction_f32(HVX_Vector sums) {
-    constexpr const size_t kFloatsPerVector = hexagon::kBytesPerVector / sizeof(float);
-    static_assert(kFloatsPerVector == 32 || kFloatsPerVector == 16, "kFloatsPerVector should be 16 or 32");
-
-    // TODO: do we have a better way to do the reduction?
-    switch (kFloatsPerVector) {
-        default:
-        case 32:
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 16 * sizeof(float)));
-            // fallthrough
-        case 16:
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 8 * sizeof(float)));
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 4 * sizeof(float)));
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 2 * sizeof(float)));
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, sizeof(float)));
-            break;
-    }
-
-    return hexagon::get_flt0_from_fltv(Q6_Vsf_equals_Vqf32(sums));
-}
-
 inline float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count) {
     constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(float);
 
-    HVX_Vector * iptr0     = ((HVX_Vector *) src0);
-    HVX_Vector * iptr0_end = ((HVX_Vector *) src0) + (count / kElementsPerVector);
-    HVX_Vector * iptr1     = ((HVX_Vector *) src1);
-    HVX_Vector   prev0     = *iptr0++;
-    HVX_Vector   prev1     = *iptr1++;
-    HVX_Vector   sum       = Q6_V_vzero();
+    HVX_Vector * src0_vec_ptr     = ((HVX_Vector *) src0);
+    HVX_Vector * src0_vec_ptr_end = ((HVX_Vector *) src0) + count / kElementsPerVector;
+    HVX_Vector * src1_vec_ptr     = ((HVX_Vector *) src1);
+    HVX_Vector   prev0            = *src0_vec_ptr++;
+    HVX_Vector   prev1            = *src1_vec_ptr++;
+    HVX_Vector   sum              = Q6_V_vzero();
 
-    while (iptr0 < iptr0_end) {
-        HVX_Vector curr0 = *iptr0++;
-        HVX_Vector curr1 = *iptr1++;
+    while (src0_vec_ptr_end - src0_vec_ptr > 1) {
+        HVX_Vector curr0_lo = src0_vec_ptr[0];
+        HVX_Vector curr0_hi = src0_vec_ptr[1];
+        HVX_Vector curr1_lo = src1_vec_ptr[0];
+        HVX_Vector curr1_hi = src1_vec_ptr[1];
+
+        HVX_Vector l0 = Q6_V_valign_VVR(curr0_lo, prev0, (size_t) src0);
+        HVX_Vector l1 = Q6_V_valign_VVR(curr1_lo, prev1, (size_t) src1);
+        HVX_Vector h0 = Q6_V_valign_VVR(curr0_hi, curr0_lo, (size_t) src0);
+        HVX_Vector h1 = Q6_V_valign_VVR(curr1_hi, curr1_lo, (size_t) src1);
+        sum           = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(l0, l1), sum);
+        sum           = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(h0, h1), sum);
+
+        prev0 = curr0_hi;
+        prev1 = curr1_hi;
+        src0_vec_ptr += 2;
+        src1_vec_ptr += 2;
+    }
+
+    if (src0_vec_ptr_end - src0_vec_ptr > 0) {
+        HVX_Vector curr0 = *src0_vec_ptr++;
+        HVX_Vector curr1 = *src1_vec_ptr++;
         HVX_Vector s0    = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         sum              = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0, s1), sum);
@@ -48,17 +47,17 @@ inline float vec_dot_product_f32_f32(const float * src0, const float * src1, siz
         prev1            = curr1;
     }
 
-    if ((iptr0_end - ((HVX_Vector *) src0)) > 0) {
+    if ((src0_vec_ptr_end - ((HVX_Vector *) src0)) > 0) {
         // handle the last vector
         // see also:
         //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
         //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        bool       iptr0_aligned = hexagon::is_addr_aligned(iptr0);
-        HVX_Vector curr0         = iptr0_aligned ? prev0 : *iptr0;
-        iptr0                    = iptr0_aligned ? iptr0 : iptr0 + 1;
-        bool       iptr1_aligned = hexagon::is_addr_aligned(iptr1);
-        HVX_Vector curr1         = iptr1_aligned ? prev1 : *iptr1;
-        iptr1                    = iptr1_aligned ? iptr1 : iptr1 + 1;
+        bool       iptr0_aligned = hexagon::is_addr_aligned(src0_vec_ptr);
+        HVX_Vector curr0         = iptr0_aligned ? prev0 : *src0_vec_ptr;
+        src0_vec_ptr             = iptr0_aligned ? src0_vec_ptr : src0_vec_ptr + 1;
+        bool       iptr1_aligned = hexagon::is_addr_aligned(src1_vec_ptr);
+        HVX_Vector curr1         = iptr1_aligned ? prev1 : *src1_vec_ptr;
+        src1_vec_ptr             = iptr1_aligned ? src1_vec_ptr : src1_vec_ptr + 1;
         HVX_Vector s0            = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         HVX_Vector s1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         sum                      = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0, s1), sum);
@@ -70,19 +69,21 @@ inline float vec_dot_product_f32_f32(const float * src0, const float * src1, siz
     const size_t leftover_bytes = leftover * sizeof(float);
     if (leftover > 0) {
         // handle the leftover elements
-        HVX_Vector curr0 =
-            (leftover_bytes + hexagon::unaligned_bytes(iptr0) > hexagon::kBytesPerVector) ? *iptr0 : prev0;
-        curr0 = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
+        HVX_Vector curr0 = (leftover_bytes + hexagon::unaligned_bytes(src0_vec_ptr) > hexagon::kBytesPerVector) ?
+                               *src0_vec_ptr :
+                               prev0;
+        curr0            = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
 
-        HVX_Vector curr1 =
-            (leftover_bytes + hexagon::unaligned_bytes(iptr1) > hexagon::kBytesPerVector) ? *iptr1 : prev1;
-        curr1 = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
+        HVX_Vector curr1 = (leftover_bytes + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
+                               *src1_vec_ptr :
+                               prev1;
+        curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
 
         sum = Q6_Vqf32_vadd_Vqf32Vqf32(
             Q6_V_valign_VVR(Q6_Vqf32_vmpy_VsfVsf(curr0, curr1), Q6_V_vzero(), leftover_bytes), sum);
     }
 
-    return vec_reduction_f32(sum);
+    return hexagon::vec_reduction_f32(sum);
 }
 
 // TODO: merge with vec_dot_product_f32_f32?
@@ -90,17 +91,17 @@ inline float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_d
     constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(npu_device_fp16_t);
     constexpr const size_t kFloatsPerVector   = hexagon::kBytesPerVector / sizeof(float);
 
-    HVX_Vector * iptr0     = ((HVX_Vector *) src0);
-    HVX_Vector * iptr0_end = ((HVX_Vector *) src0) + (count / kElementsPerVector);
-    HVX_Vector * iptr1     = ((HVX_Vector *) src1);
-    HVX_Vector   prev0     = *iptr0++;
-    HVX_Vector   prev1     = *iptr1++;
-    HVX_Vector   sum_hi    = Q6_V_vzero();
-    HVX_Vector   sum_lo    = Q6_V_vzero();
+    HVX_Vector * src0_vec_ptr     = ((HVX_Vector *) src0);
+    HVX_Vector * src0_vec_ptr_end = ((HVX_Vector *) src0) + (count / kElementsPerVector);
+    HVX_Vector * src1_vec_ptr     = ((HVX_Vector *) src1);
+    HVX_Vector   prev0            = *src0_vec_ptr++;
+    HVX_Vector   prev1            = *src1_vec_ptr++;
+    HVX_Vector   sum_hi           = Q6_V_vzero();
+    HVX_Vector   sum_lo           = Q6_V_vzero();
 
-    while (iptr0 < iptr0_end) {
-        HVX_Vector     curr0  = *iptr0++;
-        HVX_Vector     curr1  = *iptr1++;
+    while (src0_vec_ptr < src0_vec_ptr_end) {
+        HVX_Vector     curr0  = *src0_vec_ptr++;
+        HVX_Vector     curr1  = *src1_vec_ptr++;
         HVX_Vector     s0     = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         HVX_Vector     s1     = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         HVX_VectorPair result = Q6_Wqf32_vmpy_VhfVhf(s0, s1);
@@ -110,17 +111,17 @@ inline float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_d
         prev1                 = curr1;
     }
 
-    if ((iptr0_end - ((HVX_Vector *) src0)) > 0) {
+    if ((src0_vec_ptr_end - ((HVX_Vector *) src0)) > 0) {
         // handle the last vector
         // see also:
         //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
         //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        bool       iptr0_aligned = hexagon::is_addr_aligned(iptr0);
-        HVX_Vector curr0         = iptr0_aligned ? prev0 : *iptr0;
-        iptr0                    = iptr0_aligned ? iptr0 : iptr0 + 1;
-        bool       iptr1_aligned = hexagon::is_addr_aligned(iptr1);
-        HVX_Vector curr1         = iptr1_aligned ? prev1 : *iptr1;
-        iptr1                    = iptr1_aligned ? iptr1 : iptr1 + 1;
+        bool       iptr0_aligned = hexagon::is_addr_aligned(src0_vec_ptr);
+        HVX_Vector curr0         = iptr0_aligned ? prev0 : *src0_vec_ptr;
+        src0_vec_ptr             = iptr0_aligned ? src0_vec_ptr : src0_vec_ptr + 1;
+        bool       iptr1_aligned = hexagon::is_addr_aligned(src1_vec_ptr);
+        HVX_Vector curr1         = iptr1_aligned ? prev1 : *src1_vec_ptr;
+        src1_vec_ptr             = iptr1_aligned ? src1_vec_ptr : src1_vec_ptr + 1;
         HVX_Vector     s0        = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         HVX_Vector     s1        = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         HVX_VectorPair result    = Q6_Wqf32_vmpy_VhfVhf(s0, s1);
@@ -134,13 +135,15 @@ inline float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_d
     const size_t leftover_bytes = leftover * sizeof(npu_device_fp16_t);
     if (leftover > 0) {
         // handle the leftover elements
-        HVX_Vector curr0 =
-            (leftover_bytes + hexagon::unaligned_bytes(iptr0) > hexagon::kBytesPerVector) ? *iptr0 : prev0;
-        curr0 = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
+        HVX_Vector curr0 = (leftover_bytes + hexagon::unaligned_bytes(src0_vec_ptr) > hexagon::kBytesPerVector) ?
+                               *src0_vec_ptr :
+                               prev0;
+        curr0            = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
 
-        HVX_Vector curr1 =
-            (leftover_bytes + hexagon::unaligned_bytes(iptr1) > hexagon::kBytesPerVector) ? *iptr1 : prev1;
-        curr1 = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
+        HVX_Vector curr1 = (leftover_bytes + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
+                               *src1_vec_ptr :
+                               prev1;
+        curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
 
         HVX_VectorPair result = Q6_Wqf32_vmpy_VhfVhf(curr0, curr1);
 
@@ -156,7 +159,7 @@ inline float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_d
         }
     }
 
-    return vec_reduction_f32(Q6_Vqf32_vadd_Vqf32Vqf32(sum_hi, sum_lo));
+    return hexagon::vec_reduction_f32(Q6_Vqf32_vadd_Vqf32Vqf32(sum_hi, sum_lo));
 }
 
 template <typename T> struct get_data_type {};
@@ -208,68 +211,116 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
     }
 
     // cache the src0 plane in VTCM
-    const size_t    src0_plane_row_count  = start_end_element.second - start_end_element.first;
-    size_t          src0_plane_cache_size = 0;
-    uint8_t *       src0_plane_cache_ptr  = nullptr;
-    const uint8_t * last_cached_plane_ptr = nullptr;
+    size_t          src0_plane_slice_row_count = start_end_element.second - start_end_element.first;
+    size_t          src0_plane_cache_size      = 0;
+    uint8_t *       src0_plane_cache_ptr       = nullptr;
+    const uint8_t * last_cached_plane_ptr      = nullptr;
+    bool            is_mem_cache               = false;
     if (is_quantized) {
-        src0_plane_cache_size = src0_actual_row_size * src0_plane_row_count;
-        src0_plane_cache_ptr  = params->get_cache(src0_plane_cache_size, is_quantized);
+        src0_plane_slice_row_count =
+            std::min(params->vtcm_quota_size / src0_actual_row_size, src0_plane_slice_row_count);
+        src0_plane_cache_size = src0_actual_row_size * src0_plane_slice_row_count;
+        src0_plane_cache_ptr  = params->get_vtcm_cache(src0_plane_cache_size);
+        if (src0_plane_cache_ptr == nullptr) {
+            DEVICE_LOG_DEBUG(
+                "mul_mat_impl: failed to get VTCM cache for src0, size: %zu, src0_plane_slice_row_count: %zu, "
+                "src0_actual_row_size: %zu, will fallback to mem cache\n",
+                src0_plane_cache_size, src0_plane_slice_row_count, src0_actual_row_size);
+            src0_plane_cache_ptr = params->get_mem_cache(src0_plane_cache_size);
+            is_mem_cache         = true;
+        }
     }
 
-    DEVICE_LOG_DEBUG("mul_mat_impl src0_actual_row_size: %zu, is_quantized: %d, vtcm_mem: %p(%zu)\n",
-                     src0_actual_row_size, is_quantized, (void *) src0_plane_cache_ptr, src0_plane_cache_size);
+    DEVICE_LOG_DEBUG(
+        "mul_mat_impl src0_actual_row_size: %zu, src0_plane_slice_row_count: %zu, is_quantized: %d, vtcm_mem: "
+        "%p(%zu)\n",
+        src0_actual_row_size, src0_plane_slice_row_count, is_quantized, (void *) src0_plane_cache_ptr,
+        src0_plane_cache_size);
 
     const size_t valid_row_bytes = src1->get_ne(0) * sizeof(data_type);
     DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_SUB_PROC(dst, params->tidx, dequant);
     for (int64_t ip = start_end_plane.first; ip < start_end_plane.second; ip++) {
         const auto   i3         = ip / dst->get_ne(2);
         const auto   i2         = ip - i3 * dst->get_ne(2);
-        const auto * src0_plane = src0_ptr + i3 / r03 * src0->get_nb(3) + i2 / r02 * src0->get_nb(2) +
-                                  start_end_element.first * src0->get_nb(1);
         const auto * src1_plane = src1_ptr + i3 * src1->get_nb(3) + i2 * src1->get_nb(2);
         auto *       dst_plane  = dst_ptr + i3 * dst->get_nb(3) + i2 * dst->get_nb(2);
+        for (int64_t col_idx = start_end_element.first; col_idx < start_end_element.second;
+             col_idx += src0_plane_slice_row_count) {
+            const auto * src0_plane =
+                src0_ptr + i3 / r03 * src0->get_nb(3) + i2 / r02 * src0->get_nb(2) + col_idx * src0->get_nb(1);
+            if (src0_plane_cache_ptr) {
+                if (last_cached_plane_ptr != src0_plane) {
+                    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_SUB_PROC(dequant);
 
-        if (src0_plane_cache_ptr) {
-            if (last_cached_plane_ptr != src0_plane) {
-                DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_SUB_PROC(dequant);
+                    for (int64_t ir = 0; ir < (int64_t) src0_plane_slice_row_count; ir++) {
+                        auto * src0_row = src0_plane + ir * src0->get_nb(1);
+                        if (ir + 1 < src0_plane_slice_row_count) {
+                            hexagon::l2fetch_row(src0_row + src0->get_nb(1), src0->get_nb(1));
+                        }
 
-                for (int64_t ir = 0; ir < (int64_t) src0_plane_row_count; ir++) {
-                    auto * src0_row = src0_plane + ir * src0->get_nb(1);
-                    if (ir + 1 < src0_plane_row_count) {
-                        hexagon::l2fetch_row(src0_row + src0->get_nb(1), src0->get_nb(1));
+                        auto * dst_row = reinterpret_cast<float *>(src0_plane_cache_ptr + ir * src0_actual_row_size);
+                        dequantize_row_func(src0_row, reinterpret_cast<float *>(dst_row), src0->get_ne(0),
+                                            params->f16_to_f32_table);
                     }
 
-                    auto * dst_row = reinterpret_cast<float *>(src0_plane_cache_ptr + ir * src0_actual_row_size);
-                    dequantize_row_func(src0_row, reinterpret_cast<float *>(dst_row), src0->get_ne(0),
-                                        params->f16_to_f32_table);
+                    last_cached_plane_ptr = src0_plane;
                 }
 
-                last_cached_plane_ptr = src0_plane;
+                src0_plane = src0_plane_cache_ptr;
             }
 
-            src0_plane = src0_plane_cache_ptr;
-        }
-
-        for (int64_t i1 = start_end_row.first; i1 < start_end_row.second; i1++) {
-            auto * src1_row = src1_plane + i1 * src1->get_nb(1);
-            auto * dst_row  = reinterpret_cast<float *>(dst_plane + i1 * dst->get_nb(1)) + start_end_element.first;
-            for (int64_t i0 = 0; i0 < (int64_t) src0_plane_row_count; i0++) {
-                auto * src0_row = src0_plane + i0 * src0_actual_row_size;
-                if (i0 + 1 < src0_plane_row_count) {
-                    if (!src0_plane_cache_ptr) {
-                        hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row_bytes);
+            for (int64_t i1 = start_end_row.first; i1 < start_end_row.second; i1++) {
+                auto * src1_row = src1_plane + i1 * src1->get_nb(1);
+                auto * dst_row  = reinterpret_cast<float *>(dst_plane + i1 * dst->get_nb(1)) + col_idx;
+                for (int64_t i0 = 0; i0 < (int64_t) src0_plane_slice_row_count; i0++) {
+                    auto * src0_row = src0_plane + i0 * src0_actual_row_size;
+                    if (i0 + 1 < src0_plane_slice_row_count) {
+                        if (!src0_plane_cache_ptr || is_mem_cache) {
+                            hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row_bytes);
+                        }
+                    } else if (ip + 1 < start_end_plane.second) {
+                        hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row_bytes);
                     }
-                } else if (ip + 1 < start_end_plane.second) {
-                    hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row_bytes);
-                }
 
-                // TODO: figure dst how to handle a entire row
-                dst_row[i0] = _DotFunc(reinterpret_cast<const data_type *>(src0_row),
-                                       reinterpret_cast<const data_type *>(src1_row), (size_t) src0->get_ne(0));
+                    // TODO: figure dst how to handle a entire row
+                    dst_row[i0] = _DotFunc(reinterpret_cast<const data_type *>(src0_row),
+                                           reinterpret_cast<const data_type *>(src1_row), (size_t) src0->get_ne(0));
+                }
             }
         }
     }
+}
+
+bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1) {
+    if (src1.type != NPU_DATA_TYPE_F32) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) and src1.type(%s) mismatch and src1 is not F32\n",
+                         hexagon::get_type_name(src0.type), hexagon::get_type_name(src1.type));
+        return false;
+    }
+
+    const auto type_traits = hexagon::get_type_traits(src0.type);
+    if (!type_traits.is_quantized || type_traits.dequantize_row == nullptr) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) and src1.type(%s) mismatch and src0 is not quantized\n",
+                         hexagon::get_type_name(src0.type), hexagon::get_type_name(src1.type));
+        return false;
+    }
+
+    if (src0.ne[0] % type_traits.blck_size) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) ne[0] is not aligned: %ld\n", hexagon::get_type_name(src0.type),
+                         (long) src0.ne[0]);
+        return false;
+    }
+
+    const auto vtcm_thread_quota_size = hexagon::vtcm_mem::get_total_size() / hexagon::kMaxThreadCount;
+    if (src0.ne[0] * sizeof(hexagon::dequantized_element_type) > vtcm_thread_quota_size) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) ne[0] is too large: %ld, vtcm_thread_quota_size: %zu\n",
+                         hexagon::get_type_name(src0.type), (long) src0.ne[0], vtcm_thread_quota_size);
+        return false;
+    }
+
+    DEVICE_LOG_DEBUG("[MUL_MAT]supported quantized src0.type(%s) and src1.type(%s)\n",
+                     hexagon::get_type_name(src0.type), hexagon::get_type_name(src1.type));
+    return true;
 }
 
 }  // namespace
@@ -319,27 +370,9 @@ bool is_mul_mat_supported(const npu_device_tensor_spec & src0, const npu_device_
 
     if (src0.type != src1.type) {
 #ifdef GGML_HEXAGON_ENABLE_QUANTIZED_TENSORS
-        if (src1.type != NPU_DATA_TYPE_F32) {
-            DEVICE_LOG_DEBUG("[%s]src0.type(%s) and src1.type(%s) mismatch and src1 is not F32\n", op_get_name(op),
-                             get_type_name(src0.type), get_type_name(src1.type));
+        if (!is_quantized_mul_mat_supported(src0, src1)) {
             return false;
         }
-
-        const auto type_traits = get_type_traits(src0.type);
-        if (!type_traits.is_quantized || type_traits.dequantize_row == nullptr) {
-            DEVICE_LOG_DEBUG("[%s]src0.type(%s) and src1.type(%s) mismatch and src0 is not quantized\n",
-                             op_get_name(op), get_type_name(src0.type), get_type_name(src1.type));
-            return false;
-        }
-
-        if (src0.ne[0] % type_traits.blck_size) {
-            DEVICE_LOG_DEBUG("[%s]src0.type(%s) ne[0] is not aligned: %ld\n", op_get_name(op), get_type_name(src0.type),
-                             (long) src0.ne[0]);
-            return false;
-        }
-
-        DEVICE_LOG_DEBUG("[%s]supported quantized src0.type(%s) and src1.type(%s)\n", op_get_name(op),
-                         get_type_name(src0.type), get_type_name(src1.type));
 #else
         DEVICE_LOG_DEBUG("[%s]src0.type(%s) and src1.type(%s) mismatch and quantized tensors are not supported\n",
                          op_get_name(op), get_type_name(src0.type), get_type_name(src1.type));

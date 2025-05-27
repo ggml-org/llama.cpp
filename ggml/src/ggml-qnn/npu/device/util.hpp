@@ -1,7 +1,9 @@
 #pragma once
 
+#include <AEEStdDef.h>
 #include <HAP_farf.h>
 #include <HAP_perf.h>
+#include <HAP_power.h>
 
 #include <cstdint>
 #include <cstring>
@@ -48,10 +50,113 @@ inline constexpr const char * op_get_name(npu_device_tensor_op op) {
             return "SUB";
         case NPU_OP_MUL:
             return "MUL";
+        case NPU_OP_RMS_NORM:
+            return "RMS_NORM";
         default:
             return "UNKNOWN";
     }
 }
+
+class power_utils {
+  public:
+    power_utils() {
+        _context_ptr = HAP_utils_create_context();
+        if (_context_ptr == nullptr) {
+            DEVICE_LOG_ERROR("Failed to create power context\n");
+        }
+    }
+
+    ~power_utils() {
+        if (_context_ptr != nullptr) {
+            HAP_utils_destroy_context(_context_ptr);
+        }
+    }
+
+    unsigned int get_clock_speed_hz() const {
+        if (!is_valid()) {
+            DEVICE_LOG_ERROR("Power context is not initialized\n");
+            return 0;
+        }
+
+        HAP_power_response_t response = {};
+        response.type                 = HAP_power_get_clk_Freq;
+        auto ret                      = HAP_power_get(_context_ptr, &response);
+        if (ret != AEE_SUCCESS) {
+            DEVICE_LOG_ERROR("Failed to get clock speed: %d\n", ret);
+            return 0;
+        }
+
+        return response.clkFreqHz;
+    }
+
+    bool get_dvcs_enabled() const {
+        if (!is_valid()) {
+            DEVICE_LOG_ERROR("Power context is not initialized\n");
+            return false;
+        }
+
+        HAP_power_response_t response = {};
+        response.type                 = HAP_power_get_dcvsEnabled;
+        auto ret                      = HAP_power_get(_context_ptr, &response);
+        if (ret != AEE_SUCCESS) {
+            DEVICE_LOG_ERROR("Failed to get DVCS enabled: %d\n", ret);
+            return false;
+        }
+
+        return response.dcvsEnabled;
+    }
+
+    void set_dvcs_performance_mode(bool enable) {
+        if (!is_valid()) {
+            DEVICE_LOG_ERROR("Power context is not initialized\n");
+            return;
+        }
+
+        HAP_power_request_t request = {};
+        request.type                = HAP_power_set_DCVS_v3;
+        request.dcvs_v3.dcvs_enable = enable ? TRUE : FALSE;
+        if (enable) {
+            request.dcvs_v3.dcvs_option = HAP_DCVS_V2_PERFORMANCE_MODE;
+            /*
+             * sleep_latency : To request for sleep latency in micro-seconds.
+             *                 Sleep latency is the minimum time before which the DSP sleeps
+             *                 Set latency to 65535 to reset it to the default value
+             */
+            request.dcvs_v3.set_latency = TRUE;
+            request.dcvs_v3.latency     = 1000;
+
+            request.dcvs_v3.set_bus_params           = TRUE;
+            request.dcvs_v3.bus_params.min_corner    = HAP_DCVS_VCORNER_SVS;
+            request.dcvs_v3.bus_params.max_corner    = HAP_DCVS_VCORNER_TURBO;
+            request.dcvs_v3.bus_params.target_corner = HAP_DCVS_VCORNER_NOM;
+        }
+
+        auto ret = HAP_power_set(_context_ptr, &request);
+        if (ret != AEE_SUCCESS) {
+            DEVICE_LOG_ERROR("Failed to set DVCS performance mode: %d\n", ret);
+        }
+    }
+
+    void set_sleep_mode(bool enable) {
+        if (!is_valid()) {
+            DEVICE_LOG_ERROR("Power context is not initialized\n");
+            return;
+        }
+
+        boolean sleep_disable = enable ? FALSE : TRUE;
+        auto    ret           = HAP_power_set_sleep_mode(_context_ptr, sleep_disable);
+        if (ret != AEE_SUCCESS) {
+            DEVICE_LOG_ERROR("Failed to set sleep mode: %d\n", ret);
+        }
+    }
+
+    bool is_valid() const { return _context_ptr != nullptr; }
+
+  private:
+    void * _context_ptr = nullptr;
+
+    DISABLE_COPY_AND_MOVE(power_utils);
+};
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
 

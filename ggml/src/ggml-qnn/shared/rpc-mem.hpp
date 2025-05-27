@@ -64,8 +64,10 @@ class rpc_mem {
 
         void * buf = nullptr;
         if (_rpc_interface->is_alloc2_available()) {
+            LOG_DEBUG("rpcmem_alloc2 available, using it\n");
             buf = _rpc_interface->rpcmem_alloc2(heapid, flags, size);
         } else {
+            LOG_DEBUG("rpcmem_alloc2 not available, using rpcmem_alloc\n");
             buf = _rpc_interface->rpcmem_alloc(heapid, flags, size);
         }
 

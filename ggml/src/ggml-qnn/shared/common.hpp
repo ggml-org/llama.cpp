@@ -45,6 +45,10 @@ size_t get_system_free_memory_in_bytes();
     class_name(class_name &&)     = delete; \
     void operator=(class_name &&) = delete
 
+#define DISABLE_COPY_AND_MOVE(class_name) \
+    DISABLE_COPY(class_name);             \
+    DISABLE_MOVE(class_name)
+
 #define LOG_ERROR(...) (GGML_LOG_ERROR(__VA_ARGS__))
 #define LOG_WARN(...)  (GGML_LOG_WARN(__VA_ARGS__))
 #define LOG_INFO(...)  (GGML_LOG_INFO(__VA_ARGS__))

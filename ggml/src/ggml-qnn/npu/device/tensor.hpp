@@ -8,7 +8,8 @@
 
 namespace hexagon {
 
-constexpr const size_t kMaxTensorSrc = DEVICE_TENSOR_MAX_SRC;
+constexpr const size_t kMaxTensorSrc   = DEVICE_TENSOR_MAX_SRC;
+constexpr const size_t kMaxParamsCount = DEVICE_TENSOR_MAX_OP_PARAMS;
 
 class tensor {
   public:
@@ -50,16 +51,16 @@ class tensor {
         }
     }
 
-    bool set_src(size_t index, tensor * src) {
-        if (index >= kMaxTensorSrc) {
-            return false;
+    void update_config(const npu_device_tensor_update_config & config) {
+        static_assert(sizeof(_op_params) == sizeof(config.params), "op params size mismatch");
+
+        _info.op = config.op;
+        memcpy(_op_params, config.params, sizeof(_op_params));
+        for (size_t i = 0; i < DEVICE_TENSOR_MAX_SRC; ++i) {
+            auto src_handle = config.src_handles[i];
+            _src[i]         = (src_handle ? reinterpret_cast<tensor *>(src_handle) : nullptr);
         }
-
-        _src[index] = src;
-        return true;
     }
-
-    void set_op(npu_device_tensor_op op) { _info.op = op; }
 
     tensor * get_src(size_t index) const {
         if (index >= kMaxTensorSrc) {
@@ -77,6 +78,20 @@ class tensor {
 
     npu_device_tensor_op get_op() const { return _info.op; }
 
+    template <typename _TyParam> const _TyParam get_op_param(size_t index) const {
+        static_assert(sizeof(_TyParam) <= sizeof(_op_params), "_op_param type size exceeds op params size");
+
+        if (sizeof(_TyParam) * (index + 1) >= sizeof(_op_params)) {
+            return 0;
+        }
+
+        return reinterpret_cast<const _TyParam *>(_op_params)[index];
+    }
+
+    const int32_t * get_op_params() const { return _op_params; }
+
+    const size_t get_op_param_count() const { return kMaxParamsCount; }
+
     npu_device_tensor_data_type get_type() const { return _info.type; }
 
     const uint8_t * get_read_buffer() const {
@@ -89,9 +104,10 @@ class tensor {
     bool is_valid() const { return _data != nullptr; }
 
   private:
-    npu_device_tensor_config _info;
-    tensor *                 _src[kMaxTensorSrc] = {};
-    uint8_t *                _data               = nullptr;
+    npu_device_tensor_config _info                       = {};
+    int32_t                  _op_params[kMaxParamsCount] = {};
+    tensor *                 _src[kMaxTensorSrc]         = {};
+    uint8_t *                _data                       = nullptr;
 
     DISABLE_COPY_AND_MOVE(tensor);
 };

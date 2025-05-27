@@ -5,6 +5,7 @@
 namespace hexagon {
 
 enum npu_device_tensor_op        op_to_npu_op(ggml_op op);
+const char *                     get_npu_op_desc(enum npu_device_tensor_op op);
 enum npu_device_tensor_data_type type_to_npu_type(ggml_type type);
 
 // TODO: merge with qcom_htp_arch

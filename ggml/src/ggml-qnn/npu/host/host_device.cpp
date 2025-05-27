@@ -151,7 +151,7 @@ bool npu_device::supports_op_impl(const ggml_tensor * op) {
 
     auto * src0 = op->src[0];
     if (!src0) {
-        LOG_DEBUG("[%s]Unsupported inplace op: %s\n", get_name(), ggml_op_name(op->op));
+        LOG_DEBUG("[%s]Unsupported inplace op: %s\n", get_name(), ggml_op_desc(op));
         return false;
     }
 
@@ -168,7 +168,7 @@ bool npu_device::supports_op_impl(const ggml_tensor * op) {
 
     auto npu_op = op_to_npu_op(op->op);
     if (npu_op == NPU_OP_COUNT) {
-        LOG_DEBUG("[%s]Unsupported op: %s\n", get_name(), ggml_op_name(op->op));
+        LOG_DEBUG("[%s]Unsupported op: %s\n", get_name(), ggml_op_desc(op));
         return false;
     }
 
@@ -179,7 +179,7 @@ bool npu_device::supports_op_impl(const ggml_tensor * op) {
 
     constexpr const auto get_spec = [](const ggml_tensor * tensor) -> npu_device_tensor_spec {
         if (!tensor) {
-            return npu_device_tensor_spec{};
+            return npu_device_tensor_spec{ {}, NPU_DATA_TYPE_COUNT };
         }
 
         static_assert(DEVICE_TENSOR_MAX_DIMS == GGML_MAX_DIMS, "tensor dimensions mismatch");

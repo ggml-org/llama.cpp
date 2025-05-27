@@ -1,5 +1,5 @@
 
-#include "profiler.hpp"
+#include "event_tracer.hpp"
 
 #include <HTP/QnnHtpProfile.h>
 #include <QnnProfile.h>

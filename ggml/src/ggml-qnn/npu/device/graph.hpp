@@ -25,6 +25,7 @@ class graph {
 
     std::unique_ptr<tensor *[]> _tensors;
     size_t                      _tensor_count     = 0;
+    size_t                      _vtcm_quota_size  = 0;
     const float *               _f16_to_f32_table = nullptr;
 
     DISABLE_COPY_AND_MOVE(graph);

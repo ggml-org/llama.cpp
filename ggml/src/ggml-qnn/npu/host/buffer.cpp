@@ -177,7 +177,7 @@ std::shared_ptr<host_tensor> host_buffer::init_tensor(ggml_tensor * tensor, remo
 
         auto ret = _allocator->fastrpc_mmap((int) _domain_id, _buffer_fd, _data, 0, _size, FASTRPC_MAP_FD);
         if (ret != AEE_SUCCESS) {
-            LOG_ERROR("failed to mmap rpc memory, fd: %d, ret: %d\n", _buffer_fd, ret);
+            LOG_ERROR("failed to mmap rpc memory, fd: %d, size: %zu, ret: %d\n", _buffer_fd, _size, ret);
             return std::shared_ptr<host_tensor>();
         }
 

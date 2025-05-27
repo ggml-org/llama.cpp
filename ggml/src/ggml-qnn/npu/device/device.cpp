@@ -106,6 +106,7 @@ int npu_device_open(const char * uri, remote_handle64 * h) {
     }
 
     *h = reinterpret_cast<remote_handle64>(context);
+    DEVICE_LOG_INFO("NPU device context created: %p", (void *) *h);
     return AEE_SUCCESS;
 }
 
@@ -117,6 +118,7 @@ int npu_device_close(remote_handle64 h) {
     }
 
     delete context;
+    DEVICE_LOG_INFO("NPU device context destroyed: %p", (void *) h);
     return AEE_SUCCESS;
 }
 
@@ -130,6 +132,12 @@ AEEResult npu_device_device_support_op(remote_handle64 _h, const npu_device_tens
                                        const npu_device_tensor_spec * src1, const npu_device_tensor_spec * dst,
                                        npu_device_tensor_op op, boolean * is_supported) {
     NPU_UNUSED(_h);
+
+    if (!src0 || !src1 || !dst || !is_supported) {
+        DEVICE_LOG_ERROR("npu_device_device_support_op: Invalid arguments");
+        return AEE_EINVARGS;
+    }
+
     *is_supported = hexagon::support_op(*src0, *src1, *dst, op);
     return AEE_SUCCESS;
 }
@@ -147,28 +155,15 @@ AEEResult npu_device_tensor_init(remote_handle64 _h, const npu_device_tensor_con
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_tensor_set_src(remote_handle64 _h, npu_device_tensor_handle_t tensor_handle, uint64_t index,
-                                    npu_device_tensor_handle_t src) {
+AEEResult npu_device_tensor_update_params(remote_handle64 _h, npu_device_tensor_handle_t tensor_handle,
+                                          const npu_device_tensor_update_config * config) {
     NPU_UNUSED(_h);
     auto * tensor = tensor_from_handle(tensor_handle);
-    if (!tensor) {
+    if (!tensor || !config) {
         return AEE_EINVHANDLE;
     }
 
-    auto * src_tensor = tensor_from_handle(src);
-    tensor->set_src(index, src_tensor);
-    return AEE_SUCCESS;
-}
-
-AEEResult npu_device_tensor_set_op(remote_handle64 _h, npu_device_tensor_handle_t tensor_handle,
-                                   npu_device_tensor_op op) {
-    NPU_UNUSED(_h);
-    auto * tensor = tensor_from_handle(tensor_handle);
-    if (!tensor) {
-        return AEE_EINVHANDLE;
-    }
-
-    tensor->set_op(op);
+    tensor->update_config(*config);
     return AEE_SUCCESS;
 }
 
@@ -203,6 +198,29 @@ AEEResult npu_device_graph_set_tensor(remote_handle64 _h, npu_device_graph_handl
     }
 
     graph->set_tensor(tensor_handles, tensor_handlesLen);
+    return AEE_SUCCESS;
+}
+
+AEEResult npu_device_graph_set_tensor_with_param(remote_handle64 _h, npu_device_graph_handle_t graph_handle,
+                                                 const npu_device_tensor_handle_t *      tensor_handles,
+                                                 int                                     tensor_handlesLen,
+                                                 const npu_device_tensor_update_config * tensor_params,
+                                                 int                                     tensor_paramsLen) {
+    NPU_UNUSED(_h);
+    auto * graph = graph_from_handle(graph_handle);
+    if (!graph || !tensor_handles || tensor_handlesLen <= 0 || !tensor_params ||
+        tensor_handlesLen != tensor_paramsLen) {
+        return AEE_EINVHANDLE;
+    }
+
+    graph->set_tensor(tensor_handles, tensor_handlesLen);
+    for (int i = 0; i < tensor_handlesLen; ++i) {
+        auto * tensor = tensor_from_handle(tensor_handles[i]);
+        if (tensor) {
+            tensor->update_config(tensor_params[i]);
+        }
+    }
+
     return AEE_SUCCESS;
 }
 

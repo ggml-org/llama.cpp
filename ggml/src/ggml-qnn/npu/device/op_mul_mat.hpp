@@ -7,11 +7,6 @@
 
 namespace hexagon {
 
-constexpr const size_t kBytesPerVector      = sizeof(HVX_Vector);  // 128 for v73
-constexpr const size_t kAlignMask           = kBytesPerVector - 1;
-constexpr const size_t kL2CacheSize         = 8 * 1024;            // // 8KB L2 cache
-constexpr const size_t kL2FetchAheadVectors = kL2CacheSize / kBytesPerVector;
-
 inline size_t unaligned_bytes(const void * addr) {
     return ((size_t) addr) & kAlignMask;
 }
@@ -41,6 +36,31 @@ inline float get_flt0_from_fltv(HVX_Vector vect) {
 
     cvt.i = vect[0];
     return cvt.f;
+}
+
+inline HVX_Vector vec_reduction_qf32(HVX_Vector sums) {
+    constexpr const size_t kFloatsPerVector = hexagon::kBytesPerVector / sizeof(float);
+    static_assert(kFloatsPerVector == 32 || kFloatsPerVector == 16, "kFloatsPerVector should be 16 or 32");
+
+    // TODO: do we have a better way to do the reduction?
+    switch (kFloatsPerVector) {
+        default:
+        case 32:
+            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 16 * sizeof(float)));
+            // fallthrough
+        case 16:
+            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 8 * sizeof(float)));
+            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 4 * sizeof(float)));
+            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 2 * sizeof(float)));
+            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, sizeof(float)));
+            break;
+    }
+
+    return sums;
+}
+
+inline float vec_reduction_f32(HVX_Vector sums) {
+    return hexagon::get_flt0_from_fltv(Q6_Vsf_equals_Vqf32(vec_reduction_qf32(sums)));
 }
 
 bool mul_mat_f32(tensor * out, compute_params * params);

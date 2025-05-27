@@ -10,7 +10,8 @@
 namespace hexagon {
 
 graph::graph() noexcept {
-    DEVICE_LOG_DEBUG("graph(%p) created\n", (void *) this);
+    _vtcm_quota_size = hexagon::vtcm_mem::get_avail_block_size();  // TODO: move to device init?
+    DEVICE_LOG_DEBUG("graph(%p) created: vtcm quota size: %zu\n", (void *) this, _vtcm_quota_size);
 }
 
 graph::~graph() noexcept {
@@ -45,6 +46,8 @@ bool graph::compute(default_thread_pool * thread_pool, const float * f16_to_f32_
     }
 
     DEVICE_LOG_DEBUG("graph(%p) compute\n", (void *) this);
+
+    DEVICE_SCOPED_PERFORMANCE_TRACKER("[%p]compute", (void *) this);
     _f16_to_f32_table = f16_to_f32_table;
     if (thread_pool) {
         thread_pool->sync_execute(reinterpret_cast<default_thread_pool::task_type>(&graph::thread_pool_task), this);
@@ -61,6 +64,8 @@ void graph::thread_pool_task(default_thread_pool * pool, size_t thread_idx, size
 }
 
 void graph::compute_impl(default_thread_pool * pool, size_t thread_idx, size_t thread_count) {
+    hexagon::compute_params params = { thread_idx, thread_count, _vtcm_quota_size / thread_count, _f16_to_f32_table };
+
     for (size_t i = 0; i < _tensor_count; ++i) {
         auto * dst  = _tensors[i];
         auto   op   = dst->get_op();
@@ -69,14 +74,14 @@ void graph::compute_impl(default_thread_pool * pool, size_t thread_idx, size_t t
             DEVICE_LOG_ERROR("graph(%p) tensor[%zu] op %d not supported\n", (void *) this, i, op);
             return;
         }
-
-        hexagon::compute_params params = { thread_idx, thread_count, _f16_to_f32_table };
         if (!func(dst, &params)) {
             DEVICE_LOG_ERROR("graph(%p) tensor[%zu] op %d compute failed\n", (void *) this, i, op);
         }
 
-        // TODO: figure out which ops need to sync
-        if (pool) {
+        DEVICE_SCOPED_PERFORMANCE_TRACKER("[%p]sync_thread, tidx: %zu", (void *) this, thread_idx);
+
+        const bool should_sync = requires_thread_barrier(op);
+        if (pool && should_sync && i < _tensor_count - 1) {
             pool->sync_thread();
         }
         dst->invalidate();

@@ -47,7 +47,7 @@ class vtcm_mem {
         DEVICE_LOG_DEBUG("VTCM released: %zu bytes at %p\n", _vtcm_size, _vtcm_mem);
     }
 
-    bool is_valid() const { return _vtcm_mem != nullptr; }
+    bool is_valid() const { return _vtcm_mem != nullptr && _vtcm_size != 0; }
 
     uint8_t * get_mem() const { return reinterpret_cast<uint8_t *>(_vtcm_mem); }
 
