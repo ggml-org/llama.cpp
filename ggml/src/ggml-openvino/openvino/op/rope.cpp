@@ -1,4 +1,3 @@
-
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -22,6 +21,10 @@
 
 #include "../node_context.hpp"
 #include "../utils.hpp"
+
+#ifndef M_PI
+#    define M_PI 3.14159265358979323846
+#endif
 
 #define GGML_ROPE_TYPE_NEOX 2
 

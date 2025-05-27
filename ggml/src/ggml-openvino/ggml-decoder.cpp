@@ -14,6 +14,7 @@
 #include <memory>
 #include <openvino/core/dimension.hpp>
 #include <openvino/core/node.hpp>
+#include <openvino/core/partial_shape.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/parameter.hpp>
@@ -25,14 +26,16 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph)
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token)
     : m_cgraph(cgraph),
       m_node(node),
-      m_op_name(m_node ? std::string(m_node->name) : "NONE_OP") {
+      m_op_name(m_node ? std::string(m_node->name) : "NONE_OP"),
+      m_is_static(is_static),
+      m_is_first_token(is_first_token) {
     static std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
 
     if (m_node) {
-        set_input_output(m_node, model_weights);
+        set_input_output(m_node);
     } else {
         static bool printed = false;
         if (!printed && getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
@@ -47,7 +50,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
         set_max_token_len();
 
         static bool weight_created = false;
-        if (!getenv("GGML_OPENVINO_WEIGHT_AS_INPUT") && !weight_created) {
+        if (!weight_created) {
             add_weight_const_parallel(model_weights);
             weight_created = true;
         }
@@ -55,7 +58,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
         for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
             auto* cur_node = m_cgraph->nodes[node_n];
             m_nodes.push_back(cur_node);
-            set_input_output(cur_node, model_weights);
+            set_input_output(cur_node);
         }
         m_model_weights = model_weights;
 
@@ -65,8 +68,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
 
 // Called in GgmlOvDecoder constructor. Two cases: 1. constructing a decoder for the whole graph;
 // 2. constructing a decoder for a node.
-void GgmlOvDecoder::set_input_output(ggml_tensor* node,
-                                     std::map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
+void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
     std::string node_name;
     if (node->op == GGML_OP_CPY) {
         // CPY updates the input tensor in place. For later ov op that uses the
@@ -95,21 +97,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node,
         if (!m_node && !src->view_src) {
             ggml_backend_buffer* buffer = src->buffer;
 
-            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-                bool weight_as_input = getenv("GGML_OPENVINO_WEIGHT_AS_INPUT");
-                auto& weights_map = weight_as_input ? m_model_inputs : model_weights;
-                if (weights_map.find(src_name) != weights_map.end()) {
-                    continue;
-                }
-
-                std::shared_ptr<ov::Node> weight_node =
-                    weight_as_input
-                        ? std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), ov::Shape{get_shape(src)})
-                        : create_weight_node(src);
-                weight_node->set_friendly_name(src_name);
-                weights_map[src_name] = weight_node;
-
-            } else if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || src->flags & GGML_TENSOR_FLAG_INPUT) {
+            if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || src->flags & GGML_TENSOR_FLAG_INPUT) {
                 // GGML_BACKEND_BUFFER_USAGE_ANY are kv caches
                 if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                     assert(src_name.find("cache_k") == 0 || src_name.find("cache_v") == 0);
@@ -119,10 +107,24 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node,
                 }
                 ov::PartialShape input_shape;
                 if (std::string(src->name) == "inp_tokens" || std::string(src->name) == "inp_pos") {
-                    input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_max_token_len)};
+                    if (m_is_static) {
+                        input_shape = ov::PartialShape(get_shape(src));
+                        // if (m_is_first_token) {
+                        //     input_shape = ov::PartialShape{1, 1, m_max_token_len};
+                        // } else {
+                        //     input_shape = ov::PartialShape{1, 1, 1};
+                        // }
+                    } else {
+                        input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_max_token_len)};
+                    }
                 } else if (std::string(src->name).find("KQ_mask") == 0) {
-                    auto max_token_len = GGML_PAD(m_max_token_len, GGML_KQ_MASK_PAD);
-                    input_shape = ov::PartialShape{1, ov::Dimension(1, max_token_len), ov::Dimension(1, max_token_len)};
+                    if (m_is_static) {
+                        input_shape = ov::PartialShape(get_shape(src));
+                    } else {
+                        auto max_token_len = GGML_PAD(m_max_token_len, GGML_KQ_MASK_PAD);
+                        input_shape =
+                            ov::PartialShape{1, ov::Dimension(1, max_token_len), ov::Dimension(1, max_token_len)};
+                    }
                 } else {
                     input_shape = ov::Shape{get_shape(src)};
                 }
@@ -510,7 +512,7 @@ int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const {
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const {
     for (const auto& node : m_nodes) {
-        auto decoder = std::make_shared<GgmlOvDecoder>(node, m_cgraph);
+        auto decoder = std::make_shared<GgmlOvDecoder>(node, m_cgraph, m_is_static, m_is_first_token);
         node_visitor(decoder);
     }
 }
