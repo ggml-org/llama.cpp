@@ -60,7 +60,7 @@ def copy_with_new_metadata(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, new
 
         val_type = field.types[0]
         sub_type = field.types[-1] if val_type == gguf.GGUFValueType.ARRAY else None
-        old_val = MetadataDetails(val_type, field.contents(), '', sub_type)
+        old_val = MetadataDetails(val_type, field.contents(), sub_type=sub_type)
         val = new_metadata.get(field.name, old_val)
 
         if field.name in new_metadata:
