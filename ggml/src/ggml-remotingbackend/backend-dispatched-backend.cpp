@@ -6,10 +6,14 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 
+#include "shared/apir_backend.h"
+
 uint32_t
 backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
   UNUSED(enc);
+
+  start_timer();
 
   uint32_t shmem_res_id;
   vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
@@ -29,6 +33,8 @@ backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, stru
   status = bck->iface.graph_compute(bck, cgraph);
 
   vn_encode_ggml_status(enc, &status);
+
+  stop_timer();
 
   return 0;
 }

@@ -18,6 +18,20 @@ static void *backend_library_handle = NULL;
 
 extern "C" {
   void apir_backend_deinit(void) {
+    auto buffers = get_track_backend_buffers();
+    for (const auto& buffer: buffers) {
+      untrack_backend_buffer(buffer);
+      buffer->iface.free_buffer(buffer);
+    }
+
+    size_t free, total;
+    dev->iface.get_memory(dev, &free, &total);
+    WARNING("%s: free memory: %ld MB\n", __func__, (size_t) free/1024/1024);
+
+    show_timer();
+
+    /* *** */
+
     if (backend_library_handle) {
       INFO("%s: The GGML backend library was loaded. Unloading it.", __func__);
       dlclose(backend_library_handle);
@@ -55,6 +69,14 @@ extern "C" {
       return APIR_BACKEND_INITIALIZE_MISSING_GGML_SYMBOLS;
     }
 
+    INFO("#");
+#if APIR_ALLOC_FROM_HOST_PTR
+    INFO("# USING ALLOC_FROM_HOST_PTR");
+#else
+    INFO("# USING ALLOC_BUFFER");
+#endif
+    INFO("#");
+
     return backend_dispatch_initialize(ggml_backend_reg_fct, ggml_backend_init_fct);
   }
 
@@ -81,6 +103,11 @@ extern "C" {
       return APIR_BACKEND_FORWARD_INDEX_INVALID;
     }
 
+#if 0
+    static long long count = 0;
+    INFO("[%lld] Calling %s", count, backend_dispatch_command_name((ApirBackendCommandType) cmd_type));
+    count += 1;
+#endif
     backend_dispatch_t forward_fct = apir_backend_dispatch_table[cmd_type];
     uint32_t ret = forward_fct(enc, dec, ctx);
 

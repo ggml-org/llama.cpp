@@ -1,6 +1,6 @@
 #pragma once
 
-#define APIR_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend/bin/libggml-remotingbackend.dylib"
+#define APIR_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend-prod/bin/libggml-remotingbackend.dylib"
 #define APIR_INITIALIZE_FCT_NAME "apir_backend_initialize"
 #define APIR_DEINIT_FCT_NAME "apir_backend_deinit"
 #define APIR_DISPATCH_FCT_NAME "apir_backend_dispatcher"
@@ -14,8 +14,18 @@
 
 #define APIR_BACKEND_FORWARD_INDEX_INVALID 6
 
-typedef uintptr_t apir_buffer_type_handle_t;
-typedef uintptr_t apir_buffer_handle_t;
+#define APIR_ALLOC_FROM_HOST_PTR 0
+
+typedef uintptr_t apir_buffer_type_host_handle_t;
+typedef uintptr_t apir_buffer_host_handle_t;
+
+typedef struct {
+  apir_buffer_host_handle_t host_handle;
+#if APIR_ALLOC_FROM_HOST_PTR
+  struct vn_renderer_shmem *shmem;
+  apir_buffer_type_host_handle_t buft_host_handle;
+#endif
+} apir_buffer_context_t;
 
 typedef uint32_t (*apir_backend_initialize_t)(void);
 typedef void (*apir_backend_deinit_t)(void);
@@ -72,7 +82,30 @@ struct virgl_apir_context {
   struct virgl_apir_callbacks iface;
 };
 
-#define TENSOR_MAX_DEPTH_DEVICE_SUPPORTS_OP 2
-#define TENSOR_MAX_DEPTH_BUFFER_GET_TENSOR 2
-#define TENSOR_MAX_DEPTH_BUFFER_SET_TENSOR 2
-#define TENSOR_MAX_DEPTH_CGRAPH_DATA 10
+extern long long timer_start;
+extern long long timer_total;
+extern long long timer_count;
+
+static inline void start_timer(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  timer_start = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static inline void stop_timer(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  long long timer_end = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+  timer_total += (timer_end - timer_start);
+  timer_count += 1;
+}
+
+static inline void show_timer(void) {
+  long long ms = timer_total/1000000;
+  long long itl = ms/timer_count;
+  float speed = 1/((float)itl) * 1000;
+
+  INFO("compute_graph: [%9ld] ms for %ld invokations | ITL %lldms | throughput = %.2f t/s\n", timer_total/1000000, timer_count, itl, speed);
+  INFO("compute_graph: [%9ld] s", (ms)/1000);
+}

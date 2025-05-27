@@ -12,6 +12,10 @@ ggml_backend_reg_t reg = NULL;
 ggml_backend_dev_t dev = NULL;
 ggml_backend_t bck = NULL;
 
+long long timer_start = 0;
+long long timer_total = 0;
+long long timer_count = 0;
+
 uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p, void *ggml_backend_init_fct_p) {
   if (reg != NULL) {
     FATAL("%s: already initialized :/", __func__);
@@ -34,6 +38,10 @@ uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p, void *ggml_ba
     ERROR("%s: backend initialization failed :/", __func__);
     return APIR_BACKEND_INITIALIZE_BACKEND_FAILED;
   }
+
+  size_t free, total;
+  dev->iface.get_memory(dev, &free, &total);
+  WARNING("%s: free memory: %ld MB\n", __func__, (size_t) free/1024/1024);
 
   return APIR_BACKEND_INITIALIZE_SUCCESSS;
 }

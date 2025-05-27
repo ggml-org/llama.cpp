@@ -15,8 +15,6 @@ backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, st
   uintptr_t base = (uintptr_t) buffer->iface.get_base(buffer);
   vn_encode_uintptr_t(enc, &base);
 
-  //INFO("%s: send base %p\n", __func__,  (void *) base);
-
   return 0;
 }
 
@@ -122,6 +120,11 @@ backend_buffer_free_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec,
 
   ggml_backend_buffer_t buffer;
   buffer = vn_decode_ggml_buffer(dec);
+
+  if (!untrack_backend_buffer(buffer)) {
+    WARNING("%s: unknown buffer %p", (void *) buffer);
+    return 1;
+  }
 
   buffer->iface.free_buffer(buffer);
 

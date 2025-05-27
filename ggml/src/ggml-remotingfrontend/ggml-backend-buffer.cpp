@@ -4,11 +4,17 @@
   ((struct ggml_backend_remoting_buffer_context *) (name)->context)->gpu
 
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
-  //IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
-  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+  struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) buffer->context;
+  if (context->base) {
+    return context->base;
+  }
 
-  return apir_buffer_get_base(gpu, BUFFER_TO_HANDLE(buffer));
+  context->base = apir_buffer_get_base(BUFFER_TO_GPU(buffer),
+				       BUFFER_TO_APIR_CONTEXT(buffer));
+
+  return context->base;
 }
 
 static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
@@ -38,7 +44,7 @@ static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer
   }
   INFO("\n");
 #endif
-  apir_buffer_set_tensor(gpu, BUFFER_TO_HANDLE(buffer), tensor, data, offset, size);
+  apir_buffer_set_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
 
   return;
 }
@@ -47,7 +53,7 @@ static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer
   IMPLEMENTED_ONCE;
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 
-  apir_buffer_get_tensor(gpu, BUFFER_TO_HANDLE(buffer), tensor, data, offset, size);
+  apir_buffer_get_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
 }
 
 
@@ -64,11 +70,11 @@ static bool ggml_backend_remoting_buffer_cpy_tensor(ggml_backend_buffer_t buffer
 }
 
 static void ggml_backend_remoting_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 
-  apir_buffer_clear(gpu, BUFFER_TO_HANDLE(buffer), value);
+  apir_buffer_clear(gpu, BUFFER_TO_APIR_CONTEXT(buffer), value);
 
   return;
 }
@@ -80,7 +86,7 @@ static void ggml_backend_remoting_buffer_free_buffer(ggml_backend_buffer_t buffe
 
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 
-  apir_buffer_free_buffer(gpu, BUFFER_TO_HANDLE(buffer));
+  apir_buffer_free_buffer(gpu, BUFFER_TO_APIR_CONTEXT(buffer));
 }
 
 const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {

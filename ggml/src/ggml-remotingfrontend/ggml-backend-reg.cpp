@@ -111,6 +111,15 @@ static const struct ggml_backend_reg_i ggml_backend_remoting_reg_i = {
   /* .get_proc_address = */ NULL,
 };
 
+long long timer_start = 0;
+long long timer_total = 0;
+long long timer_count = 0;
+
+// needed because `show_timer` is inline
+static void showTime() {
+  show_timer();
+}
+
 ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
   struct virtgpu *gpu = apir_initialize();
   if (!gpu) {
@@ -124,9 +133,26 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
     /* .context     = */ gpu,
   };
 
-  RMT_LOG_DEBUG("ggml_backend_remoting_frontend_reg() hello :wave:");
+  static bool initialized = false;
+  if (initialized) {
+    return &reg;
+  }
+  initialized = true;
+
+  INFO("ggml_backend_remoting_frontend_reg() hello :wave:");
+
+  INFO("#");
+#if APIR_ALLOC_FROM_HOST_PTR
+  INFO("# USING ALLOC_FROM_HOST_PTR");
+#else
+  INFO("# USING ALLOC_BUFFER");
+#endif
+  INFO("#");
 
   ggml_backend_remoting_reg_init_devices(&reg);
+
+  int cr = atexit(showTime);
+  assert(cr == 0);
 
   return &reg;
 }

@@ -30,6 +30,8 @@ void serialize_graph(const ggml_cgraph * cgraph, std::vector<uint8_t> & output);
 /* backend */
 
 void track_backend_buffer(ggml_backend_buffer_t buffer);
+bool untrack_backend_buffer(ggml_backend_buffer_t buffer);
+std::unordered_set<ggml_backend_buffer_t> get_track_backend_buffers();
 
 void add_tensor(ggml_tensor * tensor, std::vector<rpc_tensor> & tensors, std::unordered_set<ggml_tensor*> & visited);
 

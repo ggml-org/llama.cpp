@@ -1,9 +1,16 @@
 #include "virtgpu-forward-impl.h"
 
+static long long current_time_ms() {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
 ggml_status
 apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
-  UNUSED(cgraph);
-
+  
+  start_timer();
+  
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
@@ -12,10 +19,17 @@ apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
   std::vector<uint8_t> cgraph_data;
   size_t cgraph_size = vn_serialize_ggml_cgraph(cgraph, cgraph_data);
 
-  struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, cgraph_size);
-  if (!shmem) {
-    FATAL("Couldn't allocate the guest-host shared buffer for passing the cgraph :/");
+  struct vn_renderer_shmem *shmem;
+  if (cgraph_size > gpu->data_shmem->mmap_size) {
+    shmem = virtgpu_shmem_create(gpu, cgraph_size);
+    WARNING("%s: 0x%lx | %dkB | %dMB", __func__, cgraph_size, (int)cgraph_size/1024, (int)cgraph_size/1024/1024);
+    if (!shmem) {
+      FATAL("Couldn't allocate the guest-host shared buffer :/");
+    }
+  } else {
+    shmem = gpu->data_shmem;
   }
+
   //INFO("Send shmem ID %d", shmem->res_id);
   vn_encode_virtgpu_shmem_res_id(encoder, shmem->res_id);
   //INFO("Send shmem size %lu", cgraph_size);
@@ -34,7 +48,12 @@ apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
 
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
-  virtgpu_shmem_destroy(gpu, shmem->shmem);
-
+  if (shmem != gpu->data_shmem) {
+    virtgpu_shmem_destroy(gpu, shmem->shmem);
+  }
+  
+  stop_timer();
+  
   return status;
 }
+

@@ -160,7 +160,7 @@ apir_device_supports_op(struct virtgpu *gpu, const ggml_tensor *op) {
 #endif
 }
 
-apir_buffer_type_handle_t
+apir_buffer_type_host_handle_t
 apir_device_get_buffer_type(struct virtgpu *gpu) {
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
@@ -169,8 +169,8 @@ apir_device_get_buffer_type(struct virtgpu *gpu) {
 
   REMOTE_CALL(gpu, encoder, decoder);
 
-  apir_buffer_type_handle_t buft_handle;
-  vn_decode_apir_buffer_type_handle_t(decoder, &buft_handle);
+  apir_buffer_type_host_handle_t buft_handle;
+  vn_decode_apir_buffer_type_host_handle_t(decoder, &buft_handle);
 
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 

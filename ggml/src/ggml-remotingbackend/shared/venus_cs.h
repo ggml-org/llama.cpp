@@ -165,6 +165,9 @@ static inline size_t
 vn_sizeof_uint64_t(const uint64_t *val)
 {
   assert(sizeof(*val) == 8);
+#ifdef NDEBUG
+  UNUSED(val);
+#endif
   return 8;
 }
 
@@ -217,6 +220,9 @@ static inline size_t
 vn_sizeof_int32_t(const int32_t *val)
 {
   assert(sizeof(*val) == 4);
+#ifdef NDEBUG
+  UNUSED(val);
+#endif
   return 4;
 }
 
@@ -327,6 +333,9 @@ static inline size_t
 vn_sizeof_uint32_t(const uint32_t *val)
 {
   assert(sizeof(*val) == 4);
+#ifdef NDEBUG
+  UNUSED(val);
+#endif
   return 4;
 }
 
@@ -502,32 +511,32 @@ vn_decode_bool_t(struct vn_cs_decoder *dec, bool *val)
   vn_decode(dec, sizeof(int), val, sizeof(bool));
 }
 
-/* apir_buffer_type_handle_t */
+/* apir_buffer_type_host_handle_t */
 
 static inline void
-vn_encode_apir_buffer_type_handle_t(struct vn_cs_encoder *enc, const apir_buffer_type_handle_t *val)
+vn_encode_apir_buffer_type_host_handle_t(struct vn_cs_encoder *enc, const apir_buffer_type_host_handle_t *val)
 {
-  vn_encode(enc, sizeof(apir_buffer_type_handle_t), val, sizeof(apir_buffer_type_handle_t));
+  vn_encode(enc, sizeof(apir_buffer_type_host_handle_t), val, sizeof(apir_buffer_type_host_handle_t));
 }
 
 static inline void
-vn_decode_apir_buffer_type_handle_t(struct vn_cs_decoder *dec, apir_buffer_type_handle_t *val)
+vn_decode_apir_buffer_type_host_handle_t(struct vn_cs_decoder *dec, apir_buffer_type_host_handle_t *val)
 {
-  vn_decode(dec, sizeof(apir_buffer_type_handle_t), val, sizeof(apir_buffer_type_handle_t));
+  vn_decode(dec, sizeof(apir_buffer_type_host_handle_t), val, sizeof(apir_buffer_type_host_handle_t));
 }
 
-/* apir_buffer_handle_t */
+/* apir_buffer_host_handle_t */
 
 static inline void
-vn_encode_apir_buffer_handle_t(struct vn_cs_encoder *enc, const apir_buffer_handle_t *val)
+vn_encode_apir_buffer_host_handle_t(struct vn_cs_encoder *enc, const apir_buffer_host_handle_t *val)
 {
-  vn_encode(enc, sizeof(apir_buffer_handle_t), val, sizeof(apir_buffer_handle_t));
+  vn_encode(enc, sizeof(apir_buffer_host_handle_t), val, sizeof(apir_buffer_host_handle_t));
 }
 
 static inline void
-vn_decode_apir_buffer_handle_t(struct vn_cs_decoder *dec, apir_buffer_handle_t *val)
+vn_decode_apir_buffer_host_handle_t(struct vn_cs_decoder *dec, apir_buffer_host_handle_t *val)
 {
-  vn_decode(dec, sizeof(apir_buffer_handle_t), val, sizeof(apir_buffer_handle_t));
+  vn_decode(dec, sizeof(apir_buffer_host_handle_t), val, sizeof(apir_buffer_host_handle_t));
 }
 
 /* uintptr_t */

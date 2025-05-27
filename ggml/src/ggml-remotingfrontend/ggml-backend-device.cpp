@@ -118,7 +118,7 @@ ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
 
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
-  apir_buffer_type_handle_t ctx = apir_device_get_buffer_type(gpu);
+  apir_buffer_type_host_handle_t ctx = apir_device_get_buffer_type(gpu);
 
   static struct ggml_backend_buffer_type buft {
     /* .iface    = */ ggml_backend_remoting_buffer_type_interface,

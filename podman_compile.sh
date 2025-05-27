@@ -29,6 +29,7 @@ podman run \
 --cgroupns host \
 --security-opt label=disable \
 --env HOME="$HOME" \
+--env PERF_MODE="${PERF_MODE:-}" \
 -v "$HOME":"$HOME":Z \
 -w "$PWD" \
 -it --rm \
