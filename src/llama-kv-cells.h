@@ -213,6 +213,8 @@ public:
         seq_pos[seq_id].insert(pos[i]);
     }
 
+    // the minimum position of sequence seq_id currently present in any of the cells
+    // return -1 if the sequence is not present
     llama_pos seq_pos_min(llama_seq_id seq_id) const {
         assert(seq_id >= 0);
         assert(seq_id < LLAMA_MAX_PARALLEL_SEQUENCES);
@@ -224,6 +226,8 @@ public:
         return *seq_pos[seq_id].begin();
     }
 
+    // the maximum position of sequence seq_id currently present in any of the cells
+    // return -1 if the sequence is not present
     llama_pos seq_pos_max(llama_seq_id seq_id) const {
         assert(seq_id >= 0);
         assert(seq_id < LLAMA_MAX_PARALLEL_SEQUENCES);
@@ -349,7 +353,7 @@ private:
     // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
     std::vector<bits_t> seq;
 
-    // the set seq_pos[s] tells us which positions are currently occupied by the s-th sequence
+    // the set seq_pos[s] tells us which positions are currently present for sequence s
     // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
     std::set<llama_pos> seq_pos[LLAMA_MAX_PARALLEL_SEQUENCES];
 
