@@ -36,3 +36,39 @@ export const OpenInNewTab = ({
     {children}
   </a>
 );
+
+export function BtnWithTooltips({
+  className,
+  onClick,
+  onMouseLeave,
+  children,
+  tooltipsContent,
+  disabled,
+}: {
+  className?: string;
+  onClick: () => void;
+  onMouseLeave?: () => void;
+  children: React.ReactNode;
+  tooltipsContent: string;
+  disabled?: boolean;
+}) {
+  // the onClick handler is on the container, so screen readers can safely ignore the inner button
+  // this prevents the label from being read twice
+  return (
+    <div
+      className="tooltip tooltip-bottom"
+      data-tip={tooltipsContent}
+      role="button"
+      onClick={onClick}
+    >
+      <button
+        className={`${className ?? ''} flex items-center justify-center`}
+        disabled={disabled}
+        onMouseLeave={onMouseLeave}
+        aria-hidden={true}
+      >
+        {children}
+      </button>
+    </div>
+  );
+}

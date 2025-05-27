@@ -84,10 +84,12 @@ class ServerProcess:
     draft_max: int | None = None
     no_webui: bool | None = None
     jinja: bool | None = None
-    reasoning_format: Literal['deepseek', 'none'] | None = None
+    reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
+    reasoning_budget: int | None = None
     chat_template: str | None = None
     chat_template_file: str | None = None
     server_path: str | None = None
+    mmproj_url: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -190,10 +192,14 @@ class ServerProcess:
             server_args.append("--jinja")
         if self.reasoning_format is not None:
             server_args.extend(("--reasoning-format", self.reasoning_format))
+        if self.reasoning_budget is not None:
+            server_args.extend(("--reasoning-budget", self.reasoning_budget))
         if self.chat_template:
             server_args.extend(["--chat-template", self.chat_template])
         if self.chat_template_file:
             server_args.extend(["--chat-template-file", self.chat_template_file])
+        if self.mmproj_url:
+            server_args.extend(["--mmproj-url", self.mmproj_url])
 
         args = [str(arg) for arg in [server_path, *server_args]]
         print(f"tests: starting server with: {' '.join(args)}")
@@ -291,6 +297,81 @@ class ServerProcess:
                 print("Partial response from server", json.dumps(data, indent=2))
                 yield data
 
+    def make_any_request(
+        self,
+        method: str,
+        path: str,
+        data: dict | None = None,
+        headers: dict | None = None,
+        timeout: float | None = None,
+    ) -> dict:
+        stream = data.get('stream', False)
+        if stream:
+            content: list[str] = []
+            tool_calls: list[dict] = []
+            finish_reason: Optional[str] = None
+
+            content_parts = 0
+            tool_call_parts = 0
+            arguments_parts = 0
+
+            for chunk in self.make_stream_request(method, path, data, headers):
+                assert len(chunk['choices']) == 1, f'Expected 1 choice, got {len(chunk["choices"])}'
+                choice = chunk['choices'][0]
+                if choice['delta'].get('content') is not None:
+                    assert len(choice['delta']['content']) > 0, f'Expected non empty content delta!'
+                    content.append(choice['delta']['content'])
+                    content_parts += 1
+                if choice['delta'].get('finish_reason') is not None:
+                    finish_reason = choice['delta']['finish_reason']
+                for tc in choice['delta'].get('tool_calls', []):
+                    if 'function' not in tc:
+                        raise ValueError(f"Expected function type, got {tc['type']}")
+                    if tc['index'] >= len(tool_calls):
+                        assert 'id' in tc
+                        assert tc.get('type') == 'function'
+                        assert 'function' in tc and 'name' in tc['function'] and len(tc['function']['name']) > 0, \
+                            f"Expected function call with name, got {tc.get('function')}"
+                        tool_calls.append(dict(
+                            id="",
+                            type="function",
+                            function=dict(
+                                name="",
+                                arguments="",
+                            )
+                        ))
+                    tool_call = tool_calls[tc['index']]
+                    if tc.get('id') is not None:
+                        tool_call['id'] = tc['id']
+                    fct = tc['function']
+                    assert 'id' not in fct, f"Function call should not have id: {fct}"
+                    if fct.get('name') is not None:
+                        tool_call['function']['name'] = tool_call['function'].get('name', '') + fct['name']
+                    if fct.get('arguments') is not None:
+                        tool_call['function']['arguments'] += fct['arguments']
+
+            print(f'Streamed response had {content_parts} content parts, {tool_call_parts} tool call parts incl. {arguments_parts} arguments parts')
+            result = dict(
+                choices=[
+                    dict(
+                        index=0,
+                        finish_reason=finish_reason,
+                        message=dict(
+                            role='assistant',
+                            content=''.join(content) if content else None,
+                            tool_calls=tool_calls if tool_calls else None,
+                        ),
+                    )
+                ],
+            )
+            print("Final response from server", json.dumps(result, indent=2))
+            return result
+        else:
+            response = self.make_request(method, path, data, headers, timeout=timeout)
+            assert response.status_code == 200, f"Server returned error: {response.status_code}"
+            return response.body
+
+
 
 server_instances: Set[ServerProcess] = set()
 
@@ -377,6 +458,21 @@ class ServerPreset:
         server.n_slots = 1
         server.seed = 42
         server.server_reranking = True
+        return server
+
+    @staticmethod
+    def tinygemma3() -> ServerProcess:
+        server = ServerProcess()
+        # mmproj is already provided by HF registry API
+        server.model_hf_repo = "ggml-org/tinygemma3-GGUF"
+        server.model_hf_file = "tinygemma3-Q8_0.gguf"
+        server.mmproj_url = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/mmproj-tinygemma3.gguf"
+        server.model_alias = "tinygemma3"
+        server.n_ctx = 1024
+        server.n_batch = 32
+        server.n_slots = 2
+        server.n_predict = 4
+        server.seed = 42
         return server
 
 
