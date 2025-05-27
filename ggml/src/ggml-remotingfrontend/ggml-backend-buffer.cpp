@@ -4,11 +4,17 @@
   ((struct ggml_backend_remoting_buffer_context *) (name)->context)->gpu
 
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
-  //IMPLEMENTED;
+  IMPLEMENTED_ONCE;
 
-  struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
+  struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) buffer->context;
+  if (context->base) {
+    return context->base;
+  }
 
-  return apir_buffer_get_base(gpu, BUFFER_TO_APIR_CONTEXT(buffer));
+  context->base = apir_buffer_get_base(BUFFER_TO_GPU(buffer),
+				       BUFFER_TO_APIR_CONTEXT(buffer));
+
+  return context->base;
 }
 
 static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {

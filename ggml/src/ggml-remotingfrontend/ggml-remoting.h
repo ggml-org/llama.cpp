@@ -88,6 +88,8 @@ struct ggml_backend_remoting_buffer_context {
   apir_buffer_context_t apir_context;
 
   struct virtgpu *gpu;
+
+  void *base;
 };
 
 extern const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface;
