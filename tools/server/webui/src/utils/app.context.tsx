@@ -358,14 +358,14 @@ export const AppContextProvider = ({
         );
       }
 
+      setPending(convId, null);
+      onChunk(lastMsgId); // trigger scroll to bottom and switch to the last node
+
       // if message ended due to "finish_reason": "tool_calls"
       // resend it to assistant to process the result.
       if (shouldContinueChain) {
         lastMsgId = await generateMessage(convId, lastMsgId, onChunk);
       }
-
-      setPending(convId, null);
-      onChunk(lastMsgId); // trigger scroll to bottom and switch to the last node
 
       // Fetch messages from DB
       const savedMsgs = await StorageUtils.getMessages(convId);
@@ -452,7 +452,7 @@ export const AppContextProvider = ({
     if (content !== null) {
       const now = Date.now();
       const currMsgId = now;
-      StorageUtils.appendMsg(
+      await StorageUtils.appendMsg(
         {
           id: currMsgId,
           timestamp: now,

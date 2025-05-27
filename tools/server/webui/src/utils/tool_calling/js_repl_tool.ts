@@ -28,7 +28,7 @@ export class JSReplAgentTool extends AgentTool {
     super(
       JSReplAgentTool.ID,
       'Javascript interpreter',
-      'Executes JavaScript code in a sandboxed iframe. The code should be self-contained valid javascript. You can use console.log(variable) to print out intermediate values, which will be captured.',
+      'Executes JavaScript code in a sandboxed iframe. The code should be self-contained valid javascript. Only console.log(variable) and final result are included in response content.',
       {
         type: 'object',
         properties: {
@@ -38,7 +38,8 @@ export class JSReplAgentTool extends AgentTool {
           },
         },
         required: ['code'],
-      } as ToolCallParameters
+      } as ToolCallParameters,
+      () => true
     );
     this.initIframe();
   }
