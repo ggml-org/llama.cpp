@@ -352,14 +352,19 @@ llama_memory_decode_state_ptr llama_kv_cache_unified::init(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
-            bool logits_all) {
+            bool logits_all,
+            bool split_equal) {
     GGML_UNUSED(embd_pooled);
 
     auto sbatch = llama_sbatch(batch, hparams.n_embd, true, logits_all);
 
     std::vector<llama_ubatch> ubatches;
     while (sbatch.n_tokens > 0) {
-        ubatches.push_back(sbatch.split_simple(n_ubatch));
+        if (split_equal) {
+            ubatches.push_back(sbatch.split_equal(n_ubatch));
+        } else {
+            ubatches.push_back(sbatch.split_simple(n_ubatch));
+        }
     }
 
     auto heads = prepare(ubatches);
@@ -1821,7 +1826,12 @@ llama_pos llama_kv_cache_unified_iswa::seq_pos_max(llama_seq_id seq_id) const {
     return kv_swa->seq_pos_max(seq_id);
 }
 
-llama_memory_decode_state_ptr llama_kv_cache_unified_iswa::init(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
+llama_memory_decode_state_ptr llama_kv_cache_unified_iswa::init(
+    const llama_batch & batch,
+    uint32_t n_ubatch,
+    bool embd_pooled,
+    bool logits_all,
+    bool split_equal) {
     GGML_UNUSED(embd_pooled);
 
     auto sbatch = llama_sbatch(batch, hparams.n_embd, true, logits_all);
@@ -1829,9 +1839,11 @@ llama_memory_decode_state_ptr llama_kv_cache_unified_iswa::init(const llama_batc
     std::vector<llama_ubatch> ubatches;
 
     while (sbatch.n_tokens > 0) {
-        auto ubatch = sbatch.split_simple(n_ubatch);
-
-        ubatches.push_back(ubatch);
+        if (split_equal) {
+            ubatches.push_back(sbatch.split_equal(n_ubatch));
+        } else {
+            ubatches.push_back(sbatch.split_simple(n_ubatch));
+        }
     }
 
     auto heads_base = kv_base->prepare(ubatches);
@@ -2291,8 +2303,15 @@ llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-llama_memory_decode_state_ptr llama_kv_cache_recurrent::init(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
+llama_memory_decode_state_ptr llama_kv_cache_recurrent::init(
+    const llama_batch & batch,
+    uint32_t n_ubatch,
+    bool embd_pooled,
+    bool logits_all,
+    bool split_equal) {
     GGML_UNUSED(embd_pooled);
+    // TODO: Should this just be ignored?
+    assert(split_equal);
 
     auto sbatch = llama_sbatch(batch, hparams.n_embd, false, logits_all);
 

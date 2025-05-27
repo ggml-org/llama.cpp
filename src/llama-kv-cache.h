@@ -34,7 +34,8 @@ struct llama_kv_cache : public llama_memory_i {
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
-            bool logits_all) = 0;
+            bool logits_all,
+            bool split_equal = false) = 0;
 
     // process any pending defrag/shift/etc. operations
     // optionally call once before processing a new batch
@@ -112,7 +113,8 @@ public:
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
-            bool logits_all) override;
+            bool logits_all,
+            bool split_equal = false) override;
 
     bool update(llama_context & lctx) override;
 
@@ -289,7 +291,8 @@ public:
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
-            bool logits_all) override;
+            bool logits_all,
+            bool split_equal = false) override;
 
     bool update(llama_context & lctx) override;
 
@@ -360,7 +363,8 @@ public:
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
-            bool logits_all) override;
+            bool logits_all,
+            bool split_equal = true) override;
 
     bool update(llama_context & lctx) override;
 
