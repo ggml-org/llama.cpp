@@ -462,10 +462,7 @@ public:
             : child(std::move(child_)), layer_ids(std::move(layer_ids_)) {}
     };
 
-    llama_kv_cache_hybrid(
-        const llama_hparams            & hparams,
-              std::vector<child_cache>   children);
-
+    explicit llama_kv_cache_hybrid(std::vector<child_cache> children);
     virtual ~llama_kv_cache_hybrid() = default;
 
     // getters for specific child cache type
@@ -473,7 +470,7 @@ public:
     template<typename child_t>
     const child_t * get_child_cache() const {
         const child_t * child = nullptr;
-        for (const auto & child_cache : m_children) {
+        for (const auto & child_cache : children) {
             const child_t * child_cast = dynamic_cast<const child_t *>(child_cache.get());
             if (child_cast) {
                 GGML_ASSERT(!child);
@@ -502,8 +499,12 @@ public:
     // llama_kv_cache
     //
 
-    void restore() override;
-    void commit()  override;
+    llama_memory_decode_state_ptr init(
+        const llama_batch & batch,
+        uint32_t n_ubatch,
+        bool embd_pooled,
+        bool logits_all,
+        bool split_equal = true) override;
 
     bool update(llama_context & ctx) override;
 
@@ -512,15 +513,6 @@ public:
     void set_full() override;
 
     bool can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const override;
-
-    llama_sbatch sbatch_init(const llama_batch & batch, bool logits_all) override;
-
-    llama_ubatch ubatch_next(llama_sbatch & sbatch, uint32_t n_ubatch, bool embd_pooled) const override;
-
-    // updates the cache head
-    // Note: On success, it's important that cache.head points
-    // to the first cell of the slot.
-    bool find_slot(const llama_ubatch & batch) override;
 
     bool get_can_shift() const override;
 
@@ -531,7 +523,6 @@ public:
 
 private:
 
-    const llama_hparams                             & m_hparams;
-    const std::set<std::unique_ptr<llama_kv_cache>>   m_children; // Ordered for state IO
-    const bool                                        m_has_recurrent;
+    const std::set<std::unique_ptr<llama_kv_cache>> children; // Ordered for state IO
+    const bool                                      has_recurrent;
 };

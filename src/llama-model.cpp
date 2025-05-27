@@ -13264,7 +13264,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     );
 
                     // initialize the hybrid cache with both children
-                    res = new llama_kv_cache_hybrid(hparams, std::move(children));
+                    res = new llama_kv_cache_hybrid(std::move(children));
                 } else if (llm_arch_is_recurrent(arch)) {
                     res = new llama_kv_cache_recurrent(
                             *this,
