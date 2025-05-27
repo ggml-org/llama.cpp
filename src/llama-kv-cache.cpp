@@ -518,6 +518,14 @@ void llama_kv_cache_unified::set_full() {
     head = 0;
 }
 
+bool llama_kv_cache_unified::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    GGML_UNUSED(seq_id);
+    GGML_UNUSED(p0);
+    GGML_UNUSED(p1);
+    // Unified attention cache can always do a sequence removal
+    return true;
+}
+
 int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
     const uint32_t n_tokens = ubatch.n_tokens;
 
@@ -1861,6 +1869,15 @@ void llama_kv_cache_unified_iswa::set_full() {
     kv_swa ->set_full();
 }
 
+bool llama_kv_cache_unified_iswa::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    GGML_UNUSED(seq_id);
+    GGML_UNUSED(p0);
+    GGML_UNUSED(p1);
+    // Unified attention caches can always do a sequence removal, so since both
+    // children can, the parent can as well.
+    return true;
+}
+
 bool llama_kv_cache_unified_iswa::get_can_shift() const {
     return kv_base->get_size() == kv_swa->get_size();
 }
@@ -2051,39 +2068,33 @@ void llama_kv_cache_recurrent::clear() {
 }
 
 bool llama_kv_cache_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    uint32_t new_head = size;
+    if (!can_seq_rm(seq_id, p0, p1)) {
+        // could be fatal
+        return false;
+    }
 
+    uint32_t new_head = size;
     if (p0 < 0) {
         p0 = 0;
     }
-
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
-    // models like Mamba or RWKV can't have a state partially erased
-    if (seq_id >= (int64_t) size) {
-        // could be fatal
-        return false;
-    }
     if (0 <= seq_id) {
         int32_t & tail_id = cells[seq_id].tail;
         if (tail_id >= 0) {
             const kv_cell & cell = cells[tail_id];
-            // partial intersection is invalid
-            if ((0 < p0 && p0 <= cell.pos) || (0 < p1 && p1 <= cell.pos)) {
-                return false;
-            }
+            // already validated in can_seq_rm
+            GGML_ASSERT(!((0 < p0 && p0 <= cell.pos) || (0 < p1 && p1 <= cell.pos)));
             // invalidate tails which will be cleared
             if (p0 <= cell.pos && cell.pos < p1) {
                 tail_id = -1;
             }
         }
     } else {
-        // seq_id is negative, then the range should include everything or nothing
-        if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
-            return false;
-        }
+        // already validated in can_seq_rm
+        GGML_ASSERT(!(p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())));
     }
 
     for (uint32_t i = 0; i < size; ++i) {
@@ -2348,6 +2359,34 @@ void llama_kv_cache_recurrent::defrag_sched(float thold) {
 void llama_kv_cache_recurrent::set_full() {
     n = size;
     head = 0;
+}
+bool llama_kv_cache_recurrent::can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const {
+    if (p0 < 0) {
+        p0 = 0;
+    }
+
+    if (p1 < 0) {
+        p1 = std::numeric_limits<llama_pos>::max();
+    }
+    // models like Mamba or RWKV can't have a state partially erased
+    if (seq_id >= (int64_t) size) {
+        // could be fatal
+        return false;
+    }
+    if (0 <= seq_id) {
+        const int32_t & tail_id = cells[seq_id].tail;
+        if (tail_id >= 0) {
+            const kv_cell & cell = cells[tail_id];
+            // partial intersection is invalid
+            if ((0 < p0 && p0 <= cell.pos) || (0 < p1 && p1 <= cell.pos)) {
+                return false;
+            }
+        }
+    // seq_id is negative, then the range should include everything or nothing
+    } else if (p0 != p1 && (p0 != 0 || p1 != std::numeric_limits<llama_pos>::max())) {
+        return false;
+    }
+    return true;
 }
 
 bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {

@@ -42,6 +42,11 @@ struct llama_kv_cache : public llama_memory_i {
     // TODO: remove
     virtual void set_full() = 0;
 
+    // sometimes it is useful to check whether a cache can remove a sequence
+    // before attempting to mutate the cache (eg a hybrid cache with multiple
+    // children to keep in sync)
+    virtual bool can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const = 0;
+
     // getters
     virtual bool get_can_shift() const = 0;
 
@@ -111,6 +116,8 @@ public:
     void defrag_sched(float thold) override;
 
     void set_full() override;
+
+    bool can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const override;
 
     bool get_can_shift() const override;
 
@@ -287,6 +294,8 @@ public:
 
     void set_full() override;
 
+    bool can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const override;
+
     bool get_can_shift() const override;
 
     // state write/load
@@ -354,6 +363,8 @@ public:
     void defrag_sched(float thold) override;
 
     void set_full() override;
+
+    bool can_seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) const override;
 
     bool prepare(const std::vector<llama_ubatch> & ubatches);
 
