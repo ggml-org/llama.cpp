@@ -883,7 +883,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         _mm_storeu_si128((__m128i *)(y[i].qs + 16), ni4);
 #endif
     }
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined(__riscv_v)
 
     size_t vl = QK8_0;
 
@@ -1221,7 +1221,7 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
         _mm_storeu_si128((__m128i *)(y[i].qs + 16), ni4);
 #endif
     }
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined(__riscv_v)
 
     size_t vl = QK8_1;
 
@@ -2384,7 +2384,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_4x4(acc_0, acc_1, acc_2, acc_3);
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined(__riscv_v)
     size_t vl = qk / 2;
 
     for (; ib < nb; ++ib) {
@@ -2774,7 +2774,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(acc) + summs;
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined(__riscv_v)
     size_t vl = qk / 2;
 
     for (; ib < nb; ++ib) {
@@ -3121,7 +3121,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(acc);
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined(__riscv_v)
     size_t vl;
     size_t vlenb = __riscv_vlenb();
 
@@ -3460,7 +3460,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(acc) + summs;
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined(__riscv_v)
     size_t vl;
     size_t vlenb = __riscv_vlenb();
 
@@ -3897,7 +3897,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(accum);
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined(__riscv_v)
     size_t vl = qk;
 
     for (; ib < nb; ++ib) {
@@ -5100,13 +5100,11 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 
-#elif defined __riscv_v_intrinsic
+#elif defined __riscv_xtheadvector
 
     float sumf = 0;
-
     uint8_t atmp[16];
 
-#if defined(__riscv_xtheadvector)
     for (int i = 0; i < nb; ++i) {
         const uint8_t * q2 = x[i].qs;
         const  int8_t * q8 = y[i].qs;
@@ -5196,7 +5194,14 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
         sumf += dall * isum;
     }
-#else
+
+    *s = sumf;
+
+#elif defined __riscv_v
+
+    float sumf = 0;
+    uint8_t atmp[16];
+
     const int vector_length = __riscv_vlenb() * 8;
     uint8_t temp_01[32] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
@@ -5371,7 +5376,6 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         assert(false && "Unsupported vector length");
         break;
     }
-#endif // defined(__riscv_xtheadvector)
 
     *s = sumf;
 
@@ -6230,13 +6234,11 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 
-#elif defined __riscv_v_intrinsic
+#elif defined __riscv_xtheadvector
 
     uint32_t utmp[4];
-
     float sumf = 0;
 
-#if defined(__riscv_xtheadvector)
     for (int i = 0; i < nb; ++i) {
         const uint8_t * restrict q3 = x[i].qs;
         const uint8_t * restrict qh = x[i].hmask;
@@ -6357,7 +6359,13 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
         sumf += d * isum;
     }
-#else
+
+    *s = sumf;
+
+#elif defined __riscv_v
+
+    uint32_t utmp[4];
+    float sumf = 0;
     uint32_t aux[3];
     const int vector_length = __riscv_vlenb() * 8;
 
@@ -6574,7 +6582,6 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         assert(false && "Unsupported vector length");
         break;
     }
-#endif // defined(__riscv_xtheadvector)
 
     *s = sumf;
 
@@ -7397,14 +7404,13 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = hsum_float_8(acc) + _mm_cvtss_f32(acc_m);
 
-#elif defined __riscv_v_intrinsic
+#elif defined __riscv_xtheadvector
 
     const uint8_t * scales = (const uint8_t*)&utmp[0];
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
 
     float sumf = 0;
 
-#if defined(__riscv_xtheadvector)
     for (int i = 0; i < nb; ++i) {
         const float d = y[i].d * GGML_FP16_TO_FP32(x[i].d);
         const float dmin = y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
@@ -7511,7 +7517,15 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         sumf += d * sumi;
 
     }
-#else
+
+    *s = sumf;
+
+#elif defined __riscv_v
+
+    const uint8_t * scales = (const uint8_t*)&utmp[0];
+    const uint8_t * mins   = (const uint8_t*)&utmp[2];
+
+    float sumf = 0;
     const int vector_length = __riscv_vlenb() * 8;
 
     switch (vector_length) {
@@ -7687,7 +7701,6 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         assert(false && "Unsupported vector length");
         break;
     }
-#endif
 
     *s = sumf;
 
@@ -8401,7 +8414,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 
-#elif defined(__riscv_v_intrinsic) && !defined(__riscv_xtheadvector)
+#elif defined __riscv_v
 
     const uint8_t * scales = (const uint8_t*)&utmp[0];
     const uint8_t * mins   = (const uint8_t*)&utmp[2];
@@ -9559,11 +9572,10 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
     *s = sumf;
 
-#elif defined __riscv_v_intrinsic
+#elif defined __riscv_xtheadvector
 
     float sumf = 0;
 
-#if defined(__riscv_xtheadvector)
     for (int i = 0; i < nb; ++i) {
 
         const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
@@ -9638,7 +9650,12 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         sumf += d * sum_t;
 
     }
-#else
+
+    *s = sumf;
+
+#elif defined __riscv_v
+
+    float sumf = 0;
     const int vector_length = __riscv_vlenb() * 8;
 
     switch (vector_length) {
@@ -9801,7 +9818,6 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         assert(false && "Unsupported vector length");
         break;
     }
-#endif // defined(__riscv_xtheadvector)
 
     *s = sumf;
 
