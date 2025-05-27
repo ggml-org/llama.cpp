@@ -69,7 +69,7 @@ static double get_duration_ms(const std::chrono::high_resolution_clock::time_poi
  * |                  |                                          |
  * |                  v                                          |
  * |         +-----------------+                                 |
- * |         | Merged FP16 View| <- Always returned to attention  |
+ * |         | Merged FP16 View| <- Always returned to attention |
  * |         | (dequantized)   |                                 |
  * |         +-----------------+                                 |
  * +-------------------------------------------------------------+
@@ -173,20 +173,21 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
         kv_layer_mixed layer;
         layer.il = il;
 
-        // Create FP16 tensors
+        // Create FP16 tensors exactly like unified cache
         layer.k_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_k, n_embd_k_gqa, kv_size);
         layer.v_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_v, n_embd_v_gqa, kv_size);
 
-        // Create quantized tensors
+        // Create quantized tensors (for future use, but not used during alignment testing)
         layer.k_quant = ggml_new_tensor_2d(ctx, config.cold_type_k, n_embd_k_gqa, kv_size);
         layer.v_quant = ggml_new_tensor_2d(ctx, config.cold_type_v, n_embd_v_gqa, kv_size);
 
-        // Create dequantization buffers (these will be used for temporary storage)
+        // Create dequantization buffers (for future use, but not used during alignment testing)
         layer.k_dequant = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n_embd_k_gqa, kv_size);
         layer.v_dequant = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n_embd_v_gqa, kv_size);
 
-        ggml_format_name(layer.k_fp16,      "mixedcache_k_fp16_l%d",     il);
-        ggml_format_name(layer.v_fp16,      "mixedcache_v_fp16_l%d",     il);
+        // Use naming convention similar to unified cache for FP16 tensors
+        ggml_format_name(layer.k_fp16,      "cache_k_l%d",          il);
+        ggml_format_name(layer.v_fp16,      "cache_v_l%d",          il);
         ggml_format_name(layer.k_quant,     "cache_k_quant_l%d",    il);
         ggml_format_name(layer.v_quant,     "cache_v_quant_l%d",    il);
         ggml_format_name(layer.k_dequant,   "cache_k_dequant_l%d",  il);
@@ -571,6 +572,9 @@ bool llama_kv_cache_mixed::update(llama_context & lctx) {
         do_defrag = false;
     }
 
+    // TEMPORARILY DISABLE QUANTIZATION FOR ALIGNMENT TESTING
+    // TODO: Re-enable quantization after alignment is verified
+    /*
     // Check if quantization is needed
     if (config.enable_quantization) {
         bool quantization_needed = false;
@@ -622,6 +626,9 @@ bool llama_kv_cache_mixed::update(llama_context & lctx) {
             need_reserve = true;
         }
     }
+    */
+
+    LLAMA_LOG_DEBUG("[mixed-kv] update completed (quantization disabled for alignment testing)\n");
 
     return need_reserve;
 }
@@ -929,11 +936,70 @@ void llama_kv_cache_mixed::quantize_tokens(int32_t il) {
 
 // Input setting functions - similar to unified cache
 void llama_kv_cache_mixed::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
-    // Similar implementation to unified cache
-    GGML_UNUSED(dst);
-    GGML_UNUSED(ubatch);
-    GGML_UNUSED(causal_attn);
-    // TODO: Implement
+    const int64_t n_tokens     = ubatch->n_tokens;
+    const int64_t n_seq_tokens = ubatch->n_seq_tokens;
+    const int64_t n_seqs       = ubatch->n_seqs;
+
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    float * data = (float *) dst->data;
+
+    const int64_t n_kv = n;
+
+    // Use only the previous KV cells of the correct sequence for each token of the ubatch.
+    // It's assumed that if a token in the batch has multiple sequences, they are equivalent.
+    // Example with a cache of 10 tokens, 2 tokens populated in cache and 3 tokens in batch:
+    //   Causal mask:
+    //      xxx-------
+    //      xxxx------
+    //      xxxxx-----
+    //   Non-causal mask:
+    //      xxxxx-----
+    //      xxxxx-----
+    //      xxxxx-----
+    // To visualize the mask, see https://github.com/ggml-org/llama.cpp/pull/12615
+    for (int h = 0; h < 1; ++h) {
+        for (int s = 0; s < n_seqs; ++s) {
+            const llama_seq_id seq_id = ubatch->seq_id[s][0];
+
+            for (int j = 0; j < n_seq_tokens; ++j) {
+                const llama_pos p1 = ubatch->pos[s*n_seq_tokens + j];
+
+                for (int i = 0; i < n_kv; ++i) {
+                    const llama_pos p0 = cells[i].pos;
+
+                    bool masked = false;
+
+                    // mask the token if not the same sequence
+                    masked = masked || (!cells[i].has_seq_id(seq_id));
+
+                    // mask future tokens
+                    masked = masked || (causal_attn && p0 > p1);
+
+                    // Note: SWA masking not implemented for mixed cache yet
+                    // masked = masked || (is_masked_swa(p0, p1));
+
+                    float f = 0.0f;
+
+                    if (masked) {
+                        f = -INFINITY;
+                    } else if (hparams.use_alibi) {
+                        f = -std::abs(p0 - p1);
+                    }
+
+                    data[h*(n_kv*n_tokens) + s*(n_kv*n_seq_tokens) + j*n_kv + i] = f;
+                }
+            }
+        }
+
+        // mask padded tokens
+        if (data) {
+            for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
+                for (int j = 0; j < n_kv; ++j) {
+                    data[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
+                }
+            }
+        }
+    }
 }
 
 void llama_kv_cache_mixed::set_input_k_shift(ggml_tensor * dst) const {
@@ -1272,6 +1338,10 @@ llama_kv_cache_mixed::memory_info llama_kv_cache_mixed::get_memory_info() const 
     return info;
 }
 
+//> ===================================================================================================
+//> Following are the original get_k and get_v functions from llama.cpp
+//> ===================================================================================================
+
 /*
  * Public API methods for getting K and V tensors
  * 
@@ -1285,28 +1355,16 @@ ggml_tensor * llama_kv_cache_mixed::get_k(ggml_context * ctx, int32_t il) const 
 
     const auto & layer = layers[it->second];
 
-    // Simple implementation like unified cache - return FP16 view directly
-    const int64_t n_embd_head_k = hparams.n_embd_head_k;
-    const int64_t n_head_kv = hparams.n_head_kv(il);
+    // Use only FP16 tensor, exactly like unified cache
+    auto * k = layer.k_fp16;
 
-    // ggml_tensor * k_view = ggml_view_3d(ctx, layer.k_fp16,
-    //     n_embd_head_k, n_head_kv, this->n,
-    //     ggml_row_size(layer.k_fp16->type, n_embd_head_k),
-    //     ggml_row_size(layer.k_fp16->type, hparams.n_embd_k_gqa(il)),
-    //     0);
-
-    ggml_tensor * k_view = ggml_view_3d(ctx, layer.k_fp16,
-        n_embd_head_k, n_head_kv, this->n,
-        ggml_row_size(layer.k_fp16->type, n_embd_head_k),
-        ggml_row_size(layer.k_fp16->type, hparams.n_embd_k_gqa(il)),
-        0);
-
-    return ggml_cont(ctx, k_view);
+    // Create view exactly like unified cache
+    return ggml_view_3d(ctx, k,
+            hparams.n_embd_head_k, hparams.n_head_kv(il), n,
+            ggml_row_size(k->type, hparams.n_embd_head_k),
+            ggml_row_size(k->type, hparams.n_embd_k_gqa(il)),
+            0);
 }
-
-//> ===================================================================================================
-//> Following are the original get_k and get_v functions from llama.cpp
-//> ===================================================================================================
 
 ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const {
     auto it = map_layer_ids.find(il);
@@ -1316,34 +1374,42 @@ ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const 
 
     const auto & layer = layers[it->second];
 
-    // Simple implementation like unified cache - return FP16 view directly
-    const int64_t n_embd_head_v = hparams.n_embd_head_v;
-    const int64_t n_head_kv = hparams.n_head_kv(il);
+    // Use only FP16 tensor, exactly like unified cache
+    auto * v = layer.v_fp16;
 
-    ggml_tensor * v_view;
-    if (v_trans) {
-        v_view = ggml_view_3d(ctx, layer.v_fp16,
-            this->n, n_head_kv, n_embd_head_v,
-            ggml_row_size(layer.v_fp16->type, layer.v_fp16->ne[1] * n_embd_head_v),
-            ggml_row_size(layer.v_fp16->type, layer.v_fp16->ne[1]),
-            0);
-    } else {
-        v_view = ggml_view_3d(ctx, layer.v_fp16,
-            n_embd_head_v, n_head_kv, this->n,
-            ggml_row_size(layer.v_fp16->type, n_embd_head_v),
-            ggml_row_size(layer.v_fp16->type, hparams.n_embd_v_gqa(il)),
-            0);
+    if (!v_trans) {
+        // note: v->nb[1] <= v->nb[2]
+        return ggml_view_3d(ctx, v,
+                hparams.n_embd_head_v, hparams.n_head_kv(il), n,
+                ggml_row_size(v->type, hparams.n_embd_head_v),    // v->nb[1]
+                ggml_row_size(v->type, hparams.n_embd_v_gqa(il)), // v->nb[2]
+                0);
     }
 
-    return ggml_cont(ctx, v_view);
+    // note: v->nb[1] > v->nb[2]
+    return ggml_view_3d(ctx, v,
+            n, hparams.n_head_kv(il), hparams.n_embd_head_v,
+            ggml_row_size(v->type, v->ne[1]*hparams.n_embd_head_v), // v->nb[1]
+            ggml_row_size(v->type, v->ne[1]),                       // v->nb[2]
+            0);
 }
 
 ggml_tensor * llama_kv_cache_mixed::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const {
     const int32_t ikv = map_layer_ids.at(il);
 
-    auto * k = layers[ikv].k_fp16;
+    auto & layer = layers[ikv];
+    auto * k = layer.k_fp16;
 
     const int64_t n_tokens = k_cur->ne[2];
+
+    // Update FP16 token counter
+    layer.n_fp16_tokens += n_tokens;
+
+    LLAMA_LOG_DEBUG("[mixed-kv] adding %ld K tokens to layer %d cache (head=%u)\n", n_tokens, il, head);
+    LLAMA_LOG_DEBUG("[mixed-kv]   - current FP16 tokens: %u, quantized tokens: %u\n", 
+                    layer.n_fp16_tokens - n_tokens, layer.n_quant_tokens);
+    LLAMA_LOG_DEBUG("[mixed-kv]   - updated FP16 tokens: %u (added %ld)\n", 
+                    layer.n_fp16_tokens, n_tokens);
 
     ggml_tensor * k_view = ggml_view_1d(ctx, k,
             n_tokens*hparams.n_embd_k_gqa(il),
@@ -1355,9 +1421,16 @@ ggml_tensor * llama_kv_cache_mixed::cpy_k(ggml_context * ctx, ggml_tensor * k_cu
 ggml_tensor * llama_kv_cache_mixed::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const {
     const int32_t ikv = map_layer_ids.at(il);
 
-    auto * v = layers[ikv].v_fp16;
+    auto & layer = layers[ikv];
+    auto * v = layer.v_fp16;
 
     const int64_t n_tokens = v_cur->ne[2];
+
+    // NOTE: We don't increment FP16 token counter here since it's already done in cpy_k
+    // Both K and V should have the same token count, so we only count once
+    
+    LLAMA_LOG_DEBUG("[mixed-kv] adding %ld V tokens to layer %d cache (head=%u)\n", n_tokens, il, head);
+    LLAMA_LOG_DEBUG("[mixed-kv]   - current total FP16 tokens: %u\n", layer.n_fp16_tokens);
 
     v_cur = ggml_reshape_2d(ctx, v_cur, hparams.n_embd_v_gqa(il), n_tokens);
 
