@@ -6452,6 +6452,7 @@ static bool ggml_vk_op_supports_incontiguous(ggml_op op) {
     case GGML_OP_ROPE:
     case GGML_OP_RMS_NORM:
     case GGML_OP_CONV_2D_DW:
+    case GGML_OP_IM2COL:
         return true;
     default:
         return false;

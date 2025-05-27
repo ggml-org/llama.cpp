@@ -2643,7 +2643,7 @@ class QwenModel(TextModel):
         self.gguf_writer.add_file_type(self.ftype)
 
 
-@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM")
+@ModelBase.register("Qwen2Model", "Qwen2ForCausalLM", "Qwen2AudioForConditionalGeneration")
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
@@ -2667,8 +2667,9 @@ class Qwen2Model(TextModel):
             name = f"model.{name}"  # map to Qwen2ForCausalLM tensors
         if "language_model." in name:
             name = name.replace("language_model.", "") # for InternVL
-        if name.startswith("mlp") or name.startswith("vision_model"):
-            # skip visual tensors
+        if name.startswith("mlp") or name.startswith("multi_modal_projector") \
+                or name.startswith("vision_model") or name.startswith("audio_tower"):
+            # skip vision and audio tensors
             return []
         yield from super().modify_tensors(data_torch, name, bid)
 
@@ -5993,11 +5994,11 @@ class UltravoxModel(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        raise NotImplementedError("Ultravox does not have text decoder. Please use --mmproj argument")
+        raise NotImplementedError("Ultravox does not have text decoder. Instead, it uses Llama or other models for text. If you want to get the audio encoder, please use --mmproj argument")
 
 
-@ModelBase.register("UltravoxModel")
-class UltravoxAudioModel(MmprojModel):
+@ModelBase.register("Qwen2AudioForConditionalGeneration")
+class WhisperEncoderModel(MmprojModel):
     has_vision_encoder = False # no vision encoder
     has_audio_encoder = True
 
@@ -6009,10 +6010,9 @@ class UltravoxAudioModel(MmprojModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ULTRAVOX)
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.QWEN2A)
         self.gguf_writer.add_audio_num_mel_bins(self.hparams["num_mel_bins"])
         self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
-        self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         del bid, new_name, n_dims  # unused
@@ -6023,6 +6023,10 @@ class UltravoxAudioModel(MmprojModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
+        if name.startswith("language_model."):
+            # skip language model tensors
+            return []
+
         # prevent clash naming with vision tensors
         if name.startswith("multi_modal_projector"):
             name = "audio." + name
@@ -6032,6 +6036,16 @@ class UltravoxAudioModel(MmprojModel):
             data_torch = data_torch.unsqueeze(-1)
 
         return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("UltravoxModel")
+class UltravoxWhisperEncoderModel(WhisperEncoderModel):
+    has_vision_encoder = False # no vision encoder
+    has_audio_encoder = True
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
 
 ###### CONVERSION LOGIC ######
 

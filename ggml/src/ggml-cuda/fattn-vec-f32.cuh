@@ -217,6 +217,7 @@ static __global__ void flash_attn_vec_ext_f32(
                 }
             }
             if (__all_sync(0xFFFFFFFF, skip)) {
+                __syncthreads();
                 continue;
             }
 #endif // GGML_USE_HIP

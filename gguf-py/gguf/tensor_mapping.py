@@ -1165,6 +1165,10 @@ class TensorNameMap:
             "audio.multi_modal_projector.linear_{bid}", # ultravox
         ),
 
+        MODEL_TENSOR.A_MMPROJ_FC: (
+            "audio.multi_modal_projector.linear", # qwen2audio
+        ),
+
         MODEL_TENSOR.A_MM_NORM_PRE: (
             "audio.multi_modal_projector.ln_pre", # ultravox
         ),

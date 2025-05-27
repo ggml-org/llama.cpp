@@ -146,6 +146,13 @@ struct mtmd_context {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
         }
 
+        if (llama_model_n_embd(text_model) != clip_n_mmproj_embd(ctx_clip)) {
+            throw std::runtime_error(string_format(
+                "mismatch between text model (n_embd = %d) and mmproj (n_embd = %d)\n"
+                "hint: you may be using wrong mmproj\n",
+                llama_model_n_embd(text_model), clip_n_mmproj_embd(ctx_clip)));
+        }
+
         has_vision = clip_has_vision_encoder(ctx_clip);
         has_audio  = clip_has_audio_encoder(ctx_clip);
         use_mrope  = clip_is_qwen2vl(ctx_clip);
@@ -196,7 +203,7 @@ struct mtmd_context {
             ov_img_first      = false; // overview image is last
         }
 
-        if (proj == PROJECTOR_TYPE_ULTRAVOX) {
+        if (clip_has_whisper_encoder(ctx_clip)) {
             // TODO @ngxson : check if model n_mel is 128 or 80
             w_filters = whisper_precalc_filters::get_128_bins();
         }
@@ -208,7 +215,7 @@ struct mtmd_context {
         }
         if (has_audio) {
             LOG_WRN("%s: audio input is in experimental stage and may have reduced quality:\n"
-                    "    https://github.com/ggml-org/llama.cpp/pull/13623\n", __func__);
+                    "    https://github.com/ggml-org/llama.cpp/discussions/13759\n", __func__);
         }
     }
 
@@ -325,6 +332,11 @@ int32_t mtmd_tokenize(mtmd_context * ctx,
     } else if (proj_type == PROJECTOR_TYPE_INTERNVL) {
         // <img> ... (image embeddings) ... </img>
         marker_modified = "<img>" + ctx->media_marker + "</img>";
+        string_replace_all(prompt_modified, ctx->media_marker, marker_modified);
+
+    } else if (proj_type == PROJECTOR_TYPE_QWEN2A) {
+        // <|audio_bos|> ... (embeddings) ... <|audio_eos|>
+        marker_modified = "<|audio_bos|>" + ctx->media_marker + "<|audio_eos|>";
         string_replace_all(prompt_modified, ctx->media_marker, marker_modified);
 
     }
