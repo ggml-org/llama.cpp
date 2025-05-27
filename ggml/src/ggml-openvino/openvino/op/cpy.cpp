@@ -5,6 +5,7 @@
 #include <openvino/core/node_output.hpp>
 #include <openvino/core/node_vector.hpp>
 #include <openvino/op/add.hpp>
+#include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert_like.hpp>
@@ -12,6 +13,7 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/scatter_nd_update.hpp>
 #include <openvino/op/slice.hpp>
+#include <openvino/op/squeeze.hpp>
 #include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
 #include <vector>
@@ -57,6 +59,13 @@ OutputVector translate_cpy(const NodeContext& context) {
         token_len = std::make_shared<ov::op::v1::Reshape>(token_len,
                                                           ov::op::v0::Constant::create(ov::element::i64, {0}, {}),
                                                           false);
+
+        if (context.is_static()) {
+            int32_t* op_params = context.get_input_op_params(1);
+            int64_t past_token_len_val = op_params[0] / context.get_input_stride(1)[2] / num_heads / head_size;
+            past_token_len = ov::op::v0::Constant::create(ov::element::i64, {}, {past_token_len_val});
+        }
+
         auto total_token_len = std::make_shared<ov::op::v1::Add>(past_token_len, token_len);
         std::shared_ptr<ov::Node> indices =
             std::make_shared<ov::op::v4::Range>(past_token_len, total_token_len, one, ov::element::i64);
@@ -67,39 +76,88 @@ OutputVector translate_cpy(const NodeContext& context) {
         res = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshaped_src1, indices, src0);
     } else {
         // Write V to cache_v
-        int64_t total_head_size = src0_shape[1];
-        auto total_head_size_node = ov::op::v0::Constant::create(ov::element::i64, {1}, {total_head_size});
-
         auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+        auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+
+        auto zero_scalar = ov::op::v0::Constant::create(ov::element::i64, {}, {0});
+        auto one_scalar = ov::op::v0::Constant::create(ov::element::i64, {}, {1});
+
+        int64_t total_head_size = src0_shape[1];
+        auto total_head_size_node = ov::op::v0::Constant::create(ov::element::i64, {1}, {total_head_size});
+        auto total_head_size_scalar = std::make_shared<ov::op::v0::Squeeze>(total_head_size_node, zero);
 
         auto token_len = get_dimensions(src0.get_node_shared_ptr(), {2});
-        past_token_len = std::make_shared<ov::op::v0::Unsqueeze>(past_token_len, zero);
-        auto total_token_len = std::make_shared<ov::op::v1::Add>(past_token_len, token_len);
+        auto token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(token_len, zero);
+        if (context.is_static()) {
+            int32_t* op_params = context.get_input_op_params(1);
+            int64_t past_token_len_val = op_params[0] / context.get_input_stride(1)[2];
+            past_token_len = ov::op::v0::Constant::create(ov::element::i64, {}, {past_token_len_val});
+        }
+        auto total_token_len_scalar = std::make_shared<ov::op::v1::Add>(past_token_len, token_len_scalar);
 
+        // auto reshaped_src1 = std::make_shared<ov::op::v1::Reshape>(
+        //     src1,
+        //     ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{1, total_head_size, -1}),
+        //     false);
+
+        // auto src1_left = std::make_shared<ov::op::v8::Slice>(
+        //     reshaped_src1,
+        //     ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 0, 0}),
+        //     std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one, total_head_size_node, past_token_len}, 0),
+        //     ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 1, 1}));
+
+        // auto src1_right = std::make_shared<ov::op::v8::Slice>(
+        //     reshaped_src1,
+        //     std::make_shared<ov::op::v0::Concat>(ov::OutputVector{zero, zero, total_token_len}, 0),
+        //     ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{1, total_head_size, INT_MAX}),
+        //     ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 1, 1}));
+
+        // auto reshaped_src0 = std::make_shared<ov::op::v1::Reshape>(
+        //     src0,
+        //     ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{1, total_head_size, -1}),
+        //     false);
+
+        // auto res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{src1_left, reshaped_src0, src1_right}, 2);
+
+        // 1D tensor of shape [total_head_size], values starting from 0
+        auto range_row =
+            std::make_shared<ov::op::v4::Range>(zero_scalar, total_head_size_scalar, one_scalar, ov::element::i64);
+        auto range_row_reshaped =
+            std::make_shared<ov::op::v0::Unsqueeze>(range_row,
+                                                    ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2}));
+        auto row_indices = std::make_shared<ov::op::v3::Broadcast>(
+            range_row_reshaped,
+            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{total_head_size_node, token_len, one}, 0));
+
+        // 1D tensor of shape [token_len], values starting from past_token_len
+        auto range_col =
+            std::make_shared<ov::op::v4::Range>(past_token_len, total_token_len_scalar, one_scalar, element::i64);
+        auto range_col_reshaped =
+            std::make_shared<ov::op::v0::Unsqueeze>(range_col,
+                                                    ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 2}));
+        auto col_indices = std::make_shared<ov::op::v3::Broadcast>(
+            range_col_reshaped,
+            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{total_head_size_node, token_len, one}, 0));
+
+        // Stack row_indices and col_indices along last axis: [total_head_size, token_len, 2]
+        auto indices = std::make_shared<ov::op::v0::Concat>(OutputVector{row_indices, col_indices}, 2);
+        auto indices_final = std::make_shared<ov::op::v1::Reshape>(
+            indices,
+            ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{-1, 2}),
+            false);
+
+        auto flattend_src0 =
+            std::make_shared<ov::op::v1::Reshape>(src0,
+                                                  ov::op::v0::Constant::create(element::i64, Shape{1}, {-1}),
+                                                  false);
         auto reshaped_src1 = std::make_shared<ov::op::v1::Reshape>(
             src1,
-            ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{1, total_head_size, -1}),
+            ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{total_head_size, -1}),
             false);
 
-        auto src1_left = std::make_shared<ov::op::v8::Slice>(
-            reshaped_src1,
-            ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 0, 0}),
-            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{one, total_head_size_node, past_token_len}, 0),
-            ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 1, 1}));
-
-        auto src1_right = std::make_shared<ov::op::v8::Slice>(
-            reshaped_src1,
-            std::make_shared<ov::op::v0::Concat>(ov::OutputVector{zero, zero, total_token_len}, 0),
-            ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{1, total_head_size, INT_MAX}),
-            ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 1, 1}));
-
-        auto reshaped_src0 = std::make_shared<ov::op::v1::Reshape>(
-            src0,
-            ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{1, total_head_size, -1}),
-            false);
-
-        res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{src1_left, reshaped_src0, src1_right}, 2);
+        auto updated = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshaped_src1, indices_final, flattend_src0);
+        res = std::make_shared<ov::op::v0::Unsqueeze>(updated, zero);
     }
 
     return rename_outputs_with_suffix({res}, context.get_name());

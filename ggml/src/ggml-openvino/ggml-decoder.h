@@ -12,7 +12,7 @@ class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
     using ov::frontend::ggml::GgmlDecoder::GgmlDecoder;
 
-    GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph);
+    GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token);
 
     virtual ov::Any get_attribute(const std::string& name) const override {
         return nullptr;
@@ -89,8 +89,15 @@ public:
         return m_model_output_names;
     }
 
+    virtual bool is_static() const override {
+        return m_is_static;
+    }
+    virtual bool is_first_token() const {
+        return m_is_first_token;
+    }
+
 private:
-    void set_input_output(ggml_tensor* node, std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
+    void set_input_output(ggml_tensor* node);
     void add_extra_inputs();
     static void dump_cgraph(const struct ggml_cgraph* cgraph);
     static std::vector<size_t> get_shape(const ggml_tensor* tensor);
@@ -119,6 +126,8 @@ private:
     std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
+    bool m_is_static;
+    bool m_is_first_token;
 };
 
 void print_tensor_address_map(const struct ggml_cgraph* cgraph);

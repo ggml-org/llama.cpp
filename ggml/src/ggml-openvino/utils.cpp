@@ -4,11 +4,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <openvino/core/any.hpp>
 #include <openvino/core/graph_util.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/frontend/manager.hpp>
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/compiled_model.hpp>
+#include <openvino/runtime/intel_npu/properties.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <unordered_map>
 
@@ -17,8 +19,8 @@
 #include "openvino/frontend.hpp"
 #include "openvino/input_model.hpp"
 
-std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph* cgraph) {
-    return std::make_shared<GgmlOvDecoder>(nullptr, cgraph);
+std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph* cgraph, bool is_static, bool is_first_token) {
+    return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, is_static, is_first_token);
 }
 
 ov::Tensor get_ggml_graph_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, std::string& name) {
@@ -49,50 +51,63 @@ static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
 }
 
 enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
+    static ov::Core core;
+    static bool is_first_token = true;
+
+    static std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "";
+    if (device.empty()) {
+        // Prefer GPU over CPU
+        for (const auto& dev : core.get_available_devices()) {
+            device = dev;
+            if (device == "GPU")
+                break;
+        }
+    }
+
+    bool is_static = device == "NPU" ? true : false;
+    ov::AnyMap config;
+    if (is_static) {
+        config = {
+            {"NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean"},
+            {"NPU_USE_NPUW", "YES"},
+            {"NPUW_DEVICES", "NPU"},
+            {"NPUW_FOLD", "YES"},
+            // {"NPU_COMPILER_TYPE", "MLIR"},
+        };
+    }
+
     auto start_time = ggml_time_us();
 
-    static ov::Core core;
     auto* cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
-    if (cache_dir) {
+    if (cache_dir && !is_static) {
         core.set_property(ov::cache_dir(cache_dir));
     }
 
-    // auto devices = core.get_available_devices();
-    // static auto front_end = get_ggml_frontend();
-    // if (!front_end) {
-    //     GGML_LOG_ERROR("GGML FrontEnd is not initialized \n");
-    //     return GGML_STATUS_FAILED;
-    // }
-
-    using CachedItem = std::pair<std::shared_ptr<ov::Model>, ov::CompiledModel>;
+    // For CPU and GPU, there is only one compiled model, so only use the first element of the pair
+    // For NPU, there are prefill model and kvcache model (This is the ideal approach, but not implemented yet,
+    // currently recompile for every token)
+    using CachedItem = std::pair<std::shared_ptr<ov::Model>, std::pair<ov::CompiledModel, ov::CompiledModel>>;
     static std::unordered_map<struct ggml_cgraph*, CachedItem> compiled_cache;
 
     std::shared_ptr<ov::Model> model;
-    ov::CompiledModel compiled_model;
+    ov::CompiledModel compiled_model_prefill;
+    ov::CompiledModel compiled_model_kvcache;
     int64_t decoder_end_time;
     int64_t conversion_end_time;
     int64_t compile_end_time;
 
-    auto ggml_decoder = get_ggml_decoder(cgraph);
+    auto ggml_decoder = get_ggml_decoder(cgraph, is_static, is_first_token);
     decoder_end_time = ggml_time_us();
 
     auto it = compiled_cache.find(cgraph);
-    if (it != compiled_cache.end()) {
+    if (it != compiled_cache.end() && !is_static) {
         model = it->second.first;
         conversion_end_time = ggml_time_us();
 
-        compiled_model = it->second.second;
+        compiled_model_prefill = it->second.second.first;
+        compiled_model_kvcache = it->second.second.second;
         compile_end_time = ggml_time_us();
     } else {
-        // std::shared_ptr<ov::frontend::DecoderBase> graph_decoder = ggml_decoder;
-        // ov::frontend::InputModel::Ptr input_model = front_end->load(graph_decoder);
-        // if (!input_model) {
-        //     GGML_LOG_ERROR("Input Model is not loaded \n");
-        //     return GGML_STATUS_FAILED;
-        // }
-
-        // model = front_end->convert(input_model);
-
         ov::frontend::InputModel::Ptr input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
         model = ov::frontend::ggml::FrontEnd::convert(input_model);
 
@@ -105,16 +120,23 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
             ov::serialize(model, timestamped_filename);
         }
 
-        if (!model) {
-            GGML_LOG_ERROR("Model is not converted \n");
-        }
-        compiled_model = core.compile_model(model, "CPU");
+        compiled_model_prefill = core.compile_model(model, device, config);
         compile_end_time = ggml_time_us();
 
-        compiled_cache[cgraph] = std::make_pair(model, compiled_model);
+        compiled_cache[cgraph] = std::make_pair(model, std::make_pair(compiled_model_prefill, compiled_model_kvcache));
     }
 
-    ov::InferRequest infer_request = compiled_model.create_infer_request();
+    ov::InferRequest infer_request;
+    if (!is_static) {
+        infer_request = compiled_model_prefill.create_infer_request();
+    } else {
+        infer_request = compiled_model_prefill.create_infer_request();
+        // if (is_first_token) {
+        //     infer_request = compiled_model_prefill.create_infer_request();
+        // } else {
+        //     infer_request = compiled_model_kvcache.create_infer_request();
+        // }
+    }
 
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
@@ -147,6 +169,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         }
     }
     auto end_time = ggml_time_us();
+
+    is_first_token = false;
 
     if (getenv("GGML_OPENVINO_PROFILING")) {
         GGML_LOG_INFO("GGML OpenVINO Backend: \n");

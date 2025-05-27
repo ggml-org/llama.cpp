@@ -55,17 +55,21 @@ OutputVector translate_mulmat(const NodeContext& context) {
         ov::Output<ov::Node> A;
         ov::Output<ov::Node> B;
 
-        auto attention_size = context.get_input("attention_size");
-
         auto src0 = context.get_input(0);
         auto src0_shape = context.get_input_shape(0).to_shape();
         auto src0_stride = context.get_input_stride(0);
         auto permuted = is_permuted(src0_stride);
         auto token_dim = permuted ? 0 : 2;
 
+        auto attention_size = context.get_input("attention_size");
+
         auto src0_perm = argsort_descend(src0_stride);
         auto src0_original_shape_ = permute(src0_shape, src0_perm);
         std::vector<int64_t> src0_original_shape(src0_original_shape_.begin(), src0_original_shape_.end());
+
+        if (context.is_static()) {
+            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {src0_original_shape[token_dim]});
+        }
         src0_original_shape[token_dim] = -1;
 
         auto src0_slice_shape = src0_original_shape;
