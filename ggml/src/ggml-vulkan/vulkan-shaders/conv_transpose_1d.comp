@@ -29,7 +29,7 @@ const uint32_t bs = gl_WorkGroupSize.x;
 uint32_t tid = gl_LocalInvocationID.x;
 // Code is more straightforward if we assume it is bs*s0+K instead of (bs-1)*s0+K.
 uint32_t tmp_len = bs*p.s0+p.K;
-shared D_TYPE tmp[1024]; 
+shared D_TYPE tmp[4096]; 
 
 uint splitWork(uint workSize){
     return (bs + workSize -1) / bs;
@@ -46,6 +46,7 @@ void main(){
     uint32_t L_blocks = splitWork(p.L);
     for(uint32_t L_block_id = 0; L_block_id < L_blocks; L_block_id++){
         if(L_block_id > 0){
+            barrier();
             // Shift values in tmp to the current processing window
             for(int i = 0; i < splitWork(tmp_len); i++){
                 uint32_t idx = i*bs+tid;
