@@ -55,14 +55,17 @@ endfunction()
 
 set(GGML_OPENCL_KERNELS
     add
+    argsort
     clamp
     cpy
     cvt
     diag_mask_inf
+    div
     gelu
     gemv_noshuffle_general
     gemv_noshuffle
     get_rows
+    group_norm
     im2col_f32
     im2col_f16
     mul_mat_Ab_Bi_8x4
@@ -83,11 +86,14 @@ set(GGML_OPENCL_KERNELS
     rms_norm
     rope
     scale
+    sigmoid
     silu
     softmax_4_f32
     softmax_4_f16
     softmax_f32
     softmax_f16
+    sub
+    sum_rows
     transpose
 )
 

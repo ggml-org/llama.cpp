@@ -3484,6 +3484,19 @@ void ggml_cpu_init(void) {
             const uint64_t t_end = ggml_time_us(); UNUSED(t_end);
 
             GGML_PRINT_DEBUG("%s: GELU, Quick GELU, SILU and EXP tables initialized in %f ms\n", __func__, (t_end - t_start)/1000.0);
+
+#ifdef GGML_USE_OPENMP
+            //if (!getenv("OMP_WAIT_POLICY")) {
+            //    // set the wait policy to active, so that OpenMP threads don't sleep
+            //    putenv("OMP_WAIT_POLICY=active");
+            //}
+
+            if (!getenv("KMP_BLOCKTIME")) {
+                // set the time to wait before sleeping a thread
+                // this is less aggressive than setting the wait policy to active, but should achieve similar results in most cases
+                putenv("KMP_BLOCKTIME=200"); // 200ms
+            }
+#endif
         }
 
 #if defined(__ARM_ARCH)

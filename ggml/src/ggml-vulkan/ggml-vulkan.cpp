@@ -1,6 +1,6 @@
 #include "ggml-vulkan.h"
 #include <vulkan/vulkan_core.h>
-#if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_PERF) || defined(GGML_VULKAN_CHECK_RESULTS)
+#if defined(GGML_VULKAN_RUN_TESTS) || defined(GGML_VULKAN_CHECK_RESULTS)
 #include <chrono>
 #include "ggml-cpu.h"
 #endif
@@ -184,9 +184,7 @@ static ggml_backend_buffer_type_i ggml_backend_vk_buffer_type_interface = {
 #ifdef GGML_VULKAN_MEMORY_DEBUG
 class vk_memory_logger;
 #endif
-#ifdef GGML_VULKAN_PERF
 class vk_perf_logger;
-#endif
 static void ggml_vk_destroy_buffer(vk_buffer& buf);
 
 static constexpr uint32_t mul_mat_vec_max_cols = 8;
@@ -442,9 +440,11 @@ struct vk_device_struct {
 #ifdef GGML_VULKAN_MEMORY_DEBUG
     std::unique_ptr<vk_memory_logger> memory_logger;
 #endif
-#ifdef GGML_VULKAN_PERF
+
+    // for GGML_VK_PERF_LOGGER
     std::unique_ptr<vk_perf_logger> perf_logger;
-#endif
+    vk::QueryPool query_pool;
+    uint32_t num_queries;
 
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
@@ -828,8 +828,6 @@ private:
 #define VK_LOG_MEMORY(msg) ((void) 0)
 #endif // GGML_VULKAN_MEMORY_DEBUG
 
-#if defined(GGML_VULKAN_PERF)
-
 class vk_perf_logger {
 public:
     void print_timings() {
@@ -839,7 +837,7 @@ public:
             for (const auto& time : t.second) {
                 total += time;
             }
-            std::cerr << t.first << ": " << t.second.size() << " x " << (total / t.second.size() / 1000.0) << " ms" << std::endl;
+            std::cerr << t.first << ": " << t.second.size() << " x " << (total / t.second.size() / 1000.0) << " us" << std::endl;
         }
 
         timings.clear();
@@ -868,7 +866,6 @@ public:
 private:
     std::map<std::string, std::vector<uint64_t>> timings;
 };
-#endif // GGML_VULKAN_PERF
 
 struct ggml_backend_vk_context {
     std::string name;
@@ -957,6 +954,8 @@ struct vk_instance_t {
 
 static bool vk_instance_initialized = false;
 static vk_instance_t vk_instance;
+
+static bool vk_perf_logger_enabled = false;
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
 static size_t vk_skip_checks;
@@ -2757,9 +2756,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #ifdef GGML_VULKAN_MEMORY_DEBUG
         device->memory_logger = std::unique_ptr<vk_memory_logger>(new vk_memory_logger());
 #endif
-#ifdef GGML_VULKAN_PERF
-        device->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
-#endif
+        if (vk_perf_logger_enabled) {
+            device->perf_logger = std::unique_ptr<vk_perf_logger>(new vk_perf_logger());
+        }
 
         size_t dev_num = vk_instance.device_indices[idx];
 
@@ -2804,23 +2803,29 @@ static vk_device ggml_vk_get_device(size_t idx) {
                 pipeline_robustness = true;
             } else if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
                 device->subgroup_size_control = true;
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_COOPMAT")) {
                 device->coopmat_support = true;
                 device->coopmat_m = 0;
                 device->coopmat_n = 0;
                 device->coopmat_k = 0;
+#endif
+#if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
             } else if (strcmp("VK_NV_cooperative_matrix2", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_COOPMAT2")) {
                 coopmat2_support = true;
+#endif
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_shader_integer_dot_product", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_INTEGER_DOT_PRODUCT")) {
                 device->integer_dot_product = true;
 #endif
+#if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT)
             } else if (strcmp("VK_KHR_shader_bfloat16", properties.extensionName) == 0 &&
                        !getenv("GGML_VK_DISABLE_BFLOAT16")) {
                 bfloat16_support = true;
+#endif
             }
         }
 
@@ -3540,6 +3545,8 @@ static void ggml_vk_instance_init() {
     }
     vk_instance.instance = vk::createInstance(instance_create_info);
     vk_instance_initialized = true;
+
+    vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
     size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
 
@@ -4667,6 +4674,19 @@ static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const
             return ctx->device->pipeline_cpy_quant_f32[src->type];
         default:
             break;
+        }
+    }
+
+    if (src->type == to) {
+        // Copy two or four bytes at a time, depending on block size.
+        // For quantized types, we scale by block size/type size. But
+        // this path is also used for bf16->bf16 for example, where the
+        // type size must be exactly 2 or 4.
+        GGML_ASSERT(ggml_is_quantized(to) || ggml_type_size(src->type) == 2 || ggml_type_size(src->type) == 4);
+        if ((ggml_type_size(src->type) % 4) == 0) {
+            return ctx->device->pipeline_contig_cpy_f32_f32;
+        } else {
+            return ctx->device->pipeline_contig_cpy_f16_f16;
         }
     }
 
@@ -6433,6 +6453,7 @@ static bool ggml_vk_op_supports_incontiguous(ggml_op op) {
     case GGML_OP_ROPE:
     case GGML_OP_RMS_NORM:
     case GGML_OP_CONV_2D_DW:
+    case GGML_OP_IM2COL:
         return true;
     default:
         return false;
@@ -6731,7 +6752,16 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_UNARY:
     case GGML_OP_CONV_2D_DW:
         {
-            const uint32_t ne = ggml_nelements(dst);
+            uint32_t ne = ggml_nelements(dst);
+            if (op == GGML_OP_CPY && ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
+                // Convert from number of logical elements to 2- or 4-byte units.
+                ne /= ggml_blck_size(src0->type);
+                if ((ggml_type_size(src0->type) % 4) == 0) {
+                    ne *= ggml_type_size(src0->type) / 4;
+                } else {
+                    ne *= ggml_type_size(src0->type) / 2;
+                }
+            }
             if (ne > 262144) {
                 elements = { 512, 512, CEIL_DIV(ne, 262144) };
             } else if (ne > 512) {
@@ -7281,8 +7311,19 @@ static void ggml_vk_cpy(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const uint32_t src0_type_size = ggml_type_size(src0->type);
     const uint32_t dst_type_size = ggml_type_size(dst->type);
 
+    uint32_t ne = (uint32_t)ggml_nelements(src0);
+    if (ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
+        // Convert from number of logical elements to 2- or 4-byte units.
+        ne /= ggml_blck_size(src0->type);
+        if ((ggml_type_size(src0->type) % 4) == 0) {
+            ne *= ggml_type_size(src0->type) / 4;
+        } else {
+            ne *= ggml_type_size(src0->type) / 2;
+        }
+    }
+
     ggml_vk_op_f32<vk_op_unary_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_CPY, {
-        (uint32_t)ggml_nelements(src0),
+        ne,
         (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2], (uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
         (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
         0,
@@ -8845,7 +8886,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
 
     ctx->tensor_ctxs[node_idx] = compute_ctx;
 
-#if defined(GGML_VULKAN_CHECK_RESULTS) || defined(GGML_VULKAN_PERF)
+#if defined(GGML_VULKAN_CHECK_RESULTS)
     // Force context reset on each node so that each tensor ends up in its own context
     // and can be run and compared to its CPU equivalent separately
     last_node = true;
@@ -9264,8 +9305,7 @@ static ggml_backend_buffer_t ggml_backend_vk_host_buffer_type_alloc_buffer(ggml_
     try {
         ptr = ggml_vk_host_malloc(vk_instance.devices[0], size);
     } catch (vk::SystemError& e) {
-        std::cerr << "ggml_vulkan: Failed to allocate pinned memory." << std::endl;
-        std::cerr << "ggml_vulkan: " << e.what() << std::endl;
+        GGML_LOG_WARN("ggml_vulkan: Failed to allocate pinned memory (%s)\n", e.what());
         // fallback to cpu buffer
         return ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), size);
     }
@@ -9466,6 +9506,29 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     bool first_node_in_batch = true; // true if next node will be first node in a batch
     int submit_node_idx = 0; // index to first node in a batch
 
+    vk_context compute_ctx;
+    if (vk_perf_logger_enabled) {
+        // allocate/resize the query pool
+        if (ctx->device->num_queries < cgraph->n_nodes + 1) {
+            if (ctx->device->query_pool) {
+                ctx->device->device.destroyQueryPool(ctx->device->query_pool);
+            }
+            VkQueryPoolCreateInfo query_create_info = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+            query_create_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            query_create_info.queryCount = cgraph->n_nodes + 100;
+            ctx->device->query_pool = ctx->device->device.createQueryPool(query_create_info);
+            ctx->device->num_queries = query_create_info.queryCount;
+        }
+
+        ctx->device->device.resetQueryPool(ctx->device->query_pool, 0, cgraph->n_nodes+1);
+
+        GGML_ASSERT(ctx->compute_ctx.expired());
+        compute_ctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+        ctx->compute_ctx = compute_ctx;
+        ggml_vk_ctx_begin(ctx->device, compute_ctx);
+        compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, 0);
+    }
+
     // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
     // Estimate the amount of matmul work by looking at the weight matrix size, and submit every 100MB
     // (and scaled down based on model size, so smaller models submit earlier).
@@ -9493,6 +9556,17 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         bool enqueued = ggml_vk_build_graph(ctx, cgraph->nodes[i], i, cgraph->nodes[submit_node_idx], submit_node_idx, false, i == last_node, almost_ready, submit);
 
+        if (vk_perf_logger_enabled) {
+            if (ctx->compute_ctx.expired()) {
+                compute_ctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+                ctx->compute_ctx = compute_ctx;
+                ggml_vk_ctx_begin(ctx->device, compute_ctx);
+            } else {
+                compute_ctx = ctx->compute_ctx.lock();
+            }
+            compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, i+1);
+        }
+
         if (enqueued) {
             ++submitted_nodes;
 
@@ -9514,9 +9588,27 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         }
     }
 
-#ifdef GGML_VULKAN_PERF
-    ctx->device->perf_logger->print_timings();
-#endif
+    if (vk_perf_logger_enabled) {
+        // End the command buffer and submit/wait
+        GGML_ASSERT(!ctx->compute_ctx.expired());
+        compute_ctx = ctx->compute_ctx.lock();
+        ggml_vk_ctx_end(compute_ctx);
+
+        ggml_vk_submit(compute_ctx, ctx->device->fence);
+        VK_CHECK(ctx->device->device.waitForFences({ ctx->device->fence }, true, UINT64_MAX), "GGML_VULKAN_PERF waitForFences");
+        ctx->device->device.resetFences({ ctx->device->fence });
+
+        // Get the results and pass them to the logger
+        std::vector<uint64_t> timestamps(cgraph->n_nodes + 1);
+        ctx->device->device.getQueryPoolResults(ctx->device->query_pool, 0, cgraph->n_nodes + 1, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            if (!ggml_vk_is_empty(cgraph->nodes[i])) {
+                ctx->device->perf_logger->log_timing(cgraph->nodes[i], uint64_t((timestamps[i+1] - timestamps[i]) * ctx->device->properties.limits.timestampPeriod));
+            }
+        }
+
+        ctx->device->perf_logger->print_timings();
+    }
 
     ggml_vk_graph_cleanup(ctx);
 
@@ -9865,6 +9957,15 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 }
 
                 if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F16) {
+                    return true;
+                }
+
+                // We can handle copying from a type to the same type if it's
+                // contiguous (memcpy). We use f16 or f32 shaders to do the copy,
+                // so the type/block size must be a multiple of 4.
+                if (src0_type == src1_type &&
+                    ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op) &&
+                    (ggml_type_size(src0_type) % 2) == 0) {
                     return true;
                 }
                 return false;

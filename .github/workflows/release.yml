@@ -260,16 +260,18 @@ jobs:
           architecture: ${{ matrix.arch == 'x64' && 'win64' || 'win64a' }}
 
       - name: Build
+        shell: cmd
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          cmake -S . -B build -G "Ninja Multi-Config" `
-            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake `
-            -DGGML_NATIVE=OFF `
-            -DGGML_BACKEND_DL=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
-            -DGGML_OPENMP=OFF `
-            -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include" `
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" ${{ matrix.arch }}
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} ^
+            -DGGML_OPENMP=ON ^
+            -DCURL_LIBRARY="%CURL_PATH%/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="%CURL_PATH%/include" ^
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release
 
@@ -279,6 +281,7 @@ jobs:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
           Copy-Item $env:CURL_PATH\bin\libcurl-${{ matrix.arch }}.dll .\build\bin\Release\
+          Copy-Item "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Redist\MSVC\14.42.34433\debug_nonredist\${{ matrix.arch }}\Microsoft.VC143.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
           7z a llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
@@ -448,6 +451,7 @@ jobs:
       WINDOWS_BASEKIT_URL: https://registrationcenter-download.intel.com/akdlm/IRC_NAS/7cd9bba0-7aab-4e30-b3ae-2221006a4a05/intel-oneapi-base-toolkit-2025.1.1.34_offline.exe
       WINDOWS_DPCPP_MKL: intel.oneapi.win.cpp-dpcpp-common:intel.oneapi.win.mkl.devel:intel.oneapi.win.dnnl:intel.oneapi.win.tbb.devel
       ONEAPI_ROOT: "C:/Program Files (x86)/Intel/oneAPI"
+
     steps:
       - name: Clone
         id: checkout
@@ -513,7 +517,9 @@ jobs:
 
     strategy:
       matrix:
-        gpu_target: [gfx1100, gfx1101, gfx1030]
+        include:
+          - name: "radeon"
+            gpu_targets: "gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
@@ -528,7 +534,7 @@ jobs:
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.16
         with:
-          key: windows-latest-cmake-hip-${{ matrix.gpu_target }}-x64
+          key: windows-latest-cmake-hip-${{ matrix.name }}-x64
           evict-old-files: 1d
 
       - name: Install
@@ -554,9 +560,12 @@ jobs:
           cmake -G "Unix Makefiles" -B build -S . `
             -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
             -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
-            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/rocwmma/library/include/ -Wno-ignored-attributes -Wno-nested-anon-types" `
             -DCMAKE_BUILD_TYPE=Release `
-            -DAMDGPU_TARGETS=${{ matrix.gpu_target }} `
+            -DGGML_BACKEND_DL=ON `
+            -DGGML_NATIVE=OFF `
+            -DGGML_CPU=OFF `
+            -DAMDGPU_TARGETS="${{ matrix.gpu_targets }}" `
             -DGGML_HIP_ROCWMMA_FATTN=ON `
             -DGGML_HIP=ON `
             -DLLAMA_CURL=OFF
@@ -569,13 +578,13 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          7z a llama-bin-win-hip-${{ matrix.gpu_target }}-x64.zip .\build\bin\*
+          7z a llama-bin-win-hip-${{ matrix.name }}-x64.zip .\build\bin\*
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          path: llama-bin-win-hip-${{ matrix.gpu_target }}-x64.zip
-          name: llama-bin-win-hip-${{ matrix.gpu_target }}-x64.zip
+          path: llama-bin-win-hip-${{ matrix.name }}-x64.zip
+          name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode-build:
     runs-on: macos-latest

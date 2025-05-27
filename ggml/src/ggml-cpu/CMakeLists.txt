@@ -299,6 +299,25 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 endif()
             endif()
         endif()
+
+        if (GGML_BACKEND_DL)
+            if (GGML_NATIVE)
+                # the feature check relies on ARCH_DEFINITIONS, but it is not set with GGML_NATIVE
+                message(FATAL_ERROR "GGML_NATIVE is not compatible with GGML_BACKEND_DL, consider using GGML_CPU_ALL_VARIANTS")
+            endif()
+
+            # The feature detection code is compiled as a separate target so that
+            # it can be built without the architecture flags
+            # Since multiple variants of the CPU backend may be included in the same
+            # build, using set_source_files_properties() to set the arch flags is not possible
+            set(GGML_CPU_FEATS_NAME ${GGML_CPU_NAME}-feats)
+            add_library(${GGML_CPU_FEATS_NAME} OBJECT ggml-cpu/cpu-feats-x86.cpp)
+            target_include_directories(${GGML_CPU_FEATS_NAME} PRIVATE . .. ../include)
+            target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE ${ARCH_DEFINITIONS})
+            target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE GGML_BACKEND_DL GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
+            set_target_properties(${GGML_CPU_FEATS_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+            target_link_libraries(${GGML_CPU_NAME} PRIVATE ${GGML_CPU_FEATS_NAME})
+        endif()
     elseif ("${CMAKE_SYSTEM_PROCESSOR} " STREQUAL "ppc64le " OR "${CMAKE_SYSTEM_PROCESSOR} " STREQUAL "powerpc ")
         message(STATUS "PowerPC detected")
         if (GGML_NATIVE)
@@ -338,8 +357,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "riscv64")
         message(STATUS "RISC-V detected")
         if (GGML_RVV)
-            if (GGML_RV_ZFH)
-                list(APPEND ARCH_FLAGS -march=rv64gcv_zfhmin -DGGML_RV_ZFH -mabi=lp64d)
+            if (GGML_XTHEADVECTOR)
+                list(APPEND ARCH_FLAGS -march=rv64gc_xtheadvector -mabi=lp64d)
+            elseif (GGML_RV_ZFH)
+                list(APPEND ARCH_FLAGS -march=rv64gcv_zfhmin -mabi=lp64d)
             else()
                 list(APPEND ARCH_FLAGS -march=rv64gcv -mabi=lp64d)
             endif()
@@ -476,25 +497,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     target_sources(${GGML_CPU_NAME} PRIVATE ${GGML_CPU_SOURCES})
     target_compile_options(${GGML_CPU_NAME} PRIVATE ${ARCH_FLAGS})
     target_compile_definitions(${GGML_CPU_NAME} PRIVATE ${ARCH_DEFINITIONS})
-
-    if (GGML_BACKEND_DL)
-        if (GGML_NATIVE)
-            # the feature check relies on ARCH_DEFINITIONS, but it is not set with GGML_NATIVE
-            message(FATAL_ERROR "GGML_NATIVE is not compatible with GGML_BACKEND_DL, consider using GGML_CPU_ALL_VARIANTS")
-        endif()
-
-        # The feature detection code is compiled as a separate target so that
-        # it can be built without the architecture flags
-        # Since multiple variants of the CPU backend may be included in the same
-        # build, using set_source_files_properties() to set the arch flags is not possible
-        set(GGML_CPU_FEATS_NAME ${GGML_CPU_NAME}-feats)
-        add_library(${GGML_CPU_FEATS_NAME} OBJECT ggml-cpu/cpu-feats-x86.cpp)
-        target_include_directories(${GGML_CPU_FEATS_NAME} PRIVATE . .. ../include)
-        target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE ${ARCH_DEFINITIONS})
-        target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE GGML_BACKEND_DL GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
-        set_target_properties(${GGML_CPU_FEATS_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-        target_link_libraries(${GGML_CPU_NAME} PRIVATE ${GGML_CPU_FEATS_NAME})
-    endif()
 
     if (EMSCRIPTEN)
         set_target_properties(${GGML_CPU_NAME} PROPERTIES COMPILE_FLAGS "-msimd128")

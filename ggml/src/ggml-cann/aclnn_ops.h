@@ -714,6 +714,21 @@ void ggml_cann_count_equal(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  */
 void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
+/**
+ * @brief   Performs the Flash Attention extended operator using the CANN backend.
+ *
+ * @details This function implements the memory-efficient Flash Attention algorithm
+ *          for computing scaled dot-product attention with hardware acceleration.
+ *          The result is stored in the destination tensor `dst`.
+ *
+ *          This operation is accelerated using the CANN backend to improve runtime performance.
+ *
+ * @param ctx The CANN context used for operations.
+ * @param dst The destination tensor where the result will be stored.
+ *            dst->op is expected to be `GGML_OP_FLASH_ATTN_EXT`.
+ */
+void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
 /*
  * @brief A generic wrapper for ACL resources with custom deleter support.
  */

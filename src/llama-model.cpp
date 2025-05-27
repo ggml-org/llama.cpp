@@ -463,10 +463,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         GGML_ASSERT(hparams.n_expert_used == 0);
     }
 
-    // zero-out the array hparams
     std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
     std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
     std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.end(),      0);
+
+    std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
+
+    std::fill(hparams.swa_layers.begin(), hparams.swa_layers.end(), 0);
 
     ml.get_key_or_arr(LLM_KV_FEED_FORWARD_LENGTH,  hparams.n_ff_arr,   hparams.n_layer, false);
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT, hparams.n_head_arr, hparams.n_layer, false);
@@ -574,7 +577,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 hparams.swa_type      = LLAMA_SWA_TYPE_CHUNKED;
                 hparams.n_swa         = 8192; // should this be a gguf kv? currently it's the same for Scout and Maverick
-                hparams.n_swa_pattern = 4;    // pattern: 3 chunked - 1 full
+                hparams.set_swa_pattern(4);   // pattern: 3 chunked - 1 full
 
                 switch (hparams.n_expert) {
                     case 16:  type = LLM_TYPE_17B_16E; break;
@@ -863,7 +866,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.swa_type = LLAMA_SWA_TYPE_NONE;
 
                     hparams.n_swa         = 0;
-                    hparams.n_swa_pattern = 1;
+                    hparams.set_swa_pattern(1);
                 }
             } break;
         case LLM_ARCH_PHIMOE:
@@ -935,7 +938,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
                 hparams.n_swa = 4096; // default value of gemma 2
-                hparams.n_swa_pattern = 2;
+                hparams.set_swa_pattern(2);
                 hparams.attn_soft_cap = true;
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
@@ -953,7 +956,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_GEMMA3:
             {
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                hparams.n_swa_pattern = 6;
+                hparams.set_swa_pattern(6);
 
                 hparams.rope_freq_base_train_swa  = 10000.0f;
                 hparams.rope_freq_scale_train_swa = 1.0f;
@@ -1038,7 +1041,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
         case LLM_ARCH_COHERE2:
             {
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                hparams.n_swa_pattern = 4;
+                hparams.set_swa_pattern(4);
 
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa);
                 ml.get_key(LLM_KV_LOGIT_SCALE,              hparams.f_logit_scale);
@@ -2486,7 +2489,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -4320,7 +4327,7 @@ void llama_model::print_info() const {
         LLAMA_LOG_INFO("%s: n_head_kv        = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_head_kv(il); }, hparams.n_layer).c_str());
         LLAMA_LOG_INFO("%s: n_rot            = %u\n",     __func__, hparams.n_rot);
         LLAMA_LOG_INFO("%s: n_swa            = %u\n",     __func__, hparams.n_swa);
-        LLAMA_LOG_INFO("%s: n_swa_pattern    = %u\n",     __func__, hparams.n_swa_pattern);
+        LLAMA_LOG_INFO("%s: is_swa_any       = %u\n",     __func__, hparams.is_swa_any());
         LLAMA_LOG_INFO("%s: n_embd_head_k    = %u\n",     __func__, hparams.n_embd_head_k);
         LLAMA_LOG_INFO("%s: n_embd_head_v    = %u\n",     __func__, hparams.n_embd_head_v);
         LLAMA_LOG_INFO("%s: n_gqa            = %s\n",     __func__, print_f([&](uint32_t il) { return hparams.n_gqa(il);        }, hparams.n_layer).c_str());
@@ -13189,6 +13196,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_NOMIC_BERT:
         case LLM_ARCH_NOMIC_BERT_MOE:
+        case LLM_ARCH_WAVTOKENIZER_DEC:
             {
                 res = nullptr;
             } break;
@@ -13215,7 +13223,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
                 if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-                    GGML_ASSERT(hparams.n_swa_pattern != 1);
+                    GGML_ASSERT(hparams.is_swa_any());
 
                     res = new llama_kv_cache_unified_iswa(
                             *this,
@@ -13229,7 +13237,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_batch,
                             padding);
                 } else {
-                    GGML_ASSERT(hparams.n_swa_pattern == 1);
+                    GGML_ASSERT(!hparams.is_swa_any());
 
                     res = new llama_kv_cache_unified(
                             *this,

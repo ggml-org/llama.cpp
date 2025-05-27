@@ -1110,6 +1110,77 @@ class TensorNameMap:
         MODEL_TENSOR.V_MM_PATCH_MERGER: (
             "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1
         ),
+
+        # audio (mtmd)
+
+        MODEL_TENSOR.A_ENC_EMBD_POS: (
+            "audio_tower.embed_positions", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV1D: (
+            "audio_tower.conv{bid}", # ultravox
+        ),
+
+        MODEL_TENSOR.A_PRE_NORM: (),
+
+        MODEL_TENSOR.A_POST_NORM: (
+            "audio_tower.layer_norm", # ultravox
+            "audio_tower.ln_post", # qwen2omni
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_Q: (
+            "audio_tower.layers.{bid}.self_attn.q_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_K: (
+            "audio_tower.layers.{bid}.self_attn.k_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_ATTN_V: (
+            "audio_tower.layers.{bid}.self_attn.v_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_INPUT_NORM: (
+            "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_OUTPUT: (
+            "audio_tower.layers.{bid}.self_attn.out_proj", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
+            "audio_tower.layers.{bid}.final_layer_norm", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_UP: (
+            "audio_tower.layers.{bid}.fc1", # ultravox
+        ),
+
+        MODEL_TENSOR.A_ENC_FFN_GATE: (),
+
+        MODEL_TENSOR.A_ENC_FFN_DOWN: (
+            "audio_tower.layers.{bid}.fc2", # ultravox
+        ),
+
+        # note: some tensors below has "audio." pseudo-prefix, to prevent conflicts with vision tensors
+        # this prefix is added in the conversion code in modify_tensors()
+
+        MODEL_TENSOR.A_MMPROJ: (
+            "audio.multi_modal_projector.linear_{bid}", # ultravox
+        ),
+
+        MODEL_TENSOR.A_MMPROJ_FC: (
+            "audio.multi_modal_projector.linear", # qwen2audio
+            "audio_tower.proj", # qwen2omni
+        ),
+
+        MODEL_TENSOR.A_MM_NORM_PRE: (
+            "audio.multi_modal_projector.ln_pre", # ultravox
+        ),
+
+        MODEL_TENSOR.A_MM_NORM_MID: (
+            "audio.multi_modal_projector.ln_mid", # ultravox
+        ),
     }
 
     # architecture-specific block mappings

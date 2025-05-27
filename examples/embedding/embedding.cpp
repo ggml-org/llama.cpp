@@ -41,8 +41,8 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
 
     // run model
     LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
-    if (llama_encode(ctx, batch) < 0) {
-        LOG_ERR("%s : failed to encode\n", __func__);
+    if (llama_decode(ctx, batch) < 0) {
+        LOG_ERR("%s : failed to process\n", __func__);
     }
 
     for (int i = 0; i < batch.n_tokens; i++) {

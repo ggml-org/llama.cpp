@@ -219,10 +219,13 @@ class Keys:
         TYPE       = "adapter.type"
         LORA_ALPHA = "adapter.lora.alpha"
 
-    class ClipVision:
+    class Clip:
         PROJECTOR_TYPE      = "clip.projector_type"
         HAS_VISION_ENCODER  = "clip.has_vision_encoder"
+        HAS_AUDIO_ENCODER   = "clip.has_audio_encoder"
         HAS_LLAVA_PROJECTOR = "clip.has_llava_projector"
+
+    class ClipVision:
         IMAGE_SIZE          = "clip.vision.image_size"
         PATCH_SIZE          = "clip.vision.patch_size"
         EMBEDDING_LENGTH    = "clip.vision.embedding_length"
@@ -243,19 +246,33 @@ class Keys:
         class Projector:
             SCALE_FACTOR    = "clip.vision.projector.scale_factor"
 
+    class ClipAudio:
+        NUM_MEL_BINS        = "clip.audio.num_mel_bins"
+        EMBEDDING_LENGTH    = "clip.audio.embedding_length"
+        FEED_FORWARD_LENGTH = "clip.audio.feed_forward_length"
+        PROJECTION_DIM      = "clip.audio.projection_dim"
+        BLOCK_COUNT         = "clip.audio.block_count"
+
+        class Attention:
+            HEAD_COUNT      = "clip.audio.attention.head_count"
+            LAYERNORM_EPS   = "clip.audio.attention.layer_norm_epsilon"
+
+        class Projector:
+            STACK_FACTOR    = "clip.audio.projector.stack_factor"
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #
 
 
 class GGUFType:
-    MODEL       = "model"
-    ADAPTER     = "adapter"
-    CLIP_VISION = "clip-vision"
+    MODEL   = "model"
+    ADAPTER = "adapter"
+    MMPROJ  = "mmproj" # dummy, unused for now
 
 
 class MODEL_ARCH(IntEnum):
-    CLIP_VISION      = auto() # dummy arch for clip.cpp
+    MMPROJ           = auto() # dummy arch for clip.cpp
     LLAMA            = auto()
     LLAMA4           = auto()
     DECI             = auto()
@@ -514,10 +531,28 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_QUERY       = auto() # minicpmv
     V_TOK_EMBD_IMG_BREAK = auto() # pixtral
     V_MM_PATCH_MERGER    = auto() # mistral small 3.1
+    # audio (mtmd)
+    A_ENC_EMBD_POS       = auto()
+    A_ENC_CONV1D         = auto()
+    A_PRE_NORM           = auto()
+    A_POST_NORM          = auto()
+    A_ENC_ATTN_Q         = auto()
+    A_ENC_ATTN_K         = auto()
+    A_ENC_ATTN_V         = auto()
+    A_ENC_INPUT_NORM     = auto()
+    A_ENC_OUTPUT         = auto()
+    A_ENC_OUTPUT_NORM    = auto()
+    A_ENC_FFN_UP         = auto()
+    A_ENC_FFN_GATE       = auto()
+    A_ENC_FFN_DOWN       = auto()
+    A_MMPROJ             = auto()
+    A_MMPROJ_FC          = auto()
+    A_MM_NORM_PRE        = auto()
+    A_MM_NORM_MID        = auto()
 
 
 MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
-    MODEL_ARCH.CLIP_VISION:      "clip", # dummy arch for clip.cpp
+    MODEL_ARCH.MMPROJ:           "clip", # dummy arch for clip.cpp
     MODEL_ARCH.LLAMA:            "llama",
     MODEL_ARCH.LLAMA4:           "llama4",
     MODEL_ARCH.DECI:             "deci",
@@ -776,10 +811,28 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
     MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
     MODEL_TENSOR.V_MM_PATCH_MERGER:         "mm.patch_merger", # mistral small 3.1
+    # audio (mtmd)
+    MODEL_TENSOR.A_ENC_EMBD_POS:            "a.position_embd",
+    MODEL_TENSOR.A_ENC_CONV1D:              "a.conv1d.{bid}",
+    MODEL_TENSOR.A_PRE_NORM:                "a.pre_ln",
+    MODEL_TENSOR.A_POST_NORM:               "a.post_ln",
+    MODEL_TENSOR.A_ENC_ATTN_Q:              "a.blk.{bid}.attn_q",
+    MODEL_TENSOR.A_ENC_ATTN_K:              "a.blk.{bid}.attn_k",
+    MODEL_TENSOR.A_ENC_ATTN_V:              "a.blk.{bid}.attn_v",
+    MODEL_TENSOR.A_ENC_INPUT_NORM:          "a.blk.{bid}.ln1",
+    MODEL_TENSOR.A_ENC_OUTPUT:              "a.blk.{bid}.attn_out",
+    MODEL_TENSOR.A_ENC_OUTPUT_NORM:         "a.blk.{bid}.ln2",
+    MODEL_TENSOR.A_ENC_FFN_UP:              "a.blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_ENC_FFN_GATE:            "a.blk.{bid}.ffn_gate",
+    MODEL_TENSOR.A_ENC_FFN_DOWN:            "a.blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
+    MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
+    MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
+    MODEL_TENSOR.A_MM_NORM_MID:             "mm.a.norm_mid",
 }
 
 MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
-    MODEL_ARCH.CLIP_VISION: [
+    MODEL_ARCH.MMPROJ: [
         MODEL_TENSOR.V_MMPROJ,
         MODEL_TENSOR.V_MMPROJ_FC,
         MODEL_TENSOR.V_MMPROJ_MLP,
@@ -819,6 +872,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_RESMPL_QUERY,
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
         MODEL_TENSOR.V_MM_PATCH_MERGER,
+        # audio
+        MODEL_TENSOR.A_ENC_EMBD_POS,
+        MODEL_TENSOR.A_ENC_CONV1D,
+        MODEL_TENSOR.A_PRE_NORM,
+        MODEL_TENSOR.A_POST_NORM,
+        MODEL_TENSOR.A_ENC_ATTN_Q,
+        MODEL_TENSOR.A_ENC_ATTN_K,
+        MODEL_TENSOR.A_ENC_ATTN_V,
+        MODEL_TENSOR.A_ENC_INPUT_NORM,
+        MODEL_TENSOR.A_ENC_OUTPUT,
+        MODEL_TENSOR.A_ENC_OUTPUT_NORM,
+        MODEL_TENSOR.A_ENC_FFN_UP,
+        MODEL_TENSOR.A_ENC_FFN_GATE,
+        MODEL_TENSOR.A_ENC_FFN_DOWN,
+        MODEL_TENSOR.A_MMPROJ,
+        MODEL_TENSOR.A_MMPROJ_FC,
+        MODEL_TENSOR.A_MM_NORM_PRE,
+        MODEL_TENSOR.A_MM_NORM_MID,
     ],
     MODEL_ARCH.LLAMA: [
         MODEL_TENSOR.TOKEN_EMBD,
@@ -2186,7 +2257,10 @@ class VisionProjectorType:
     LLAMA4 = "llama4"
     QWEN2VL = "qwen2vl_merger"
     QWEN25VL = "qwen2.5vl_merger"
+    ULTRAVOX = "ultravox"
     INTERNVL = "internvl"
+    QWEN2A = "qwen2a" # audio
+    QWEN25O = "qwen2.5o" # omni
 
 
 # Items here are (block size, type size)
