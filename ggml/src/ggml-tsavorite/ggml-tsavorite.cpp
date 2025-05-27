@@ -20,11 +20,15 @@
 #include <inttypes.h>
 #include <math.h>
 #include <string>
-
+#include <iostream>
 #include "ggml-backend-impl.h"
 #include "ggml-impl.h"
 #include "ggml.h"
+#include "HostShimCAPI.h"
+#include "tsi-rt/utils/Profiler.h"
 
+using namespace std;
+namespace tsirt = ::tsi::runtime;
 typedef struct _txe_device_t *txe_device_s;
 typedef struct _txe_compute_pipeline_state_t *txe_compute_pipeline_state_s;
 FILE *tsi_op_log_file;
@@ -513,8 +517,12 @@ static struct ggml_backend_tsavorite_context *ggml_tsavorite_init(ggml_backend_d
   if (tsi_log_setup() == false)
     return NULL;
 
+  std::string mainProfilerName = "GGML Tsavorite ";
+  tsirt::utils::TSIProfiler::initialize();
+  tsirt::utils::TSIScopedProfiler mainProfiler(mainProfilerName);
+  
   // TSI Run time Initalization
-  tsi_initialize(NUM_OF_TXES);
+  tsi_initialize(NUM_OF_TXES, NULL);
 
   // init context
   struct ggml_backend_tsavorite_context *ctx = (struct ggml_backend_tsavorite_context *)calloc(
@@ -615,6 +623,11 @@ static void ggml_tsavorite_free(struct ggml_backend_tsavorite_context *ctx) {
   sleep(2);
   tsi_finalize();
   GGML_TSAVORITE_LOG_INFO("End %s\n", __func__);
+  tsirt::utils::TSIProfiler::finalize();
+  std::cout << "\nGGML Tsavorite Profiling Results:" << std::endl;
+  std::cout << tsirt::utils::TSIProfiler::getFormattedResults(
+                   /*truncateFuncNames*/ true)
+            << std::endl;
 }
 
 #if 0
