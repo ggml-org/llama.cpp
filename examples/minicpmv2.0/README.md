@@ -5,15 +5,12 @@
 make
 make minicpmv-cli
 
-python ./examples/minicpmv/minicpm-surgery.py -m ../MiniCPM-V-2
-python ./examples/minicpmv/convert-image-encoder-to-gguf.py -m ../MiniCPM-V-2 --llava-projector ../MiniCPM-V-2/llava.projector --output-dir ../MiniCPM-V-2 --image-mean 0.5 0.5 0.5 --image-std 0.5 0.5 0.5
-python ./convert-hf-to-gguf.py ../MiniCPM-V-2/MiniCPM
-./minicpmv-cli -m ../MiniCPM-V-2/MiniCPM/ggml-model-f16.gguf --mmproj ../MiniCPM-V-2/mmproj-model-f16.gguf -c 4096 --temp 0.6 --top-p 0.8 --top-k 100 --repeat-penalty 1.0 --image ../test.jpg -p "这张图里有什么?"
+python ./examples/minicpmv2.0/minicpm-surgery.py -m ../MiniCPM-V-2
+python ./examples/minicpmv2.0/convert-image-encoder-to-gguf.py -m ../MiniCPM-V-2 --llava-projector ../MiniCPM-V-2/llava.projector --output-dir ../MiniCPM-V-2 --image-mean 0.5 0.5 0.5 --image-std 0.5 0.5 0.5
+python ./convert-hf-to-gguf.py ../MiniCPM-V-2/model
+./minicpmv-cli -m ../MiniCPM-V-2/model/ggml-model-f16.gguf --mmproj ../MiniCPM-V-2/mmproj-model-f16.gguf -c 4096 --temp 0.6 --top-p 0.8 --top-k 100 --repeat-penalty 1.0 --image ../test.jpg -p "这张图里有什么?"
 
 # or run quantize int4 version
-./quantize ../MiniCPM-V-2/MiniCPM/ggml-model-f16.gguf ../MiniCPM-V-2/MiniCPM/ggml-model-Q4_K_M.gguf Q4_K_M
-./minicpmv-cli -m ../MiniCPM-V-2/MiniCPM/ggml-model-Q4_K_M.gguf --mmproj ../MiniCPM-V-2/mmproj-model-f16.gguf -c 4096 --temp 0.6 --top-p 0.8 --top-k 100 --repeat-penalty 1.0 --image ../test.jpg -p "这张图里有什么?"
-
-# or run in interactive mode
-./minicpmv-cli -m ../MiniCPM-V-2/MiniCPM/ggml-model-Q4_K_M.gguf --mmproj ../MiniCPM-V-2/mmproj-model-f16.gguf -c 4096 --temp 0.6 --top-p 0.8 --top-k 100 --repeat-penalty 1.0 --image ../test.jpg -i
+./quantize ../MiniCPM-V-2/model/ggml-model-f16.gguf ../MiniCPM-V-2/model/ggml-model-Q4_K_M.gguf Q4_K_M
+./minicpmv-cli -m ../MiniCPM-V-2/model/ggml-model-Q4_K_M.gguf --mmproj ../MiniCPM-V-2/mmproj-model-f16.gguf -c 4096 --temp 0.6 --top-p 0.8 --top-k 100 --repeat-penalty 1.0 --image ../test.jpg -p "这张图里有什么?"
 ```
