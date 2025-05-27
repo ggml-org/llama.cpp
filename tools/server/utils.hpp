@@ -749,10 +749,9 @@ static json oaicompat_chat_params_parse(
         llama_params["parse_tool_calls"] = true;
     }
 
+    // merge the template args provided from command line with the args provided in the user request
     auto chat_template_kwargs_object = json_value(body, "chat_template_kwargs", json::object());
-    for (const auto & item : opt.chat_template_kwargs) {
-        inputs.chat_template_kwargs[item.first] = item.second;
-    }
+    inputs.chat_template_kwargs = opt.chat_template_kwargs;
     for (const auto & item : chat_template_kwargs_object.items()) {
         inputs.chat_template_kwargs[item.key()] = item.value().dump();
     }
