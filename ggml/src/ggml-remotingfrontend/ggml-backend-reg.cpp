@@ -133,6 +133,12 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
     /* .context     = */ gpu,
   };
 
+  static bool initialized = false;
+  if (initialized) {
+    return &reg;
+  }
+  initialized = true;
+
   INFO("ggml_backend_remoting_frontend_reg() hello :wave:");
 
   INFO("#");
