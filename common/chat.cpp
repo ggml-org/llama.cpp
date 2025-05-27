@@ -1508,12 +1508,15 @@ static void common_chat_parse_functionary_v3_1_llama_3_1(common_chat_msg_parser 
 static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
 
-    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, /* tools_override= */ std::nullopt, json {
+    json extra_context = json {
         {"enable_thinking", inputs.enable_thinking},
-    });
+    };
+    extra_context.update(inputs.extra_context);
+
+    data.prompt = apply(tmpl, inputs, /* messages_override =*/ std::nullopt, /* tools_override= */ std::nullopt, extra_context);
     data.format = COMMON_CHAT_FORMAT_HERMES_2_PRO;
     if (string_ends_with(data.prompt, "<think>\n")) {
-        if (!inputs.enable_thinking) {
+        if (!extra_context["enable_thinking"]) {
             data.prompt += "</think>";
         } else {
             data.thinking_forced_open = true;
@@ -1731,6 +1734,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.grammar = inputs.grammar;
     params.now = inputs.now;
 
+    params.extra_context = json::object();
     for (auto el : inputs.chat_template_kwargs) {
         params.extra_context[el.first] = json::parse(el.second);
     }
