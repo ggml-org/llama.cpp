@@ -259,6 +259,49 @@ const StorageUtils = {
       localStorage.setItem('theme', theme);
     }
   },
+
+  /**
+   * Import a demo conversation from JSON data
+   */
+  async importDemoConversation(demoConv: {
+    demo?: boolean;
+    id: string;
+    lastModified: number;
+    messages: Message[];
+  }): Promise<void> {
+    if (demoConv.messages.length === 0) return;
+
+    // Create a new conversation with a fresh ID
+    const conv = await this.createConversation('Demo Conversation');
+
+    // Get the root message to use as parent
+    const rootMessages = await this.getMessages(conv.id);
+    const rootMessage = rootMessages.find((msg) => msg.type === 'root');
+    if (!rootMessage) {
+      throw new Error('Failed to find root message in created conversation');
+    }
+
+    // Transform demo messages to the format expected by appendMsgChain
+    const now = Date.now();
+    const transformedMessages = demoConv.messages
+      .filter(
+        (msg) =>
+          msg && msg.role && msg.content !== undefined && msg.id !== undefined
+      )
+      .map((msg, index) => ({
+        id: now + index,
+        convId: conv.id,
+        type: 'text' as const,
+        tool_calls: msg.tool_calls || [],
+        timestamp: now + index,
+        role: msg.role,
+        content: msg.content,
+        timings: msg.timings,
+      })) as Exclude<Message, 'parent' | 'children'>[];
+
+    // Use appendMsgChain to add all messages at once
+    await this.appendMsgChain(transformedMessages, rootMessage.id);
+  },
 };
 
 export default StorageUtils;

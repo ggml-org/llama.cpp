@@ -63,7 +63,10 @@ function MessagePart({
   isMainMessage?: boolean;
 }) {
   const { config } = useAppContext();
-  const { content, thought, isThinking } = extractThoughts(message.content, message.role);
+  const { content, thought, isThinking } = extractThoughts(
+    message.content,
+    message.role
+  );
 
   if (message.role === 'tool' && baseClassName) {
     return (
@@ -89,10 +92,7 @@ function MessagePart({
       ) : (
         content &&
         content.trim() !== '' && (
-          <MarkdownDisplay
-            content={content}
-            isGenerating={isPending}
-          />
+          <MarkdownDisplay content={content} isGenerating={isPending} />
         )
       )}
 
@@ -147,7 +147,10 @@ export default function ChatMessage({
   const nextSibling = siblingLeafNodeIds[siblingCurrIdx + 1];
   const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
 
-  const mainSplitMessage = useMemo(() => extractThoughts(msg.content, msg.role), [msg.content, msg.role]);
+  const mainSplitMessage = useMemo(
+    () => extractThoughts(msg.content, msg.role),
+    [msg.content, msg.role]
+  );
 
   if (!viewingChat) return null;
 
@@ -246,7 +249,11 @@ export default function ChatMessage({
                       isPending={isPending}
                       showThoughts={true}
                       className={part.role === 'assistant' ? 'mt-2' : ''}
-                      baseClassName={part.role === 'tool' ? 'collapse bg-base-200 collapse-arrow mb-4 mt-2' : ''}
+                      baseClassName={
+                        part.role === 'tool'
+                          ? 'collapse bg-base-200 collapse-arrow mb-4 mt-2'
+                          : ''
+                      }
                     />
                   ))}
                 </>

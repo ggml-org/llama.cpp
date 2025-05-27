@@ -215,10 +215,7 @@ const SETTING_SECTIONS: SettingSection[] = [
           const debugImportDemoConv = async () => {
             const res = await fetch('/demo-conversation.json');
             const demoConv = await res.json();
-            StorageUtils.remove(demoConv.id);
-            for (const msg of demoConv.messages) {
-              StorageUtils.appendMsg(demoConv.id, msg);
-            }
+            await StorageUtils.importDemoConversation(demoConv);
           };
           return (
             <button className="btn" onClick={debugImportDemoConv}>

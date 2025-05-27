@@ -367,10 +367,6 @@ export const AppContextProvider = ({
         lastMsgId = await generateMessage(convId, lastMsgId, onChunk);
       }
 
-      // Fetch messages from DB
-      const savedMsgs = await StorageUtils.getMessages(convId);
-      console.log({ savedMsgs });
-
       return lastMsgId;
     } catch (err) {
       setPending(convId, null);
