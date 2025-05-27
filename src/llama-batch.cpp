@@ -4,21 +4,6 @@
 #include <cstring>
 #include <algorithm>
 
-void llama_ubatch::update() {
-    if (equal_seqs) {
-        // TODO: for now don't compute min/max for recurrent batches since we don't need this.
-        //       the batches will be refactored anyway, so we'll fix this later
-        return;
-    }
-
-    for (uint32_t i = 0; i < n_tokens; ++i) {
-        const llama_seq_id s = seq_id[i][0];
-
-        seq_pos_min[s] = seq_pos_min[s] == -1 ? pos[i] : std::min(seq_pos_min[s], pos[i]);
-        seq_pos_max[s] = seq_pos_max[s] == -1 ? pos[i] : std::max(seq_pos_max[s], pos[i]);
-    }
-}
-
 llama_ubatch llama_sbatch::reserve_ubatch(size_t n_ubatch, bool has_embd) {
     // clear empty sequences
     // the previous ubatch is assumed to be gone,
@@ -47,8 +32,6 @@ llama_ubatch llama_sbatch::reserve_ubatch(size_t n_ubatch, bool has_embd) {
         /*n_tokens     =*/ 0,
         /*n_seq_tokens =*/ 0,
         /*n_seqs       =*/ 0,
-        /*seq_pos_min  =*/ {-1},
-        /*seq_pos_max  =*/ {-1},
         /*token        =*/ !has_embd ? udata.token.data() : nullptr,
         /*embd         =*/ has_embd  ? udata.embd.data()  : nullptr,
         /*pos          =*/ udata.pos.data(),
@@ -172,7 +155,6 @@ llama_ubatch llama_sbatch::split_simple(size_t n_ubatch) {
         GGML_ASSERT(seq.size() == 1 && s.n_seq_id == 0); // don't mix with other splits
         add_seq_to_ubatch(ubatch, s, length);
     }
-    ubatch.update();
     return ubatch;
 }
 
@@ -200,7 +182,6 @@ llama_ubatch llama_sbatch::split_equal(size_t n_ubatch) {
             if (length + n_tokens_in_ubatch > n_ubatch) { break; }
         }
     }
-    ubatch.update();
     return ubatch;
 }
 
@@ -213,7 +194,6 @@ llama_ubatch llama_sbatch::split_seq(size_t n_ubatch) {
         GGML_ASSERT(s.n_seq_id > 0); // should not be mixed with simple splits
         add_seq_to_ubatch(ubatch, s, length);
     }
-    ubatch.update();
     return ubatch;
 }
 
