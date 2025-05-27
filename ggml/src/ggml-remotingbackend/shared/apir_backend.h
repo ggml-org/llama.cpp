@@ -14,7 +14,7 @@
 
 #define APIR_BACKEND_FORWARD_INDEX_INVALID 6
 
-#define APIR_ALLOC_FROM_HOST_PTR 1
+#define APIR_ALLOC_FROM_HOST_PTR 0
 
 typedef uintptr_t apir_buffer_type_host_handle_t;
 typedef uintptr_t apir_buffer_host_handle_t;

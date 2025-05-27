@@ -64,7 +64,7 @@ apir_buffer_set_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_contex
   return;
 }
 
-#if APIR_ALLOC_FROM_HOST_PTR
+#if false
 void
 apir_buffer_get_tensor(struct virtgpu *gpu, apir_buffer_context_t *buffer_context,
 		       const ggml_tensor *tensor, void *data, size_t offset, size_t size) {
