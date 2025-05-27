@@ -38,6 +38,7 @@ class Metadata:
     license: Optional[str] = None
     license_name: Optional[str] = None
     license_link: Optional[str] = None
+    license_content: Optional[str] = None
     base_models: Optional[list[dict]] = None
     tags: Optional[list[str]] = None
     languages: Optional[list[str]] = None
@@ -77,6 +78,7 @@ class Metadata:
         metadata.size_label      = metadata_override.get(Keys.General.SIZE_LABEL,      metadata.size_label)
         metadata.license_name    = metadata_override.get(Keys.General.LICENSE_NAME,    metadata.license_name)
         metadata.license_link    = metadata_override.get(Keys.General.LICENSE_LINK,    metadata.license_link)
+        metadata.license_content = metadata_override.get(Keys.General.LICENSE_CONTENT, metadata.license_content)
 
         metadata.url             = metadata_override.get(Keys.General.URL,             metadata.url)
         metadata.doi             = metadata_override.get(Keys.General.DOI,             metadata.doi)
@@ -538,6 +540,15 @@ class Metadata:
             if metadata.size_label is None and size_label is not None:
                 metadata.size_label = size_label
 
+        # Detect LICENSE file and include a copy
+        #########################################
+        if isinstance(metadata.license_link, str) and not (metadata.license_link.startswith("http://") or metadata.license_link.startswith("https://")):
+            if metadata.license_content is None:
+                standard_license_file_path = Path("LICENSE")
+                if standard_license_file_path.is_file():
+                    with open(standard_license_file_path, 'r') as file:
+                        metadata.license_content = file.read()
+
         return metadata
 
     def set_gguf_meta_model(self, gguf_writer: gguf.GGUFWriter):
@@ -573,6 +584,8 @@ class Metadata:
             gguf_writer.add_license_name(self.license_name)
         if self.license_link is not None:
             gguf_writer.add_license_link(self.license_link)
+        if self.license_content is not None:
+            gguf_writer.add_license_content(self.license_content)
 
         if self.url is not None:
             gguf_writer.add_url(self.url)
