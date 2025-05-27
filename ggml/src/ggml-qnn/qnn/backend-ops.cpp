@@ -164,6 +164,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_UNARY_OP_HARDSWISH
     false,  // GGML_UNARY_OP_HARDSIGMOID
     false,  // GGML_UNARY_OP_EXP
+    false,  // GGML_UNARY_OP_GELU_ERF
 };
 
 static_assert(kQnnSupportedOps[GGML_OP_NONE], "GGML_OP_NONE is not true");

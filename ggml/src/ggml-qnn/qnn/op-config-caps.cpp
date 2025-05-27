@@ -213,6 +213,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_UNARY_OP_HARDSWISH
     {}, // GGML_UNARY_OP_HARDSIGMOID
     {}, // GGML_UNARY_OP_EXP
+    {}, // GGML_UNARY_OP_GELU_ERF
 };
 
 static_assert(kOpCaps[GGML_OP_NONE].get_desc == nullptr, "GGML_OP_NONE should not have get_desc function");
@@ -382,6 +383,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_UNARY_OP_HARDSWISH
     nullptr,  // GGML_UNARY_OP_HARDSIGMOID
     nullptr,  // GGML_UNARY_OP_EXP
+    nullptr, // GGML_UNARY_OP_GELU_ERF
 };
 
 static_assert(kOpConstructors[GGML_OP_NONE] == nullptr, "GGML_OP_NONE does not match the nullptr function");
