@@ -285,7 +285,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
     }
 
     __dpct_inline__ float operator()(const void * __restrict__ vbq, const int ibx_offset, const int d_offset,
-                     const int8_t* q8_1_quant_ptr, const sycl::half2& q8_1_ds, const int & iqs, int /* nblocks */) {
+                     const int8_t* q8_1_quant_ptr, const sycl::half2* q8_1_ds, const int & iqs, int /* nblocks */) {
         const uint8_t * bq4_0 = static_cast<const uint8_t *>(vbq) + ibx_offset;
         const ggml_half d     = *(reinterpret_cast<const ggml_half *>(static_cast<const uint8_t *>(vbq) + d_offset));
         int             v[q4_0_traits::vdr_mmvq];
@@ -299,7 +299,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_0> {
             u[2 * i + 1] = get_int_from_int8_aligned(q8_1_quant_ptr, iqs + i + q4_0_traits::qi);
         }
 
-        return vec_dot_q4_0_q8_1_impl(v, u, d, q8_1_ds);
+        return vec_dot_q4_0_q8_1_impl(v, u, d, *q8_1_ds);
     };
 };
 
@@ -347,7 +347,7 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K> {
     using q4_k_traits = typename q4_k_block::traits;
 
     float operator()(const void * __restrict__ vbq, const int ibx_offset, const int d_offset,
-                     const int8_t* q8_1_quant_ptr, const sycl::half2& q8_1_ds, const int & iqs, int nblocks) {
+                     const int8_t* q8_1_quant_ptr, const sycl::half2* q8_1_ds, const int & iqs, int nblocks) {
         const int ib = ibx_offset / (QK_K / 2);
 
         const uint8_t *    base           = static_cast<const uint8_t *>(vbq);
@@ -360,7 +360,38 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q4_K> {
         const int *      q4         = (const int *) (qs + 16 * bq8_offset + 4 * ((iqs / 2) % 4));
         const uint16_t * scales     = (const uint16_t *) scs;
 
-        return vec_dot_q4_K_q8_1_common(q4, scales, *dms, bq8_1, iqs);
+        int   v[2];
+        int   u[2 * QR4_K];
+        float d8[QR4_K];
+
+        v[0] = q4[0];
+        v[1] = q4[4];
+
+        uint16_t  aux[2];
+        const int j = (QR4_K * ((iqs / 2) / (QI8_1 / 2))) / 2;
+        if (j < 2) {
+            aux[0] = scales[j + 0] & 0x3f3f;
+            aux[1] = scales[j + 2] & 0x3f3f;
+        } else {
+            aux[0] = ((scales[j + 2] >> 0) & 0x0f0f) | ((scales[j - 2] & 0xc0c0) >> 2);
+            aux[1] = ((scales[j + 2] >> 4) & 0x0f0f) | ((scales[j - 0] & 0xc0c0) >> 2);
+        }
+
+        const uint8_t * sc = (const uint8_t *) aux;
+        const uint8_t * m  = sc + 2;
+
+        for (int i = 0; i < QR4_K; ++i) {
+            const int8_t* quant_base_ptr = q8_1_quant_ptr + (bq8_offset + i) * QK8_1;
+            sycl::half2 ds_values = *(q8_1_ds + bq8_offset + i);
+
+            d8[i]                   = ds_values[0];
+
+            const int * q8 = (const int *) quant_base_ptr + ((iqs / 2) % 4);
+            u[2 * i + 0]   = q8[0];
+            u[2 * i + 1]   = q8[4];
+        }
+
+        return vec_dot_q4_K_q8_1_impl_vmmq(v, u, sc, m, *dms, d8);
     }
 };
 

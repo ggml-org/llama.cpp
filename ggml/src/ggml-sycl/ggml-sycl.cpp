@@ -1418,19 +1418,8 @@ template <int ElementsPerWI>
 static __dpct_inline__ void quantize_and_reorder_q8_1(const float * __restrict__ x, void * reordered_q8_tensor,
                                                       const int kx, const int kx_padded, const sycl::nd_item<1> & it) {
     /*
-        quantize and reorders the resultant q8 tensor in a per row fashion
-        Each sub-group calculates one quant block
-        work_group_size = sub_group_size;
-
-        |------------------------------ Matrix Pitch -------------------------|
-        |------- Matrix Width --------|
-        q_00 q_01 q_02 ..... q_0n-1 q_n ds00 ds01 ... ds0n/32 ... padding ... |
-        .                             .                                       |
-        .                             .                                       |
-        .                             .                                   Matrix Height
-        .                             .                                       |
-        .                             .                                       |
-        q_n0 q_n1 q_n2 ..... q_nn-1 q_n dsn0 dsn1 ... dsnn/32 ... padding ... | 
+        Quantizes and reorders the resultant q8 tensor in a per row fashion
+        Each sub-group calculates one quant block. i.e. QK8_1 quant values and the d and sum values
     */
 
     auto subgroup_id = it.get_group(0);
