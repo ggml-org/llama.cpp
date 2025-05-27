@@ -4,6 +4,7 @@
 #include "llama-batch.h"
 #include "llama-cparams.h"
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-mixed.h"
 
 #include <cassert>
 #include <cmath>
@@ -373,6 +374,12 @@ void llm_graph_input_attn_kv_unified_iswa::set_input(const llama_ubatch * ubatch
 
     if (self_kq_mask_swa) {
         kv_self->get_kv_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+    }
+}
+
+void llm_graph_input_attn_kv_mixed::set_input(const llama_ubatch * ubatch) {
+    if (self_kq_mask) {
+        kv_self->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
 }
 
@@ -1589,6 +1596,67 @@ void llm_graph_context::build_pooling(
     res->t_embd_pooled = cur;
 
     ggml_build_forward_expand(gf, cur);
+}
+
+llm_graph_input_attn_kv_mixed * llm_graph_context::build_attn_inp_kv_mixed() const {
+    const llama_kv_cache_mixed * kv_self = static_cast<const llama_kv_cache_mixed *>(memory);
+
+    auto inp = std::make_unique<llm_graph_input_attn_kv_mixed>(hparams, cparams, kv_self);
+
+    const auto n_kv = kv_self->get_n();
+
+    inp->self_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+    ggml_set_input(inp->self_kq_mask);
+
+    inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+
+    return (llm_graph_input_attn_kv_mixed *) res->add_input(std::move(inp));
+}
+
+ggml_tensor * llm_graph_context::build_attn(
+        llm_graph_input_attn_kv_mixed * inp,
+        ggml_cgraph * gf,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * v_mla,
+            float     kq_scale,
+            int       il) const {
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, k_cur);
+    ggml_build_forward_expand(gf, v_cur);
+
+    const llama_kv_cache_mixed * kv_self = static_cast<const llama_kv_cache_mixed *>(memory);
+
+    // store to KV cache
+    {
+        ggml_build_forward_expand(gf, kv_self->cpy_k(ctx0, k_cur, il));
+        ggml_build_forward_expand(gf, kv_self->cpy_v(ctx0, v_cur, il));
+    }
+
+    const auto & kq_mask = inp->get_kq_mask();
+
+    ggml_tensor * q = q_cur;
+    ggml_tensor * k = kv_self->get_k(ctx0, il);
+    ggml_tensor * v = kv_self->get_v(ctx0, il);
+
+    ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, kq_scale);
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+    }
+
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+
+    return cur;
 }
 
 int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional) {

@@ -2107,6 +2107,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--mixed-kv-cache"},
+        "enable mixed precision KV cache (FP16 for recent tokens, quantized for old tokens)",
+        [](common_params & params) {
+            params.use_mixed_kv_cache = true;
+        }
+    ).set_env("LLAMA_ARG_MIXED_KV_CACHE"));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {

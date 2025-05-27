@@ -489,7 +489,7 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
         return false;
     }
 
-#define FIND_SLOT_DEBUG 1
+// #define FIND_SLOT_DEBUG 1
 #if FIND_SLOT_DEBUG
     LLAMA_LOG_WARN("begin: n = %5d, used = %5d, head = %5d, n_swa = %5d\n", n, used, head, n_swa);
 
@@ -562,7 +562,11 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
     n = std::min(size, std::max(n_pad, GGML_PAD(cell_max(), n_pad)));
 
 #ifdef FIND_SLOT_DEBUG
-    LLAMA_LOG_WARN("end:   n = %5d, used = %5d, head = %5d, n_swa = %5d\n", n, used, head, n_swa);
+    // 🐛 调试信息：显示unified缓存的详细状态
+    // 🛡️ 这不会影响mixed缓存的运行，因为mixed缓存有自己的find_slot实现
+    // Debug info: show detailed status of unified cache
+    // This won't affect mixed cache operation as mixed cache has its own find_slot implementation
+    LLAMA_LOG_WARN("end:   n = %5d, used = %5d, head = %5d, n_swa = %5d, n_pad = %5d, cell_max = %5d, size = %5d\n", n, used, head, n_swa, n_pad, cell_max(), size);
 #endif
 
     return true;

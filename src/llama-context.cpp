@@ -177,9 +177,10 @@ llama_context::llama_context(
     // init the memory module
     if (!hparams.vocab_only) {
         llama_memory_params params_mem = {
-            /*.type_k   =*/ params.type_k,
-            /*.type_v   =*/ params.type_v,
-            /*.swa_full =*/ params.swa_full,
+            /*.type_k   =*/             params.type_k,
+            /*.type_v   =*/             params.type_v,
+            /*.swa_full =*/             params.swa_full,
+            /*.use_mixed_kv_cache =*/   params.use_mixed_kv_cache,
         };
 
         memory.reset(model.create_memory(params_mem, cparams));

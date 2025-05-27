@@ -1,0 +1,226 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Mixed KV Cache Implementation Guide
+
+## Overview
+The Mixed KV Cache is a memory-efficient implementation for llama.cpp that uses a hybrid approach:
+- **Hot Cache (FP16)**: Recent tokens stored in high precision
+- **Cold Cache (Quantized)**: Older tokens stored in compressed format (Q4_0)
+- **FIFO Strategy**: First-In-First-Out quantization when threshold is reached
+
+## Architecture
+
+### Core Files
+- [src/llama-kv-cache-mixed.h](mdc:src/llama-kv-cache-mixed.h) - Header with class definitions
+- [src/llama-kv-cache-mixed.cpp](mdc:src/llama-kv-cache-mixed.cpp) - Implementation
+- [src/llama-model.cpp](mdc:src/llama-model.cpp) - Integration with model building
+- [src/llama-memory.h](mdc:src/llama-memory.h) - Memory management integration
+
+### Key Data Structures
+
+#### kv_layer_mixed
+```cpp
+struct kv_layer_mixed {
+    uint32_t il;                    // Layer index
+    ggml_tensor * k_fp16;          // FP16 K tensor for recent tokens
+    ggml_tensor * v_fp16;          // FP16 V tensor for recent tokens
+    ggml_tensor * k_quant;         // Quantized K tensor for old tokens
+    ggml_tensor * v_quant;         // Quantized V tensor for old tokens
+    ggml_tensor * k_dequant;       // Temporary dequantization buffer
+    ggml_tensor * v_dequant;       // Temporary dequantization buffer
+    mutable uint32_t n_fp16_tokens = 0;   // Count of FP16 tokens
+    mutable uint32_t n_quant_tokens = 0;  // Count of quantized tokens
+};
+```
+
+#### Configuration
+```cpp
+struct llama_kv_cache_mixed_config {
+    bool enable_quantization = true;
+    uint32_t quantization_threshold = 32;  // Tokens before quantization
+    uint32_t group_size = 16;              // Batch size for quantization
+    ggml_type hot_type_k = GGML_TYPE_F16;  // Recent tokens type
+    ggml_type cold_type_k = GGML_TYPE_Q4_0; // Old tokens type
+    // ... additional settings
+};
+```
+
+## Critical Implementation Details
+
+### 1. Tensor Creation (IMPORTANT)
+**Always use 2D tensors for cache storage**, following unified cache pattern:
+```cpp
+// ✅ Correct way (like unified cache)
+layer.k_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_k, n_embd_k_gqa, kv_size);
+layer.v_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_v, n_embd_v_gqa, kv_size);
+
+// ❌ Wrong way - would cause dimension check failures
+layer.k_fp16 = ggml_new_tensor_1d(ctx, config.hot_type_k, n_embd_k_gqa * kv_size);
+```
+
+### 2. Dimension Check Fixes
+When using `ggml_view_3d`, always check token counts to avoid `ne[1] * ne[2] != 0` errors:
+```cpp
+// ✅ Safe approach
+if (layer.n_quant_tokens == 0) {
+    if (layer.n_fp16_tokens == 0) {
+        return nullptr;  // No data available
+    }
+    // Create view only for FP16 data
+}
+```
+
+### 3. Architecture Compliance
+**Never create ggml_context inside KV cache methods**. Use graph building mechanism:
+```cpp
+// ❌ Wrong - creates context internally
+ggml_context * ctx_quant = ggml_init(params);
+
+// ✅ Correct - use graph building
+llm_graph_result_ptr build_graph_quantize(
+    const llama_cparams & cparams,
+    ggml_context * ctx,  // Use provided context
+    ggml_cgraph * gf,
+    int32_t il) const;
+```
+
+## Key Methods
+
+### Core Access Methods
+- `get_k()` / `get_v()`: Always return FP16 views (transparent to attention)
+- `get_merged_k()` / `get_merged_v()`: Handle merging of FP16 + dequantized data
+- `cpy_k()` / `cpy_v()`: Store new tokens in FP16 buffers
+
+### Quantization Methods
+- `quantize_oldest_tokens()`: FIFO quantization implementation
+- `build_graph_quantize()`: Graph-based quantization (proper llama.cpp way)
+- `update()`: Triggers quantization through graph mechanism
+
+### Token Counting Fix
+**Critical**: Update token counters in `cpy_k()` method:
+```cpp
+// 🔄 Update FP16 token counter
+layer.n_fp16_tokens += n_tokens;
+```
+Make counters `mutable` to allow updates in const methods.
+
+## Memory Layout
+
+### FIFO Strategy Visualization
+```
+Time →  [Token 1] [Token 2] [Token 3] [Token 4] [Token 5]
+Step 1: [  FP16   ] [  FP16  ] [  FP16  ]
+Step 2: [  FP16   ] [  FP16  ] [  FP16  ] [  FP16  ]
+Step 3: [ Quant   ] [  FP16  ] [  FP16  ] [  FP16  ] [  FP16  ]
+        ↑ oldest moved to quantized buffer
+```
+
+### Data Merging Process
+```
+Case 3: Mixed Data
+┌─────────────────┐ ┌─────────────────┐    merge    ┌─────────────────┐
+│ Quantized Buffer│ │ FP16 Buffer     │ ──────────▶│ Merged FP16 View│
+│ [older tokens]  │ │ [newer tokens]  │            │ [all tokens]    │
+└─────────────────┘ └─────────────────┘            └─────────────────┘
+```
+
+## Integration Points
+
+### Model Building Integration
+In [src/llama-model.cpp](mdc:src/llama-model.cpp), use type-safe detection:
+```cpp
+// Detect cache type and use appropriate input builder
+llm_graph_input_i * inp_attn = nullptr;
+if (dynamic_cast<const llama_kv_cache_mixed*>(memory)) {
+    inp_attn = build_attn_inp_kv_mixed();
+} else {
+    inp_attn = build_attn_inp_kv_unified(); // Default path
+}
+```
+
+### Memory Creation
+In memory creation functions:
+```cpp
+if (params.use_mixed_kv_cache) {
+    llama_kv_cache_mixed_config mixed_config;
+    // Configure parameters...
+    res = new llama_kv_cache_mixed(/*parameters*/);
+}
+```
+
+## Testing and Debugging
+
+### Build Commands
+```bash
+# Build project
+cmake --build build-arm64 --config Release -j12
+
+# Test with standard command
+./build-arm64/bin/llama-cli -m model.gguf -n 16 -p "Hello, world" -ngl 0 -ctk q4_0 -ctv q4_0 -fa -t 12 -no-cnv
+```
+
+### Debug Logging
+Look for `[mixed-kv]` prefixed logs:
+```
+[mixed-kv] adding 1 K tokens to layer 0 cache (head=0)
+[mixed-kv]   - current FP16 tokens: 0, quantized tokens: 0
+[mixed-kv]   - updated FP16 tokens: 1 (added 1)
+```
+
+### Fixed Token Testing
+For testing with exactly 32 tokens:
+```bash
+PROMPT="Hello world this is a comprehensive test prompt designed to evaluate mixed precision KV cache implementation"
+./llama-cli -m model.gguf -n 1 -p "$PROMPT" -ngl 0 -t 12 -no-cnv
+```
+
+## Common Issues and Solutions
+
+### 1. Token Counters Always Zero
+**Problem**: `current FP16 tokens: 0, quantized tokens: 0`
+**Solution**: Update counters in `cpy_k()` method and make them `mutable`
+
+### 2. Dimension Check Failures
+**Problem**: `ggml_view_3d` fails with dimension errors
+**Solution**: Check token counts before creating views, handle empty cases
+
+### 3. Context Creation Errors
+**Problem**: Creating `ggml_context` inside KV cache
+**Solution**: Use graph building mechanism in `update()` method
+
+### 4. Compatibility Issues
+**Problem**: Breaking existing cache types
+**Solution**: Use `dynamic_cast` for type detection, maintain separate code paths
+
+## Performance Considerations
+
+### Memory Savings
+- FP16: 2 bytes per value
+- Q4_0: ~0.5 bytes per value
+- Compression ratio: ~4x for quantized portions
+
+### Quantization Timing
+- Trigger: When FP16 tokens exceed threshold (default: 32)
+- Batch size: Process in groups (default: 16 tokens)
+- Strategy: FIFO - oldest tokens quantized first
+
+## Compatibility Guarantees
+
+The mixed cache implementation:
+- ✅ Only activates when `use_mixed_kv_cache = true`
+- ✅ Unified cache continues to work normally
+- ✅ SWA cache continues to work normally
+- ✅ Recurrent cache continues to work normally
+- ✅ All existing functionality preserved
+- ✅ Type-safe detection using `dynamic_cast`
+
+## Future Improvements
+
+1. **Command Line Integration**: Add `--mixed-kv-cache` option
+2. **Adaptive Thresholds**: Dynamic adjustment based on memory pressure
+3. **Better Quantization**: More sophisticated compression algorithms
+4. **GPU Support**: Offload quantization operations to GPU
+5. **Statistics**: Detailed performance and compression metrics

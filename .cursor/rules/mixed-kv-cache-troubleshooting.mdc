@@ -1,0 +1,239 @@
+---
+description: 
+globs: llama-context.cpp,llama-kv-cache*
+alwaysApply: false
+---
+# Mixed KV Cache Troubleshooting & Best Practices
+
+## Critical Fixes Applied in This Session
+
+### 1. Architecture Compliance Fix
+**Issue**: Creating `ggml_context` inside KV cache methods violates llama.cpp architecture
+**Root Cause**: `quantize_oldest_tokens()` was creating internal contexts
+**Solution**: Moved quantization to graph building mechanism in `update()` method
+
+**Before (Wrong)**:
+```cpp
+void quantize_oldest_tokens() {
+    ggml_init_params params = {...};
+    ggml_context * ctx_quant = ggml_init(params);  // ❌ Wrong!
+    // ... quantization logic
+}
+```
+
+**After (Correct)**:
+```cpp
+bool update(llama_context & lctx) {
+    // ... existing update logic
+    if (quantization_needed) {
+        auto * gf = lctx.graph_init();
+        auto res = build_graph_quantize(lctx.get_cparams(), lctx.get_ctx_compute(), gf, layer.il);
+        lctx.graph_compute(gf, false);
+    }
+}
+```
+
+### 2. Token Counter Fix
+**Issue**: Token counters always showing 0 in debug logs
+**Root Cause**: `cpy_k()` and `cpy_v()` methods not updating counters
+**Solution**: Update counters in `cpy_k()` and make them `mutable`
+
+**Critical Code**:
+```cpp
+// In kv_layer_mixed struct
+mutable uint32_t n_fp16_tokens = 0;  // Made mutable
+mutable uint32_t n_quant_tokens = 0;
+
+// In cpy_k() method
+layer.n_fp16_tokens += n_tokens;  // Update counter
+```
+
+### 3. Dimension Check Fix
+**Issue**: `ggml_view_3d` failing with dimension errors when token counts are 0
+**Root Cause**: Creating views with zero dimensions
+**Solution**: Check token counts before creating views
+
+**Safe Pattern**:
+```cpp
+if (layer.n_quant_tokens == 0) {
+    if (layer.n_fp16_tokens == 0) {
+        return nullptr;  // No data available
+    }
+    // Only create view if we have data
+}
+```
+
+## Testing Strategies
+
+### 1. Fixed Token Count Testing
+For consistent testing with exactly 32 tokens:
+
+```bash
+# Create a prompt with approximately 32 tokens
+PROMPT="Hello world this is a comprehensive test prompt designed to evaluate the mixed precision KV cache implementation in llama cpp framework with exactly thirty two tokens for testing purposes"
+
+# Test command
+./build-arm64/bin/llama-cli -m model.gguf -n 1 -p "$PROMPT" -ngl 0 -t 12 -no-cnv
+```
+
+### 2. Debug Verification
+Enable debug logging to verify proper operation:
+```bash
+LLAMA_LOG_LEVEL=DEBUG ./build-arm64/bin/llama-cli [options] 2>&1 | grep -E "(mixed-kv|token|cache)"
+```
+
+**Expected Output**:
+```
+[mixed-kv] adding 1 K tokens to layer 0 cache (head=0)
+[mixed-kv]   - current FP16 tokens: 0, quantized tokens: 0
+[mixed-kv]   - updated FP16 tokens: 1 (added 1)
+```
+
+## Implementation Patterns
+
+### 1. Tensor Creation Pattern
+Always follow the unified cache pattern for tensor creation:
+```cpp
+// ✅ Correct - 2D tensors like unified cache
+layer.k_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_k, n_embd_k_gqa, kv_size);
+layer.v_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_v, n_embd_v_gqa, kv_size);
+```
+
+### 2. Safe View Creation Pattern
+Always check data availability before creating views:
+```cpp
+// ✅ Safe pattern for view creation
+if (layer.n_fp16_tokens > 0) {
+    ggml_tensor * view = ggml_view_3d(ctx, layer.k_fp16, ...);
+    // Use view
+}
+```
+
+### 3. Type-Safe Integration Pattern
+Use `dynamic_cast` for type detection in model integration:
+```cpp
+// ✅ Type-safe detection
+if (auto* mixed_cache = dynamic_cast<const llama_kv_cache_mixed*>(memory)) {
+    // Handle mixed cache
+} else {
+    // Handle other cache types
+}
+```
+
+## Memory Management Best Practices
+
+### 1. Buffer Allocation
+Follow the existing llama.cpp pattern for buffer allocation:
+```cpp
+// Create contexts for each buffer type
+std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
+// Allocate tensors with no_alloc = true
+// Allocate buffers from contexts
+ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+```
+
+### 2. Memory Layout
+Maintain consistent memory layout:
+```
+Layer Structure:
+├── k_fp16 [n_embd_k_gqa, kv_size] (2D tensor)
+├── k_quant [n_embd_k_gqa, kv_size] (2D tensor)
+├── k_dequant [n_embd_k_gqa, kv_size] (2D tensor)
+├── v_fp16, v_quant, v_dequant (same pattern)
+└── counters: n_fp16_tokens, n_quant_tokens
+```
+
+## Performance Optimization
+
+### 1. Quantization Timing
+Optimal quantization parameters:
+```cpp
+struct llama_kv_cache_mixed_config {
+    uint32_t quantization_threshold = 32;  // Start quantizing after 32 tokens
+    uint32_t group_size = 16;              // Process 16 tokens at once
+    // Balance between memory savings and processing overhead
+};
+```
+
+### 2. Memory Access Patterns
+Efficient data access:
+- Recent tokens (FP16): Direct access, no conversion needed
+- Old tokens (Quantized): Dequantize on-demand, cache in dequant buffer
+- Merged access: Transparent to attention mechanism
+
+## Debugging Checklist
+
+When implementing or modifying mixed KV cache:
+
+1. **✅ Architecture Compliance**
+   - No `ggml_context` creation inside cache methods
+   - Use graph building for all operations
+   - Follow llama.cpp patterns
+
+2. **✅ Token Counting**
+   - Counters update in `cpy_k()` method
+   - Counters are `mutable` for const methods
+   - Debug logs show increasing counts
+
+3. **✅ Dimension Safety**
+   - Check token counts before creating views
+   - Handle zero-token cases gracefully
+   - Use 2D tensors for storage
+
+4. **✅ Type Safety**
+   - Use `dynamic_cast` for type detection
+   - Maintain separate code paths
+   - Don't break existing cache types
+
+5. **✅ Memory Management**
+   - Follow buffer allocation patterns
+   - Clear buffers on initialization
+   - Proper cleanup in destructors
+
+## Common Error Messages and Solutions
+
+### "ne[1] * ne[2] != 0 assertion failed"
+**Cause**: Creating `ggml_view_3d` with zero dimensions
+**Solution**: Check token counts before view creation
+
+### "Token counters always 0"
+**Cause**: Not updating counters in `cpy_k()`
+**Solution**: Add `layer.n_fp16_tokens += n_tokens;`
+
+### "Context creation failed"
+**Cause**: Creating contexts inside cache methods
+**Solution**: Use graph building mechanism
+
+### "Cache type not detected"
+**Cause**: Missing `dynamic_cast` in model integration
+**Solution**: Add type detection in model building
+
+## Integration Requirements
+
+### Command Line Support (Future)
+To add `--mixed-kv-cache` option:
+1. Add option in `common/common.cpp`
+2. Set `params.use_mixed_kv_cache = true`
+3. Pass to memory creation functions
+
+### Model Integration Points
+Key files that need mixed cache awareness:
+- [src/llama-model.cpp](mdc:src/llama-model.cpp) - Model building
+- [src/llama-memory.h](mdc:src/llama-memory.h) - Memory management
+- [src/llama-graph.h](mdc:src/llama-graph.h) - Graph building support
+
+## Validation Tests
+
+### Unit Test Scenarios
+1. **Empty Cache**: Handle zero tokens gracefully
+2. **FP16 Only**: Work with only recent tokens
+3. **Mixed Data**: Merge FP16 + quantized correctly
+4. **Quantization Trigger**: Activate at threshold
+5. **Memory Pressure**: Handle large token counts
+
+### Integration Test Scenarios
+1. **Model Loading**: Mixed cache creation
+2. **Inference**: Token processing and storage
+3. **Quantization**: FIFO strategy execution
+4. **Memory Usage**: Verify compression ratios
+5. **Compatibility**: Other cache types unaffected

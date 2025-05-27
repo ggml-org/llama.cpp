@@ -116,6 +116,8 @@ struct llama_hparams {
                                 //   il == 5: dense
                                 //   il == 6: swa
                                 //   etc ...
+    
+    uint32_t mixed_kv_cache_window_size = 0; //> window size for mixed KV cache
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;

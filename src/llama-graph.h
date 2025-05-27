@@ -21,6 +21,8 @@ class llama_memory_i;
 class llama_kv_cache_unified;
 class llama_kv_cache_unified_iswa;
 class llama_kv_cache_recurrent;
+class llama_kv_cache_mixed;
+class llama_kv_cache_mixed;
 
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
@@ -293,6 +295,31 @@ public:
     const llama_cparams & cparams;
 
     const llama_kv_cache_unified_iswa * kv_self;
+};
+
+class llm_graph_input_attn_kv_mixed : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_kv_mixed(
+            const llama_hparams & hparams,
+            const llama_cparams & cparams,
+            const llama_kv_cache_mixed * kv_self) :
+        hparams(hparams),
+        cparams(cparams),
+        kv_self(kv_self) {
+    }
+    ~llm_graph_input_attn_kv_mixed() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
+
+    ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch]
+    ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch]
+
+    const llama_hparams & hparams;
+    const llama_cparams & cparams;
+
+    const llama_kv_cache_mixed * kv_self;
 };
 
 class llm_graph_input_attn_cross : public llm_graph_input_i {
@@ -574,6 +601,21 @@ struct llm_graph_context {
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_kv_unified_iswa * inp,
+            ggml_cgraph * gf,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+                  float   kq_scale,
+                    int   il) const;
+
+    llm_graph_input_attn_kv_mixed * build_attn_inp_kv_mixed() const;
+
+    ggml_tensor * build_attn(
+            llm_graph_input_attn_kv_mixed * inp,
             ggml_cgraph * gf,
             ggml_tensor * wo,
             ggml_tensor * wo_b,

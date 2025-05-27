@@ -6,6 +6,7 @@
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-mixed.h"
 
 #include "ggml-cpp.h"
 
@@ -4535,7 +4536,32 @@ struct llm_build_llama : public llm_graph_context {
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        auto * inp_attn = build_attn_inp_kv_unified();
+        /*
+         * Cache Type Detection and Input Builder Selection
+         * 
+         * This ensures that non-mixed cache normal routes are not affected.
+         * Uses dynamic_cast for type-safe detection.
+         * 
+         * Cache Type Decision Tree:
+         * ┌─────────────────────────────────────────────────────────┐
+         * │ memory pointer                                          │
+         * │ ↓                                                       │
+         * │ dynamic_cast<llama_kv_cache_mixed*>                     │
+         * │ ↓                        ↓                              │
+         * │ Success                  Failure                        │
+         * │ ↓                        ↓                              │
+         * │ build_attn_inp_kv_mixed  build_attn_inp_kv_unified      │
+         * │ (mixed cache path)       (default path)                 │
+         * └─────────────────────────────────────────────────────────┘
+         */
+        llm_graph_input_i * inp_attn = nullptr;
+        if (dynamic_cast<const llama_kv_cache_mixed*>(memory)) {
+            // Use mixed KV cache input builder
+            inp_attn = build_attn_inp_kv_mixed();
+        } else {
+            // Use standard unified cache input builder (default path)
+            inp_attn = build_attn_inp_kv_unified();
+        }
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
@@ -4595,9 +4621,23 @@ struct llm_build_llama : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
-                        model.layers[il].wo, model.layers[il].bo,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                // 🎯 根据缓存类型调用适当的build_attn
+                // 🛡️ 确保类型安全的转换和调用
+                // Call appropriate build_attn based on cache type
+                // Ensures type-safe conversion and calling
+                if (dynamic_cast<const llama_kv_cache_mixed*>(memory)) {
+                    // 🔀 使用混合KV缓存的attention构建
+                    // Use mixed KV cache attention building
+                    cur = build_attn(static_cast<llm_graph_input_attn_kv_mixed*>(inp_attn), gf,
+                            model.layers[il].wo, model.layers[il].bo,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                } else {
+                    // 🔄 使用标准unified缓存的attention构建（默认路径）
+                    // Use standard unified cache attention building (default path)
+                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified*>(inp_attn), gf,
+                            model.layers[il].wo, model.layers[il].bo,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                }
                 cb(cur, "attn_out", il);
             }
 
@@ -13213,7 +13253,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             } break;
         default:
             {
-                const auto padding = llama_kv_cache_unified::get_padding(cparams);
+                // const auto padding = llama_kv_cache_unified::get_padding(cparams);
+                const auto padding = llama_kv_cache_mixed::get_padding(cparams);
 
                 cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
 
@@ -13233,6 +13274,30 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_seq_max,
                             cparams.n_batch,
                             padding);
+                } else if (params.use_mixed_kv_cache) {
+                    // 🏭 Mixed Precision KV Cache Factory
+                    LLAMA_LOG_INFO("%s: creating mixed KV cache\n", __func__);
+                    
+                    // padding = llama_kv_cache_mixed::get_padding(cparams);
+                    
+                    llama_kv_cache_mixed_config mixed_config;
+                    mixed_config.enable_quantization = true;
+                    mixed_config.quantization_threshold = 32;    // 🎯 Hot window: keep 32 newest tokens in FP16
+                    mixed_config.group_size = 64;               // 📦 Quantization granularity: process 128 tokens at once
+                    mixed_config.hot_type_k = params.type_k;     // 🔥 Recent tokens: high precision for accuracy
+                    mixed_config.hot_type_v = params.type_v;
+                    mixed_config.cold_type_k = GGML_TYPE_Q4_0;   // ❄️ Old tokens: compressed for memory efficiency
+                    mixed_config.cold_type_v = GGML_TYPE_Q4_0;
+                    
+                    res = new llama_kv_cache_mixed(
+                            *this,
+                            nullptr,                // 🔍 Include all transformer layers
+                            !cparams.flash_attn,    // 🔄 V-cache layout optimization
+                            cparams.offload_kqv,    // 🚀 GPU memory offloading
+                            cparams.n_ctx,          // 📏 Total sequence length capacity
+                            cparams.n_seq_max,      // 🔢 Maximum concurrent sequences
+                            padding,                 // 🔲 Memory alignment padding
+                            mixed_config);           // ⚙️ Hot/cold cache configuration
                 } else {
                     GGML_ASSERT(hparams.n_swa_pattern == 1);
 
