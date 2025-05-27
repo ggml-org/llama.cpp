@@ -1,7 +1,6 @@
 #pragma once
 
 #include "llama.h"
-#include "llama-cparams.h"
 
 #include <array>
 #include <vector>
@@ -9,17 +8,12 @@
 // very similar to llama_batch,
 // but has more metadata about sequences
 struct llama_ubatch {
-    void update();
-
     bool equal_seqs;
     // TODO: whole_seqs for embeddings?
 
     uint32_t n_tokens;     // total tokens (n_seq_tokens * n_seqs)
     uint32_t n_seq_tokens; // tokens per sequence
     uint32_t n_seqs;
-
-    llama_pos seq_pos_min[LLAMA_MAX_PARALLEL_SEQUENCES]; // min position of each sequence
-    llama_pos seq_pos_max[LLAMA_MAX_PARALLEL_SEQUENCES]; // max position of each sequence
 
     llama_token  *  token;    // [n_tokens]
     float        *  embd;     // [n_embd, n_tokens]

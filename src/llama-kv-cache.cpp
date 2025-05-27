@@ -548,7 +548,7 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
                 if (cells.is_empty(i)) {
                     ss += '.';
                 } else {
-                    ss += 'x';
+                    ss += std::to_string(cells.seq_get(i));
                 }
                 if (i%256 == 255) {
                     ss += '\n';
@@ -557,6 +557,10 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
         }
         LLAMA_LOG_WARN("\n%s\n", ss.c_str());
     }
+
+    LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[0] = %5d, max[0] = %5d\n", n_swa, cells.seq_pos_min(0), cells.seq_pos_max(0));
+    LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[1] = %5d, max[1] = %5d\n", n_swa, cells.seq_pos_min(1), cells.seq_pos_max(1));
+    LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[2] = %5d, max[2] = %5d\n", n_swa, cells.seq_pos_min(2), cells.seq_pos_max(2));
 #endif
 
     uint32_t n_tested = 0;
@@ -568,6 +572,12 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
             continue;
         }
 
+        // keep track of what the minimum sequence positions would be if we accept the ubatch
+        llama_seq_id seq_pos_min[LLAMA_MAX_PARALLEL_SEQUENCES];
+        for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            seq_pos_min[s] = cells.seq_pos_min(s);
+        }
+
         bool found = true;
         for (uint32_t i = 0; i < n_tokens; i++) {
             const llama_pos    pos    = ubatch.pos[i];
@@ -575,17 +585,31 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
 
             // can we use this cell? either:
             //  - the cell is empty
-            //  - the cell is occupied only by the same sequence, and the pos is masked
-            const bool can_use =
-                    cells.is_empty(head_cur + i) ||
-                    (
-                        cells.seq_has  (head_cur + i, seq_id) && // sequence mask
-                        cells.seq_count(head_cur + i) == 1    &&
-                        (
-                            cells.pos_get  (head_cur + i) >= pos ||                                // causal mask
-                            is_masked_swa(cells.pos_get(head_cur + i), ubatch.seq_pos_min[seq_id]) // SWA mask
-                        )
-                    );
+            //  - the cell is occupied only by one sequence:
+            //    - mask causally, if the sequence is the same as the one we are inserting
+            //    - mask SWA, using current max pos for that sequence in the cache
+            //                always insert in the cell with minimum pos
+            bool can_use = cells.is_empty(head_cur + i);
+
+            if (!can_use && cells.seq_count(head_cur + i) == 1) {
+                const llama_pos pos_cell = cells.pos_get(head_cur + i);
+
+                // causal mask
+                if (cells.seq_has(head_cur + i, seq_id)) {
+                    can_use = pos_cell >= pos;
+                }
+
+                if (!can_use) {
+                    const llama_seq_id seq_id_cell = cells.seq_get(head_cur + i);
+
+                    // SWA mask
+                    if (pos_cell == seq_pos_min[seq_id_cell] &&
+                        is_masked_swa(pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
+                        seq_pos_min[seq_id_cell]++;
+                        can_use = true;
+                    }
+                }
+            }
 
             if (!can_use) {
                 found = false;
@@ -613,9 +637,7 @@ void llama_kv_cache_unified::fill_slot(uint32_t head_cur, const llama_ubatch & u
 
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         if (!cells.is_empty(head + i)) {
-            cells.pos_chg(head + i, ubatch.pos[i]);
-
-            continue;
+            cells.rm(head + i);
         }
 
         cells.pos_set(head + i, ubatch.pos[i]);
