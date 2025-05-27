@@ -82,12 +82,16 @@ namespace ggml_cuda_mma {
                     static_assert(I == -1 && J == -1, "template specialization not implemented");
                 }
             } else if constexpr (warp_size == 64) {
-                if constexpr (I == 8 && (J == 4 || J == 8)) {
+                if constexpr (I == 8 && (J == 4 || J == 8)) { // Remove this case
                     return threadIdx.x / 4;
                 } else if constexpr (I == 16 && J == 8) {
                     return threadIdx.x % 16;
+                } else if constexpr (I == 32 && J == 4) {
+                    return threadIdx.x % 32;
                 } else if constexpr (I == 16 && J == 16) {
                     return 4 * (threadIdx.x / 16) + l;
+                } else if constexpr (I == 32 && J == 32) {
+                    return 4 * (threadIdx.x / 32) + 8 * (l / 4) + (l % 4);
                 } else {
                     static_assert(I == -1 && J == -1, "template specialization not implemented");
                 }
@@ -108,14 +112,18 @@ namespace ggml_cuda_mma {
                     static_assert(I == -1 && J == -1, "template specialization not implemented");
                 }
             } else if constexpr (warp_size == 64) {
-                if constexpr (I == 8 && J == 4) {
+                if constexpr (I == 8 && J == 4) { // Remove this case
                     return threadIdx.x % 4;
-                } else if constexpr (I == 8 && J == 8) {
+                } else if constexpr (I == 8 && J == 8) { // Remove this case
                     return 4 * l + threadIdx.x % 4;
                 } else if constexpr (I == 16 && J == 8) {
                     return 2 * (threadIdx.x / 16) + l;
+                } else if constexpr (I == 32 && J == 4) {
+                    return 2 * (threadIdx.x / 32) + l;
                 } else if constexpr (I == 16 && J == 16) {
                     return threadIdx.x % 16;
+                } else if constexpr (I == 32 && J == 32) {
+                    return threadIdx.x % 32;
                 } else {
                     static_assert(I == -1 && J == -1, "template specialization not implemented");
                 }
@@ -219,6 +227,19 @@ namespace ggml_cuda_mma {
         asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
             : "=r"(xi[0]), "=r"(xi[1]), "=r"(xi[2]), "=r"(xi[3])
             : "l"(xs));
+#else
+        load_generic(t, xs0, stride);
+#endif // NEW_MMA_AVAILABLE
+    }
+
+    template <typename T>
+    static __device__ __forceinline__ void load_ldmatrix(
+            tile<32, 4, T> & t, const T * __restrict__ xs0, const int stride) {
+#ifdef NEW_MMA_AVAILABLE
+        GGML_UNUSED(t);
+        GGML_UNUSED(xs0);
+        GGML_UNUSED(stride);
+        NO_DEVICE_CODE;
 #else
         load_generic(t, xs0, stride);
 #endif // NEW_MMA_AVAILABLE
@@ -428,6 +449,26 @@ namespace ggml_cuda_mma {
         using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;                          
         int32x4_t* acc = (int32x4_t*) D.x;
         acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(((int64_t*) A.x)[0], 
+                                                       ((int64_t*) B.x)[0], 
+                                                       acc[0], 
+                                                       0, 0, 0);    
+#elif defined(CDNA2) || defined(CDNA)
+#endif
+#else
+        GGML_UNUSED(D);
+        GGML_UNUSED(A);
+        GGML_UNUSED(B);
+        NO_DEVICE_CODE;
+#endif // NEW_MMA_AVAILABLE
+    }
+
+    static __device__ __forceinline__ void mma(
+            tile<32, 32, int> & D, const tile<32, 4, int> & A, const tile<32, 4, int> & B) {
+#if defined(AMD_MMA_AVAILABLE)
+#if defined(CDNA3)
+        using int32x16_t = __attribute__((__vector_size__(16 * sizeof(int)))) int;                          
+        int32x16_t* acc = (int32x16_t*) D.x;
+        acc[0] = __builtin_amdgcn_mfma_i32_32x32x16_i8(((int64_t*) A.x)[0], 
                                                        ((int64_t*) B.x)[0], 
                                                        acc[0], 
                                                        0, 0, 0);    
