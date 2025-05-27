@@ -28,6 +28,10 @@ extern "C" {
     dev->iface.get_memory(dev, &free, &total);
     WARNING("%s: free memory: %ld MB\n", __func__, (size_t) free/1024/1024);
 
+    show_timer();
+
+    /* *** */
+
     if (backend_library_handle) {
       INFO("%s: The GGML backend library was loaded. Unloading it.", __func__);
       dlclose(backend_library_handle);
@@ -91,6 +95,11 @@ extern "C" {
       return APIR_BACKEND_FORWARD_INDEX_INVALID;
     }
 
+#if 0
+    static long long count = 0;
+    INFO("[%lld] Calling %s", count, backend_dispatch_command_name((ApirBackendCommandType) cmd_type));
+    count += 1;
+#endif
     backend_dispatch_t forward_fct = apir_backend_dispatch_table[cmd_type];
     uint32_t ret = forward_fct(enc, dec, ctx);
 

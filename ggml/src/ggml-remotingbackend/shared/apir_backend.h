@@ -82,7 +82,30 @@ struct virgl_apir_context {
   struct virgl_apir_callbacks iface;
 };
 
-#define TENSOR_MAX_DEPTH_DEVICE_SUPPORTS_OP 2
-#define TENSOR_MAX_DEPTH_BUFFER_GET_TENSOR 2
-#define TENSOR_MAX_DEPTH_BUFFER_SET_TENSOR 2
-#define TENSOR_MAX_DEPTH_CGRAPH_DATA 10
+extern long long timer_start;
+extern long long timer_total;
+extern long long timer_count;
+
+static inline void start_timer(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  timer_start = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static inline void stop_timer(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  long long timer_end = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+  timer_total += (timer_end - timer_start);
+  timer_count += 1;
+}
+
+static inline void show_timer(void) {
+  long long ms = timer_total/1000000;
+  long long itl = ms/timer_count;
+  float speed = 1/((float)itl) * 1000;
+
+  INFO("compute_graph: [%9ld] ms for %ld invokations | ITL %lldms | throughput = %.2f t/s\n", timer_total/1000000, timer_count, itl, speed);
+  INFO("compute_graph: [%9ld] s", (ms)/1000);
+}

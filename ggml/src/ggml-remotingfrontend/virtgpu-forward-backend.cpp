@@ -1,9 +1,16 @@
 #include "virtgpu-forward-impl.h"
 
+static long long current_time_ms() {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
 ggml_status
 apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
-  UNUSED(cgraph);
-
+  
+  start_timer();
+  
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
@@ -44,5 +51,9 @@ apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
   if (shmem != gpu->data_shmem) {
     virtgpu_shmem_destroy(gpu, shmem->shmem);
   }
+  
+  stop_timer();
+  
   return status;
 }
+
