@@ -165,3 +165,21 @@ std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i) {
             return gguf_data_to_str(type, gguf_get_val_data(ctx_gguf, i), 0);
     }
 }
+
+size_t ctxs_total_size(const std::vector<ggml_context_ptr> & ctxs, ggml_backend_dev_t dev) {
+    ggml_backend_buffer_type_t dev_buft = dev ? ggml_backend_dev_buffer_type(dev) : nullptr;
+
+    size_t total_size = 0;
+    for (const ggml_context_ptr & ctx : ctxs) {
+        ggml_tensor * t = ggml_get_first_tensor(ctx.get());
+        if (!t || !t->buffer) {
+            continue;
+        }
+        ggml_backend_buffer_type_t ctx_buft = ggml_backend_buffer_get_type(t->buffer);
+        if (dev_buft && ctx_buft != dev_buft) {
+            continue;
+        }
+        total_size += ggml_backend_alloc_ctx_tensors_from_buft_size(ctx.get(), ctx_buft);
+    }
+    return total_size;
+}

@@ -414,6 +414,13 @@ extern "C" {
     LLAMA_API struct llama_sampler_chain_params  llama_sampler_chain_default_params(void);
     LLAMA_API struct llama_model_quantize_params llama_model_quantize_default_params(void);
 
+    // returns success
+    LLAMA_API bool llama_expected_memory_use(
+                             const char * path_model,
+              struct llama_model_params   mparams,
+            struct llama_context_params   cparams,
+                                 size_t * nbytes_expect);
+
     // Initialize the llama + ggml backend
     // If numa is true, use NUMA optimizations
     // Call once at the start of the program

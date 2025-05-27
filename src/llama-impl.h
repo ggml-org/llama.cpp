@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h" // for ggml_log_level
+#include "ggml-cpp.h"
 
 #include <string>
 #include <vector>
@@ -14,6 +15,11 @@
 #else
 #    define LLAMA_ATTRIBUTE_FORMAT(...)
 #endif
+
+struct llama_context;
+struct llama_model;
+struct llama_context_params;
+llama_context * llama_init_from_model_impl(llama_model * model, llama_context_params params, bool dry_run);
 
 //
 // logging
@@ -59,3 +65,9 @@ std::string llama_format_tensor_shape(const std::vector<int64_t> & ne);
 std::string llama_format_tensor_shape(const struct ggml_tensor * t);
 
 std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
+
+// calculate the total number of bytes needed to allocate a vector of ggml contexts
+// skips ggml contexts without ggml_backend buffers (dummy buffers are ok)
+// assumes that all tensors in a context are on the same buffer
+// if the optional device dev is set, return the number of bytes needed on that device only
+size_t ctxs_total_size(const std::vector<ggml_context_ptr> & ctxs, ggml_backend_dev_t dev = nullptr);

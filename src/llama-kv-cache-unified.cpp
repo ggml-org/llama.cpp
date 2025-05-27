@@ -27,7 +27,8 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                  uint32_t    n_seq_max,
                  uint32_t    n_pad,
                  uint32_t    n_swa,
-           llama_swa_type    swa_type) :
+           llama_swa_type    swa_type,
+                     bool    dry_run) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
@@ -107,9 +108,17 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         auto * buft = it.first;
         auto * ctx  = it.second;
 
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-        if (!buf) {
-            throw std::runtime_error("failed to allocate buffer for kv cache");
+        ggml_backend_buffer_t buf;
+        if (dry_run) {
+            buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0);
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                t->buffer = buf;
+            }
+        } else {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+            if (!buf) {
+                throw std::runtime_error("failed to allocate buffer for kv cache");
+            }
         }
 
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
@@ -835,14 +844,8 @@ void llama_kv_cache_unified::set_input_pos_bucket(ggml_tensor * dst, const llama
     }
 }
 
-size_t llama_kv_cache_unified::total_size() const {
-    size_t size = 0;
-
-    for (const auto & buf : bufs) {
-        size += ggml_backend_buffer_get_size(buf.get());
-    }
-
-    return size;
+size_t llama_kv_cache_unified::total_size(ggml_backend_dev_t dev) const {
+    return ctxs_total_size(ctxs, dev);
 }
 
 size_t llama_kv_cache_unified::size_k_bytes() const {

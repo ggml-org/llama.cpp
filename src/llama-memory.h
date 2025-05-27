@@ -108,6 +108,12 @@ struct llama_memory_i {
 
     virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const = 0;
     virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) = 0;
+
+    //
+    // TODO
+    //
+
+    virtual size_t total_size(ggml_backend_dev_t dev) const = 0;
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

@@ -17,7 +17,8 @@
 
 llama_context::llama_context(
         const llama_model & model,
-              llama_context_params params) :
+              llama_context_params params,
+              bool dry_run) :
     model(model) {
     LLAMA_LOG_INFO("%s: constructing llama_context\n", __func__);
 
@@ -192,7 +193,7 @@ llama_context::llama_context(
             /*.swa_full =*/ params.swa_full,
         };
 
-        memory.reset(model.create_memory(params_mem, cparams));
+        memory.reset(model.create_memory(params_mem, cparams, dry_run));
     }
 
     // init backends
@@ -265,6 +266,8 @@ llama_context::llama_context(
 
     // reserve worst-case graph
     if (!hparams.vocab_only && memory) {
+        backends_exp_max_size.resize(backend_ptrs.size());
+
         const uint32_t n_seqs = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
@@ -287,7 +290,7 @@ llama_context::llama_context(
 
         // reserve pp graph first so that buffers are only allocated once
         {
-            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mstate.get());
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mstate.get(), dry_run);
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
@@ -298,7 +301,7 @@ llama_context::llama_context(
 
         // reserve with tg graph to get the number of splits and nodes
         {
-            auto * gf = graph_reserve(1, 1, 1, mstate.get());
+            auto * gf = graph_reserve(1, 1, 1, mstate.get(), dry_run);
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute tg buffers");
             }
@@ -309,16 +312,21 @@ llama_context::llama_context(
 
         // reserve again with pp graph to avoid ggml-alloc reallocations during inference
         {
-            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mstate.get());
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mstate.get(), dry_run);
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
         }
 
+        if (!dry_run) {
+            for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+                backends_exp_max_size[i] = ggml_backend_sched_get_buffer_size(sched.get(), backend_ptrs[i]);
+            }
+        }
+
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
-            ggml_backend_t             backend = backend_ptrs[i];
-            ggml_backend_buffer_type_t buft    = backend_buft[i];
-            size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+            ggml_backend_buffer_type_t buft = backend_buft[i];
+            const size_t               size = backends_exp_max_size[i];
             if (size > 1) {
                 LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
                         ggml_backend_buft_name(buft),
@@ -418,6 +426,10 @@ uint32_t llama_context::n_threads_batch() const {
     return cparams.n_threads_batch;
 }
 
+size_t llama_context::total_size(ggml_backend_dev_t dev) const {
+    return memory->total_size(dev);
+}
+
 llama_memory_t llama_context::get_memory() const {
     return memory.get();
 }
@@ -476,7 +488,7 @@ bool llama_context::kv_self_update(bool optimize) {
         const uint32_t n_seqs   = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mstate.get());
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mstate.get(), /*dry_run =*/ false);
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
         }
@@ -1232,6 +1244,15 @@ int llama_context::decode(llama_batch & inp_batch) {
     return 0;
 }
 
+size_t llama_context::get_expected_max_size(ggml_backend_dev_t dev) const {
+    for (size_t i = 0; i < backend_buft.size(); i++) {
+        if (ggml_backend_buft_get_device(backend_buft[i]) == dev) {
+            return backends_exp_max_size[i];
+        }
+    }
+    return 0;
+}
+
 //
 // output
 //
@@ -1328,7 +1349,7 @@ ggml_cgraph * llama_context::graph_init() {
     return ggml_new_graph_custom(ctx_compute.get(), graph_max_nodes(), false);
 }
 
-ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_state_i * mstate) {
+ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_state_i * mstate, bool dry_run) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
 
     if (n_tokens % n_seqs != 0) {
@@ -1360,9 +1381,17 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
     ggml_backend_sched_reset(sched.get());
 
     // initialize scheduler with the specified graph
-    if (!ggml_backend_sched_reserve(sched.get(), gf)) {
-        LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
-        return nullptr;
+    if (dry_run) {
+        std::vector<size_t> tmp(backend_ptrs.size());
+        ggml_backend_sched_reserve_size(sched.get(), gf, tmp.data());
+        for (size_t i = 0; i < backend_ptrs.size(); i++) {
+            backends_exp_max_size[i] = std::max(backends_exp_max_size[i], tmp[i]);
+        }
+    } else {
+        if (!ggml_backend_sched_reserve(sched.get(), gf)) {
+            LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
+            return nullptr;
+        }
     }
 
     return gf;
@@ -2229,9 +2258,10 @@ llama_context_params llama_context_default_params() {
     return result;
 }
 
-llama_context * llama_init_from_model(
+llama_context * llama_init_from_model_impl(
                  llama_model * model,
-        llama_context_params   params) {
+        llama_context_params   params,
+                        bool   dry_run) {
     if (!model) {
         LLAMA_LOG_ERROR("%s: model cannot be NULL\n", __func__);
         return nullptr;
@@ -2258,7 +2288,7 @@ llama_context * llama_init_from_model(
     }
 
     try {
-        auto * ctx = new llama_context(*model, params);
+        auto * ctx = new llama_context(*model, params, dry_run);
         return ctx;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
@@ -2267,6 +2297,11 @@ llama_context * llama_init_from_model(
     return nullptr;
 }
 
+llama_context * llama_init_from_model(
+                 llama_model * model,
+        llama_context_params   params) {
+    return llama_init_from_model_impl(model, params, /*dry_run =*/ false);
+}
 // deprecated
 llama_context * llama_new_context_with_model(
                  llama_model * model,

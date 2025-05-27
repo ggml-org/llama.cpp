@@ -21,7 +21,8 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
                  uint32_t   kv_size,
                  uint32_t   n_seq_max,
                  uint32_t   n_ubatch,
-                 uint32_t   n_pad) : hparams(model.hparams) {
+                 uint32_t   n_pad,
+                     bool   dry_run) : hparams(model.hparams) {
     llama_kv_cache_unified::layer_filter_cb filter_base = [&](int32_t il) { return !model.hparams.is_swa(il); };
     llama_kv_cache_unified::layer_filter_cb filter_swa  = [&](int32_t il) { return  model.hparams.is_swa(il); };
 
@@ -42,14 +43,14 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
     kv_base = std::make_unique<llama_kv_cache_unified>(
             model, std::move(filter_base), type_k, type_v,
             v_trans, offload, size_base, n_seq_max, n_pad,
-            0, LLAMA_SWA_TYPE_NONE);
+            0, LLAMA_SWA_TYPE_NONE, dry_run);
 
     LLAMA_LOG_INFO("%s: creating     SWA KV cache, size = %u cells\n", __func__, size_swa);
 
     kv_swa = std::make_unique<llama_kv_cache_unified>(
             model, std::move(filter_swa), type_k, type_v,
             v_trans, offload, size_swa, n_seq_max, n_pad,
-            hparams.n_swa, hparams.swa_type);
+            hparams.n_swa, hparams.swa_type, dry_run);
 }
 
 void llama_kv_cache_unified_iswa::clear(bool data) {
@@ -93,6 +94,10 @@ llama_pos llama_kv_cache_unified_iswa::seq_pos_min(llama_seq_id seq_id) const {
 
 llama_pos llama_kv_cache_unified_iswa::seq_pos_max(llama_seq_id seq_id) const {
     return kv_swa->seq_pos_max(seq_id);
+}
+
+size_t llama_kv_cache_unified_iswa::total_size(ggml_backend_dev_t dev) const {
+    return get_base()->total_size(dev) + get_swa()->total_size(dev);
 }
 
 llama_memory_state_ptr llama_kv_cache_unified_iswa::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {

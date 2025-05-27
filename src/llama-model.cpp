@@ -1464,7 +1464,7 @@ void llama_model::load_vocab(llama_model_loader & ml) {
     vocab.load(ml, kv);
 }
 
-bool llama_model::load_tensors(llama_model_loader & ml) {
+bool llama_model::load_tensors(llama_model_loader & ml, bool dry_run) {
     const auto & split_mode   = params.split_mode;
     const auto & n_gpu_layers = params.n_gpu_layers;
     const auto & use_mlock    = params.use_mlock;
@@ -4192,11 +4192,18 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 pimpl->bufs.emplace_back(buf);
                 buf_map.emplace(idx, buf);
             }
-        }
-        else {
-            ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-            if (buf == nullptr) {
-                throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+        } else {
+            ggml_backend_buffer_t buf;
+            if (dry_run) {
+                buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0); // alloc dummy buffer
+                for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                    t->buffer = buf;
+                }
+            } else {
+                buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+                if (buf == nullptr) {
+                    throw std::runtime_error(format("unable to allocate %s buffer", ggml_backend_buft_name(buft)));
+                }
             }
             pimpl->bufs.emplace_back(buf);
             if (use_mlock && ggml_backend_buffer_is_host(buf)) {
@@ -4249,6 +4256,18 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
         }
     }
 
+    if (dry_run) {
+        for (auto & it : ctx_bufs) {
+            ggml_context * ctx = it.first;
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                if (!t->buffer) {
+                    t->data = (void *) 0x12345678; // so that e.g. tensors which would normally be memory-mapped are treated as allocated
+                }
+            }
+        }
+        return true;
+    }
+
     // load tensor data
     for (auto & it : ctx_bufs) {
         ggml_context * ctx = it.first;
@@ -4289,6 +4308,10 @@ size_t llama_model::n_tensors() const {
 
 size_t llama_model::n_devices() const {
     return devices.size();
+}
+
+size_t llama_model::total_size(ggml_backend_dev_t dev) const {
+    return ctxs_total_size(pimpl->ctxs, dev);
 }
 
 uint64_t llama_model::n_elements() const {
@@ -13203,7 +13226,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
     }
 };
 
-llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
+llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams, bool dry_run) const {
     llama_memory_i * res;
 
     switch (arch) {
@@ -13227,7 +13250,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         GGML_TYPE_F32,
                         cparams.offload_kqv,
                         std::max((uint32_t) 1, cparams.n_seq_max),
-                        cparams.n_seq_max);
+                        cparams.n_seq_max,
+                        dry_run);
             } break;
         default:
             {
@@ -13250,7 +13274,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_ctx,
                             cparams.n_seq_max,
                             cparams.n_ubatch,
-                            padding);
+                            padding,
+                            dry_run);
                 } else {
                     GGML_ASSERT(!hparams.is_swa_any());
 
@@ -13265,7 +13290,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_seq_max,
                             padding,
                             hparams.n_swa,
-                            hparams.swa_type);
+                            hparams.swa_type,
+                            dry_run);
                 }
             }
     }

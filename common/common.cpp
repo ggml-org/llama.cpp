@@ -885,9 +885,78 @@ std::string fs_get_cache_file(const std::string & filename) {
 // Model utils
 //
 
+static void common_fit_to_free_memory(
+        const std::string & path_model, llama_model_params & mparams, llama_context_params & cparams, const size_t margin) {
+
+    std::vector<ggml_backend_dev_t> devices(ggml_backend_dev_count());
+    for (size_t i = 0; i < devices.size(); i++) {
+        devices[i] = ggml_backend_dev_get(i);
+    }
+
+    std::vector<size_t> memory_total(devices.size());
+    std::vector<size_t> memory_free(devices.size());
+    for (size_t i = 0; i < devices.size(); i++) {
+        ggml_backend_dev_memory(devices[i], memory_free.data() + i, memory_total.data() + i);
+    }
+
+    auto get_min_margin = [path_model, memory_free](const llama_model_params & mparams_test, const llama_context_params & cparams_test) {
+        std::vector<size_t> memory_expect(memory_free.size());
+        GGML_ASSERT(llama_expected_memory_use(path_model.c_str(), mparams_test, cparams_test, memory_expect.data()));
+
+        int64_t min_margin = INT64_MAX;
+        for (size_t i = 0; i < memory_free.size(); i++) {
+            min_margin = std::min(min_margin, int64_t(memory_free[i]) - int64_t(memory_expect[i]));
+        }
+        return min_margin;
+    };
+    auto test_ngl = [mparams, cparams, get_min_margin](const int ngl) {
+        llama_model_params mparams_test = mparams;
+        mparams_test.n_gpu_layers = ngl;
+        return get_min_margin(mparams_test, cparams);
+    };
+
+    int ngl_low = 0;
+    int64_t margin_low = test_ngl(ngl_low);
+    if (margin_low < int64_t(margin)) {
+        mparams.n_gpu_layers = ngl_low;
+        return;
+    }
+
+    int ngl_high = 128; // FIXME
+    int64_t margin_high = test_ngl(ngl_high);
+    if (margin_high >= int64_t(margin)) {
+        mparams.n_gpu_layers = ngl_high;
+        return;
+    }
+
+    // TODO bisection is ineffient, better to interpolate if max ngl value is known
+    while (ngl_high - ngl_low > 1) {
+        const int ngl_test = (ngl_high + ngl_low) / 2;
+        const int64_t margin_test = test_ngl(ngl_test);
+
+        if (margin_test < int64_t(margin)) {
+            ngl_high = ngl_test;
+            margin_high = margin_test;
+        } else {
+            ngl_low = ngl_test;
+            margin_low = margin_test;
+        }
+    }
+
+    if (margin_high >= int64_t(margin)) {
+        mparams.n_gpu_layers = ngl_high;
+    } else {
+        mparams.n_gpu_layers = ngl_low;
+    }
+}
+
 struct common_init_result common_init_from_params(common_params & params) {
     common_init_result iparams;
     auto mparams = common_model_params_to_llama(params);
+    auto cparams = common_context_params_to_llama(params);
+
+    constexpr size_t margin = 1024*1024*1024;
+    common_fit_to_free_memory(params.model.path, mparams, cparams, margin);
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
     if (model == NULL) {
@@ -924,8 +993,6 @@ struct common_init_result common_init_from_params(common_params & params) {
             return iparams;
         }
     }
-
-    auto cparams = common_context_params_to_llama(params);
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {

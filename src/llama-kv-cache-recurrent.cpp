@@ -21,7 +21,8 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
                 ggml_type   type_v,
                      bool   offload,
                  uint32_t   kv_size,
-                 uint32_t   n_seq_max) : hparams(model.hparams), n_seq_max(n_seq_max) {
+                 uint32_t   n_seq_max,
+                     bool   dry_run) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer;
 
     LLAMA_LOG_INFO("%s: kv_size = %u, n_seq_max = %u, type_k = '%s', type_v = '%s', n_layer = %d\n",
@@ -97,9 +98,17 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
         auto * buft = it.first;
         auto * ctx  = it.second;
 
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-        if (!buf) {
-            throw std::runtime_error("failed to allocate buffer for kv cache");
+        ggml_backend_buffer_t buf;
+        if (dry_run) {
+            buf = ggml_backend_buft_alloc_buffer(buft, /*size =*/ 0);
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+                t->buffer = buf;
+            }
+        } else {
+            buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
+            if (!buf) {
+                throw std::runtime_error("failed to allocate buffer for kv cache");
+            }
         }
         ggml_backend_buffer_clear(buf, 0);
         LLAMA_LOG_INFO("%s: %10s KV buffer size = %8.2f MiB\n", __func__, ggml_backend_buffer_name(buf), ggml_backend_buffer_get_size(buf)/1024.0/1024.0);
@@ -648,13 +657,8 @@ float llama_kv_cache_recurrent::s_mask(int i) const {
     return res;
 }
 
-size_t llama_kv_cache_recurrent::total_size() const {
-    size_t size = 0;
-    for (const auto & buf : bufs) {
-        size += ggml_backend_buffer_get_size(buf.get());
-    }
-
-    return size;
+size_t llama_kv_cache_recurrent::total_size(ggml_backend_dev_t dev) const {
+    return ctxs_total_size(ctxs, dev);
 }
 
 size_t llama_kv_cache_recurrent::size_k_bytes() const {

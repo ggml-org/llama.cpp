@@ -376,7 +376,7 @@ struct llama_model {
     void load_arch   (llama_model_loader & ml);
     void load_hparams(llama_model_loader & ml);
     void load_vocab  (llama_model_loader & ml);
-    bool load_tensors(llama_model_loader & ml); // returns false if cancelled by progress_callback
+    bool load_tensors(llama_model_loader & ml, bool dry_run); // returns false if cancelled by progress_callback
 
     std::string arch_name() const;
     std::string type_name() const;
@@ -386,6 +386,8 @@ struct llama_model {
     size_t size() const;
     size_t n_tensors() const;
     size_t n_devices() const;
+
+    size_t total_size(ggml_backend_dev_t dev = nullptr) const;
 
     // total number of parameters in the model
     uint64_t n_elements() const;
@@ -408,7 +410,7 @@ struct llama_model {
 
     // note: can mutate `cparams`
     // TODO: move this to new llm_arch_model_i interface
-    llama_memory_i * create_memory(const llama_memory_params & params, llama_cparams & cparams) const;
+    llama_memory_i * create_memory(const llama_memory_params & params, llama_cparams & cparams, bool dry_run) const;
 
     // TODO: move this to new llm_arch_model_i interface
     llm_graph_result_ptr build_graph(

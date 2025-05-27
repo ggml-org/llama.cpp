@@ -48,7 +48,8 @@ public:
                      uint32_t    n_seq_max,
                      uint32_t    n_pad,
                      uint32_t    n_swa,
-               llama_swa_type    swa_type);
+               llama_swa_type    swa_type,
+                         bool    dry_run);
 
     ~llama_kv_cache_unified() = default;
 
@@ -78,6 +79,8 @@ public:
 
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+
+    size_t total_size(ggml_backend_dev_t dev = nullptr) const override;
 
     // state write/load
 
@@ -172,8 +175,6 @@ private:
 
     // return non-empty vector if cells have been moved
     defrag_info defrag_prepare(int32_t n_max_nodes) const;
-
-    size_t total_size() const;
 
     size_t size_k_bytes() const;
     size_t size_v_bytes() const;

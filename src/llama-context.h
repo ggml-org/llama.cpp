@@ -24,7 +24,8 @@ struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
     llama_context(
             const llama_model & model,
-                  llama_context_params params);
+                  llama_context_params params,
+                  bool dry_run);
 
     ~llama_context();
 
@@ -45,6 +46,8 @@ struct llama_context {
 
     uint32_t n_threads()       const;
     uint32_t n_threads_batch() const;
+
+    size_t total_size(ggml_backend_dev_t dev = nullptr) const;
 
     llama_memory_t get_memory() const;
 
@@ -104,6 +107,8 @@ struct llama_context {
 
     int encode(llama_batch & inp_batch);
     int decode(llama_batch & inp_batch);
+
+    size_t get_expected_max_size(ggml_backend_dev_t dev) const;
 
     //
     // state save/load
@@ -197,7 +202,7 @@ public:
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 
     // reserve a graph with a dummy ubatch of the specified size
-    ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_state_i * mstate);
+    ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_state_i * mstate, bool dry_run);
 
 private:
     llm_graph_result_ptr graph_build(
@@ -255,6 +260,7 @@ private:
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
+    std::vector<size_t> backends_exp_max_size;
 
     ggml_context_ptr ctx_compute;
 

@@ -9,6 +9,7 @@ extern "C" {
 typedef struct ggml_backend_buffer_type * ggml_backend_buffer_type_t;
 typedef struct      ggml_backend_buffer * ggml_backend_buffer_t;
 typedef struct             ggml_backend * ggml_backend_t;
+typedef struct      ggml_backend_device * ggml_backend_dev_t;
 
 // Tensor allocator
 struct ggml_tallocr {
@@ -58,16 +59,19 @@ GGML_API bool ggml_gallocr_reserve_n(
     ggml_gallocr_t galloc,
     struct ggml_cgraph * graph,
     const int * node_buffer_ids,
-    const int * leaf_buffer_ids);
+    const int * leaf_buffer_ids,
+    bool dry_run);
 
 // automatic reallocation if the topology changes when using a single buffer
 // returns false if using multiple buffers and a re-allocation is needed (call ggml_gallocr_reserve_n first to set the node buffers)
 GGML_API bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph);
 
 GGML_API size_t ggml_gallocr_get_buffer_size(ggml_gallocr_t galloc, int buffer_id);
+size_t ggml_gallocr_get_max_size(ggml_gallocr_t galloc, ggml_backend_dev_t dev);
 
 // Utils
 // Create a buffer and allocate all the tensors in a ggml_context
+GGML_API size_t                       ggml_backend_alloc_ctx_tensors_from_buft_size(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors_from_buft(struct ggml_context * ctx, ggml_backend_buffer_type_t buft);
 GGML_API struct ggml_backend_buffer * ggml_backend_alloc_ctx_tensors(struct ggml_context * ctx, ggml_backend_t backend);
 

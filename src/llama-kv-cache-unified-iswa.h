@@ -23,7 +23,8 @@ public:
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_ubatch,
-                     uint32_t   n_pad);
+                     uint32_t   n_pad,
+                         bool   dry_run);
 
     ~llama_kv_cache_unified_iswa() = default;
 
@@ -53,6 +54,8 @@ public:
 
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+
+    size_t total_size(ggml_backend_dev_t dev = nullptr) const override;
 
     // state write/load
 

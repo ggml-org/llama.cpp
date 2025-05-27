@@ -1347,7 +1347,8 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: failed to allocate graph, reserving (backend_ids_changed = %d)\n", __func__, backend_ids_changed);
 #endif
-        ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids);
+        ggml_gallocr_reserve_n(sched->galloc, &sched->graph,
+            sched->node_backend_ids, sched->leaf_backend_ids, /*dry_run =*/ false);
         if (!ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
             GGML_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             return false;
@@ -1546,6 +1547,22 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
     sched->is_alloc = false;
 }
 
+void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
+    GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
+
+    ggml_backend_sched_split_graph(sched, measure_graph);
+
+    ggml_backend_sched_synchronize(sched);
+
+    GGML_ASSERT(ggml_gallocr_reserve_n(sched->galloc, &sched->graph,
+            sched->node_backend_ids, sched->leaf_backend_ids, /*dry_run =*/ true));
+    for (int ib = 0; ib < sched->n_backends; ib++) {
+        sizes[ib] = ggml_gallocr_get_max_size(sched->galloc, ggml_backend_get_device(sched->backends[ib]));
+    }
+
+    ggml_backend_sched_reset(sched);
+}
+
 bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
     GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
 
@@ -1553,7 +1570,8 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
     ggml_backend_sched_synchronize(sched);
 
-    if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
+    if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph,
+            sched->node_backend_ids, sched->leaf_backend_ids, /*dry_run =*/ false)) {
         return false;
     }
 

@@ -21,7 +21,8 @@ public:
                     ggml_type   type_v,
                          bool   offload,
                      uint32_t   kv_size,
-                     uint32_t   n_seq_max);
+                     uint32_t   n_seq_max,
+                         bool   dry_run);
 
     ~llama_kv_cache_recurrent() = default;
 
@@ -49,6 +50,8 @@ public:
 
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+
+    size_t total_size(ggml_backend_dev_t dev = nullptr) const override;
 
     bool prepare(const std::vector<llama_ubatch> & ubatches);
 
@@ -107,8 +110,6 @@ private:
 
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
-
-    size_t total_size() const;
 
     size_t size_k_bytes() const;
     size_t size_v_bytes() const;
