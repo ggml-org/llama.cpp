@@ -15,9 +15,6 @@ static void ggml_backend_remoting_free(ggml_backend_t backend) {
 }
 
 static ggml_status ggml_backend_remoting_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
-  UNUSED(backend);
-  UNUSED(cgraph);
-
   struct virtgpu *gpu = DEV_TO_GPU(backend->device);
 
   IMPLEMENTED_ONCE;

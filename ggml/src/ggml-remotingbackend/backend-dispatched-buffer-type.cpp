@@ -77,17 +77,14 @@ backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder
 
   ggml_backend_buffer_t buffer;
 #if APIR_ALLOC_FROM_HOST_PTR
-  WARNING("USING FROM_HOST_PTR\n\n");
   #define MAX_TENSOR_SIZE 323205120
   buffer = dev->iface.buffer_from_host_ptr(dev, shmem_data, size, MAX_TENSOR_SIZE);
 
   vn_encode_ggml_buffer_type(enc, buffer->buft);
 #else
-  WARNING("USING ALLOC_BUFFER");
   buffer = buft->iface.alloc_buffer(buft, size);
-  WARNING("USING ALLOC_BUFFER--> %p", buffer);
 #endif
-  
+
   vn_encode_ggml_buffer(enc, buffer);
 
   if (buffer) {

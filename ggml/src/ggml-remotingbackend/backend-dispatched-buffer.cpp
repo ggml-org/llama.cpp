@@ -15,8 +15,6 @@ backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, st
   uintptr_t base = (uintptr_t) buffer->iface.get_base(buffer);
   vn_encode_uintptr_t(enc, &base);
 
-  //INFO("%s: send base %p\n", __func__,  (void *) base);
-
   return 0;
 }
 
