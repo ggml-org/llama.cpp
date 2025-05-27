@@ -1011,7 +1011,14 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
     llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
     llama_token new_token_id;
 
+    int count = 0;
     while (true) {
+#if 0
+      if (count > 25) {
+	printe("WARNING: stopping after %d tokens", count);
+	break;
+      }
+#endif
         start_timer();
         check_context_size(llama_data.context, batch);
         if (llama_decode(llama_data.context.get(), batch)) {
@@ -1035,6 +1042,7 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
         // prepare the next batch with the sampled token
         batch = llama_batch_get_one(&new_token_id, 1);
 	stop_timer();
+	count += 1;
     }
 
     printf(LOG_COL_DEFAULT);
