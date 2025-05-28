@@ -26,12 +26,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
-                  g++-14-riscv64-linux-gnu \
-                  libcurl4-openssl-dev:riscv64
+                  g++-14-riscv64-linux-gnu
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
                          -DLLAMA_BUILD_TOOLS=ON \
@@ -72,12 +72,12 @@ jobs:
                   glslc \
                   gcc-14-riscv64-linux-gnu \
                   g++-14-riscv64-linux-gnu \
-                  libvulkan-dev:riscv64 \
-                  libcurl4-openssl-dev:riscv64
+                  libvulkan-dev:riscv64
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
@@ -118,12 +118,12 @@ jobs:
                   build-essential \
                   glslc \
                   crossbuild-essential-arm64 \
-                  libvulkan-dev:arm64 \
-                  libcurl4-openssl-dev:arm64
+                  libvulkan-dev:arm64
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
@@ -163,12 +163,12 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-powerpc64le-linux-gnu \
-                  g++-14-powerpc64le-linux-gnu \
-                  libcurl4-openssl-dev:ppc64el
+                  g++-14-powerpc64le-linux-gnu
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
                          -DLLAMA_BUILD_TOOLS=ON \
@@ -209,12 +209,12 @@ jobs:
                   glslc \
                   gcc-14-powerpc64le-linux-gnu \
                   g++-14-powerpc64le-linux-gnu \
-                  libvulkan-dev:ppc64el \
-                  libcurl4-openssl-dev:ppc64el
+                  libvulkan-dev:ppc64el
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
