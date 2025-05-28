@@ -28,8 +28,9 @@ extern "C" {
     dev->iface.get_memory(dev, &free, &total);
     WARNING("%s: free memory: %ld MB\n", __func__, (size_t) free/1024/1024);
 
-    show_timer();
-
+    show_timer(&graph_compute_timer);
+    show_timer(&set_tensor_timer);
+    show_timer(&get_tensor_timer);
     /* *** */
 
     if (backend_library_handle) {
@@ -43,7 +44,7 @@ extern "C" {
   uint32_t apir_backend_initialize() {
     const char* dlsym_error;
 
-    INFO("%s: hello :wave: \\o/", __func__);
+    INFO("%s: hello " GGML_BACKEND_REG_FCT_NAME " :wave: \\o/", __func__);
 
     backend_library_handle = dlopen(GGML_BACKEND_LIBRARY_PATH, RTLD_LAZY);
 

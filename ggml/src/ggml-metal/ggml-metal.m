@@ -4485,9 +4485,53 @@ static void ggml_metal_encode_node(
     }
 }
 
+long long timer_start;
+long long timer_total;
+long long timer_count;
+
+static inline void start_timer(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  timer_start = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static inline void stop_timer(void) {
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
+  long long timer_end = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+
+  timer_total += (timer_end - timer_start);
+  timer_count += 1;
+}
+
+static void show_timer(void) {
+  double ms = timer_total/1000000;
+  double itl = ms/timer_count;
+  double speed = 1/itl * 1000;
+
+  printf("METAL compute_graph: [%9.0f] ms for %lld invokations | ITL %.2f ms | throughput = %.2f t/s\n",ms, timer_count, itl, speed);
+
+  timer_start = 0;
+  timer_total = 1; // to avoid re-registering
+  timer_count = 0;
+}
+
+static void show_timer_signal(int sig) {
+  GGML_UNUSED(sig);
+  show_timer();
+}
+
 static enum ggml_status ggml_metal_graph_compute(
             ggml_backend_t   backend,
         struct ggml_cgraph * gf) {
+
+  if (timer_total == 0) {
+    signal(SIGUSR1, show_timer_signal); // kill -USR1 $(cat /tmp/krunkit.pid)
+    atexit(show_timer);
+  }
+
+  start_timer();
+
     struct ggml_backend_metal_context        * ctx     = backend->context;
     struct ggml_backend_metal_device_context * ctx_dev = backend->device->context;
 
@@ -4614,6 +4658,8 @@ static enum ggml_status ggml_metal_graph_compute(
             [[MTLCaptureManager sharedCaptureManager] stopCapture];
         }
     }
+
+  stop_timer();
 
     return GGML_STATUS_SUCCESS;
 }

@@ -82,30 +82,37 @@ struct virgl_apir_context {
   struct virgl_apir_callbacks iface;
 };
 
-extern long long timer_start;
-extern long long timer_total;
-extern long long timer_count;
+struct timer_data {
+  long long start;
+  long long total;
+  long long count;
+  const char *name;
+};
 
-static inline void start_timer(void) {
+extern struct timer_data graph_compute_timer;
+extern struct timer_data get_tensor_timer;
+extern struct timer_data set_tensor_timer;
+
+static inline void start_timer(struct timer_data *timer) {
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
-  timer_start = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+  timer->start = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
-static inline void stop_timer(void) {
+static inline void stop_timer(struct timer_data *timer) {
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);  // Use CLOCK_MONOTONIC for elapsed time
   long long timer_end = (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 
-  timer_total += (timer_end - timer_start);
-  timer_count += 1;
+  timer->total += (timer_end - timer->start);
+  timer->count += 1;
 }
 
-static inline void show_timer(void) {
-  long long ms = timer_total/1000000;
-  long long itl = ms/timer_count;
-  float speed = 1/((float)itl) * 1000;
+static inline void show_timer(struct timer_data *timer) {
+  double ms = timer->total/1000000;
+  double itl = ms/timer->count;
+  double speed = 1/itl * 1000;
 
-  INFO("compute_graph: [%9ld] ms for %ld invokations | ITL %lldms | throughput = %.2f t/s\n", timer_total/1000000, timer_count, itl, speed);
-  INFO("compute_graph: [%9ld] s", (ms)/1000);
+  INFO("%14s [%9.0f] ms for %4ld invocations | ITL %2.2f ms | throughput = %4.2f t/s",
+       timer->name, ms, timer->count, itl, speed);
 }

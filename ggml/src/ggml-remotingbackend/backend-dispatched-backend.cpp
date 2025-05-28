@@ -8,12 +8,14 @@
 
 #include "shared/apir_backend.h"
 
+struct timer_data graph_compute_timer = {0, 0, 0, "compute_timer"};
+
 uint32_t
 backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
   UNUSED(enc);
 
-  start_timer();
+  start_timer(&graph_compute_timer);
 
   uint32_t shmem_res_id;
   vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
@@ -34,7 +36,7 @@ backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, stru
 
   vn_encode_ggml_status(enc, &status);
 
-  stop_timer();
+  stop_timer(&graph_compute_timer);
 
   return 0;
 }

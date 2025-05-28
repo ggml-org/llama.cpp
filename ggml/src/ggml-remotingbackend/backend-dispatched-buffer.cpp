@@ -6,6 +6,9 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 
+struct timer_data get_tensor_timer = {0, 0, 0, "get_tensor"};
+struct timer_data set_tensor_timer = {0, 0, 0, "set_tensor"};
+
 uint32_t
 backend_buffer_get_base(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
@@ -22,6 +25,8 @@ uint32_t
 backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
   UNUSED(enc);
+
+  start_timer(&set_tensor_timer);
 
   ggml_backend_buffer_t buffer;
   buffer = vn_decode_ggml_buffer(dec);
@@ -60,6 +65,8 @@ backend_buffer_set_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
 
   buffer->iface.set_tensor(buffer, tensor, shmem_data, offset, size);
 
+  stop_timer(&set_tensor_timer);
+
   return 0;
 }
 
@@ -67,6 +74,8 @@ uint32_t
 backend_buffer_get_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
   UNUSED(enc);
+
+  start_timer(&get_tensor_timer);
 
   ggml_backend_buffer_t buffer;
   buffer = vn_decode_ggml_buffer(dec);
@@ -93,6 +102,8 @@ backend_buffer_get_tensor(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, 
   UNUSED(buffer);
   UNUSED(tensor);
   buffer->iface.get_tensor(buffer, tensor, shmem_data, offset, size);
+
+  stop_timer(&get_tensor_timer);
 
   return 0;
 }

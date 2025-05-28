@@ -31,9 +31,9 @@ uint32_t backend_dispatch_initialize(void *ggml_backend_reg_fct_p, void *ggml_ba
     dev = reg->iface.get_device(reg, 0);
   }
 
-  ggml_backend_t (* ggml_backend_fct)(void) = (ggml_backend_t (*)()) ggml_backend_init_fct_p;
+  ggml_backend_t (* ggml_backend_fct)(int) = (ggml_backend_t (*)(int)) ggml_backend_init_fct_p;
 
-  bck = ggml_backend_fct();
+  bck = ggml_backend_fct(0);
   if (!bck) {
     ERROR("%s: backend initialization failed :/", __func__);
     return APIR_BACKEND_INITIALIZE_BACKEND_FAILED;

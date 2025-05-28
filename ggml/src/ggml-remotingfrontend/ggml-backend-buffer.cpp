@@ -3,6 +3,9 @@
 #define BUFFER_TO_GPU(name) \
   ((struct ggml_backend_remoting_buffer_context *) (name)->context)->gpu
 
+struct timer_data get_tensor_timer = {0, 0, 0, "get_tensor"};
+struct timer_data set_tensor_timer = {0, 0, 0, "set_tensor"};
+
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
   IMPLEMENTED_ONCE;
 
@@ -32,6 +35,8 @@ static void ggml_backend_remoting_buffer_memset_tensor(ggml_backend_buffer_t buf
 static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
   IMPLEMENTED_ONCE;
 
+  start_timer(&set_tensor_timer);
+
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 #if 0
   INFO("%s: data=%p, offset=%lu, size=%lu\n", __func__, data, offset, size);
@@ -46,14 +51,21 @@ static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer
 #endif
   apir_buffer_set_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
 
+  stop_timer(&set_tensor_timer);
+
   return;
 }
 
 static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
   IMPLEMENTED_ONCE;
+
+  start_timer(&get_tensor_timer);
+
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
 
   apir_buffer_get_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
+
+  stop_timer(&get_tensor_timer);
 }
 
 

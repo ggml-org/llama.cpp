@@ -8,9 +8,6 @@ static long long current_time_ms() {
 
 ggml_status
 apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
-  
-  start_timer();
-  
   struct vn_cs_encoder *encoder;
   struct vn_cs_decoder *decoder;
 
@@ -51,9 +48,6 @@ apir_backend_graph_compute(struct virtgpu *gpu, ggml_cgraph *cgraph) {
   if (shmem != gpu->data_shmem) {
     virtgpu_shmem_destroy(gpu, shmem->shmem);
   }
-  
-  stop_timer();
-  
+
   return status;
 }
-

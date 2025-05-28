@@ -111,13 +111,11 @@ static const struct ggml_backend_reg_i ggml_backend_remoting_reg_i = {
   /* .get_proc_address = */ NULL,
 };
 
-long long timer_start = 0;
-long long timer_total = 0;
-long long timer_count = 0;
 
-// needed because `show_timer` is inline
 static void showTime() {
-  show_timer();
+  show_timer(&graph_compute_timer);
+  show_timer(&get_tensor_timer);
+  show_timer(&set_tensor_timer);
 }
 
 ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
