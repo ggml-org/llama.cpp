@@ -2372,3 +2372,145 @@ void ggml_vec_dot_iq3_s_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, c
 #endif
 }
 
+void ggml_vec_dot_iq1_s_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq1_s * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined(__POWER9_VECTOR__)
+    const vector unsigned char v0 = vec_splats((unsigned char)0x0);
+    const vector unsigned short vsign = vec_splats((unsigned short)0x8000);
+
+    vector float vsumf0 = vec_splats(0.0f);
+    vector float vsumf1 = vec_splats(0.0f);
+    vector float vsumf2 = vec_splats(0.0f);
+    vector float vsumf3 = vec_splats(0.0f);
+
+    for (int i = 0; i < nb; ++i) {
+        vector float vxd = vec_splats(GGML_FP16_TO_FP32(x[i].d));
+        vector float vyd = vec_splats(y[i].d);
+        vector float vd = vec_mul(vxd, vyd);
+
+        vector signed int vsumi0 = vec_splats((int32_t)0);
+        vector signed int vsumi1 = vec_splats((int32_t)0);
+        vector signed int vsumi2 = vec_splats((int32_t)0);
+        vector signed int vsumi3 = vec_splats((int32_t)0);
+        vector signed int vsumi8 = vec_splats((int32_t)0);
+
+        const uint8_t  * GGML_RESTRICT q1 = x[i].qs;
+        const uint16_t * GGML_RESTRICT qh = x[i].qh;
+        const int8_t   * GGML_RESTRICT q8 = y[i].qs;
+        const int16_t  * GGML_RESTRICT qs = y[i].bsums;
+
+        for (int j = 0; j < QK_K/32; j += 2) {
+            __builtin_prefetch(q1, 0, 1);
+            __builtin_prefetch(qh, 0, 1);
+            __builtin_prefetch(q8, 0, 1);
+
+            vector signed long long aux64x2_0 = {*(const int64_t *)(iq1s_grid + (q1[0] | ((qh[0] << 8) & 0x700))), *(const int64_t *)(iq1s_grid + (q1[1] | ((qh[0] << 5) & 0x700)))};
+            vector signed long long aux64x2_1 = {*(const int64_t *)(iq1s_grid + (q1[2] | ((qh[0] << 2) & 0x700))), *(const int64_t *)(iq1s_grid + (q1[3] | ((qh[0] >> 1) & 0x700)))};
+            vector signed long long aux64x2_2 = {*(const int64_t *)(iq1s_grid + (q1[4] | ((qh[1] << 8) & 0x700))), *(const int64_t *)(iq1s_grid + (q1[5] | ((qh[1] << 5) & 0x700)))};
+            vector signed long long aux64x2_3 = {*(const int64_t *)(iq1s_grid + (q1[6] | ((qh[1] << 2) & 0x700))), *(const int64_t *)(iq1s_grid + (q1[7] | ((qh[1] >> 1) & 0x700)))};
+            q1 += 8;
+
+            vector signed char q1x0 = (vector signed char)aux64x2_0;
+            vector signed char q1x1 = (vector signed char)aux64x2_1;
+            vector signed char q1x2 = (vector signed char)aux64x2_2;
+            vector signed char q1x3 = (vector signed char)aux64x2_3;
+
+            vector signed char q8y0 = vec_xl( 0, q8);
+            vector signed char q8y1 = vec_xl(16, q8);
+            vector signed char q8y2 = vec_xl(32, q8);
+            vector signed char q8y3 = vec_xl(48, q8);
+            q8 += 64;
+
+            vector signed short qv0 = vec_add(vec_mule(q1x0, q8y0), vec_mulo(q1x0, q8y0));
+            vector signed short qv1 = vec_add(vec_mule(q1x1, q8y1), vec_mulo(q1x1, q8y1));
+            vector signed short qv2 = vec_add(vec_mule(q1x2, q8y2), vec_mulo(q1x2, q8y2));
+            vector signed short qv3 = vec_add(vec_mule(q1x3, q8y3), vec_mulo(q1x3, q8y3));
+
+            const uint16_t ls0 = (uint16_t)((qh[0] >> 12) & 7);
+            const uint16_t ls1 = (uint16_t)((qh[1] >> 12) & 7);
+
+            vector signed short vscales01 = (vector signed short)vec_splats((uint16_t)(2*ls0+1));
+            vector signed short vscales23 = (vector signed short)vec_splats((uint16_t)(2*ls1+1));
+            vector signed short vscales = vec_sld(vscales23, vscales01, 8);
+
+            vsumi0 = vec_msum(qv0, vscales01, vsumi0);
+            vsumi1 = vec_msum(qv1, vscales01, vsumi1);
+            vsumi2 = vec_msum(qv2, vscales23, vsumi2);
+            vsumi3 = vec_msum(qv3, vscales23, vsumi3);
+
+            vector signed short q8ysums = vec_xl_len(qs, 8);
+            qs += 4;
+            q8ysums = vec_mergeh(q8ysums, (vector signed short)v0);
+
+            vector signed short qxh = (vector signed short)vec_sld(vec_splats(qh[1]), vec_splats(qh[0]), 8);
+            qh += 2;
+            vector __bool short vsel = vec_cmpge(qxh, (vector signed short)v0);
+
+            vector signed short q8ysum = vec_sel((vector signed short)vec_xor((vector unsigned short)q8ysums, vsign), q8ysums, vsel);
+
+            vsumi8 = vec_add(vec_mule(q8ysum, vscales), vsumi8);
+        }
+
+        vsumf0 = vec_madd(vec_ctf(vsumi0, 0), vd, vsumf0);
+        vsumf1 = vec_madd(vec_ctf(vsumi1, 0), vd, vsumf1);
+        vsumf2 = vec_madd(vec_ctf(vsumi2, 0), vd, vsumf2);
+        vsumf3 = vec_madd(vec_ctf(vsumi3, 0), vd, vsumf3);
+
+        vsumf0 = vec_madd(vec_ctf(vsumi8, 0), vec_mul(vd, vec_splats(IQ1S_DELTA)), vsumf0);
+    }
+
+    vsumf0 = vec_add(vsumf0, vsumf2);
+    vsumf1 = vec_add(vsumf1, vsumf3);
+
+    vsumf0 = vec_add(vsumf0, vsumf1);
+
+    vsumf0 = vec_add(vsumf0, vec_sld(vsumf0, vsumf0, 4));
+    vsumf0 = vec_add(vsumf0, vec_sld(vsumf0, vsumf0, 8));
+
+    *s = vec_extract(vsumf0, 0);
+
+#else
+
+    float sumf = 0;
+    for (int i = 0; i < nb; i++) {
+
+        const int8_t   * q8 = y[i].qs;
+        const uint8_t  * qs = x[i].qs;
+        const uint16_t * qh = x[i].qh;
+
+        int sumi = 0, sumi1 = 0;
+        for (int ib = 0; ib < QK_K/32; ++ib) {
+            const int ls = 2*((qh[ib] >> 12) & 7) + 1;
+            const int delta = qh[ib] & 0x8000 ? -1 : 1;
+            int lsum = 0;
+            for (int l = 0; l < 4; ++l) {
+                const int8_t * grid = (const int8_t *)(iq1s_grid + (qs[l] | (((qh[ib] >> 3*l) & 7) << 8)));
+                for (int j = 0; j < 8; ++j) {
+                    lsum += q8[j] * grid[j];
+                }
+                q8 += 8;
+            }
+            sumi  += ls * lsum;
+            sumi1 += ls * delta * (y[i].bsums[2*ib+0] + y[i].bsums[2*ib+1]);
+            qs += 4;
+        }
+
+        sumf += GGML_FP16_TO_FP32(x[i].d) * y[i].d * (sumi + IQ1S_DELTA * sumi1);
+    }
+
+    *s = sumf;
+
+#endif
+}
+
