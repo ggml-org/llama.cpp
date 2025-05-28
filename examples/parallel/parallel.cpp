@@ -392,7 +392,7 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
 
-                LOG_ERR("%s : failed to decode the batch, retrying with n_batch = %d\n", __func__, n_batch / 2);
+                LOG_WRN("%s : failed to decode the batch, retrying with n_batch = %d\n", __func__, n_batch / 2);
 
                 n_cache_miss += 1;
 

@@ -1809,9 +1809,10 @@ llama_pos llama_kv_cache_unified_iswa::seq_pos_max(llama_seq_id seq_id) const {
 llama_memory_state_ptr llama_kv_cache_unified_iswa::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
     GGML_UNUSED(embd_pooled);
 
-    auto sbatch = llama_sbatch(batch, hparams.n_embd, true, logits_all);
+    // TODO: if we fail with split_simple, we should attempt different splitting strategies
+    //       but to do that properly, we first have to refactor the batches to be more flexible
 
-    // TODO: if we fail with split_simple, we should attempt split_equal
+    auto sbatch = llama_sbatch(batch, hparams.n_embd, true, logits_all);
 
     std::vector<llama_ubatch> ubatches;
 

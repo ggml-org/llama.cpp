@@ -3431,7 +3431,7 @@ struct server_context {
                 // retry with half the batch size to try to find a free slot in the KV cache
                 n_batch /= 2;
 
-                SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size - try increasing it via the context size or enable defragmentation, i = %d, n_batch = %d, ret = %d\n", i, n_batch, ret);
+                SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, i = %d, n_batch = %d, ret = %d\n", i, n_batch, ret);
 
                 continue; // continue loop of n_batch
             }

@@ -50,8 +50,9 @@ struct llama_context {
           llama_kv_cache * get_kv_self();
     const llama_kv_cache * get_kv_self() const;
 
+    // return true of the KV cache was updated
     // TODO: remove
-    void kv_self_update();
+    bool kv_self_update();
 
     enum llama_pooling_type pooling_type() const;
 
