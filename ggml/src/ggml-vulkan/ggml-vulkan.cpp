@@ -198,6 +198,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    INTEL_XE2,
 };
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
@@ -247,6 +248,34 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 return vk_device_architecture::AMD_RDNA3;
             }
             return vk_device_architecture::AMD_RDNA2;
+        }
+    } else if (props.vendorID == VK_VENDOR_ID_INTEL) {
+        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+        bool subgroup_size_control = false;
+
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
+                subgroup_size_control = true;
+            }
+        }
+
+        if (!subgroup_size_control) {
+            return vk_device_architecture::OTHER;
+        }
+
+        vk::PhysicalDeviceProperties2 props2;
+        vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
+
+        props2.pNext = &subgroup_size_control_props;
+        device.getProperties2(&props2);
+
+        if (subgroup_size_control_props.minSubgroupSize == 16) {
+            // Xe2 architecture has SIMD16 while previous Xe and Gen architecture has SIMD8.
+            // Minimum subgroup size matches the SIMD width so we distinguish architecture by checking this value.
+            // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
+            // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
+            return vk_device_architecture::INTEL_XE2;
         }
     }
     return vk_device_architecture::OTHER;
