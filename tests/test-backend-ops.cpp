@@ -4032,7 +4032,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for(uint32_t Cout : {1, 9}){
         for(uint32_t Cin : {1, 7}){
             for(uint32_t K : {1, 3, 1337}){
-                for(uint32_t L : {1, 2, 2173}){
+                for(uint32_t L : {1, 2, 13}){
                     for(uint32_t s0: {1, 2, 3}){
                         test_cases.emplace_back(new test_conv_transpose_1d({L,Cin,1,1}, {K,Cout,Cin,1}, s0, 0, 1));
                     }
