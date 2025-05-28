@@ -3726,3 +3726,95 @@ void ggml_vec_dot_iq3_s_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, c
 #endif
 }
 
+void ggml_vec_dot_iq1_s_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq1_s * GGML_RESTRICT x = vx;
+    const block_q8_K  * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined __ARM_NEON
+
+    ggml_int8x16x4_t q1b;
+    ggml_int8x16x4_t q8b;
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+
+        const int8_t   * q8 = y[i].qs;
+        const uint8_t  * qs = x[i].qs;
+        const uint16_t * qh = x[i].qh;
+
+        int sumi1 = 0, sumi2 = 0, sumi3 = 0;
+
+        for (int ib = 0; ib < QK_K/32; ib += 2) {
+
+            q1b.val[0] = vcombine_s8(vld1_s8((const int8_t *)(iq1s_grid + (qs[0] | ((qh[ib+0] << 8) & 0x700)))),
+                                     vld1_s8((const int8_t *)(iq1s_grid + (qs[1] | ((qh[ib+0] << 5) & 0x700)))));
+            q1b.val[1] = vcombine_s8(vld1_s8((const int8_t *)(iq1s_grid + (qs[2] | ((qh[ib+0] << 2) & 0x700)))),
+                                     vld1_s8((const int8_t *)(iq1s_grid + (qs[3] | ((qh[ib+0] >> 1) & 0x700)))));
+            q1b.val[2] = vcombine_s8(vld1_s8((const int8_t *)(iq1s_grid + (qs[4] | ((qh[ib+1] << 8) & 0x700)))),
+                                     vld1_s8((const int8_t *)(iq1s_grid + (qs[5] | ((qh[ib+1] << 5) & 0x700)))));
+            q1b.val[3] = vcombine_s8(vld1_s8((const int8_t *)(iq1s_grid + (qs[6] | ((qh[ib+1] << 2) & 0x700)))),
+                                     vld1_s8((const int8_t *)(iq1s_grid + (qs[7] | ((qh[ib+1] >> 1) & 0x700)))));
+            qs += 8;
+
+            q8b = ggml_vld1q_s8_x4(q8); q8 += 64;
+
+            const int32x4_t p1 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), q1b.val[0], q8b.val[0]), q1b.val[1], q8b.val[1]);
+            const int32x4_t p2 = ggml_vdotq_s32(ggml_vdotq_s32(vdupq_n_s32(0), q1b.val[2], q8b.val[2]), q1b.val[3], q8b.val[3]);
+
+            const int ls1 = 2*((qh[ib+0] >> 12) & 7) + 1;
+            const int ls2 = 2*((qh[ib+1] >> 12) & 7) + 1;
+            sumi1 += vaddvq_s32(p1) * ls1;
+            sumi2 += vaddvq_s32(p2) * ls2;
+            sumi3 += (y[i].bsums[2*ib+0] + y[i].bsums[2*ib+1]) * ls1 * (qh[ib+0] & 0x8000 ? -1 : 1)
+                   + (y[i].bsums[2*ib+2] + y[i].bsums[2*ib+3]) * ls2 * (qh[ib+1] & 0x8000 ? -1 : 1);
+
+        }
+
+        sumf += y[i].d * GGML_FP16_TO_FP32(x[i].d) * (sumi1 + sumi2 + IQ1S_DELTA * sumi3);
+    }
+
+    *s = sumf;
+
+#else
+
+    float sumf = 0;
+    for (int i = 0; i < nb; i++) {
+
+        const int8_t   * q8 = y[i].qs;
+        const uint8_t  * qs = x[i].qs;
+        const uint16_t * qh = x[i].qh;
+
+        int sumi = 0, sumi1 = 0;
+        for (int ib = 0; ib < QK_K/32; ++ib) {
+            const int ls = 2*((qh[ib] >> 12) & 7) + 1;
+            const int delta = qh[ib] & 0x8000 ? -1 : 1;
+            int lsum = 0;
+            for (int l = 0; l < 4; ++l) {
+                const int8_t * grid = (const int8_t *)(iq1s_grid + (qs[l] | (((qh[ib] >> 3*l) & 7) << 8)));
+                for (int j = 0; j < 8; ++j) {
+                    lsum += q8[j] * grid[j];
+                }
+                q8 += 8;
+            }
+            sumi  += ls * lsum;
+            sumi1 += ls * delta * (y[i].bsums[2*ib+0] + y[i].bsums[2*ib+1]);
+            qs += 4;
+        }
+
+        sumf += GGML_FP16_TO_FP32(x[i].d) * y[i].d * (sumi + IQ1S_DELTA * sumi1);
+    }
+
+    *s = sumf;
+
+#endif
+}
+
