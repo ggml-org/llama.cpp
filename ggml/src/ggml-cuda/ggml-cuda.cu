@@ -1064,6 +1064,9 @@ static const char * ggml_backend_cuda_host_buffer_type_name(ggml_backend_buffer_
 
     GGML_UNUSED(buft);
 }
+static bool ggml_backend_buft_is_cuda_host(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_cuda_host_buffer_type_name;
+}
 
 static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     CUDA_CHECK(cudaFreeHost(buffer->context));
@@ -3263,7 +3266,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 }
 
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft)) && buft->device == dev;
+        if (getenv("GGML_CUDA_JETSON_DEVICE") != nullptr){
+        return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft)||ggml_backend_buft_is_cuda_host(buft)) && buft->device == dev;
+    }else{
+        return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft)) && buft->device == dev;
+    }
 }
 
 static int64_t get_op_batch_size(const ggml_tensor * op) {
