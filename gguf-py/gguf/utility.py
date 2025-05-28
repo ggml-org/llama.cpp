@@ -231,7 +231,7 @@ class SafetensorRemote:
         response.raise_for_status()
 
         # Get raw byte data
-        return response.content[:size]
+        return response.content[:size] if size > -1 else response.content
 
     @classmethod
     def check_file_exist(cls, url: str) -> bool:
