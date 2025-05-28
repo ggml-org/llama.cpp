@@ -1342,3 +1342,140 @@ void ggml_vec_dot_q5_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, co
 #endif
 }
 
+void ggml_vec_dot_q6_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined __wasm_simd128__
+    int8_t aux8[QK_K] __attribute__((aligned(16)));
+    int32_t aux32[8] __attribute__((aligned(16))) = {0};
+    float sums[8] __attribute__((aligned(16))) = {0};
+
+    for (int i = 0; i < nb; ++i) {
+        // Unpack 6-bit quantized data into aux8 (unchanged)
+        const uint8_t * GGML_RESTRICT q4 = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        int8_t * a = aux8;
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                a[l +  0] = (int8_t)((q4[l +  0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32;
+                a[l + 32] = (int8_t)((q4[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32;
+                a[l + 64] = (int8_t)((q4[l +  0] >>  4) | (((qh[l] >> 4) & 3) << 4)) - 32;
+                a[l + 96] = (int8_t)((q4[l + 32] >>  4) | (((qh[l] >> 6) & 3) << 4)) - 32;
+            }
+            a += 128;
+            q4 += 64;
+            qh += 32;
+        }
+
+        const int8_t * GGML_RESTRICT a_ptr = aux8;
+        const int8_t * GGML_RESTRICT q8 = y[i].qs;
+        v128_t acc0 = wasm_i32x4_splat(0);
+        v128_t acc1 = wasm_i32x4_splat(0);
+
+        for (int j = 0; j < QK_K/16; ++j) {
+            const int scale = x[i].scales[j];
+            const v128_t vscale = wasm_i32x4_splat(scale);
+
+            // Load 16 elements from a and q8
+            const v128_t a_vec = wasm_v128_load(a_ptr);
+            const v128_t q8_vec = wasm_v128_load(q8);
+
+            // Process low 8 elements
+            v128_t a_low = wasm_i16x8_extend_low_i8x16(a_vec);
+            v128_t q8_low = wasm_i16x8_extend_low_i8x16(q8_vec);
+            v128_t prod_low = wasm_i16x8_mul(a_low, q8_low);
+            v128_t prod_lo_lo = wasm_i32x4_extend_low_i16x8(prod_low);
+            v128_t prod_lo_hi = wasm_i32x4_extend_high_i16x8(prod_low);
+
+            // Process high 8 elements
+            v128_t a_high = wasm_i16x8_extend_high_i8x16(a_vec);
+            v128_t q8_high = wasm_i16x8_extend_high_i8x16(q8_vec);
+            v128_t prod_high = wasm_i16x8_mul(a_high, q8_high);
+            v128_t prod_hi_lo = wasm_i32x4_extend_low_i16x8(prod_high);
+            v128_t prod_hi_hi = wasm_i32x4_extend_high_i16x8(prod_high);
+
+            // Scale and accumulate
+            prod_lo_lo = wasm_i32x4_mul(prod_lo_lo, vscale);
+            prod_lo_hi = wasm_i32x4_mul(prod_lo_hi, vscale);
+            prod_hi_lo = wasm_i32x4_mul(prod_hi_lo, vscale);
+            prod_hi_hi = wasm_i32x4_mul(prod_hi_hi, vscale);
+
+            acc0 = wasm_i32x4_add(acc0, wasm_i32x4_add(prod_lo_lo, prod_hi_lo));
+            acc1 = wasm_i32x4_add(acc1, wasm_i32x4_add(prod_lo_hi, prod_hi_hi));
+
+            a_ptr += 16;
+            q8 += 16;
+        }
+
+        // Store accumulated results
+        wasm_v128_store(&aux32[0], acc0);
+        wasm_v128_store(&aux32[4], acc1);
+
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        for (int l = 0; l < 8; ++l) {
+            sums[l] += d * aux32[l];
+        }
+    }
+
+    // Sum final results
+    float sumf = 0;
+    for (int l = 0; l < 8; ++l) {
+        sumf += sums[l];
+    }
+    *s = sumf;
+    
+#else
+
+    int8_t  aux8[QK_K];
+    int16_t aux16[8];
+    float   sums [8];
+    int32_t aux32[8];
+    memset(sums, 0, 8*sizeof(float));
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        const uint8_t * GGML_RESTRICT q4 = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const  int8_t * GGML_RESTRICT q8 = y[i].qs;
+        memset(aux32, 0, 8*sizeof(int32_t));
+        int8_t * GGML_RESTRICT a = aux8;
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                a[l +  0] = (int8_t)((q4[l +  0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32;
+                a[l + 32] = (int8_t)((q4[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32;
+                a[l + 64] = (int8_t)((q4[l +  0] >>  4) | (((qh[l] >> 4) & 3) << 4)) - 32;
+                a[l + 96] = (int8_t)((q4[l + 32] >>  4) | (((qh[l] >> 6) & 3) << 4)) - 32;
+            }
+            a  += 128;
+            q4 += 64;
+            qh += 32;
+        }
+        a = aux8;
+        int is = 0;
+        for (int j = 0; j < QK_K/16; ++j) {
+            int scale = x[i].scales[is++];
+            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            q8 += 8; a += 8;
+            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            q8 += 8; a += 8;
+        }
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        for (int l = 0; l < 8; ++l) sums[l] += d * aux32[l];
+    }
+    for (int l = 0; l < 8; ++l) sumf += sums[l];
+    *s = sumf;
+#endif
+}
+
