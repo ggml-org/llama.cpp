@@ -1029,3 +1029,118 @@ void ggml_vec_dot_q8_0_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, co
 
     *s = sumf;
 }
+
+void ggml_vec_dot_q2_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined __loongarch_asx
+
+    __m256 acc = (__m256)__lasx_xvldi(0);
+
+    for (int i = 0; i < nb; ++i) {
+
+        const float d = y[i].d * GGML_FP16_TO_FP32(x[i].d);
+        const float dmin = -y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
+
+        const uint8_t * GGML_RESTRICT q2 = x[i].qs;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        const __m128i mins_and_scales128 = __lsx_vld((const __m128i*)x[i].scales, 0);
+        const __m128i scales128 = __lsx_vandi_b(mins_and_scales128, 0xf);
+        const __m256i mins = lasx_ext8_16(__lsx_vsrli_b(mins_and_scales128, 4));
+        const __m256i prod = lasx_madd_h(mins, __lasx_xvld((const __m256i*)y[i].bsums, 0));
+
+        acc = __lasx_xvfmadd_s(__lasx_xvreplfr2vr_s(dmin), __lasx_xvffint_s_w(prod), acc);
+
+        const v16i8 shuffle_mask = {0, 2, 4, 6, 8, 10, 12, 14, 1, 3, 5, 7, 9, 11, 13, 15};
+        const __m256i scales_shuffled = lasx_ext8_16(__lsx_vshuf_b(scales128, scales128, (__m128i)shuffle_mask));
+
+        __m256i sumi = __lasx_xvldi(0);
+
+        for (int j = 0; j < QK_K/128; ++j) {
+
+            const __m256i q2bits = __lasx_xvld((const __m256i*)q2, 0); q2 += 32;
+
+            const __m256i q8_0 = __lasx_xvld((const __m256i*)q8, 0); q8 += 32;
+            const __m256i q8_1 = __lasx_xvld((const __m256i*)q8, 0); q8 += 32;
+            const __m256i q8_2 = __lasx_xvld((const __m256i*)q8, 0); q8 += 32;
+            const __m256i q8_3 = __lasx_xvld((const __m256i*)q8, 0); q8 += 32;
+
+            const __m256i q2_0 = __lasx_xvandi_b(q2bits, 3);
+            const __m256i q2_1 = __lasx_xvandi_b(__lasx_xvsrli_b(q2bits, 2), 3);
+            const __m256i q2_2 = __lasx_xvandi_b(__lasx_xvsrli_b(q2bits, 4), 3);
+            const __m256i q2_3 = __lasx_xvsrli_b(q2bits, 6);
+
+            __m256i p0 = lasx_madd_h_b(q2_0, q8_0);
+            __m256i p1 = lasx_madd_h_b(q2_1, q8_1);
+            __m256i p2 = lasx_madd_h_b(q2_2, q8_2);
+            __m256i p3 = lasx_madd_h_b(q2_3, q8_3);
+
+            p0 = lasx_madd_h(lasx_xvrepl128vei_h(scales_shuffled, 4 * j + 0), p0);
+            p1 = lasx_madd_h(lasx_xvrepl128vei_h(scales_shuffled, 4 * j + 1), p1);
+            p2 = lasx_madd_h(lasx_xvrepl128vei_h(scales_shuffled, 4 * j + 2), p2);
+            p3 = lasx_madd_h(lasx_xvrepl128vei_h(scales_shuffled, 4 * j + 3), p3);
+
+            p0 = __lasx_xvadd_w(p0, p1);
+            p2 = __lasx_xvadd_w(p2, p3);
+
+            sumi = __lasx_xvadd_w(sumi, __lasx_xvadd_w(p0, p2));
+        }
+
+        acc = __lasx_xvfmadd_s(__lasx_xvreplfr2vr_s(d), __lasx_xvffint_s_w(sumi), acc);
+
+    }
+
+    *s = hsum_float_8(acc);
+
+#else
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+
+        const uint8_t * q2 = x[i].qs;
+        const  int8_t * q8 = y[i].qs;
+        const uint8_t * sc = x[i].scales;
+
+        int summs = 0;
+        for (int j = 0; j < 16; ++j) {
+            summs += y[i].bsums[j] * (sc[j] >> 4);
+        }
+
+        const float dall = y[i].d * GGML_FP16_TO_FP32(x[i].d);
+        const float dmin = y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
+
+        int isum = 0;
+        int is = 0;
+        int d;
+        for (int k = 0; k < QK_K/128; ++k) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                d = sc[is++] & 0xF;
+                int isuml = 0;
+                for (int l =  0; l < 16; ++l) isuml += q8[l] * ((q2[l] >> shift) & 3);
+                isum += d * isuml;
+                d = sc[is++] & 0xF;
+                isuml = 0;
+                for (int l = 16; l < 32; ++l) isuml += q8[l] * ((q2[l] >> shift) & 3);
+                isum += d * isuml;
+                shift += 2;
+                q8 += 32;
+            }
+            q2 += 32;
+        }
+        sumf += dall * isum - dmin * summs;
+    }
+    *s = sumf;
+#endif
+}

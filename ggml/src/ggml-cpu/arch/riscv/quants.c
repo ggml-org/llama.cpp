@@ -445,3 +445,337 @@ void ggml_vec_dot_q8_0_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, co
 
     *s = sumf;
 }
+
+void ggml_vec_dot_q2_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined __riscv_xtheadvector
+
+    float sumf = 0;
+    uint8_t atmp[16];
+
+    for (int i = 0; i < nb; ++i) {
+        const uint8_t * q2 = x[i].qs;
+        const  int8_t * q8 = y[i].qs;
+        const uint8_t * sc = x[i].scales;
+        const float dall = y[i].d * GGML_FP16_TO_FP32(x[i].d);
+        const float dmin = -y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
+        uint8_t *patmp = atmp;
+        int vsums;
+        int tmp;
+        __asm__ __volatile__(
+            "th.vsetvli zero, %[vl16], e8, m1\n\t"
+            "th.vmv.v.x v8, zero\n\t"
+            "th.vlb.v v1, (%[sc])\n\t"
+            "th.vand.vi v0, v1, 0xF\n\t"
+            "th.vsrl.vi v1, v1, 4\n\t"
+            "th.vsb.v v0, (%[scale])\n\t"
+            "th.vwaddu.vx v16, v1, zero\n\t"
+            "th.vsetvli zero, %[vl16], e16, m2\n\t"
+            "th.vlh.v v2, (%[bsums])\n\t"
+            "th.vwmul.vv v4, v16, v2\n\t"
+            "th.vsetvli zero, %[vl16], e32, m4\n\t"
+            "th.vredsum.vs v8, v4, v8\n\t"
+            "th.vmv.x.s %[vsums], v8"
+            : [tmp] "=&r" (tmp), [vsums] "=&r" (vsums)
+            : [sc] "r" (sc), [scale] "r" (atmp), [bsums] "r" (y[i].bsums)
+            , [vl16] "r" (16)
+            : "memory"
+            , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
+            , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
+            , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
+            , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
+        );
+        sumf += dmin * vsums;
+        int isum = 0;
+
+        for (int j = 0; j < QK_K/128; ++j) {
+            __asm__ __volatile__(
+                "th.vsetvli zero, %[vl32], e8, m2\n\t"
+                "th.vlb.v v0, (%[q2])\n\t"
+                "th.vsrl.vi v2, v0, 2\n\t"
+                "th.vsrl.vi v4, v0, 4\n\t"
+                "th.vsrl.vi v6, v0, 6\n\t"
+                "th.vand.vi v0, v0, 0x3\n\t"
+                "th.vand.vi v2, v2, 0x3\n\t"
+                "th.vand.vi v4, v4, 0x3\n\t"
+                "th.vsetvli zero, %[vl128], e8, m8\n\t"
+                "th.vlb.v v8, (%[q8])\n\t"
+                "th.vsetvli zero, %[vl64], e8, m4\n\t"
+                "th.vwmul.vv v16, v0, v8\n\t"
+                "th.vwmul.vv v24, v4, v12\n\t"
+                "th.vsetvli zero, %[vl16], e16, m2\n\t"
+                "th.vmv.v.x v0, zero\n\t"
+                "th.vwredsum.vs v10, v16, v0\n\t"
+                "th.vwredsum.vs v9, v18, v0\n\t"
+                "th.vwredsum.vs v8, v20, v0\n\t"
+                "th.vwredsum.vs v7, v22, v0\n\t"
+                "th.vwredsum.vs v11, v24, v0\n\t"
+                "th.vwredsum.vs v12, v26, v0\n\t"
+                "th.vwredsum.vs v13, v28, v0\n\t"
+                "th.vwredsum.vs v14, v30, v0\n\t"
+                "li %[tmp], 4\n\t"
+                "th.vsetvli zero, %[tmp], e32, m1\n\t"
+                "th.vslideup.vi v10, v9, 1\n\t"
+                "th.vslideup.vi v8, v7, 1\n\t"
+                "th.vslideup.vi v11, v12, 1\n\t"
+                "th.vslideup.vi v13, v14, 1\n\t"
+                "th.vslideup.vi v10, v8, 2\n\t"
+                "th.vslideup.vi v11, v13, 2\n\t"
+                "li %[tmp], 8\n\t"
+                "th.vsetvli zero, %[tmp], e32, m2\n\t"
+                "th.vlbu.v v12, (%[scale])\n\t"
+                "th.vmul.vv v10, v10, v12\n\t"
+                "th.vredsum.vs v0, v10, v0\n\t"
+                "th.vmv.x.s %[tmp], v0\n\t"
+                "add %[isum], %[isum], %[tmp]"
+                : [tmp] "=&r" (tmp), [isum] "+&r" (isum)
+                : [q2] "r" (q2), [scale] "r" (patmp), [q8] "r" (q8)
+                , [vl16] "r" (16), [vl32] "r" (32), [vl64] "r" (64), [vl128] "r" (128)
+                : "memory"
+                , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
+                , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
+                , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
+                , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
+            );
+            q2 += 32; q8 += 128; patmp += 8;
+        }
+
+        sumf += dall * isum;
+    }
+
+    *s = sumf;
+
+#elif defined __riscv_v
+
+    float sumf = 0;
+    uint8_t atmp[16];
+
+    const int vector_length = __riscv_vlenb() * 8;
+    uint8_t temp_01[32] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
+
+    switch (vector_length) {
+    case 256:
+        for (int i = 0; i < nb; ++i) {
+            const uint8_t * q2 = x[i].qs;
+            const int8_t *  q8 = y[i].qs;
+            const uint8_t * sc = x[i].scales;
+
+            const float dall = y[i].d * GGML_FP16_TO_FP32(x[i].d);
+            const float dmin = -y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
+
+            size_t vl = 16;
+
+            vuint8m1_t scales = __riscv_vle8_v_u8m1(sc, vl);
+            vuint8m1_t aux    = __riscv_vand_vx_u8m1(scales, 0x0F, vl);
+
+            vint16m1_t q8sums = __riscv_vle16_v_i16m1(y[i].bsums, vl);
+
+            vuint8mf2_t scales_2 = __riscv_vle8_v_u8mf2(sc, vl);
+            vuint8mf2_t mins8    = __riscv_vsrl_vx_u8mf2(scales_2, 0x4, vl);
+            vint16m1_t  mins     = __riscv_vreinterpret_v_u16m1_i16m1(__riscv_vzext_vf2_u16m1(mins8, vl));
+            vint32m2_t  prod     = __riscv_vwmul_vv_i32m2(q8sums, mins, vl);
+            vint32m1_t  vsums    = __riscv_vredsum_vs_i32m2_i32m1(prod, __riscv_vmv_v_x_i32m1(0, 1), vl);
+
+            sumf += dmin * __riscv_vmv_x_s_i32m1_i32(vsums);
+
+            vl = 32;
+
+            vint32m1_t vzero = __riscv_vmv_v_x_i32m1(0, 1);
+            vuint8m1_t v_b   = __riscv_vle8_v_u8m1(temp_01, vl);
+
+            uint8_t is   = 0;
+            int     isum = 0;
+
+            for (int j = 0; j < QK_K / 128; ++j) {
+                // load Q2
+                vuint8m1_t q2_x = __riscv_vle8_v_u8m1(q2, vl);
+
+                vuint8m1_t q2_0 = __riscv_vand_vx_u8m1(q2_x, 0x03, vl);
+                vuint8m1_t q2_1 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(q2_x, 0x2, vl), 0x03, vl);
+                vuint8m1_t q2_2 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(q2_x, 0x4, vl), 0x03, vl);
+                vuint8m1_t q2_3 = __riscv_vand_vx_u8m1(__riscv_vsrl_vx_u8m1(q2_x, 0x6, vl), 0x03, vl);
+
+                // duplicate scale elements for product
+                vuint8m1_t sc0 = __riscv_vrgather_vv_u8m1(aux, __riscv_vadd_vx_u8m1(v_b, 0 + is, vl), vl);
+                vuint8m1_t sc1 = __riscv_vrgather_vv_u8m1(aux, __riscv_vadd_vx_u8m1(v_b, 2 + is, vl), vl);
+                vuint8m1_t sc2 = __riscv_vrgather_vv_u8m1(aux, __riscv_vadd_vx_u8m1(v_b, 4 + is, vl), vl);
+                vuint8m1_t sc3 = __riscv_vrgather_vv_u8m1(aux, __riscv_vadd_vx_u8m1(v_b, 6 + is, vl), vl);
+
+                vint16m2_t p0 = __riscv_vreinterpret_v_u16m2_i16m2(__riscv_vwmulu_vv_u16m2(q2_0, sc0, vl));
+                vint16m2_t p1 = __riscv_vreinterpret_v_u16m2_i16m2(__riscv_vwmulu_vv_u16m2(q2_1, sc1, vl));
+                vint16m2_t p2 = __riscv_vreinterpret_v_u16m2_i16m2(__riscv_vwmulu_vv_u16m2(q2_2, sc2, vl));
+                vint16m2_t p3 = __riscv_vreinterpret_v_u16m2_i16m2(__riscv_vwmulu_vv_u16m2(q2_3, sc3, vl));
+
+                // load Q8
+                vint8m1_t q8_0 = __riscv_vle8_v_i8m1(q8, vl);
+                vint8m1_t q8_1 = __riscv_vle8_v_i8m1(q8 + 32, vl);
+                vint8m1_t q8_2 = __riscv_vle8_v_i8m1(q8 + 64, vl);
+                vint8m1_t q8_3 = __riscv_vle8_v_i8m1(q8 + 96, vl);
+
+                vint32m4_t s0 = __riscv_vwmul_vv_i32m4(p0, __riscv_vwcvt_x_x_v_i16m2(q8_0, vl), vl);
+                vint32m4_t s1 = __riscv_vwmul_vv_i32m4(p1, __riscv_vwcvt_x_x_v_i16m2(q8_1, vl), vl);
+                vint32m4_t s2 = __riscv_vwmul_vv_i32m4(p2, __riscv_vwcvt_x_x_v_i16m2(q8_2, vl), vl);
+                vint32m4_t s3 = __riscv_vwmul_vv_i32m4(p3, __riscv_vwcvt_x_x_v_i16m2(q8_3, vl), vl);
+
+                vint32m1_t isum0 = __riscv_vredsum_vs_i32m4_i32m1(__riscv_vadd_vv_i32m4(s0, s1, vl), vzero, vl);
+                vint32m1_t isum1 = __riscv_vredsum_vs_i32m4_i32m1(__riscv_vadd_vv_i32m4(s2, s3, vl), isum0, vl);
+
+                isum += __riscv_vmv_x_s_i32m1_i32(isum1);
+
+                q2 += 32;
+                q8 += 128;
+                is = 8;
+            }
+
+            sumf += dall * isum;
+        }
+        break;
+    case 128:
+        for (int i = 0; i < nb; ++i) {
+            const uint8_t * q2 = x[i].qs;
+            const  int8_t * q8 = y[i].qs;
+            const uint8_t * sc = x[i].scales;
+            const float dall = y[i].d * GGML_FP16_TO_FP32(x[i].d);
+            const float dmin = -y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
+            uint8_t *patmp = atmp;
+            int vsums;
+            int tmp;
+            __asm__ __volatile__(
+                "vsetivli zero, 16, e8, m1\n\t"
+                "vmv.v.x v8, zero\n\t"
+                "vle8.v v1, (%[sc])\n\t"
+                "vand.vi v0, v1, 0xF\n\t"
+                "vsrl.vi v1, v1, 4\n\t"
+                "vse8.v v0, (%[scale])\n\t"
+                "vsetivli zero, 16, e16, m2\n\t"
+                "vle16.v v2, (%[bsums])\n\t"
+                "vzext.vf2 v0, v1\n\t"
+                "vwmul.vv v4, v0, v2\n\t"
+                "vsetivli zero, 16, e32, m4\n\t"
+                "vredsum.vs v8, v4, v8\n\t"
+                "vmv.x.s %[vsums], v8"
+                : [tmp] "=&r" (tmp), [vsums] "=&r" (vsums)
+                : [sc] "r" (sc), [scale] "r" (atmp), [bsums] "r" (y[i].bsums)
+                : "memory"
+                , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
+                , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
+                , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
+                , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
+            );
+            sumf += dmin * vsums;
+            int isum = 0;
+
+            for (int j = 0; j < QK_K/128; ++j) {
+                __asm__ __volatile__(
+                    "vsetvli zero, %[vl32], e8, m2\n\t"
+                    "vle8.v v0, (%[q2])\n\t"
+                    "vsrl.vi v2, v0, 2\n\t"
+                    "vsrl.vi v4, v0, 4\n\t"
+                    "vsrl.vi v6, v0, 6\n\t"
+                    "vand.vi v0, v0, 0x3\n\t"
+                    "vand.vi v2, v2, 0x3\n\t"
+                    "vand.vi v4, v4, 0x3\n\t"
+                    "vsetvli zero, %[vl128], e8, m8\n\t"
+                    "vle8.v v8, (%[q8])\n\t"
+                    "vsetvli zero, %[vl64], e8, m4\n\t"
+                    "vwmul.vv v16, v0, v8\n\t"
+                    "vwmul.vv v24, v4, v12\n\t"
+                    "vsetivli zero, 16, e16, m2\n\t"
+                    "vmv.v.x v0, zero\n\t"
+                    "vwredsum.vs v10, v16, v0\n\t"
+                    "vwredsum.vs v9, v18, v0\n\t"
+                    "vwredsum.vs v8, v20, v0\n\t"
+                    "vwredsum.vs v7, v22, v0\n\t"
+                    "vwredsum.vs v11, v24, v0\n\t"
+                    "vwredsum.vs v12, v26, v0\n\t"
+                    "vwredsum.vs v13, v28, v0\n\t"
+                    "vwredsum.vs v14, v30, v0\n\t"
+                    "vsetivli zero, 4, e32, m1\n\t"
+                    "vslideup.vi v10, v9, 1\n\t"
+                    "vslideup.vi v8, v7, 1\n\t"
+                    "vslideup.vi v11, v12, 1\n\t"
+                    "vslideup.vi v13, v14, 1\n\t"
+                    "vslideup.vi v10, v8, 2\n\t"
+                    "vslideup.vi v11, v13, 2\n\t"
+                    "vsetivli zero, 8, e32, m2\n\t"
+                    "vle8.v v15, (%[scale])\n\t"
+                    "vzext.vf4 v12, v15\n\t"
+                    "vmul.vv v10, v10, v12\n\t"
+                    "vredsum.vs v0, v10, v0\n\t"
+                    "vmv.x.s %[tmp], v0\n\t"
+                    "add %[isum], %[isum], %[tmp]"
+                    : [tmp] "=&r" (tmp), [isum] "+&r" (isum)
+                    : [q2] "r" (q2), [scale] "r" (patmp), [q8] "r" (q8)
+                    , [vl32] "r" (32), [vl64] "r" (64), [vl128] "r" (128)
+                    : "memory"
+                    , "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7"
+                    , "v8", "v9", "v10", "v11", "v12", "v13", "v14", "v15"
+                    , "v16", "v17", "v18", "v19", "v20", "v21", "v22", "v23"
+                    , "v24", "v25", "v26", "v27", "v28", "v29", "v30", "v31"
+                );
+                q2 += 32; q8 += 128; patmp += 8;
+            }
+
+            sumf += dall * isum;
+        }
+        break;
+    default:
+        assert(false && "Unsupported vector length");
+        break;
+    }
+
+    *s = sumf;
+
+#else
+
+    float sumf = 0;
+
+    for (int i = 0; i < nb; ++i) {
+
+        const uint8_t * q2 = x[i].qs;
+        const  int8_t * q8 = y[i].qs;
+        const uint8_t * sc = x[i].scales;
+
+        int summs = 0;
+        for (int j = 0; j < 16; ++j) {
+            summs += y[i].bsums[j] * (sc[j] >> 4);
+        }
+
+        const float dall = y[i].d * GGML_FP16_TO_FP32(x[i].d);
+        const float dmin = y[i].d * GGML_FP16_TO_FP32(x[i].dmin);
+
+        int isum = 0;
+        int is = 0;
+        int d;
+        for (int k = 0; k < QK_K/128; ++k) {
+            int shift = 0;
+            for (int j = 0; j < 4; ++j) {
+                d = sc[is++] & 0xF;
+                int isuml = 0;
+                for (int l =  0; l < 16; ++l) isuml += q8[l] * ((q2[l] >> shift) & 3);
+                isum += d * isuml;
+                d = sc[is++] & 0xF;
+                isuml = 0;
+                for (int l = 16; l < 32; ++l) isuml += q8[l] * ((q2[l] >> shift) & 3);
+                isum += d * isuml;
+                shift += 2;
+                q8 += 32;
+            }
+            q2 += 32;
+        }
+        sumf += dall * isum - dmin * summs;
+    }
+    *s = sumf;
+#endif
+}
