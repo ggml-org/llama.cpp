@@ -16,7 +16,7 @@
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
 
-#include "ggml-cpu-aarch64.h"
+#include "repack.h"
 
 // TODO: move to include file?
 template <int K> constexpr int QK_0() {
