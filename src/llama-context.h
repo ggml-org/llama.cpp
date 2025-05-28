@@ -89,6 +89,14 @@ struct llama_context {
                 int32_t   il_start,
                 int32_t   il_end);
 
+    // process a single ubatch with a specific graph type
+    // ret contains the status of the graph computation
+    // returns nullptr only if ret != GGML_STATUS_SUCCESS
+    llm_graph_result_ptr process(
+            const llama_ubatch & ubatch,
+                llm_graph_type   gtype,
+                   ggml_status * ret);
+
     int encode(llama_batch & inp_batch);
     int decode(llama_batch & inp_batch);
 
@@ -181,9 +189,7 @@ public:
     ggml_cgraph * graph_init();
 
     // returns the result of ggml_backend_sched_graph_compute_async execution
-    ggml_status graph_compute(
-            ggml_cgraph * gf,
-                   bool   batched);
+    ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs);
