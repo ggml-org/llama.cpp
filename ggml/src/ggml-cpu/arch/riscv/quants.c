@@ -1,0 +1,112 @@
+#include "ggml-common.h"
+#include "ggml-quants.h"
+#include "ggml-impl.h"
+#include "ggml-cpu.h"
+
+#include "../../ggml-cpu-quants.h"
+#include "../../ggml-cpu-impl.h"
+
+#include <math.h>
+#include <string.h>
+#include <assert.h>
+#include <float.h>
+#include <stdlib.h> // for qsort
+#include <stdio.h>  // for GGML_ASSERT
+
+#define GROUP_MAX_EPS 1e-15f
+#define GROUP_MAX_EPS_IQ3_XXS 1e-8f
+#define GROUP_MAX_EPS_IQ2_S 1e-8f
+#define GROUP_MAX_EPS_IQ1_M 1e-7f
+#define GROUP_MAX_EPS_IQ1_S 1e-12f
+
+#define UNUSED GGML_UNUSED
+
+void native_quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(QK8_0 == 32);
+    assert(k % QK8_0 == 0);
+    const int nb = k / QK8_0;
+
+    block_q8_0 * GGML_RESTRICT y = vy;
+
+#if defined(__riscv_v)
+
+    size_t vl = QK8_0;
+
+    for (int i = 0; i < nb; i++) {
+        // load elements
+        vfloat32m8_t v_x   = __riscv_vle32_v_f32m8(x+i*QK8_0, vl);
+
+        vfloat32m8_t vfabs = __riscv_vfabs_v_f32m8(v_x, vl);
+        vfloat32m1_t tmp   = __riscv_vfmv_v_f_f32m1(0.0f, vl);
+        vfloat32m1_t vmax  = __riscv_vfredmax_vs_f32m8_f32m1(vfabs, tmp, vl);
+        float amax = __riscv_vfmv_f_s_f32m1_f32(vmax);
+
+        const float d = amax / ((1 << 7) - 1);
+        const float id = d ? 1.0f/d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        vfloat32m8_t x0 = __riscv_vfmul_vf_f32m8(v_x, id, vl);
+
+        // convert to integer
+        vint16m4_t   vi = __riscv_vfncvt_x_f_w_i16m4(x0, vl);
+        vint8m2_t    vs = __riscv_vncvt_x_x_w_i8m2(vi, vl);
+
+        // store result
+        __riscv_vse8_v_i8m2(y[i].qs , vs, vl);
+    }
+#else
+    GGML_UNUSED(nb);
+    // scalar
+    quantize_row_q8_0_ref(x, y, k);
+#endif
+}
+
+void native_quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+    assert(k % QK8_1 == 0);
+    const int nb = k / QK8_1;
+
+    block_q8_1 * GGML_RESTRICT y = vy;
+
+#if defined(__riscv_v)
+
+    size_t vl = QK8_1;
+
+    for (int i = 0; i < nb; i++) {
+        // load elements
+        vfloat32m8_t v_x   = __riscv_vle32_v_f32m8(x+i*QK8_1, vl);
+
+        vfloat32m8_t vfabs = __riscv_vfabs_v_f32m8(v_x, vl);
+        vfloat32m1_t tmp   = __riscv_vfmv_v_f_f32m1(0.0, vl);
+        vfloat32m1_t vmax  = __riscv_vfredmax_vs_f32m8_f32m1(vfabs, tmp, vl);
+        float amax = __riscv_vfmv_f_s_f32m1_f32(vmax);
+
+        const float d  = amax / ((1 << 7) - 1);
+        const float id = d ? 1.0f/d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        vfloat32m8_t x0 = __riscv_vfmul_vf_f32m8(v_x, id, vl);
+
+        // convert to integer
+        vint16m4_t   vi = __riscv_vfncvt_x_f_w_i16m4(x0, vl);
+        vint8m2_t    vs = __riscv_vncvt_x_x_w_i8m2(vi, vl);
+
+        // store result
+        __riscv_vse8_v_i8m2(y[i].qs , vs, vl);
+
+        // compute sum for y[i].s
+        vint16m1_t tmp2 = __riscv_vmv_v_x_i16m1(0, vl);
+        vint16m1_t vwrs = __riscv_vwredsum_vs_i8m2_i16m1(vs, tmp2, vl);
+
+        // set y[i].s
+        int sum = __riscv_vmv_x_s_i16m1_i16(vwrs);
+        y[i].s = GGML_FP32_TO_FP16(sum*d);
+    }
+
+#else
+    GGML_UNUSED(nb);
+    // scalar
+    quantize_row_q8_1_ref(x, y, k);
+#endif
+}
