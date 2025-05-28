@@ -1044,6 +1044,10 @@ class TextModel(ModelBase):
         special_vocab.chat_template = "rwkv-world"
         # hack: Add '\n\n' as the EOT token to make it chat normally
         special_vocab._set_special_token("eot", 261)
+        # hack: Override these as they have already been set (incorrectly)
+        special_vocab.special_token_ids["bos"] = 0
+        special_vocab.special_token_ids["eos"] = 0
+
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_builtin(self, model_name: Literal["gpt-neox", "llama-spm"], vocab_size: int):
