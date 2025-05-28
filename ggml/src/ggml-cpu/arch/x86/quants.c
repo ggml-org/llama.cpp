@@ -959,3 +959,72 @@ void ggml_vec_dot_q5_1_q8_1_native(int n, float * GGML_RESTRICT s, size_t bs, co
 
     *s = sumf;
 }
+
+void ggml_vec_dot_q8_0_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK8_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q8_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined(__AVX2__)
+    // Initialize accumulator with zeros
+    __m256 acc = _mm256_setzero_ps();
+
+    // Main loop
+    for (; ib < nb; ++ib) {
+        // Compute combined scale for the block
+        const __m256 d = _mm256_set1_ps(GGML_FP16_TO_FP32(x[ib].d) * GGML_FP16_TO_FP32(y[ib].d));
+        __m256i qx = _mm256_loadu_si256((const __m256i *)x[ib].qs);
+        __m256i qy = _mm256_loadu_si256((const __m256i *)y[ib].qs);
+
+        const __m256 q = mul_sum_i8_pairs_float(qx, qy);
+
+        // Multiply q with scale and accumulate
+        acc = _mm256_fmadd_ps( d, q, acc );
+    }
+
+    sumf = hsum_float_8(acc);
+#elif defined(__AVX__)
+    __m256 accum = _mm256_setzero_ps();
+
+    for (; ib + 1 < nb; ib += 2) {
+        const __m128i qx_1_0 = _mm_loadu_si128((const __m128i *)x[ib].qs);
+        const __m128i qx_1_1 = _mm_loadu_si128((const __m128i *)x[ib].qs + 1);
+        const __m128i qx_2_0 = _mm_loadu_si128((const __m128i *)x[ib + 1].qs);
+        const __m128i qx_2_1 = _mm_loadu_si128((const __m128i *)x[ib + 1].qs + 1);
+        const __m128i qy_1_0 = _mm_loadu_si128((const __m128i *)y[ib].qs);
+        const __m128i qy_1_1 = _mm_loadu_si128((const __m128i *)y[ib].qs + 1);
+        const __m128i qy_2_0 = _mm_loadu_si128((const __m128i *)y[ib + 1].qs);
+        const __m128i qy_2_1 = _mm_loadu_si128((const __m128i *)y[ib + 1].qs + 1);
+
+        const __m256 p = mul_sum_i8_quad_float(qx_1_0, qx_1_1, qx_2_0, qx_2_1, qy_1_0, qy_1_1, qy_2_0, qy_2_1);
+        const __m256 deltas = quad_fp16_delta_float(x[ib].d, y[ib].d, x[ib + 1].d, y[ib + 1].d);
+        accum = _mm256_add_ps(_mm256_mul_ps(deltas, p), accum);
+    }
+
+    sumf = hsum_float_8(accum);
+
+#endif
+    for (; ib < nb; ++ib) {
+        int sumi = 0;
+
+        for (int j = 0; j < qk; j++) {
+            sumi += x[ib].qs[j]*y[ib].qs[j];
+        }
+
+        sumf += sumi*(GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d));
+    }
+
+    *s = sumf;
+}
