@@ -10,9 +10,17 @@
 #include "shared/apir_backend.h"
 #include "shared/venus_cs.h"
 
+#define USE_METAL 1
+
+#if USE_METAL
 #define GGML_BACKEND_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend/bin/libggml-metal.dylib"
 #define GGML_BACKEND_REG_FCT_NAME "ggml_backend_metal_reg"
 #define GGML_BACKEND_INIT_FCT_NAME "ggml_backend_metal_init"
+#else
+#define GGML_BACKEND_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend/bin/libggml-vulkan.dylib"
+#define GGML_BACKEND_REG_FCT_NAME "ggml_backend_vk_reg"
+#define GGML_BACKEND_INIT_FCT_NAME "ggml_backend_vk_init"
+#endif
 
 static void *backend_library_handle = NULL;
 
