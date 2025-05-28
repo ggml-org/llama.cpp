@@ -21,7 +21,7 @@
 
 #define UNUSED GGML_UNUSED
 
-void native_quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void quantize_row_q8_0_native(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
@@ -67,7 +67,7 @@ void native_quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRIC
 #endif
 }
 
-void native_quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void quantize_row_q8_1_native(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(k % QK8_1 == 0);
     const int nb = k / QK8_1;
 
@@ -117,3 +117,9 @@ void native_quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRIC
     quantize_row_q8_1_ref(x, y, k);
 #endif
 }
+
+static const int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
+
+
+//===================================== Dot products =================================
+
