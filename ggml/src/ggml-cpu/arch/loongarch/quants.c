@@ -643,3 +643,132 @@ static inline __m128i get_scale_shuffle(int i) {
     return __lsx_vld((const __m128i*)k_shuffle + i, 0);
 }
 #endif
+
+void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    const int qk = QK8_0;
+    const int nb = n / qk;
+
+    assert(n % qk == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q4_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined(__loongarch_asx)
+    // Initialize accumulator with zeros
+    __m256 acc = (__m256)__lasx_xvldi(0);
+
+    // Main loop
+    for (; ib < nb; ++ib) {
+        /* Compute combined scale for the block */
+        const __m256 d = __lasx_xvreplfr2vr_s( GGML_FP16_TO_FP32(x[ib].d) * GGML_FP16_TO_FP32(y[ib].d) );
+
+        __m256i qx = bytes_from_nibbles_32(x[ib].qs);
+
+        // Now we have a vector with bytes in [ 0 .. 15 ] interval. Offset them into [ -8 .. +7 ] interval.
+        const __m256i off = __lasx_xvreplgr2vr_b( 8 );
+        qx = __lasx_xvsub_b( qx, off );
+
+        __m256i qy = __lasx_xvld((const __m256i *)y[ib].qs, 0);
+
+        const __m256 q = mul_sum_i8_pairs_float(qx, qy);
+
+        /* Multiply q with scale and accumulate */
+        acc = __lasx_xvfmadd_s( d, q, acc );
+    }
+
+    sumf = hsum_float_8(acc);
+
+#elif defined(__loongarch_sx)
+    // set constants
+    const __m128i low_mask = __lsx_vreplgr2vr_b(0xF);
+    const __m128i off = __lsx_vreplgr2vr_b(8);
+
+    // Initialize accumulator with zeros
+    __m128 acc_0 = (__m128)__lsx_vldi(0);
+    __m128 acc_1 = (__m128)__lsx_vldi(0);
+    __m128 acc_2 = (__m128)__lsx_vldi(0);
+    __m128 acc_3 = (__m128)__lsx_vldi(0);
+
+    for (; ib + 1 < nb; ib += 2) {
+
+        // Compute combined scale for the block 0 and 1
+        const __m128 d_0_1 = (__m128)__lsx_vreplgr2vr_w( GGML_FP16_TO_FP32(x[ib].d) * GGML_FP16_TO_FP32(y[ib].d) );
+
+        const __m128i tmp_0_1 = __lsx_vld((const __m128i *)x[ib].qs, 0);
+
+        __m128i bx_0 = __lsx_vand_v(low_mask, tmp_0_1);
+        __m128i by_0 = __lsx_vld((const __m128i *)y[ib].qs, 0);
+        bx_0 = __lsx_vsub_b(bx_0, off);
+        const __m128i i32_0 = mul_sum_i8_pairs(bx_0, by_0);
+
+        __m128i bx_1 = __lsx_vand_v(low_mask, __lsx_vsrli_d(tmp_0_1, 4));
+        __m128i by_1 = __lsx_vld((const __m128i *)(y[ib].qs + 16), 0);
+        bx_1 = __lsx_vsub_b(bx_1, off);
+        const __m128i i32_1 = mul_sum_i8_pairs(bx_1, by_1);
+
+        //_mm_prefetch(&x[ib] + 2 * sizeof(block_q4_0), _MM_HINT_T0);
+        //_mm_prefetch(&y[ib] + 2 * sizeof(block_q8_0), _MM_HINT_T0);
+
+        // Compute combined scale for the block 2 and 3
+        const __m128 d_2_3 = (__m128)__lsx_vreplgr2vr_w( GGML_FP16_TO_FP32(x[ib + 1].d) * GGML_FP16_TO_FP32(y[ib + 1].d) );
+
+        const __m128i tmp_2_3 = __lsx_vld((const __m128i *)x[ib + 1].qs, 0);
+
+        __m128i bx_2 = __lsx_vand_v(low_mask, tmp_2_3);
+        __m128i by_2 = __lsx_vld((const __m128i *)y[ib + 1].qs, 0);
+        bx_2 = __lsx_vsub_b(bx_2, off);
+        const __m128i i32_2 = mul_sum_i8_pairs(bx_2, by_2);
+
+        __m128i bx_3 = __lsx_vand_v(low_mask, __lsx_vsrli_d(tmp_2_3, 4));
+        __m128i by_3 = __lsx_vld((const __m128i *)(y[ib + 1].qs + 16), 0);
+        bx_3 = __lsx_vsub_b(bx_3, off);
+        const __m128i i32_3 = mul_sum_i8_pairs(bx_3, by_3);
+
+        // Convert int32_t to float
+        __m128 p0 = __lsx_vffint_s_w(i32_0);
+        __m128 p1 = __lsx_vffint_s_w(i32_1);
+        __m128 p2 = __lsx_vffint_s_w(i32_2);
+        __m128 p3 = __lsx_vffint_s_w(i32_3);
+
+        // Apply the scale
+        __m128 p0_d = __lsx_vfmul_s( d_0_1, p0 );
+        __m128 p1_d = __lsx_vfmul_s( d_0_1, p1 );
+        __m128 p2_d = __lsx_vfmul_s( d_2_3, p2 );
+        __m128 p3_d = __lsx_vfmul_s( d_2_3, p3 );
+
+        // Acummulate
+        acc_0 = __lsx_vfadd_s(p0_d, acc_0);
+        acc_1 = __lsx_vfadd_s(p1_d, acc_1);
+        acc_2 = __lsx_vfadd_s(p2_d, acc_2);
+        acc_3 = __lsx_vfadd_s(p3_d, acc_3);
+    }
+
+    sumf = hsum_float_4x4(acc_0, acc_1, acc_2, acc_3);
+
+#endif
+    for (; ib < nb; ++ib) {
+        int sumi0 = 0;
+        int sumi1 = 0;
+
+        for (int j = 0; j < qk/2; ++j) {
+            const int v0 = (x[ib].qs[j] & 0x0F) - 8;
+            const int v1 = (x[ib].qs[j] >>   4) - 8;
+
+            sumi0 += (v0 * y[ib].qs[j]);
+            sumi1 += (v1 * y[ib].qs[j + qk/2]);
+        }
+
+        int sumi = sumi0 + sumi1;
+        sumf += sumi*GGML_FP16_TO_FP32(x[ib].d)*GGML_FP16_TO_FP32(y[ib].d);
+    }
+
+    *s = sumf;
+}
