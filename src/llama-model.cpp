@@ -13263,7 +13263,7 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
         }
 
         // Extract the recurrent cache from the hybrid parent
-        const auto * kv_recurrent = static_cast<const llama_kv_cache_hybrid *>(memory)->get_child_cache<llama_kv_cache_recurrent>();
+        const auto * kv_recurrent = static_cast<const llama_kv_cache_hybrid_recurrent *>(memory)->get_kv_recurrent();
         GGML_ASSERT(kv_recurrent);
 
         for (int il = 0; il < n_layer; ++il) {
