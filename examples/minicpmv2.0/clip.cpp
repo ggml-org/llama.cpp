@@ -1076,7 +1076,8 @@ struct clip_ctx * clip_model_load(const char * fname, const int verbosity = 1) {
     }
 
 #ifdef GGML_USE_CUDA
-    new_clip->backend = ggml_backend_cuda_init(0);
+    // new_clip->backend = ggml_backend_cuda_init(0);
+    new_clip->backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
     LOG_TEE("%s: CLIP using CUDA backend\n", __func__);
 #endif
 
