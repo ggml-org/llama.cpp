@@ -1,4 +1,4 @@
-#version 450  
+#version 450
 
 #include "types.comp"
 
@@ -6,9 +6,9 @@ layout (binding = 0) readonly buffer A {A_TYPE data_a[];};   // src0 - kernel:  
 layout (binding = 1) readonly buffer B {B_TYPE data_b[];};   // src1 - input:     [L, Cin]
 layout (binding = 2) writeonly buffer D {D_TYPE data_d[];};     // dst - result      [KL, Cout]
 
-layout(local_size_x = 128 , local_size_y = 1, local_size_z = 1) in; 
- 
-layout (push_constant) uniform parameter { 
+layout(local_size_x = 128 , local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
     uint32_t Cout;
     uint32_t Cin;
     uint32_t K;
@@ -29,7 +29,7 @@ const uint32_t bs = gl_WorkGroupSize.x;
 uint32_t tid = gl_LocalInvocationID.x;
 // Code is more straightforward if we assume it is bs*s0+K instead of (bs-1)*s0+K.
 uint32_t tmp_len = bs*p.s0+p.K;
-shared D_TYPE tmp[4096]; 
+shared D_TYPE tmp[4096];
 
 uint splitWork(uint workSize){
     return (bs + workSize -1) / bs;
@@ -42,7 +42,7 @@ void main(){
             tmp[idx] = 0.0;
         }
     }
-    
+
     uint32_t L_blocks = splitWork(p.L);
     for(uint32_t L_block_id = 0; L_block_id < L_blocks; L_block_id++){
         if(L_block_id > 0){

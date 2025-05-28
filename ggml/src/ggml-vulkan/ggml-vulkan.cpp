@@ -6413,7 +6413,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_conv_transpose_1d_f32;
         }
-        return nullptr;    
+        return nullptr;
     case GGML_OP_POOL_2D:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_pool2d_f32;
@@ -6751,7 +6751,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_TRANSPOSE_1D:
         {
             elements = {uint32_t(src0->ne[1]), 1, 1}; // parallelize in {Cout, 1, 1}
-        } break;        
+        } break;
     case GGML_OP_POOL_2D:
         {
             const uint32_t N = dst->ne[3];
@@ -7572,16 +7572,16 @@ static void ggml_vk_conv_transpose_1d(ggml_backend_vk_context * ctx, vk_context&
     const int32_t s0 = dst->op_params[0];
 
     vk_op_conv_transpose_1d_push_constants p{};
-    p.Cout = ne01;
-    p.Cin = ne02;
-    p.K = ne00;
-    p.L = ne10;
-    p.KL = ne0;
-    p.nb01 = nb01 / nb00;
-    p.nb02 = nb02 / nb00;
-    p.nb11 = nb11 / nb10;
-    p.nb1 = nb1 / nb0;
-    p.s0 = s0;
+    p.Cout = static_cast<uint32_t>(ne01);
+    p.Cin = static_cast<uint32_t>(ne02);
+    p.K = static_cast<uint32_t>(ne00);
+    p.L = static_cast<uint32_t>(ne10);
+    p.KL = static_cast<uint32_t>(ne0);
+    p.nb01 = static_cast<uint32_t>(nb01 / nb00);
+    p.nb02 = static_cast<uint32_t>(nb02 / nb00);
+    p.nb11 = static_cast<uint32_t>(nb11 / nb10);
+    p.nb1 = static_cast<uint32_t>(nb1 / nb0);
+    p.s0 = static_cast<uint32_t>(s0);
 
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_CONV_TRANSPOSE_1D, std::move(p), dryrun);
 }
@@ -8657,7 +8657,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
     case GGML_OP_COUNT_EQUAL:
     case GGML_OP_IM2COL:
     case GGML_OP_TIMESTEP_EMBEDDING:
-    case GGML_OP_CONV_TRANSPOSE_1D:    
+    case GGML_OP_CONV_TRANSPOSE_1D:
     case GGML_OP_POOL_2D:
     case GGML_OP_CONV_2D_DW:
     case GGML_OP_RWKV_WKV6:
@@ -10030,7 +10030,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_IM2COL:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_CONV_TRANSPOSE_1D:
-            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;        
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_POOL_2D:
         case GGML_OP_RWKV_WKV6:
@@ -10533,7 +10533,7 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
         const int32_t s0 = tensor->op_params[0];
         const int32_t p0 = tensor->op_params[1];
         const int32_t d0 = tensor->op_params[2];
-        tensor_clonse = ggml_conv_transpose_1d(ggml_ctx, src_clone[0], src_clone[1], s0, p0, d0);    
+        tensor_clone = ggml_conv_transpose_1d(ggml_ctx, src_clone[0], src_clone[1], s0, p0, d0);
     } else if (tensor->op == GGML_OP_POOL_2D) {
         enum ggml_op_pool op = static_cast<ggml_op_pool>(tensor->op_params[0]);
         const int32_t k0 = tensor->op_params[1];
