@@ -566,7 +566,7 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
         bool found = true;
         for (uint32_t i = 0; i < n_tokens; i++) {
             const llama_pos    pos    = ubatch.pos[i];
-            const llama_seq_id seq_id = ubatch.seq_id[i][0];
+            const llama_seq_id seq_id = ubatch.seq_id[i / ubatch.n_seq_tokens][0];
 
             // can we use this cell? either:
             //  - the cell is empty
