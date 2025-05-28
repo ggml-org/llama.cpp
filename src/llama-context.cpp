@@ -633,7 +633,15 @@ bool llama_context::apply_adapter_cvec(
     return cvec.apply(model, data, len, n_embd, il_start, il_end);
 }
 
-llm_graph_result_ptr llama_context::process(const llama_ubatch & ubatch, llm_graph_type gtype, ggml_status * ret) {
+llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_state_i * mstate, ggml_status * ret) {
+    if (mstate && !mstate->apply()) {
+        LLAMA_LOG_ERROR("%s: failed to apply memory state\n", __func__);
+        if (ret) {
+            *ret = GGML_STATUS_FAILED;
+        }
+        return nullptr;
+    }
+
     auto * gf = graph_init();
     if (!gf) {
         LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
@@ -748,7 +756,7 @@ int llama_context::encode(llama_batch & inp_batch) {
     cparams.causal_attn = false;
 
     ggml_status status;
-    auto res = process(ubatch, LLM_GRAPH_TYPE_ENCODER, &status);
+    const auto res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, &status);
 
     cparams.causal_attn = causal_attn_org;
 
@@ -927,12 +935,12 @@ int llama_context::decode(llama_batch & inp_batch) {
     // handle any pending defrags/shifts
     kv_self_update();
 
-    auto decode_state = kv_self->init(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ n_outputs_all == n_tokens_all);
-    if (!decode_state) {
+    auto kv_state = kv_self->init_batch(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ n_outputs_all == n_tokens_all);
+    if (!kv_state) {
         return -2;
     }
 
-    switch (decode_state->get_status()) {
+    switch (kv_state->get_status()) {
         case LLAMA_MEMORY_STATUS_SUCCESS:
             {
             } break;
@@ -955,8 +963,8 @@ int llama_context::decode(llama_batch & inp_batch) {
 
     int64_t n_outputs_prev = 0;
 
-    while (const auto * ubatch_ptr = decode_state->next()) {
-        const auto & ubatch = *ubatch_ptr;
+    do {
+        const auto & ubatch = kv_state->get_ubatch();
 
         // count the outputs in this u_batch
         {
@@ -979,7 +987,7 @@ int llama_context::decode(llama_batch & inp_batch) {
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
 
         ggml_status status;
-        auto res = process(ubatch, LLM_GRAPH_TYPE_DECODER, &status);
+        const auto res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, kv_state.get(), &status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the KV cache
@@ -1092,7 +1100,7 @@ int llama_context::decode(llama_batch & inp_batch) {
         }
 
         n_outputs_prev += n_outputs;
-    }
+    } while (kv_state->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
@@ -1101,7 +1109,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     {
         bool sorted_output = true;
 
-        auto & out_ids = decode_state->out_ids();
+        auto & out_ids = kv_state->out_ids();
 
         GGML_ASSERT(out_ids.size() == (size_t) n_outputs_all);
 
@@ -2020,8 +2028,8 @@ void llama_context::opt_epoch_iter(
 
         int64_t n_outputs_all = n_tokens_all;
 
-        auto decode_state = kv_self->init(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ true);
-        if (!decode_state || decode_state->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
+        auto kv_state = kv_self->init_batch(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ true);
+        if (!kv_state || kv_state->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
             LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
             break;
         }
@@ -2033,8 +2041,8 @@ void llama_context::opt_epoch_iter(
         };
 
         uint32_t pos_batch = 0;
-        while (const auto * ubatch_ptr = decode_state->next()) {
-            const auto & ubatch = *ubatch_ptr;
+        do {
+            const auto & ubatch = kv_state->get_ubatch();
 
             n_outputs = ubatch.n_tokens;
 
@@ -2073,7 +2081,7 @@ void llama_context::opt_epoch_iter(
             ggml_free(ctx_compute_opt);
 
             pos_batch += ubatch.n_tokens;
-        }
+        } while (kv_state->next());
     }
 }
 

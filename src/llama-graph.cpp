@@ -1029,7 +1029,7 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
 
     auto inp = std::make_unique<llm_graph_input_pos_bucket_kv>(hparams, kv_self);
 
-    const auto n_kv = kv_self->get_n();
+    const auto n_kv = kv_self->get_n_kv();
 
     auto & cur = inp->pos_bucket;
 
@@ -1238,7 +1238,7 @@ llm_graph_input_attn_kv_unified * llm_graph_context::build_attn_inp_kv_unified()
     {
         GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_unified_iswa for SWA");
 
-        const auto n_kv = kv_self->get_n();
+        const auto n_kv = kv_self->get_n_kv();
 
         inp->self_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         //cb(inp->self_kq_mask, "KQ_mask", -1);
@@ -1306,7 +1306,7 @@ llm_graph_input_attn_kv_unified_iswa * llm_graph_context::build_attn_inp_kv_unif
     auto inp = std::make_unique<llm_graph_input_attn_kv_unified_iswa>(hparams, cparams, kv_self);
 
     {
-        const auto n_kv = kv_self->get_kv_base()->get_n();
+        const auto n_kv = kv_self->get_kv_base()->get_n_kv();
 
         inp->self_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         //cb(inp->self_kq_mask, "KQ_mask", -1);
@@ -1318,7 +1318,7 @@ llm_graph_input_attn_kv_unified_iswa * llm_graph_context::build_attn_inp_kv_unif
     {
         GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache_unified for non-SWA");
 
-        const auto n_kv = kv_self->get_kv_swa()->get_n();
+        const auto n_kv = kv_self->get_kv_swa()->get_n_kv();
 
         inp->self_kq_mask_swa = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
         //cb(inp->self_kq_mask_swa, "KQ_mask_swa", -1);

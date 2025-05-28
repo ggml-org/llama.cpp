@@ -17,11 +17,11 @@
 // llama_kv_cache_unified
 //
 
-class llama_kv_cache_unified_decode_state_t : public llama_memory_decode_state_i {
+class llama_kv_cache_unified_state_t : public llama_memory_state_i {
 public:
-    llama_kv_cache_unified_decode_state_t(llama_memory_status status) : status(status) {}
+    llama_kv_cache_unified_state_t(llama_memory_status status) : status(status) {}
 
-    llama_kv_cache_unified_decode_state_t(
+    llama_kv_cache_unified_state_t(
             llama_memory_status status,
             llama_kv_cache_unified * kv,
             llama_sbatch sbatch,
@@ -34,18 +34,24 @@ public:
               ubatches(std::move(ubatches)) {
     }
 
-    ~llama_kv_cache_unified_decode_state_t() = default;
+    ~llama_kv_cache_unified_state_t() = default;
 
-    llama_ubatch * next() override {
+    bool next() override {
         assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
-        if (i_next >= ubatches.size()) {
-            return nullptr;
+        if (++i_next >= ubatches.size()) {
+            return false;
         }
 
-        kv->fill_slot(heads[i_next], ubatches[i_next]);
+        return true;
+    }
 
-        return &ubatches[i_next++];
+    bool apply() override {
+        assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+        kv->apply_ubatch(heads[i_next], ubatches[i_next], &cstate);
+
+        return true;
     }
 
     std::vector<int64_t> & out_ids() override {
@@ -58,10 +64,18 @@ public:
         return status;
     }
 
+    const llama_ubatch & get_ubatch() const override {
+        assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+        return ubatches[i_next];
+    }
+
 private:
     const llama_memory_status status;
 
     llama_kv_cache_unified * kv;
+
+    llama_kv_cache_unified::compute_state cstate;
 
     llama_sbatch sbatch;
 
@@ -348,7 +362,7 @@ llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
     return cells.seq_pos_max(seq_id);
 }
 
-llama_memory_decode_state_ptr llama_kv_cache_unified::init(
+llama_memory_state_ptr llama_kv_cache_unified::init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
@@ -364,10 +378,10 @@ llama_memory_decode_state_ptr llama_kv_cache_unified::init(
 
     auto heads = prepare(ubatches);
     if (heads.empty()) {
-        return std::make_unique<llama_kv_cache_unified_decode_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        return std::make_unique<llama_kv_cache_unified_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
-    return std::make_unique<llama_kv_cache_unified_decode_state_t>(LLAMA_MEMORY_STATUS_SUCCESS,
+    return std::make_unique<llama_kv_cache_unified_state_t>(LLAMA_MEMORY_STATUS_SUCCESS,
             this, std::move(sbatch), std::move(heads), std::move(ubatches));
 }
 
@@ -401,7 +415,8 @@ std::vector<uint32_t> llama_kv_cache_unified::prepare(const std::vector<llama_ub
         states.push_back({head, (uint32_t) head_new, cells.cp(head_new, ubatch.n_tokens)});
 
         // now emplace the ubatch
-        fill_slot(head_new, ubatch);
+        // do not pass a compute state because we are only preparing the batch
+        apply_ubatch(head_new, ubatch, nullptr);
     }
 
     // iterate backwards and restore the cells to their original state
@@ -495,9 +510,11 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
 }
 
 void llama_kv_cache_unified::defrag_sched(float thold) {
+    const auto n_kv = cells.used_max_p1();
+
     // - do not defrag small contexts (i.e. < 2048 tokens)
     // - count the padding towards the number of used tokens
-    const float fragmentation = n >= 2048 ? std::max(0.0f, 1.0f - (float(cells.get_used() + n_pad)/n)) : 0.0f;
+    const float fragmentation = n_kv >= 2048 ? std::max(0.0f, 1.0f - (float(cells.get_used() + n_pad)/n_kv)) : 0.0f;
 
     // queue defragmentation for next llama_kv_cache_update
     if (fragmentation > thold) {
@@ -508,14 +525,7 @@ void llama_kv_cache_unified::defrag_sched(float thold) {
 }
 
 void llama_kv_cache_unified::set_full() {
-    n = cells.size();
-
-    // when simulating a full KV cache, the specific value of the "head" pointer is not important because it does not
-    //   affect the shapes of the tensors in the compute graph - it only affects the offsets of the K/V views.
-    //   we should only guarantee that the head position won't cause out-of-bounds view of the K, V tensors, so
-    //   setting it to 0 is the simplest way to achieve that
-    // ref: https://github.com/ggml-org/llama.cpp/issues/13359
-    head = 0;
+    cstate = nullptr;
 }
 
 int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
@@ -538,7 +548,7 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
 
 //#define FIND_SLOT_DEBUG 1
 #if FIND_SLOT_DEBUG
-    LLAMA_LOG_WARN("begin: n = %5d, used = %5d, head = %5d, n_swa = %5d\n", n, cells.get_used(), head, n_swa);
+    LLAMA_LOG_WARN("begin: n = %5d, used = %5d, head = %5d, n_swa = %5d\n", cells.used_max_p1(), cells.get_used(), head, n_swa);
 
     // for debugging
     {
@@ -632,32 +642,39 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
     return head_cur;
 }
 
-void llama_kv_cache_unified::fill_slot(uint32_t head_cur, const llama_ubatch & ubatch) {
-    head = head_cur;
-
+void llama_kv_cache_unified::apply_ubatch(uint32_t head_cur, const llama_ubatch & ubatch, compute_state * cstate) {
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-        if (!cells.is_empty(head + i)) {
-            cells.rm(head + i);
+        if (!cells.is_empty(head_cur + i)) {
+            cells.rm(head_cur + i);
         }
 
-        cells.pos_set(head + i, ubatch.pos[i]);
+        cells.pos_set(head_cur + i, ubatch.pos[i]);
 
         for (int32_t j = 0; j < ubatch.n_seq_id[i]; j++) {
-            cells.seq_add(head + i, ubatch.seq_id[i][j]);
+            cells.seq_add(head_cur + i, ubatch.seq_id[i][j]);
         }
     }
 
-    // a heuristic, to avoid attending the full cache if it is not yet utilized
-    // as the cache gets filled, the benefit from this heuristic disappears
-    n = std::min(cells.size(), std::max(n_pad, GGML_PAD(cells.used_max_p1(), n_pad)));
+    // populate the provided compute state and store a reference to it
+    if (cstate) {
+        cstate->head = head_cur;
+        cstate->n_kv = std::min(cells.size(), std::max(n_pad, GGML_PAD(cells.used_max_p1(), n_pad)));
+
+        this->cstate = cstate;
+    } else {
+        this->cstate = nullptr;
+    }
+
+    // move the head at the end of the slot
+    head = head_cur + ubatch.n_tokens;
 }
 
 bool llama_kv_cache_unified::get_can_shift() const {
     return true;
 }
 
-uint32_t llama_kv_cache_unified::get_n() const {
-    return n;
+uint32_t llama_kv_cache_unified::get_n_kv() const {
+    return cstate ? cstate->n_kv : cells.size();
 }
 
 uint32_t llama_kv_cache_unified::get_size() const {
@@ -669,8 +686,10 @@ ggml_tensor * llama_kv_cache_unified::get_k(ggml_context * ctx, int32_t il) cons
 
     auto * k = layers[ikv].k;
 
+    const auto n_kv = cstate ? cstate->n_kv : cells.size();
+
     return ggml_view_3d(ctx, k,
-            hparams.n_embd_head_k, hparams.n_head_kv(il), n,
+            hparams.n_embd_head_k, hparams.n_head_kv(il), n_kv,
             ggml_row_size(k->type, hparams.n_embd_head_k),
             ggml_row_size(k->type, hparams.n_embd_k_gqa(il)),
             0);
@@ -681,10 +700,12 @@ ggml_tensor * llama_kv_cache_unified::get_v(ggml_context * ctx, int32_t il) cons
 
     auto * v = layers[ikv].v;
 
+    const auto n_kv = cstate ? cstate->n_kv : cells.size();
+
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
         return ggml_view_3d(ctx, v,
-                hparams.n_embd_head_v, hparams.n_head_kv(il), n,
+                hparams.n_embd_head_v, hparams.n_head_kv(il), n_kv,
                 ggml_row_size(v->type, hparams.n_embd_head_v),    // v->nb[1]
                 ggml_row_size(v->type, hparams.n_embd_v_gqa(il)), // v->nb[2]
                 0);
@@ -692,7 +713,7 @@ ggml_tensor * llama_kv_cache_unified::get_v(ggml_context * ctx, int32_t il) cons
 
     // note: v->nb[1] > v->nb[2]
     return ggml_view_3d(ctx, v,
-            n, hparams.n_head_kv(il), hparams.n_embd_head_v,
+            n_kv, hparams.n_head_kv(il), hparams.n_embd_head_v,
             ggml_row_size(v->type, v->ne[1]*hparams.n_embd_head_v), // v->nb[1]
             ggml_row_size(v->type, v->ne[1]),                       // v->nb[2]
             0);
@@ -704,6 +725,8 @@ ggml_tensor * llama_kv_cache_unified::cpy_k(ggml_context * ctx, ggml_tensor * k_
     auto * k = layers[ikv].k;
 
     const int64_t n_tokens = k_cur->ne[2];
+
+    const auto head = cstate ? cstate->head : 0;
 
     ggml_tensor * k_view = ggml_view_1d(ctx, k,
             n_tokens*hparams.n_embd_k_gqa(il),
@@ -722,6 +745,8 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
     v_cur = ggml_reshape_2d(ctx, v_cur, hparams.n_embd_v_gqa(il), n_tokens);
 
     ggml_tensor * v_view = nullptr;
+
+    const auto head = cstate ? cstate->head : 0;
 
     if (!v_trans) {
         v_view = ggml_view_1d(ctx, v,
@@ -747,7 +772,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
     float * data = (float *) dst->data;
 
-    const int64_t n_kv = n;
+    const auto n_kv = cstate ? cstate->n_kv : cells.size();
 
     // Use only the previous KV cells of the correct sequence for each token of the ubatch.
     // It's assumed that if a token in the batch has multiple sequences, they are equivalent.
@@ -768,7 +793,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
             for (int j = 0; j < n_seq_tokens; ++j) {
                 const llama_pos p1 = ubatch->pos[s*n_seq_tokens + j];
 
-                for (int i = 0; i < n_kv; ++i) {
+                for (uint32_t i = 0; i < n_kv; ++i) {
                     float f = 0.0f;
 
                     bool masked = false;
@@ -804,7 +829,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
         // mask padded tokens
         if (data) {
             for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
-                for (int j = 0; j < n_kv; ++j) {
+                for (uint32_t j = 0; j < n_kv; ++j) {
                     data[h*(n_kv*n_tokens) + i*n_kv + j] = -INFINITY;
                 }
             }
@@ -830,7 +855,7 @@ void llama_kv_cache_unified::set_input_pos_bucket(ggml_tensor * dst, const llama
 
     int32_t * data = (int32_t *) dst->data;
 
-    const int64_t n_kv = n;
+    const int32_t n_kv = cstate ? cstate->n_kv : cells.size();
 
     for (int h = 0; h < 1; ++h) {
         for (int j = 0; j < n_tokens; ++j) {
@@ -1492,15 +1517,18 @@ bool llama_kv_cache_unified::state_read_meta(llama_io_read_i & io, uint32_t cell
             return false;
         }
 
-        fill_slot(head_cur, batch);
+        apply_ubatch(head_cur, batch, nullptr);
 
-        // DEBUG CHECK: kv.head should be our first cell, kv.head + cell_count - 1 should be our last cell (verify seq_id and pos values)
+        // keep the head at the old position because we will read the KV data into it in state_read_data()
+        head = head_cur;
+
+        // DEBUG CHECK: head_cur should be our first cell, head_cur + cell_count - 1 should be our last cell (verify seq_id and pos values)
         // Assume that this is one contiguous block of cells
-        GGML_ASSERT(head + cell_count <= cells.size());
-        GGML_ASSERT(cells.pos_get(head)                  == batch.pos[0]);
-        GGML_ASSERT(cells.pos_get(head + cell_count - 1) == batch.pos[cell_count - 1]);
-        GGML_ASSERT(cells.seq_has(head,                  dest_seq_id));
-        GGML_ASSERT(cells.seq_has(head + cell_count - 1, dest_seq_id));
+        GGML_ASSERT(head_cur + cell_count <= cells.size());
+        GGML_ASSERT(cells.pos_get(head_cur)                  == batch.pos[0]);
+        GGML_ASSERT(cells.pos_get(head_cur + cell_count - 1) == batch.pos[cell_count - 1]);
+        GGML_ASSERT(cells.seq_has(head_cur,                  dest_seq_id));
+        GGML_ASSERT(cells.seq_has(head_cur + cell_count - 1, dest_seq_id));
     } else {
         // whole KV cache restore
 
@@ -1670,11 +1698,11 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t cell
 // llama_kv_cache_unified_iswa
 //
 
-class llama_kv_cache_unified_iswa_decode_state_t : public llama_memory_decode_state_i {
+class llama_kv_cache_unified_iswa_state_t : public llama_memory_state_i {
 public:
-    llama_kv_cache_unified_iswa_decode_state_t(llama_memory_status status) : status(status) {}
+    llama_kv_cache_unified_iswa_state_t(llama_memory_status status) : status(status) {}
 
-    llama_kv_cache_unified_iswa_decode_state_t(
+    llama_kv_cache_unified_iswa_state_t(
             llama_memory_status status,
             llama_kv_cache_unified_iswa * kv,
             llama_sbatch sbatch,
@@ -1689,19 +1717,25 @@ public:
               ubatches(std::move(ubatches)) {
     }
 
-    ~llama_kv_cache_unified_iswa_decode_state_t() = default;
+    ~llama_kv_cache_unified_iswa_state_t() = default;
 
-    llama_ubatch * next() override {
+    bool next() override {
         assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
-        if (i_next >= ubatches.size()) {
-            return nullptr;
+        if (++i_next >= ubatches.size()) {
+            return false;
         }
 
-        kv->get_kv_base()->fill_slot(heads_base[i_next], ubatches[i_next]);
-        kv->get_kv_swa ()->fill_slot(heads_swa [i_next], ubatches[i_next]);
+        return true;
+    }
 
-        return &ubatches[i_next++];
+    bool apply() override {
+        assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+        kv->get_kv_base()->apply_ubatch(heads_base[i_next], ubatches[i_next], &cstate_base);
+        kv->get_kv_swa ()->apply_ubatch(heads_swa [i_next], ubatches[i_next], &cstate_swa);
+
+        return true;
     }
 
     std::vector<int64_t> & out_ids() override {
@@ -1714,10 +1748,18 @@ public:
         return status;
     }
 
+    const llama_ubatch & get_ubatch() const override {
+        assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+        return ubatches[i_next];
+    }
+
 private:
     const llama_memory_status status;
 
     llama_kv_cache_unified_iswa * kv;
+
+    llama_kv_cache_unified::compute_state cstate_base;
+    llama_kv_cache_unified::compute_state cstate_swa;
 
     llama_sbatch sbatch;
 
@@ -1813,7 +1855,7 @@ llama_pos llama_kv_cache_unified_iswa::seq_pos_max(llama_seq_id seq_id) const {
     return kv_swa->seq_pos_max(seq_id);
 }
 
-llama_memory_decode_state_ptr llama_kv_cache_unified_iswa::init(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
+llama_memory_state_ptr llama_kv_cache_unified_iswa::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
     GGML_UNUSED(embd_pooled);
 
     auto sbatch = llama_sbatch(batch, hparams.n_embd, true, logits_all);
@@ -1828,17 +1870,17 @@ llama_memory_decode_state_ptr llama_kv_cache_unified_iswa::init(const llama_batc
 
     auto heads_base = kv_base->prepare(ubatches);
     if (heads_base.empty()) {
-        return std::make_unique<llama_kv_cache_unified_iswa_decode_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        return std::make_unique<llama_kv_cache_unified_iswa_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
     auto heads_swa = kv_swa->prepare(ubatches);
     if (heads_swa.empty()) {
-        return std::make_unique<llama_kv_cache_unified_iswa_decode_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        return std::make_unique<llama_kv_cache_unified_iswa_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
     assert(heads_base.size() == heads_swa.size());
 
-    return std::make_unique<llama_kv_cache_unified_iswa_decode_state_t>(LLAMA_MEMORY_STATUS_SUCCESS,
+    return std::make_unique<llama_kv_cache_unified_iswa_state_t>(LLAMA_MEMORY_STATUS_SUCCESS,
             this, std::move(sbatch), std::move(heads_base), std::move(heads_swa), std::move(ubatches));
 }
 
@@ -1887,28 +1929,34 @@ llama_kv_cache_unified * llama_kv_cache_unified_iswa::get_kv_swa() const {
 // llama_kv_cache_recurrent
 //
 
-class llama_kv_cache_recurrent_decode_state_t : public llama_memory_decode_state_i {
+class llama_kv_cache_recurrent_state_t : public llama_memory_state_i {
 public:
-    llama_kv_cache_recurrent_decode_state_t(llama_memory_status status) : status(status) {}
+    llama_kv_cache_recurrent_state_t(llama_memory_status status) : status(status) {}
 
-    llama_kv_cache_recurrent_decode_state_t(
+    llama_kv_cache_recurrent_state_t(
             llama_memory_status status,
             llama_kv_cache_recurrent * kv,
             llama_sbatch sbatch,
             std::vector<llama_ubatch> ubatches) : status(status), kv(kv), sbatch(std::move(sbatch)), ubatches(std::move(ubatches)) {}
 
-    ~llama_kv_cache_recurrent_decode_state_t() override = default;
+    ~llama_kv_cache_recurrent_state_t() override = default;
 
-    llama_ubatch * next() override {
+    bool next() override {
         assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
-        if (i_next >= ubatches.size()) {
-            return nullptr;
+        if (++i_next >= ubatches.size()) {
+            return false;
         }
+
+        return true;
+    }
+
+    bool apply() override {
+        assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
         kv->find_slot(ubatches[i_next]);
 
-        return &ubatches[i_next++];
+        return true;
     }
 
     std::vector<int64_t> & out_ids() override {
@@ -1919,6 +1967,12 @@ public:
 
     llama_memory_status get_status() const override {
         return status;
+    }
+
+    const llama_ubatch & get_ubatch() const override {
+        assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+        return ubatches[i_next];
     }
 
 private:
@@ -2274,7 +2328,7 @@ llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-llama_memory_decode_state_ptr llama_kv_cache_recurrent::init(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
+llama_memory_state_ptr llama_kv_cache_recurrent::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
     GGML_UNUSED(embd_pooled);
 
     auto sbatch = llama_sbatch(batch, hparams.n_embd, false, logits_all);
@@ -2295,10 +2349,10 @@ llama_memory_decode_state_ptr llama_kv_cache_recurrent::init(const llama_batch &
     }
 
     if (!prepare(ubatches)) {
-        return std::make_unique<llama_kv_cache_recurrent_decode_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        return std::make_unique<llama_kv_cache_recurrent_state_t>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
-    return std::make_unique<llama_kv_cache_recurrent_decode_state_t>(LLAMA_MEMORY_STATUS_SUCCESS, this, std::move(sbatch), std::move(ubatches));
+    return std::make_unique<llama_kv_cache_recurrent_state_t>(LLAMA_MEMORY_STATUS_SUCCESS, this, std::move(sbatch), std::move(ubatches));
 }
 
 bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {

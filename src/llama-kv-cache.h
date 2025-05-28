@@ -23,8 +23,9 @@ struct llama_kv_cache : public llama_memory_i {
     virtual ~llama_kv_cache() = default;
 
     // split the input batch into a set of ubatches and verify that they can fit into the cache
-    // check the llama_memory_decode_state_i::get_status() for the result
-    virtual llama_memory_decode_state_ptr init(
+    // return a state object containing the ubatches and KV cache state required to process them
+    // check the llama_memory_state_i::get_status() for the result
+    virtual llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
@@ -39,7 +40,6 @@ struct llama_kv_cache : public llama_memory_i {
     virtual void defrag_sched(float thold) = 0;
 
     // simulate full cache, used for allocating worst-case compute buffers
-    // TODO: remove
     virtual void set_full() = 0;
 
     // getters
@@ -100,7 +100,7 @@ public:
     // llama_kv_cache
     //
 
-    llama_memory_decode_state_ptr init(
+    llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
@@ -123,7 +123,17 @@ public:
     // llama_kv_cache_unified specific API
     //
 
-    uint32_t get_n()    const;
+    // data needed for building the compute graph for the current ubatch
+    struct compute_state {
+        // a heuristic, to avoid attending the full cache if it is not yet utilized
+        // as the cache gets filled, the benefit from this heuristic disappears
+        int32_t n_kv;
+
+        // the beginning of the current slot in which the ubatch will be inserted
+        int32_t head;
+    };
+
+    uint32_t get_n_kv() const;
     uint32_t get_size() const;
 
     // get views of the current state of the cache
@@ -142,9 +152,9 @@ public:
     // return -1 on failure to find a contiguous slot of kv cells
     int32_t find_slot(const llama_ubatch & ubatch) const;
 
-    // emplace the ubatch context into cells [head_cur, head_cur + ubatch.n_tokens)
-    // updates head = head_cur
-    void fill_slot(uint32_t head_cur, const llama_ubatch & ubatch);
+    // emplace the ubatch context into slot: [head_cur, head_cur + ubatch.n_tokens)
+    // if cstate is not null, it is populated with the necessary information for building the compute graph
+    void apply_ubatch(uint32_t head_cur, const llama_ubatch & ubatch, compute_state * cstate);
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_shift   (ggml_tensor * dst) const;
@@ -166,11 +176,15 @@ private:
     bool do_defrag = false;
     bool v_trans   = true;  // the value tensor is transposed
 
-    uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
+    // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
+    // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
+    uint32_t head = 0;
 
-    // computed before each graph build
-    // TODO: cells should start to maintain this value dynamically based on the edits
-    uint32_t n = 0;
+    // updated before each graph build via apply_ubatch()
+    //   this is fleeting state, which is used only during the computation of the current ubatch
+    //   it's accessed via methods such as get_k()/get_v() and cpy_k()/cpy_v()
+    //   if it is nullptr, the KV cache is assumed in "full" state (used for reserving worst-case graphs)
+    const compute_state * cstate = nullptr;
 
     const uint32_t n_seq_max = 1;
 
@@ -275,7 +289,7 @@ public:
     // llama_kv_cache
     //
 
-    llama_memory_decode_state_ptr init(
+    llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
@@ -343,7 +357,7 @@ public:
     // llama_kv_cache
     //
 
-    llama_memory_decode_state_ptr init(
+    llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
