@@ -1846,3 +1846,174 @@ void ggml_vec_dot_iq2_xxs_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs,
 #endif
 }
 
+void ggml_vec_dot_iq2_xs_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq2_xs * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined(__loongarch_asx)
+
+    const __m256i mone = __lasx_xvreplgr2vr_b(1);
+    static const char block_sign_shuffle_mask_1[32] = {
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02,
+        0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06, 0x06,
+    };
+    static const char block_sign_shuffle_mask_2[32] = {
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a, 0x0a,
+        0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0c, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e, 0x0e,
+    };
+    static const uint8_t bit_selector_mask_bytes[32] = {
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+        0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
+    };
+
+    const __m256i bit_selector_mask = __lasx_xvld((const __m256i*)bit_selector_mask_bytes, 0);
+    const __m256i block_sign_shuffle_1 = __lasx_xvld((const __m256i*)block_sign_shuffle_mask_1, 0);
+    const __m256i block_sign_shuffle_2 = __lasx_xvld((const __m256i*)block_sign_shuffle_mask_2, 0);
+
+    static const uint8_t k_bit_helper[32] = {
+        0x00, 0x80, 0x80, 0x00, 0x80, 0x00, 0x00, 0x80, 0x80, 0x00, 0x00, 0x80, 0x00, 0x80, 0x80, 0x00,
+        0x00, 0x80, 0x80, 0x00, 0x80, 0x00, 0x00, 0x80, 0x80, 0x00, 0x00, 0x80, 0x00, 0x80, 0x80, 0x00,
+    };
+    const __m256i bit_helper = __lasx_xvld((const __m256i*)k_bit_helper, 0);
+    const __m256i m511 = __lasx_xvreplgr2vr_h(511);
+    const __m128i m4 = __lsx_vreplgr2vr_b(0xf);
+    const __m128i m1 = __lsx_vreplgr2vr_b(1);
+
+    uint64_t aux64;
+
+    // somewhat hacky, but gives a significant boost in performance
+    __m256i aux_gindex;
+    const uint16_t * gindex = (const uint16_t *)&aux_gindex;
+
+    __m256 accumf = (__m256)__lasx_xvldi(0);
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint16_t * GGML_RESTRICT q2 = x[i].qs;
+        const int8_t   * GGML_RESTRICT q8 = y[i].qs;
+
+        memcpy(&aux64, x[i].scales, 8);
+        __m128i stmp = __lsx_vreplgr2vr_d(aux64);
+        stmp = __lsx_vilvl_b( __lsx_vand_v(__lsx_vsrli_h(stmp, 4), m4), __lsx_vand_v(stmp, m4));
+        const __m128i scales = __lsx_vadd_b(__lsx_vslli_h(stmp, 1), m1);
+
+        __m256i sumi1 = __lasx_xvldi(0);
+        __m256i sumi2 = __lasx_xvldi(0);
+        for (int ib32 = 0; ib32 < QK_K/32; ib32 += 4) {
+
+            const __m256i q2_data = __lasx_xvld((const __m256i*)q2, 0);  q2 += 16;
+            aux_gindex = __lasx_xvand_v(q2_data, m511);
+
+            const __m256i partial_sign_bits = __lasx_xvsrli_h(q2_data, 9);
+            const __m256i partial_sign_bits_upper = __lasx_xvsrli_h(q2_data, 13);
+            const __m256i partial_sign_bits_for_counting = __lasx_xvxor_v(partial_sign_bits, partial_sign_bits_upper);
+
+            const __m256i odd_bits = lasx_shuffle_b(bit_helper, partial_sign_bits_for_counting);
+            const __m256i full_sign_bits = __lasx_xvor_v(partial_sign_bits, odd_bits);
+
+            const __m256i q8_1 = __lasx_xvld((const __m256i *)q8, 0); q8 += 32;
+            const __m256i q8_2 = __lasx_xvld((const __m256i *)q8, 0); q8 += 32;
+            const __m256i q8_3 = __lasx_xvld((const __m256i *)q8, 0); q8 += 32;
+            const __m256i q8_4 = __lasx_xvld((const __m256i *)q8, 0); q8 += 32;
+
+            const __m256i q2_1 = lasx_set_d(iq2xs_grid[gindex[ 3]], iq2xs_grid[gindex[ 2]],
+                                                   iq2xs_grid[gindex[ 1]], iq2xs_grid[gindex[ 0]]);
+            const __m256i q2_2 = lasx_set_d(iq2xs_grid[gindex[ 7]], iq2xs_grid[gindex[ 6]],
+                                                   iq2xs_grid[gindex[ 5]], iq2xs_grid[gindex[ 4]]);
+            const __m256i q2_3 = lasx_set_d(iq2xs_grid[gindex[11]], iq2xs_grid[gindex[10]],
+                                                   iq2xs_grid[gindex[ 9]], iq2xs_grid[gindex[ 8]]);
+            const __m256i q2_4 = lasx_set_d(iq2xs_grid[gindex[15]], iq2xs_grid[gindex[14]],
+                                                   iq2xs_grid[gindex[13]], iq2xs_grid[gindex[12]]);
+
+            const __m128i full_signs_l = lasx_extracti128(full_sign_bits, 0);
+            const __m128i full_signs_h = lasx_extracti128(full_sign_bits, 1);
+            const __m256i full_signs_1 = lasx_insertf128(full_signs_l, full_signs_l);
+            const __m256i full_signs_2 = lasx_insertf128(full_signs_h, full_signs_h);
+
+            __m256i signs;
+            signs = lasx_shuffle_b(full_signs_1, block_sign_shuffle_1);
+            signs = __lasx_xvseq_b(__lasx_xvand_v(signs, bit_selector_mask), bit_selector_mask);
+            const __m256i q8s_1 = __lasx_xvsigncov_b(__lasx_xvor_v(signs, mone), q8_1);
+
+            signs = lasx_shuffle_b(full_signs_1, block_sign_shuffle_2);
+            signs = __lasx_xvseq_b(__lasx_xvand_v(signs, bit_selector_mask), bit_selector_mask);
+            const __m256i q8s_2 = __lasx_xvsigncov_b(__lasx_xvor_v(signs, mone), q8_2);
+
+            signs = lasx_shuffle_b(full_signs_2, block_sign_shuffle_1);
+            signs = __lasx_xvseq_b(__lasx_xvand_v(signs, bit_selector_mask), bit_selector_mask);
+            const __m256i q8s_3 = __lasx_xvsigncov_b(__lasx_xvor_v(signs, mone), q8_3);
+
+            signs = lasx_shuffle_b(full_signs_2, block_sign_shuffle_2);
+            signs = __lasx_xvseq_b(__lasx_xvand_v(signs, bit_selector_mask), bit_selector_mask);
+            const __m256i q8s_4 = __lasx_xvsigncov_b(__lasx_xvor_v(signs, mone), q8_4);
+
+            const __m256i dot1  = lasx_maddubs_h(q2_1, q8s_1);
+            const __m256i dot2  = lasx_maddubs_h(q2_2, q8s_2);
+            const __m256i dot3  = lasx_maddubs_h(q2_3, q8s_3);
+            const __m256i dot4  = lasx_maddubs_h(q2_4, q8s_4);
+
+            const __m256i sc1 = lasx_ext8_16(lsx_shuffle_b(scales, get_scale_shuffle(ib32+0)));
+            const __m256i sc2 = lasx_ext8_16(lsx_shuffle_b(scales, get_scale_shuffle(ib32+1)));
+            const __m256i sc3 = lasx_ext8_16(lsx_shuffle_b(scales, get_scale_shuffle(ib32+2)));
+            const __m256i sc4 = lasx_ext8_16(lsx_shuffle_b(scales, get_scale_shuffle(ib32+3)));
+
+            sumi1 = __lasx_xvadd_w(sumi1, lasx_madd_h(dot1, sc1));
+            sumi2 = __lasx_xvadd_w(sumi2, lasx_madd_h(dot2, sc2));
+            sumi1 = __lasx_xvadd_w(sumi1, lasx_madd_h(dot3, sc3));
+            sumi2 = __lasx_xvadd_w(sumi2, lasx_madd_h(dot4, sc4));
+        }
+
+        accumf = __lasx_xvfmadd_s(__lasx_xvreplfr2vr_s(d), __lasx_xvffint_s_w(__lasx_xvadd_w(sumi1, sumi2)), accumf);
+
+    }
+
+    *s = 0.125f * hsum_float_8(accumf);
+
+#else
+
+    float sumf = 0.f;
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint16_t * GGML_RESTRICT q2 = x[i].qs;
+        const uint8_t  * GGML_RESTRICT sc = x[i].scales;
+        const int8_t   * GGML_RESTRICT q8 = y[i].qs;
+        int32_t bsum = 0;
+        for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
+            const uint16_t ls1 = 2*(sc[ib32] & 0xf) + 1;
+            const uint16_t ls2 = 2*(sc[ib32] >>  4) + 1;
+            int32_t sumi = 0;
+            for (int l = 0; l < 2; ++l) {
+                const uint8_t * grid = (const uint8_t *)(iq2xs_grid + (q2[l] & 511));
+                const uint8_t  signs = ksigns_iq2xs[q2[l] >> 9];
+                for (int j = 0; j < 8; ++j) {
+                    sumi += grid[j] * q8[j] * (signs & kmask_iq2xs[j] ? -1 : 1);
+                }
+                q8 += 8;
+            }
+            bsum += sumi * ls1;
+            sumi = 0;
+            for (int l = 2; l < 4; ++l) {
+                const uint8_t * grid = (const uint8_t *)(iq2xs_grid + (q2[l] & 511));
+                const uint8_t  signs = ksigns_iq2xs[q2[l] >> 9];
+                for (int j = 0; j < 8; ++j) {
+                    sumi += grid[j] * q8[j] * (signs & kmask_iq2xs[j] ? -1 : 1);
+                }
+                q8 += 8;
+            }
+            bsum += sumi * ls2;
+            q2 += 4;
+        }
+        sumf += d * bsum;
+    }
+    *s = 0.125f * sumf;
+#endif
+}
+
