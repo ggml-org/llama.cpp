@@ -2,6 +2,7 @@
 
 #include "llama.h"
 #include "llama-io.h"
+#include "llama-batch.h"
 #include "llama-graph.h"
 #include "llama-memory.h"
 #include "llama-kv-cells.h"
@@ -14,8 +15,6 @@
 
 struct llama_cparams;
 struct llama_hparams;
-struct llama_ubatch;
-struct llama_sbatch;
 struct llama_model;
 struct llama_context;
 
@@ -23,12 +22,16 @@ struct llama_kv_cache : public llama_memory_i {
     virtual ~llama_kv_cache() = default;
 
     // split the input batch into a set of ubatches and verify that they can fit into the cache
-    // check the llama_memory_decode_state_i::get_status() for the result
-    virtual llama_memory_decode_state_ptr init(
+    // return a state object containing the ubatches and KV cache state required to process them
+    // check the llama_memory_state_i::get_status() for the result
+    virtual llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
             bool logits_all) = 0;
+
+    // simulate full cache, used for allocating worst-case compute buffers
+    virtual llama_memory_state_ptr init_full() = 0;
 
     // process any pending defrag/shift/etc. operations
     // optionally call once before processing a new batch
@@ -36,11 +39,10 @@ struct llama_kv_cache : public llama_memory_i {
     virtual bool update(llama_context & lctx) = 0;
 
     // schedule a defrag if the fragmentation threshold is exceeded. otherwise, do nothing
+    // TODO: change to
+    //   llama_memory_state_ptr init_defrag(float thold) = 0;
+    //
     virtual void defrag_sched(float thold) = 0;
-
-    // simulate full cache, used for allocating worst-case compute buffers
-    // TODO: remove
-    virtual void set_full() = 0;
 
     // getters
     virtual bool get_can_shift() const = 0;
@@ -100,17 +102,17 @@ public:
     // llama_kv_cache
     //
 
-    llama_memory_decode_state_ptr init(
+    llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
             bool logits_all) override;
 
+    llama_memory_state_ptr init_full() override;
+
     bool update(llama_context & lctx) override;
 
     void defrag_sched(float thold) override;
-
-    void set_full() override;
 
     bool get_can_shift() const override;
 
@@ -123,16 +125,25 @@ public:
     // llama_kv_cache_unified specific API
     //
 
-    uint32_t get_n()    const;
     uint32_t get_size() const;
 
-    // get views of the current state of the cache
-    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
-    ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    //
+    // graph_build API
+    //
 
-    // store k_cur and v_cur in the cache based on the current head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
+    uint32_t get_n_kv() const;
+
+    // get views of the current state of the cache
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
+
+    // store k_cur and v_cur in the cache based on the provided head location
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il, uint32_t head_cur) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il, uint32_t head_cur) const;
+
+    //
+    // preparation API
+    //
 
     // find places for the provided ubatches in the cache, returns the head locations
     // return empty vector on failure
@@ -142,9 +153,12 @@ public:
     // return -1 on failure to find a contiguous slot of kv cells
     int32_t find_slot(const llama_ubatch & ubatch) const;
 
-    // emplace the ubatch context into cells [head_cur, head_cur + ubatch.n_tokens)
-    // updates head = head_cur
-    void fill_slot(uint32_t head_cur, const llama_ubatch & ubatch);
+    // emplace the ubatch context into slot: [head_cur, head_cur + ubatch.n_tokens)
+    void apply_ubatch(uint32_t head_cur, const llama_ubatch & ubatch);
+
+    //
+    // set_input API
+    //
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_shift   (ggml_tensor * dst) const;
@@ -166,11 +180,9 @@ private:
     bool do_defrag = false;
     bool v_trans   = true;  // the value tensor is transposed
 
-    uint32_t head = 0; // the location where the batch will be placed in the cache (see find_slot())
-
-    // computed before each graph build
-    // TODO: cells should start to maintain this value dynamically based on the edits
-    uint32_t n = 0;
+    // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
+    // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
+    uint32_t head = 0;
 
     const uint32_t n_seq_max = 1;
 
@@ -233,6 +245,82 @@ private:
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
 };
 
+class llama_kv_cache_unified_state : public llama_memory_state_i {
+public:
+    // used for errors
+    llama_kv_cache_unified_state(llama_memory_status status);
+
+    // used to create a full-cache state
+    llama_kv_cache_unified_state(
+            llama_memory_status status,
+            llama_kv_cache_unified * kv);
+
+    // used to create a state from a batch
+    llama_kv_cache_unified_state(
+            llama_memory_status status,
+            llama_kv_cache_unified * kv,
+            llama_sbatch sbatch,
+            std::vector<uint32_t> heads,
+            std::vector<llama_ubatch> ubatches);
+
+    virtual ~llama_kv_cache_unified_state();
+
+    //
+    // llama_memory_state_i
+    //
+
+    bool next()  override;
+    bool apply() override;
+
+    std::vector<int64_t> & out_ids() override;
+
+    llama_memory_status  get_status() const override;
+    const llama_ubatch & get_ubatch() const override;
+
+    //
+    // llama_kv_cache_unified_state specific API
+    //
+
+    uint32_t get_n_kv() const;
+
+    // get views of the current state of the cache
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+
+    // store k_cur and v_cur in the cache based on the provided head location
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
+
+    void set_input_k_shift(ggml_tensor * dst) const;
+
+    void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+private:
+    const llama_memory_status status;
+
+    llama_kv_cache_unified * kv;
+
+    llama_sbatch sbatch;
+
+    // the index of the next ubatch to process
+    size_t i_next = 0;
+
+    std::vector<uint32_t> heads;
+    std::vector<llama_ubatch> ubatches;
+
+    //
+    // data needed for building the compute graph for the current ubatch:
+    //
+
+    // a heuristic, to avoid attending the full cache if it is not yet utilized
+    // as the cache gets filled, the benefit from this heuristic disappears
+    int32_t n_kv;
+
+    // the beginning of the current slot in which the ubatch will be inserted
+    int32_t head;
+};
+
 //
 // llama_kv_cache_unified_iswa
 //
@@ -275,17 +363,17 @@ public:
     // llama_kv_cache
     //
 
-    llama_memory_decode_state_ptr init(
+    llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
             bool logits_all) override;
 
+    llama_memory_state_ptr init_full() override;
+
     bool update(llama_context & lctx) override;
 
     void defrag_sched(float thold) override;
-
-    void set_full() override;
 
     bool get_can_shift() const override;
 
@@ -298,8 +386,8 @@ public:
     // llama_kv_cache_unified_iswa specific API
     //
 
-    llama_kv_cache_unified * get_kv_base() const;
-    llama_kv_cache_unified * get_kv_swa () const;
+    llama_kv_cache_unified * get_base() const;
+    llama_kv_cache_unified * get_swa () const;
 
 private:
     const llama_hparams & hparams;
@@ -308,10 +396,68 @@ private:
     std::unique_ptr<llama_kv_cache_unified> kv_swa;
 };
 
+class llama_kv_cache_unified_iswa_state : public llama_memory_state_i {
+public:
+    // used for errors
+    llama_kv_cache_unified_iswa_state(llama_memory_status status);
+
+    // used to create a full-cache state
+    llama_kv_cache_unified_iswa_state(
+            llama_memory_status status,
+            llama_kv_cache_unified_iswa * kv);
+
+    // used to create a state from a batch
+    llama_kv_cache_unified_iswa_state(
+            llama_memory_status status,
+            llama_kv_cache_unified_iswa * kv,
+            llama_sbatch sbatch,
+            std::vector<uint32_t> heads_base,
+            std::vector<uint32_t> heads_swa,
+            std::vector<llama_ubatch> ubatches);
+
+    virtual ~llama_kv_cache_unified_iswa_state();
+
+    //
+    // llama_memory_state_i
+    //
+
+    bool next()  override;
+    bool apply() override;
+
+    std::vector<int64_t> & out_ids() override;
+
+    llama_memory_status  get_status() const override;
+    const llama_ubatch & get_ubatch() const override;
+
+    //
+    // llama_kv_cache_unified_iswa_state specific API
+    //
+
+    const llama_kv_cache_unified_state * get_base() const;
+    const llama_kv_cache_unified_state * get_swa()  const;
+
+private:
+    const llama_memory_status status;
+
+    //llama_kv_cache_unified_iswa * kv;
+
+    llama_sbatch sbatch;
+
+    // the index of the next ubatch to process
+    size_t i_next = 0;
+
+    std::vector<llama_ubatch> ubatches;
+
+    std::unique_ptr<llama_kv_cache_unified_state> state_base;
+    std::unique_ptr<llama_kv_cache_unified_state> state_swa;
+};
+
 //
 // llama_kv_cache_recurrent
 //
 
+// TODO: extract the KV cache state used for graph computation into llama_kv_cache_recurrent_state_i
+//       see the implementation of llama_kv_cache_unified_state_i for an example how to do it
 class llama_kv_cache_recurrent : public llama_kv_cache {
 public:
     llama_kv_cache_recurrent(
@@ -343,17 +489,17 @@ public:
     // llama_kv_cache
     //
 
-    llama_memory_decode_state_ptr init(
+    llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
             bool embd_pooled,
             bool logits_all) override;
 
+    llama_memory_state_ptr init_full() override;
+
     bool update(llama_context & lctx) override;
 
     void defrag_sched(float thold) override;
-
-    void set_full() override;
 
     bool prepare(const std::vector<llama_ubatch> & ubatches);
 
@@ -423,4 +569,68 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+};
+
+class llama_kv_cache_recurrent_state : public llama_memory_state_i {
+public:
+    // used for errors
+    llama_kv_cache_recurrent_state(llama_memory_status status);
+
+    // used to create a full-cache state
+    llama_kv_cache_recurrent_state(
+            llama_memory_status status,
+            llama_kv_cache_recurrent * kv);
+
+    // used to create a state from a batch
+    llama_kv_cache_recurrent_state(
+            llama_memory_status status,
+            llama_kv_cache_recurrent * kv,
+            llama_sbatch sbatch,
+            std::vector<llama_ubatch> ubatches);
+
+    virtual ~llama_kv_cache_recurrent_state();
+
+    //
+    // llama_memory_state_i
+    //
+
+    bool next()  override;
+    bool apply() override;
+
+    std::vector<int64_t> & out_ids() override;
+
+    llama_memory_status  get_status() const override;
+    const llama_ubatch & get_ubatch() const override;
+
+    //
+    // llama_kv_cache_recurrent_state specific API
+    //
+
+    uint32_t get_n_kv() const;
+    uint32_t get_head() const;
+    uint32_t get_size() const;
+
+    ggml_tensor * get_k_l(int32_t il) const;
+    ggml_tensor * get_v_l(int32_t il) const;
+
+    int32_t s_copy(int i) const;
+    float   s_mask(int i) const;
+
+private:
+    const llama_memory_status status;
+
+    llama_kv_cache_recurrent * kv;
+
+    llama_sbatch sbatch;
+
+    size_t i_next = 0;
+
+    std::vector<llama_ubatch> ubatches;
+
+    //
+    // data needed for building the compute graph for the current ubatch:
+    // TODO: extract all the state like `head` and `n` here
+    //
+
+    const bool is_full = false;
 };

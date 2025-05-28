@@ -274,13 +274,16 @@ llama_context::llama_context(
         // simulate full KV cache
         llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
-        kv_self->set_full();
+        const auto kv_state = kv_self->init_full();
+        if (!kv_state) {
+            throw std::runtime_error("failed to initialize KV cache");
+        }
 
         cross.v_embd.clear();
 
         // reserve pp graph first so that buffers are only allocated once
         {
-            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens);
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, kv_state.get());
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
@@ -291,7 +294,7 @@ llama_context::llama_context(
 
         // reserve with tg graph to get the number of splits and nodes
         {
-            auto * gf = graph_reserve(1, 1, 1);
+            auto * gf = graph_reserve(1, 1, 1, kv_state.get());
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute tg buffers");
             }
@@ -302,7 +305,7 @@ llama_context::llama_context(
 
         // reserve again with pp graph to avoid ggml-alloc reallocations during inference
         {
-            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens);
+            auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, kv_state.get());
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute pp buffers");
             }
@@ -430,12 +433,15 @@ void llama_context::kv_self_update() {
 
     if (kv_self->update(*this)) {
         // if the KV cache did any computation, we have to reserve a new worst-case graph
-        kv_self->set_full();
+        const auto kv_state = kv_self->init_full();
+        if (!kv_state) {
+            throw std::runtime_error("failed to initialize KV cache");
+        }
 
         const uint32_t n_seqs   = cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens);
+        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, kv_state.get());
         if (!gf) {
             LLAMA_LOG_ERROR("%s: failed to reserve graph after the KV cache update\n", __func__);
         }
@@ -633,22 +639,24 @@ bool llama_context::apply_adapter_cvec(
     return cvec.apply(model, data, len, n_embd, il_start, il_end);
 }
 
-llm_graph_result_ptr llama_context::process(const llama_ubatch & ubatch, llm_graph_type gtype, ggml_status * ret) {
-    auto * gf = graph_init();
-    if (!gf) {
-        LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
-        if (ret) {
-            *ret = GGML_STATUS_FAILED;
-        }
+llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_state_i * mstate, ggml_status & ret) {
+    if (mstate && !mstate->apply()) {
+        LLAMA_LOG_ERROR("%s: failed to apply memory state\n", __func__);
+        ret = GGML_STATUS_FAILED;
         return nullptr;
     }
 
-    auto res = graph_build(ctx_compute.get(), gf, ubatch, gtype);
+    auto * gf = graph_init();
+    if (!gf) {
+        LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
+        ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
+
+    auto res = graph_build(ctx_compute.get(), gf, ubatch, gtype, mstate);
     if (!res) {
         LLAMA_LOG_ERROR("%s: failed to build graph\n", __func__);
-        if (ret) {
-            *ret = GGML_STATUS_FAILED;
-        }
+        ret = GGML_STATUS_FAILED;
         return nullptr;
     }
 
@@ -656,9 +664,7 @@ llm_graph_result_ptr llama_context::process(const llama_ubatch & ubatch, llm_gra
 
     if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
         LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
-        if (ret) {
-            *ret = GGML_STATUS_ALLOC_FAILED;
-        }
+        ret = GGML_STATUS_ALLOC_FAILED;
         return nullptr;
     }
 
@@ -667,11 +673,11 @@ llm_graph_result_ptr llama_context::process(const llama_ubatch & ubatch, llm_gra
     const auto status = graph_compute(gf, ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
-        if (ret) {
-            *ret = status;
-        }
+        ret = status;
         return nullptr;
     }
+
+    ret = GGML_STATUS_SUCCESS;
 
     return res;
 }
@@ -748,7 +754,7 @@ int llama_context::encode(llama_batch & inp_batch) {
     cparams.causal_attn = false;
 
     ggml_status status;
-    auto res = process(ubatch, LLM_GRAPH_TYPE_ENCODER, &status);
+    const auto res = process_ubatch(ubatch, LLM_GRAPH_TYPE_ENCODER, nullptr, status);
 
     cparams.causal_attn = causal_attn_org;
 
@@ -927,12 +933,12 @@ int llama_context::decode(llama_batch & inp_batch) {
     // handle any pending defrags/shifts
     kv_self_update();
 
-    auto decode_state = kv_self->init(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ n_outputs_all == n_tokens_all);
-    if (!decode_state) {
+    auto kv_state = kv_self->init_batch(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ n_outputs_all == n_tokens_all);
+    if (!kv_state) {
         return -2;
     }
 
-    switch (decode_state->get_status()) {
+    switch (kv_state->get_status()) {
         case LLAMA_MEMORY_STATUS_SUCCESS:
             {
             } break;
@@ -955,8 +961,8 @@ int llama_context::decode(llama_batch & inp_batch) {
 
     int64_t n_outputs_prev = 0;
 
-    while (const auto * ubatch_ptr = decode_state->next()) {
-        const auto & ubatch = *ubatch_ptr;
+    do {
+        const auto & ubatch = kv_state->get_ubatch();
 
         // count the outputs in this u_batch
         {
@@ -979,7 +985,7 @@ int llama_context::decode(llama_batch & inp_batch) {
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
 
         ggml_status status;
-        auto res = process(ubatch, LLM_GRAPH_TYPE_DECODER, &status);
+        const auto res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, kv_state.get(), status);
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the KV cache
@@ -1092,7 +1098,7 @@ int llama_context::decode(llama_batch & inp_batch) {
         }
 
         n_outputs_prev += n_outputs;
-    }
+    } while (kv_state->next());
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
@@ -1101,7 +1107,7 @@ int llama_context::decode(llama_batch & inp_batch) {
     {
         bool sorted_output = true;
 
-        auto & out_ids = decode_state->out_ids();
+        auto & out_ids = kv_state->out_ids();
 
         GGML_ASSERT(out_ids.size() == (size_t) n_outputs_all);
 
@@ -1261,7 +1267,7 @@ ggml_cgraph * llama_context::graph_init() {
     return ggml_new_graph_custom(ctx_compute.get(), graph_max_nodes(), false);
 }
 
-ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs) {
+ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_state_i * mstate) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
 
     if (n_tokens % n_seqs != 0) {
@@ -1281,7 +1287,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
     llama_ubatch ubatch = { true, n_tokens, n_tokens / n_seqs, n_seqs, &token, nullptr, nullptr, nullptr, nullptr, nullptr};
 
     auto * gf = graph_init();
-    auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_DEFAULT);
+    auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_DEFAULT, mstate);
 
     this->n_outputs = save_n_outputs;
 
@@ -1302,10 +1308,11 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
 }
 
 llm_graph_result_ptr llama_context::graph_build(
-            ggml_context * ctx,
-             ggml_cgraph * gf,
-      const llama_ubatch & ubatch,
-            llm_graph_type gtype) {
+                    ggml_context * ctx,
+                     ggml_cgraph * gf,
+              const llama_ubatch & ubatch,
+                  llm_graph_type   gtype,
+      const llama_memory_state_i * mstate) {
     return model.build_graph(
             {
                 /*.ctx         =*/ ctx,
@@ -1317,7 +1324,7 @@ llm_graph_result_ptr llama_context::graph_build(
                 /*.backend_cpu =*/ backend_cpu,
                 /*.cvec        =*/ &cvec,
                 /*.loras       =*/ &loras,
-                /*.memory      =*/ memory.get(),
+                /*.mstate      =*/ mstate,
                 /*.cross       =*/ &cross,
                 /*.n_outputs   =*/ n_outputs,
                 /*.cb          =*/ graph_get_cb(),
@@ -2020,8 +2027,8 @@ void llama_context::opt_epoch_iter(
 
         int64_t n_outputs_all = n_tokens_all;
 
-        auto decode_state = kv_self->init(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ true);
-        if (!decode_state || decode_state->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
+        auto kv_state = kv_self->init_batch(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ true);
+        if (!kv_state || kv_state->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
             LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
             break;
         }
@@ -2033,13 +2040,18 @@ void llama_context::opt_epoch_iter(
         };
 
         uint32_t pos_batch = 0;
-        while (const auto * ubatch_ptr = decode_state->next()) {
-            const auto & ubatch = *ubatch_ptr;
+        do {
+            const auto & ubatch = kv_state->get_ubatch();
 
             n_outputs = ubatch.n_tokens;
 
+            if (!kv_state->apply()) {
+                LLAMA_LOG_ERROR("%s: failed to update the memory state\n", __func__);
+                break;
+            }
+
             auto * gf = graph_init();
-            auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_DEFAULT);
+            auto res = graph_build(ctx_compute.get(), gf, ubatch, LLM_GRAPH_TYPE_DEFAULT, kv_state.get());
 
             struct ggml_context * ctx_compute_opt;
             {
@@ -2054,6 +2066,7 @@ void llama_context::opt_epoch_iter(
             }
             ggml_opt_prepare_alloc(opt_ctx, ctx_compute_opt, gf, res->get_tokens(), res->get_logits());
             ggml_opt_alloc(opt_ctx, train);
+
             res->set_inputs(&ubatch);
             {
                 struct ggml_tensor * labels = ggml_opt_labels(opt_ctx);
@@ -2073,7 +2086,7 @@ void llama_context::opt_epoch_iter(
             ggml_free(ctx_compute_opt);
 
             pos_batch += ubatch.n_tokens;
-        }
+        } while (kv_state->next());
     }
 }
 
