@@ -354,3 +354,4 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
     *s = sumf;
 }
+
