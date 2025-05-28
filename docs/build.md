@@ -298,6 +298,8 @@ If your GPU is not officially supported you can use the environment variable [`H
 
 On Linux it is possible to use unified memory architecture (UMA) to share main memory between the CPU and integrated GPU by setting environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1`. However, this hurts performance for non-integrated GPUs (but enables working with integrated GPUs).
 
+When using NVIDIA Jetson series devices which have integrated GPU, setting environment variable `GGML_CUDA_JETSON_DEVICE=1` to optimize for the Unified Memory Architecture
+
 ## Vulkan
 
 **Windows**
