@@ -830,3 +830,186 @@ void ggml_vec_dot_q5_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, co
 #endif
 }
 
+void ggml_vec_dot_q6_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q6_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined(__VXE__) || defined(__VXE2__)
+    float sum = 0;
+
+    // Lower 4-bit and upper 2-bit masks
+    const uint8x16_t v_lm = vec_splat_u8(0x0F);
+    const uint8x16_t v_um = vec_splat_u8(0x03);
+
+    const int32x4_t v_z = vec_splat_s32(0);
+
+    int8x16_t  q6b[4];
+    uint8x16_t q6h[4];
+
+    uint8x16_t v_xl[4];
+    uint8x16_t v_xh[2];
+    int8x16_t  v_y[4];
+
+    for (int i = 0; i < nb; ++i) {
+        const float d_all = GGML_FP16_TO_FP32(x[i].d);
+
+        const uint8_t * GGML_RESTRICT x0l = x[i].ql;
+        const uint8_t * GGML_RESTRICT x0h = x[i].qh;
+        const int8_t  * GGML_RESTRICT y0 = y[i].qs;
+
+        const int8_t  * GGML_RESTRICT scale = x[i].scales;
+
+        const int16x8_t v_ysumsl = vec_xl(0 , y[i].bsums);
+        const int16x8_t v_ysumsh = vec_xl(16, y[i].bsums);
+
+        const int8x16_t v_scale  = vec_xl(0, scale);
+        const int16x8_t v_scalel = vec_unpackh(v_scale);
+        const int16x8_t v_scaleh = vec_unpackl(v_scale);
+
+        const int32x4_t v_minslo = vec_mulo(v_ysumsl, v_scalel);
+        const int32x4_t v_minsle = vec_mule(v_ysumsl, v_scalel);
+        const int32x4_t v_minsho = vec_mulo(v_ysumsh, v_scaleh);
+        const int32x4_t v_minshe = vec_mule(v_ysumsh, v_scaleh);
+        const int32x4_t v_mins = v_minslo + v_minsle + v_minsho + v_minshe;
+
+        const int32_t mins = v_mins[0] + v_mins[1] + v_mins[2] + v_mins[3];
+
+        int32_t isum = 0;
+        for (int j = 0; j < QK_K/128; ++j) {
+            // Load model upper 2 bits
+            v_xh[0] = vec_xl(0 , x0h);
+            v_xh[1] = vec_xl(16, x0h);
+            x0h += 32;
+
+            // Load model lower 4 bits
+            v_xl[0] = vec_xl(0 , x0l);
+            v_xl[1] = vec_xl(16, x0l);
+            v_xl[2] = vec_xl(32, x0l);
+            v_xl[3] = vec_xl(48, x0l);
+            x0l += 64;
+
+            // Load activation quants
+            v_y[0] = vec_xl(0 , y0);
+            v_y[1] = vec_xl(16, y0);
+            v_y[2] = vec_xl(32, y0);
+            v_y[3] = vec_xl(48, y0);
+            y0 += 64;
+
+            q6h[0] = vec_sl(vec_and(v_um, v_xh[0]), 4);
+            q6h[1] = vec_sl(vec_and(v_um, v_xh[1]), 4);
+            uint8x16_t shifted = vec_sr(v_xh[0], 2);
+            q6h[2] = vec_sl(vec_and(v_um, shifted), 4);
+            shifted = vec_sr(v_xh[1], 2);
+            q6h[3] = vec_sl(vec_and(v_um, shifted), 4);
+
+            q6b[0] = (int8x16_t)(vec_or(vec_and(v_xl[0], v_lm), q6h[0]));
+            q6b[1] = (int8x16_t)(vec_or(vec_and(v_xl[1], v_lm), q6h[1]));
+            q6b[2] = (int8x16_t)(vec_or(vec_and(v_xl[2], v_lm), q6h[2]));
+            q6b[3] = (int8x16_t)(vec_or(vec_and(v_xl[3], v_lm), q6h[3]));
+
+            int32x4_t summs0 = ggml_vec_dot(v_z, q6b[0], v_y[0]);
+            int32x4_t summs1 = ggml_vec_dot(v_z, q6b[1], v_y[1]);
+            int32x4_t summs2 = ggml_vec_dot(v_z, q6b[2], v_y[2]);
+            int32x4_t summs3 = ggml_vec_dot(v_z, q6b[3], v_y[3]);
+
+            isum += (summs0[0] + summs0[1] + summs0[2] + summs0[3]) * scale[0] +
+                    (summs1[0] + summs1[1] + summs1[2] + summs1[3]) * scale[1] +
+                    (summs2[0] + summs2[1] + summs2[2] + summs2[3]) * scale[2] +
+                    (summs3[0] + summs3[1] + summs3[2] + summs3[3]) * scale[3];
+
+            scale += 4;
+
+
+            // Load activation quants
+            v_y[0] = vec_xl(0 , y0);
+            v_y[1] = vec_xl(16, y0);
+            v_y[2] = vec_xl(32, y0);
+            v_y[3] = vec_xl(48, y0);
+            y0 += 64;
+
+            shifted = vec_sr(v_xh[0], 4);
+            q6h[0] = vec_sl(vec_and(v_um, shifted), 4);
+            shifted = vec_sr(v_xh[1], 4);
+            q6h[1] = vec_sl(vec_and(v_um, shifted), 4);
+            shifted = vec_sr(v_xh[0], 6);
+            q6h[2] = vec_sl(vec_and(v_um, shifted), 4);
+            shifted = vec_sr(v_xh[1], 6);
+            q6h[3] = vec_sl(vec_and(v_um, shifted), 4);
+
+            q6b[0] = (int8x16_t)(vec_or(vec_sr(v_xl[0], 4), q6h[0]));
+            q6b[1] = (int8x16_t)(vec_or(vec_sr(v_xl[1], 4), q6h[1]));
+            q6b[2] = (int8x16_t)(vec_or(vec_sr(v_xl[2], 4), q6h[2]));
+            q6b[3] = (int8x16_t)(vec_or(vec_sr(v_xl[3], 4), q6h[3]));
+
+            summs0 = ggml_vec_dot(v_z, q6b[0], v_y[0]);
+            summs1 = ggml_vec_dot(v_z, q6b[1], v_y[1]);
+            summs2 = ggml_vec_dot(v_z, q6b[2], v_y[2]);
+            summs3 = ggml_vec_dot(v_z, q6b[3], v_y[3]);
+
+            isum += (summs0[0] + summs0[1] + summs0[2] + summs0[3]) * scale[0] +
+                    (summs1[0] + summs1[1] + summs1[2] + summs1[3]) * scale[1] +
+                    (summs2[0] + summs2[1] + summs2[2] + summs2[3]) * scale[2] +
+                    (summs3[0] + summs3[1] + summs3[2] + summs3[3]) * scale[3];
+
+            scale += 4;
+        }
+
+        sum += d_all * y[i].d * (isum - 32 * mins);
+    }
+
+    *s = sum;
+
+#else
+
+    int8_t  aux8[QK_K];
+    int16_t aux16[8];
+    float   sums [8];
+    int32_t aux32[8];
+    memset(sums, 0, 8*sizeof(float));
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        const uint8_t * GGML_RESTRICT q4 = x[i].ql;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const  int8_t * GGML_RESTRICT q8 = y[i].qs;
+        memset(aux32, 0, 8*sizeof(int32_t));
+        int8_t * GGML_RESTRICT a = aux8;
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) {
+                a[l +  0] = (int8_t)((q4[l +  0] & 0xF) | (((qh[l] >> 0) & 3) << 4)) - 32;
+                a[l + 32] = (int8_t)((q4[l + 32] & 0xF) | (((qh[l] >> 2) & 3) << 4)) - 32;
+                a[l + 64] = (int8_t)((q4[l +  0] >>  4) | (((qh[l] >> 4) & 3) << 4)) - 32;
+                a[l + 96] = (int8_t)((q4[l + 32] >>  4) | (((qh[l] >> 6) & 3) << 4)) - 32;
+            }
+            a  += 128;
+            q4 += 64;
+            qh += 32;
+        }
+        a = aux8;
+        int is = 0;
+        for (int j = 0; j < QK_K/16; ++j) {
+            int scale = x[i].scales[is++];
+            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            q8 += 8; a += 8;
+            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += scale * aux16[l];
+            q8 += 8; a += 8;
+        }
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        for (int l = 0; l < 8; ++l) sums[l] += d * aux32[l];
+    }
+    for (int l = 0; l < 8; ++l) sumf += sums[l];
+    *s = sumf;
+#endif
+}
+
