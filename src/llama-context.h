@@ -18,6 +18,9 @@ struct llama_kv_cache;
 class llama_io_read_i;
 class llama_io_write_i;
 
+class llama_memory_i;
+class llama_memory_state_i;
+
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
     llama_context(
@@ -90,12 +93,14 @@ struct llama_context {
                 int32_t   il_end);
 
     // process a single ubatch with a specific graph type
+    // if memory_state is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
     // returns nullptr only if ret != GGML_STATUS_SUCCESS
-    llm_graph_result_ptr process(
-            const llama_ubatch & ubatch,
-                llm_graph_type   gtype,
-                   ggml_status * ret);
+    llm_graph_result_ptr process_ubatch(
+              const llama_ubatch & ubatch,
+                  llm_graph_type   gtype,
+            llama_memory_state_i * mstate,
+                     ggml_status & ret);
 
     int encode(llama_batch & inp_batch);
     int decode(llama_batch & inp_batch);
@@ -192,14 +197,15 @@ public:
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
 
     // reserve a graph with a dummy ubatch of the specified size
-    ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs);
+    ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_state_i * mstate);
 
 private:
     llm_graph_result_ptr graph_build(
-            ggml_context * ctx,
-             ggml_cgraph * gf,
-      const llama_ubatch & ubatch,
-          llm_graph_type   gtype);
+                    ggml_context * ctx,
+                     ggml_cgraph * gf,
+              const llama_ubatch & ubatch,
+                  llm_graph_type   gtype,
+      const llama_memory_state_i * mstate);
 
     llm_graph_cb graph_get_cb() const;
 
