@@ -38,7 +38,7 @@ void quantize_row_q5_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q5_1_ref(x, y, k);
 }
 
-void native_quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
+void quantize_row_q8_0_native(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
 #if defined(__aarch64__) \
  || defined(__wasm__) \
@@ -47,13 +47,13 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
  || defined(__powerpc__) \
  || defined(__loongarch__) \
  || defined(__s390__)
-    native_quantize_row_q8_0(x, y, k);
+    quantize_row_q8_0_native(x, y, k);
 #else
     quantize_row_q8_0_ref(x, y, k);
 #endif
 }
 
-void native_quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
+void quantize_row_q8_1_native(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
 #if defined(__aarch64__) \
  || defined(__wasm__) \
@@ -62,7 +62,7 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
  || defined(__powerpc__) \
  || defined(__loongarch__) \
  || defined(__s390__)
-    native_quantize_row_q8_1(x, y, k);
+    quantize_row_q8_1_native(x, y, k);
 #else
     quantize_row_q8_1_ref(x, y, k);
 #endif
@@ -126,85 +126,10 @@ static const int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -1
 
 //===================================== Q8_K ==============================================
 
+void quantize_row_q8_K_native(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k);
 void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-#ifdef __wasm_simd128__
-    assert(k % QK_K == 0);
-    const int64_t nb = k / QK_K;
-    block_q8_K * GGML_RESTRICT yc = y; // Cast to proper type
-
-    for (int i = 0; i < nb; i++) {
-        const float * x_block = x + i * QK_K;
-
-        v128_t min_vec = wasm_v128_load(x_block);
-        v128_t max_vec = min_vec;
-
-        for (int j = 4; j < QK_K; j += 4) {
-            v128_t x_vec = wasm_v128_load(x_block + j);
-            max_vec = wasm_f32x4_pmax(max_vec, x_vec);
-            min_vec = wasm_f32x4_pmin(min_vec, x_vec);
-        }
-        max_vec = wasm_f32x4_pmax(max_vec, wasm_i32x4_shuffle(max_vec, max_vec, 2, 3, 0, 1));
-        max_vec = wasm_f32x4_pmax(max_vec, wasm_i32x4_shuffle(max_vec, max_vec, 1, 0, 3, 2));
-        min_vec = wasm_f32x4_pmin(min_vec, wasm_i32x4_shuffle(min_vec, min_vec, 2, 3, 0, 1));
-        min_vec = wasm_f32x4_pmin(min_vec, wasm_i32x4_shuffle(min_vec, min_vec, 1, 0, 3, 2));
-        float max = wasm_f32x4_extract_lane(max_vec, 0);
-        float min = wasm_f32x4_extract_lane(min_vec, 0);
-        float amax = -min > max ? min : max;
-
-        if (amax == 0.0f) {
-            yc[i].d = 0.0f;
-            const v128_t zero = wasm_i8x16_splat(0);
-            for (int j = 0; j < QK_K; j += 16) {
-                wasm_v128_store(yc[i].qs + j, zero);
-            }
-            continue;
-        }
-
-        const float iscale = -127.0f / amax;
-        const v128_t scale_vec = wasm_f32x4_splat(iscale);
-
-        // Process 16 elements per iteration
-        for (int j = 0, jb = 0; j < QK_K; j += 16, jb++) {
-            // Load and quantize 16 floats
-            v128_t x0 = wasm_v128_load(x_block + j);
-            v128_t x1 = wasm_v128_load(x_block + j + 4);
-            v128_t x2 = wasm_v128_load(x_block + j + 8);
-            v128_t x3 = wasm_v128_load(x_block + j + 12);
-
-            v128_t q0 = wasm_f32x4_nearest(wasm_f32x4_mul(x0, scale_vec));
-            v128_t q1 = wasm_f32x4_nearest(wasm_f32x4_mul(x1, scale_vec));
-            v128_t q2 = wasm_f32x4_nearest(wasm_f32x4_mul(x2, scale_vec));
-            v128_t q3 = wasm_f32x4_nearest(wasm_f32x4_mul(x3, scale_vec));
-
-            // Convert to i32 with saturation
-            v128_t i0 = wasm_i32x4_trunc_sat_f32x4(q0);
-            v128_t i1 = wasm_i32x4_trunc_sat_f32x4(q1);
-            v128_t i2 = wasm_i32x4_trunc_sat_f32x4(q2);
-            v128_t i3 = wasm_i32x4_trunc_sat_f32x4(q3);
-
-            // Pack into 16 i8 values
-            v128_t i8 = wasm_i8x16_narrow_i16x8(
-                wasm_i16x8_narrow_i32x4(i0, i1),
-                wasm_i16x8_narrow_i32x4(i2, i3)
-            );
-            wasm_v128_store(yc[i].qs + j, i8);
-
-            // Calculate bsums using SIMD
-            v128_t sum16 = wasm_i16x8_add(
-                wasm_i16x8_extend_low_i8x16(i8),
-                wasm_i16x8_extend_high_i8x16(i8)
-            );
-            v128_t sum32 = wasm_i32x4_add(
-                wasm_i32x4_extend_low_i16x8(sum16),
-                wasm_i32x4_extend_high_i16x8(sum16)
-            );
-            sum32 = wasm_i32x4_add(sum32, wasm_i32x4_shuffle(sum32, sum32, 2, 3, 0, 1));
-            sum32 = wasm_i32x4_add(sum32, wasm_i32x4_shuffle(sum32, sum32, 1, 0, 3, 2));
-            yc[i].bsums[jb] = wasm_i32x4_extract_lane(sum32, 0);
-        }
-
-        yc[i].d = 1.0f / iscale;
-    }
+#if defined(__wasm__)
+    quantize_row_q8_K_native(x, y, k);
 #else
     quantize_row_q8_K_ref(x, y, k);
 #endif
@@ -215,82 +140,6 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 //
 // Helper functions
 //
-#if __AVX__ || __AVX2__ || __AVX512F__
-
-// shuffles to pick the required scales in dot products
-static inline __m256i get_scale_shuffle_q3k(int i) {
-    static const uint8_t k_shuffle[128] = {
-         0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,     2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
-         4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,     6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
-         8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,    10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,
-        12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,    14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,
-    };
-    return _mm256_loadu_si256((const __m256i*)k_shuffle + i);
-}
-static inline __m256i get_scale_shuffle_k4(int i) {
-    static const uint8_t k_shuffle[256] = {
-         0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
-         2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
-         4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,
-         6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
-         8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,
-        10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,
-        12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,
-        14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15
-    };
-    return _mm256_loadu_si256((const __m256i*)k_shuffle + i);
-}
-static inline __m128i get_scale_shuffle(int i) {
-    static const uint8_t k_shuffle[128] = {
-         0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
-         2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
-         4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
-         6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
-         8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
-        10,10,10,10,10,10,10,10, 11,11,11,11,11,11,11,11,
-        12,12,12,12,12,12,12,12, 13,13,13,13,13,13,13,13,
-        14,14,14,14,14,14,14,14, 15,15,15,15,15,15,15,15
-    };
-    return _mm_loadu_si128((const __m128i*)k_shuffle + i);
-}
-#elif defined(__loongarch_asx)
-// shuffles to pick the required scales in dot products
-static inline __m256i get_scale_shuffle_q3k(int i) {
-    static const uint8_t k_shuffle[128] = {
-         0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,     2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
-         4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,     6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
-         8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,    10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,
-        12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,    14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,
-    };
-    return __lasx_xvld((const __m256i*)k_shuffle + i, 0);
-}
-static inline __m256i get_scale_shuffle_k4(int i) {
-    static const uint8_t k_shuffle[256] = {
-         0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
-         2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3, 2, 3,
-         4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5, 4, 5,
-         6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7, 6, 7,
-         8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9, 8, 9,
-        10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,10,11,
-        12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,12,13,
-        14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15,14,15
-    };
-    return __lasx_xvld((const __m256i*)k_shuffle + i, 0);
-}
-static inline __m128i get_scale_shuffle(int i) {
-    static const uint8_t k_shuffle[128] = {
-         0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
-         2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3,
-         4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 5, 5, 5,
-         6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7,
-         8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
-        10,10,10,10,10,10,10,10, 11,11,11,11,11,11,11,11,
-        12,12,12,12,12,12,12,12, 13,13,13,13,13,13,13,13,
-        14,14,14,14,14,14,14,14, 15,15,15,15,15,15,15,15
-    };
-    return __lsx_vld((const __m128i*)k_shuffle + i, 0);
-}
-#endif
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
