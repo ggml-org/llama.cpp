@@ -573,7 +573,7 @@ struct oaicompat_parser_options {
 
 // used by /chat/completions endpoint
 static json oaicompat_chat_params_parse(
-    const json & body, /* openai api json semantics */
+    json & body, /* openai api json semantics */
     const oaicompat_parser_options & opt,
     std::vector<raw_buffer> & out_files)
 {
@@ -624,7 +624,7 @@ static json oaicompat_chat_params_parse(
     if (!body.contains("messages")) {
         throw std::runtime_error("'messages' is required");
     }
-    json messages = body.at("messages");
+    json & messages = body.at("messages");
     if (!messages.is_array()) {
         throw std::runtime_error("Expected 'messages' to be an array");
     }
