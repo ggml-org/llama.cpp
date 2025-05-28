@@ -1768,3 +1768,143 @@ void ggml_vec_dot_iq2_xxs_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs,
 #endif
 }
 
+void ggml_vec_dot_iq2_xs_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_iq2_xs * GGML_RESTRICT x = vx;
+    const block_q8_K   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined(__POWER9_VECTOR__)
+    const vector int v0 = vec_splats((int32_t)0);
+    vector float vsumf0 = vec_splats(0.0f);
+    vector float vsumf1 = vec_splats(0.0f);
+    vector float vsumf2 = vec_splats(0.0f);
+    vector float vsumf3 = vec_splats(0.0f);
+
+    const uint64_t * signs64 = (const uint64_t *)keven_signs_q2xs;
+
+    for (int i = 0; i < nb; ++i) {
+        vector float vxd = vec_splats(GGML_FP16_TO_FP32(x[i].d));
+        vector float vyd = vec_splats(y[i].d);
+        vector float vd = vec_mul(vxd, vyd);
+
+        vector signed int vsumi0 = v0;
+        vector signed int vsumi1 = v0;
+        vector signed int vsumi2 = v0;
+        vector signed int vsumi3 = v0;
+
+        const uint16_t * GGML_RESTRICT q2 = x[i].qs;
+        const uint8_t  * GGML_RESTRICT sc = x[i].scales;
+        const int8_t  *  GGML_RESTRICT q8 = y[i].qs;
+
+        for (int j = 0; j < QK_K/64; ++j) {
+            __builtin_prefetch(q2, 0, 1);
+            __builtin_prefetch(q8, 0, 1);
+
+            vector signed long long aux64x2_0 = {*(const int64_t *)(iq2xs_grid + (q2[0] & 511)), *(const int64_t *)(iq2xs_grid + (q2[1] & 511))};
+            vector signed long long aux64x2_1 = {*(const int64_t *)(iq2xs_grid + (q2[2] & 511)), *(const int64_t *)(iq2xs_grid + (q2[3] & 511))};
+            vector signed long long aux64x2_2 = {*(const int64_t *)(iq2xs_grid + (q2[4] & 511)), *(const int64_t *)(iq2xs_grid + (q2[5] & 511))};
+            vector signed long long aux64x2_3 = {*(const int64_t *)(iq2xs_grid + (q2[6] & 511)), *(const int64_t *)(iq2xs_grid + (q2[7] & 511))};
+
+            vector signed long long vsigns0 = {*(const int64_t *)(signs64 + ((q2[0] >> 9))), *(const int64_t *)(signs64 + ((q2[1] >> 9)))};
+            vector signed long long vsigns1 = {*(const int64_t *)(signs64 + ((q2[2] >> 9))), *(const int64_t *)(signs64 + ((q2[3] >> 9)))};
+            vector signed long long vsigns2 = {*(const int64_t *)(signs64 + ((q2[4] >> 9))), *(const int64_t *)(signs64 + ((q2[5] >> 9)))};
+            vector signed long long vsigns3 = {*(const int64_t *)(signs64 + ((q2[6] >> 9))), *(const int64_t *)(signs64 + ((q2[7] >> 9)))};
+            q2 += 8;
+
+            vector signed char q2x0 = (vector signed char)vec_mul((vector signed char)vsigns0, (vector signed char)aux64x2_0);
+            vector signed char q2x1 = (vector signed char)vec_mul((vector signed char)vsigns1, (vector signed char)aux64x2_1);
+            vector signed char q2x2 = (vector signed char)vec_mul((vector signed char)vsigns2, (vector signed char)aux64x2_2);
+            vector signed char q2x3 = (vector signed char)vec_mul((vector signed char)vsigns3, (vector signed char)aux64x2_3);
+
+            vector signed char q8y0 = vec_xl( 0, q8);
+            vector signed char q8y1 = vec_xl(16, q8);
+            vector signed char q8y2 = vec_xl(32, q8);
+            vector signed char q8y3 = vec_xl(48, q8);
+            q8 += 64;
+
+            vector signed short qv0 = vec_add(vec_mule(q2x0, q8y0), vec_mulo(q2x0, q8y0));
+            vector signed short qv1 = vec_add(vec_mule(q2x1, q8y1), vec_mulo(q2x1, q8y1));
+            vector signed short qv2 = vec_add(vec_mule(q2x2, q8y2), vec_mulo(q2x2, q8y2));
+            vector signed short qv3 = vec_add(vec_mule(q2x3, q8y3), vec_mulo(q2x3, q8y3));
+
+            const uint16_t ls0 = (uint16_t)(sc[0] & 0xf);
+            const uint16_t ls1 = (uint16_t)(sc[0] >>  4);
+            const uint16_t ls2 = (uint16_t)(sc[1] & 0xf);
+            const uint16_t ls3 = (uint16_t)(sc[1] >>  4);
+            sc += 2;
+
+            vector signed short vscales0 = vec_splats((int16_t)(2*ls0+1));
+            vector signed short vscales1 = vec_splats((int16_t)(2*ls1+1));
+            vector signed short vscales2 = vec_splats((int16_t)(2*ls2+1));
+            vector signed short vscales3 = vec_splats((int16_t)(2*ls3+1));
+
+            vsumi0 = vec_msum(qv0, vscales0, vsumi0);
+            vsumi1 = vec_msum(qv1, vscales1, vsumi1);
+            vsumi2 = vec_msum(qv2, vscales2, vsumi2);
+            vsumi3 = vec_msum(qv3, vscales3, vsumi3);
+        }
+
+        vsumf0 = vec_madd(vec_ctf(vsumi0, 0), vd, vsumf0);
+        vsumf1 = vec_madd(vec_ctf(vsumi1, 0), vd, vsumf1);
+        vsumf2 = vec_madd(vec_ctf(vsumi2, 0), vd, vsumf2);
+        vsumf3 = vec_madd(vec_ctf(vsumi3, 0), vd, vsumf3);
+    }
+
+    vsumf0 = vec_add(vsumf0, vsumf2);
+    vsumf1 = vec_add(vsumf1, vsumf3);
+
+    vsumf0 = vec_add(vsumf0, vsumf1);
+
+    vsumf0 = vec_add(vsumf0, vec_sld(vsumf0, vsumf0, 4));
+    vsumf0 = vec_add(vsumf0, vec_sld(vsumf0, vsumf0, 8));
+
+    *s = 0.125f * vec_extract(vsumf0, 0);
+
+#else
+
+    float sumf = 0.f;
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint16_t * GGML_RESTRICT q2 = x[i].qs;
+        const uint8_t  * GGML_RESTRICT sc = x[i].scales;
+        const int8_t   * GGML_RESTRICT q8 = y[i].qs;
+        int32_t bsum = 0;
+        for (int ib32 = 0; ib32 < QK_K/32; ++ib32) {
+            const uint16_t ls1 = 2*(sc[ib32] & 0xf) + 1;
+            const uint16_t ls2 = 2*(sc[ib32] >>  4) + 1;
+            int32_t sumi = 0;
+            for (int l = 0; l < 2; ++l) {
+                const uint8_t * grid = (const uint8_t *)(iq2xs_grid + (q2[l] & 511));
+                const uint8_t  signs = ksigns_iq2xs[q2[l] >> 9];
+                for (int j = 0; j < 8; ++j) {
+                    sumi += grid[j] * q8[j] * (signs & kmask_iq2xs[j] ? -1 : 1);
+                }
+                q8 += 8;
+            }
+            bsum += sumi * ls1;
+            sumi = 0;
+            for (int l = 2; l < 4; ++l) {
+                const uint8_t * grid = (const uint8_t *)(iq2xs_grid + (q2[l] & 511));
+                const uint8_t  signs = ksigns_iq2xs[q2[l] >> 9];
+                for (int j = 0; j < 8; ++j) {
+                    sumi += grid[j] * q8[j] * (signs & kmask_iq2xs[j] ? -1 : 1);
+                }
+                q8 += 8;
+            }
+            bsum += sumi * ls2;
+            q2 += 4;
+        }
+        sumf += d * bsum;
+    }
+    *s = 0.125f * sumf;
+#endif
+}
+
