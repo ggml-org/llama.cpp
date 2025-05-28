@@ -19,7 +19,6 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
     float sumf = 0.0f;
 
     #if defined(__ARM_FEATURE_SVE)
-
         const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
         const int ggml_f32_epr = sve_register_length / 32;//8;//svcntw(); // SVE128:4, SVE256:8, SVE512:16
         const int ggml_f32_step = 8 * ggml_f32_epr; // choose 8 SVE registers
@@ -35,7 +34,7 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         svfloat32_t sum8 = svdup_n_f32(0.0f);
         svfloat32_t ax1,ax2,ax3,ax4,ax5,ax6,ax7,ax8;
         svfloat32_t ay1,ay2,ay3,ay4,ay5,ay6,ay7,ay8;
-        for ( int i = 0; i < np; i += ggml_f32_step) {
+        for (int i = 0; i < np; i += ggml_f32_step) {
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
             sum1 = GGML_F32_VEC_FMA(ax1, ay1, sum1);
@@ -71,14 +70,14 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         // leftovers
         // Since 8 unrolls are done in above loop, leftovers lie in range [0, ggml_f32_step] which is handled in below loop
         const int np2 = (n & ~(ggml_f32_epr - 1));
-        for ( int i = np; i < np2; i += ggml_f32_epr) {
+        for (int i = np; i < np2; i += ggml_f32_epr) {
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
             sum1 = GGML_F32_VEC_FMA(ax1, ay1, sum1);
         }
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
-        if(np2<n){
-            svbool_t pg = svwhilelt_b32(np2,n);
+        if (np2 < n){
+            svbool_t pg = svwhilelt_b32(np2, n);
             ax1 = svld1_f32(pg, x + np2);
             ay1 = svld1_f32(pg, y + np2);
             sum1 = svmad_f32_m(pg, ax1, ay1, sum1);

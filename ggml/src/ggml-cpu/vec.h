@@ -157,9 +157,9 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
         GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
 
         const int np = (n & ~(ggml_f32_step - 1));
-        svfloat32_t ax1,ax2;
-        svfloat32_t ay1,ay2;
-        for ( int i = 0; i < np; i += ggml_f32_step) {
+        svfloat32_t ax1, ax2;
+        svfloat32_t ay1, ay2;
+        for (int i = 0; i < np; i += ggml_f32_step) {
 
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
@@ -175,7 +175,7 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
         }
         // leftovers
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
-        if(np<n) {
+        if (np < n) {
             svbool_t pg =svwhilelt_b32(np, n);
             ax1 = svld1_f32(pg, x + np);
             ay1 = svld1_f32(pg, y + np);
@@ -318,8 +318,9 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
 
         GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
         const int np = (n & ~(ggml_f32_step - 1));
-        svfloat32_t ay1,ay2;
-        for ( int i = 0; i < np; i += ggml_f32_step) {
+        svfloat32_t ay1;
+        svfloat32_t ay2;
+        for (int i = 0; i < np; i += ggml_f32_step) {
             ay1 = GGML_F32_VEC_LOAD(y + i);
             ay1 = GGML_F32_VEC_MUL(ay1, vx);
             GGML_F32_VEC_STORE(y + i, ay1);
@@ -330,9 +331,9 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
         }
         // leftovers
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
-        if(np<n) {
+        if (np < n) {
             svbool_t pg = svwhilelt_b32(np, n);
-            ay1 = svld1_f32(pg, y+np);
+            ay1 = svld1_f32(pg, y + np);
             ay1 = svmul_f32_m(pg, ay1, vx);
             svst1_f32(pg, y + np, ay1);
         }
@@ -583,42 +584,6 @@ inline static ggml_fp16_t ggml_silu_f16(ggml_fp16_t x) {
 #if __FINITE_MATH_ONLY__
 #error "some routines in ggml.c require non-finite math arithmetics -- pass -fno-finite-math-only to the compiler to fix"
 #error "ref: https://github.com/ggml-org/llama.cpp/pull/7154#issuecomment-2143844461"
-#endif
-
-/* Below function was borrowed from the GitHub repository:
-https://github.com/openvinotoolkit/openvino/blob/master/src/plugins/intel_cpu/src/nodes/kernels/scaled_attn/common.hpp */
-#if defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
-    inline static svfloat32_t exp_ps_sve(svbool_t pg, svfloat32_t src) {
-        // Constants
-        const svfloat32_t log2_e = svdup_n_f32(1.4426950409f);
-        const svfloat32_t ln2 = svdup_n_f32(0.6931473921f);
-        const svfloat32_t half_ln2_sq = svdup_n_f32(0.2413862043f);
-        const svuint32_t not_mask17 = svdup_n_u32(~((1u << 17) - 1));
-        const svfloat32_t one = svdup_n_f32(1.0f);
-        const svfloat32_t inactive1 = svdup_n_f32(0.0f);
-        const svint32_t inactive2 = svdup_n_s32(0);
-
-        // Algorithm starts here
-        svfloat32_t t0 = svmul_f32_m(pg, src, log2_e);  // y = x * log2(e)
-        svfloat32_t t1 = svrintm_f32_m(inactive1, pg, t0);         // rount to int (float)
-        svint32_t t2 = svcvt_s32_f32_m(inactive2, pg, t1);         // n
-
-        t1 = svsub_f32_m(pg, t0, t1);   // a = y - floor(y)
-        t1 = svadd_f32_m(pg, t1, one);  // b = a + 1
-
-        svuint32_t t3 = svlsr_n_u32_m(pg, svreinterpret_u32_f32(t1), 17);  // v = b >> 17 (u32)
-        svfloat32_t t4 = svexpa_f32(t3);                                   // c = fexpa(v)
-        t4 = svscale_f32_m(pg, t4, t2);                                    // fexpa(v) * 2^(n)
-
-        // and_(t2.d, t1.d, not_mask17.d)
-        svfloat32_t t5 = svreinterpret_f32_u32(svand_u32_m(pg, svreinterpret_u32_f32(t1), not_mask17));
-        t5 = svsub_f32_m(pg, t1, t5);                // z
-        t0 = svmla_f32_m(pg, ln2, t5, half_ln2_sq);  // ln2 + half_ln2_sq * z
-        t0 = svmla_f32_m(pg, one, t5, t0);           // 1 + (ln2 * z) + (half_ln2_sq * z * z)
-        t0 = svmul_f32_m(pg, t0, t4);                // Final result
-
-        return t0;
-    }
 #endif
 
 #if defined(__ARM_NEON) && defined(__aarch64__)

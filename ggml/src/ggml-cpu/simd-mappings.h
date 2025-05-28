@@ -25,21 +25,21 @@
 #define GGML_F32_EPR 8
 #define DEFAULT_PG svptrue_b32()
 
-#define GGML_F32xt              svfloat32_t
-#define GGML_F32xt_ZERO         svdup_n_f32(0.0f)
-#define GGML_F32xt_SET1(x)      svdup_n_f32(x)
-#define GGML_F32xt_LOAD_IMPL(pg, a, ...) svld1_f32(pg, a)
-#define GGML_F32xt_LOAD(...) GGML_F32xt_LOAD_IMPL(DEFAULT_PG, __VA_ARGS__)
-#define GGML_F32xt_STORE_IMPL(pg,a,b) svst1_f32(pg, a, b)
-#define GGML_F32xt_STORE(...) GGML_F32xt_STORE_IMPL(DEFAULT_PG, __VA_ARGS__)
-#define GGML_F32xt_FMA_IMPL(pg, a, b, c) svmad_f32_m(pg, a, b, c)
-#define GGML_F32xt_FMA(...) GGML_F32xt_FMA_IMPL(DEFAULT_PG, __VA_ARGS__)
-#define GGML_F32xt_ADD_IMPL(pg, a, b) svadd_f32_m(pg, a, b)
-#define GGML_F32xt_ADD(...) GGML_F32xt_ADD_IMPL(DEFAULT_PG, __VA_ARGS__)
-#define GGML_F32xt_MUL_IMPL(pg, a, b) svmul_f32_m(pg, a, b)
-#define GGML_F32xt_MUL(...) GGML_F32xt_MUL_IMPL(DEFAULT_PG, __VA_ARGS__)
+#define GGML_F32xt                        svfloat32_t
+#define GGML_F32xt_ZERO                   svdup_n_f32(0.0f)
+#define GGML_F32xt_SET1(x)                svdup_n_f32(x)
+#define GGML_F32xt_LOAD_IMPL(pg, a, ...)  svld1_f32(pg, a)
+#define GGML_F32xt_LOAD(...)              GGML_F32xt_LOAD_IMPL(DEFAULT_PG, __VA_ARGS__)
+#define GGML_F32xt_STORE_IMPL(pg,a,b)     svst1_f32(pg, a, b)
+#define GGML_F32xt_STORE(...)             GGML_F32xt_STORE_IMPL(DEFAULT_PG, __VA_ARGS__)
+#define GGML_F32xt_FMA_IMPL(pg, a, b, c)  svmad_f32_m(pg, a, b, c)
+#define GGML_F32xt_FMA(...)               GGML_F32xt_FMA_IMPL(DEFAULT_PG, __VA_ARGS__)
+#define GGML_F32xt_ADD_IMPL(pg, a, b)     svadd_f32_m(pg, a, b)
+#define GGML_F32xt_ADD(...)               GGML_F32xt_ADD_IMPL(DEFAULT_PG, __VA_ARGS__)
+#define GGML_F32xt_MUL_IMPL(pg, a, b)     svmul_f32_m(pg, a, b)
+#define GGML_F32xt_MUL(...)               GGML_F32xt_MUL_IMPL(DEFAULT_PG, __VA_ARGS__)
 #define GGML_F32xt_REDUCE_ONE_IMPL(pg, a) svaddv(pg, a)
-#define GGML_F32xt_REDUCE_ONE(...) GGML_F32xt_REDUCE_ONE_IMPL(DEFAULT_PG, __VA_ARGS__)
+#define GGML_F32xt_REDUCE_ONE(...)        GGML_F32xt_REDUCE_ONE_IMPL(DEFAULT_PG, __VA_ARGS__)
 #define GGML_F32xt_REDUCE_IMPL(pg, res, sum1, sum2, sum3, sum4, sum5, sum6, sum7, sum8)  \
 {                                                      \
     sum1 = svadd_f32_m(DEFAULT_PG, sum1, sum2);        \
