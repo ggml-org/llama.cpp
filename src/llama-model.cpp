@@ -13800,8 +13800,8 @@ bool llama_model_is_recurrent(const llama_model * model) {
     return llm_arch_is_recurrent(model->arch);
 }
 
-bool llama_model_is_hybrid(const llama_model * model) {
-    return llm_arch_is_hybrid(model->arch);
+bool llama_model_is_hybrid_recurrent(const llama_model * model) {
+    return llm_arch_is_hybrid_recurrent(model->arch);
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
