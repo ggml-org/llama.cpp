@@ -132,7 +132,7 @@ struct llama_hparams {
     bool use_kq_norm   = true;
 
     // for Classifiers
-    uint32_t n_cls_out_labels = 1;
+    uint32_t n_cls_out = 1;
 
     // llama4
     uint32_t n_moe_layer_step        = 0;
