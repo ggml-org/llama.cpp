@@ -1,7 +1,7 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
-#include "ggml-cpu-aarch64.h"
+#include "repack.h"
 #include "ggml-cpu-traits.h"
 #include "ggml-impl.h"
 #include "amx/amx.h"
