@@ -796,3 +796,174 @@ void ggml_vec_dot_q2_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, co
     *s = sumf;
 #endif
 }
+
+void ggml_vec_dot_q3_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK_K == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const uint32_t kmask1 = 0x03030303;
+    const uint32_t kmask2 = 0x0f0f0f0f;
+
+    const block_q3_K * GGML_RESTRICT x = vx;
+    const block_q8_K * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK_K;
+
+#if defined __wasm_simd128__
+    int8_t  aux8[QK_K];
+    float   sums[8] = {0};
+    uint32_t auxs[4];
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        const uint8_t * GGML_RESTRICT q3 = x[i].qs;
+        const uint8_t * GGML_RESTRICT hm = x[i].hmask;
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        // Process blocks with SIMD
+        int8_t * a = aux8;
+        uint8_t m = 1;
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int shift = 0; shift <= 6; shift += 2) {
+                v128_t v_m = wasm_i8x16_splat(m);
+                for (int l = 0; l < 32; l += 16) {
+                    v128_t v_q3 = wasm_v128_load(q3 + l);
+                    v128_t v_shift = wasm_i8x16_shr(v_q3, shift);
+                    v128_t v_low2 = wasm_v128_and(v_shift, wasm_i8x16_splat(0x03));
+
+                    v128_t v_hm = wasm_v128_load(hm + l);
+                    v128_t v_mask = wasm_v128_and(v_hm, v_m);
+                    v_mask = wasm_i8x16_ne(v_mask, wasm_i8x16_splat(0));
+
+                    v_low2 = wasm_i8x16_sub(v_low2, wasm_v128_and(wasm_i8x16_splat(4), wasm_v128_not(v_mask)));
+                    wasm_v128_store(a + l, v_low2);
+                }
+                a += 32;
+                m <<= 1;
+            }
+            q3 += 32;
+        }
+
+        // Extract scales
+        memcpy(auxs, x[i].scales, 12);
+        uint32_t tmp = auxs[2];
+        auxs[2] = ((auxs[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        auxs[3] = ((auxs[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        auxs[0] = (auxs[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        auxs[1] = (auxs[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+        const int8_t * scales = (const int8_t *)auxs;
+
+        // SIMD dot product with register accumulators
+        v128_t v_acc0 = wasm_i32x4_splat(0);
+        v128_t v_acc1 = wasm_i32x4_splat(0);
+        a = aux8;
+        for (int j = 0; j < QK_K/16; ++j) {
+            const v128_t v_scale = wasm_i16x8_splat(scales[j] - 32);
+
+            // Process 16 elements per iteration
+            for (int k = 0; k < 2; ++k) {
+                const v128_t v_q8 = wasm_i16x8_load8x8(q8);
+                const v128_t v_a = wasm_i16x8_load8x8(a);
+
+                v128_t v_prod = wasm_i16x8_mul(v_q8, v_a);
+                v_prod = wasm_i16x8_mul(v_prod, v_scale);
+
+                v_acc0 = wasm_i32x4_add(v_acc0, wasm_i32x4_extend_low_i16x8(v_prod));
+                v_acc1 = wasm_i32x4_add(v_acc1, wasm_i32x4_extend_high_i16x8(v_prod));
+
+                q8 += 8;
+                a += 8;
+            }
+        }
+
+        // Accumulate results
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        const v128_t v_d = wasm_f32x4_splat(d);
+        v128_t v_sum = wasm_f32x4_add(
+            wasm_f32x4_mul(wasm_f32x4_convert_i32x4(v_acc0), v_d),
+            wasm_f32x4_mul(wasm_f32x4_convert_i32x4(v_acc1), v_d)
+        );
+
+        // Accumulate into sums vector
+        wasm_v128_store(sums, wasm_f32x4_add(wasm_v128_load(sums), v_sum));
+    }
+
+    // Horizontal sum
+    v128_t v_sum = wasm_f32x4_add(wasm_v128_load(sums), wasm_v128_load(sums + 4));
+    sumf = wasm_f32x4_extract_lane(v_sum, 0) +
+           wasm_f32x4_extract_lane(v_sum, 1) +
+           wasm_f32x4_extract_lane(v_sum, 2) +
+           wasm_f32x4_extract_lane(v_sum, 3);
+
+    *s = sumf;
+
+#else
+    // scalar version
+    // This function is written like this so the compiler can manage to vectorize most of it
+    // Using -Ofast, GCC and clang manage to produce code that is within a factor of 2 or so from the
+    // manually vectorized version above. Every other version I tried would run at least 4 times slower.
+    // The ideal situation would be if we could just write the code once, and the compiler would
+    // automatically produce the best possible set of machine instructions, instead of us having to manually
+    // write vectorized versions for AVX, ARM_NEON, etc.
+
+    int8_t  aux8[QK_K];
+    int16_t aux16[8];
+    float   sums [8];
+    int32_t aux32[8];
+    memset(sums, 0, 8*sizeof(float));
+
+    uint32_t auxs[4];
+    const int8_t * scales = (const int8_t*)auxs;
+
+    float sumf = 0;
+    for (int i = 0; i < nb; ++i) {
+        const uint8_t * GGML_RESTRICT q3 = x[i].qs;
+        const uint8_t * GGML_RESTRICT hm = x[i].hmask;
+        const  int8_t * GGML_RESTRICT q8 = y[i].qs;
+        memset(aux32, 0, 8*sizeof(int32_t));
+        int8_t * GGML_RESTRICT a = aux8;
+        uint8_t m = 1;
+        for (int j = 0; j < QK_K; j += 128) {
+            for (int l = 0; l < 32; ++l) a[l] = q3[l] & 3;
+            for (int l = 0; l < 32; ++l) a[l] -= (hm[l] & m ? 0 : 4);
+            a += 32; m <<= 1;
+            for (int l = 0; l < 32; ++l) a[l] = (q3[l] >> 2) & 3;
+            for (int l = 0; l < 32; ++l) a[l] -= (hm[l] & m ? 0 : 4);
+            a += 32; m <<= 1;
+            for (int l = 0; l < 32; ++l) a[l] = (q3[l] >> 4) & 3;
+            for (int l = 0; l < 32; ++l) a[l] -= (hm[l] & m ? 0 : 4);
+            a += 32; m <<= 1;
+            for (int l = 0; l < 32; ++l) a[l] = (q3[l] >> 6) & 3;
+            for (int l = 0; l < 32; ++l) a[l] -= (hm[l] & m ? 0 : 4);
+            a += 32; m <<= 1;
+            q3 += 32;
+        }
+        a = aux8;
+
+        memcpy(auxs, x[i].scales, 12);
+        uint32_t tmp = auxs[2];
+        auxs[2] = ((auxs[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+        auxs[3] = ((auxs[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+        auxs[0] = (auxs[0] & kmask2) | (((tmp >> 0) & kmask1) << 4);
+        auxs[1] = (auxs[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+        for (int j = 0; j < QK_K/16; ++j) {
+            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += (scales[j] - 32) * aux16[l];
+            q8 += 8; a += 8;
+            for (int l = 0; l < 8; ++l) aux16[l] = q8[l] * a[l];
+            for (int l = 0; l < 8; ++l) aux32[l] += (scales[j] - 32) * aux16[l];
+            q8 += 8; a += 8;
+        }
+        const float d = GGML_FP16_TO_FP32(x[i].d) * y[i].d;
+        for (int l = 0; l < 8; ++l) sums[l] += d * aux32[l];
+    }
+    for (int l = 0; l < 8; ++l) sumf += sums[l];
+    *s = sumf;
+
+#endif
+
+}
