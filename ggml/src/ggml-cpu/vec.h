@@ -153,12 +153,12 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
 
         const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
         const int ggml_f32_epr = sve_register_length / 32;//8;//svcntw(); // SVE128:4, SVE256:8, SVE512:16
-        const int ggml_f32_step = 2 * ggml_f32_epr;
+        const int ggml_f32_step = 8 * ggml_f32_epr; // choose 8 SVE registers
         GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
 
         const int np = (n & ~(ggml_f32_step - 1));
-        svfloat32_t ax1, ax2;
-        svfloat32_t ay1, ay2;
+        svfloat32_t ax1, ax2, ax3, ax4, ax5, ax6, ax7, ax8;
+        svfloat32_t ay1, ay2, ay3, ay4, ay5, ay6, ay7, ay8;
         for (int i = 0; i < np; i += ggml_f32_step) {
 
             ax1 = GGML_F32_VEC_LOAD(x + i);
@@ -172,16 +172,61 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
             ay2 = GGML_F32_VEC_FMA(ax2, vx, ay2);
 
             GGML_F32_VEC_STORE(y + i + 1*ggml_f32_epr, ay2);
+
+            ax3 = GGML_F32_VEC_LOAD(x + i + 2*ggml_f32_epr);
+            ay3 = GGML_F32_VEC_LOAD(y + i + 2*ggml_f32_epr);
+            ay3 = GGML_F32_VEC_FMA(ax3, vx, ay3);
+
+            GGML_F32_VEC_STORE(y + i + 2*ggml_f32_epr, ay3);
+
+            ax4 = GGML_F32_VEC_LOAD(x + i + 3*ggml_f32_epr);
+            ay4 = GGML_F32_VEC_LOAD(y + i + 3*ggml_f32_epr);
+            ay4 = GGML_F32_VEC_FMA(ax4, vx, ay4);
+
+            GGML_F32_VEC_STORE(y + i + 3*ggml_f32_epr, ay4);
+
+            ax5 = GGML_F32_VEC_LOAD(x + i + 4*ggml_f32_epr);
+            ay5 = GGML_F32_VEC_LOAD(y + i + 4*ggml_f32_epr);
+            ay5 = GGML_F32_VEC_FMA(ax5, vx, ay5);
+
+            GGML_F32_VEC_STORE(y + i + 4*ggml_f32_epr, ay5);
+
+            ax6 = GGML_F32_VEC_LOAD(x + i + 5*ggml_f32_epr);
+            ay6 = GGML_F32_VEC_LOAD(y + i + 5*ggml_f32_epr);
+            ay6 = GGML_F32_VEC_FMA(ax6, vx, ay6);
+
+            GGML_F32_VEC_STORE(y + i + 5*ggml_f32_epr, ay6);
+
+            ax7 = GGML_F32_VEC_LOAD(x + i + 6*ggml_f32_epr);
+            ay7 = GGML_F32_VEC_LOAD(y + i + 6*ggml_f32_epr);
+            ay7 = GGML_F32_VEC_FMA(ax7, vx, ay7);
+
+            GGML_F32_VEC_STORE(y + i + 6*ggml_f32_epr, ay7);
+
+            ax8 = GGML_F32_VEC_LOAD(x + i + 7*ggml_f32_epr);
+            ay8 = GGML_F32_VEC_LOAD(y + i + 7*ggml_f32_epr);
+            ay8 = GGML_F32_VEC_FMA(ax8, vx, ay8);
+
+            GGML_F32_VEC_STORE(y + i + 7*ggml_f32_epr, ay8);
         }
         // leftovers
+        // Since 8 unrolls are done in above loop, leftovers lie in range [0, ggml_f32_step] which is handled in below loop
+        const int np2 = (n & ~(ggml_f32_epr - 1));
+        for (int i = np; i < np2; i += ggml_f32_epr) {
+            ax1 = GGML_F32_VEC_LOAD(x + i);
+            ay1 = GGML_F32_VEC_LOAD(y + i);
+            ay1 = GGML_F32_VEC_FMA(ax1, vx, ay1);
+
+            GGML_F32_VEC_STORE(y + i, ay1);
+        }
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
-        if (np < n) {
-            svbool_t pg =svwhilelt_b32(np, n);
-            ax1 = svld1_f32(pg, x + np);
-            ay1 = svld1_f32(pg, y + np);
+        if (np2 < n) {
+            svbool_t pg =svwhilelt_b32(np2, n);
+            ax1 = svld1_f32(pg, x + np2);
+            ay1 = svld1_f32(pg, y + np2);
             ay1 = svmad_f32_m(pg, ax1, vx, ay1);
 
-            svst1_f32(pg, y + np, ay1);
+            svst1_f32(pg, y + np2, ay1);
         }
     #else
         const int np = (n & ~(GGML_F32_STEP - 1));

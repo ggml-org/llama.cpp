@@ -76,7 +76,7 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
             sum1 = GGML_F32_VEC_FMA(ax1, ay1, sum1);
         }
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
-        if (np2 < n){
+        if (np2 < n) {
             svbool_t pg = svwhilelt_b32(np2, n);
             ax1 = svld1_f32(pg, x + np2);
             ay1 = svld1_f32(pg, y + np2);
