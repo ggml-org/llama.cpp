@@ -96,7 +96,7 @@ llama_pos llama_kv_cache_hybrid_recurrent::seq_pos_max(llama_seq_id seq_id) cons
 llama_memory_state_ptr llama_kv_cache_hybrid_recurrent::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_pooled, bool logits_all) {
 
     // since this includes a recurrent cache, we cannot use split_simple
-    auto sbatch = llama_sbatch(batch, hparams.n_embd, true, logits_all);
+    auto sbatch = llama_sbatch(batch, hparams.n_embd, false, logits_all);
 
     // follow the recurrent pattern for creating the ubatch splits
     std::vector<llama_ubatch> ubatches;
