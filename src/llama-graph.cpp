@@ -1644,6 +1644,14 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = kv_self->get_k(ctx0, il);
     ggml_tensor * v = kv_self->get_v(ctx0, il);
+    
+    if (kv_self->do_quant(il)) {
+        ggml_tensor * k_quant = kv_self->k_quant(ctx0, il);
+        ggml_tensor * v_quant = kv_self->v_quant(ctx0, il);
+    
+        ggml_build_forward_expand(gf, k_quant);
+        ggml_build_forward_expand(gf, v_quant);
+    }
 
     ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, kq_scale);
     cb(cur, "kqv_out", il);

@@ -108,6 +108,8 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
     : model(model), hparams(model.hparams), config(config),
       v_trans(v_trans), n_seq_max(n_seq_max), n_pad(n_pad),
       quant_mgr(config.quantization_threshold) {
+    
+    // NOTE: `v_trans` = !flash_attn
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -174,12 +176,12 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
         layer.il = il;
 
         // Create FP16 tensors exactly like unified cache
-        layer.k_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_k, n_embd_k_gqa, kv_size);
-        layer.v_fp16 = ggml_new_tensor_2d(ctx, config.hot_type_v, n_embd_v_gqa, kv_size);
+        layer.k_fp16    = ggml_new_tensor_2d(ctx, config.hot_type_k, n_embd_k_gqa, kv_size);
+        layer.v_fp16    = ggml_new_tensor_2d(ctx, config.hot_type_v, n_embd_v_gqa, kv_size);
 
         // Create quantized tensors (for future use, but not used during alignment testing)
-        layer.k_quant = ggml_new_tensor_2d(ctx, config.cold_type_k, n_embd_k_gqa, kv_size);
-        layer.v_quant = ggml_new_tensor_2d(ctx, config.cold_type_v, n_embd_v_gqa, kv_size);
+        layer.k_quant   = ggml_new_tensor_2d(ctx, config.cold_type_k, n_embd_k_gqa, kv_size);
+        layer.v_quant   = ggml_new_tensor_2d(ctx, config.cold_type_v, n_embd_v_gqa, kv_size);
 
         // Create dequantization buffers (for future use, but not used during alignment testing)
         layer.k_dequant = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n_embd_k_gqa, kv_size);
@@ -245,16 +247,11 @@ void llama_kv_cache_mixed::clear() {
 
     // Clear all layers and count tokens for debug output
     uint32_t total_fp16_tokens = 0;
-    uint32_t total_quant_tokens = 0;
     for (auto & layer : layers) {
         total_fp16_tokens += layer.n_fp16_tokens;
-        total_quant_tokens += layer.n_quant_tokens;
-        layer.n_fp16_tokens = 0;
-        layer.n_quant_tokens = 0;
+        layer.n_k_quant_tokens = 0;
+        layer.n_v_quant_tokens = 0;
     }
-
-    LLAMA_LOG_DEBUG("[mixed-kv] cleared %u FP16 tokens and %u quantized tokens across %d layers\n", 
-                    total_fp16_tokens, total_quant_tokens, (int)layers.size());
 
     for (auto & buf : bufs) {
         ggml_backend_buffer_clear(buf.get(), 0);
@@ -772,166 +769,14 @@ uint32_t llama_kv_cache_mixed::get_size() const {
  * +-----------------+ +---------------------------------------+
  */
 void llama_kv_cache_mixed::quantize_oldest_tokens(int32_t il, uint32_t tokens_to_quantize) {
-    auto start_time = get_current_time();
-    
-    auto it = map_layer_ids.find(il);
-    if (it == map_layer_ids.end()) {
-        LLAMA_LOG_ERROR("[mixed-kv] ERROR: layer %d not found in cache\n", il);
-        return;
-    }
-
-    auto & layer = layers[it->second];
-
-    LLAMA_LOG_DEBUG("[mixed-kv] starting quantization for layer %d:\n", il);
-    LLAMA_LOG_DEBUG("[mixed-kv]   - requested tokens to quantize: %u\n", tokens_to_quantize);
-    LLAMA_LOG_DEBUG("[mixed-kv]   - available FP16 tokens: %u\n", layer.n_fp16_tokens);
-    LLAMA_LOG_DEBUG("[mixed-kv]   - existing quantized tokens: %u\n", layer.n_quant_tokens);
-
-    // Safety check: don't quantize more than available
-    if (layer.n_fp16_tokens < tokens_to_quantize) {
-        LLAMA_LOG_DEBUG("[mixed-kv]   - adjusting tokens_to_quantize from %u to %u (limited by available FP16 tokens)\n",
-                       tokens_to_quantize, layer.n_fp16_tokens);
-        tokens_to_quantize = layer.n_fp16_tokens;
-    }
-
-    if (tokens_to_quantize == 0) {
-        LLAMA_LOG_DEBUG("[mixed-kv]   - no tokens to quantize, returning early\n");
-        return; // Nothing to quantize
-    }
-
-    // Calculate memory impact for debug output
-    size_t fp16_size_per_token = (ggml_type_size(config.hot_type_k) + ggml_type_size(config.hot_type_v)) * 
-                                (hparams.n_embd_k_gqa(il) + hparams.n_embd_v_gqa(il));
-    size_t quant_size_per_token = (ggml_type_size(config.cold_type_k) + ggml_type_size(config.cold_type_v)) * 
-                                 (hparams.n_embd_k_gqa(il) + hparams.n_embd_v_gqa(il));
-    size_t memory_saved = tokens_to_quantize * (fp16_size_per_token - quant_size_per_token);
-
-    LLAMA_LOG_DEBUG("[mixed-kv] memory impact of quantization:\n");
-    LLAMA_LOG_DEBUG("[mixed-kv]   - FP16 size per token: %s\n", format_memory_size(fp16_size_per_token).c_str());
-    LLAMA_LOG_DEBUG("[mixed-kv]   - quantized size per token: %s\n", format_memory_size(quant_size_per_token).c_str());
-    LLAMA_LOG_DEBUG("[mixed-kv]   - memory saved: %s\n", format_memory_size(memory_saved).c_str());
-
-    // Log quantization operation details
-    LLAMA_LOG_INFO("%s: scheduling quantization of oldest %u tokens for layer %d from %s to %s (model arch: %s)\n",
-                   __func__, tokens_to_quantize, il,
-                   ggml_type_name(config.hot_type_k), ggml_type_name(config.cold_type_k),
-                   llm_arch_name(model.arch));
-
-    /*
-     * Correct Quantization Strategy:
-     * 
-     * In llama.cpp, we should not create ggml_context inside KV cache.
-     * Instead, we should:
-     * 1. Mark data that needs quantization
-     * 2. Handle quantization in update() method through graph building mechanism
-     * 3. Use build_graph_quantize() method to build quantization graph
-     * 
-     * Currently as a temporary solution, we perform direct memory copy operations,
-     * but this should be refactored to use graph building mechanism in future versions.
-     */
-
-    // Temporary Implementation: Direct Memory Operations
-    // TODO: Refactor to use graph building mechanism
-    
-    try {
-        /*
-         * Temporary Quantization Process:
-         * 
-         * Since we cannot create context inside KV cache, we use direct memory
-         * operations as a temporary solution. This is not optimal, but ensures
-         * compatibility with llama.cpp architecture.
-         * 
-         * Step 1: Copy data directly to quantization buffer
-         * Step 2: Move remaining FP16 data
-         * Step 3: Update counters
-         */
-        
-        // Calculate data sizes to move
-        size_t k_token_size = ggml_row_size(layer.k_fp16->type, hparams.n_embd_k_gqa(il));
-        size_t v_token_size = ggml_row_size(layer.v_fp16->type, hparams.n_embd_v_gqa(il));
-        
-        // Get source data pointers (oldest FP16 tokens)
-        uint8_t * k_src = (uint8_t*)layer.k_fp16->data;
-        uint8_t * v_src = (uint8_t*)layer.v_fp16->data;
-        
-        // Get target data pointers (end of quantization buffer)
-        uint8_t * k_dst = (uint8_t*)layer.k_quant->data + (layer.n_quant_tokens * ggml_row_size(layer.k_quant->type, hparams.n_embd_k_gqa(il)));
-        uint8_t * v_dst = (uint8_t*)layer.v_quant->data + (layer.n_quant_tokens * ggml_row_size(layer.v_quant->type, hparams.n_embd_v_gqa(il)));
-        
-        // NOTE: Here we temporarily just copy data, without actual quantization
-        // Real quantization should be implemented through ggml_cpy and type conversion
-        // but this needs to be done in graph building process
-        
-        LLAMA_LOG_WARN("[mixed-kv] WARNING: Using temporary direct memory copy instead of proper quantization\n");
-        LLAMA_LOG_WARN("[mixed-kv] This should be replaced with graph-based quantization in future versions\n");
-        
-        // Temporary solution: direct data copy (no actual quantization)
-        // In real applications, this should be done through ggml graph operations for type conversion
-        for (uint32_t i = 0; i < tokens_to_quantize; ++i) {
-            // Note: This is just copying, not quantizing!
-            // Real quantization needs ggml_cpy and type conversion
-            memcpy(k_dst + i * ggml_row_size(layer.k_quant->type, hparams.n_embd_k_gqa(il)),
-                   k_src + i * k_token_size,
-                   std::min(k_token_size, ggml_row_size(layer.k_quant->type, hparams.n_embd_k_gqa(il))));
-                   
-            memcpy(v_dst + i * ggml_row_size(layer.v_quant->type, hparams.n_embd_v_gqa(il)),
-                   v_src + i * v_token_size,
-                   std::min(v_token_size, ggml_row_size(layer.v_quant->type, hparams.n_embd_v_gqa(il))));
-        }
-
-        /*
-         * Step 2: Move remaining FP16 tokens to buffer beginning
-         */
-        uint32_t remaining_fp16_tokens = layer.n_fp16_tokens - tokens_to_quantize;
-
-        if (remaining_fp16_tokens > 0) {
-            // Move remaining FP16 data to buffer beginning
-            memmove(k_src, 
-                    k_src + tokens_to_quantize * k_token_size,
-                    remaining_fp16_tokens * k_token_size);
-                    
-            memmove(v_src,
-                    v_src + tokens_to_quantize * v_token_size,
-                    remaining_fp16_tokens * v_token_size);
-        }
-
-        // Update token counts
-        layer.n_quant_tokens += tokens_to_quantize;
-        layer.n_fp16_tokens = remaining_fp16_tokens;
-
-        // Calculate performance metrics
-        auto end_time = get_current_time();
-        double duration_ms = get_duration_ms(start_time, end_time);
-        double tokens_per_ms = tokens_to_quantize / duration_ms;
-        
-        LLAMA_LOG_DEBUG("[mixed-kv] quantization performance metrics:\n");
-        LLAMA_LOG_DEBUG("[mixed-kv]   - duration: %.2f ms\n", duration_ms);
-        LLAMA_LOG_DEBUG("[mixed-kv]   - tokens processed: %u\n", tokens_to_quantize);
-        LLAMA_LOG_DEBUG("[mixed-kv]   - throughput: %.2f tokens/ms\n", tokens_per_ms);
-        LLAMA_LOG_DEBUG("[mixed-kv]   - memory saved: %s\n", format_memory_size(memory_saved).c_str());
-        
-        LLAMA_LOG_DEBUG("[mixed-kv] updated token counts for layer %d:\n", il);
-        LLAMA_LOG_DEBUG("[mixed-kv]   - quantized tokens: %u (was %u)\n", layer.n_quant_tokens, layer.n_quant_tokens - tokens_to_quantize);
-        LLAMA_LOG_DEBUG("[mixed-kv]   - FP16 tokens: %u (was %u)\n", layer.n_fp16_tokens, layer.n_fp16_tokens + tokens_to_quantize);
-
-        LLAMA_LOG_DEBUG("%s: quantization completed for layer %d, now have %u quantized + %u FP16 tokens\n",
-                        __func__, il, layer.n_quant_tokens, layer.n_fp16_tokens);
-
-    } catch (const std::exception& e) {
-        LLAMA_LOG_ERROR("[mixed-kv] ERROR: quantization failed for layer %d: %s\n", il, e.what());
-        LLAMA_LOG_ERROR("%s: quantization failed for layer %d: %s\n", __func__, il, e.what());
-    }
+    GGML_UNUSED(il);
+    GGML_UNUSED(tokens_to_quantize);
+    // TODO: Implement
 }
 
 // Legacy method - now calls the new FIFO-based quantization
 void llama_kv_cache_mixed::quantize_tokens(int32_t il) {
-    auto it = map_layer_ids.find(il);
-    if (it == map_layer_ids.end()) {
-        return;
-    }
-
-    auto & layer = layers[it->second];
-    quantize_oldest_tokens(il, layer.n_fp16_tokens);
+    GGML_UNUSED(il);
 }
 
 // Input setting functions - similar to unified cache
@@ -1089,115 +934,6 @@ llm_graph_result_ptr llama_kv_cache_mixed::build_graph_defrag(
     return nullptr;
 }
 
-llm_graph_result_ptr llama_kv_cache_mixed::build_graph_quantize(
-        const llama_cparams & cparams,
-               ggml_context * ctx,
-                ggml_cgraph * gf,
-                     int32_t il) const {
-    LLAMA_LOG_DEBUG("[mixed-kv] building quantization graph for layer %d\n", il);
-    
-    auto res = std::make_unique<llm_graph_result>();
-
-    auto it = map_layer_ids.find(il);
-    if (it == map_layer_ids.end()) {
-        LLAMA_LOG_ERROR("[mixed-kv] ERROR: layer %d not found in cache for quantization graph\n", il);
-        return res;
-    }
-
-    const auto & layer = layers[it->second];
-
-    // Check if there are tokens that need quantization
-    if (layer.n_fp16_tokens == 0) {
-        LLAMA_LOG_DEBUG("[mixed-kv] no FP16 tokens to quantize for layer %d\n", il);
-        return res;
-    }
-
-    /*
-     * Graph-based Quantization Process:
-     * 
-     * This is the correct llama.cpp quantization approach:
-     * 1. Create views of source and target tensors
-     * 2. Use ggml_cpy for type conversion (quantization)
-     * 3. Add operations to computation graph
-     * 4. Let caller execute the graph
-     * 
-     * Advantages:
-     * - Consistent with llama.cpp architecture
-     * - Support for GPU acceleration
-     * - Support for backend optimization
-     * - Memory management handled by framework
-     */
-
-    // Calculate number of tokens to quantize (using configured threshold)
-    uint32_t tokens_to_quantize = std::min(layer.n_fp16_tokens, config.group_size);
-    
-    if (tokens_to_quantize == 0) {
-        return res;
-    }
-
-    LLAMA_LOG_DEBUG("[mixed-kv] creating quantization graph for %u tokens in layer %d\n", tokens_to_quantize, il);
-
-    // Create source views (oldest FP16 data)
-    ggml_tensor * k_src = ggml_view_2d(ctx, layer.k_fp16,
-                                      layer.k_fp16->ne[0], tokens_to_quantize,
-                                      layer.k_fp16->nb[1], 0);
-    ggml_tensor * v_src = ggml_view_2d(ctx, layer.v_fp16,
-                                      layer.v_fp16->ne[0], tokens_to_quantize,
-                                      layer.v_fp16->nb[1], 0);
-
-    // Create target views (quantized storage)
-    ggml_tensor * k_dst = ggml_view_2d(ctx, layer.k_quant,
-                                      layer.k_quant->ne[0], tokens_to_quantize,
-                                      layer.k_quant->nb[1],
-                                      layer.n_quant_tokens * layer.k_quant->nb[1]);
-    ggml_tensor * v_dst = ggml_view_2d(ctx, layer.v_quant,
-                                      layer.v_quant->ne[0], tokens_to_quantize,
-                                      layer.v_quant->nb[1],
-                                      layer.n_quant_tokens * layer.v_quant->nb[1]);
-
-    // Perform quantization (type conversion)
-    ggml_tensor * k_quantized = ggml_cpy(ctx, k_src, k_dst);
-    ggml_tensor * v_quantized = ggml_cpy(ctx, v_src, v_dst);
-
-    // Add to computation graph
-    ggml_build_forward_expand(gf, k_quantized);
-    ggml_build_forward_expand(gf, v_quantized);
-
-    // If there are remaining FP16 tokens, need to move them
-    uint32_t remaining_fp16_tokens = layer.n_fp16_tokens - tokens_to_quantize;
-    if (remaining_fp16_tokens > 0) {
-        // Create source views for remaining data
-        ggml_tensor * k_remaining_src = ggml_view_2d(ctx, layer.k_fp16,
-                                                    layer.k_fp16->ne[0], remaining_fp16_tokens,
-                                                    layer.k_fp16->nb[1],
-                                                    tokens_to_quantize * layer.k_fp16->nb[1]);
-        ggml_tensor * v_remaining_src = ggml_view_2d(ctx, layer.v_fp16,
-                                                    layer.v_fp16->ne[0], remaining_fp16_tokens,
-                                                    layer.v_fp16->nb[1],
-                                                    tokens_to_quantize * layer.v_fp16->nb[1]);
-
-        // Create target views (FP16 buffer beginning)
-        ggml_tensor * k_remaining_dst = ggml_view_2d(ctx, layer.k_fp16,
-                                                    layer.k_fp16->ne[0], remaining_fp16_tokens,
-                                                    layer.k_fp16->nb[1], 0);
-        ggml_tensor * v_remaining_dst = ggml_view_2d(ctx, layer.v_fp16,
-                                                    layer.v_fp16->ne[0], remaining_fp16_tokens,
-                                                    layer.v_fp16->nb[1], 0);
-
-        // Move remaining data
-        ggml_tensor * k_moved = ggml_cpy(ctx, k_remaining_src, k_remaining_dst);
-        ggml_tensor * v_moved = ggml_cpy(ctx, v_remaining_src, v_remaining_dst);
-
-        // Add to computation graph
-        ggml_build_forward_expand(gf, k_moved);
-        ggml_build_forward_expand(gf, v_moved);
-    }
-
-    LLAMA_LOG_DEBUG("[mixed-kv] quantization graph built successfully for layer %d (%u tokens)\n", il, tokens_to_quantize);
-
-    return res;
-}
-
 bool llama_kv_cache_mixed::defrag_prepare(int32_t n_max_nodes) {
     GGML_UNUSED(n_max_nodes);
     // TODO: Implement defrag preparation
@@ -1232,115 +968,17 @@ bool llama_kv_cache_mixed::state_read_data(llama_io_read_i & io, uint32_t cell_c
     return false;
 }
 
-//
-// Enhanced quantization methods implementation
-//
-
-bool llama_kv_cache_mixed::should_trigger_quantization() const {
-    float memory_pressure = calculate_memory_pressure();
-    return quant_mgr.should_quantize(config, memory_pressure);
-}
-
-void llama_kv_cache_mixed::trigger_quantization_if_needed(uint32_t new_tokens) {
-    if (quant_mgr.quantization_in_progress) {
-        LLAMA_LOG_WARN("%s: quantization already in progress, skipping\n", __func__);
-        return;
-    }
-
-    quant_mgr.quantization_in_progress = true;
-    quant_mgr.last_quantization_start = std::chrono::high_resolution_clock::now();
-
-    LLAMA_LOG_INFO("%s: starting quantization of %u accumulated tokens\n", __func__, new_tokens);
-
-    uint32_t total_quantized = 0;
-
-    // Quantize all layers
-    for (auto & layer : layers) {
-        if (layer.n_fp16_tokens > 0) {
-            quantize_tokens(layer.il);
-            total_quantized += layer.n_fp16_tokens;
-        }
-    }
-
-    // Calculate timing
-    auto end_time = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_time - quant_mgr.last_quantization_start);
-    double time_ms = duration.count() / 1000.0;
-
-    // Update statistics
-    update_quantization_stats(total_quantized, time_ms);
-
-    // Reset accumulation
-    quant_mgr.reset_accumulation();
-    quant_mgr.quantization_in_progress = false;
-
-    LLAMA_LOG_INFO("%s: quantization completed in %.2f ms, %u tokens quantized\n",
-                   __func__, time_ms, total_quantized);
-}
-
-void llama_kv_cache_mixed::update_quantization_stats(uint32_t tokens_quantized, double time_ms) {
-    quant_stats.total_tokens_quantized += tokens_quantized;
-    quant_stats.quantization_events++;
-    quant_stats.last_quantization_time_ms = time_ms;
-    quant_stats.total_quantization_time_ms += time_ms;
-    quant_stats.avg_quantization_time_ms = quant_stats.total_quantization_time_ms / quant_stats.quantization_events;
-
-    // Calculate compression ratio (assuming Q4_0 is ~4x smaller than FP16)
-    if (quant_stats.total_tokens_processed > 0) {
-        quant_stats.compression_ratio = static_cast<float>(quant_stats.total_tokens_quantized) /
-                                       static_cast<float>(quant_stats.total_tokens_processed);
-    }
-
-    // Estimate memory saved (FP16 = 2 bytes, Q4_0 ≈ 0.5 bytes per value)
-    // Assuming each token has n_embd values
-    size_t fp16_size_per_token = hparams.n_embd * 2;  // 2 bytes per FP16 value
-    size_t q4_0_size_per_token = hparams.n_embd / 2;  // ~0.5 bytes per Q4_0 value
-    quant_stats.memory_saved_bytes += tokens_quantized * (fp16_size_per_token - q4_0_size_per_token);
-}
-
-float llama_kv_cache_mixed::calculate_memory_pressure() const {
-    size_t total_memory = total_size();
-    size_t fp16_memory = 0;
-
-    // Calculate current FP16 memory usage
-    for (const auto & layer : layers) {
-        fp16_memory += layer.n_fp16_tokens * (ggml_type_size(config.hot_type_k) + ggml_type_size(config.hot_type_v));
-    }
-
-    if (total_memory == 0) {
-        return 0.0f;
-    }
-
-    return static_cast<float>(fp16_memory) / static_cast<float>(total_memory);
-}
-
-void llama_kv_cache_mixed::adaptive_threshold_update() {
-    float memory_pressure = calculate_memory_pressure();
-    quant_mgr.update_threshold(config, memory_pressure);
-}
-
-llama_kv_cache_mixed::memory_info llama_kv_cache_mixed::get_memory_info() const {
-    memory_info info;
-
-    info.total_memory_bytes = total_size();
-
-    // Calculate FP16 and quantized memory usage
-    for (const auto & layer : layers) {
-        info.fp16_memory_bytes += layer.n_fp16_tokens *
-            (ggml_type_size(config.hot_type_k) + ggml_type_size(config.hot_type_v));
-        info.quant_memory_bytes += layer.n_quant_tokens *
-            (ggml_type_size(config.cold_type_k) + ggml_type_size(config.cold_type_v));
-    }
-
-    info.memory_pressure = calculate_memory_pressure();
-    info.should_quantize = should_trigger_quantization();
-
-    return info;
-}
-
 //> ===================================================================================================
 //> Following are the original get_k and get_v functions from llama.cpp
 //> ===================================================================================================
+
+bool llama_kv_cache_mixed::do_quant(int32_t il) const {
+    auto& layer = layers[il];
+    if (layer.n_fp16_tokens % config.quantization_threshold == 0) {
+        return true;
+    }
+    return false;
+}
 
 /*
  * Public API methods for getting K and V tensors
@@ -1377,6 +1015,7 @@ ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const 
     // Use only FP16 tensor, exactly like unified cache
     auto * v = layer.v_fp16;
 
+    // NOTE: v_trans is !flash_attn
     if (!v_trans) {
         // note: v->nb[1] <= v->nb[2]
         return ggml_view_3d(ctx, v,
@@ -1394,22 +1033,61 @@ ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const 
             0);
 }
 
+
+ggml_tensor * llama_kv_cache_mixed::k_quant(ggml_context * ctx, int32_t il) const {
+    auto & layer = layers[il];
+    auto * k = layer.k_fp16;
+    
+    LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
+    LLAMA_LOG_DEBUG("[mixed-kv] quantizing %d tokens from layer %d\n", config.quantization_threshold, il);
+    LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
+
+    // NOTE: Get the last config.quantization_threshold tokens.
+    ggml_tensor * k_need_quantize = ggml_view_1d(ctx, k,
+            config.quantization_threshold*hparams.n_embd_k_gqa(il),
+            ggml_row_size(k->type, hparams.n_embd_k_gqa(il))*(layer.n_fp16_tokens - config.quantization_threshold));
+    
+    ggml_tensor * k_quantized = ggml_view_1d(ctx, layer.k_quant,
+            config.quantization_threshold*hparams.n_embd_k_gqa(il),
+            ggml_row_size(k->type, hparams.n_embd_k_gqa(il))*layer.n_k_quant_tokens);
+    
+    layer.n_k_quant_tokens += config.quantization_threshold;
+    
+    return ggml_cpy(ctx, k_need_quantize, k_quantized);
+}
+
+ggml_tensor * llama_kv_cache_mixed::v_quant(ggml_context * ctx, int32_t il) const {
+    auto & layer = layers[il];
+    auto * v = layer.v_fp16;
+
+    LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
+    LLAMA_LOG_DEBUG("[mixed-kv] quantizing %d tokens from layer %d\n", config.quantization_threshold, il);
+    LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
+    
+    ggml_tensor * v_need_quantize = ggml_view_1d(ctx, v,
+            config.quantization_threshold*hparams.n_embd_v_gqa(il),
+            ggml_row_size(v->type, hparams.n_embd_v_gqa(il))*(layer.n_fp16_tokens - config.quantization_threshold));
+    
+    ggml_tensor * v_quantized = ggml_view_1d(ctx, layer.v_quant,
+            config.quantization_threshold*hparams.n_embd_v_gqa(il),
+            ggml_row_size(v->type, hparams.n_embd_v_gqa(il))*layer.n_v_quant_tokens);
+    
+    layer.n_v_quant_tokens += config.quantization_threshold;
+    
+    return ggml_cpy(ctx, v_need_quantize, v_quantized);
+}
+
 ggml_tensor * llama_kv_cache_mixed::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const {
     const int32_t ikv = map_layer_ids.at(il);
 
     auto & layer = layers[ikv];
     auto * k = layer.k_fp16;
 
+    // NOTE: k_cur shape is (n_embd_k_gqa(il), n_head, n_tokens, n_batch_size)
     const int64_t n_tokens = k_cur->ne[2];
 
     // Update FP16 token counter
     layer.n_fp16_tokens += n_tokens;
-
-    LLAMA_LOG_DEBUG("[mixed-kv] adding %ld K tokens to layer %d cache (head=%u)\n", n_tokens, il, head);
-    LLAMA_LOG_DEBUG("[mixed-kv]   - current FP16 tokens: %u, quantized tokens: %u\n", 
-                    layer.n_fp16_tokens - n_tokens, layer.n_quant_tokens);
-    LLAMA_LOG_DEBUG("[mixed-kv]   - updated FP16 tokens: %u (added %ld)\n", 
-                    layer.n_fp16_tokens, n_tokens);
 
     ggml_tensor * k_view = ggml_view_1d(ctx, k,
             n_tokens*hparams.n_embd_k_gqa(il),
@@ -1428,14 +1106,12 @@ ggml_tensor * llama_kv_cache_mixed::cpy_v(ggml_context * ctx, ggml_tensor * v_cu
 
     // NOTE: We don't increment FP16 token counter here since it's already done in cpy_k
     // Both K and V should have the same token count, so we only count once
-    
-    LLAMA_LOG_DEBUG("[mixed-kv] adding %ld V tokens to layer %d cache (head=%u)\n", n_tokens, il, head);
-    LLAMA_LOG_DEBUG("[mixed-kv]   - current total FP16 tokens: %u\n", layer.n_fp16_tokens);
 
     v_cur = ggml_reshape_2d(ctx, v_cur, hparams.n_embd_v_gqa(il), n_tokens);
 
     ggml_tensor * v_view = nullptr;
 
+    // NOTE: `v_trans` = !flash_attn
     if (!v_trans) {
         v_view = ggml_view_1d(ctx, v,
                 n_tokens*hparams.n_embd_v_gqa(il),

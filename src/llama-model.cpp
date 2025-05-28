@@ -4621,19 +4621,11 @@ struct llm_build_llama : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                // 🎯 根据缓存类型调用适当的build_attn
-                // 🛡️ 确保类型安全的转换和调用
-                // Call appropriate build_attn based on cache type
-                // Ensures type-safe conversion and calling
                 if (dynamic_cast<const llama_kv_cache_mixed*>(memory)) {
-                    // 🔀 使用混合KV缓存的attention构建
-                    // Use mixed KV cache attention building
                     cur = build_attn(static_cast<llm_graph_input_attn_kv_mixed*>(inp_attn), gf,
                             model.layers[il].wo, model.layers[il].bo,
                             Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 } else {
-                    // 🔄 使用标准unified缓存的attention构建（默认路径）
-                    // Use standard unified cache attention building (default path)
                     cur = build_attn(static_cast<llm_graph_input_attn_kv_unified*>(inp_attn), gf,
                             model.layers[il].wo, model.layers[il].bo,
                             Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
@@ -13275,29 +13267,30 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.n_batch,
                             padding);
                 } else if (params.use_mixed_kv_cache) {
-                    // 🏭 Mixed Precision KV Cache Factory
                     LLAMA_LOG_INFO("%s: creating mixed KV cache\n", __func__);
                     
-                    // padding = llama_kv_cache_mixed::get_padding(cparams);
+                    // Configure mixed precision KV cache - like a two-tier storage system
+                    // Think of it as a library: frequently accessed books (recent tokens) stay on the desk (FP16),
+                    // while older books get archived to compressed storage (Q4_0) to save space
                     
                     llama_kv_cache_mixed_config mixed_config;
                     mixed_config.enable_quantization = true;
-                    mixed_config.quantization_threshold = 32;    // 🎯 Hot window: keep 32 newest tokens in FP16
-                    mixed_config.group_size = 64;               // 📦 Quantization granularity: process 128 tokens at once
-                    mixed_config.hot_type_k = params.type_k;     // 🔥 Recent tokens: high precision for accuracy
+                    mixed_config.group_size = 64;                   // Archive books in batches of 64 for efficiency
+                    mixed_config.hot_type_k = params.type_k;        // Fresh tokens: keep in high-quality format like original manuscripts
                     mixed_config.hot_type_v = params.type_v;
-                    mixed_config.cold_type_k = GGML_TYPE_Q4_0;   // ❄️ Old tokens: compressed for memory efficiency
+                    mixed_config.cold_type_k = GGML_TYPE_Q4_0;      // Archived tokens: compress like storing books in compact boxes
                     mixed_config.cold_type_v = GGML_TYPE_Q4_0;
+                    mixed_config.quantization_threshold =  ggml_get_type_traits(GGML_TYPE_Q4_0)->blck_size;       // Keep the last 32 tokens on the "hot desk" in full precision
                     
                     res = new llama_kv_cache_mixed(
-                            *this,
-                            nullptr,                // 🔍 Include all transformer layers
-                            !cparams.flash_attn,    // 🔄 V-cache layout optimization
-                            cparams.offload_kqv,    // 🚀 GPU memory offloading
-                            cparams.n_ctx,          // 📏 Total sequence length capacity
-                            cparams.n_seq_max,      // 🔢 Maximum concurrent sequences
-                            padding,                 // 🔲 Memory alignment padding
-                            mixed_config);           // ⚙️ Hot/cold cache configuration
+                        *this,
+                        nullptr,                                    // Process all transformer layers - no layer filtering
+                        !cparams.flash_attn,                        // Optimize memory layout like organizing books by size
+                        cparams.offload_kqv,                        // Move storage to GPU when available - like using a bigger warehouse
+                        cparams.n_ctx,                              // Total library capacity - maximum books we can store
+                        cparams.n_seq_max,                          // Number of reading sessions we can handle simultaneously
+                        padding,                                    // Add extra space between shelves for easy access
+                        mixed_config);                              // The librarian's rules for organizing hot and cold storage
                 } else {
                     GGML_ASSERT(hparams.n_swa_pattern == 1);
 

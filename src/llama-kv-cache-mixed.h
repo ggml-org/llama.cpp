@@ -140,11 +140,16 @@ public:
     uint32_t get_n() const;
     uint32_t get_size() const;
 
+    // NOTE: Do quantization judgement.
+    bool do_quant(int32_t il) const;
+
     // get views of the current state of the cache (always returns FP16 view)
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the current head location
+    ggml_tensor * k_quant(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * v_quant(ggml_context * ctx, int32_t il) const;
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
 
@@ -172,22 +177,6 @@ public:
         }
         const auto & cell = cells[cell_idx];
         return {cell.pos, cell.is_empty(), true};
-    }
-    
-    // Get token counts for a specific layer (for debugging)
-    struct layer_token_info {
-        uint32_t n_fp16_tokens = 0;
-        uint32_t n_quant_tokens = 0;
-        bool valid = false;
-    };
-    
-    layer_token_info get_layer_token_info(int32_t il) const {
-        auto it = map_layer_ids.find(il);
-        if (it == map_layer_ids.end()) {
-            return {0, 0, false};
-        }
-        const auto & layer = layers[it->second];
-        return {layer.n_fp16_tokens, layer.n_quant_tokens, true};
     }
 
     // Quantization statistics and management
@@ -221,15 +210,15 @@ public:
     void reset_quantization_stats() { quant_stats.reset(); }
     
     // Get current memory usage and pressure
-    struct memory_info {
-        size_t total_memory_bytes = 0;
-        size_t fp16_memory_bytes = 0;
-        size_t quant_memory_bytes = 0;
-        float  memory_pressure = 0.0f;  // 0.0 to 1.0
-        bool   should_quantize = false;
-    };
+    // struct memory_info {
+    //     size_t total_memory_bytes = 0;
+    //     size_t fp16_memory_bytes = 0;
+    //     size_t quant_memory_bytes = 0;
+    //     float  memory_pressure = 0.0f;  // 0.0 to 1.0
+    //     bool   should_quantize = false;
+    // };
     
-    memory_info get_memory_info() const;
+    // memory_info get_memory_info() const;
 
 private:
     const llama_model & model;
@@ -257,7 +246,8 @@ private:
         mutable uint32_t n_fp16_tokens = 0;
         
         // Number of tokens in quantized buffer
-        mutable uint32_t n_quant_tokens = 0;
+        mutable uint32_t n_k_quant_tokens = 0;
+        mutable uint32_t n_v_quant_tokens = 0;
     };
 
     struct kv_cell {
@@ -385,17 +375,6 @@ private:
     
     // Quantize oldest tokens using FIFO strategy
     void quantize_oldest_tokens(int32_t il, uint32_t tokens_to_quantize);
-    
-    // Return a merged tensor view (FP16) for attention
-    ggml_tensor * get_merged_k(ggml_context * ctx, int32_t il) const;
-    ggml_tensor * get_merged_v(ggml_context * ctx, int32_t il) const;
-
-    // Enhanced quantization methods
-    bool should_trigger_quantization() const;
-    void trigger_quantization_if_needed(uint32_t new_tokens);
-    void update_quantization_stats(uint32_t tokens_quantized, double time_ms);
-    float calculate_memory_pressure() const;
-    void adaptive_threshold_update();
 
     // Helper functions from unified cache
     bool defrag_prepare(int32_t n_max_nodes);
