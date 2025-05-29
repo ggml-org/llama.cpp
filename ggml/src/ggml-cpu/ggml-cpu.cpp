@@ -51,9 +51,9 @@ std::vector<ggml_backend_buffer_type_t>& ggml_backend_cpu_get_extra_buffers_type
         }
 #endif
 
-#ifdef GGML_USE_CPU_AARCH64
-        if (ggml_backend_cpu_aarch64_buffer_type()) {
-            bufts.push_back(ggml_backend_cpu_aarch64_buffer_type());
+#ifdef GGML_USE_CPU_REPACK
+        if (ggml_backend_cpu_repack_buffer_type()) {
+            bufts.push_back(ggml_backend_cpu_repack_buffer_type());
         }
 #endif
 
@@ -596,8 +596,8 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
     #ifdef GGML_USE_CPU_KLEIDIAI
         features.push_back({ "KLEIDIAI", "1" });
     #endif
-    #ifdef GGML_USE_CPU_AARCH64
-        features.push_back({ "AARCH64_REPACK", "1" });
+    #ifdef GGML_USE_CPU_REPACK
+        features.push_back({ "REPACK", "1" });
     #endif
 
         features.push_back({ nullptr, nullptr });
