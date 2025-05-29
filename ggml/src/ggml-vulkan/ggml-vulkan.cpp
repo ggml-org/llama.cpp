@@ -10146,14 +10146,11 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Allowing certain Intel hardware for certain OS that has been tested to perform well with cooperative matrix enabled.
-        // Some hardware regresses compared with normal Vulkan (ex. Arc A770), while some significantly improves performance (ex. Arc B580).
-        if ((driver_props.driverID == vk::DriverId::eIntelProprietaryWindows) && // Only tested on Windows
-            ((strcmp("Intel(R) Arc(TM) B580 Graphics", props.deviceName) == 0) || // Battlemage B580
-             (strcmp("Intel(R) Arc(TM) 140V GPU (16GB)", props.deviceName) == 0))) { // Ultra 9 288V
-            return true;
+        if (driver_props.driverID == vk::DriverId::eIntelProprietaryWindows || driver_props.driverID == vk::DriverId::eIntelOpenSourceMESA) {
+            // Only allowing Xe2 GPU at the moment because Xe2 GPU can gain significant performance boost,
+            // while some older hardware (ex. Arc A770) has performance regressions at the moment.
+            return arch == vk_device_architecture::INTEL_XE2;
         }
-        // All other hardware are not allowed
         return false;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
