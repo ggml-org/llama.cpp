@@ -2,7 +2,7 @@
 #include "ggml-common.h"
 
 #include "ggml-quants.h"
-#include "ggml-cpu-quants.h"
+#include "quants.h"
 #include "ggml-impl.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-cpu.h"
