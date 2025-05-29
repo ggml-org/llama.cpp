@@ -7656,7 +7656,7 @@ static void ggml_compute_forward_ssm_scan_f32(
                     svfloat32_t vdt_soft_plus = GGML_F32_VEC_SET1(dt_soft_plus);
                     svfloat32_t r1_vector = GGML_F32_VEC_ZERO;
 
-                    for(int64_t k = 0; k < nc; k += svcntw()) {
+                    for (int64_t k = 0; k < nc; k += svcntw()) {
                         svfloat32_t vA = GGML_F32_VEC_LOAD(&A[i1*nc + k]);
                         svfloat32_t vB = GGML_F32_VEC_LOAD(&B[k]);
                         svfloat32_t vC = GGML_F32_VEC_LOAD(&C[k]);
