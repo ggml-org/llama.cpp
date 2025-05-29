@@ -24,7 +24,7 @@
 
 #define UNUSED GGML_UNUSED
 
-void ggml_gemv_q4_0_8x8_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -139,7 +139,7 @@ void ggml_gemv_q4_0_8x8_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, c
     }
 }
 
-void ggml_gemm_q4_0_8x8_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;

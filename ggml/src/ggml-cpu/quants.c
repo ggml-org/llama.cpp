@@ -1,16 +1,10 @@
-#if !(defined(__aarch64__) || defined(__arm__) || defined(__x86_64__) || defined(__powerpc__) || defined(__loongarch__))
-// for iq quant tables
 #define GGML_COMMON_IMPL_C
-#endif
 #include "ggml-common.h"
 
+#include "ggml-cpu-impl.h"
 #include "ggml-quants.h"
 #include "quants.h"
-#include "ggml-impl.h"
-#include "ggml-cpu-impl.h"
-#include "ggml-cpu.h"
 
-#include <math.h>
 #include <string.h>
 #include <assert.h>
 #include <float.h>
@@ -41,32 +35,14 @@ void quantize_row_q5_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q5_1_ref(x, y, k);
 }
 
-void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    quantize_row_q8_0_native(x, y, k);
-#else
+GGML_CPU_NATIVE_IMPL(quantize_row_q8_0)
+void quantize_row_q8_0_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q8_0_ref(x, y, k);
-#endif
 }
 
-void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    quantize_row_q8_1_native(x, y, k);
-#else
+GGML_CPU_NATIVE_IMPL(quantize_row_q8_1)
+void quantize_row_q8_1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q8_1_ref(x, y, k);
-#endif
 }
 
 //
@@ -137,16 +113,8 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 
 //===================================== Dot products =================================
 
-void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_q4_0_q8_0_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_0_q8_0)
+void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -180,19 +148,11 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    // TODO: add WASM SIMD
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_q4_1_q8_1_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+// TODO: add WASM SIMD
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_1_q8_1)
+void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -226,18 +186,10 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_q5_0_q8_0_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_0_q8_0)
+void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -278,18 +230,10 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_q5_1_q8_1_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_1_q8_1)
+void ggml_vec_dot_q5_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_1;
     const int nb = n / qk;
 
@@ -330,19 +274,10 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_q8_0_q8_0_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q8_0_q8_0)
+void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
 
@@ -370,14 +305,10 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__)
-    ggml_vec_dot_tq1_0_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_tq1_0_q8_K)
+void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -427,14 +358,10 @@ void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     }
 
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__)
-    ggml_vec_dot_tq2_0_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_tq2_0_q8_K)
+void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -464,18 +391,10 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     }
 
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_q2_K_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q2_K_q8_K)
+void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -525,19 +444,10 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
         sumf += dall * isum - dmin * summs;
     }
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_q3_K_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q3_K_q8_K)
+void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -614,21 +524,10 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
-
-#endif
-
 }
 
-void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_q4_K_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_K_q8_K)
+void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
 #ifdef __ARM_FEATURE_MATMUL_INT8
     assert((nrc == 2) || (nrc == 1));
@@ -1672,19 +1571,10 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_q5_K_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_K_q8_K)
+void ggml_vec_dot_q5_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1762,19 +1652,10 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__wasm__) \
- || defined(__x86_64__) \
- || defined(__riscv) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_q6_K_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q6_K_q8_K)
+void ggml_vec_dot_q6_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1827,16 +1708,10 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_iq2_xxs_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_xxs_q8_K)
+void ggml_vec_dot_iq2_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1876,16 +1751,10 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
         sumf += d * bsum;
     }
     *s = 0.125f * sumf;
-#endif
 }
 
-void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_iq2_xs_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_xs_q8_K)
+void ggml_vec_dot_iq2_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1933,16 +1802,10 @@ void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
         sumf += d * bsum;
     }
     *s = 0.125f * sumf;
-#endif
 }
 
-void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_iq2_s_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_s_q8_K)
+void ggml_vec_dot_iq2_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1992,18 +1855,10 @@ void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     }
 
     *s = 0.125f * sumf;
-
-#endif
-
 }
 
-void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_iq3_xxs_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq3_xxs_q8_K)
+void ggml_vec_dot_iq3_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -2045,16 +1900,10 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
         sumf += d * bsum;
     }
     *s = 0.25f * sumf;
-#endif
 }
 
-void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_iq3_s_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq3_s_q8_K)
+void ggml_vec_dot_iq3_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -2108,16 +1957,10 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         sumf += d * bsum;
     }
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__)
-    ggml_vec_dot_iq1_s_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq1_s_q8_K)
+void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -2158,15 +2001,10 @@ void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     }
 
     *s = sumf;
-
-#endif
 }
 
-void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__)
-    ggml_vec_dot_iq1_m_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq1_m_q8_K)
+void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
     UNUSED(nrc);
@@ -2225,19 +2063,10 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     }
 
     *s = sumf;
-
-#endif
 }
 
-void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    UNUSED(kvalues_iq4nl);
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_iq4_nl_q8_0_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq4_nl_q8_0)
+void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -2264,18 +2093,10 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
         sumf += d * (sumi1 + sumi2);
     }
     *s = sumf;
-#endif
 }
 
-void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-    UNUSED(kvalues_iq4nl);
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__powerpc__) \
- || defined(__loongarch__) \
- || defined(__s390__)
-    ggml_vec_dot_iq4_xs_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq4_xs_q8_K)
+void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
     UNUSED(bx);
@@ -2319,7 +2140,6 @@ void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
         }
     }
     *s = sumf;
-#endif
 }
 
 // ============================ 4-bit non-linear quants

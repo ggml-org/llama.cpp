@@ -506,3 +506,19 @@ void ggml_barrier(struct ggml_threadpool * tp);
 #ifdef __cplusplus
 }
 #endif
+
+#define GGML_DO_PRAGMA_(x) _Pragma (#x)
+#define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
+#if defined(__GNUC__)
+// GCC/Clang
+#define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
+#elif defined(_MSC_VER) && defined (_M_AMD64)
+// MSVC
+// Note: C name mangling varies across different calling conventions
+// see https://learn.microsoft.com/en-us/cpp/build/reference/decorated-names?view=msvc-170
+#define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:" #name "=" #alias))
+#else
+#error "Unsupported compiler for GGML_WEAK_ALIAS"
+#endif
+
+#define GGML_CPU_NATIVE_IMPL(name) GGML_WEAK_ALIAS(name, name ## _generic)

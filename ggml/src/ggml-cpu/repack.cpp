@@ -3,7 +3,6 @@
 #include "ggml-common.h"
 #include "ggml-backend-impl.h"
 
-#include "ggml-quants.h"
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
 #include "ggml-cpu-impl.h"
@@ -12,7 +11,6 @@
 #include <cmath>
 #include <cstring>
 #include <cassert>
-#include <cfloat>
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
 
@@ -48,10 +46,10 @@ static inline int nearest_int(float fval) {
 
 static const int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
 
-static void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-#if defined(__aarch64__) || defined(__arm__)
-    ggml_quantize_mat_q8_0_4x4_native(x, vy, k);
-#else
+extern "C" {
+
+GGML_CPU_NATIVE_IMPL(ggml_quantize_mat_q8_0_4x4)
+void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
@@ -87,14 +85,10 @@ static void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGM
             y[i].qs[j] = roundf(x0);
         }
     }
-#endif
 }
 
-static void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__)
-    ggml_quantize_mat_q8_0_4x8_native(x, vy, k);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_quantize_mat_q8_0_4x8)
+void ggml_quantize_mat_q8_0_4x8_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
@@ -130,13 +124,10 @@ static void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGM
             y[i].qs[j] = roundf(x0);
         }
     }
-#endif
 }
 
-static void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-#if defined(__x86_64__)
-    ggml_quantize_mat_q8_K_4x8_native(x, vy, k);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_quantize_mat_q8_K_4x8)
+void ggml_quantize_mat_q8_K_4x8_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK_K == 256);
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
@@ -185,8 +176,9 @@ static void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGM
             y[i].bsums[index] += y[i].qs[j];
         }
     }
-#endif
 }
+
+} // extern "C"
 
 template <int64_t INTER_SIZE, ggml_type PARAM_TYPE>
 void ggml_quantize_mat_t(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t nrow, int64_t n_per_row);
@@ -209,10 +201,10 @@ template <> void ggml_quantize_mat_t<8, GGML_TYPE_Q8_K>(const float * GGML_RESTR
     ggml_quantize_mat_q8_K_4x8(x, vy, n_per_row);
 }
 
-static void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__)
-    ggml_gemv_q4_0_4x4_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+extern "C" {
+
+GGML_CPU_NATIVE_IMPL(ggml_gemv_q4_0_4x4_q8_0)
+void ggml_gemv_q4_0_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -254,13 +246,10 @@ static void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, c
         }
         for (int j = 0; j < ncols_interleaved; j++) s[x * ncols_interleaved + j] = sumf[j];
     }
-#endif
 }
 
-static void ggml_gemv_q4_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__)
-    ggml_gemv_q4_0_4x8_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemv_q4_0_4x8_q8_0)
+void ggml_gemv_q4_0_4x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -302,15 +291,10 @@ static void ggml_gemv_q4_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, c
         }
         for (int j = 0; j < ncols_interleaved; j++) s[x * ncols_interleaved + j] = sumf[j];
     }
-#endif
 }
 
-static void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__riscv)
-    ggml_gemv_q4_0_8x8_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemv_q4_0_8x8_q8_0)
+void ggml_gemv_q4_0_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -354,13 +338,10 @@ static void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, c
             for (int j = 0; j < ncols_interleaved; j++) s[x * ncols_interleaved + j] = sumf[j];
         }
     }
-#endif
 }
 
-static void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__x86_64__)
-    ggml_gemv_q4_K_8x8_q8_K_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemv_q4_K_8x8_q8_K)
+void ggml_gemv_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -436,14 +417,10 @@ static void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, c
             s[x * ncols_interleaved + j] = sumf[j] - sum_minf[j];
         }
     }
-#endif
 }
 
-
-static void ggml_gemv_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__)
-    ggml_gemv_iq4_nl_4x4_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemv_iq4_nl_4x4_q8_0)
+void ggml_gemv_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -487,13 +464,10 @@ static void ggml_gemv_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
             for (int j = 0; j < ncols_interleaved; j++) s[x * ncols_interleaved + j] = sumf[j];
         }
     }
-#endif
 }
 
-static void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__)
-    ggml_gemm_q4_0_4x4_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemm_q4_0_4x4_q8_0)
+void ggml_gemm_q4_0_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -547,13 +521,10 @@ static void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, c
             }
         }
     }
-#endif
 }
 
-static void ggml_gemm_q4_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__)
-    ggml_gemm_q4_0_4x8_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemm_q4_0_4x8_q8_0)
+void ggml_gemm_q4_0_4x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -605,15 +576,10 @@ static void ggml_gemm_q4_0_4x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, c
             }
         }
     }
-#endif
 }
 
-static void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__) \
- || defined(__x86_64__) \
- || defined(__riscv)
-    ggml_gemm_q4_0_8x8_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemm_q4_0_8x8_q8_0)
+void ggml_gemm_q4_0_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -665,13 +631,10 @@ static void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, c
             }
         }
     }
-#endif
 }
 
-static void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__x86_64__)
-    ggml_gemm_q4_K_8x8_q8_K_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemm_q4_K_8x8_q8_K)
+void ggml_gemm_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -758,13 +721,10 @@ static void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, c
             }
         }
     }
-#endif
 }
 
-static void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
-#if defined(__aarch64__) || defined(__arm__)
-    ggml_gemm_iq4_nl_4x4_q8_0_native(n, s, bs, vx, vy, nr, nc);
-#else
+GGML_CPU_NATIVE_IMPL(ggml_gemm_iq4_nl_4x4_q8_0)
+void ggml_gemm_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 4;
@@ -818,8 +778,9 @@ static void ggml_gemm_iq4_nl_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs,
             }
         }
     }
-#endif
 }
+
+} // extern "C"
 
 static block_q4_0x4 make_block_q4_0x4(block_q4_0 * in, unsigned int blck_size_interleave) {
     block_q4_0x4 out;
