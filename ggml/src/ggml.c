@@ -200,7 +200,7 @@ void ggml_print_backtrace(void) {
     }
 }
 #else
-static void ggml_print_backtrace(void) {
+void ggml_print_backtrace(void) {
     // platform not supported
 }
 #endif
