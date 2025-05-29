@@ -7650,28 +7650,26 @@ static void ggml_compute_forward_ssm_scan_f32(
 
                 // d_inner
                 for (int i1 = 0; i1 < ir; ++i1) {
-
                     float dt_soft_plus = dt[i1] <= 20.0f ? log1pf(expf(dt[i1])) : dt[i1];
                     float x_dt = x[i1] * dt_soft_plus;
                     svfloat32_t vx_dt = GGML_F32_VEC_SET1(x_dt);
                     svfloat32_t vdt_soft_plus = GGML_F32_VEC_SET1(dt_soft_plus);
                     svfloat32_t r1_vector = GGML_F32_VEC_ZERO;
 
-                    for(int64_t k=0; k < nc; k += svcntw()) {
-
-                        svfloat32_t vA = GGML_F32_VEC_LOAD(&A[i1*nc+k]);
+                    for(int64_t k = 0; k < nc; k += svcntw()) {
+                        svfloat32_t vA = GGML_F32_VEC_LOAD(&A[i1*nc + k]);
                         svfloat32_t vB = GGML_F32_VEC_LOAD(&B[k]);
                         svfloat32_t vC = GGML_F32_VEC_LOAD(&C[k]);
-                        svfloat32_t vs0 = GGML_F32_VEC_LOAD(&s0[i1*nc+k]);
+                        svfloat32_t vs0 = GGML_F32_VEC_LOAD(&s0[i1*nc + k]);
 
-                        svfloat32_t t1 = GGML_F32_VEC_MUL(vdt_soft_plus,vA);
+                        svfloat32_t t1 = GGML_F32_VEC_MUL(vdt_soft_plus, vA);
                         t1 = exp_ps_sve(svptrue_b32(), t1);
-                        svfloat32_t t2 = GGML_F32_VEC_MUL(vx_dt,vB);
+                        svfloat32_t t2 = GGML_F32_VEC_MUL(vx_dt, vB);
 
                         vs0 = GGML_F32_VEC_FMA(vs0, t1, t2);
                         r1_vector = GGML_F32_VEC_ADD(GGML_F32_VEC_MUL(vs0, vC), r1_vector);
 
-                        GGML_F32_VEC_STORE(&s[i1*nc+k], vs0);
+                        GGML_F32_VEC_STORE(&s[i1*nc + k], vs0);
                     }
                     y[i1] = GGML_F32xt_REDUCE_ONE(r1_vector);
                 }
