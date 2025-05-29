@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
-import { classNames } from '../utils/misc';
+import { classNames, parseThoughtContent } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
 import { ToolCallArgsDisplay } from './tool_calling/ToolCallArgsDisplay';
 import { ToolCallResultDisplay } from './tool_calling/ToolCallResultDisplay';
@@ -20,30 +20,20 @@ interface SplitMessage {
   isThinking?: boolean;
 }
 
-// Helper function to extract thoughts from message content
+// Helper function to extract thoughts using shared parseThoughtContent
 function extractThoughts(content: string | null, role: string): SplitMessage {
   if (content === null || (role !== 'assistant' && role !== 'tool')) {
     return { content };
   }
 
-  let actualContent = '';
-  let thought = '';
-  let isThinking = false;
-  let thinkSplit = content.split('<think>', 2);
-  actualContent += thinkSplit[0];
+  const { filteredContent, thoughtContent, isThinking } =
+    parseThoughtContent(content);
 
-  while (thinkSplit[1] !== undefined) {
-    thinkSplit = thinkSplit[1].split('</think>', 2);
-    thought += thinkSplit[0];
-    isThinking = true;
-    if (thinkSplit[1] !== undefined) {
-      isThinking = false;
-      thinkSplit = thinkSplit[1].split('<think>', 2);
-      actualContent += thinkSplit[0];
-    }
-  }
-
-  return { content: actualContent, thought, isThinking };
+  return {
+    content: filteredContent,
+    thought: thoughtContent,
+    isThinking,
+  };
 }
 
 // Helper component to render a single message part
@@ -348,9 +338,7 @@ export default function ChatMessage({
                       onRegenerateMessage(msg as Message);
                     }
                   }}
-                  disabled={
-                    !entireTurnHasSomeDisplayableContent || msg.content === null
-                  }
+                  disabled={!entireTurnHasSomeDisplayableContent}
                   tooltipsContent="Regenerate response"
                 >
                   <ArrowPathIcon className="h-4 w-4" />

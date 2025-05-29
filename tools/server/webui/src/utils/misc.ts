@@ -120,19 +120,13 @@ export function filterThoughtFromMsgs(messages: APIMessage[]) {
     if (msg.role !== 'assistant') {
       return msg;
     }
-    // assistant message is always a string
-    // except when tool_calls is present - it can be null then
+
     const contentStr = msg.content as string | null;
-    let content;
-    if (msg.role === 'assistant' && contentStr !== null) {
-      content = contentStr?.split('</think>').at(-1)!.trim();
-    } else {
-      content = contentStr;
-    }
+    const { filteredContent } = parseThoughtContent(contentStr);
 
     const filteredMessage = {
       role: msg.role,
-      content: content,
+      content: filteredContent,
       tool_calls: msg.tool_calls,
     } as APIMessage;
 
@@ -181,6 +175,42 @@ export const cleanCurrentUrl = (removeQueryParams: string[]) => {
   });
   window.history.replaceState({}, '', url.toString());
 };
+
+/**
+ * Parse content with <think> tags and extract different parts
+ */
+export function parseThoughtContent(content: string | null) {
+  if (content === null) {
+    return {
+      filteredContent: null,
+      thoughtContent: '',
+      isThinking: false,
+    };
+  }
+
+  let actualContent = '';
+  let thought = '';
+  let isThinking = false;
+  let thinkSplit = content.split('<think>', 2);
+  actualContent += thinkSplit[0];
+
+  while (thinkSplit[1] !== undefined) {
+    thinkSplit = thinkSplit[1].split('</think>', 2);
+    thought += thinkSplit[0];
+    isThinking = true;
+    if (thinkSplit[1] !== undefined) {
+      isThinking = false;
+      thinkSplit = thinkSplit[1].split('<think>', 2);
+      actualContent += thinkSplit[0];
+    }
+  }
+
+  return {
+    filteredContent: actualContent,
+    thoughtContent: thought,
+    isThinking,
+  };
+}
 
 export const getServerProps = async (
   baseUrl: string,
