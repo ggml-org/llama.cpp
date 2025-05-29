@@ -84,7 +84,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (GGML_SYSTEM_ARCH STREQUAL "ARM")
         message(STATUS "ARM detected")
-        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/arm64/quants.c)
+        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/arm/quants.c)
 
         if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
             message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
