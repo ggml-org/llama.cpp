@@ -367,6 +367,53 @@ This covers the basic workflow of getting a small model like `phi-2` up and runn
 
 ---
 
+### 5. Running on GPU (NVIDIA CUDA with GTX 3060 Example)
+
+If you have an NVIDIA GPU like the GTX 3060, you can offload some computation layers to it for significantly faster inference.
+
+**Prerequisites:**
+
+-   **NVIDIA CUDA Toolkit:** You'll need the NVIDIA CUDA Toolkit installed.
+-   **Compatible Drivers:** Ensure you have NVIDIA drivers that are compatible with the CUDA Toolkit version you install.
+-   **Build with CUDA Support:** `llama.cpp` must be compiled with CUDA support enabled.
+    You can do this using CMake:
+    ```bash
+    mkdir build
+    cd build
+    cmake .. -DLLAMA_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES="<arch>"
+    cmake --build . --config Release
+    ```
+    Replace `<arch>` with the appropriate compute capability for your GPU (e.g., "86" for a GTX 3060 which is Ampere generation). You can find the correct compute capability for your GPU on NVIDIA's CUDA GPUs website: [https://developer.nvidia.com/cuda-gpus](https://developer.nvidia.com/cuda-gpus). For more detailed instructions, refer to the [CUDA build documentation](docs/build.md#cuda).
+
+**Troubleshooting CUDA Build Issues**
+
+If you encounter errors during the build process with CUDA enabled, here are some common issues and recommendations:
+
+-   **`std_function.h` Parameter Pack Error:** Errors like "`std::function` does not support variadic template arguments" or similar messages related to parameter packs in `<functional>` (often seen as `std_function.h` in error paths) can indicate an incompatibility between your C++ compiler (e.g., GCC version) and the installed NVIDIA CUDA Toolkit version (nvcc).
+    -   **Verify Compatibility:** Check NVIDIA's official CUDA Toolkit documentation for a list of supported host C++ compilers for your specific CUDA Toolkit version. Using a newer GCC with an older CUDA Toolkit (or vice-versa) is a common source of such problems.
+    -   **Community Solutions:** Search the `llama.cpp` GitHub issues and discussions. Other users might have faced and solved similar issues with specific compiler/CUDA version combinations on similar operating systems.
+    -   **C++ Standard (Advanced):** Sometimes, explicitly setting a compatible C++ standard for CUDA compilation can help. You might try adding `-DCMAKE_CUDA_STANDARD=17` (or another version like 14) to your CMake command. However, do this cautiously as it can affect other parts of the build.
+    -   **Keep Software Updated:** Generally, ensure your NVIDIA drivers, CUDA Toolkit, and C++ compiler are up-to-date, but always prioritize official compatibility matrices provided by NVIDIA.
+
+**Running with GPU Offload:**
+
+Once `llama.cpp` is built with CUDA support, you can use the `-ngl` (number of GPU layers) flag with `llama-cli` to specify how many layers of the model you want to offload to your GPU.
+
+Here's an example using a hypothetical `model.gguf` and offloading 35 layers to a GTX 3060:
+
+```bash
+./llama-cli -m model.gguf -ngl 35 -p "Running this model on my GTX 3060!" -n 50
+```
+
+**Important Notes for GTX 3060 (and other NVIDIA GPUs):**
+
+-   **`-ngl` Value:** The optimal number for `-ngl` depends on the specific model you are using and the amount of VRAM on your GPU (the GTX 3060 typically comes with 6GB or 12GB VRAM). If you set `-ngl` too high for your VRAM, you might encounter out-of-memory errors. If it's too low, you might not get the best possible performance. You may need to experiment with this value to find the sweet spot for your setup. Start with a moderate number and increase it gradually.
+-   **Driver and Toolkit Versions:** It's crucial to have a matching set of NVIDIA drivers and CUDA Toolkit. For a GTX 3060, always check the [official NVIDIA website](https://www.nvidia.com/Download/index.aspx) for the latest recommended drivers for your operating system and the compatible CUDA Toolkit versions.
+
+By offloading layers to your GPU, you can significantly speed up prompt processing and token generation.
+
+---
+
 ## [`llama-cli`](tools/main)
 
 #### A CLI tool for accessing and experimenting with most of `llama.cpp`'s functionality.
