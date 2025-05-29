@@ -7,7 +7,7 @@
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
 #include "ggml-cpu-impl.h"
-#include "ggml-cpu-traits.h"
+#include "traits.h"
 
 #include <cmath>
 #include <cstring>
