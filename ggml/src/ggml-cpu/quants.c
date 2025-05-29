@@ -1,4 +1,7 @@
+#if !(defined(__aarch64__) || defined(__arm__) || defined(__x86_64__) || defined(__powerpc__) || defined(__loongarch__))
+// for iq quant tables
 #define GGML_COMMON_IMPL_C
+#endif
 #include "ggml-common.h"
 
 #include "ggml-quants.h"
@@ -2227,6 +2230,7 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    UNUSED(kvalues_iq4nl);
 #if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
@@ -2264,6 +2268,7 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    UNUSED(kvalues_iq4nl);
 #if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
