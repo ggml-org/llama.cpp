@@ -3782,44 +3782,93 @@ class BertModel(TextModel):
         from sentencepiece import sentencepiece_model_pb2 as model
 
         tokenizer_path = self.dir_model / 'sentencepiece.bpe.model'
+
+        tokenizer_json = {}
+        tokenizer_config_json = {}
         if not tokenizer_path.is_file():
-            raise FileNotFoundError(f"File not found: {tokenizer_path}")
+            tokenizer_path = self.dir_model / 'tokenizer.json'
+            tokenizer_config_path = self.dir_model / 'tokenizer_config.json'
 
-        sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
-        sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
-        assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
+            if not tokenizer_path.is_file():
+                raise FileNotFoundError(f"File not found: {tokenizer_path}")
 
-        add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
-        remove_whitespaces = sentencepiece_model.normalizer_spec.remove_extra_whitespaces
-        precompiled_charsmap = sentencepiece_model.normalizer_spec.precompiled_charsmap
+            from base64 import b64decode
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
 
-        tokenizer = SentencePieceProcessor()
-        tokenizer.LoadFromFile(str(tokenizer_path))
+            with open(tokenizer_path, "r", encoding="utf-8") as fp:
+                tokenizer_json = json.load(fp)
 
-        vocab_size = self.hparams.get('vocab_size', tokenizer.vocab_size())
+            if tokenizer_config_path.is_file():
+                with open(tokenizer_config_path, "r", encoding="utf-8") as fp:
+                    tokenizer_config_json = json.load(fp)
+
+            add_prefix = tokenizer.add_prefix_space
+            remove_whitespaces = tokenizer.clean_up_tokenization_spaces
+            precompiled_charsmap = b64decode(tokenizer_json["normalizer"]["precompiled_charsmap"])
+
+            vocab_size = self.hparams.get("vocab_size", tokenizer.vocab_size)
+        else:
+            sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
+            sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
+            assert sentencepiece_model.trainer_spec.model_type == 1  # UNIGRAM
+
+            add_prefix = sentencepiece_model.normalizer_spec.add_dummy_prefix
+            remove_whitespaces = sentencepiece_model.normalizer_spec.remove_extra_whitespaces
+            precompiled_charsmap = sentencepiece_model.normalizer_spec.precompiled_charsmap
+
+            tokenizer = SentencePieceProcessor()
+            tokenizer.LoadFromFile(str(tokenizer_path))
+
+            vocab_size = self.hparams.get('vocab_size', tokenizer.vocab_size())
 
         tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
         scores: list[float] = [-10000.0] * vocab_size
         toktypes: list[int] = [SentencePieceTokenTypes.UNUSED] * vocab_size
 
-        for token_id in range(tokenizer.vocab_size()):
-            piece = tokenizer.IdToPiece(token_id)
-            text = piece.encode("utf-8")
-            score = tokenizer.GetScore(token_id)
+        if isinstance(tokenizer, SentencePieceProcessor):
+            for token_id in range(tokenizer.vocab_size()):
+                piece = tokenizer.IdToPiece(token_id)
+                text = piece.encode("utf-8")
+                score = tokenizer.GetScore(token_id)
 
-            toktype = SentencePieceTokenTypes.NORMAL
-            if tokenizer.IsUnknown(token_id):
-                toktype = SentencePieceTokenTypes.UNKNOWN
-            elif tokenizer.IsControl(token_id):
-                toktype = SentencePieceTokenTypes.CONTROL
-            elif tokenizer.IsUnused(token_id):
-                toktype = SentencePieceTokenTypes.UNUSED
-            elif tokenizer.IsByte(token_id):
-                toktype = SentencePieceTokenTypes.BYTE
+                toktype = SentencePieceTokenTypes.NORMAL
+                if tokenizer.IsUnknown(token_id):
+                    toktype = SentencePieceTokenTypes.UNKNOWN
+                elif tokenizer.IsControl(token_id):
+                    toktype = SentencePieceTokenTypes.CONTROL
+                elif tokenizer.IsUnused(token_id):
+                    toktype = SentencePieceTokenTypes.UNUSED
+                elif tokenizer.IsByte(token_id):
+                    toktype = SentencePieceTokenTypes.BYTE
 
-            tokens[token_id] = text
-            scores[token_id] = score
-            toktypes[token_id] = toktype
+                tokens[token_id] = text
+                scores[token_id] = score
+                toktypes[token_id] = toktype
+        else:
+            added_vocab = tokenizer.get_added_vocab()
+            unk_token = tokenizer_config_json.get("unk_token")
+            unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))
+
+            for token_id in range(vocab_size):
+                piece = tokenizer._convert_id_to_token(token_id)
+                text = piece.encode("utf-8")
+                score = tokenizer_json["model"]["vocab"][token_id][1]
+
+                toktype = SentencePieceTokenTypes.NORMAL
+                if token_id == unk_token_id:
+                    toktype = SentencePieceTokenTypes.UNKNOWN
+                elif token_id in tokenizer.all_special_ids:
+                    toktype = SentencePieceTokenTypes.CONTROL
+                elif token_id in added_vocab.values():
+                    toktype = SentencePieceTokenTypes.USER_DEFINED
+                # No reliable way to detect this, but jina doesn't have any
+                # elif tokenizer.IsByte(token_id):
+                #     toktype = SentencePieceTokenTypes.BYTE
+
+                tokens[token_id] = text
+                scores[token_id] = score
+                toktypes[token_id] = toktype
 
         if vocab_size > len(tokens):
             pad_count = vocab_size - len(tokens)
@@ -3829,15 +3878,16 @@ class BertModel(TextModel):
                 scores.append(-1000.0)
                 toktypes.append(SentencePieceTokenTypes.UNUSED)
 
-        # realign tokens (see HF tokenizer code)
-        tokens = [b'<s>', b'<pad>', b'</s>', b'<unk>'] + tokens[3:-1]
-        scores = [0.0, 0.0, 0.0, 0.0] + scores[3:-1]
-        toktypes = [
-            SentencePieceTokenTypes.CONTROL,
-            SentencePieceTokenTypes.CONTROL,
-            SentencePieceTokenTypes.CONTROL,
-            SentencePieceTokenTypes.UNKNOWN,
-        ] + toktypes[3:-1]
+        if isinstance(tokenizer, SentencePieceProcessor):
+            # realign tokens (see HF tokenizer code)
+            tokens = [b'<s>', b'<pad>', b'</s>', b'<unk>'] + tokens[3:-1]
+            scores = [0.0, 0.0, 0.0, 0.0] + scores[3:-1]
+            toktypes = [
+                SentencePieceTokenTypes.CONTROL,
+                SentencePieceTokenTypes.CONTROL,
+                SentencePieceTokenTypes.CONTROL,
+                SentencePieceTokenTypes.UNKNOWN,
+            ] + toktypes[3:-1]
 
         self.gguf_writer.add_tokenizer_model("t5")
         self.gguf_writer.add_tokenizer_pre("default")
