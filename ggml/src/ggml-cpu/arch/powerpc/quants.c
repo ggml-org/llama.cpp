@@ -278,7 +278,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     vsumf0 = vec_add(vsumf0, vec_sld(vsumf0, vsumf0, 8));
 
     sumf = vec_extract(vsumf0, 0);
-    
+
 #endif
     for (; ib < nb; ++ib) {
         int sumi0 = 0;
@@ -360,7 +360,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     vsumf0 = vec_add(vsumf0, vec_sld(vsumf0, vsumf0, 8));
 
     sumf = vec_extract(vsumf0, 0);
-    
+
 #endif
     for (; ib < nb; ++ib) {
         uint32_t qh;

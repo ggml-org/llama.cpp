@@ -883,7 +883,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(acc);
-    
+
 #endif
     for (; ib < nb; ++ib) {
         uint32_t qh;
@@ -954,7 +954,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(acc) + summs;
-    
+
 #endif
     for (; ib < nb; ++ib) {
         uint32_t qh;

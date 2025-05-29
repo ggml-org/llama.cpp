@@ -10,7 +10,6 @@
 #include <math.h>
 #include <string.h>
 #include <assert.h>
-#include <float.h>
 #include <stdlib.h> // for qsort
 #include <stdio.h>  // for GGML_ASSERT
 

@@ -84,7 +84,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (GGML_SYSTEM_ARCH STREQUAL "ARM")
         message(STATUS "ARM detected")
-        list(APPEND GGML_CPU_SOURCES 
+        list(APPEND GGML_CPU_SOURCES
             ggml-cpu/arch/arm/quants.c
             ggml-cpu/arch/arm/repack.cpp
             )
