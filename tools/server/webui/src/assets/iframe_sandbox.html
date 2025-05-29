@@ -7,7 +7,7 @@
       const iframeConsole = {
         _buffer: [],
         log: function (...args) {
-          this._buffer.push(args.map(String).join(' '));
+          this._buffer.push(args.map(JSON.stringify).join(' '));
         },
         getOutput: function () {
           const output = this._buffer.join('\n');
