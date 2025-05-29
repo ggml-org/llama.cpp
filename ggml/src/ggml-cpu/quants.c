@@ -39,7 +39,7 @@ void quantize_row_q5_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 }
 
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -53,7 +53,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 }
 
 void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -135,7 +135,7 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 //===================================== Dot products =================================
 
 void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -182,7 +182,7 @@ void ggml_vec_dot_q4_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     // TODO: add WASM SIMD
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
  || defined(__powerpc__) \
@@ -227,7 +227,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -279,7 +279,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -331,7 +331,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -371,7 +371,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__)
     ggml_vec_dot_tq1_0_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
 #else
@@ -428,7 +428,7 @@ void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__)
     ggml_vec_dot_tq2_0_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
 #else
@@ -465,7 +465,7 @@ void ggml_vec_dot_tq2_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -526,7 +526,7 @@ void ggml_vec_dot_q2_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -617,7 +617,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -1673,7 +1673,7 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -1763,7 +1763,7 @@ void ggml_vec_dot_q5_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__wasm__) \
  || defined(__x86_64__) \
  || defined(__riscv) \
@@ -1828,7 +1828,7 @@ void ggml_vec_dot_q6_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 }
 
 void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__)
@@ -1877,7 +1877,7 @@ void ggml_vec_dot_iq2_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 }
 
 void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__)
@@ -1934,7 +1934,7 @@ void ggml_vec_dot_iq2_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__)
@@ -1995,7 +1995,7 @@ void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__)
@@ -2046,7 +2046,7 @@ void ggml_vec_dot_iq3_xxs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const 
 }
 
 void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__)
@@ -2109,7 +2109,7 @@ void ggml_vec_dot_iq3_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__)
@@ -2160,7 +2160,7 @@ void ggml_vec_dot_iq1_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__)
     ggml_vec_dot_iq1_m_q8_K_native(n, s, bs, vx, bx, vy, by, nrc);
 #else
@@ -2227,7 +2227,7 @@ void ggml_vec_dot_iq1_m_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 }
 
 void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__) \
@@ -2264,7 +2264,7 @@ void ggml_vec_dot_iq4_nl_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const v
 }
 
 void ggml_vec_dot_iq4_xs_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__aarch64__) \
+#if defined(__aarch64__) || defined(__arm__) \
  || defined(__x86_64__) \
  || defined(__powerpc__) \
  || defined(__loongarch__) \
