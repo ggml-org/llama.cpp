@@ -49,11 +49,12 @@ COPY --from=build /app/full /app
 
 WORKDIR /app
 
+# PEP 668 are in effect, pip should be run within virtualenv instead
+ENV VIRTUAL_ENV=/opt/venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN apt-get update \
-    && apt-get install -y \
-    git \
-    python3 \
-    python3-pip \
+    && apt-get install -y python3 python3-pip python3-venv \
+    && python3 -m venv $VIRTUAL_ENV \
     && pip install --upgrade pip setuptools wheel \
     && pip install -r requirements.txt \
     && apt autoremove -y \
@@ -61,7 +62,6 @@ RUN apt-get update \
     && rm -rf /tmp/* /var/tmp/* \
     && find /var/cache/apt/archives /var/lib/apt/lists -not -name lock -type f -delete \
     && find /var/cache -type f -delete
-
 
 ENTRYPOINT ["/app/tools.sh"]
 
@@ -88,4 +88,3 @@ WORKDIR /app
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 
 ENTRYPOINT [ "/app/llama-server" ]
-
