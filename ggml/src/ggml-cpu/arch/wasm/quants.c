@@ -3,7 +3,7 @@
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
 
-#include "../../ggml-cpu-quants.h"
+#include "../../quants.h"
 #include "../../ggml-cpu-impl.h"
 
 #include <math.h>
