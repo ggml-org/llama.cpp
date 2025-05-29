@@ -13,6 +13,21 @@ cd llama.cpp
 
 The following sections describe how to build with different backends and options.
 
+* [CPU Build](#cpu-build)
+* [BLAS Build](#blas-build)
+* [Metal Build](#metal-build)
+* [SYCL](#sycl)
+* [CUDA](#cuda)
+* [MUSA](#musa)
+* [HIP](#hip)
+* [Vulkan](#vulkan)
+* [CANN](#cann)
+* [Arm® KleidiAI™](#arm-kleidiai)
+* [OpenCL](#opencl)
+* [Android](#android-1)
+* [OPENVINO](#openvino)
+* [Notes about GPU-accelerated backends](#notes-about-gpu-accelerated-backends)
+
 ## CPU Build
 
 Build llama.cpp using `CMake`:
@@ -580,62 +595,106 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 
 ## OPENVINO
 
-### Build openvino
+[OpenVINO](https://docs.openvino.ai/2025/index.html) is a open-source toolkit for optimizing and deploying performant AI inference, specifically designed for Intel hardware including CPUs, GPUs, and NPUs in the cloud, on-prem, and on the edge alike. The OpenVINO backend enhances performance by leveraging hardware-specific optimizations and can be enabled for use with llama.cpp.
 
+Follow the instructions below to install OpenVINO runtime and build llama.cpp with OpenVINO support.
+
+### 1. Install OpenVINO Runtime
+
+- Follow the guide to install OpenVINO Runtime from an archive file: **[Install OpenVINO™ Runtime on Linux from an Archive File.](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html)**
+
+- After installation, make sure to [source the environment setup script](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html#step-2-configure-the-environment):
 ```bash
-git clone https://github.com/openvinotoolkit/openvino.git
-cd openvino
-git submodule update --init --recursive
-export OPENVINO_DIR=$(pwd)
-
-sudo ./install_build_dependencies.sh
-
-mkdir -p build/Release && cd build/Release
-cmake -DCMAKE_BUILD_TYPE=Release -DENABLE_DEBUG_CAPS=ON ../..
+source /opt/intel/openvino_2025.1.0/setupvars.sh
+```
+- Verify OpenVINO is initialized properly
+```bash
+echo $OpenVINO_DIR
 ```
 
-### Build llama.cpp-ov
+### 2. Build llama.cpp with OpenVINO Backend
+
+Clone the OpenVINO-enabled llama.cpp fork and build it:
 
 ```bash
-git clone https://github.com/intel-sandbox/llama.cpp-ov.git
-cd llama.cpp-ov
+git clone https://github.com/ravi9/llama.cpp.git
+cd llama.cpp
 git switch dev_backend_openvino
 
+# Build with OpenVINO support
 cmake --preset ReleaseOV
-cmake --build build/ReleaseOV
+cmake --build build/ReleaseOV --parallel
+
 ```
 
-Download the test model file [Phi-3-mini-4k-instruct-fp16.gguf](https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf) from hugging face website.
-  ``` bash
-  wget https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-fp16.gguf?download=true -O  ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf
-  ```
+### 3. Download Sample Model
 
-Execute the following command to test.
+Download the Phi-3 mini model for testing:
+
+```bash
+# Create models directory
+mkdir -p ~/models/Phi-3-mini-4k-instruct-gguf
+
+# Download model file
+wget https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-fp16.gguf \
+     -O ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf
+
+```
+
+### 4. Run inference with OpenVINO backend:
+
+When using the OpenVINO backend, the first inference token may have slightly higher latency due to on-the-fly conversion to the OpenVINO graph. Subsequent tokens and runs will be faster.
+
 ```bash
 export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
-./build/ReleaseOV/bin/llama-simple -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf -n 10 "Hello, my name is "
+
+./build/ReleaseOV/bin/llama-simple \
+    -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf \
+    -n 50 \
+    "Hello, my name is "
+
 ```
 
-Environment variables:
-- GGML_OPENVINO_WEIGHT_AS_INPUT:
-    Pass the weights as input to the OpenVINO model instead of creating Constant nodes for them.
-- GGML_OPENVINO_CACHE_DIR:
-    If set, model caching in OpenVINO will be used.
-- GGML_OPENVINO_DUMP_CGRAPH:
-    Dumped the compute graph to "cgraph.txt". Note that the the compute graph is different for every token, so the later cgraph will overwrite the previous one.
-- GGML_OPENVINO_PROFILING:
-    Print the time taken for each phase in the OpenVINO backend.
-- GGML_OPENVINO_DUMP_IR:
-    Dump the converted OpenVINO IR. The filenames are timestamps.
-- GGML_OPENVINO_DEBUG_INPUT
-- GGML_OPENVINO_DEBUG_OUTPUT
+### Using Llama.cpp's Built-in CPU Backend (for Comparison)
 
-To use Llama.cpp's builtin CPU backend:
+To compare performance with the deafult CPU backend:
+
 ```bash
+# Build CPU-only version
 cmake --preset ReleaseCPU
-cmake --build build/ReleaseCPU
+cmake --build build/ReleaseCPU --parallel
 
-./build/ReleaseCPU/bin/llama-simple -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf -n 10 "Hello, my name is "
+# Run with Default CPU backend
+./build/ReleaseCPU/bin/llama-simple \
+    -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf \
+    -n 50 \
+    "Hello, my name is "
+
+```
+
+### Configuration Options
+
+Control OpenVINO behavior using these environment variables:
+
+-   **`GGML_OPENVINO_CACHE_DIR`**: Directory for model caching (recommended: `/tmp/ov_cache`). If set, enables model caching in OpenVINO.
+-   **`GGML_OPENVINO_WEIGHT_AS_INPUT`**: Pass the weights as input to the OpenVINO model instead of creating Constant nodes for them.
+-   **`GGML_OPENVINO_PROFILING`**: Enable execution time profiling
+-   **`GGML_OPENVINO_DUMP_CGRAPH`**: Save compute graph to `cgraph.txt`
+-   **`GGML_OPENVINO_DUMP_IR`**: Export OpenVINO IR files with timestamps
+-   **`GGML_OPENVINO_DEBUG_INPUT`**: Enable input debugging
+-   **`GGML_OPENVINO_DEBUG_OUTPUT`**: Enable output debugging
+
+### Example with Profiling
+
+```bash
+export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
+export GGML_OPENVINO_PROFILING=1
+
+./build/ReleaseOV/bin/llama-simple \
+    -m ~/models/Phi-3-mini-4k-instruct-gguf/Phi-3-mini-4k-instruct-fp16.gguf \
+    -n 50 \
+    "Hello, my name is "
+
 ```
 
 ## Notes about GPU-accelerated backends
