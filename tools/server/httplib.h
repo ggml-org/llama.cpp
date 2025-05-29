@@ -192,13 +192,8 @@ using ssize_t = long;
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-#if defined(__has_include)
-#if __has_include(<afunix.h>)
 // afunix.h uses types declared in winsock2.h, so has to be included after it.
 #include <afunix.h>
-#define CPPHTTPLIB_HAVE_AFUNIX_H 1
-#endif
-#endif
 
 #ifndef WSA_FLAG_NO_HANDLE_INHERIT
 #define WSA_FLAG_NO_HANDLE_INHERIT 0x80
@@ -636,7 +631,6 @@ using Ranges = std::vector<Range>;
 struct Request {
   std::string method;
   std::string path;
-  std::string matched_route;
   Params params;
   Headers headers;
   std::string body;
@@ -888,16 +882,10 @@ namespace detail {
 
 class MatcherBase {
 public:
-  MatcherBase(std::string pattern) : pattern_(pattern) {}
   virtual ~MatcherBase() = default;
-
-  const std::string &pattern() const { return pattern_; }
 
   // Match request path and populate its matches and
   virtual bool match(Request &request) const = 0;
-
-private:
-  std::string pattern_;
 };
 
 /**
@@ -949,8 +937,7 @@ private:
  */
 class RegexMatcher final : public MatcherBase {
 public:
-  RegexMatcher(const std::string &pattern)
-      : MatcherBase(pattern), regex_(pattern) {}
+  RegexMatcher(const std::string &pattern) : regex_(pattern) {}
 
   bool match(Request &request) const override;
 
@@ -1017,11 +1004,8 @@ public:
   }
 
   Server &set_exception_handler(ExceptionHandler handler);
-
   Server &set_pre_routing_handler(HandlerWithResponse handler);
   Server &set_post_routing_handler(Handler handler);
-
-  Server &set_pre_request_handler(HandlerWithResponse handler);
 
   Server &set_expect_100_continue_handler(Expect100ContinueHandler handler);
   Server &set_logger(Logger logger);
@@ -1103,7 +1087,8 @@ private:
   bool listen_internal();
 
   bool routing(Request &req, Response &res, Stream &strm);
-  bool handle_file_request(const Request &req, Response &res);
+  bool handle_file_request(const Request &req, Response &res,
+                           bool head = false);
   bool dispatch_request(Request &req, Response &res,
                         const Handlers &handlers) const;
   bool dispatch_request_for_content_reader(
@@ -1164,7 +1149,6 @@ private:
   ExceptionHandler exception_handler_;
   HandlerWithResponse pre_routing_handler_;
   Handler post_routing_handler_;
-  HandlerWithResponse pre_request_handler_;
   Expect100ContinueHandler expect_100_continue_handler_;
 
   Logger logger_;
@@ -2082,9 +2066,7 @@ template <size_t N> inline constexpr size_t str_len(const char (&)[N]) {
 }
 
 inline bool is_numeric(const std::string &str) {
-  return !str.empty() &&
-         std::all_of(str.cbegin(), str.cend(),
-                     [](unsigned char c) { return std::isdigit(c); });
+  return !str.empty() && std::all_of(str.begin(), str.end(), ::isdigit);
 }
 
 inline uint64_t get_header_value_u64(const Headers &headers,
@@ -3568,7 +3550,6 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
     hints.ai_flags = socket_flags;
   }
 
-#if !defined(_WIN32) || defined(CPPHTTPLIB_HAVE_AFUNIX_H)
   if (hints.ai_family == AF_UNIX) {
     const auto addrlen = host.length();
     if (addrlen > sizeof(sockaddr_un::sun_path)) { return INVALID_SOCKET; }
@@ -3613,7 +3594,6 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
     }
     return sock;
   }
-#endif
 
   auto service = std::to_string(port);
 
@@ -6236,8 +6216,7 @@ inline time_t BufferStream::duration() const { return 0; }
 
 inline const std::string &BufferStream::get_buffer() const { return buffer; }
 
-inline PathParamsMatcher::PathParamsMatcher(const std::string &pattern)
-    : MatcherBase(pattern) {
+inline PathParamsMatcher::PathParamsMatcher(const std::string &pattern) {
   constexpr const char marker[] = "/:";
 
   // One past the last ending position of a path param substring
@@ -6485,11 +6464,6 @@ inline Server &Server::set_pre_routing_handler(HandlerWithResponse handler) {
 
 inline Server &Server::set_post_routing_handler(Handler handler) {
   post_routing_handler_ = std::move(handler);
-  return *this;
-}
-
-inline Server &Server::set_pre_request_handler(HandlerWithResponse handler) {
-  pre_request_handler_ = std::move(handler);
   return *this;
 }
 
@@ -6904,7 +6878,8 @@ Server::read_content_core(Stream &strm, Request &req, Response &res,
   return true;
 }
 
-inline bool Server::handle_file_request(const Request &req, Response &res) {
+inline bool Server::handle_file_request(const Request &req, Response &res,
+                                        bool head) {
   for (const auto &entry : base_dirs_) {
     // Prefix match
     if (!req.path.compare(0, entry.mount_point.size(), entry.mount_point)) {
@@ -6937,7 +6912,7 @@ inline bool Server::handle_file_request(const Request &req, Response &res) {
                 return true;
               });
 
-          if (req.method != "HEAD" && file_request_handler_) {
+          if (!head && file_request_handler_) {
             file_request_handler_(req, res);
           }
 
@@ -7071,8 +7046,9 @@ inline bool Server::routing(Request &req, Response &res, Stream &strm) {
   }
 
   // File handler
-  if ((req.method == "GET" || req.method == "HEAD") &&
-      handle_file_request(req, res)) {
+  auto is_head_request = req.method == "HEAD";
+  if ((req.method == "GET" || is_head_request) &&
+      handle_file_request(req, res, is_head_request)) {
     return true;
   }
 
@@ -7147,11 +7123,7 @@ inline bool Server::dispatch_request(Request &req, Response &res,
     const auto &handler = x.second;
 
     if (matcher->match(req)) {
-      req.matched_route = matcher->pattern();
-      if (!pre_request_handler_ ||
-          pre_request_handler_(req, res) != HandlerResponse::Handled) {
-        handler(req, res);
-      }
+      handler(req, res);
       return true;
     }
   }
@@ -7278,11 +7250,7 @@ inline bool Server::dispatch_request_for_content_reader(
     const auto &handler = x.second;
 
     if (matcher->match(req)) {
-      req.matched_route = matcher->pattern();
-      if (!pre_request_handler_ ||
-          pre_request_handler_(req, res) != HandlerResponse::Handled) {
-        handler(req, res, content_reader);
-      }
+      handler(req, res, content_reader);
       return true;
     }
   }

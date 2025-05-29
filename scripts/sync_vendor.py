@@ -9,9 +9,9 @@ vendor = {
 
     "https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image.h": "tools/mtmd/vendor/stb_image.h",
 
-    "https://raw.githubusercontent.com/mackron/miniaudio/refs/heads/master/miniaudio.h": "tools/mtmd/vendor/miniaudio.h",
+    "https://github.com/mackron/miniaudio/raw/refs/tags/0.11.22/miniaudio.h": "tools/mtmd/vendor/miniaudio.h",
 
-    "https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/heads/master/httplib.h": "tools/server/httplib.h",
+    "https://raw.githubusercontent.com/yhirose/cpp-httplib/refs/tags/v0.20.1/httplib.h": "tools/server/httplib.h",
 }
 
 import urllib.request
