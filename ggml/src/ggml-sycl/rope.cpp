@@ -49,10 +49,7 @@ static void rope_norm(const T * x, T * dst, const int ne0, const int ne1, const 
 
     if (i0 >= n_dims) {
         const int i = row * ne0 + i0;
-
-        dst[i + 0] = x[i + 0];
-        dst[i + 1] = x[i + 1];
-
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i);
         return;
     }
 
@@ -93,10 +90,7 @@ static void rope_neox(const T * x, T * dst, const int ne0, const int ne1, const 
 
     if (i0 >= n_dims) {
         const int i = row * ne0 + i0;
-
-        dst[i + 0] = x[i + 0];
-        dst[i + 1] = x[i + 1];
-
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i);
         return;
     }
 
@@ -137,10 +131,7 @@ static void rope_multi(const T * x, T * dst, const int ne0, const int ne1, const
 
     if (i0 >= n_dims) {
         const int i = row_dst*ne0 + i0;
-
-        dst[i + 0] = x[i + 0];
-        dst[i + 1] = x[i + 1];
-
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i);
         return;
     }
 
