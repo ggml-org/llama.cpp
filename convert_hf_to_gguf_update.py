@@ -117,7 +117,26 @@ models = [
     {"name": "glm4",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/THUDM/glm-4-9b-hf", },
     {"name": "pixtral",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/mistral-community/pixtral-12b", },
     {"name": "seed-coder",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base", },
+    {"name": "ruri-large",       "tokt": TOKENIZER_TYPE.WPM, "repo": "https://huggingface.co/cl-nagoya/ruri-large", },
 ]
+
+
+def fugashi_check():
+    """
+    Check if fugashi and Japanese dictionary are installed and can be imported.
+    """
+    try:
+        import fugashi
+        tagger = fugashi.Tagger()
+    except ImportError:
+        raise ImportError(
+            "fugashi is missing, install it via: pip install 'fugashi[unidic-lite]'"
+        )
+    except Exception:
+        raise RuntimeError(
+            "fugashi is installed, but it might be missing the dictionary (e.g., unidic-lite).\n"
+            "Try installing via: pip install 'fugashi[unidic-lite]'\n"
+        )
 
 
 def download_file_with_auth(url, token, save_path):
@@ -137,7 +156,7 @@ def download_model(model):
 
     os.makedirs(f"models/tokenizers/{name}", exist_ok=True)
 
-    files = ["config.json", "tokenizer.json", "tokenizer_config.json"]
+    files = ["config.json", "tokenizer.json", "tokenizer_config.json", "vocab.txt"]
 
     if name == "gpt-4o":
         # Xenova/gpt-4o is tokenizer-only, it does not contain config.json
@@ -194,6 +213,15 @@ for model in models:
         logger.warning(f"Directory for tokenizer {name} not found. Skipping...")
         continue
 
+    pre_tokenizer_log = True
+    if os.path.isfile(f"models/tokenizers/{name}/tokenizer_config.json"):
+        with open(f"models/tokenizers/{name}/tokenizer_config.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            if "word_tokenizer_type" in cfg and cfg["word_tokenizer_type"] == "mecab":
+                # Mecab need to be installed via fugashi
+                fugashi_check()
+                pre_tokenizer_log = False
+
     # create the tokenizer
     try:
         if name == "t5":
@@ -214,14 +242,15 @@ for model in models:
     logger.info(f"chkhsh: {chkhsh}")
 
     # print the "pre_tokenizer" content from the tokenizer.json
-    with open(f"models/tokenizers/{name}/tokenizer.json", "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-        normalizer = cfg["normalizer"]
-        logger.info("normalizer: " + json.dumps(normalizer, indent=4))
-        pre_tokenizer = cfg["pre_tokenizer"]
-        logger.info("pre_tokenizer: " + json.dumps(pre_tokenizer, indent=4))
-        if "ignore_merges" in cfg["model"]:
-            logger.info("ignore_merges: " + json.dumps(cfg["model"]["ignore_merges"], indent=4))
+    if pre_tokenizer_log:
+        with open(f"models/tokenizers/{name}/tokenizer.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            normalizer = cfg["normalizer"]
+            logger.info("normalizer: " + json.dumps(normalizer, indent=4))
+            pre_tokenizer = cfg["pre_tokenizer"]
+            logger.info("pre_tokenizer: " + json.dumps(pre_tokenizer, indent=4))
+            if "ignore_merges" in cfg["model"]:
+                logger.info("ignore_merges: " + json.dumps(cfg["model"]["ignore_merges"], indent=4))
 
     logger.info("")
 
