@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ggml-cpu-traits.h"
+#include "traits.h"
 #include "ggml.h"
 
 // GGML internal header

@@ -2,7 +2,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
 #include "repack.h"
-#include "ggml-cpu-traits.h"
+#include "traits.h"
 #include "ggml-impl.h"
 #include "amx/amx.h"
 
