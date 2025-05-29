@@ -26,10 +26,11 @@
 
 #include "chat.h"
 #include "common.h"
-#include "json.hpp"
-#include "linenoise.cpp/linenoise.h"
 #include "llama-cpp.h"
 #include "log.h"
+
+#include "nlohmann/json.hpp"
+#include "linenoise.cpp/linenoise.h"
 
 #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(_WIN32)
 [[noreturn]] static void sigint_handler(int) {

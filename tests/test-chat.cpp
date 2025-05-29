@@ -7,8 +7,9 @@
 //
 #include <fstream>
 #include <iostream>
-#include <json.hpp>
 #include <string>
+
+#include <nlohmann/json.hpp>
 
 #include "chat.h"
 

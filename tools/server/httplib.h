@@ -8,7 +8,7 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.20.0"
+#define CPPHTTPLIB_VERSION "0.20.1"
 
 /*
  * Configuration
@@ -145,6 +145,10 @@
 #define CPPHTTPLIB_LISTEN_BACKLOG 5
 #endif
 
+#ifndef CPPHTTPLIB_MAX_LINE_LENGTH
+#define CPPHTTPLIB_MAX_LINE_LENGTH 32768
+#endif
+
 /*
  * Headers
  */
@@ -188,8 +192,13 @@ using ssize_t = long;
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
+#if defined(__has_include)
+#if __has_include(<afunix.h>)
 // afunix.h uses types declared in winsock2.h, so has to be included after it.
 #include <afunix.h>
+#define CPPHTTPLIB_HAVE_AFUNIX_H 1
+#endif
+#endif
 
 #ifndef WSA_FLAG_NO_HANDLE_INHERIT
 #define WSA_FLAG_NO_HANDLE_INHERIT 0x80
@@ -627,6 +636,7 @@ using Ranges = std::vector<Range>;
 struct Request {
   std::string method;
   std::string path;
+  std::string matched_route;
   Params params;
   Headers headers;
   std::string body;
@@ -878,10 +888,16 @@ namespace detail {
 
 class MatcherBase {
 public:
+  MatcherBase(std::string pattern) : pattern_(pattern) {}
   virtual ~MatcherBase() = default;
+
+  const std::string &pattern() const { return pattern_; }
 
   // Match request path and populate its matches and
   virtual bool match(Request &request) const = 0;
+
+private:
+  std::string pattern_;
 };
 
 /**
@@ -933,7 +949,8 @@ private:
  */
 class RegexMatcher final : public MatcherBase {
 public:
-  RegexMatcher(const std::string &pattern) : regex_(pattern) {}
+  RegexMatcher(const std::string &pattern)
+      : MatcherBase(pattern), regex_(pattern) {}
 
   bool match(Request &request) const override;
 
@@ -1000,8 +1017,11 @@ public:
   }
 
   Server &set_exception_handler(ExceptionHandler handler);
+
   Server &set_pre_routing_handler(HandlerWithResponse handler);
   Server &set_post_routing_handler(Handler handler);
+
+  Server &set_pre_request_handler(HandlerWithResponse handler);
 
   Server &set_expect_100_continue_handler(Expect100ContinueHandler handler);
   Server &set_logger(Logger logger);
@@ -1083,8 +1103,7 @@ private:
   bool listen_internal();
 
   bool routing(Request &req, Response &res, Stream &strm);
-  bool handle_file_request(const Request &req, Response &res,
-                           bool head = false);
+  bool handle_file_request(const Request &req, Response &res);
   bool dispatch_request(Request &req, Response &res,
                         const Handlers &handlers) const;
   bool dispatch_request_for_content_reader(
@@ -1145,6 +1164,7 @@ private:
   ExceptionHandler exception_handler_;
   HandlerWithResponse pre_routing_handler_;
   Handler post_routing_handler_;
+  HandlerWithResponse pre_request_handler_;
   Expect100ContinueHandler expect_100_continue_handler_;
 
   Logger logger_;
@@ -2062,7 +2082,9 @@ template <size_t N> inline constexpr size_t str_len(const char (&)[N]) {
 }
 
 inline bool is_numeric(const std::string &str) {
-  return !str.empty() && std::all_of(str.begin(), str.end(), ::isdigit);
+  return !str.empty() &&
+         std::all_of(str.cbegin(), str.cend(),
+                     [](unsigned char c) { return std::isdigit(c); });
 }
 
 inline uint64_t get_header_value_u64(const Headers &headers,
@@ -3067,6 +3089,11 @@ inline bool stream_line_reader::getline() {
 #endif
 
   for (size_t i = 0;; i++) {
+    if (size() >= CPPHTTPLIB_MAX_LINE_LENGTH) {
+      // Treat exceptionally long lines as an error to
+      // prevent infinite loops/memory exhaustion
+      return false;
+    }
     char byte;
     auto n = strm_.read(&byte, 1);
 
@@ -3541,6 +3568,7 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
     hints.ai_flags = socket_flags;
   }
 
+#if !defined(_WIN32) || defined(CPPHTTPLIB_HAVE_AFUNIX_H)
   if (hints.ai_family == AF_UNIX) {
     const auto addrlen = host.length();
     if (addrlen > sizeof(sockaddr_un::sun_path)) { return INVALID_SOCKET; }
@@ -3585,6 +3613,7 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
     }
     return sock;
   }
+#endif
 
   auto service = std::to_string(port);
 
@@ -6055,6 +6084,8 @@ inline void calc_actual_timeout(time_t max_timeout_msec, time_t duration_msec,
   auto actual_timeout_msec =
       (std::min)(max_timeout_msec - duration_msec, timeout_msec);
 
+  if (actual_timeout_msec < 0) { actual_timeout_msec = 0; }
+
   actual_timeout_sec = actual_timeout_msec / 1000;
   actual_timeout_usec = (actual_timeout_msec % 1000) * 1000;
 }
@@ -6205,7 +6236,8 @@ inline time_t BufferStream::duration() const { return 0; }
 
 inline const std::string &BufferStream::get_buffer() const { return buffer; }
 
-inline PathParamsMatcher::PathParamsMatcher(const std::string &pattern) {
+inline PathParamsMatcher::PathParamsMatcher(const std::string &pattern)
+    : MatcherBase(pattern) {
   constexpr const char marker[] = "/:";
 
   // One past the last ending position of a path param substring
@@ -6453,6 +6485,11 @@ inline Server &Server::set_pre_routing_handler(HandlerWithResponse handler) {
 
 inline Server &Server::set_post_routing_handler(Handler handler) {
   post_routing_handler_ = std::move(handler);
+  return *this;
+}
+
+inline Server &Server::set_pre_request_handler(HandlerWithResponse handler) {
+  pre_request_handler_ = std::move(handler);
   return *this;
 }
 
@@ -6867,8 +6904,7 @@ Server::read_content_core(Stream &strm, Request &req, Response &res,
   return true;
 }
 
-inline bool Server::handle_file_request(const Request &req, Response &res,
-                                        bool head) {
+inline bool Server::handle_file_request(const Request &req, Response &res) {
   for (const auto &entry : base_dirs_) {
     // Prefix match
     if (!req.path.compare(0, entry.mount_point.size(), entry.mount_point)) {
@@ -6901,7 +6937,7 @@ inline bool Server::handle_file_request(const Request &req, Response &res,
                 return true;
               });
 
-          if (!head && file_request_handler_) {
+          if (req.method != "HEAD" && file_request_handler_) {
             file_request_handler_(req, res);
           }
 
@@ -7035,9 +7071,8 @@ inline bool Server::routing(Request &req, Response &res, Stream &strm) {
   }
 
   // File handler
-  auto is_head_request = req.method == "HEAD";
-  if ((req.method == "GET" || is_head_request) &&
-      handle_file_request(req, res, is_head_request)) {
+  if ((req.method == "GET" || req.method == "HEAD") &&
+      handle_file_request(req, res)) {
     return true;
   }
 
@@ -7112,7 +7147,11 @@ inline bool Server::dispatch_request(Request &req, Response &res,
     const auto &handler = x.second;
 
     if (matcher->match(req)) {
-      handler(req, res);
+      req.matched_route = matcher->pattern();
+      if (!pre_request_handler_ ||
+          pre_request_handler_(req, res) != HandlerResponse::Handled) {
+        handler(req, res);
+      }
       return true;
     }
   }
@@ -7239,7 +7278,11 @@ inline bool Server::dispatch_request_for_content_reader(
     const auto &handler = x.second;
 
     if (matcher->match(req)) {
-      handler(req, res, content_reader);
+      req.matched_route = matcher->pattern();
+      if (!pre_request_handler_ ||
+          pre_request_handler_(req, res) != HandlerResponse::Handled) {
+        handler(req, res, content_reader);
+      }
       return true;
     }
   }
@@ -7327,8 +7370,9 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   }
 
   // Setup `is_connection_closed` method
-  req.is_connection_closed = [&]() {
-    return !detail::is_socket_alive(strm.socket());
+  auto sock = strm.socket();
+  req.is_connection_closed = [sock]() {
+    return !detail::is_socket_alive(sock);
   };
 
   // Routing

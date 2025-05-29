@@ -58,18 +58,17 @@ add_library(${TARGET} STATIC
     arg.cpp
     arg.h
     base64.hpp
-    chat.cpp
-    chat.h
     chat-parser.cpp
     chat-parser.h
+    chat.cpp
+    chat.h
     common.cpp
     common.h
     console.cpp
     console.h
-    json-schema-to-grammar.cpp
-    json.hpp
-    json-partial.h
     json-partial.cpp
+    json-partial.h
+    json-schema-to-grammar.cpp
     llguidance.cpp
     log.cpp
     log.h
@@ -77,6 +76,7 @@ add_library(${TARGET} STATIC
     minja/minja.hpp
     ngram-cache.cpp
     ngram-cache.h
+    nlohmann/json.hpp
     regex-partial.cpp
     regex-partial.h
     sampling.cpp

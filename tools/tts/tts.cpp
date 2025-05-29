@@ -5,7 +5,8 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
-#include "json.hpp"
+
+#include "nlohmann/json.hpp"
 
 #include <algorithm>
 #include <cmath>
