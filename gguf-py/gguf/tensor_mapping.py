@@ -31,6 +31,7 @@ class TensorNameMap:
             "model.embeddings",                          # rwkv7
             "model.word_embeddings",                     # bailingmoe
             "language_model.model.embed_tokens",         # llama4
+            "model.decoder.embed_tokens",               # opt
         ),
 
         # Token type embeddings
@@ -56,6 +57,7 @@ class TensorNameMap:
             "transformer.wpe",                 # gpt2
             "embeddings.position_embeddings",  # bert
             "wpe",                             # gpt2
+            "model.decoder.embed_positions",  # opt
         ),
 
         # Output
@@ -68,7 +70,7 @@ class TensorNameMap:
             "output_layer",              # chatglm
             "head",                      # rwkv
             "head.out",                  # wavtokenizer
-            "lm_head",                   # llama4
+            "lm_head",                   # llama4 opt
         ),
 
         # Output norm
@@ -92,6 +94,7 @@ class TensorNameMap:
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
+            "model.decoder.final_layer_norm",          # opt
         ),
 
         # Rope frequencies
@@ -134,6 +137,7 @@ class TensorNameMap:
             "rwkv.blocks.{bid}.ln1",                                # rwkv6
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
+            "model.decoder.layers.{bid}.self_attn_layer_norm",      # opt
         ),
 
         # Attention norm 2
@@ -174,6 +178,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
+            "model.decoder.layers.{bid}.self_attn.q_proj",               # opt
         ),
 
         # Attention key
@@ -189,6 +194,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
+            "model.decoder.layers.{bid}.self_attn.k_proj",             # opt
         ),
 
         # Attention value
@@ -203,6 +209,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
+            "model.decoder.layers.{bid}.self_attn.v_proj",               # opt
         ),
 
         # Attention output
@@ -230,6 +237,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
+            "model.decoder.layers.{bid}.self_attn.out_proj",                # opt
         ),
 
         # Attention output norm
@@ -269,6 +277,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
+            "model.decoder.layers.{bid}.final_layer_norm",                   # opt
         ),
 
         # Post feed-forward norm
@@ -330,6 +339,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4
+            "model.decoder.layers.{bid}.fc1",                         # opt
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -411,6 +421,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4
+            "model.decoder.layers.{bid}.fc2",                         # opt
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
