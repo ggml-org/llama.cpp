@@ -1,0 +1,40 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # Every Sunday at midnight
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master branch
+        uses: actions/checkout@v2
+        with:
+          ref: master
+
+      - name: Merge upstream master
+        id: merge
+        run: |
+          git remote add upstream https://github.com/ggml-org/repository.git
+          git fetch upstream
+          if git merge upstream/master; then
+            echo "merge_success=true" >> $GITHUB_OUTPUT
+          else
+            echo "merge_success=false" >> $GITHUB_OUTPUT
+            echo "Automatic merge failed. Skipping push."
+            exit 0
+          fi
+
+      - name: Push changes
+        if: steps.merge.outputs.merge_success == 'true'
+        run: |
+          # Check if there are any changes
+          if git diff --quiet HEAD@{1} HEAD; then
+            echo "No changes to push"
+          else
+            echo "Changes detected, pushing updates..."
+            git push origin master
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
