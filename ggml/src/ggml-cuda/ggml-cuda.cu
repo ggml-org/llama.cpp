@@ -243,7 +243,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
-
+        info.devices[id].integrated= prop.integrated;
         info.devices[id].nsm       = prop.multiProcessorCount;
         info.devices[id].smpb      = prop.sharedMemPerBlock;
         info.devices[id].warp_size = prop.warpSize;
@@ -1063,6 +1063,10 @@ static const char * ggml_backend_cuda_host_buffer_type_name(ggml_backend_buffer_
     return GGML_CUDA_NAME "_Host";
 
     GGML_UNUSED(buft);
+}
+
+static bool ggml_backend_buft_is_cuda_host(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_cuda_host_buffer_type_name;
 }
 
 static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -3263,7 +3267,13 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 }
 
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft)) && buft->device == dev;
+    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
+    const int integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
+    if(integrated){
+        return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft) ||ggml_backend_buft_is_cuda_host(buft)) && buft->device == dev;
+    }else{
+        return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft)) && buft->device == dev;
+    }
 }
 
 static int64_t get_op_batch_size(const ggml_tensor * op) {
