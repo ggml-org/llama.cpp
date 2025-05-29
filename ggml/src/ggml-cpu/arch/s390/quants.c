@@ -239,7 +239,7 @@ void ggml_vec_dot_q4_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = acc[0] + acc[1] + acc[2] + acc[3] + summs;
-    
+
 #endif
     for (; ib < nb; ++ib) {
         int sumi0 = 0;
