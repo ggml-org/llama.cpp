@@ -16,6 +16,7 @@
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
 
+#define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
 
 #if defined(__GNUC__)
@@ -395,4 +396,3 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
         }
     }
 }
-
