@@ -115,6 +115,7 @@ export interface CanvasPyInterpreter {
 
 export type CanvasData = CanvasPyInterpreter;
 
+// The request for a tool call, which is received from the model.
 export interface ToolCallRequest {
   id: string;
   type: 'function';
@@ -125,6 +126,7 @@ export interface ToolCallRequest {
   };
 }
 
+// The specification of a tool call, which is sent to the model.
 export interface ToolCallSpec {
   type: 'function';
   function: {
@@ -134,17 +136,22 @@ export interface ToolCallSpec {
   };
 }
 
+// The parameters for a tool call, which defines the structure of the arguments.
 export interface ToolCallParameters {
   type: 'object';
   properties: object;
   required: string[];
 }
 
+// The output of a tool call, which is returned to the model.
 export interface ToolCallOutput {
   type: 'function_call_output';
   call_id: string;
   output: string;
 }
+
+// A list of available builtin tool IDs.
+export type AvailableToolId = 'javascript_interpreter';
 
 // a non-complete list of props, only contains the ones we need
 export interface LlamaCppServerProps {

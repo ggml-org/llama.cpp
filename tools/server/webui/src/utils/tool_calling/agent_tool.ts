@@ -3,11 +3,12 @@ import {
   ToolCallOutput,
   ToolCallParameters,
   ToolCallSpec,
+  AvailableToolId,
 } from '../types';
 
 export abstract class AgentTool {
   constructor(
-    public readonly id: string,
+    public readonly id: AvailableToolId,
     public readonly name: string,
     public readonly toolDescription: string,
     public readonly parameters: ToolCallParameters,

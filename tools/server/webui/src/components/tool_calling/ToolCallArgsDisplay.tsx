@@ -7,15 +7,21 @@ export const ToolCallArgsDisplay = ({
   toolCall: ToolCallRequest;
   baseClassName?: string;
 }) => {
+  let parsedArgs = toolCall.function.arguments;
+  try {
+    parsedArgs = JSON.stringify(JSON.parse(parsedArgs), null, 2);
+  } catch (e) {
+    // Might still be generating
+  }
   return (
     <details className={baseClassName} open={false}>
       <summary className="collapse-title">
         <b>Tool call:</b> {toolCall.function.name}
       </summary>
       <div className="collapse-content">
-        <div className="font-bold mb-1">Arguments:</div>
+        <div className="mb-1">Arguments:</div>
         <pre className="whitespace-pre-wrap bg-base-300 p-2 rounded">
-          {toolCall.function.arguments}
+          {parsedArgs}
         </pre>
       </div>
     </details>

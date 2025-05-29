@@ -14,8 +14,6 @@ import {
   WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
-import { AVAILABLE_TOOLS } from '../utils/tool_calling/register_tools';
-import { AgentTool } from '../utils/tool_calling/agent_tool';
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
@@ -180,24 +178,21 @@ const SETTING_SECTIONS: SettingSection[] = [
       </>
     ),
     fields: [
-      ...Array.from(AVAILABLE_TOOLS.values()).map(
-        (tool: AgentTool) =>
-          ({
-            type: SettingInputType.CHECKBOX,
-            label: (
-              <>
-                <span className="font-semibold">{tool.name || tool.id}</span>
-                {tool.toolDescription && (
-                  <small className="text-xs block mt-1 opacity-70">
-                    <strong>Agent tool description: </strong>
-                    {tool.toolDescription}
-                  </small>
-                )}
-              </>
-            ),
-            key: `tool_${tool.id}_enabled` as SettKey,
-          }) as SettingFieldInput
-      ),
+      {
+        type: SettingInputType.CHECKBOX,
+        label: (
+          <>
+            <span className="font-semibold">JavaScript Interpreter</span>
+            <small className="text-xs block mt-1 opacity-70">
+              <strong>Agent tool description: </strong>
+              Executes JavaScript code in a sandboxed iframe. The code should be
+              self-contained valid javascript. Only console.log(variable) and
+              final result are included in response content.
+            </small>
+          </>
+        ),
+        key: 'toolJsReplEnabled',
+      },
     ],
   },
   {
@@ -559,13 +554,11 @@ function SettingsModalCheckbox({
   value,
   onChange,
   label,
-  disabled,
 }: {
   configKey: SettKey;
   value: boolean;
   onChange: (value: boolean) => void;
-  label: React.ReactElement | string;
-  disabled?: boolean;
+  label: string;
 }) {
   return (
     <div className="flex flex-row items-center mb-2">
@@ -574,7 +567,6 @@ function SettingsModalCheckbox({
         className="toggle"
         checked={value}
         onChange={(e) => onChange(e.target.checked)}
-        disabled={disabled}
       />
       <span className="ml-4">{label || configKey}</span>
     </div>

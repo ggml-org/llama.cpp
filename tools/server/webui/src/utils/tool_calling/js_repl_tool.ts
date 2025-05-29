@@ -3,6 +3,7 @@ import { AgentTool } from './agent_tool';
 
 // Import the HTML content as a raw string
 import iframeHTMLContent from '../../assets/iframe_sandbox.html?raw';
+import StorageUtils from '../storage';
 
 interface IframeMessage {
   call_id: string;
@@ -39,7 +40,7 @@ export class JSReplAgentTool extends AgentTool {
         },
         required: ['code'],
       } as ToolCallParameters,
-      () => true
+      () => StorageUtils.getConfig().toolJsReplEnabled
     );
     this.initIframe();
   }

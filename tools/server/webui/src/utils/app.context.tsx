@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
   APIMessage,
+  AvailableToolId,
   CanvasData,
   Conversation,
   LlamaCppServerProps,
@@ -312,7 +313,7 @@ export const AppContextProvider = ({
 
               // Process tool call
               const toolResult = await AVAILABLE_TOOLS.get(
-                toolCall.function.name
+                toolCall.function.name as AvailableToolId
               )?.processCall(toolCall);
 
               const toolMsg: PendingMessage = {

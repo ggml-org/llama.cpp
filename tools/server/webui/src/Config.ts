@@ -1,7 +1,5 @@
 import daisyuiThemes from 'daisyui/theme/object';
 import { isNumeric } from './utils/misc';
-import { AVAILABLE_TOOLS } from './utils/tool_calling/register_tools';
-import { AgentTool } from './utils/tool_calling/agent_tool';
 
 export const isDev = import.meta.env.MODE === 'development';
 
@@ -43,13 +41,7 @@ export const CONFIG_DEFAULT = {
   custom: '', // custom json-stringified object
   // experimental features
   pyIntepreterEnabled: false,
-  // Fields for tool calling
-  ...Object.fromEntries(
-    Array.from(AVAILABLE_TOOLS.values()).map((tool: AgentTool) => [
-      `tool_${tool.id}_enabled`,
-      false,
-    ])
-  ),
+  toolJsReplEnabled: false,
 };
 export const CONFIG_INFO: Record<string, string> = {
   apiKey: 'Set the API Key if you are using --api-key option for the server.',
