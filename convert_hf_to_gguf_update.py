@@ -288,7 +288,7 @@ logger.info("+++ convert_hf_to_gguf.py was updated")
 
 tests = [
     "ied 4 ½ months",
-    "Führer",
+    "Äpfel",
     "",
     " ",
     "  ",

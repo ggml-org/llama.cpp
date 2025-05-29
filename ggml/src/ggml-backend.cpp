@@ -1598,6 +1598,9 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     for (int i = 0; i < sched->n_backends; i++) {
         ggml_backend_synchronize(sched->backends[i]);
     }
+    // reset the current copy to 0 so that the graphs will be similar during generation
+    // necessary for CUDA graphs
+    sched->cur_copy = 0;
 }
 
 void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data) {

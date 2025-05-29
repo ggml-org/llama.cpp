@@ -157,6 +157,7 @@ class TensorNameMap:
             "h.{bid}.attn.c_attn",                                                 # gpt2
             "transformer.h.{bid}.mixer.Wqkv",                                      # phi2
             "encoder.layers.{bid}.attn.Wqkv",                                      # nomic-bert
+            "encoder.layers.{bid}.mixer.Wqkv",                                     # jina
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
@@ -224,6 +225,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.self_attn.o_proj",                   # plamo
             "model.layers.{bid}.attention.wo",                              # internlm2
             "encoder.layers.{bid}.attn.out_proj",                           # nomic-bert
+            "encoder.layers.{bid}.mixer.out_proj",                          # jina
             "transformer.decoder_layer.{bid}.multi_head_attention.linear",  # Grok
             "transformer.blocks.{bid}.norm_attn_norm.attn.out_proj",        # dbrx
             "encoder.layers.{bid}.self_attention.dense",                    # chatglm
@@ -902,7 +904,6 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ_FC: (
             "model.connector.modality_projection.proj", # SmolVLM
-            "multi_modal_projector.linear_1", # llama 4
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
@@ -1125,6 +1126,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_POST_NORM: (
             "audio_tower.layer_norm", # ultravox
+            "audio_tower.ln_post", # qwen2omni
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_Q: (
@@ -1161,8 +1163,16 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.fc2", # ultravox
         ),
 
+        # note: some tensors below has "audio." pseudo-prefix, to prevent conflicts with vision tensors
+        # this prefix is added in the conversion code in modify_tensors()
+
         MODEL_TENSOR.A_MMPROJ: (
             "audio.multi_modal_projector.linear_{bid}", # ultravox
+        ),
+
+        MODEL_TENSOR.A_MMPROJ_FC: (
+            "audio.multi_modal_projector.linear", # qwen2audio
+            "audio_tower.proj", # qwen2omni
         ),
 
         MODEL_TENSOR.A_MM_NORM_PRE: (

@@ -24,6 +24,7 @@ class MetadataDetails(NamedTuple):
     type: gguf.GGUFValueType
     value: Any
     description: str = ''
+    sub_type: gguf.GGUFValueType | None = None
 
 
 def get_field_data(reader: gguf.GGUFReader, key: str) -> Any:
@@ -57,7 +58,9 @@ def copy_with_new_metadata(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, new
             logger.debug(f'Removing {field.name}')
             continue
 
-        old_val = MetadataDetails(field.types[0], field.contents())
+        val_type = field.types[0]
+        sub_type = field.types[-1] if val_type == gguf.GGUFValueType.ARRAY else None
+        old_val = MetadataDetails(val_type, field.contents(), sub_type=sub_type)
         val = new_metadata.get(field.name, old_val)
 
         if field.name in new_metadata:
@@ -67,7 +70,7 @@ def copy_with_new_metadata(reader: gguf.GGUFReader, writer: gguf.GGUFWriter, new
             logger.debug(f'Copying {field.name}')
 
         if val.value is not None:
-            writer.add_key_value(field.name, val.value, val.type)
+            writer.add_key_value(field.name, val.value, val.type, sub_type=sub_type if val.sub_type is None else val.sub_type)
 
     if gguf.Keys.Tokenizer.CHAT_TEMPLATE in new_metadata:
         logger.debug('Adding chat template(s)')
