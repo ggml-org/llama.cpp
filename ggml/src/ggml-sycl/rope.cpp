@@ -222,7 +222,7 @@ static void rope_norm_sycl(const T * x, T * dst, const int ne0, const int ne1, c
                            const float * freq_factors, queue_ptr stream) {
     GGML_ASSERT(ne0 % 2 == 0);
     const sycl::range<3> block_dims(1, SYCL_ROPE_BLOCK_SIZE, 1);
-    const int            num_blocks_x = (ne0 + 2 * SYCL_ROPE_BLOCK_SIZE - 1) / (2 * SYCL_ROPE_BLOCK_SIZE);
+    const int            num_blocks_x = ceil_div(ne0, (2 * SYCL_ROPE_BLOCK_SIZE));
     const sycl::range<3> block_nums(1, num_blocks_x, nr);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
@@ -259,7 +259,7 @@ static void rope_neox_sycl(const T * x, T * dst, const int ne0, const int ne1, c
                            const rope_corr_dims corr_dims, const float * freq_factors, queue_ptr stream) {
     GGML_ASSERT(ne0 % 2 == 0);
     const sycl::range<3> block_dims(1, SYCL_ROPE_BLOCK_SIZE, 1);
-    const int            num_blocks_x = (ne0 + 2 * SYCL_ROPE_BLOCK_SIZE - 1) / (2 * SYCL_ROPE_BLOCK_SIZE);
+    const int            num_blocks_x = ceil_div(ne0, (2 * SYCL_ROPE_BLOCK_SIZE));
     const sycl::range<3> block_nums(1, num_blocks_x, nr);
 
     const float theta_scale = powf(freq_base, -2.0f / n_dims);
@@ -287,7 +287,7 @@ static void rope_multi_sycl(const T * x, T * dst, const int ne0, const int ne1, 
                              const mrope_sections sections, queue_ptr stream) {
     GGML_ASSERT(ne0 % 2 == 0);
     const sycl::range<3>    block_dims(1, SYCL_ROPE_BLOCK_SIZE, 1);
-    const int               n_blocks_y = (ne0 + 2 * SYCL_ROPE_BLOCK_SIZE - 1) / (2 * SYCL_ROPE_BLOCK_SIZE);
+    const int               n_blocks_y = ceil_div(ne0, (2 * SYCL_ROPE_BLOCK_SIZE));
     const sycl::range<3>    grid_dims(1, n_blocks_y, nr);
     const sycl::nd_range<3> nd_range(grid_dims * block_dims, block_dims);
 
@@ -322,7 +322,7 @@ static void rope_vision_sycl(const T * x, T * dst, const int ne0, const int ne1,
                              const mrope_sections sections, queue_ptr stream) {
     GGML_ASSERT(ne0 % 2 == 0);
     const sycl::range<3>    block_dims(1, SYCL_ROPE_BLOCK_SIZE, 1);
-    const int               n_blocks_y = (ne0 + 2 * SYCL_ROPE_BLOCK_SIZE - 1) / (2 * SYCL_ROPE_BLOCK_SIZE);
+    const int               n_blocks_y = ceil_div(ne0, (2 * SYCL_ROPE_BLOCK_SIZE));
     const sycl::range<3>    grid_dims(1, n_blocks_y, nr);
     const sycl::nd_range<3> nd_range(grid_dims * block_dims, block_dims);
 
