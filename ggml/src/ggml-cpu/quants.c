@@ -35,15 +35,15 @@ void quantize_row_q5_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q5_1_ref(x, y, k);
 }
 
-GGML_CPU_NATIVE_IMPL(quantize_row_q8_0)
 void quantize_row_q8_0_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q8_0_ref(x, y, k);
 }
+GGML_CPU_NATIVE_IMPL(quantize_row_q8_0)
 
-GGML_CPU_NATIVE_IMPL(quantize_row_q8_1)
 void quantize_row_q8_1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q8_1_ref(x, y, k);
 }
+GGML_CPU_NATIVE_IMPL(quantize_row_q8_1)
 
 //
 // 2-6 bit quantization in super-blocks
@@ -113,7 +113,6 @@ void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
 
 //===================================== Dot products =================================
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_0_q8_0)
 void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -149,9 +148,9 @@ void ggml_vec_dot_q4_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_0_q8_0)
 
 // TODO: add WASM SIMD
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_1_q8_1)
 void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_1;
     const int nb = n / qk;
@@ -187,8 +186,8 @@ void ggml_vec_dot_q4_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_1_q8_1)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_0_q8_0)
 void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -231,8 +230,8 @@ void ggml_vec_dot_q5_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_0_q8_0)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_1_q8_1)
 void ggml_vec_dot_q5_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_1;
     const int nb = n / qk;
@@ -275,8 +274,8 @@ void ggml_vec_dot_q5_1_q8_1_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_1_q8_1)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q8_0_q8_0)
 void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -306,8 +305,8 @@ void ggml_vec_dot_q8_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q8_0_q8_0)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_tq1_0_q8_K)
 void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -359,8 +358,8 @@ void ggml_vec_dot_tq1_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_tq1_0_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_tq2_0_q8_K)
 void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -392,8 +391,8 @@ void ggml_vec_dot_tq2_0_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_tq2_0_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q2_K_q8_K)
 void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -445,8 +444,8 @@ void ggml_vec_dot_q2_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     }
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q2_K_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q3_K_q8_K)
 void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -525,8 +524,8 @@ void ggml_vec_dot_q3_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q3_K_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_K_q8_K)
 void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -601,8 +600,8 @@ void ggml_vec_dot_q4_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q4_K_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_K_q8_K)
 void ggml_vec_dot_q5_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy,  size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -682,8 +681,8 @@ void ggml_vec_dot_q5_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q5_K_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q6_K_q8_K)
 void ggml_vec_dot_q6_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -738,8 +737,8 @@ void ggml_vec_dot_q6_K_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, c
     for (int l = 0; l < 8; ++l) sumf += sums[l];
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_q6_K_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_xxs_q8_K)
 void ggml_vec_dot_iq2_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -781,8 +780,8 @@ void ggml_vec_dot_iq2_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs
     }
     *s = 0.125f * sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_xxs_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_xs_q8_K)
 void ggml_vec_dot_iq2_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -832,8 +831,8 @@ void ggml_vec_dot_iq2_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
     }
     *s = 0.125f * sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_xs_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_s_q8_K)
 void ggml_vec_dot_iq2_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -885,8 +884,8 @@ void ggml_vec_dot_iq2_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     *s = 0.125f * sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq2_s_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq3_xxs_q8_K)
 void ggml_vec_dot_iq3_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -930,8 +929,8 @@ void ggml_vec_dot_iq3_xxs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs
     }
     *s = 0.25f * sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq3_xxs_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq3_s_q8_K)
 void ggml_vec_dot_iq3_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -987,8 +986,8 @@ void ggml_vec_dot_iq3_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq3_s_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq1_s_q8_K)
 void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -1031,8 +1030,8 @@ void ggml_vec_dot_iq1_s_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq1_s_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq1_m_q8_K)
 void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
     assert(nrc == 1);
@@ -1093,8 +1092,8 @@ void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq1_m_q8_K)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq4_nl_q8_0)
 void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1123,8 +1122,8 @@ void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
     }
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq4_nl_q8_0)
 
-GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq4_xs_q8_K)
 void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(nrc == 1);
     UNUSED(nrc);
@@ -1170,6 +1169,7 @@ void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs,
     }
     *s = sumf;
 }
+GGML_CPU_NATIVE_IMPL(ggml_vec_dot_iq4_xs_q8_K)
 
 // ============================ 4-bit non-linear quants
 
