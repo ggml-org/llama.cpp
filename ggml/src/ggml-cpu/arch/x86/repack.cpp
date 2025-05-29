@@ -105,6 +105,12 @@ static inline __m256 __avx_rearranged_f32cx8_load(ggml_fp16_t *x, __m128i arrang
 #endif
 #endif
 
+static inline int nearest_int(float fval) {
+    assert(fabsf(fval) <= 4194303.f);
+    float val = fval + 12582912.f;
+    int i; memcpy(&i, &val, sizeof(int));
+    return (i & 0x007fffff) - 0x00400000;
+}
 
 #if defined(__AVX2__) || defined(__AVX512F__)
 #if defined(__AVX512F__)
