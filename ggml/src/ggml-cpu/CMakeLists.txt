@@ -12,8 +12,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/ggml-cpu.cpp
         ggml-cpu/repack.cpp
         ggml-cpu/repack.h
-        ggml-cpu/ggml-cpu-hbm.cpp
-        ggml-cpu/ggml-cpu-hbm.h
+        ggml-cpu/hbm.cpp
+        ggml-cpu/hbm.h
         ggml-cpu/quants.c
         ggml-cpu/quants.h
         ggml-cpu/traits.cpp
