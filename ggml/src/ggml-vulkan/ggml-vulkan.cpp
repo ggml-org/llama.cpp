@@ -271,7 +271,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         device.getProperties2(&props2);
 
         if (subgroup_size_control_props.minSubgroupSize == 16) {
-            // Xe2 architecture has SIMD16 while previous Xe and Gen architecture has SIMD8.
+            // Xe2 architecture uses SIMD16 while previous Xe and Gen architecture uses SIMD8.
             // Minimum subgroup size matches the SIMD width so we distinguish architecture by checking this value.
             // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
             // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
