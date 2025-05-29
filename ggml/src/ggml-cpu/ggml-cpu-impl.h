@@ -510,9 +510,13 @@ void ggml_barrier(struct ggml_threadpool * tp);
 #define GGML_DO_PRAGMA_(x) _Pragma (#x)
 #define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
 #if defined(__GNUC__)
-// GCC/Clang
-# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
-#elif defined(_MSC_VER) && defined (_M_AMD64)
+// GCC/Clang on *nix
+# if defined(__APPLE__) && !defined(TARGET_OS_OSX)
+#  define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak _ ## name = _ ## alias) // NOLINT
+# else
+#  define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
+# endif
+#elif defined(_MSC_VER) && defined (_WIN64)
 // MSVC
 // Note: C name mangling varies across different calling conventions
 // see https://learn.microsoft.com/en-us/cpp/build/reference/decorated-names?view=msvc-170
