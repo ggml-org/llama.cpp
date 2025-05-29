@@ -13262,10 +13262,6 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
             inp_pos = build_inp_pos();
         }
 
-        // Extract the recurrent cache from the hybrid parent
-        const auto * kv_recurrent = static_cast<const llama_kv_cache_hybrid_recurrent *>(memory)->get_kv_recurrent();
-        GGML_ASSERT(kv_recurrent);
-
         for (int il = 0; il < n_layer; ++il) {
             struct ggml_tensor * inpSA = inpL;
 
@@ -13278,9 +13274,9 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
             if (hparams.recurrent_layer(il)) {
                 // ssm layer //
                 if (use_mamba2) {
-                    cur = llm_build_mamba::build_mamba2_layer(this, gf, cur, state_copy, kv_recurrent, model, ubatch, il);
+                    cur = llm_build_mamba::build_mamba2_layer(this, gf, cur, state_copy, model, ubatch, il);
                 } else {
-                    cur = llm_build_mamba::build_mamba_layer(this, gf, cur, state_copy, kv_recurrent, model, ubatch, il);
+                    cur = llm_build_mamba::build_mamba_layer(this, gf, cur, state_copy, model, ubatch, il);
                 }
             } else {
                 // attention layer //
