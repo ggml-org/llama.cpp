@@ -111,9 +111,6 @@ void quantize_row_q8_1_native(const float * GGML_RESTRICT x, void * GGML_RESTRIC
 #endif
 }
 
-static const int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
-
-
 //===================================== Dot products =================================
 
 void ggml_vec_dot_q4_0_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
