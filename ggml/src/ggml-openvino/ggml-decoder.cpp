@@ -108,22 +108,25 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
                 ov::PartialShape input_shape;
                 if (std::string(src->name) == "inp_tokens" || std::string(src->name) == "inp_pos") {
                     if (m_is_static) {
-                        input_shape = ov::PartialShape(get_shape(src));
-                        // if (m_is_first_token) {
-                        //     input_shape = ov::PartialShape{1, 1, m_max_token_len};
-                        // } else {
-                        //     input_shape = ov::PartialShape{1, 1, 1};
-                        // }
+                        if (m_is_first_token) {
+                            input_shape = ov::PartialShape{1, 1, m_max_token_len};
+                        } else {
+                            input_shape = ov::PartialShape{1, 1, 1};
+                        }
                     } else {
                         input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_max_token_len)};
                     }
-                } else if (std::string(src->name).find("KQ_mask") == 0) {
+                } else if (std::string(src->name) == "KQ_mask") {
                     if (m_is_static) {
-                        input_shape = ov::PartialShape(get_shape(src));
+                        if (m_is_first_token) {
+                            input_shape = ov::PartialShape{1, m_max_token_len, m_max_token_len};
+                        } else {
+                            input_shape = ov::PartialShape{1, 1, m_max_token_len};
+                        }
                     } else {
-                        auto max_token_len = GGML_PAD(m_max_token_len, GGML_KQ_MASK_PAD);
+                        auto max_mask_size = GGML_PAD(m_max_token_len, GGML_KQ_MASK_PAD);
                         input_shape =
-                            ov::PartialShape{1, ov::Dimension(1, max_token_len), ov::Dimension(1, max_token_len)};
+                            ov::PartialShape{1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size)};
                     }
                 } else {
                     input_shape = ov::Shape{get_shape(src)};
@@ -208,6 +211,7 @@ void GgmlOvDecoder::set_max_token_len() {
 
 void GgmlOvDecoder::add_extra_inputs() {
     int64_t past_token_len;
+    // attention_size not used for NPU
     int64_t attention_size;
 
     for (const auto& node : m_nodes) {
@@ -231,8 +235,7 @@ void GgmlOvDecoder::add_extra_inputs() {
     for (const auto& node : m_nodes) {
         if (node->src[1] && std::string(node->src[1]->name).find("inp_tokens") == 0) {
             int64_t total_token_len = node->src[1]->ne[0] + past_token_len;
-            attention_size = (total_token_len + 31) / 32 * 32;
-
+            attention_size = GGML_PAD(total_token_len, 32);
             std::string name = "attention_size";
             auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
             param_node->set_friendly_name(name);
