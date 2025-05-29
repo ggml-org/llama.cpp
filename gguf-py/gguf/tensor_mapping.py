@@ -58,6 +58,10 @@ class TensorNameMap:
             "wpe",                             # gpt2
         ),
 
+        #eagle2 draft model
+        MODEL_TENSOR.FC: (
+            "model.fc",                   
+        ),
         # Output
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox

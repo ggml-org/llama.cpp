@@ -2711,6 +2711,23 @@ class Qwen2Model(TextModel):
             return []
         yield from super().modify_tensors(data_torch, name, bid)
 
+@ModelBase.register("Eagle2DraftForCausalLM")
+class Eagle2DraftModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.EAGLE2_DRAFT
+
+    def set_vocab(self):
+        try:
+            self._set_vocab_sentencepiece()
+        except FileNotFoundError:
+            self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        if self.hparams.get("rope_scaling") is not None and "factor" in self.hparams["rope_scaling"]:
+            if self.hparams["rope_scaling"].get("type") == "yarn":
+                self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+                self.gguf_writer.add_rope_scaling_factor(self.hparams["rope_scaling"]["factor"])
+                self.gguf_writer.add_rope_scaling_orig_ctx_len(self.hparams["rope_scaling"]["original_max_position_embeddings"])
 
 @ModelBase.register(
     "Qwen2VLModel",

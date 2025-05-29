@@ -300,6 +300,7 @@ class MODEL_ARCH(IntEnum):
     QWEN2VL          = auto()
     QWEN3            = auto()
     QWEN3MOE         = auto()
+    EAGLE2_DRAFT     = auto()
     PHI2             = auto()
     PHI3             = auto()
     PHIMOE           = auto()
@@ -360,6 +361,7 @@ class MODEL_TENSOR(IntEnum):
     TOKEN_EMBD_NORM      = auto()
     TOKEN_TYPES          = auto()
     POS_EMBD             = auto()
+    FC                   = auto()
     OUTPUT               = auto()
     OUTPUT_NORM          = auto()
     ROPE_FREQS           = auto()
@@ -580,6 +582,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.QWEN2VL:          "qwen2vl",
     MODEL_ARCH.QWEN3:            "qwen3",
     MODEL_ARCH.QWEN3MOE:         "qwen3moe",
+    MODEL_ARCH.EAGLE2_DRAFT:     "eagle2-draft",
     MODEL_ARCH.PHI2:             "phi2",
     MODEL_ARCH.PHI3:             "phi3",
     MODEL_ARCH.PHIMOE:           "phimoe",
@@ -640,6 +643,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.TOKEN_EMBD_NORM:           "token_embd_norm",
     MODEL_TENSOR.TOKEN_TYPES:               "token_types",
     MODEL_TENSOR.POS_EMBD:                  "position_embd",
+    MODEL_TENSOR.FC:                        "fc",
     MODEL_TENSOR.OUTPUT_NORM:               "output_norm",
     MODEL_TENSOR.OUTPUT:                    "output",
     MODEL_TENSOR.ROPE_FREQS:                "rope_freqs",
@@ -1206,6 +1210,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.EAGLE2_DRAFT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.FC,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+
     ],
     MODEL_ARCH.QWEN2MOE: [
         MODEL_TENSOR.TOKEN_EMBD,
