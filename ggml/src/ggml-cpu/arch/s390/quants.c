@@ -1147,3 +1147,55 @@ void ggml_vec_dot_q6_K_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, co
 // #endif
 // }
 
+void ggml_vec_dot_iq4_nl_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+    assert(n % QK4_NL == 0);
+    static_assert(QK4_NL == QK8_0, "QK4_NL and QK8_0 must be the same");
+
+    const block_iq4_nl * GGML_RESTRICT x = vx;
+    const block_q8_0   * GGML_RESTRICT y = vy;
+
+    const int nb = n / QK4_NL;
+
+    int ib = 0;
+    float sumf = 0;
+
+#if defined(__VXE__) || defined(__VXE2__)
+    const int8x16_t v_k = vec_xl(0, kvalues_iq4nl);
+    const uint8x16_t v_m = vec_splat_u8(0x0F);
+
+    for (; ib < nb; ++ib) {
+        const block_iq4_nl * GGML_RESTRICT x0 = &x[ib];
+        const block_q8_0   * GGML_RESTRICT y0 = &y[ib];
+
+        const uint8x16_t v_x = vec_xl(0, x0->qs);
+        int8x16_t v_xl = (int8x16_t)vec_and(v_x, v_m);
+        int8x16_t v_xh = (int8x16_t)vec_sr(v_x, 4);
+
+        v_xl = vec_perm(v_k, v_k, (uchar8x16_t)v_xl);
+        v_xh = vec_perm(v_k, v_k, (uchar8x16_t)v_xh);
+
+        const int8x16_t v_yl = vec_xl(0      , y0->qs);
+        const int8x16_t v_yh = vec_xl(QK8_0/2, y0->qs);
+        const int32x4_t v_xy = ggml_vec_dot(ggml_vec_dot(vec_splats(0), v_xl, v_yl), v_xh, v_yh);
+
+        sumf += GGML_FP16_TO_FP32(x0->d) * GGML_FP16_TO_FP32(y0->d) * (v_xy[0] + v_xy[1] + v_xy[2] + v_xy[3]);
+    }
+
+#endif
+    for (; ib < nb; ++ib) {
+        const float d = GGML_FP16_TO_FP32(y[ib].d)*GGML_FP16_TO_FP32(x[ib].d);
+        int sumi1 = 0, sumi2 = 0;
+        for (int j = 0; j < QK4_NL/2; ++j) {
+            sumi1 += y[ib].qs[j+       0] * kvalues_iq4nl[x[ib].qs[j] & 0xf];
+            sumi2 += y[ib].qs[j+QK4_NL/2] * kvalues_iq4nl[x[ib].qs[j] >>  4];
+        }
+        sumf += d * (sumi1 + sumi2);
+    }
+    *s = sumf;
+}
+
