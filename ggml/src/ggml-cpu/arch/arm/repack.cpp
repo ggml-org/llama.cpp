@@ -1,7 +1,12 @@
 #define GGML_COMMON_IMPL_CPP
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
+#include "ggml-backend-impl.h"
+
 #include "ggml-impl.h"
+#include "ggml-cpu.h"
+#include "ggml-cpu-impl.h"
+#include "traits.h"
 
 #include <cmath>
 #include <cstring>
