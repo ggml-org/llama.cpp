@@ -1,5 +1,4 @@
 #include "mmvq.hpp"
-#include <cstdint>
 
 #include "ggml.h"
 #include "common.hpp"
@@ -40,7 +39,7 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
         // Y block index that aligns with ibx
         const int iby = i * block_type::block_to_q8_1_ratio();
         const int8_t* q8_1_quant_ptr = (const int8_t*)vy + iby * QK8_1;
-        const sycl::half2* q8_1_ds_ptr = (const sycl::half2*)((const char*)vy + ncols + iby * sizeof(sycl::half2)); 
+        const sycl::half2* q8_1_ds_ptr = (const sycl::half2*)((const char*)vy + ncols + iby * sizeof(sycl::half2));
 
 #pragma unroll
         for (int elem = 0; elem < block_elements_per_subgroup; elem += WARP_SIZE) {

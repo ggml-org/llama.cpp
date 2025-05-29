@@ -33,7 +33,6 @@
 #include <sycl/half_type.hpp>
 
 #include "ggml-sycl.h"
-#include "common.hpp"
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
@@ -45,7 +44,6 @@
 #include "ggml-sycl/sycl_hw.hpp"
 #include "ggml-sycl/getrows.hpp"
 #include "ggml.h"
-#include "presets.hpp"
 
 static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
