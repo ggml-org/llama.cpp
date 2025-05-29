@@ -8,7 +8,7 @@
 
 // GGML internal header
 
-ggml_backend_buffer_type_t ggml_backend_cpu_aarch64_buffer_type(void);
+ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void);
 
 template <int K> constexpr int QK_0() {
     if constexpr (K == 4) {
