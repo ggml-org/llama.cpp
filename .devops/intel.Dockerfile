@@ -53,7 +53,7 @@ WORKDIR /app
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 RUN apt-get update \
-    && apt-get install -y python3 python3-pip python3-venv \
+    && apt-get install -y git python3 python3-pip python3-venv \
     && python3 -m venv $VIRTUAL_ENV \
     && pip install --upgrade pip setuptools wheel \
     && pip install -r requirements.txt \
