@@ -92,8 +92,11 @@ public:
     virtual bool is_static() const override {
         return m_is_static;
     }
-    virtual bool is_first_token() const {
+    virtual bool is_first_token() const override {
         return m_is_first_token;
+    }
+    virtual int get_max_token_len() const override {
+        return m_max_token_len;
     }
 
 private:
@@ -106,7 +109,7 @@ private:
     static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
 
     void set_max_token_len();
-    int64_t m_max_token_len;
+    int m_max_token_len;
 
     void add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
 

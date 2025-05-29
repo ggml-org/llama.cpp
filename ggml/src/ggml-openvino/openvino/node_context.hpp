@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <openvino/frontend/node_context.hpp>
 
 #include "decoder.hpp"
@@ -86,6 +87,12 @@ public:
     }
     bool is_static() const {
         return m_decoder->is_static();
+    }
+    bool is_first_token() const {
+        return m_decoder->is_first_token();
+    }
+    int get_max_token_len() const {
+        return m_decoder->get_max_token_len();
     }
 
 private:

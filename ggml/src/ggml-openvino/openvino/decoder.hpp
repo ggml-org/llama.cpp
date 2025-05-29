@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <openvino/core/node.hpp>
 #include <openvino/frontend/decoder.hpp>
@@ -57,6 +58,8 @@ public:
     virtual const std::vector<std::string>& get_model_output_names() const = 0;
 
     virtual bool is_static() const = 0;
+    virtual bool is_first_token() const = 0;
+    virtual int get_max_token_len() const = 0;
 };
 
 }  // namespace ggml
