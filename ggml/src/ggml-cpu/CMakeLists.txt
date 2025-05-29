@@ -84,7 +84,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (GGML_SYSTEM_ARCH STREQUAL "ARM")
         message(STATUS "ARM detected")
-        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/arm/quants.c)
+        list(APPEND GGML_CPU_SOURCES 
+            ggml-cpu/arch/arm/quants.c
+            ggml-cpu/arch/arm/repack.cpp
+            )
 
         if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
             message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
@@ -169,7 +172,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "x86")
         message(STATUS "x86 detected")
-        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/x86/quants.c)
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/arch/x86/quants.c
+            ggml-cpu/arch/x86/repack.cpp
+            )
 
         if (MSVC)
             # instruction set detection for MSVC only
@@ -354,7 +360,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "riscv64")
         message(STATUS "riscv64 detected")
-        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/riscv/quants.c)
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/arch/riscv/quants.c
+            ggml-cpu/arch/riscv/repack.cpp
+            )
         if (GGML_RVV)
             if (GGML_XTHEADVECTOR)
                 list(APPEND ARCH_FLAGS -march=rv64gc_xtheadvector -mabi=lp64d)
