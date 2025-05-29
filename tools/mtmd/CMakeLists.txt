@@ -9,6 +9,10 @@ add_library(mtmd OBJECT
             clip-impl.h
             )
 
+set(MTMD_PUBLIC_HEADERS
+    "mtmd.h"
+    "clip.h")
+
 target_link_libraries(mtmd PRIVATE ggml llama ${CMAKE_THREAD_LIBS_INIT})
 target_include_directories(mtmd PUBLIC .)
 target_include_directories(mtmd PRIVATE ../..)
@@ -21,6 +25,9 @@ add_library(mtmd_helper OBJECT
             mtmd-helper.h
             )
 
+set(MTMD_HELPER_PUBLIC_HEADERS
+    "mtmd-helper.h")
+
 target_link_libraries(mtmd_helper PRIVATE ggml llama mtmd ${CMAKE_THREAD_LIBS_INIT})
 target_include_directories(mtmd_helper PUBLIC .)
 target_include_directories(mtmd_helper PRIVATE ./vendor)
@@ -32,13 +39,22 @@ if (BUILD_SHARED_LIBS)
     target_compile_definitions(mtmd PRIVATE LLAMA_SHARED LLAMA_BUILD)
     add_library(mtmd_shared SHARED $<TARGET_OBJECTS:mtmd>)
     target_link_libraries(mtmd_shared PRIVATE ggml llama ${CMAKE_THREAD_LIBS_INIT})
-    install(TARGETS mtmd_shared LIBRARY)
+    set_target_properties(mtmd_shared PROPERTIES PUBLIC_HEADER "${MTMD_PUBLIC_HEADERS}")
+    install(TARGETS mtmd_shared LIBRARY PUBLIC_HEADER)
 
     set_target_properties(mtmd_helper PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(mtmd_helper PRIVATE LLAMA_SHARED LLAMA_BUILD)
-    add_library(mtmd_helper_shared SHARED $<TARGET_OBJECTS:mtmd>)
+    add_library(mtmd_helper_shared SHARED $<TARGET_OBJECTS:mtmd_helper>)
     target_link_libraries(mtmd_helper_shared PRIVATE ggml llama mtmd ${CMAKE_THREAD_LIBS_INIT})
-    install(TARGETS mtmd_helper_shared LIBRARY)
+    set_target_properties(mtmd_helper_shared PROPERTIES PUBLIC_HEADER "${MTMD_HELPER_PUBLIC_HEADERS}")
+    install(TARGETS mtmd_helper_shared LIBRARY PUBLIC_HEADER)
+else()
+    add_library(mtmd_static STATIC $<TARGET_OBJECTS:mtmd>)
+    set_target_properties(mtmd_static PROPERTIES PUBLIC_HEADER "${MTMD_PUBLIC_HEADERS}")
+    add_library(mtmd_helper_static STATIC $<TARGET_OBJECTS:mtmd_helper>)
+    set_target_properties(mtmd_helper_static PROPERTIES PUBLIC_HEADER "${MTMD_HELPER_PUBLIC_HEADERS}")
+    install(TARGETS mtmd_static LIBRARY PUBLIC_HEADER PUBLIC_HEADER)
+    install(TARGETS mtmd_helper_static LIBRARY PUBLIC_HEADER)
 endif()
 
 if (NOT MSVC)
