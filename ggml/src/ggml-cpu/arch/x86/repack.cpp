@@ -169,7 +169,7 @@ static inline __m256i mul_sum_i8_pairs_acc_int32x8(const __m256i acc, const __m2
 }
 #endif
 
-void ggml_quantize_mat_q8_0_4x8_native(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
@@ -307,7 +307,7 @@ void ggml_quantize_mat_q8_0_4x8_native(const float * GGML_RESTRICT x, void * GGM
 #endif
 }
 
-void ggml_quantize_mat_q8_K_4x8_native(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
+void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK_K == 256);
     assert(k % QK_K == 0);
     const int nb = k / QK_K;
@@ -571,7 +571,7 @@ void ggml_quantize_mat_q8_K_4x8_native(const float * GGML_RESTRICT x, void * GGM
 #endif
 }
 
-void ggml_gemv_q4_0_8x8_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -710,7 +710,7 @@ void ggml_gemv_q4_0_8x8_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, c
     }
 }
 
-void ggml_gemv_q4_K_8x8_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -984,7 +984,7 @@ void ggml_gemv_q4_K_8x8_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, c
 #endif
 }
 
-void ggml_gemm_q4_0_8x8_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
@@ -1763,7 +1763,7 @@ void ggml_gemm_q4_0_8x8_q8_0_native(int n, float * GGML_RESTRICT s, size_t bs, c
     }
 }
 
-void ggml_gemm_q4_K_8x8_q8_K_native(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK_K;
     const int nb = n / qk;
     const int ncols_interleaved = 8;
