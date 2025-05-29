@@ -1,5 +1,7 @@
 #include "utils.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -13,6 +15,7 @@
 #include <openvino/runtime/intel_npu/properties.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <unordered_map>
+#include <vector>
 
 #include "ggml-impl.h"
 #include "ggml.h"
@@ -52,7 +55,6 @@ static ov::frontend::FrontEnd::Ptr get_ggml_frontend() {
 
 enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph) {
     static ov::Core core;
-    static bool is_first_token = true;
 
     static std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "";
     if (device.empty()) {
@@ -66,12 +68,16 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     bool is_static = device == "NPU" ? true : false;
     ov::AnyMap config;
-    if (is_static) {
+    if (device == "NPU") {
         config = {
             {"NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean"},
             {"NPU_USE_NPUW", "YES"},
             {"NPUW_DEVICES", "NPU"},
             {"NPUW_FOLD", "YES"},
+            {"NPUW_DQ", "YES"},
+            {"NPUW_FUNCALL_ASYNC", "YES"},
+            {"NPUW_HOST_GATHER", "YES"},
+            {"NPUW_WEIGHTS_BANK", "shared"},
             // {"NPU_COMPILER_TYPE", "MLIR"},
         };
     }
@@ -83,69 +89,128 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         core.set_property(ov::cache_dir(cache_dir));
     }
 
-    // For CPU and GPU, there is only one compiled model, so only use the first element of the pair
-    // For NPU, there are prefill model and kvcache model (This is the ideal approach, but not implemented yet,
-    // currently recompile for every token)
-    using CachedItem = std::pair<std::shared_ptr<ov::Model>, std::pair<ov::CompiledModel, ov::CompiledModel>>;
-    static std::unordered_map<struct ggml_cgraph*, CachedItem> compiled_cache;
+    // CPU and GPU will only use cache_prefill
+    using CachedItem = std::pair<std::shared_ptr<ov::Model>, ov::CompiledModel>;
+    static std::unordered_map<struct ggml_cgraph*, CachedItem> compiled_cache_prefill;
+    static std::unordered_map<struct ggml_cgraph*, CachedItem> compiled_cache_kvcache;
 
+    std::shared_ptr<GgmlOvDecoder> ggml_decoder;
     std::shared_ptr<ov::Model> model;
-    ov::CompiledModel compiled_model_prefill;
-    ov::CompiledModel compiled_model_kvcache;
+    ov::CompiledModel compiled_model;
+
     int64_t decoder_end_time;
     int64_t conversion_end_time;
     int64_t compile_end_time;
 
-    auto ggml_decoder = get_ggml_decoder(cgraph, is_static, is_first_token);
-    decoder_end_time = ggml_time_us();
+    auto it = compiled_cache_prefill.find(cgraph);
+    bool is_first_token = it == compiled_cache_prefill.end();
+    if (!is_first_token) {
+        ggml_decoder = get_ggml_decoder(cgraph, is_static, false);
+        decoder_end_time = ggml_time_us();
 
-    auto it = compiled_cache.find(cgraph);
-    if (it != compiled_cache.end() && !is_static) {
-        model = it->second.first;
-        conversion_end_time = ggml_time_us();
-
-        compiled_model_prefill = it->second.second.first;
-        compiled_model_kvcache = it->second.second.second;
-        compile_end_time = ggml_time_us();
-    } else {
-        ov::frontend::InputModel::Ptr input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
-        model = ov::frontend::ggml::FrontEnd::convert(input_model);
-
-        conversion_end_time = ggml_time_us();
-
-        if (getenv("GGML_OPENVINO_DUMP_IR")) {
-            char timestamped_filename[64];
-            auto timestamp = (long long)ggml_time_us();
-            snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
-            ov::serialize(model, timestamped_filename);
+        if (is_static) {
+            model = compiled_cache_kvcache[cgraph].first;
+            compiled_model = compiled_cache_kvcache[cgraph].second;
+        } else {
+            model = it->second.first;
+            compiled_model = it->second.second;
         }
-
-        compiled_model_prefill = core.compile_model(model, device, config);
-        compile_end_time = ggml_time_us();
-
-        compiled_cache[cgraph] = std::make_pair(model, std::make_pair(compiled_model_prefill, compiled_model_kvcache));
-    }
-
-    ov::InferRequest infer_request;
-    if (!is_static) {
-        infer_request = compiled_model_prefill.create_infer_request();
+        conversion_end_time = ggml_time_us();
+        compile_end_time = conversion_end_time;
     } else {
-        infer_request = compiled_model_prefill.create_infer_request();
-        // if (is_first_token) {
-        //     infer_request = compiled_model_prefill.create_infer_request();
-        // } else {
-        //     infer_request = compiled_model_kvcache.create_infer_request();
-        // }
+        if (is_static) {
+            ggml_decoder = get_ggml_decoder(cgraph, is_static, true);
+            auto ggml_decoder_kvcache = get_ggml_decoder(cgraph, is_static, false);
+            decoder_end_time = ggml_time_us();
+
+            auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
+            auto input_model_kvcache = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder_kvcache);
+
+            model = ov::frontend::ggml::FrontEnd::convert(input_model);
+            auto model_kvcache = ov::frontend::ggml::FrontEnd::convert(input_model_kvcache);
+            conversion_end_time = ggml_time_us();
+
+            compiled_model = core.compile_model(model, device, config);
+            auto compiled_model_kvcache = core.compile_model(model_kvcache, device, config);
+            compile_end_time = ggml_time_us();
+
+            compiled_cache_prefill[cgraph] = std::make_pair(model, compiled_model);
+            compiled_cache_kvcache[cgraph] = std::make_pair(model_kvcache, compiled_model_kvcache);
+
+            if (getenv("GGML_OPENVINO_DUMP_IR")) {
+                char timestamped_filename[64];
+                auto timestamp = (long long)ggml_time_us();
+                snprintf(timestamped_filename, sizeof(timestamped_filename), "model_prefill_%lld.xml", timestamp);
+                ov::serialize(model, timestamped_filename);
+                snprintf(timestamped_filename, sizeof(timestamped_filename), "model_kvcache_%lld.xml", timestamp);
+                ov::serialize(model_kvcache, timestamped_filename);
+            }
+        } else {
+            ggml_decoder = get_ggml_decoder(cgraph, is_static, true);
+            decoder_end_time = ggml_time_us();
+
+            auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
+            model = ov::frontend::ggml::FrontEnd::convert(input_model);
+            conversion_end_time = ggml_time_us();
+
+            compiled_model = core.compile_model(model, device, config);
+            compile_end_time = ggml_time_us();
+            compiled_cache_prefill[cgraph] = std::make_pair(model, compiled_model);
+
+            if (getenv("GGML_OPENVINO_DUMP_IR")) {
+                char timestamped_filename[64];
+                auto timestamp = (long long)ggml_time_us();
+                snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
+                ov::serialize(model, timestamped_filename);
+            }
+        }
     }
+    auto infer_request = compiled_model.create_infer_request();
 
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
         auto param_name = ov_params[i]->get_friendly_name();
         ov::Tensor input_tensor;
+
         if (ggml_decoder->get_model_extra_inputs().find(param_name) != ggml_decoder->get_model_extra_inputs().end()) {
             input_tensor = *ggml_decoder->get_model_extra_input_values().at(param_name);
-        } else {
+
+        } else if (!is_static) {
             input_tensor = get_ggml_graph_input_tensor(ggml_decoder, param_name);
+
+        } else {
+            if (param_name == "inp_tokens" || param_name == "inp_pos") {
+                if (is_first_token) {
+                    size_t max_token_len = ggml_decoder->get_max_token_len();
+                    const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
+                    std::vector<int32_t> padded_data = pad_input<int32_t>(input_tensor_ggml, 1, max_token_len, 0);
+                    input_tensor = ov::Tensor(ov::element::i32, ov::Shape{1, 1, max_token_len});
+                    auto* data_ptr = input_tensor.data<int32_t>();
+                    std::copy(padded_data.begin(), padded_data.end(), data_ptr);
+                } else {
+                    input_tensor = get_ggml_graph_input_tensor(ggml_decoder, param_name);
+                }
+
+            } else if (param_name == "KQ_mask") {
+                size_t max_token_len = ggml_decoder->get_max_token_len();
+                const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
+                if (is_first_token) {
+                    std::vector<float> padded_data =
+                        pad_input<float>(input_tensor_ggml, max_token_len, max_token_len, -INFINITY);
+                    set_zero_diagonal(padded_data, max_token_len);
+                    input_tensor = ov::Tensor(ov::element::f32, ov::Shape{1, max_token_len, max_token_len});
+                    auto* data_ptr = input_tensor.data<float>();
+                    std::copy(padded_data.begin(), padded_data.end(), data_ptr);
+                } else {
+                    std::vector<float> padded_data = pad_input<float>(input_tensor_ggml, 1, max_token_len, -INFINITY);
+                    input_tensor = ov::Tensor(ov::element::f32, ov::Shape{1, 1, max_token_len});
+                    auto* data_ptr = input_tensor.data<float>();
+                    std::copy(padded_data.begin(), padded_data.end(), data_ptr);
+                }
+
+            } else {
+                input_tensor = get_ggml_graph_input_tensor(ggml_decoder, param_name);
+            }
         }
         infer_request.set_input_tensor(i, input_tensor);
 
@@ -232,5 +297,11 @@ void print_output_tensor_info(const std::string& name,
         break;
     default:
         break;
+    }
+}
+
+void set_zero_diagonal(std::vector<float>& matrix, size_t dim) {
+    for (size_t i = 0; i < dim; ++i) {
+        matrix[i * dim + i] = 0.0f;
     }
 }
