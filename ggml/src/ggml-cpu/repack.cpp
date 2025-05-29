@@ -1125,7 +1125,7 @@ static int repack_iq4_nl_to_iq4_nl_4_bl(struct ggml_tensor * t, int interleave_b
     GGML_UNUSED(data_size);
 }
 
-namespace ggml::cpu::aarch64 {
+namespace ggml::cpu::repack {
 // repack
 template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS>
 int repack(struct ggml_tensor *, const void *, size_t);
@@ -1445,7 +1445,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
     int repack(struct ggml_tensor * t, const void * data, size_t data_size) override {
         GGML_LOG_DEBUG("%s: repack tensor %s with %s_%dx%d\n", __func__, t->name, ggml_type_name(t->type),
                        (int) NB_COLS, (int) INTER_SIZE);
-        return ggml::cpu::aarch64::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
+        return ggml::cpu::repack::repack<BLOC_TYPE, INTER_SIZE, NB_COLS>(t, data, data_size);
     }
 };
 
@@ -1458,35 +1458,35 @@ static const tensor_traits<block_q4_K, 8, 8, GGML_TYPE_Q8_K> q4_K_8x8_q8_K;
 // instance for IQ4
 static const tensor_traits<block_iq4_nl, 4, 4, GGML_TYPE_Q8_0> iq4_nl_4x4_q8_0;
 
-}  // namespace ggml::cpu::aarch64
+}  // namespace ggml::cpu::repack
 
 static const ggml::cpu::tensor_traits * ggml_aarch64_get_optimal_repack_type(const struct ggml_tensor * cur) {
     if (cur->type == GGML_TYPE_Q4_0) {
         if (ggml_cpu_has_avx2() || (ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == QK8_0)) {
             if (cur->ne[1] % 8 == 0) {
-                return &ggml::cpu::aarch64::q4_0_8x8_q8_0;
+                return &ggml::cpu::repack::q4_0_8x8_q8_0;
             }
         }
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 4 == 0) {
-                return &ggml::cpu::aarch64::q4_0_4x8_q8_0;
+                return &ggml::cpu::repack::q4_0_4x8_q8_0;
             }
         }
         if (ggml_cpu_has_neon() && ggml_cpu_has_dotprod()) {
             if (cur->ne[1] % 4 == 0) {
-                return &ggml::cpu::aarch64::q4_0_4x4_q8_0;
+                return &ggml::cpu::repack::q4_0_4x4_q8_0;
             }
         }
     } else if (cur->type == GGML_TYPE_Q4_K) {
         if (ggml_cpu_has_avx2()) {
             if (cur->ne[1] % 8 == 0) {
-                return &ggml::cpu::aarch64::q4_K_8x8_q8_K;
+                return &ggml::cpu::repack::q4_K_8x8_q8_K;
             }
         }
     } else if (cur->type == GGML_TYPE_IQ4_NL) {
         if (ggml_cpu_has_neon() && ggml_cpu_has_dotprod()) {
             if (cur->ne[1] % 4 == 0) {
-                return &ggml::cpu::aarch64::iq4_nl_4x4_q8_0;
+                return &ggml::cpu::repack::iq4_nl_4x4_q8_0;
             }
         }
     }
@@ -1506,7 +1506,7 @@ static void ggml_backend_cpu_aarch64_buffer_set_tensor(ggml_backend_buffer_t buf
     GGML_ASSERT(offset == 0);
     GGML_ASSERT(size == ggml_nbytes(tensor));
 
-    auto tensor_traits = (ggml::cpu::aarch64::tensor_traits_base *) tensor->extra;
+    auto tensor_traits = (ggml::cpu::repack::tensor_traits_base *) tensor->extra;
     auto OK            = tensor_traits->repack(tensor, data, size);
 
     GGML_ASSERT(OK == 0);
@@ -1540,7 +1540,7 @@ static size_t ggml_backend_cpu_aarch64_buffer_type_get_alignment(ggml_backend_bu
     GGML_UNUSED(buft);
 }
 
-namespace ggml::cpu::aarch64 {
+namespace ggml::cpu::repack {
 class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         if (    op->op == GGML_OP_MUL_MAT &&
@@ -1587,7 +1587,7 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
         return nullptr;
     }
 };
-}  // namespace ggml::cpu::aarch64
+}  // namespace ggml::cpu::repack
 
 ggml_backend_buffer_type_t ggml_backend_cpu_aarch64_buffer_type(void) {
     static struct ggml_backend_buffer_type ggml_backend_cpu_buffer_type_aarch64 = {
@@ -1600,7 +1600,7 @@ ggml_backend_buffer_type_t ggml_backend_cpu_aarch64_buffer_type(void) {
                            /* .is_host          = */ nullptr,
                            },
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cpu_reg(), 0),
-        /* .context = */ new ggml::cpu::aarch64::extra_buffer_type(),
+        /* .context = */ new ggml::cpu::repack::extra_buffer_type(),
     };
 
     return &ggml_backend_cpu_buffer_type_aarch64;
