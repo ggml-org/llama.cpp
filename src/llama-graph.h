@@ -18,6 +18,8 @@ struct llama_ubatch;
 struct llama_cparams;
 
 class llama_memory_i;
+class llama_memory_state_i;
+
 class llama_kv_cache_unified;
 class llama_kv_cache_unified_iswa;
 class llama_kv_cache_recurrent;
@@ -383,10 +385,11 @@ struct llm_graph_params {
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
 
-    const llama_adapter_cvec  * cvec;
-    const llama_adapter_loras * loras;
-    const llama_memory_i      * memory;
-    const llama_cross         * cross;
+    const llama_adapter_cvec   * cvec;
+    const llama_adapter_loras  * loras;
+    const llama_memory_i       * memory;
+    const llama_memory_state_i * mstate;
+    const llama_cross          * cross;
 
     int32_t n_outputs;
 
@@ -435,10 +438,11 @@ struct llm_graph_context {
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
 
-    const llama_adapter_cvec  * cvec;
-    const llama_adapter_loras * loras;
-    const llama_memory_i      * memory;
-    const llama_cross         * cross;
+    const llama_adapter_cvec   * cvec;
+    const llama_adapter_loras  * loras;
+    const llama_memory_i       * memory;
+    const llama_memory_state_i * mstate;
+    const llama_cross          * cross;
 
     const llm_graph_cb & cb_func;
 
