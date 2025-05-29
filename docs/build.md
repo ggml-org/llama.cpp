@@ -559,3 +559,66 @@ The GPU may still be used to accelerate some parts of the computation even when 
 In most cases, it is possible to build and use multiple backends at the same time. For example, you can build llama.cpp with both CUDA and Vulkan support by using the `-DGGML_CUDA=ON -DGGML_VULKAN=ON` options with CMake. At runtime, you can specify which backend devices to use with the `--device` option. To see a list of available devices, use the `--list-devices` option.
 
 Backends can be built as dynamic libraries that can be loaded dynamically at runtime. This allows you to use the same llama.cpp binary on different machines with different GPUs. To enable this feature, use the `GGML_BACKEND_DL` option when building.
+
+
+## TSI compilation steps
+
+Following are the instructions to compile for TSI FPGA and Posix backend
+
+```bash
+Pull the repo frim tsisw as follows
+git clone git@github.com:tsisw/llama.cpp.git -b FIR-699
+```
+
+Ensure prerequisites are met as follows
+```bash
+cd llama.cpp/
+git submodule update --recursive --init
+cd ggml-tsi-kernel/
+module load tsi4 gcc/13.3.0
+python3 -m venv blob-creation
+source blob-creation/bin/activate
+pip install -r /proj/rel/sw/mlir-compiler/python/requirements-common.txt
+pip install /proj/rel/sw/mlir-compiler/python/mlir_external_packages-1.2.1-py3-none-any.whl
+pip install onnxruntime-training
+```
+
+build TSI kernels for the Tsavorite backend
+First for FPGA
+```bash
+cd fpga-kernel
+cmake -B build-fpga
+./create-all-kernels.sh
+```
+The for Posix Use cases
+```bash
+cd ../posix-kernel/
+./create-all-kernels.sh
+```
+
+Change directory to top level llama.cpp
+```bash
+cd ../../
+```
+
+Compile for posix with build-posix as a target folder
+```bash
+cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix
+cmake --build build-posix --config Release
+```
+
+Compile for fpga with build-fpga as a target folder
+```bash
+export CC="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc"
+export CXX="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++"
+cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga
+cmake --build build-fpga --config Release
+```
+For easy build one can also use which creates a FPGA specific tar bundle tsi-ggml.tz
+If you want to release the build update the TSI-VERSION in the file tsi-pkg-build.sh and add Release as parameter
+when running ./tsi-pkg-build.sh (Note it will overwrite what exists in /proj/rel/sw/ggml so be sure you want to do
+it. Example ./tsi-pkg-build.sh release
+
+```bash
+./tsi-pkg-build.sh
+```
