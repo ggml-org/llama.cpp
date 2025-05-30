@@ -531,6 +531,8 @@ struct llm_graph_context {
     // attention
     //
 
+    const llama_kv_cache_unified_state * get_state_unified() const;
+
     ggml_tensor * build_attn_mha(
              ggml_cgraph * gf,
              ggml_tensor * q,       // [n_embd_head_q, n_head_q, n_tokens]
@@ -604,6 +606,8 @@ struct llm_graph_context {
     //
     // recurrent
     //
+
+    const llama_kv_cache_recurrent_state * get_state_recurrent() const;
 
     ggml_tensor * build_copy_mask_state(
              ggml_cgraph * gf,

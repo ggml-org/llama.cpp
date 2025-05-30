@@ -954,7 +954,7 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_s_copy() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = get_state_recurrent();
 
     auto inp = std::make_unique<llm_graph_input_s_copy>(kv_state);
 
@@ -971,7 +971,7 @@ ggml_tensor * llm_graph_context::build_inp_s_copy() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_s_mask() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = get_state_recurrent();
 
     auto inp = std::make_unique<llm_graph_input_s_mask>(kv_state);
 
@@ -1025,7 +1025,7 @@ ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_dec() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_unified_state *>(mstate);
+    const auto * kv_state = get_state_unified();
 
     auto inp = std::make_unique<llm_graph_input_pos_bucket_kv>(hparams, kv_state);
 
@@ -1054,6 +1054,30 @@ ggml_tensor * llm_graph_context::build_pos_bias(ggml_tensor * pos_bucket, ggml_t
     cb(pos_bias, "pos_bias", -1);
 
     return pos_bias;
+}
+
+const llama_kv_cache_unified_state * llm_graph_context::get_state_unified() const {
+    const auto * umstate = dynamic_cast<const llama_kv_cache_unified_state *>(mstate);
+    if (!umstate) {
+        const auto hmstate = dynamic_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate);
+        if (hmstate) {
+            umstate = hmstate->get_state_attn();
+        }
+    }
+    GGML_ASSERT(umstate);
+    return umstate;
+}
+
+const llama_kv_cache_recurrent_state * llm_graph_context::get_state_recurrent() const {
+    const auto * rmstate = dynamic_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    if (!rmstate) {
+        const auto hmstate = dynamic_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate);
+        if (hmstate) {
+            rmstate = hmstate->get_state_recurrent();
+        }
+    }
+    GGML_ASSERT(rmstate);
+    return rmstate;
 }
 
 ggml_tensor * llm_graph_context::build_attn_mha(
@@ -1231,7 +1255,7 @@ ggml_tensor * llm_graph_context::build_attn(
 }
 
 llm_graph_input_attn_kv_unified * llm_graph_context::build_attn_inp_kv_unified() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_unified_state *>(mstate);
+    const auto * kv_state = get_state_unified();
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_unified>(hparams, cparams, kv_state);
 
@@ -1268,7 +1292,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const auto * kv_state = static_cast<const llama_kv_cache_unified_state *>(mstate);
+    const auto * kv_state = get_state_unified();
 
     // store to KV cache
     {
@@ -1446,7 +1470,7 @@ ggml_tensor * llm_graph_context::build_copy_mask_state(
          ggml_tensor * state_mask,
              int32_t   n_state,
              int32_t   n_seqs) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = get_state_recurrent();
 
     const auto n_kv    = kv_state->get_n_kv();
     const auto kv_head = kv_state->get_head();
@@ -1478,7 +1502,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
          ggml_tensor * state_mask,
   const llama_ubatch & ubatch,
                  int   il) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = get_state_recurrent();
 
     const auto token_shift_count = hparams.token_shift_count;
 
@@ -1499,7 +1523,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
          ggml_tensor * token_shift,
   const llama_ubatch & ubatch,
                  int   il) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = get_state_recurrent();
 
     const auto token_shift_count = hparams.token_shift_count;
     const auto n_embd = hparams.n_embd;
