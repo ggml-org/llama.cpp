@@ -511,11 +511,7 @@ void ggml_barrier(struct ggml_threadpool * tp);
 #define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
 #if defined(__GNUC__)
 // GCC/Clang on *nix
-# if defined(__APPLE__) && !defined(TARGET_OS_OSX)
-#  define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak _ ## name = _ ## alias) // NOLINT
-# else
-#  define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
-# endif
+# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
 #elif defined(_MSC_VER) && defined (_WIN64)
 // MSVC
 // Note: C name mangling varies across different calling conventions
