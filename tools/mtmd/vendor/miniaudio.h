@@ -61050,6 +61050,9 @@ MA_API void ma_dr_mp3_version(ma_uint32* pMajor, ma_uint32* pMinor, ma_uint32* p
 MA_API const char* ma_dr_mp3_version_string(void);
 typedef struct
 {
+    #ifdef hz
+    #undef hz
+    #endif
     int frame_bytes, channels, hz, layer, bitrate_kbps;
 } ma_dr_mp3dec_frame_info;
 typedef struct
