@@ -315,7 +315,10 @@ int main(int argc, char ** argv) {
                     } else {
                         client.prompt += k_system;
                     }
-                    for (int i = 0; i < n_junk; ++i) {
+
+                    const int n_junk_cur = rand() % n_junk;
+
+                    for (int i = 0; i < n_junk_cur; ++i) {
                         const int r = rand() % k_questions.size();
                         client.prompt += "User:\n" + k_questions[r] + "\nAssistant:\n " + k_answers[r] + "\n";
                     }
@@ -340,7 +343,7 @@ int main(int argc, char ** argv) {
                     client.n_decoded = 0;
                     client.i_batch   = batch.n_tokens - 1;
 
-                    LOG_INF("\033[31mClient %3d, seq %4d, started decoding ...\033[0m\n", client.id, client.seq_id);
+                    LOG_INF("\033[31mClient %3d, seq %4d, junk = %4d, started decoding ...\033[0m\n", client.id, client.seq_id, n_junk_cur);
 
                     g_seq_id += 1;
 
