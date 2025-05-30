@@ -6833,6 +6833,55 @@ void ggml_compute_forward_arange(
     }
 }
 
+// ggml_compute_forward_fill
+
+static void ggml_compute_forward_fill_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    float v;
+    memcpy(&v, dst->op_params, sizeof(float));
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int n  = ggml_nrows(dst);
+    const int nc = dst->ne[0];
+
+    const size_t nb00 = dst->nb[0];
+
+    const size_t nb0 = dst->nb[0];
+    const size_t nb1 = dst->nb[1];
+
+    GGML_ASSERT( nb0 == sizeof(float));
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    for (int j = ith; j < n; j += nth) {
+        float * dst_ptr  = (float *) ((char *)  dst->data + j*nb1);
+
+        for (int i = 0; i < nc; i++) {
+            dst_ptr[i] = v;
+        }
+    }
+}
+
+void ggml_compute_forward_fill(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_fill_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 static void ggml_compute_forward_timestep_embedding_f32(
     const ggml_compute_params * params,
     ggml_tensor * dst) {

@@ -2422,6 +2422,32 @@ struct test_clamp : public test_case {
     }
 };
 
+// GGML_OP_FILL
+struct test_fill : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    float v;
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, v);
+    }
+
+    test_fill(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 5, 4, 3},
+            float v = 0.5f)
+        : type(type), ne(ne), v(v) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_fill(ctx, a, v);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_DIAG_MASK_INF
 struct test_diag_mask_inf : public test_case {
     const ggml_type type;
@@ -4198,6 +4224,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 1));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 32, 4));
     test_cases.emplace_back(new test_gla(GGML_TYPE_F32, 32, 64, 128, 4));
+
+    test_cases.emplace_back(new test_fill(GGML_TYPE_F32));
 
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {
