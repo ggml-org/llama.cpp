@@ -6,7 +6,7 @@
 #include "log.h"
 #include "llama.h"
 
-#include "nlohmann/json.hpp"
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>

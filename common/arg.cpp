@@ -5,6 +5,7 @@
 #include "log.h"
 #include "sampling.h"
 #include "chat.h"
+#include "json-schema-to-grammar.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -14,6 +15,8 @@
 #endif
 #include <windows.h>
 #endif
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -33,8 +36,6 @@
 #include <curl/easy.h>
 #include <future>
 #endif
-
-#include "json-schema-to-grammar.h"
 
 using json = nlohmann::ordered_json;
 

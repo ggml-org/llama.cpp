@@ -1,3 +1,12 @@
+#include "chat.h"
+#include "common.h"
+#include "llama-cpp.h"
+#include "log.h"
+
+#include "linenoise.cpp/linenoise.h"
+
+#include <nlohmann/json.hpp>
+
 #if defined(_WIN32)
 #    include <windows.h>
 #    include <io.h>
@@ -23,14 +32,6 @@
 #include <sstream>
 #include <string>
 #include <vector>
-
-#include "chat.h"
-#include "common.h"
-#include "llama-cpp.h"
-#include "log.h"
-
-#include "nlohmann/json.hpp"
-#include "linenoise.cpp/linenoise.h"
 
 #if defined(__unix__) || (defined(__APPLE__) && defined(__MACH__)) || defined(_WIN32)
 [[noreturn]] static void sigint_handler(int) {
