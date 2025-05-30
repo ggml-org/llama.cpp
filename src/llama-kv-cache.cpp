@@ -464,8 +464,6 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
         head_cur = 0;
     }
 
-    // otherwise, one cell per token.
-
     if (n_tokens > cells.size()) {
         LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %u\n", __func__, n_tokens, cells.size());
         return -1;
@@ -2546,6 +2544,18 @@ bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {
         }
     }
 
+    // Find first to-be-cleared cell
+    rs_z = -1;
+    for (int i = min; i <= max; ++i) {
+        if (rs_z < 0 && cells[i].src == -1) {
+            rs_z = i;
+        }
+        // Stage the source ids for all used cells to allow correct seq_* behavior
+        // and still make these values available when setting the inputs
+        cells[i].src0 = cells[i].src;
+        cells[i].src = i;
+    }
+
     // allow getting the range of used cells, from head to head + n
     head = min;
     n    = max - min + 1;
@@ -2557,47 +2567,8 @@ bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {
 }
 
 bool llama_kv_cache_recurrent::get_can_shift() const {
-    return false;
-}
-
-int32_t llama_kv_cache_recurrent::s_copy(int i) const {
-    const uint32_t cell_id = i + head;
-
-    //////////////////////////////////////////////
-    // TODO: this should not mutate the KV cache !
-    kv_cell & cell = const_cast<kv_cell &>(cells[cell_id]);
-
-    // prevent out-of-bound sources
-    if (cell.src < 0 || (uint32_t) cell.src >= size) {
-        cell.src = cell_id;
-    }
-
-    int32_t res = cell.src;
-
-    // TODO: do not mutate the KV cache
-    // ensure copy only happens once
-    if (cell.src != (int32_t) cell_id) {
-        cell.src = cell_id;
-    }
-
-    return res;
-}
-
-float llama_kv_cache_recurrent::s_mask(int i) const {
-    const uint32_t cell_id = i + head;
-
-    //////////////////////////////////////////////
-    // TODO: this should not mutate the KV cache !
-    kv_cell & cell = const_cast<kv_cell &>(cells[cell_id]);
-
-    float res = (float) (cell.src >= 0);
-
-    // only clear once
-    if (cell.src < 0) {
-        cell.src = cell_id;
-    }
-
-    return res;
+    // shifting is trivial, the recurrent states don't care about the absolute position
+    return true;
 }
 
 size_t llama_kv_cache_recurrent::total_size() const {
@@ -3067,20 +3038,20 @@ uint32_t llama_kv_cache_recurrent_state::get_size() const {
     return kv->size;
 }
 
+int32_t llama_kv_cache_recurrent_state::get_rs_z() const {
+    return kv->rs_z;
+}
+
+int32_t llama_kv_cache_recurrent_state::get_src0(uint32_t cell_id) const {
+    return kv->cells[cell_id].src0;
+}
+
 ggml_tensor * llama_kv_cache_recurrent_state::get_k_l(int32_t il) const {
     return kv->k_l[il];
 }
 
 ggml_tensor * llama_kv_cache_recurrent_state::get_v_l(int32_t il) const {
     return kv->v_l[il];
-}
-
-int32_t llama_kv_cache_recurrent_state::s_copy(int i) const {
-    return kv->s_copy(i);
-}
-
-float llama_kv_cache_recurrent_state::s_mask(int i) const {
-    return kv->s_mask(i);
 }
 
 //
