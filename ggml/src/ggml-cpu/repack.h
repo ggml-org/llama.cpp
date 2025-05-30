@@ -71,7 +71,7 @@ extern "C" {
 // Workaround for clang:
 // clang++ complains: ``error: call to 'ggml_gemm_q4_0_4x4_q8_0' is ambiguous''
 // repro: https://godbolt.org/z/oKdeWKonM (ICE), https://godbolt.org/z/1szq6P36v (ambiguous call)
-#if defined(GGML_CPU_CLANG_WORKAROUND) || !(defined(__GNUC__) && defined(__clang__))
+#if defined(GGML_CPU_CLANG_WORKAROUND) || !(defined(__GNUC__) && defined(__clang__)) || defined(__HIPCC__)
 void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
@@ -102,7 +102,7 @@ void ggml_gemm_q4_0_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 void ggml_gemm_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 
-#if defined(__APPLE__) && !defined(TARGET_OS_OSX)
+#if defined(__APPLE__) && !TARGET_OS_OSX
 #define ggml_quantize_mat_q8_0_4x4_generic ggml_quantize_mat_q8_0_4x4
 #define ggml_quantize_mat_q8_0_4x8_generic ggml_quantize_mat_q8_0_4x8
 #define ggml_quantize_mat_q8_K_4x8_generic ggml_quantize_mat_q8_K_4x8

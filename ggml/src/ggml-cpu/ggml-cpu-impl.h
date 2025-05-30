@@ -513,7 +513,7 @@ void ggml_barrier(struct ggml_threadpool * tp);
 
 #define GGML_DO_PRAGMA_(x) _Pragma (#x)
 #define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
-#if defined(__APPLE__) && !defined(TARGET_OS_OSX)
+#if (defined(__APPLE__) && !TARGET_OS_OSX) || defined(__HIPCC__)
 // weak alias not working
 # define GGML_WEAK_ALIAS(name, alias)
 #elif defined(__GNUC__)
