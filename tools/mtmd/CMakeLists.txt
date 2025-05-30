@@ -23,8 +23,7 @@ add_library(mtmd_helper OBJECT
 
 target_link_libraries(mtmd_helper PRIVATE ggml llama mtmd ${CMAKE_THREAD_LIBS_INIT})
 target_include_directories(mtmd_helper PUBLIC .)
-target_include_directories(mtmd_helper PRIVATE ./vendor)
-target_include_directories(mtmd_helper PRIVATE ../..)
+target_include_directories(mtmd_helper PRIVATE ../../vendor)
 target_compile_features(mtmd_helper PRIVATE cxx_std_17)
 
 if (BUILD_SHARED_LIBS)
