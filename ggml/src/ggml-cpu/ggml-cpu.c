@@ -2414,13 +2414,15 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
             } break;
         case GGML_OP_CUSTOM:
             {
-                struct ggml_custom_op_params p;
-                memcpy(&p, node->op_params, sizeof(p));
-                if (p.n_tasks == GGML_N_TASKS_MAX) {
-                    n_tasks = n_threads;
-                } else {
-                    n_tasks = MIN(p.n_tasks, n_threads);
-                }
+                //> Modify this to adopt the custom flashdecoding op
+                n_tasks = n_threads;
+                // struct ggml_custom_op_params p;
+                // memcpy(&p, node->op_params, sizeof(p));
+                // if (p.n_tasks == GGML_N_TASKS_MAX) {
+                //     n_tasks = n_threads;
+                // } else {
+                //     n_tasks = MIN(p.n_tasks, n_threads);
+                // }
             } break;
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
@@ -2896,6 +2898,13 @@ struct ggml_cplan ggml_graph_plan(
                     {
                         GGML_ABORT("fatal error");
                     }
+                case GGML_OP_CUSTOM:
+                    {
+                        const int64_t ne10 = node->src[1]->ne[0]; // DK
+                        const int64_t ne20 = node->src[2]->ne[0]; // DV
+
+                        cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
+                    } break;
                 default:
                     break;
             }
@@ -3185,7 +3194,7 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
 
     int n_threads                               = cplan->n_threads;
     struct ggml_threadpool * threadpool = cplan->threadpool;
-    
+
     ggml_graph_profile_start(cgraph, n_threads);
 
     bool disposable_threadpool = false;

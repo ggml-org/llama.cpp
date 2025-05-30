@@ -6,6 +6,8 @@
 #include "llama-model.h"
 #include "llama-context.h"
 #include "llama-graph.h"
+#include "ggml.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <cassert>
@@ -15,6 +17,15 @@
 #include <stdexcept>
 #include <cstring>
 #include <chrono>
+
+// Define missing macros if not available
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+#ifndef CACHE_LINE_SIZE_F32
+#define CACHE_LINE_SIZE_F32 16
+#endif
 
 /*
  * Mixed KV Cache Debug Output
@@ -257,7 +268,7 @@ void llama_kv_cache_mixed::clear() {
         ggml_backend_buffer_clear(buf.get(), 0);
     }
     
-    LLAMA_LOG_DEBUG("[mixed-kv] cache cleared successfully\n");
+    LLAMA_LOG_DEBUG("[mixed-kv] cache cleared successfully (cleared %u FP16 tokens)\n", total_fp16_tokens);
 }
 
 // Implement sequence operations - similar to unified cache
@@ -1126,4 +1137,266 @@ ggml_tensor * llama_kv_cache_mixed::cpy_v(ggml_context * ctx, ggml_tensor * v_cu
     }
 
     return ggml_cpy(ctx, v_cur, v_view);
+}
+
+//=================================================================================================
+// Custom Flash Attention Implementation for Mixed KV Cache
+//=================================================================================================
+
+/**
+ * Simplified Custom Flash Attention Implementation for Mixed KV Cache
+ * 
+ * This is a basic implementation that follows the ggml_custom_op_t interface.
+ * It provides a foundation for flash attention with mixed precision KV cache.
+ * 
+ * @param dst Output tensor
+ * @param ith Thread index
+ * @param nth Total number of threads
+ * @param wdata Pointer to workspace
+ * @param wsize Size of workspace [1*DK + 2*DV + CACHE_LINE_SIZE_F32] * sizeof(float) * n_threads, e.g. (128 * 3 * sizeof(float) + 64) * 12 = 19200 bytes
+ * @param userdata Pointer to flash attention parameters
+ */
+void ggml_custom_flash_attn_mixed_simple(
+        ggml_tensor * dst,
+        int ith,
+        int nth,
+        void* wdata,
+        size_t wsize,
+        void * userdata) {
+    
+    GGML_UNUSED(wsize); // Mark as intentionally unused
+    
+    if (!userdata || !dst) {
+        LLAMA_LOG_ERROR("[mixed-kv] ERROR: null parameters in custom flash attention\n");
+        return;
+    }
+    
+    const auto * flash_params = static_cast<const llama_flash_attn_mixed_params *>(userdata);
+    
+    ggml_tensor * q = dst->src[0];
+    ggml_tensor * k = dst->src[1];
+    ggml_tensor * v = dst->src[2];
+    ggml_tensor * mask = dst->src[3];
+    
+    if (!q || !k || !v) {
+        LLAMA_LOG_ERROR("[mixed-kv] ERROR: null tensors in custom flash attention\n");
+        return;
+    }
+   
+    GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nek, k,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk, k,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nev, v,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbv, v,   nb)
+    GGML_TENSOR_LOCALS(int64_t, ne,  dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
+
+    const int64_t DK = nek0;     //> head_dim
+    const int64_t DV = nev0;     //> head_dim 
+    const int64_t N  = neq1;     //> q_len
+    
+    // memset(dst->data, 0, ggml_nbytes(dst));
+
+    GGML_ASSERT(ne0 == DV);     //> dst -> ne[0] == head_dim
+    GGML_ASSERT(ne2 == N);      //> dst -> ne[2] == q_len
+
+    // input tensor rows must be contiguous
+    //> QKV cannot do transpose.
+    GGML_ASSERT(nbq0 == ggml_type_size(q->type));
+    GGML_ASSERT(nbk0 == ggml_type_size(k->type));
+    GGML_ASSERT(nbv0 == ggml_type_size(v->type));
+
+    //> V donot transpose before.
+    GGML_ASSERT(neq0 == DK);     //> q -> ne[0] == head_dim
+    GGML_ASSERT(nek0 == DK);     //> k -> ne[0] == head_dim
+    GGML_ASSERT(nev0 == DV);     //> v -> ne[0] == head_dim
+
+    GGML_ASSERT(neq1 == N);      //> q -> ne[1] == q_len
+
+    // dst cannot be transposed or permuted
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+
+    // broadcast factors
+    const int64_t rk2 = neq2/nek2;     //> n_q_head / n_kv_head   | This is q_head and k_head ratio
+    const int64_t rk3 = neq3/nek3;     //> n_q_batch / n_kv_batch | This is q_batch and k_batch ratio
+
+    const int64_t rv2 = neq2/nev2;     //> n_q_head / n_v_head   | This is q_head and v_head ratio
+    const int64_t rv3 = neq3/nev3;     //> n_q_batch / n_v_batch | This is q_batch and v_batch ratio
+
+    // parallelize by q rows using ggml_vec_dot_f32
+
+    // total rows in q
+    const int nr = neq1*neq2*neq3;     //> number of rows, one row is one head_dim.
+
+    // NOTE: Parallelize by q rows.
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    float scale         = flash_params->scale;
+    float max_bias      = flash_params->max_bias;
+    float logit_softcap = flash_params->logit_softcap;
+
+    if (logit_softcap != 0) {
+        scale /= logit_softcap;
+    }
+
+    const uint32_t n_head      = neq2;
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
+
+    const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
+    const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    ggml_type    const k_vec_dot_type      = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
+    ggml_from_float_t const q_to_vec_dot   = ggml_get_type_traits_cpu(k_vec_dot_type)->from_float;
+    ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
+    ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
+
+    GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
+    GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
+
+    // loop over n_batch and n_head
+    for (int ir = ir0; ir < ir1; ++ir) {
+        // q indices
+        const int iq3 = ir / (neq2*neq1);                   //> batch index 
+        const int iq2 = (ir - iq3*neq2*neq1)/neq1;          //> head  index
+        const int iq1 = (ir - iq3*neq2*neq1 - iq2*neq1);    //> token index
+
+        const uint32_t h = iq2; // head index
+        const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+
+        float S = 0.0f;      // sum
+        float M = -INFINITY; // maximum KQ value
+
+        float       * VKQ32 = (float       *) wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
+        float       * V32   =                 (VKQ32 + 1*DV); // (temporary) FP32 V buffer
+        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
+        ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
+
+        if (v->type == GGML_TYPE_F16) {
+            memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+        } else {
+            memset(VKQ32, 0, DV*sizeof(float));
+        }
+
+        const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
+
+        // k indices
+        const int ik3 = iq3 / rk3;
+        const int ik2 = iq2 / rk2;
+
+        // v indices
+        const int iv3 = iq3 / rv3;
+        const int iv2 = iq2 / rv2;
+
+        //> One head of q (F32).
+        const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
+        q_to_vec_dot(pq, Q_q, DK);
+
+        // online softmax / attention
+        // loop over n_kv and n_head_kv
+        // ref: https://arxiv.org/pdf/2112.05682.pdf
+        for (int64_t ic = 0; ic < nek1; ++ic) {
+            const float mv = mp ? slope*ggml_fp16_to_fp32(mp[ic]) : 0.0f;
+            if (mv == -INFINITY) {
+                continue;
+            }
+
+            float s; // KQ value
+
+            const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
+            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+
+            s = s*scale; // scale KQ value
+
+            if (logit_softcap != 0.0f) {
+                s = logit_softcap*tanhf(s);
+            }
+
+            s += mv; // apply mask
+
+            const float Mold = M;
+
+            float ms = 1.0f; // upon new higher max val, scale VKQ and KQ sum with this value
+            float vs = 1.0f; // post-softmax KQ value, expf(s - M)
+
+            const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+
+            const ggml_fp16_t * v_data_f16 = (const ggml_fp16_t *) v_data;
+
+            if (v->type == GGML_TYPE_F16) {
+                if (s > M) {
+                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                    M = s;
+                    ms = expf(Mold - M);
+
+                    // V = V*expf(Mold - M)
+                    for (int i = 0; i < DV; ++i) {
+                        VKQ16[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(VKQ16[i])*ms);
+                    }
+                } else {
+                    // no new maximum, ms == 1.0f, vs != 1.0f
+                    vs = expf(s - M);
+                }
+
+                // V += v*expf(s - M)
+                for (int i = 0; i < DV; ++i) {
+                    VKQ16[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(VKQ16[i]) + ggml_fp16_to_fp32(v_data_f16[i])*vs);
+                }
+            } else {
+                // if (s > M) {
+                //     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                //     M = s;
+                //     ms = expf(Mold - M);
+
+                //     // V = V*expf(Mold - M)
+                //     ggml_vec_scale_f32(DV, VKQ32, ms);
+                // } else {
+                //     // no new maximum, ms == 1.0f, vs != 1.0f
+                //     vs = expf(s - M);
+                // }
+
+                // // V += v*expf(s - M)
+                // if (v_to_float) {
+                //     v_to_float(v_data, V32, DV);
+                //     ggml_vec_mad_f32(DV, VKQ32, V32, vs);
+                // } else {
+                //     // V is F32
+                //     ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
+                // }
+            }
+
+            S = S*ms + vs; // scale and increment sum with partial sum
+        }
+
+        if (v->type == GGML_TYPE_F16) {
+            for (int64_t d = 0; d < DV; ++d) {
+                VKQ32[d] = ggml_fp16_to_fp32(VKQ16[d]);
+            }
+        }
+
+        // V /= S
+        const float S_inv = 1.0f/S;
+        for (int i = 0; i < DV; ++i) {
+            VKQ32[i] *= S_inv;
+        }
+
+        // dst indices
+        const int i1 = iq1;
+        const int i2 = iq2;
+        const int i3 = iq3;
+
+        // original
+        //memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
+
+        // permute(0, 2, 1, 3)
+        memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
+    }
 }

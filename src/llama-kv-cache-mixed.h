@@ -13,7 +13,17 @@ struct llama_model;
 struct llama_context;
 struct ggml_tensor;
 
-// 🔀 混合精度KV缓存配置
+/**
+ * Flash Attention Parameters for Custom Operation
+ */
+struct llama_flash_attn_mixed_params {
+    float   scale;            // Scaling factor
+    float   max_bias;         // Maximum bias for attention
+    float   logit_softcap;    // Logit soft cap
+    int32_t layer_id;         // Layer ID for mixed cache access
+};
+
+
 // Mixed KV cache configuration
 struct llama_kv_cache_mixed_config {
         // Quantization settings
@@ -22,10 +32,10 @@ struct llama_kv_cache_mixed_config {
     uint32_t group_size = 16;               // Number of tokens to quantize at once
     
     // Advanced quantization settings
-    bool     adaptive_threshold = false;    // Dynamically adjust threshold based on memory pressure
-    float    memory_pressure_threshold = 0.8f; // Trigger quantization when memory usage > 80%
-    uint32_t min_quantization_threshold = 16;  // Minimum threshold for adaptive mode
-    uint32_t max_quantization_threshold = 128; // Maximum threshold for adaptive mode
+    bool     adaptive_threshold = false;        // Dynamically adjust threshold based on memory pressure
+    float    memory_pressure_threshold = 0.8f;  // Trigger quantization when memory usage > 80%
+    uint32_t min_quantization_threshold = 16;   // Minimum threshold for adaptive mode
+    uint32_t max_quantization_threshold = 128;  // Maximum threshold for adaptive mode
     
     // Cache types
     ggml_type hot_type_k  = GGML_TYPE_F16;  // Recent tokens (FP16)
@@ -37,6 +47,18 @@ struct llama_kv_cache_mixed_config {
     bool     enable_stats = true;           // Enable quantization statistics
     uint32_t stats_report_interval = 1000; // Report stats every N tokens
 };
+
+//> =================================================================================================
+//> Custom Flash Attention Implementation for Mixed KV Cache
+//> =================================================================================================
+void ggml_custom_flash_attn_mixed_simple(
+    ggml_tensor * dst,
+    int ith,
+    int nth,
+    void* wdata,
+    size_t wsize,
+    void * userdata
+);
 
 /*
  * llama_kv_cache_mixed

@@ -158,6 +158,12 @@ struct ggml_custom_op_params {
     void           * userdata;
 };
 
+struct ggml_flashdecoding_params {
+    ggml_custom_op_t fun;
+    int              n_tasks;
+    void           * userdata;
+};
+
 // bitset
 
 typedef uint32_t ggml_bitset_t;

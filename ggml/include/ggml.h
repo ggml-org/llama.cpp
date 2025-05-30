@@ -2018,7 +2018,7 @@ extern "C" {
             int                     n_tasks,
             void                  * userdata);
 
-    typedef void (*ggml_custom_op_t)(struct ggml_tensor * dst , int ith, int nth, void * userdata);
+    typedef void (*ggml_custom_op_t)(struct ggml_tensor * dst , int ith, int nth, void* wdata, size_t wsize, void * userdata);
 
     GGML_API struct ggml_tensor * ggml_custom_4d(
             struct ggml_context * ctx,
