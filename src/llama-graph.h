@@ -144,6 +144,25 @@ public:
     const llama_kv_cache_unified * kv_self;
 };
 
+class llm_graph_input_attn_decay : public llm_graph_input_i {
+public:
+    llm_graph_input_attn_decay(const llama_hparams & hparams,
+            const llama_kv_cache_unified * kv_self) : hparams(hparams), kv_self(kv_self) {}
+
+     virtual ~llm_graph_input_attn_decay() = default;
+
+    virtual void set_input(const llama_ubatch * ubatch) = 0;
+
+    ggml_tensor * slopes     = nullptr; // F32 [n_head]
+    ggml_tensor * q_decay    = nullptr; // F32 [n_batch, n_head]
+    ggml_tensor * k_decay    = nullptr; // F32 [n_batch, n_head]
+    ggml_tensor * diag_decay = nullptr; // F32 [n_batch, n_batch, n_head]
+    ggml_tensor * seq_ids    = nullptr; // I32 [n_seqs]
+
+    const llama_hparams & hparams;
+    const llama_kv_cache_unified * kv_self;
+};
+
 class llm_graph_input_out_ids : public llm_graph_input_i {
 public:
     llm_graph_input_out_ids(
@@ -526,6 +545,9 @@ struct llm_graph_context {
     ggml_tensor * build_inp_pos_bucket_dec() const;
     ggml_tensor * build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const;
 
+    // attention decay
+    llm_graph_input_attn_decay * build_attn_decay_inp() const;
+
     //
     // attention
     //
@@ -634,6 +656,69 @@ struct llm_graph_context {
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
             ggml_tensor * cls_out_b) const;
+
+    // minimax specific implementation
+    ggml_cgraph * build_minimax01() const;
+
+    // Add this new function declaration
+    ggml_tensor * llm_build_kv(
+            ggml_context * ctx,
+            void * lctx,
+            const llama_memory_i & kv_self,
+            ggml_cgraph * gf,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * k,
+            ggml_tensor * v,
+            ggml_tensor * q,
+            ggml_tensor * kq_mask,
+            int32_t n_tokens,
+            int32_t kv_head,
+            int32_t n_kv,
+            float kq_scale,
+            const llm_graph_cb & cb,
+            int il) const;
+
+    // Add these new function declarations
+    ggml_tensor * llm_build_inp_embd(
+            ggml_context * ctx,
+            void * lctx,
+            const llama_hparams & hparams,
+            const llama_ubatch & ubatch,
+            ggml_tensor * tok_embd,
+            const llm_graph_cb & cb) const;
+
+    ggml_tensor * build_inp_KQ_mask() const;
+    
+    ggml_tensor * llm_build_inp_slopes() const;
+    ggml_tensor * llm_build_inp_q_decay() const;
+    ggml_tensor * llm_build_inp_k_decay() const;
+    ggml_tensor * llm_build_inp_diag_decay() const;
+    ggml_tensor * llm_build_inp_seq_ids() const;
+
+    ggml_tensor * llm_build_norm(
+            ggml_context * ctx,
+            ggml_tensor * cur,
+            const llama_hparams & hparams,
+            ggml_tensor * norm,
+            ggml_tensor * norm_b,
+            llm_norm_type type,
+            const llm_graph_cb & cb,
+            int il) const;
+
+    ggml_tensor * llm_build_lora_mm(
+            void * lctx,
+            ggml_context * ctx,
+            ggml_tensor * w,
+            ggml_tensor * inp) const;
+            
+    ggml_tensor * llm_build_moe_ffn(
+            ggml_context * ctx,
+            void * lctx,
+            ggml_tensor * inp,
+            ggml_tensor * ffn_gate_inp,
+            ggml_tensor * ffn_up_exps,
+            ggml_tensor * ffn_gate_exps) const;
 };
 
 // TODO: better name

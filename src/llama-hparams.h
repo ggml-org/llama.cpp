@@ -128,6 +128,7 @@ struct llama_hparams {
 
     bool causal_attn   = true;
     bool use_alibi     = false;
+    bool use_decay_attn = false;  // whether to use decay attention mechanism
     bool attn_soft_cap = false;
     bool use_kq_norm   = true;
 

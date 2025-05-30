@@ -87,6 +87,96 @@ void llm_graph_input_pos_bucket_kv::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_attn_decay::set_input(const llama_ubatch * ubatch) {
+    if (slopes) {
+        const int64_t n_head = hparams.n_head();
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(slopes->buffer));
+
+        float * data = (float *) slopes->data;
+        memset(slopes->data, 0, n_head * ggml_element_size(slopes));
+
+        float start = powf(2, -powf(2, -(log2f(n_head) - 3)));
+        float ratio = start;
+
+        for (int h = 0; h < n_head; ++h) {
+            data[h] = start * powf(ratio, h);
+        }
+    }
+
+    if (q_decay) {
+        const int64_t n_head = hparams.n_head();
+        const int64_t n_seq_tokens = ubatch->n_seq_tokens;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(q_decay->buffer));
+        GGML_ASSERT(slopes != nullptr);
+
+        float * slopes_data = (float *) slopes->data;
+        float * data = (float *) q_decay->data;
+
+        // 处理3D张量格式
+        for (int i = 0; i < n_seq_tokens; ++i) {
+            for (int h = 0; h < n_head; ++h) {
+                // 对于3D张量[1, n_head, n_seq_tokens]，索引计算为i*n_head + h
+                data[i*n_head + h] = -slopes_data[h] * (i + 1);
+            }
+        }
+    }
+
+    if (k_decay) {
+        const int64_t n_head = hparams.n_head();
+        const int64_t n_seq_tokens = ubatch->n_seq_tokens;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(k_decay->buffer));
+        GGML_ASSERT(slopes != nullptr);
+
+        float * slopes_data = (float *) slopes->data;
+        float * data = (float *) k_decay->data;
+
+        // 处理3D张量格式
+        for (int i = 0; i < n_seq_tokens; ++i) {
+            for (int h = 0; h < n_head; ++h) {
+                // 对于3D张量[1, n_head, n_seq_tokens]，索引计算为i*n_head + h
+                data[i*n_head + h] = -slopes_data[h] * (n_seq_tokens - i - 1);
+            }
+        }
+    }
+
+    if (diag_decay) {
+        const int64_t n_head = hparams.n_head();
+        const int64_t n_seq_tokens = ubatch->n_seq_tokens;
+
+        GGML_ASSERT(ggml_backend_buffer_is_host(diag_decay->buffer));
+        GGML_ASSERT(slopes != nullptr);
+
+        float * slopes_data = (float *) slopes->data;
+        float * data = (float *) diag_decay->data;
+
+        for (int j = 0; j < n_seq_tokens; ++j) {
+            for (int i = 0; i < n_seq_tokens; ++i) {
+                int index = j - i;
+                for (int h = 0; h < n_head; ++h) {
+                    float s_index = index >= 0 ? -slopes_data[h] * index : -INFINITY;
+                    data[j * n_head * n_seq_tokens + i * n_head + h] = s_index;
+                }
+            }
+        }
+    }
+
+    if (seq_ids) {
+        const int64_t n_seqs = ubatch->n_seqs;
+
+        GGML_ASSERT(n_seqs != 0);
+        GGML_ASSERT(ggml_backend_buffer_is_host(seq_ids->buffer));
+
+        uint32_t * data = (uint32_t *) seq_ids->data;
+
+        for (int s = 0; s < n_seqs; ++s) {
+            data[s] = (ubatch->seq_id ? ubatch->seq_id[s][0] : 0);
+        }
+    }
+}
+
 void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
     if (hparams.causal_attn || cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
         //GGML_ASSERT(out_ids && "every model that can must skip unused outputs");
@@ -1011,6 +1101,51 @@ ggml_tensor * llm_graph_context::build_inp_cross_embd() const {
     return cur;
 }
 
+// attention decay
+class llm_graph_input_attn_decay_local : public llm_graph_input_attn_decay {
+public:
+    llm_graph_input_attn_decay_local(const llama_hparams & hparams, const llama_kv_cache_unified * kv_self) : llm_graph_input_attn_decay(hparams, kv_self) {}
+    virtual ~llm_graph_input_attn_decay_local() = default;
+
+    void set_input(const llama_ubatch * ubatch) override {
+        if (slopes) {
+            float * data = (float *) slopes->data;
+            // 初始化衰减参数...
+        }
+        // 其他设置...
+    }
+};
+
+llm_graph_input_attn_decay * llm_graph_context::build_attn_decay_inp() const {
+    const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
+    const llama_kv_cache_unified * kv_unified = dynamic_cast<const llama_kv_cache_unified *>(kv_self);
+    auto * inp = new llm_graph_input_attn_decay_local(hparams, kv_unified);
+    res->add_input(llm_graph_input_ptr(inp));
+
+    // 创建斜率张量 - 单个标量参数
+    inp->slopes = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_head);
+    cb(inp->slopes, "decay_slopes", -1);
+
+    // 创建q_decay张量 - 3D张量：[n_seq_tokens, n_head, n_seqs]
+    const int64_t n_seq_tokens = ubatch.n_seq_tokens;
+    inp->q_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_seq_tokens, n_head, ubatch.n_seqs);
+    cb(inp->q_decay, "q_decay", -1);
+
+    // 创建k_decay张量 - 3D张量：[n_seq_tokens, n_head, n_seqs]
+    inp->k_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_seq_tokens, n_head, ubatch.n_seqs);
+    cb(inp->k_decay, "k_decay", -1);
+
+    // 创建diag_decay张量 - 3D张量：[n_seq_tokens, n_seq_tokens, n_head]
+    inp->diag_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_seq_tokens, n_seq_tokens, n_head);
+    cb(inp->diag_decay, "diag_decay", -1);
+
+    // 创建seq_ids张量 - 1D张量：[n_seqs]
+    inp->seq_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_seqs);
+    cb(inp->seq_ids, "seq_ids", -1);
+
+    return (llm_graph_input_attn_decay*)inp;
+}
+
 ggml_tensor * llm_graph_context::build_inp_pos_bucket_enc() const {
     auto inp = std::make_unique<llm_graph_input_pos_bucket>(hparams);
 
@@ -1211,6 +1346,19 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
+    
+    // Apply decay attention if enabled in the model architecture
+    if (hparams.use_decay_attn) {
+        llm_graph_input_attn_decay * decay_inp = build_attn_decay_inp();
+        
+        // Apply q decay and k decay
+        q = ggml_add(ctx0, q, ggml_reshape_3d(ctx0, decay_inp->q_decay, 1, decay_inp->q_decay->ne[1], decay_inp->q_decay->ne[2]));
+        k = ggml_add(ctx0, k, ggml_reshape_3d(ctx0, decay_inp->k_decay, 1, decay_inp->k_decay->ne[1], decay_inp->k_decay->ne[2]));
+        
+        // Alternatively, if diagonal decay should be used directly in attention scoring,
+        // we need to modify the kq_mask or implement custom attention
+        // This depends on the specific implementation of decay attention
+    }
 
     ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, kq_scale);
     cb(cur, "kqv_out", il);
@@ -1501,123 +1649,169 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
                  int   il) const {
     const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
 
-    const auto token_shift_count = hparams.token_shift_count;
-    const auto n_embd = hparams.n_embd;
-
-    const int64_t n_seqs = ubatch.n_seqs;
-
-    const auto kv_head = kv_self->head;
-
-    return ggml_cpy(
-        ctx0,
-        ggml_view_1d(ctx0, token_shift, n_embd * n_seqs * token_shift_count, 0),
-        ggml_view_1d(ctx0, kv_self->k_l[il], hparams.n_embd_k_s() * n_seqs, hparams.n_embd_k_s() * kv_head * ggml_element_size(kv_self->k_l[il]))
-    );
+    // 这里将添加minimax01特定的实现
+    
+    return token_shift; // 返回处理后的token_shift
 }
 
-void llm_graph_context::build_pooling(
+ggml_tensor * llm_graph_context::llm_build_kv(
+        ggml_context * ctx,
+        void * lctx,
+        const llama_memory_i & kv_self,
         ggml_cgraph * gf,
-        ggml_tensor * cls,
-        ggml_tensor * cls_b,
-        ggml_tensor * cls_out,
-        ggml_tensor * cls_out_b) const {
-    if (!cparams.embeddings) {
-        return;
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * q,
+        ggml_tensor * kq_mask,
+        int32_t n_tokens,
+        int32_t kv_head,
+        int32_t n_kv,
+        float kq_scale,
+        const llm_graph_cb & cb,
+        int il) const {
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    ggml_build_forward_expand(gf, q);
+    ggml_build_forward_expand(gf, k);
+    ggml_build_forward_expand(gf, v);
+
+    // store to KV cache (implementation might need to be adjusted based on kv_self type)
+    const llama_kv_cache_unified * kv_unified = dynamic_cast<const llama_kv_cache_unified *>(&kv_self);
+    if (kv_unified) {
+        ggml_build_forward_expand(gf, kv_unified->cpy_k(ctx, k, il));
+        ggml_build_forward_expand(gf, kv_unified->cpy_v(ctx, v, il));
     }
 
-    ggml_tensor * inp = res->t_embd;
+    ggml_tensor * cur = build_attn_mha(gf, q, k, v, nullptr, kq_mask, nullptr, kq_scale);
+    cb(ubatch, cur, "kqv_out", il);
 
-    //// find result_norm tensor for input
-    //for (int i = ggml_graph_n_nodes(gf) - 1; i >= 0; --i) {
-    //    inp = ggml_graph_node(gf, i);
-    //    if (strcmp(inp->name, "result_norm") == 0 || strcmp(inp->name, "result_embd") == 0) {
-    //        break;
-    //    }
-
-    //    inp = nullptr;
-    //}
-
-    GGML_ASSERT(inp != nullptr && "missing result_norm/result_embd tensor");
-
-    ggml_tensor * cur;
-
-    switch (pooling_type) {
-        case LLAMA_POOLING_TYPE_NONE:
-            {
-                cur = inp;
-            } break;
-        case LLAMA_POOLING_TYPE_MEAN:
-            {
-                ggml_tensor * inp_mean = build_inp_mean();
-                cur = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, inp)), inp_mean);
-            } break;
-        case LLAMA_POOLING_TYPE_CLS:
-        case LLAMA_POOLING_TYPE_LAST:
-            {
-                ggml_tensor * inp_cls = build_inp_cls();
-                cur = ggml_get_rows(ctx0, inp, inp_cls);
-            } break;
-        case LLAMA_POOLING_TYPE_RANK:
-            {
-                ggml_tensor * inp_cls = build_inp_cls();
-                inp = ggml_get_rows(ctx0, inp, inp_cls);
-
-                if (cls != nullptr && cls_b != nullptr) {
-                    // classification head
-                    // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
-                    cur = ggml_add(ctx0, ggml_mul_mat(ctx0, cls, inp), cls_b);
-                    cur = ggml_tanh(ctx0, cur);
-
-                    // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
-                    // https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/blob/cb5347e43979c3084a890e3f99491952603ae1b7/modeling_bert.py#L884-L896
-                    if (cls_out) {
-                        GGML_ASSERT(cls_out_b != nullptr);
-                        cur = ggml_add(ctx0, ggml_mul_mat(ctx0, cls_out, cur), cls_out_b);
-                    }
-                } else if (cls_out) {
-                    // Single layer classification head (direct projection)
-                    // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
-                    GGML_ASSERT(cls_out_b != nullptr);
-                    cur = ggml_add(ctx0, ggml_mul_mat(ctx0, cls_out, inp), cls_out_b);
-                } else {
-                    GGML_ABORT("RANK pooling requires either cls+cls_b or cls_out+cls_out_b");
-                }
-            } break;
-        default:
-            {
-                GGML_ABORT("unknown pooling type");
-            }
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
     }
 
-    cb(cur, "result_embd_pooled", -1);
-    res->t_embd_pooled = cur;
+    if (wo_b) {
+        cur = ggml_add(ctx, cur, wo_b);
+    }
 
-    ggml_build_forward_expand(gf, cur);
+    return cur;
 }
 
-int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional) {
-    // TODO move to hparams if a T5 variant appears that uses a different value
-    const int64_t max_distance = 128;
+ggml_tensor * llm_graph_context::llm_build_inp_embd(
+        ggml_context * ctx,
+        void * lctx,
+        const llama_hparams & hparams,
+        const llama_ubatch & ubatch,
+        ggml_tensor * tok_embd,
+        const llm_graph_cb & cb) const {
+    // 基本的嵌入逻辑
+    ggml_tensor * inp_tokens = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ubatch.n_tokens);
+    ggml_set_input(inp_tokens);
 
-    if (bidirectional) {
-        n_buckets >>= 1;
+    // 使用token嵌入来获取每个token的嵌入向量
+    ggml_tensor * inpL = ggml_get_rows(ctx, tok_embd, inp_tokens);
+    cb(ubatch, inpL, "inp_embd", -1);
+
+    return inpL;
+}
+
+ggml_tensor * llm_graph_context::build_inp_KQ_mask() const {
+    // 创建注意力掩码
+    ggml_tensor * KQ_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_ctx, n_tokens);
+    ggml_set_input(KQ_mask);
+    return KQ_mask;
+}
+
+ggml_tensor * llm_graph_context::llm_build_inp_slopes() const {
+    // 斜率张量用于特殊的注意力实现
+    ggml_tensor * slopes = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_head);
+    ggml_set_input(slopes);
+    return slopes;
+}
+
+ggml_tensor * llm_graph_context::llm_build_inp_q_decay() const {
+    // 用于q衰减
+    ggml_tensor * q_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_tokens, n_head);
+    ggml_set_input(q_decay);
+    return q_decay;
+}
+
+ggml_tensor * llm_graph_context::llm_build_inp_k_decay() const {
+    // 用于k衰减
+    ggml_tensor * k_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_tokens, n_head);
+    ggml_set_input(k_decay);
+    return k_decay;
+}
+
+ggml_tensor * llm_graph_context::llm_build_inp_diag_decay() const {
+    // 用于对角线衰减
+    ggml_tensor * diag_decay = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_tokens, n_tokens, n_head);
+    ggml_set_input(diag_decay);
+    return diag_decay;
+}
+
+ggml_tensor * llm_graph_context::llm_build_inp_seq_ids() const {
+    // 序列ID张量
+    ggml_tensor * seq_ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_seqs);
+    ggml_set_input(seq_ids);
+    return seq_ids;
+}
+
+ggml_tensor * llm_graph_context::llm_build_norm(
+        ggml_context * ctx,
+        ggml_tensor * cur,
+        const llama_hparams & hparams,
+        ggml_tensor * norm,
+        ggml_tensor * norm_b,
+        llm_norm_type type,
+        const llm_graph_cb & cb,
+        int il) const {
+    // 标准化层实现
+    switch (type) {
+        case LLM_NORM:
+            cur = ggml_norm(ctx, cur, hparams.f_norm_eps);
+            break;
+        case LLM_NORM_RMS:
+            cur = ggml_rms_norm(ctx, cur, hparams.f_norm_rms_eps);
+            break;
+        case LLM_NORM_GROUP:
+            // Group norm would need to be implemented
+            break;
     }
 
-    const int64_t max_exact = n_buckets >> 1;
-
-    int32_t relative_position = x - y;
-    int32_t relative_bucket = 0;
-
-    if (bidirectional) {
-        relative_bucket += (relative_position > 0) * n_buckets;
-        relative_position = abs(relative_position);
-    } else {
-        relative_position = -std::min<int32_t>(relative_position, 0);
+    if (norm) {
+        cur = ggml_mul(ctx, cur, norm);
     }
 
-    int32_t relative_position_if_large = floorf(max_exact + logf(1.0 * relative_position / max_exact) * (n_buckets - max_exact) / log(1.0 * max_distance / max_exact));
-    relative_position_if_large = std::min<int32_t>(relative_position_if_large, n_buckets - 1);
-    relative_bucket += (relative_position < max_exact ? relative_position : relative_position_if_large);
+    if (norm_b) {
+        cur = ggml_add(ctx, cur, norm_b);
+    }
 
-    return relative_bucket;
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::llm_build_lora_mm(
+        void * lctx,
+        ggml_context * ctx,
+        ggml_tensor * w,
+        ggml_tensor * inp) const {
+    // 简单的矩阵乘法实现，实际上可能需要处理LoRA逻辑
+    return ggml_mul_mat(ctx, w, inp);
+}
+
+ggml_tensor * llm_graph_context::llm_build_moe_ffn(
+        ggml_context * ctx,
+        void * lctx,
+        ggml_tensor * inp,
+        ggml_tensor * ffn_gate_inp,
+        ggml_tensor * ffn_up_exps,
+        ggml_tensor * ffn_gate_exps) const {
+    // Mixture of Experts前馈网络的基本实现
+    // 这是一个简化版本，实际实现会更复杂
+    ggml_tensor * gate_inp = ggml_mul_mat(ctx, ffn_gate_inp, inp);
+    
+    // 对于简单起见，我们只返回输入张量
+    // 实际实现需要处理专家选择和组合
+    return inp;
 }

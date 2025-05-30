@@ -464,6 +464,7 @@ public:
 
     std::vector<ggml_tensor *> k_l; // per layer
     std::vector<ggml_tensor *> v_l;
+    std::vector<ggml_tensor *> kv_l;
 
 private:
     //const llama_model & model;
