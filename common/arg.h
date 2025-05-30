@@ -87,3 +87,10 @@ struct common_remote_params {
 };
 // get remote file content, returns <http_code, raw_response_body>
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params);
+
+// download one single file from remote URL to local path
+bool common_download_file_single(const std::string & url, const std::string & path, const std::string & bearer_token, bool offline);
+
+// download multiple files from remote URLs to local paths
+// the input is a vector of pairs <url, path>
+bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls, const std::string & bearer_token, bool offline);
