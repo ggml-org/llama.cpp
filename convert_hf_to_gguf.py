@@ -2191,25 +2191,6 @@ class Mistral3Model(LlamaModel):
 class Plamo2Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.PLAMO2
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
-        # Add custom mappings for Plamo2's unique structure
-        # Plamo2 uses "mixer" for Mamba layers instead of standard attention
-        tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
-        
-        # Add Mamba-specific mappings 
-        for i in range(self.block_count):
-            # SSM/Mamba tensors
-            tensor_map[f"model.layers.{i}.mixer.in_proj"] = f"blk.{i}.ssm_in"
-            tensor_map[f"model.layers.{i}.mixer.conv1d"] = f"blk.{i}.ssm_conv1d"
-            tensor_map[f"model.layers.{i}.mixer.x_proj"] = f"blk.{i}.ssm_x"
-            tensor_map[f"model.layers.{i}.mixer.dt_proj"] = f"blk.{i}.ssm_dt"
-            tensor_map[f"model.layers.{i}.mixer.A_log"] = f"blk.{i}.ssm_a"
-            tensor_map[f"model.layers.{i}.mixer.D"] = f"blk.{i}.ssm_d"
-            tensor_map[f"model.layers.{i}.mixer.out_proj"] = f"blk.{i}.ssm_out"
-            
-        self.tensor_map = tensor_map
 
     def set_vocab(self):
         # Plamo2 uses sentencepiece tokenizer similar to Llama
