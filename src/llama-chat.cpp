@@ -64,6 +64,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
     { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
+    { "seed-coder",        LLM_CHAT_TEMPLATE_SEED_CODER        },
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -183,6 +184,9 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_BAILING;
     } else if (tmpl_contains("<|header_start|>") && tmpl_contains("<|header_end|>")) {
         return LLM_CHAT_TEMPLATE_LLAMA4;
+    } else if (tmpl_contains("raise_exception") && tmpl_contains("System role not supported") &&
+               tmpl_contains("Conversation roles must alternate user/assistant/user/assistant/...")) {
+        return LLM_CHAT_TEMPLATE_SEED_CODER;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -642,6 +646,17 @@ int32_t llm_chat_apply_template(
         }
         if (add_ass) {
             ss << "Assistant:";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_SEED_CODER) {
+        // Seed-Coder
+        for (auto message : chat) {
+            std::string role(message->role);
+            if (role == "user") {
+                ss << "<[begin▁of▁sentence]>" << role << "\n" << trim(message->content) << "<[end▁of▁sentence]>";
+            }
+        }
+        if (add_ass) {
+            ss << "<[begin▁of▁sentence]>assistant\n";
         }
     } else {
         // template not supported
