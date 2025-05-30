@@ -1863,7 +1863,12 @@ static bool ggml_backend_opencl_cpy_tensor_async(ggml_backend_t backend, const g
 }
 
 static void ggml_backend_opencl_synchronize(ggml_backend_t backend) {
-    GGML_UNUSED(backend);
+    auto * backend_ctx = static_cast<ggml_backend_opencl_context *>(backend->context);
+
+    cl_event evt;
+    CL_CHECK(clEnqueueBarrierWithWaitList(backend_ctx->queue, 0, nullptr, &evt));
+    CL_CHECK(clWaitForEvents(1, &evt));
+    CL_CHECK(clReleaseEvent(evt));
 }
 
 // Syncronizes the 'backend_ctx's device with others so that commands
@@ -2052,7 +2057,7 @@ static ggml_backend_i ggml_backend_opencl_i = {
     /* .set_tensor_async        = */ NULL,  /* ggml_backend_opencl_set_tensor_async */
     /* .get_tensor_async        = */ NULL,  /* ggml_backend_opencl_get_tensor_async */
     /* .cpy_tensor_async        = */ NULL,  /* ggml_backend_opencl_cpy_tensor_async */
-    /* .synchronize             = */ NULL,  /* ggml_backend_opencl_synchronize */
+    /* .synchronize             = */ ggml_backend_opencl_synchronize,
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
     /* .graph_plan_update       = */ NULL,
