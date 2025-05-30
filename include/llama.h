@@ -48,9 +48,28 @@
 #define LLAMA_STATE_SEQ_VERSION 2
 
 #ifdef __cplusplus
+#include <vector>
+#include <string>
+#include <array> // Added for std::array
+
+// These enums need to be defined before struct llama_hparams
+enum llama_swa_type {
+    LLAMA_SWA_TYPE_UNSPECIFIED = -1,
+    LLAMA_SWA_TYPE_NONE        = 0,
+    LLAMA_SWA_TYPE_STANDARD    = 1, // standard SWA (used by Gemma-2)
+    LLAMA_SWA_TYPE_CHUNKED     = 2, // chunked SWA (used by Llama 4)
+};
+
+enum llama_expert_gating_func_type {
+    LLAMA_EXPERT_GATING_FUNC_TYPE_NONE    = 0,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX = 1,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID = 2,
+};
+#endif // __cplusplus // Closes the block for C++ specific includes and enums
+
+#ifdef __cplusplus
 extern "C" {
 #endif
-
     //
     // C interface
     //
@@ -1372,6 +1391,152 @@ extern "C" {
 
 #ifdef __cplusplus
 }
-#endif
+
+// Internal llama_hparams
+// NOTE: must be C-compatible
+// TODO: remove this C-compatibility requirement
+#include <cstdint>
+#include <cstddef>
+// #include <vector> // already included above
+// #include <string> // already included above
+// #include <array>  // already included above
+
+// Max number of layers that can be stored in llama_hparams arrays
+#define LLAMA_MAX_LAYERS 256
+
+struct llama_hparams {
+    uint32_t n_vocab = 0;
+    uint32_t n_ctx_train = 0; // context size used during training
+    uint32_t n_embd = 0;
+    uint32_t n_layer = 0;
+    uint32_t n_rot = 0;
+    uint32_t n_ff_exp = 0; // feed-forward length for experts
+    uint32_t n_ff_shexp = 0; // feed-forward length for shared experts
+    uint32_t n_expert = 0;
+    uint32_t n_expert_used = 0;
+    uint32_t n_expert_shared = 0;
+    uint32_t n_embd_head_k = 0; // dimension of key heads
+    uint32_t n_embd_head_v = 0; // dimension of value heads
+    // uint32_t n_embd_k_gqa = 0;  // dimension of key GQA // REMOVED
+    // uint32_t n_embd_v_gqa = 0;  // dimension of value GQA // REMOVED
+    uint32_t n_embd_features = 0; // dimension of features for wavtokenizer
+    uint32_t n_layer_dense_lead = 0; // number of leading dense layers for MoE models
+    uint32_t n_moe_layer_step = 0; // step between MoE layers
+    uint32_t n_lora_q = 0;
+    uint32_t n_lora_kv = 0;
+    uint32_t n_lora_decay = 0;
+    uint32_t n_lora_iclr = 0;
+    uint32_t n_lora_value_res_mix = 0;
+    uint32_t n_lora_gate = 0;
+    uint32_t n_rel_attn_bkts = 0;
+    uint32_t n_no_rope_layer_step = 0;
+    uint32_t n_token_types = 0;
+    uint32_t n_swa = 0; // sliding window attention size
+    uint32_t n_swa_pattern = 0; // sliding window attention pattern
+    uint32_t wkv_head_size = 0;
+    uint32_t time_mix_extra_dim = 0;
+    uint32_t time_decay_extra_dim = 0;
+    uint32_t rescale_every_n_layers = 0;
+    uint32_t token_shift_count = 0;
+    uint32_t n_embd_head_k_mla = 0; // dimension of key heads for MLA
+    uint32_t n_embd_head_v_mla = 0; // dimension of value heads for MLA
+    uint32_t ssm_d_conv = 0;     // SSM conv dimension
+    uint32_t ssm_d_inner = 0;    // SSM inner dimension
+    uint32_t ssm_d_state = 0;    // SSM state dimension
+    uint32_t ssm_dt_rank = 0;    // SSM time step rank
+    uint32_t moe_every_n_layers = 0; // MoE layer interval
+
+    float    f_norm_eps = 0.0f; // rmsnorm eps
+    float    f_norm_rms_eps = 0.0f; // rmsnorm eps
+    float    f_norm_group_eps = 0.0f; // group norm eps
+    uint32_t n_norm_groups = 0; // group norm groups
+    float    f_clamp_kqv = 0.0f; // clamp kqv
+    float    f_max_alibi_bias = 0.0f; // max alibi bias
+    float    f_logit_scale = 0.0f; // logit scale
+    float    f_attention_scale = 0.0f; // attention scale
+    float    f_embedding_scale = 0.0f; // embedding scale
+    float    f_residual_scale = 0.0f; // residual scale
+    float    f_attn_logit_softcapping = 0.0f; // attention logit softcapping
+    float    f_final_logit_softcapping = 0.0f; // final logit softcapping
+    float    n_attn_temp_floor_scale = 0.0f; // attention temperature floor scale
+    float    f_attn_temp_scale = 0.0f; // attention temperature scale
+    float    expert_weights_scale = 0.0f; // expert weights scale
+
+    bool     use_par_res = false; // parallel residual
+    bool     causal_attn = true;  // causal attention
+    bool     rope_finetuned = false; // rope finetuned
+    bool     swin_norm = false; // swin norm
+    bool     attn_soft_cap = false; // attention soft capping
+    bool     ssm_dt_b_c_rms = false; // ssm dt_b_c_rms
+    bool     use_kq_norm = true; // use kq norm
+    bool     expert_weights_norm = false; // expert weights norm
+    bool     use_alibi = false; // use ALiBi
+    bool     vocab_only = false; // only load vocabulary
+
+    enum llama_pooling_type pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
+    enum llama_rope_type    rope_type    = LLAMA_ROPE_TYPE_NONE;
+    llama_swa_type     swa_type     = LLAMA_SWA_TYPE_NONE; // C++ enum, keyword 'enum' omitted
+    llama_expert_gating_func_type expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE; // C++ enum, keyword 'enum' omitted
+
+    float    rope_freq_base_train = 0.0f;
+    float    rope_freq_scale_train = 0.0f;
+    float    rope_freq_base_train_swa = 0.0f;
+    float    rope_freq_scale_train_swa = 0.0f;
+    float    rope_attn_factor = 0.0f;
+    float    rope_yarn_log_mul = 0.0f;
+    uint32_t n_ctx_orig_yarn = 0;
+    llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
+
+    llama_token dec_start_token_id = -1; // decoder start token id
+
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> rope_sections;
+    std::array<uint32_t, LLAMA_MAX_LAYERS> swa_layers;
+    std::vector<std::string> layers_block_type_arr;
+
+
+    // posnet / convnext hparams
+    struct {
+        uint32_t n_embd = 0;
+        uint32_t n_layer = 0;
+    } posnet;
+
+    struct {
+        uint32_t n_embd = 0;
+        uint32_t n_layer = 0;
+    } convnext;
+
+    // helper functions
+    uint32_t n_head    (uint32_t il = 0) const { return n_head_arr   [il % n_head_arr.size()];    }
+    uint32_t n_head_kv (uint32_t il = 0) const { return n_head_kv_arr[il % n_head_kv_arr.size()]; }
+    uint32_t n_ff      (uint32_t il = 0) const { return n_ff_arr     [il % n_ff_arr.size()];      }
+    uint32_t n_gqa     (uint32_t il = 0) const { return n_head(il)/n_head_kv(il); }
+    uint32_t n_embd_k_gqa(uint32_t il = 0) const { return n_embd_head_k * n_head_kv(il); } // dimension of K (w/ GQA)
+    uint32_t n_embd_v_gqa(uint32_t il = 0) const { return n_embd_head_v * n_head_kv(il); } // dimension of V (w/ GQA)
+    uint32_t n_embd_k_s() const; // dimension of recurrent state for K
+    uint32_t n_embd_v_s() const; // dimension of recurrent state for V
+
+    bool is_swa(uint32_t il) const {
+        return swa_layers[il % swa_layers.size()] != 0;
+    }
+
+    bool is_swa_any() const {
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            if (is_swa(il)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void set_swa_pattern(uint32_t pattern) {
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            swa_layers[il] = (il + 1) % pattern == 0 ? 0 : 1;
+        }
+    }
+};
+#endif // __cplusplus
 
 #endif // LLAMA_H

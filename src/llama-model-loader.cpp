@@ -379,6 +379,18 @@ namespace GGUFMeta {
     template bool llama_model_loader::get_key<std::string>(enum llm_kv kid, std::string & result, bool required);
 
     template<>
+    bool llama_model_loader::get_key(enum llm_kv kid, enum llama_expert_gating_func_type & result, bool required) {
+        uint32_t tmp;
+        const bool found = get_key(kid, tmp, required);
+        if (found) {
+            result = (enum llama_expert_gating_func_type) tmp;
+        } else {
+            result = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
+        }
+        return found;
+    }
+
+    template<>
     bool llama_model_loader::get_key(enum llm_kv kid, enum llama_pooling_type & result, bool required) {
         uint32_t tmp;
         const bool found = get_key(kid, tmp, required);
@@ -439,6 +451,7 @@ namespace GGUFMeta {
     // TODO: this is not very clever - figure out something better
     template bool llama_model_loader::get_key_or_arr<std::array<int, 4>>(enum llm_kv kid, std::array<int, 4> & result, uint32_t n, bool required);
     template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 512>>(enum llm_kv kid, std::array<uint32_t, 512> & result, uint32_t n, bool required);
+    template bool llama_model_loader::get_key_or_arr<std::array<uint32_t, 256>>(enum llm_kv kid, std::array<uint32_t, 256> & result, uint32_t n, bool required);
 
 llama_model_loader::llama_model_loader(
         const std::string & fname,
