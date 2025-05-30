@@ -3268,7 +3268,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
-    const int integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
+    const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
     if(integrated){
         return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft) ||ggml_backend_buft_is_cuda_host(buft)) && buft->device == dev;
     }else{
