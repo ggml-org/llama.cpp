@@ -6,6 +6,9 @@
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json_fwd.hpp>
 
+#include <functional>
+#include <string>
+
 std::string json_schema_to_grammar(const nlohmann::ordered_json & schema,
                                    bool force_gbnf = false);
 
