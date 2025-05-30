@@ -134,6 +134,7 @@ class TensorNameMap:
             "rwkv.blocks.{bid}.ln1",                                # rwkv6
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
+            "model.layers.{bid}.pre_mixer_norm",                    # plamo2
         ),
 
         # Attention norm 2
@@ -142,6 +143,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.layer_norm_1",             # jina-v2-code
             "rwkv.blocks.{bid}.ln2",                        # rwkv6
             "model.layers.{bid}.ln2",                       # rwkv7
+            "model.layers.{bid}.post_mixer_norm",           # plamo2
         ),
 
         # Attention query-key-value
@@ -160,6 +162,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
+            "model.layers.{bid}.mixer.qkv_proj",                                   # plamo2
         ),
 
         # Attention query
@@ -174,6 +177,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
+            "model.layers.{bid}.mixer.q_weight",                         # plamo2
         ),
 
         # Attention key
@@ -189,6 +193,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
+            "model.layers.{bid}.mixer.k_weight",                       # plamo2
         ),
 
         # Attention value
@@ -230,6 +235,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
+            "model.layers.{bid}.mixer.o_proj",                              # plamo2
         ),
 
         # Attention output norm
@@ -271,15 +277,17 @@ class TensorNameMap:
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
         ),
 
-        # Post feed-forward norm
+        # Pre feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
+            "model.layers.{bid}.pre_mlp_norm",              # plamo2
         ),
 
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
-            "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
+            "model.layers.{bid}.post_mlp_layernorm",         # glm-4-0414
+            "model.layers.{bid}.post_mlp_norm",              # plamo2
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (
@@ -476,13 +484,20 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_X: (
             "model.layers.{bid}.x_proj",
             "backbone.layers.{bid}.mixer.x_proj",
-            "model.layers.{bid}.mixer.x_proj",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_BCDT: (
+            "model.layers.{bid}.mixer.bcdt_proj",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_DT: (
             "model.layers.{bid}.dt_proj",
             "backbone.layers.{bid}.mixer.dt_proj",
             "model.layers.{bid}.mixer.dt_proj",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_DT_BIAS: (
+            "model.layers.{bid}.mixer.dt_bias",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_A: (
@@ -495,6 +510,18 @@ class TensorNameMap:
             "model.layers.{bid}.D",
             "backbone.layers.{bid}.mixer.D",
             "model.layers.{bid}.mixer.D",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_DT_NORM_WEIGHT: (
+            "model.layers.{bid}.mixer.dt_norm_weight",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_B_NORM_WEIGHT: (
+            "model.layers.{bid}.mixer.B_norm_weight",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_C_NORM_WEIGHT: (
+            "model.layers.{bid}.mixer.C_norm_weight",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_OUT: (

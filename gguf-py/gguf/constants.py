@@ -396,10 +396,15 @@ class MODEL_TENSOR(IntEnum):
     SSM_IN               = auto()
     SSM_CONV1D           = auto()
     SSM_X                = auto()
+    SSM_BCDT             = auto()
     SSM_DT               = auto()
+    SSM_DT_BIAS          = auto()
     SSM_A                = auto()
     SSM_D                = auto()
     SSM_OUT              = auto()
+    SSM_DT_NORM_WEIGHT   = auto()
+    SSM_B_NORM_WEIGHT    = auto()
+    SSM_C_NORM_WEIGHT    = auto()
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -677,9 +682,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_IN:                    "blk.{bid}.ssm_in",
     MODEL_TENSOR.SSM_CONV1D:                "blk.{bid}.ssm_conv1d",
     MODEL_TENSOR.SSM_X:                     "blk.{bid}.ssm_x",
+    MODEL_TENSOR.SSM_BCDT:                  "blk.{bid}.ssm_bcdt",
     MODEL_TENSOR.SSM_DT:                    "blk.{bid}.ssm_dt",
+    MODEL_TENSOR.SSM_DT_BIAS:               "blk.{bid}.ssm_dt_bias",
     MODEL_TENSOR.SSM_A:                     "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                     "blk.{bid}.ssm_d",
+    MODEL_TENSOR.SSM_DT_NORM_WEIGHT:        "blk.{bid}.ssm_dt_norm_weight",
+    MODEL_TENSOR.SSM_B_NORM_WEIGHT:         "blk.{bid}.ssm_b_norm_weight",
+    MODEL_TENSOR.SSM_C_NORM_WEIGHT:         "blk.{bid}.ssm_c_norm_weight",
     MODEL_TENSOR.SSM_OUT:                   "blk.{bid}.ssm_out",
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
@@ -1280,23 +1290,29 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ROPE_FREQS,
         MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_NORM_2,
+        MODEL_TENSOR.ATTN_QKV,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
-        MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.ATTN_ROT_EMBD,
-        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         # SSM/Mamba tensors for hybrid architecture
         MODEL_TENSOR.SSM_IN,
         MODEL_TENSOR.SSM_CONV1D,
-        MODEL_TENSOR.SSM_X,
+        MODEL_TENSOR.SSM_BCDT,
         MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_DT_BIAS,
         MODEL_TENSOR.SSM_A,
         MODEL_TENSOR.SSM_D,
         MODEL_TENSOR.SSM_OUT,
+        MODEL_TENSOR.SSM_DT_NORM_WEIGHT,
+        MODEL_TENSOR.SSM_B_NORM_WEIGHT,
+        MODEL_TENSOR.SSM_C_NORM_WEIGHT,
     ],
     MODEL_ARCH.GPT2: [
         MODEL_TENSOR.TOKEN_EMBD,
