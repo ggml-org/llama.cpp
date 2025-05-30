@@ -2190,6 +2190,26 @@ class Mistral3Model(LlamaModel):
 @ModelBase.register("Plamo2ForCausalLM")
 class Plamo2Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.PLAMO2
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        
+        # Add custom mappings for Plamo2's unique structure
+        # Plamo2 uses "mixer" for Mamba layers instead of standard attention
+        tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+        
+        # Add Mamba-specific mappings 
+        for i in range(self.block_count):
+            # SSM/Mamba tensors
+            tensor_map[f"model.layers.{i}.mixer.in_proj"] = f"blk.{i}.ssm_in"
+            tensor_map[f"model.layers.{i}.mixer.conv1d"] = f"blk.{i}.ssm_conv1d"
+            tensor_map[f"model.layers.{i}.mixer.x_proj"] = f"blk.{i}.ssm_x"
+            tensor_map[f"model.layers.{i}.mixer.dt_proj"] = f"blk.{i}.ssm_dt"
+            tensor_map[f"model.layers.{i}.mixer.A_log"] = f"blk.{i}.ssm_a"
+            tensor_map[f"model.layers.{i}.mixer.D"] = f"blk.{i}.ssm_d"
+            tensor_map[f"model.layers.{i}.mixer.out_proj"] = f"blk.{i}.ssm_out"
+            
+        self.tensor_map = tensor_map
 
     def set_vocab(self):
         # Plamo2 uses sentencepiece tokenizer similar to Llama
@@ -2220,12 +2240,33 @@ class Plamo2Model(LlamaModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Handle Plamo2 specific tensor naming
         # The model has both attention and Mamba layers
-
-        # Handle Mamba-specific tensors if present
-        if "mamba" in name:
-            # Mamba layers might need special handling
-            # For now, pass through with standard naming
-            pass
+        
+        # Handle the nested layer structure: layers.layers.X
+        if name.startswith("model.layers.layers."):
+            # Extract the layer number and rest of the name
+            parts = name.split(".")
+            layer_num = parts[3]  # The layer number
+            rest = ".".join(parts[4:])  # Everything after the layer number
+            
+            # Reconstruct the name without the duplicate "layers"
+            name = f"model.layers.{layer_num}.{rest}"
+        
+        # Handle Mamba-specific A_log tensor transformation
+        if name.endswith(".A_log"):
+            # Map the tensor name first
+            new_name = self.map_tensor_name(name)
+            logger.debug(f"A_log --> A ==> {new_name}")
+            # Transform A_log to A: A = -exp(A_log)
+            data_torch = -torch.exp(data_torch)
+            return [(new_name, data_torch)]
+        
+        # Handle Mamba conv1d tensor shape adjustment
+        if "mixer.conv1d" in name:
+            new_name = self.map_tensor_name(name)
+            # Squeeze the conv1d tensor if needed
+            if len(data_torch.shape) == 4:
+                data_torch = data_torch.squeeze()
+            return [(new_name, data_torch)]
 
         return super().modify_tensors(data_torch, name, bid)
 
