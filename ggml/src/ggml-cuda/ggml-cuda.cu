@@ -243,10 +243,10 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
-        info.devices[id].integrated= prop.integrated;
-        info.devices[id].nsm       = prop.multiProcessorCount;
-        info.devices[id].smpb      = prop.sharedMemPerBlock;
-        info.devices[id].warp_size = prop.warpSize;
+        info.devices[id].integrated = prop.integrated;
+        info.devices[id].nsm        = prop.multiProcessorCount;
+        info.devices[id].smpb       = prop.sharedMemPerBlock;
+        info.devices[id].warp_size  = prop.warpSize;
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
 
