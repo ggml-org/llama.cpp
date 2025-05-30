@@ -2190,11 +2190,52 @@ class Mistral3Model(LlamaModel):
 @ModelBase.register("Plamo2ForCausalLM")
 class Plamo2Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.PLAMO2
-    
 
     def set_vocab(self):
-        # Plamo2 uses sentencepiece tokenizer similar to Llama
-        self._set_vocab_sentencepiece()
+        dir_model = self.dir_model
+        hparams = self.hparams
+
+        tokens: list[bytes] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
+        vocab_size = len(tokenizer.vocab)
+        # Since we are checking the maximum index, we need to ensure it's strictly less than vocab_size,
+        # because vocab_size is the count of items, and indexes start at 0.
+        max_vocab_index = max(tokenizer.get_vocab().values())
+        if max_vocab_index >= vocab_size:
+            raise ValueError("Vocabulary size exceeds expected maximum size.")
+        
+        reverse_vocab: dict[int, str] = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+
+        for token_id in range(vocab_size):
+            token_text = reverse_vocab[token_id].encode('utf-8')
+            # replace "\x00" to string with length > 0
+            if token_text == b"\x00":
+                toktype = gguf.TokenType.BYTE  # special
+                token_text = f"<{token_text}>".encode('utf-8')
+            elif re.fullmatch(br"<0x[0-9A-Fa-f]{2}>", token_text):
+                toktype = gguf.TokenType.BYTE  # special
+            elif reverse_vocab[token_id] in added_vocab:
+                if tokenizer.added_tokens_decoder[token_id].special:
+                    toktype = gguf.TokenType.CONTROL
+                else:
+                    toktype = gguf.TokenType.USER_DEFINED
+            else:
+                toktype = gguf.TokenType.NORMAL
+
+            tokens.append(token_text)
+            toktypes.append(toktype)
+
+        # self.gguf_writer.add_tokenizer_model("llama")
+        # self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(dir_model, n_vocab=len(tokens))
+        special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
