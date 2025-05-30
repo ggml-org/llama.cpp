@@ -15,7 +15,6 @@
 #define CPPHTTPLIB_TCP_NODELAY true
 #include <cpp-httplib/httplib.h>
 
-// Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 

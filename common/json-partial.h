@@ -1,4 +1,5 @@
 #pragma once
+
 #include <nlohmann/json.hpp>
 
 // Healing marker (empty if the JSON was fully parsed / wasn't healed).

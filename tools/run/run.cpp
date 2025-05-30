@@ -5,6 +5,7 @@
 
 #include "linenoise.cpp/linenoise.h"
 
+#define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
 #if defined(_WIN32)

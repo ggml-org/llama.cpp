@@ -1,11 +1,11 @@
-#include "gguf.h" // for reading GGUF splits
 #include "arg.h"
 
+#include "chat.h"
 #include "common.h"
+#include "gguf.h" // for reading GGUF splits
+#include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
-#include "chat.h"
-#include "json-schema-to-grammar.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -16,6 +16,7 @@
 #include <windows.h>
 #endif
 
+#define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
 #include <algorithm>

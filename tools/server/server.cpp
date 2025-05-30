@@ -11,9 +11,6 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
-// Change JSON_ASSERT from assert() to GGML_ASSERT:
-#define JSON_ASSERT GGML_ASSERT
-#include <nlohmann/json.hpp>
 // mime type for sending response
 #define MIMETYPE_JSON "application/json; charset=utf-8"
 
