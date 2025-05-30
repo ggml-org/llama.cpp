@@ -652,7 +652,6 @@ extern "C" {
     // Adds relative position "delta" to all tokens that belong to the specified sequence and have positions in [p0, p1)
     // If the KV cache is RoPEd, the KV data is updated accordingly:
     //   - lazily on next llama_decode()
-    //   - explicitly with llama_kv_self_update()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
     LLAMA_API void llama_kv_self_seq_add(
@@ -665,7 +664,6 @@ extern "C" {
     // Integer division of the positions by factor of `d > 1`
     // If the KV cache is RoPEd, the KV data is updated accordingly:
     //   - lazily on next llama_decode()
-    //   - explicitly with llama_kv_self_update()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
     LLAMA_API void llama_kv_self_seq_div(
@@ -693,16 +691,15 @@ extern "C" {
     // Defragment the KV cache
     // This will be applied:
     //   - lazily on next llama_decode()
-    //   - explicitly with llama_kv_self_update()
-    // TODO: deprecate and always update the cache lazily [TAG: API_KV_NO_DEFRAG]
-    LLAMA_API void llama_kv_self_defrag(struct llama_context * ctx);
+    LLAMA_API DEPRECATED(void llama_kv_self_defrag(struct llama_context * ctx),
+            "simply remove this call, the context will automatically decide when to do a defragmentation based on 'defrag_thold'");
 
     // Check if the context supports KV cache shifting
     LLAMA_API bool llama_kv_self_can_shift(const struct llama_context * ctx);
 
     // Apply the KV cache updates (such as K-shifts, defragmentation, etc.)
-    // TODO: deprecate and always update the cache lazily [TAG: API_KV_NO_DEFRAG]
-    LLAMA_API void llama_kv_self_update(struct llama_context * ctx);
+    LLAMA_API DEPRECATED(void llama_kv_self_update(struct llama_context * ctx),
+            "simply remove this call, updates are applied lazily on the next llama_decode()");
 
     //
     // State / sessions

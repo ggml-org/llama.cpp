@@ -2276,6 +2276,7 @@ llama_kv_cache * llama_get_kv_self(llama_context * ctx) {
     return ctx->get_kv_self();
 }
 
+// deprecated
 void llama_kv_self_update(llama_context * ctx) {
     ctx->kv_self_update();
 }
@@ -2530,6 +2531,7 @@ llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     return kv->seq_pos_max(seq_id);
 }
 
+// deprecated
 void llama_kv_self_defrag(llama_context * ctx) {
     auto * kv = ctx->get_kv_self();
     if (!kv) {
