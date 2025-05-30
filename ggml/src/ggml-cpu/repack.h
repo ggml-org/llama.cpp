@@ -36,7 +36,6 @@ using block_q4_0x8 = block<4, 8>;
 using block_q8_0x4 = block<8, 4>;
 using block_q8_0x8 = block<8, 8>;
 
-
 struct block_q4_Kx8 {
     ggml_half d[8];      // super-block scale for quantized scales
     ggml_half dmin[8];   // super-block scale for quantized mins
@@ -68,8 +67,7 @@ extern "C" {
 // Workaround for clang:
 // clang++ complains: ``error: call to 'ggml_gemm_q4_0_4x4_q8_0' is ambiguous''
 // repro: https://godbolt.org/z/oKdeWKonM (ICE), https://godbolt.org/z/1szq6P36v (ambiguous call)
-// but gcc needs forward declarations
-#if !defined(__clang__) || (defined(__clang__) && defined(GGML_CPU_CLANG_WORKAROUND))
+#if !defined(__clang__) || (defined(__clang__) && (defined(GGML_CPU_CLANG_WORKAROUND) || defined(_WIN64)))
 void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void ggml_quantize_mat_q8_K_4x8(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);

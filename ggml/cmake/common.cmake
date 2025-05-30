@@ -28,6 +28,9 @@ endfunction()
 function(ggml_get_system_arch)
     if (CMAKE_OSX_ARCHITECTURES      STREQUAL "arm64" OR
         CMAKE_GENERATOR_PLATFORM_LWR STREQUAL "arm64" OR
+        CMAKE_SYSTEM_NAME            STREQUAL "iOS"   OR
+        CMAKE_SYSTEM_NAME            STREQUAL "tvOS"  OR
+        CMAKE_SYSTEM_NAME            STREQUAL "visionOS" OR
         (NOT CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_GENERATOR_PLATFORM_LWR AND
             CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm.*|ARM64)$"))
         set(GGML_SYSTEM_ARCH "ARM" PARENT_SCOPE)
