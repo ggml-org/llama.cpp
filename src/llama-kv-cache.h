@@ -638,3 +638,229 @@ private:
 
     const bool is_full = false;
 };
+
+//
+// llama_kv_cache_hybrid_recurrent
+//
+
+// utilizes instances of llama_kv_cache_recurrent and llama_kv_cache_unified to
+//   support models where each layer may be either attention-based or recurrent
+
+class llama_kv_cache_hybrid_recurrent : public llama_kv_cache {
+public:
+    llama_kv_cache_hybrid_recurrent(
+            const llama_model & model,
+                                /* attn */
+                    ggml_type   attn_type_k,
+                    ggml_type   attn_type_v,
+                         bool   attn_v_trans,
+                     uint32_t   attn_kv_size,
+                     uint32_t   attn_n_pad,
+                     uint32_t   attn_n_swa,
+               llama_swa_type   attn_swa_type,
+                                /* recurrent */
+                    ggml_type   recurrent_type_k,
+                    ggml_type   recurrent_type_v,
+                     uint32_t   recurrent_kv_size,
+                                /* common */
+                     uint32_t   n_seq_max,
+                         bool   offload);
+
+    ~llama_kv_cache_hybrid_recurrent() = default;
+
+    //
+    // llama_memory_i
+    //
+
+    void clear() override;
+
+    bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
+    void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
+    void seq_keep(llama_seq_id seq_id)                                                          override;
+    void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos shift) override;
+    void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
+
+    llama_pos seq_pos_min(llama_seq_id seq_id) const override;
+    llama_pos seq_pos_max(llama_seq_id seq_id) const override;
+
+    //
+    // llama_kv_cache
+    //
+
+    llama_memory_state_ptr init_batch(
+            const llama_batch & batch,
+            uint32_t n_ubatch,
+            bool embd_pooled,
+            bool logits_all) override;
+
+    llama_memory_state_ptr init_full() override;
+
+    bool update(llama_context & lctx) override;
+
+    void defrag_sched(float thold) override;
+
+    bool get_can_shift() const override;
+
+    // state write/load
+
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
+
+    //
+    // llama_kv_cache_hybrid_recurrent specific API
+    //
+
+    llama_kv_cache_unified   * get_kv_attn     () const;
+    llama_kv_cache_recurrent * get_kv_recurrent() const;
+
+private:
+    const llama_hparams & hparams;
+
+    const std::unique_ptr<llama_kv_cache_unified>   kv_attn;
+    const std::unique_ptr<llama_kv_cache_recurrent> kv_recurrent;
+};
+
+class llama_kv_cache_hybrid_recurrent_state : public llama_memory_state_i {
+public:
+    // init failure
+    explicit llama_kv_cache_hybrid_recurrent_state(llama_memory_status status);
+
+    // init full
+    explicit llama_kv_cache_hybrid_recurrent_state(llama_kv_cache_hybrid_recurrent * kv);
+
+    // init success
+    llama_kv_cache_hybrid_recurrent_state(
+        llama_kv_cache_hybrid_recurrent * kv,
+                           llama_sbatch   sbatch,
+                  std::vector<uint32_t>   heads_attn,
+              std::vector<llama_ubatch>   ubatches);
+
+    ~llama_kv_cache_hybrid_recurrent_state() = default;
+
+    bool next()  override;
+    bool apply() override;
+
+    std::vector<int64_t> & out_ids() override;
+
+    llama_memory_status  get_status() const override;
+    const llama_ubatch & get_ubatch() const override;
+
+    //
+    // llama_kv_cache_hybrid_recurrent_state_i
+    //
+
+    const llama_kv_cache_unified_state   * get_state_attn     () const;
+    const llama_kv_cache_recurrent_state * get_state_recurrent() const;
+
+private:
+    const llama_memory_status status;
+
+    llama_kv_cache_hybrid_recurrent * kv;
+
+    llama_sbatch sbatch;
+
+    // the index of the next ubatch to process
+    size_t i_next = 0;
+
+    std::vector<uint32_t>     heads_attn;
+    std::vector<llama_ubatch> ubatches;
+
+    const llama_kv_cache_unified_state   state_attn;
+    const llama_kv_cache_recurrent_state state_recurrent;
+};
+
+// class llama_kv_cache_hybrid_recurrent_state : public llama_memory_state_i {
+// public:
+//     // init failure
+//     explicit llama_kv_cache_hybrid_recurrent_state(llama_memory_status status)
+//         : status(status), state_attn(status), state_recurrent(status) {}
+
+//     // init full
+//     explicit llama_kv_cache_hybrid_recurrent_state(llama_kv_cache_hybrid_recurrent * kv)
+//         : status(LLAMA_MEMORY_STATUS_SUCCESS),
+//           kv(kv),
+//           state_attn(status, kv->get_kv_attn()),
+//           state_recurrent(status, kv->get_kv_recurrent()) {}
+
+//     // init success
+//     llama_kv_cache_hybrid_recurrent_state(
+//         llama_kv_cache_hybrid_recurrent * kv,
+//                            llama_sbatch   sbatch,
+//                   std::vector<uint32_t>   heads_attn,
+//               std::vector<llama_ubatch>   ubatches)
+//             : status(LLAMA_MEMORY_STATUS_SUCCESS),
+//               kv(kv),
+//               sbatch(std::move(sbatch)),
+//               heads_attn(std::move(heads_attn)),
+//               ubatches(std::move(ubatches)),
+//               // NOTE: these child states are only used as wrapper APIs for the
+//               //    const methods, so we use the "init full" signature since the
+//               //    actual state is not used.
+//               state_attn(LLAMA_MEMORY_STATUS_SUCCESS, kv->get_kv_attn()),
+//               state_recurrent(LLAMA_MEMORY_STATUS_SUCCESS, kv->get_kv_recurrent()) {
+//     }
+
+//     ~llama_kv_cache_hybrid_recurrent_state() = default;
+
+//     bool next() override {
+//         assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+//         if (++i_next >= ubatches.size()) {
+//             return false;
+//         }
+
+//         return true;
+//     }
+
+//     bool apply() override {
+//         assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+//         kv->get_kv_attn()     ->apply_ubatch(heads_attn[i_next], ubatches[i_next]);
+//         kv->get_kv_recurrent()->find_slot(ubatches[i_next]);
+
+//         return true;
+//     }
+
+//     std::vector<int64_t> & out_ids() override {
+//         assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
+//         return sbatch.out_ids;
+//     }
+
+//     llama_memory_status get_status() const override {
+//         return status;
+//     }
+
+//     const llama_ubatch & get_ubatch() const override {
+//         assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+//         return ubatches[i_next];
+//     }
+
+//     //
+//     // llama_kv_cache_hybrid_recurrent_state_i
+//     //
+
+//     const llama_kv_cache_unified_state * get_state_attn () const {
+//         return &state_attn;
+//     }
+
+//     const llama_kv_cache_recurrent_state * get_state_recurrent() const {
+//         return &state_recurrent;
+//     }
+
+// private:
+//     const llama_memory_status status;
+
+//     llama_kv_cache_hybrid_recurrent * kv;
+
+//     llama_sbatch sbatch;
+
+//     // the index of the next ubatch to process
+//     size_t i_next = 0;
+
+//     std::vector<uint32_t>     heads_attn;
+//     std::vector<llama_ubatch> ubatches;
+
+//     const llama_kv_cache_unified_state   state_attn;
+//     const llama_kv_cache_recurrent_state state_recurrent;
+// };
