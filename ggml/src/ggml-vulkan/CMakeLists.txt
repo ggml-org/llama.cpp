@@ -51,6 +51,7 @@ if (Vulkan_FOUND)
 
     set(VULKAN_SHADER_GEN_CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
+        # CMAKE_RUNTIME_OUTPUT_DIRECTORY 这里保持原样，因为 _ggml_vk_genshaders_cmd 接下来会使用硬编码路径
         -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
     )
 
@@ -88,7 +89,7 @@ if (Vulkan_FOUND)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
     # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build
-    # Posssibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the-correct-length-of-stdvector
+    # Posssibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the.correct-length-of-stdvector
     if (MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         add_compile_definitions(_ITERATOR_DEBUG_LEVEL=0)
     endif()
@@ -151,13 +152,18 @@ if (Vulkan_FOUND)
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
         CMAKE_ARGS ${VULKAN_SHADER_GEN_CMAKE_ARGS}
         BUILD_COMMAND ${CMAKE_COMMAND} --build . ${VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS}
-        INSTALL_COMMAND ${CMAKE_COMMAND} --install .
-        INSTALL_DIR ${CMAKE_BINARY_DIR}
+        INSTALL_COMMAND "" # <-- 关键修改：强制为空命令
+        # INSTALL_DIR ${CMAKE_BINARY_DIR} # <-- 保持注释，因为 INSTALL_COMMAND 已经为空
+        BUILD_IN_SOURCE ON # <-- 保持新增
     )
-    ExternalProject_Add_StepTargets(vulkan-shaders-gen build install)
+    # 修改 ExternalProject_Add_StepTargets, 移除 'install' 目标
+    ExternalProject_Add_StepTargets(vulkan-shaders-gen build)
 
     set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
-    set (_ggml_vk_genshaders_cmd ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/vulkan-shaders-gen${_ggml_vk_host_suffix})
+    # 修改 _ggml_vk_genshaders_cmd 的路径，直接指向构建后的文件位置
+    # CMAKE_BINARY_DIR 是主项目的构建目录（例如 /data/data/com.termux/files/home/llama.cpp/build）
+    # bin/ 是 CMAKE_RUNTIME_OUTPUT_DIRECTORY 的默认子目录，vulkan-shaders-gen 实际链接到这里
+    set (_ggml_vk_genshaders_cmd ${CMAKE_BINARY_DIR}/bin/vulkan-shaders-gen${_ggml_vk_host_suffix})
     set (_ggml_vk_header     ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp)
     set (_ggml_vk_source     ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.cpp)
     set (_ggml_vk_input_dir  ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders)
@@ -167,7 +173,8 @@ if (Vulkan_FOUND)
     set (_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen)
 
     # Add build and install dependencies for all builds
-    set(_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen-build vulkan-shaders-gen-install)
+    # 修改 _ggml_vk_shader_deps，移除对 'vulkan-shaders-gen-install' 的依赖
+    set(_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen-build )
 
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
