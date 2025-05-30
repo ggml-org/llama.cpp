@@ -2645,7 +2645,7 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
-    //flag used to determine whether it is an integrated_gpu 
+    // flag used to determine whether it is an integrated_gpu
     const bool integrated = ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
     while (!graph_evaluated_or_captured) {
