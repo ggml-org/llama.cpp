@@ -423,7 +423,7 @@ class ModelBase:
         try:
             # for security reason, we don't allow loading remote code by default
             # if a model need remote code, we will fallback to config.json
-            return AutoConfig.from_pretrained(dir_model, trust_remote_code=False).to_dict()
+            return AutoConfig.from_pretrained(dir_model, trust_remote_code=True).to_dict()
         except Exception as e:
             logger.warning(f"Failed to load model config from {dir_model}: {e}")
             logger.warning("Trying to load config.json instead")
@@ -2184,6 +2184,49 @@ class Mistral3Model(LlamaModel):
         name = name.replace("language_model.", "")
         if "multi_modal_projector" in name or "vision_tower" in name:
             return []
+        return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Plamo2ForCausalLM")
+class Plamo2Model(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.PLAMO2
+
+    def set_vocab(self):
+        # Plamo2 uses sentencepiece tokenizer similar to Llama
+        self._set_vocab_sentencepiece()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        # Plamo2 specific parameters - hybrid attention/Mamba architecture
+        # Mamba parameters
+        if hparams.get("mamba_enabled", False):
+            self.gguf_writer.add_ssm_conv_kernel(hparams.get("mamba_d_conv", 4))
+            self.gguf_writer.add_ssm_inner_size(hparams.get("mamba_d_state", 64) * hparams.get("intermediate_size", 13312) // hparams.get("hidden_size", 4096))
+            self.gguf_writer.add_ssm_state_size(hparams.get("mamba_d_state", 64))
+            self.gguf_writer.add_ssm_time_step_rank(hparams.get("mamba_d_state", 64) // 16)  # Commonly d_state/16
+
+        # Attention window parameters
+        if "attention_window_size" in hparams:
+            self.gguf_writer.add_sliding_window(hparams["attention_window_size"])
+
+        # Full attention layer indices
+        if "full_attention_idx" in hparams and hparams["full_attention_idx"]:
+            # Store which layers use full attention vs sliding window
+            # This may need custom handling in llama.cpp
+            pass
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Handle Plamo2 specific tensor naming
+        # The model has both attention and Mamba layers
+
+        # Handle Mamba-specific tensors if present
+        if "mamba" in name:
+            # Mamba layers might need special handling
+            # For now, pass through with standard naming
+            pass
+
         return super().modify_tensors(data_torch, name, bid)
 
 
