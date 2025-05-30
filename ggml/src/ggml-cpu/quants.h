@@ -5,10 +5,6 @@
 
 #include "ggml.h"
 
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
-
 // GGML CPU internal header
 
 #ifdef __cplusplus
@@ -88,7 +84,7 @@ void ggml_vec_dot_iq1_m_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 void ggml_vec_dot_iq4_nl_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 void ggml_vec_dot_iq4_xs_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc);
 
-#if defined(__APPLE__) && !TARGET_OS_OSX
+#if defined(GGML_CPU_GENERIC)
 #define quantize_row_q8_0_generic quantize_row_q8_0
 #define quantize_row_q8_1_generic quantize_row_q8_1
 #define quantize_row_q8_K_generic quantize_row_q8_K

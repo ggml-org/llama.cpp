@@ -11,10 +11,6 @@
 #include <string.h> // memcpy
 #include <math.h>   // fabsf
 
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -513,7 +509,7 @@ void ggml_barrier(struct ggml_threadpool * tp);
 
 #define GGML_DO_PRAGMA_(x) _Pragma (#x)
 #define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
-#if (defined(__APPLE__) && !TARGET_OS_OSX) || defined(__HIPCC__)
+#if defined(GGML_CPU_GENERIC) || defined(__HIPCC__)
 // weak alias not working
 # define GGML_WEAK_ALIAS(name, alias)
 #elif defined(__GNUC__)
