@@ -6,10 +6,6 @@
 #include "traits.h"
 #include "ggml.h"
 
-#if defined(__APPLE__)
-#include <TargetConditionals.h>
-#endif
-
 // GGML internal header
 
 ggml_backend_buffer_type_t ggml_backend_cpu_repack_buffer_type(void);
@@ -102,7 +98,7 @@ void ggml_gemm_q4_0_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, 
 void ggml_gemm_q4_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 
-#if defined(__APPLE__) && !TARGET_OS_OSX
+#if defined(GGML_CPU_GENERIC)
 #define ggml_quantize_mat_q8_0_4x4_generic ggml_quantize_mat_q8_0_4x4
 #define ggml_quantize_mat_q8_0_4x8_generic ggml_quantize_mat_q8_0_4x8
 #define ggml_quantize_mat_q8_K_4x8_generic ggml_quantize_mat_q8_K_4x8
