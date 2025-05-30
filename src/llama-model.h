@@ -168,6 +168,7 @@ struct llama_layer {
     struct ggml_tensor * ffn_sub_norm    = nullptr;
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
+    struct ggml_tensor * ssm_norm        = nullptr;
 
     // attention
     struct ggml_tensor * wq        = nullptr;
@@ -252,6 +253,7 @@ struct llama_layer {
     // mamba bias
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b     = nullptr;
+    struct ggml_tensor * ssm_in_b     = nullptr;
 
     // rwkv
     struct ggml_tensor * time_mix_w1         = nullptr;

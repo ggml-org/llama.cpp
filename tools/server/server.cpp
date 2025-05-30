@@ -3214,7 +3214,9 @@ struct server_context {
                             }
 
                             if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
-                                if (llama_kv_self_seq_pos_min(ctx, slot.id) > 0) {
+                                const auto pos_min = llama_kv_self_seq_pos_min(ctx, slot.id);
+                                if (pos_min > 0) {
+                                    SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min);
                                     SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
                                             "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
                                     slot.n_past = 0;
@@ -3425,9 +3427,10 @@ struct server_context {
 
                 // retry with half the batch size to try to find a free slot in the KV cache
                 n_batch /= 2;
-                i -= n_batch;
 
                 SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size - try increasing it via the context size or enable defragmentation, i = %d, n_batch = %d, ret = %d\n", i, n_batch, ret);
+
+                i -= n_batch;
 
                 continue; // continue loop of n_batch
             }

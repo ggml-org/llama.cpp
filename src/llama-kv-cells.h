@@ -68,12 +68,6 @@ public:
     // the index of the last cell that is used + 1
     // return 0 if no cells are used
     uint32_t used_max_p1() const {
-#if 0
-        if (!seq_pos[0].empty()) printf("kv_cells: min[0] = %5d, max[0] = %5d\n", *seq_pos[0].begin(), *seq_pos[0].rbegin());
-        if (!seq_pos[1].empty()) printf("kv_cells: min[1] = %5d, max[1] = %5d\n", *seq_pos[1].begin(), *seq_pos[1].rbegin());
-        if (!seq_pos[2].empty()) printf("kv_cells: min[2] = %5d, max[2] = %5d\n", *seq_pos[2].begin(), *seq_pos[2].rbegin());
-#endif
-
         return used.empty() ? 0 : *used.rbegin() + 1;
     }
 
@@ -144,6 +138,19 @@ public:
         }
     }
 
+    // clear a non-empty cell
+    void rm(uint32_t i) {
+        assert(i < pos.size());
+        assert(pos[i] != -1);
+
+        seq_pos_rm(i);
+
+        pos[i] = -1;
+        seq[i].reset();
+
+        used.erase(i);
+    }
+
     // note: call only if the cell has seq_id
     // return true if the cell becomes empty
     bool seq_rm(uint32_t i, llama_seq_id seq_id) {
@@ -196,6 +203,15 @@ public:
         return false;
     }
 
+    // number of different sequences in the cell
+    int seq_count(uint32_t i) const {
+        assert(i < pos.size());
+        assert(pos[i] != -1);
+
+        return seq[i].count();
+    }
+
+    // check if the cell contains seq_id
     bool seq_has(uint32_t i, llama_seq_id seq_id) const {
         assert(i < pos.size());
         assert(seq_id >= 0);
@@ -211,6 +227,20 @@ public:
 
         seq[i].set(seq_id);
         seq_pos[seq_id].insert(pos[i]);
+    }
+
+    // return the sequence id of this cell
+    // note: call only for cells with exactly one sequence
+    llama_seq_id seq_get(uint32_t i) const {
+        assert(seq[i].count() == 1);
+
+        for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            if (seq[i].test(s)) {
+                return s;
+            }
+        }
+
+        return -1;
     }
 
     // the minimum position of sequence seq_id currently present in any of the cells
@@ -268,6 +298,7 @@ public:
     void pos_set(uint32_t i, llama_pos p) {
         assert(i < pos.size());
         assert(pos[i] == -1);
+        assert(seq[i].none());
 
         pos[i] = p;
 

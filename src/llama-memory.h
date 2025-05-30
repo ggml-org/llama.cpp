@@ -2,6 +2,11 @@
 
 #include "llama.h"
 
+#include <memory>
+#include <vector>
+
+struct llama_ubatch;
+
 struct llama_memory_params {
     // kv cache
     ggml_type type_k;
@@ -30,3 +35,42 @@ public:
 
     virtual bool get_can_edit() const = 0;
 };
+
+enum llama_memory_status {
+    LLAMA_MEMORY_STATUS_SUCCESS = 0,
+    LLAMA_MEMORY_STATUS_FAILED_PREPARE,
+    LLAMA_MEMORY_STATUS_FAILED_COMPUTE,
+};
+
+// the interface for managing the memory state during batch processing
+// this interface is implemented per memory type. see:
+//   - llama_kv_cache_unified_state
+//   - llama_kv_cache_unified_iswa_state
+//   ...
+//
+// the only method that can mutate the memory and the memory state is llama_memory_i::apply()
+//
+// TODO: rename to llama_memory_context_i ?
+class llama_memory_state_i {
+public:
+    virtual ~llama_memory_state_i() = default;
+
+    // consume the current ubatch from the state and proceed to the next one
+    // return false if we are done
+    virtual bool next() = 0;
+
+    // apply the memory state for the current ubatch to the memory object
+    // return false on failure
+    virtual bool apply() = 0;
+
+    // TODO: this might get reworked in the future when refactoring llama_batch
+    virtual std::vector<int64_t> & out_ids() = 0;
+
+    // get the current ubatch
+    virtual const llama_ubatch & get_ubatch() const = 0;
+
+    // get the status of the memory state
+    virtual llama_memory_status get_status() const = 0;
+};
+
+using llama_memory_state_ptr = std::unique_ptr<llama_memory_state_i>;
