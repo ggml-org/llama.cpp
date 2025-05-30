@@ -138,6 +138,7 @@ public:
         }
     }
 
+    // clear a non-empty cell
     void rm(uint32_t i) {
         assert(i < pos.size());
         assert(pos[i] != -1);
@@ -202,6 +203,7 @@ public:
         return false;
     }
 
+    // number of different sequences in the cell
     int seq_count(uint32_t i) const {
         assert(i < pos.size());
         assert(pos[i] != -1);
@@ -209,6 +211,7 @@ public:
         return seq[i].count();
     }
 
+    // check if the cell contains seq_id
     bool seq_has(uint32_t i, llama_seq_id seq_id) const {
         assert(i < pos.size());
         assert(seq_id >= 0);
@@ -226,6 +229,8 @@ public:
         seq_pos[seq_id].insert(pos[i]);
     }
 
+    // return the sequence id of this cell
+    // note: call only for cells with exactly one sequence
     llama_seq_id seq_get(uint32_t i) const {
         assert(seq[i].count() == 1);
 

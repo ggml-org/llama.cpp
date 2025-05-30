@@ -493,9 +493,13 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
         LLAMA_LOG_WARN("\n%s\n", ss.c_str());
     }
 
-    LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[0] = %5d, max[0] = %5d\n", n_swa, cells.seq_pos_min(0), cells.seq_pos_max(0));
-    LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[1] = %5d, max[1] = %5d\n", n_swa, cells.seq_pos_min(1), cells.seq_pos_max(1));
-    LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[2] = %5d, max[2] = %5d\n", n_swa, cells.seq_pos_min(2), cells.seq_pos_max(2));
+    for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+        if (cells.seq_pos_min(s) < 0) {
+            continue;
+        }
+
+        LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[%d] = %5d, max[%d] = %5d\n", n_swa, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
+    }
 #endif
 
     uint32_t n_tested = 0;
@@ -538,6 +542,9 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
                     const llama_seq_id seq_id_cell = cells.seq_get(head_cur + i);
 
                     // SWA mask
+                    // note: we insert only in the cell with minimum pos in order to preserve the invariant that
+                    //       all positions between [pos_min, pos_max] for each sequence will be present in the cache
+                    //       ref: https://github.com/ggml-org/llama.cpp/pull/13746#issuecomment-2916057092
                     if (pos_cell == seq_pos_min[seq_id_cell] &&
                         is_masked_swa(pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
                         seq_pos_min[seq_id_cell]++;
