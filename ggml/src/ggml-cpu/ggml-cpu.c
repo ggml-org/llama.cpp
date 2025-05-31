@@ -2418,10 +2418,30 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     // This is up to the applications.
     DWORD p = THREAD_PRIORITY_NORMAL;
     switch (prio) {
+        case GGML_SCHED_PRIO_LOW:      p = THREAD_PRIORITY_BELOW_NORMAL;  break;
         case GGML_SCHED_PRIO_NORMAL:   p = THREAD_PRIORITY_NORMAL;        break;
         case GGML_SCHED_PRIO_MEDIUM:   p = THREAD_PRIORITY_ABOVE_NORMAL;  break;
         case GGML_SCHED_PRIO_HIGH:     p = THREAD_PRIORITY_HIGHEST;       break;
         case GGML_SCHED_PRIO_REALTIME: p = THREAD_PRIORITY_TIME_CRITICAL; break;
+    }
+
+    if (prio != GGML_SCHED_PRIO_LOW) {
+        // Tell Windows that this thread should not be throttled (needs its own CPU core).
+        // Newer Windows 11 versions aggresively park (offline) CPU cores and often place
+        // all our threads onto the first 4 cores which results in terrible performance with
+        // n_threads > 4
+        #if _WIN32_WINNT >= 0x0602
+        THREAD_POWER_THROTTLING_STATE t;
+        ZeroMemory(&t, sizeof(t));
+        t.Version     = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+        t.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+        t.StateMask   = 0;
+
+        if (!SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &t, sizeof(t))) {
+            GGML_LOG_DEBUG("failed to disable thread power throttling %d : (%d)\n", prio, (int) GetLastError());
+            return false;
+        }
+        #endif
     }
 
     if (prio == GGML_SCHED_PRIO_NORMAL) {
@@ -2451,6 +2471,8 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     struct sched_param p;
     int32_t policy = SCHED_OTHER;
     switch (prio) {
+        // TODO: there seems to be no way to set lower prio on Apple platforms
+        case GGML_SCHED_PRIO_LOW:      policy = SCHED_OTHER; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_NORMAL:   policy = SCHED_OTHER; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_MEDIUM:   policy = SCHED_FIFO;  p.sched_priority = 40; break;
         case GGML_SCHED_PRIO_HIGH:     policy = SCHED_FIFO;  p.sched_priority = 80; break;
@@ -2507,6 +2529,7 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     struct sched_param p;
     int32_t policy = SCHED_OTHER;
     switch (prio) {
+        case GGML_SCHED_PRIO_LOW:      policy = SCHED_BATCH; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_NORMAL:   policy = SCHED_OTHER; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_MEDIUM:   policy = SCHED_FIFO;  p.sched_priority = 40; break;
         case GGML_SCHED_PRIO_HIGH:     policy = SCHED_FIFO;  p.sched_priority = 80; break;

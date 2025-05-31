@@ -2181,6 +2181,7 @@ extern "C" {
 
     // scheduling priorities
     enum ggml_sched_priority {
+        GGML_SCHED_PRIO_LOW = -1,
         GGML_SCHED_PRIO_NORMAL,
         GGML_SCHED_PRIO_MEDIUM,
         GGML_SCHED_PRIO_HIGH,
