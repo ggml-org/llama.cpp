@@ -74,16 +74,34 @@ extern "C" {
         GGML_OPT_BUILD_TYPE_OPT     = 30,
     };
 
+    enum ggml_opt_optimizer_type {
+        GGML_OPT_OPTIMIZER_ADAMW,
+        GGML_OPT_OPTIMIZER_SGD,
+
+        GGML_OPT_OPTIMIZER_COUNT
+    };
+
+    // "adamw" or "sgd" (case insensitive)
+    GGML_API const char *                 ggml_opt_optimizer_name(enum ggml_opt_optimizer_type);
+    GGML_API enum ggml_opt_optimizer_type ggml_opt_get_optimizer(const char *);
+
     // parameters that control which optimizer is used and how said optimizer tries to find the minimal loss
     struct ggml_opt_optimizer_params {
-        // AdamW optimizer parameters
+        // SGD and AdamW optimizer parameters
+        struct {
+            float alpha;  // learning rate
+            float wd;     // weight decay for SGD or AdamW, use 0.0f to disable
+        } common;
+
         struct {
             float alpha; // learning rate
-            float beta1;
-            float beta2;
-            float eps;   // epsilon for numerical stability
-            float wd;    // weight decay for AdamW, use 0.0f to disable
+            float beta1;  // adamw
+            float beta2;  // adamw
+            float eps;    // epsilon for numerical stability
         } adamw;
+
+        // only GGML_OPT_OPTIMIZER_ADAMW allocates m, v per parameter
+        enum ggml_opt_optimizer_type optimizer;
     };
 
     // callback to calculate optimizer parameters prior to a backward pass
@@ -113,7 +131,7 @@ extern "C" {
         int32_t opt_period; // after how many gradient accumulation steps an optimizer step should be done
 
         ggml_opt_get_optimizer_params get_opt_pars; // callback for calculating optimizer parameters
-        void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
+        void *                        get_opt_pars_ud;  // userdata for calculating optimizer parameters
     };
 
     // get parameters for an optimization context with defaults set where possible

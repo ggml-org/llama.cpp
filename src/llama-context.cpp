@@ -1988,6 +1988,7 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     opt_params.opt_period      = n_batch / n_ubatch;
     opt_params.get_opt_pars    = lopt_params.get_opt_pars;
     opt_params.get_opt_pars_ud = lopt_params.get_opt_pars_ud;
+    opt_params.build_type      = GGML_OPT_BUILD_TYPE_OPT;
 
     opt_ctx = ggml_opt_init(opt_params);
 
@@ -2138,6 +2139,7 @@ void llama_context::opt_epoch(
     const uint32_t ubatch_per_ctx = n_ctx / n_ubatch;
 
     struct llama_batch batch = llama_batch_init(n_batch, 0, 1);
+    LLAMA_LOG_DEBUG("%s:        n_batch = %d n_ubatch = %d n_ctx = %d\n", __func__, n_batch, n_ubatch, n_ctx);
     std::vector<llama_token>        tokens(n_ctx);
     std::vector<llama_token> labels_sparse(n_ctx);
 

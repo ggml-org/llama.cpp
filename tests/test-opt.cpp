@@ -40,7 +40,7 @@ struct helper_ctx_data {
 // These default values make it easier to check optimization results vs. expected values.
 static ggml_opt_optimizer_params helper_get_test_opt_pars(void * userdata) {
     ggml_opt_optimizer_params result = ggml_opt_get_default_optimizer_params(userdata);
-    result.adamw.alpha = 1.0f;
+    result.common.alpha              = 1.0f;
     result.adamw.beta1 = 0.0f;
     result.adamw.beta2 = 0.0f;
     result.adamw.eps   = 0.0f;
@@ -687,7 +687,7 @@ static std::pair<int, int> test_gradient_accumulation(
 
 static ggml_opt_optimizer_params helper_get_regression_opt_pars(void * userdata) {
     ggml_opt_optimizer_params result = ggml_opt_get_default_optimizer_params(userdata);
-    result.adamw.alpha = 0.1f;
+    result.common.alpha              = 0.1f;
     return result;
 }
 

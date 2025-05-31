@@ -763,7 +763,8 @@ struct test_case {
 
         ggml_tensor * out = build_graph(ctx.get());
 
-        if ((op_name != nullptr && op_desc(out) != op_name) || out->op == GGML_OP_OPT_STEP_ADAMW) {
+        if ((op_name != nullptr && op_desc(out) != op_name) || out->op == GGML_OP_OPT_STEP_ADAMW ||
+            out->op == GGML_OP_OPT_STEP_SGD) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
             return true;
         }
@@ -3453,9 +3454,9 @@ struct test_opt_step_adamw : public test_case {
         return VARS_TO_STR2(type, ne);
     }
 
-    test_opt_step_adamw(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 5, 4, 3})
-        : type(type), ne(ne) {}
+    test_opt_step_adamw(ggml_type type = GGML_TYPE_F32, std::array<int64_t, 4> ne = { 10, 5, 4, 3 }) :
+        type(type),
+        ne(ne) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
@@ -3465,16 +3466,18 @@ struct test_opt_step_adamw : public test_case {
         ggml_tensor * grad = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
         ggml_set_name(grad, "grad");
 
+        ggml_tensor * adamw_params = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+        ggml_set_name(adamw_params, "adamw_params");
+
+        ggml_tensor * out;
         ggml_tensor * grad_m = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
         ggml_set_name(grad_m, "grad_m");
 
         ggml_tensor * grad_v = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
         ggml_set_name(grad_v, "grad_v");
 
-        ggml_tensor * adamw_params = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 7);
-        ggml_set_name(adamw_params, "adamw_params");
+        out = ggml_opt_step_adamw(ctx, a, grad, grad_m, grad_v, adamw_params);
 
-        ggml_tensor * out = ggml_opt_step_adamw(ctx, a, grad, grad_m, grad_v, adamw_params);
         ggml_set_name(out, "out");
 
         return out;
@@ -3489,6 +3492,43 @@ struct test_opt_step_adamw : public test_case {
     bool grad_precise() override {
         return true;
     }
+};
+
+struct test_opt_step_sgd : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override { return VARS_TO_STR2(type, ne); }
+
+    test_opt_step_sgd(ggml_type type = GGML_TYPE_F32, std::array<int64_t, 4> ne = { 10, 5, 4, 3 }) :
+        type(type),
+        ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);  // Despite tensor a having gradients the output tensor will not.
+        ggml_set_name(a, "a");
+
+        ggml_tensor * grad = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_name(grad, "grad");
+
+        ggml_tensor * adamw_params = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 8);
+        ggml_set_name(adamw_params, "adamw_params");
+
+        ggml_tensor * out = ggml_opt_step_sgd(ctx, a, grad, adamw_params);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, 0.0f, 1.0f);  // grad_v and adamw_params need non-negative values.
+        }
+    }
+
+    bool grad_precise() override { return true; }
 };
 
 enum llm_norm_type {
@@ -4537,6 +4577,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {30000, 1, 1, 1}));
 
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
+    test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, { 10, 5, 4, 3 }));
 
     // these tests are disabled to save execution time, but they can be handy for debugging
 #if 0

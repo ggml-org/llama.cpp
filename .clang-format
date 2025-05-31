@@ -23,7 +23,7 @@ AllowShortLambdasOnASingleLine: Inline
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakBeforeMultilineStrings: true
 BinPackArguments: true
-BinPackParameters: true # OnePerLine
+BinPackParameters: true
 BitFieldColonSpacing: Both
 BreakBeforeBraces: Custom # Attach
 BraceWrapping:
@@ -45,7 +45,6 @@ BraceWrapping:
   SplitEmptyFunction: false
   SplitEmptyRecord: false
   SplitEmptyNamespace: false
-# BreakAdjacentStringLiterals: true
 BreakAfterAttributes: Never
 BreakBeforeBinaryOperators: None
 BreakBeforeInlineASMColon: OnlyMultiline
@@ -158,4 +157,3 @@ TabWidth:        4
 UseTab:          Never
 WhitespaceSensitiveMacros: ['STRINGIZE']
 ...
-
