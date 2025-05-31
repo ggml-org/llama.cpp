@@ -70,7 +70,7 @@ struct common_chat_msg {
 };
 
 struct common_chat_msg_diff {
-    // std::string reasoning_content_delta;
+    std::string reasoning_content_delta;
     std::string content_delta;
     size_t tool_call_index = std::string::npos;
     common_chat_tool_call tool_call_delta;

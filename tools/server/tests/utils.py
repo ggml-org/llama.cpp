@@ -308,10 +308,12 @@ class ServerProcess:
         stream = data.get('stream', False)
         if stream:
             content: list[str] = []
+            reasoning_content: list[str] = []
             tool_calls: list[dict] = []
             finish_reason: Optional[str] = None
 
             content_parts = 0
+            reasoning_content_parts = 0
             tool_call_parts = 0
             arguments_parts = 0
 
@@ -322,6 +324,10 @@ class ServerProcess:
                     assert len(choice['delta']['content']) > 0, f'Expected non empty content delta!'
                     content.append(choice['delta']['content'])
                     content_parts += 1
+                if choice['delta'].get('reasoning_content') is not None:
+                    assert len(choice['delta']['reasoning_content']) > 0, f'Expected non empty reasoning_content delta!'
+                    reasoning_content.append(choice['delta']['reasoning_content'])
+                    reasoning_content_parts += 1
                 if choice['delta'].get('finish_reason') is not None:
                     finish_reason = choice['delta']['finish_reason']
                 for tc in choice['delta'].get('tool_calls', []):
@@ -349,8 +355,10 @@ class ServerProcess:
                         tool_call['function']['name'] = tool_call['function'].get('name', '') + fct['name']
                     if fct.get('arguments') is not None:
                         tool_call['function']['arguments'] += fct['arguments']
+                        arguments_parts += 1
+                    tool_call_parts += 1
 
-            print(f'Streamed response had {content_parts} content parts, {tool_call_parts} tool call parts incl. {arguments_parts} arguments parts')
+            print(f'Streamed response had {content_parts} content parts, {reasoning_content_parts} reasoning_content parts, {tool_call_parts} tool call parts incl. {arguments_parts} arguments parts')
             result = dict(
                 choices=[
                     dict(
@@ -359,6 +367,7 @@ class ServerProcess:
                         message=dict(
                             role='assistant',
                             content=''.join(content) if content else None,
+                            reasoning_content=''.join(reasoning_content) if reasoning_content else None,
                             tool_calls=tool_calls if tool_calls else None,
                         ),
                     )

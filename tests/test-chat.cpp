@@ -19,8 +19,8 @@
 using json = nlohmann::ordered_json;
 
 static std::ostream & operator<<(std::ostream & os, const common_chat_msg_diff & diff) {
-    // os << "reasoning_content_delta: " << diff.reasoning_content_delta << '\n';
     os << "{ content_delta: " << diff.content_delta << "; ";
+    os << "reasoning_content_delta: " << diff.reasoning_content_delta << "; ";
     if (diff.tool_call_index != std::string::npos) {
         os << "tool_call_index: " << diff.tool_call_index << "; ";
         os << "tool_call_delta.name: " << diff.tool_call_delta.name << "; ";
