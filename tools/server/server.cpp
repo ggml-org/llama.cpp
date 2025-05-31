@@ -3219,6 +3219,7 @@ struct server_context {
                                     SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min);
                                     SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
                                             "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                                    llama_kv_self_seq_rm(ctx, slot.id, 0, -1);
                                     slot.n_past = 0;
                                 }
                             }
