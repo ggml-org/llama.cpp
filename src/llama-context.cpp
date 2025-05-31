@@ -431,25 +431,26 @@ bool llama_context::kv_self_update() {
 
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
-    if (kv_self->update(*this)) {
-        // if the KV cache did any computation, we have to reserve a new worst-case graph
-        const auto kv_state = kv_self->init_full();
-        if (!kv_state) {
-            throw std::runtime_error("failed to initialize KV cache");
-        }
-
-        const uint32_t n_seqs   = cparams.n_seq_max;
-        const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
-
-        auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, kv_state.get());
-        if (!gf) {
-            LLAMA_LOG_ERROR("%s: failed to reserve graph after the KV cache update\n", __func__);
-        }
-
-        return true;
+    if (!kv_self->update(*this)) {
+        // no updates have been performed
+        return false;
     }
 
-    return false;
+    // if the KV cache did any computation, we have to reserve a new worst-case graph
+    const auto kv_state = kv_self->init_full();
+    if (!kv_state) {
+        throw std::runtime_error("failed to initialize KV cache");
+    }
+
+    const uint32_t n_seqs   = cparams.n_seq_max;
+    const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
+
+    auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, kv_state.get());
+    if (!gf) {
+        LLAMA_LOG_ERROR("%s: failed to reserve graph after the KV cache update\n", __func__);
+    }
+
+    return true;
 }
 
 enum llama_pooling_type llama_context::pooling_type() const {
