@@ -59,7 +59,7 @@ class common_chat_msg_parser {
     bool add_tool_call(const std::string & name, const std::string & id, const std::string & arguments);
 
     // Adds a tool call using the "name", "id" and "arguments" fields of the json object
-    bool add_tool_call(const nlohmann::ordered_json & tool_call);
+    bool add_tool_call(const nlohmann::ordered_json & tool_call, const char * arguments_name = "arguments");
 
     // Adds an array of tool calls using their "name", "id" and "arguments" fields.
     bool add_tool_calls(const nlohmann::ordered_json & arr);
