@@ -683,6 +683,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
                 ml.get_key(LLM_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
                 ml.get_key(LLM_KV_POOLING_TYPE,               hparams.pooling_type, false);
+                ml.get_arr_n(LLM_KV_CLASSIFIER_OUTPUT_LABELS, hparams.n_cls_out, false);
 
                 switch (hparams.n_layer) {
                     case 3:
@@ -2113,7 +2114,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_NOMIC_BERT_MOE:
                 {
                     tok_embd     = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
-                    type_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, 0);
+                    type_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, TENSOR_NOT_REQUIRED);
 
                     if (arch == LLM_ARCH_BERT) {
                         pos_embd = create_tensor(tn(LLM_TENSOR_POS_EMBD,    "weight"), {n_embd, n_ctx_train}, 0);
@@ -2121,8 +2122,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         cls   = create_tensor(tn(LLM_TENSOR_CLS, "weight"), {n_embd, n_embd}, TENSOR_NOT_REQUIRED);
                         cls_b = create_tensor(tn(LLM_TENSOR_CLS, "bias"),   {n_embd},         TENSOR_NOT_REQUIRED);
 
-                        cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, 1}, TENSOR_NOT_REQUIRED);
-                        cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {1},         TENSOR_NOT_REQUIRED);
+                        cls_out   = create_tensor(tn(LLM_TENSOR_CLS_OUT, "weight"), {n_embd, hparams.n_cls_out}, TENSOR_NOT_REQUIRED);
+                        cls_out_b = create_tensor(tn(LLM_TENSOR_CLS_OUT, "bias"),   {hparams.n_cls_out},         TENSOR_NOT_REQUIRED);
                     }
 
                     tok_norm   = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
@@ -2131,7 +2132,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
 
-                        if (arch == LLM_ARCH_BERT) {
+                        layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
+                        layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", i), {n_embd + 2*n_embd_gqa}, TENSOR_NOT_REQUIRED);
+
+                        if (!layer.wqkv) {
                             layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd}, 0);
                             layer.bq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "bias", i),   {n_embd}, 0);
 
@@ -2140,12 +2144,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
                             layer.bv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "bias", i),   {n_embd_gqa}, 0);
-                        } else {
-                            layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, 0);
-                        }
-
-                        if (arch == LLM_ARCH_NOMIC_BERT_MOE) {
-                            layer.bqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", i), {n_embd + 2*n_embd_gqa}, 0);
                         }
 
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {n_embd, n_embd}, 0);
@@ -2489,7 +2487,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -5883,8 +5885,10 @@ struct llm_build_bert : public llm_graph_context {
         inpL = build_inp_embd(model.tok_embd);
 
         // token types are hardcoded to zero ("Sentence A")
-        ggml_tensor * type_row0 = ggml_view_1d(ctx0, model.type_embd, n_embd, 0);
-        inpL = ggml_add(ctx0, inpL, type_row0);
+        if (model.type_embd) {
+            ggml_tensor * type_row0 = ggml_view_1d(ctx0, model.type_embd, n_embd, 0);
+            inpL = ggml_add(ctx0, inpL, type_row0);
+        }
         if (model.arch == LLM_ARCH_BERT) {
             inpL = ggml_add(ctx0, ggml_get_rows(ctx0, model.pos_embd, inp_pos), inpL);
         }
@@ -5905,36 +5909,11 @@ struct llm_build_bert : public llm_graph_context {
             ggml_tensor * Vcur;
 
             // self-attention
-            if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_JINA_BERT_V2) {
-                Qcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wq, cur), model.layers[il].bq);
-
-                if (model.layers[il].attn_q_norm) {
-                    Qcur = build_norm(Qcur,
-                            model.layers[il].attn_q_norm,
-                            model.layers[il].attn_q_norm_b,
-                            LLM_NORM, il);
-                }
-
-                Kcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wk, cur), model.layers[il].bk);
-
-                if (model.layers[il].attn_k_norm) {
-                    Kcur = build_norm(Kcur,
-                            model.layers[il].attn_k_norm,
-                            model.layers[il].attn_k_norm_b,
-                            LLM_NORM, il);
-                }
-
-                Vcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wv, cur), model.layers[il].bv);
-
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-            } else {
-                // compute Q and K and RoPE them
+            if (model.layers[il].wqkv) {
                 cur = build_lora_mm(model.layers[il].wqkv, cur);
                 cb(cur, "wqkv", il);
 
-                if (model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
+                if (model.layers[il].bqkv) {
                     cur = ggml_add(ctx0, cur, model.layers[il].bqkv);
                     cb(cur, "bqkv", il);
                 }
@@ -5942,11 +5921,32 @@ struct llm_build_bert : public llm_graph_context {
                 Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd,     n_tokens, cur->nb[1], 0*sizeof(float)*(n_embd)));
                 Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd_gqa, n_tokens, cur->nb[1], 1*sizeof(float)*(n_embd)));
                 Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd_gqa, n_tokens, cur->nb[1], 1*sizeof(float)*(n_embd + n_embd_gqa)));
+            } else {
+                Qcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wq, cur), model.layers[il].bq);
+                Kcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wk, cur), model.layers[il].bk);
+                Vcur = ggml_add(ctx0, build_lora_mm(model.layers[il].wv, cur), model.layers[il].bv);
+            }
 
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            if (model.layers[il].attn_q_norm) {
+                Qcur = build_norm(Qcur,
+                        model.layers[il].attn_q_norm,
+                        model.layers[il].attn_q_norm_b,
+                        LLM_NORM, il);
+            }
 
+            if (model.layers[il].attn_k_norm) {
+                Kcur = build_norm(Kcur,
+                        model.layers[il].attn_k_norm,
+                        model.layers[il].attn_k_norm_b,
+                        LLM_NORM, il);
+            }
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+            // RoPE
+            if (model.arch == LLM_ARCH_NOMIC_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -8892,9 +8892,9 @@ struct llm_build_mamba : public llm_graph_context {
              ggml_tensor * state_mask,
       const llama_ubatch & ubatch,
                      int   il) const {
-        const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
+        const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
 
-        const auto kv_head = kv_self->head;
+        const auto kv_head = kv_state->get_head();
 
         const int64_t d_conv  = hparams.ssm_d_conv;
         const int64_t d_inner = hparams.ssm_d_inner;
@@ -8912,8 +8912,8 @@ struct llm_build_mamba : public llm_graph_context {
         GGML_ASSERT(ubatch.equal_seqs);
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
-        ggml_tensor * conv_states_all = kv_self->k_l[il];
-        ggml_tensor * ssm_states_all  = kv_self->v_l[il];
+        ggml_tensor * conv_states_all = kv_state->get_k_l(il);
+        ggml_tensor * ssm_states_all  = kv_state->get_v_l(il);
 
         // (ab)using the KV cache to store the states
         ggml_tensor * conv = build_copy_mask_state(
@@ -11640,7 +11640,7 @@ struct llm_build_rwkv6_base : public llm_graph_context {
             ggml_tensor * state_mask,
             const llama_ubatch & ubatch,
             int   il) const {
-        const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
+        const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
 
         const auto n_tokens = ubatch.n_tokens;
         const auto n_seqs = ubatch.n_seqs;
@@ -11650,7 +11650,7 @@ struct llm_build_rwkv6_base : public llm_graph_context {
         const auto n_head = n_embd / head_size;
         const auto n_head_kv = hparams.n_head_kv(il);
 
-        const auto kv_head = kv_self->head;
+        const auto kv_head = kv_state->get_head();
 
         const auto & layer = model.layers[il];
 
@@ -11762,7 +11762,7 @@ struct llm_build_rwkv6_base : public llm_graph_context {
         }
 
         ggml_tensor * wkv_state = build_copy_mask_state(
-                gf, kv_self->v_l[il], state_copy, state_mask,
+                gf, kv_state->get_v_l(il), state_copy, state_mask,
                 hparams.n_embd_v_s(), n_seqs);
 
         ggml_tensor * wkv_output;
@@ -11781,9 +11781,9 @@ struct llm_build_rwkv6_base : public llm_graph_context {
                     wkv_state,
                     ggml_view_1d(
                         ctx0,
-                        kv_self->v_l[il],
+                        kv_state->get_v_l(il),
                         hparams.n_embd_v_s() * n_seqs,
-                        hparams.n_embd_v_s() * kv_head * ggml_element_size(kv_self->v_l[il])
+                        hparams.n_embd_v_s() * kv_head * ggml_element_size(kv_state->get_v_l(il))
                         )
                     )
                 );
@@ -12036,7 +12036,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
             ggml_tensor *& first_layer_value,
             const llama_ubatch & ubatch,
             int   il) const {
-        const llama_kv_cache_recurrent * kv_self = static_cast<const llama_kv_cache_recurrent *>(memory);
+        const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
 
         const auto n_tokens = ubatch.n_tokens;
         const auto n_seqs = ubatch.n_seqs;
@@ -12045,7 +12045,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
         const auto head_count = n_embd / head_size;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
 
-        const auto kv_head = kv_self->head;
+        const auto kv_head = kv_state->get_head();
 
         const auto & layer = model.layers[il];
 
@@ -12116,7 +12116,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
         a = ggml_reshape_3d(ctx0, a, head_size, head_count, n_tokens);
 
         ggml_tensor * wkv_state = build_copy_mask_state(
-                gf, kv_self->v_l[il], state_copy, state_mask,
+                gf, kv_state->get_v_l(il), state_copy, state_mask,
                 hparams.n_embd_v_s(), n_seqs);
 
         ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, ggml_neg(ctx0, kk), ggml_mul(ctx0, kk, a), wkv_state);
@@ -12130,9 +12130,9 @@ struct llm_build_rwkv7_base : public llm_graph_context {
                     wkv_state,
                     ggml_view_1d(
                         ctx0,
-                        kv_self->v_l[il],
+                        kv_state->get_v_l(il),
                         hparams.n_embd_v_s() * n_seqs,
-                        hparams.n_embd_v_s() * kv_head * ggml_element_size(kv_self->v_l[il])
+                        hparams.n_embd_v_s() * kv_head * ggml_element_size(kv_state->get_v_l(il))
                         )
                     )
                 );
@@ -13262,7 +13262,6 @@ llm_graph_result_ptr llama_model::build_graph(
 
     switch (arch) {
         case LLM_ARCH_LLAMA:
-        case LLM_ARCH_MINICPM:
             {
                 llm = std::make_unique<llm_build_llama>(*this, params, gf);
             } break;
@@ -13503,6 +13502,7 @@ llm_graph_result_ptr llama_model::build_graph(
             } break;
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
+        case LLM_ARCH_MINICPM:
             {
                 llm = std::make_unique<llm_build_granite>(*this, params, gf);
             } break;

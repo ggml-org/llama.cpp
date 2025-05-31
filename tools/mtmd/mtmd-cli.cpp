@@ -7,6 +7,7 @@
 #include "console.h"
 #include "chat.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 
 #include <vector>
 #include <limits.h>
@@ -143,7 +144,7 @@ struct mtmd_cli_context {
     }
 
     bool load_media(const std::string & fname) {
-        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(fname.c_str()));
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx_vision.get(), fname.c_str()));
         if (!bmp.ptr) {
             return false;
         }
@@ -284,7 +285,9 @@ int main(int argc, char ** argv) {
     if (is_single_turn) {
         g_is_generating = true;
         if (params.prompt.find(mtmd_default_marker()) == std::string::npos) {
-            params.prompt += mtmd_default_marker();
+            for (size_t i = 0; i < params.image.size(); i++) {
+                params.prompt += mtmd_default_marker();
+            }
         }
         common_chat_msg msg;
         msg.role = "user";

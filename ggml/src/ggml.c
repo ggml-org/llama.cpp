@@ -2312,6 +2312,26 @@ struct ggml_tensor * ggml_repeat(
     return result;
 }
 
+struct ggml_tensor * ggml_repeat_4d(
+        struct ggml_context * ctx,
+        struct ggml_tensor * a,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3) {
+    const bool can_repeat = ggml_is_empty(a) || (
+        (ne0 % a->ne[0] == 0) &&
+        (ne1 % a->ne[1] == 0) &&
+        (ne2 % a->ne[2] == 0) &&
+        (ne3 % a->ne[3] == 0)
+    );
+    GGML_ASSERT(can_repeat);
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
+
+    result->op     = GGML_OP_REPEAT;
+    result->src[0] = a;
+
+    return result;
+}
+
 // ggml_repeat_back
 
 struct ggml_tensor * ggml_repeat_back(

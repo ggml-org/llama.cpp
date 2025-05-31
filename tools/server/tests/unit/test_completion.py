@@ -121,6 +121,30 @@ def test_completion_stream_with_openai_library():
     assert match_regex("(going|bed)+", output_text)
 
 
+# Test case from https://github.com/ggml-org/llama.cpp/issues/13780
+@pytest.mark.slow
+def test_completion_stream_with_openai_library_stops():
+    global server
+    server.model_hf_repo = "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M"
+    server.model_hf_file = None
+    server.start()
+    client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
+    res = client.completions.create(
+        model="davinci-002",
+        prompt="System: You are helpfull assistant.\nAssistant:\nHey! How could I help?\nUser:\nTell me a joke.\nAssistant:\n",
+        stop=["User:\n", "Assistant:\n"],
+        max_tokens=200,
+        stream=True,
+    )
+    output_text = ''
+    for data in res:
+        choice = data.choices[0]
+        if choice.finish_reason is None:
+            assert choice.text is not None
+            output_text += choice.text
+    assert match_regex("Sure, here's one for[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
+
+
 @pytest.mark.parametrize("n_slots", [1, 2])
 def test_consistent_result_same_seed(n_slots: int):
     global server

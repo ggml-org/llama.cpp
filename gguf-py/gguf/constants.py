@@ -177,6 +177,9 @@ class Keys:
         EMBEDDING_LENGTH = "{arch}.convnext.embedding_length"
         BLOCK_COUNT      = "{arch}.convnext.block_count"
 
+    class Classifier:
+        OUTPUT_LABELS = "{arch}.classifier.output_labels"
+
     class Tokenizer:
         MODEL                = "tokenizer.ggml.model"
         PRE                  = "tokenizer.ggml.pre"
@@ -546,6 +549,7 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_FFN_GATE       = auto()
     A_ENC_FFN_DOWN       = auto()
     A_MMPROJ             = auto()
+    A_MMPROJ_FC          = auto()
     A_MM_NORM_PRE        = auto()
     A_MM_NORM_MID        = auto()
 
@@ -825,6 +829,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_FFN_GATE:            "a.blk.{bid}.ffn_gate",
     MODEL_TENSOR.A_ENC_FFN_DOWN:            "a.blk.{bid}.ffn_down",
     MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
+    MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
     MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
     MODEL_TENSOR.A_MM_NORM_MID:             "mm.a.norm_mid",
 }
@@ -885,6 +890,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_FFN_GATE,
         MODEL_TENSOR.A_ENC_FFN_DOWN,
         MODEL_TENSOR.A_MMPROJ,
+        MODEL_TENSOR.A_MMPROJ_FC,
         MODEL_TENSOR.A_MM_NORM_PRE,
         MODEL_TENSOR.A_MM_NORM_MID,
     ],
@@ -1030,6 +1036,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.POS_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.ATTN_OUT_NORM,
+        MODEL_TENSOR.ATTN_QKV,
         MODEL_TENSOR.ATTN_Q,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_V,
@@ -2256,6 +2263,8 @@ class VisionProjectorType:
     QWEN25VL = "qwen2.5vl_merger"
     ULTRAVOX = "ultravox"
     INTERNVL = "internvl"
+    QWEN2A = "qwen2a" # audio
+    QWEN25O = "qwen2.5o" # omni
 
 
 # Items here are (block size, type size)

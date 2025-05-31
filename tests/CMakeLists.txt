@@ -97,6 +97,9 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-qwen2             ARGS ${CMAKE
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-refact            ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-refact.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-starcoder.gguf)
 
+# TODO: missing HF tokenizer for this model in convert_hf_to_gguf_update.py, see https://github.com/ggml-org/llama.cpp/pull/13847
+# llama_test(test-tokenizer-0 NAME test-tokenizer-0-nomic-bert-moe    ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-nomic-bert-moe.gguf)
+
 if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-llama-bpe.gguf)
 endif ()
@@ -142,8 +145,10 @@ if (NOT WIN32)
     # llama_build_and_test(test-double-float.cpp) # SLOW
 endif()
 
-llama_build_and_test(test-log.cpp)
+llama_build_and_test(test-chat-parser.cpp)
 llama_build_and_test(test-chat-template.cpp)
+llama_build_and_test(test-json-partial.cpp)
+llama_build_and_test(test-log.cpp)
 llama_build_and_test(test-regex-partial.cpp)
 
 # this fails on windows (github hosted runner) due to curl DLL not found (exit code 0xc0000135)
