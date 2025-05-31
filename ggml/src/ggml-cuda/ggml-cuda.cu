@@ -2408,22 +2408,44 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
     ggml_backend_buffer_t buf_src = src->view_src ? src->view_src->buffer : src->buffer;
     ggml_backend_buffer_t buf_dst = dst->view_src ? dst->view_src->buffer : dst->buffer;
 
-    if (!ggml_backend_is_cuda(backend_src) || !ggml_backend_is_cuda(backend_dst)) {
-        return false;
+    bool src_is_cuda = ggml_backend_is_cuda(backend_src);
+    if (src_is_cuda) {
+         if (!ggml_backend_buffer_is_cuda(buf_src)) {
+            return false;
+         }
+    }
+    else {
+        if (!ggml_backend_buffer_is_host(buf_src)) {
+            return false;
+        }
     }
 
-    if (!ggml_backend_buffer_is_cuda(src->buffer) || !ggml_backend_buffer_is_cuda(dst->buffer)) {
+    bool dst_is_cuda = ggml_backend_is_cuda(backend_dst);
+    if (dst_is_cuda) {
+        if (!ggml_backend_buffer_is_cuda(buf_dst)) {
+            return false;
+        }
+    }
+    else {
+        if (!ggml_backend_buffer_is_host(buf_dst)) {
+            return false;
+        }
+    }
+
+    // async copy supports cuda to cuda, cuda to host, and host to cuda.
+    if (!src_is_cuda && !dst_is_cuda) {
+        // ignore host to host copy
         return false;
     }
 
     // device -> device copy
-    ggml_backend_cuda_context * cuda_ctx_src = (ggml_backend_cuda_context *)backend_src->context;
-    ggml_backend_cuda_context * cuda_ctx_dst = (ggml_backend_cuda_context *)backend_dst->context;
+    ggml_backend_cuda_context * cuda_ctx_src = src_is_cuda ? (ggml_backend_cuda_context *)backend_src->context : nullptr;
+    ggml_backend_cuda_context * cuda_ctx_dst = dst_is_cuda ? (ggml_backend_cuda_context *)backend_dst->context : nullptr;
 
     ggml_backend_cuda_buffer_context * buf_ctx_src = (ggml_backend_cuda_buffer_context *)buf_src->context;
     ggml_backend_cuda_buffer_context * buf_ctx_dst = (ggml_backend_cuda_buffer_context *)buf_dst->context;
 
-    if (cuda_ctx_src->device != buf_ctx_src->device || cuda_ctx_dst->device != buf_ctx_dst->device) {
+    if ((cuda_ctx_src && cuda_ctx_src->device != buf_ctx_src->device) || (cuda_ctx_dst && cuda_ctx_dst->device != buf_ctx_dst->device)) {
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: backend and buffer devices do not match\n", __func__);
 #endif
@@ -2432,7 +2454,11 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
 
     if (backend_src != backend_dst) {
         // copy on src stream
-        if (cuda_ctx_src->device == cuda_ctx_dst->device) {
+        if (!src_is_cuda) {
+            CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyHostToDevice, cuda_ctx_dst->stream()));
+        } else if (!dst_is_cuda) {
+            CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToHost, cuda_ctx_src->stream()));
+        } else if (cuda_ctx_src->device == cuda_ctx_dst->device) {
             CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
@@ -2442,16 +2468,14 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
 #endif
         }
 
-        // record event on src stream after the copy
-        if (!cuda_ctx_src->copy_event) {
-            ggml_cuda_set_device(cuda_ctx_src->device);
-            CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx_src->copy_event, cudaEventDisableTiming));
+        if (cuda_ctx_src) {
+            if (!cuda_ctx_src->copy_event) {
+                ggml_cuda_set_device(cuda_ctx_src->device);
+                CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx_src->copy_event, cudaEventDisableTiming));
+            }
+
+            CUDA_CHECK(cudaEventRecord(cuda_ctx_src->copy_event, cuda_ctx_src->stream()));
         }
-
-        CUDA_CHECK(cudaEventRecord(cuda_ctx_src->copy_event, cuda_ctx_src->stream()));
-
-        // wait on dst stream for the copy to complete
-        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx_dst->stream(), cuda_ctx_src->copy_event, 0));
     } else {
         // src and dst are on the same backend
         CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));

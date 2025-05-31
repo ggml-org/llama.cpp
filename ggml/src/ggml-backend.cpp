@@ -1364,6 +1364,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         struct ggml_backend_sched_split * split = &splits[i];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+        bool needs_synchronize[GGML_SCHED_MAX_BACKENDS] = { false };
+        auto queue_synchronize = [&](ggml_backend_t backend) {
+            auto backend_id = ggml_backend_sched_backend_id(sched, backend);
+            needs_synchronize[backend_id] = true;
+        };
 
         // copy the input tensors to the split backend
         for (int j = 0; j < split->n_inputs; j++) {
@@ -1386,9 +1391,10 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
-                // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
-                // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
-                if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                if (split_backend->iface.cpy_tensor_async && split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                    // async tensor copy occurs on the source stream, queue up a synchronize after all the copies are done to ensure all inputs are ready
+                    queue_synchronize(input_backend);
+                } else {
                     ggml_backend_synchronize(input_backend);
                     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
                         ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
@@ -1397,6 +1403,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                     }
                     ggml_backend_tensor_copy(input, input_cpy);
                 }
+            }
+        }
+
+        for (int i = 0; i < GGML_SCHED_MAX_BACKENDS; i++) {
+            if (needs_synchronize[i]) {
+                auto backend = sched->backends[i];
+                ggml_backend_synchronize(backend);
             }
         }
 
