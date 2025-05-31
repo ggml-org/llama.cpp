@@ -362,7 +362,9 @@ int main(int argc, char ** argv) {
         // process in chunks of params.n_batch
         int32_t n_batch = params.n_batch;
 
-        for (int32_t i = 0; i < (int32_t) batch.n_tokens; i += n_batch) {
+        int32_t i_next = 0;
+
+        for (int32_t i = 0; i < batch.n_tokens; i = i_next) {
             // experiment: process in powers of 2
             //if (i + n_batch > (int32_t) batch.n_tokens && n_batch > 32) {
             //    n_batch /= 2;
@@ -370,7 +372,7 @@ int main(int argc, char ** argv) {
             //    continue;
             //}
 
-            const int32_t n_tokens = std::min(n_batch, (int32_t) (batch.n_tokens - i));
+            const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
 
             llama_batch batch_view = {
                 n_tokens,
@@ -396,12 +398,17 @@ int main(int argc, char ** argv) {
 
                 // retry with half the batch size to try to find a free slot in the KV cache
                 n_batch /= 2;
-                i -= n_batch;
 
                 continue;
             }
 
             LOG_DBG("%s : decoded batch of %d tokens\n", __func__, n_tokens);
+
+            // move the head of the batch forward with the number of tokens we just processed
+            i_next = i + n_tokens;
+
+            // on successful decode, restore the original batch size
+            n_batch = params.n_batch;
 
             for (auto & client : clients) {
                 if (client.i_batch < (int) i || client.i_batch >= (int) (i + n_tokens)) {
