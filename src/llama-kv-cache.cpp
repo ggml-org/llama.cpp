@@ -1811,6 +1811,8 @@ llama_memory_state_ptr llama_kv_cache_unified_iswa::init_batch(const llama_batch
 
     auto sbatch = llama_sbatch(batch, hparams.n_embd, true, logits_all);
 
+    // TODO: if we fail with split_simple, we should attempt split_equal
+
     std::vector<llama_ubatch> ubatches;
 
     while (sbatch.n_tokens > 0) {
