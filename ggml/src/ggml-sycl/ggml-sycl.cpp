@@ -354,7 +354,8 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         assert(tensor->view_src->buffer->buft == buffer->buft);
         return GGML_STATUS_SUCCESS;
     }
-    if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K) && !g_ggml_sycl_disable_optimize) {
+    if ((tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q6_K) &&
+        !g_ggml_sycl_disable_optimize) {
         ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
         tensor->extra                 = extra;
         ctx->tensor_extras.push_back(extra);  //used to release it when destroy ctx.
@@ -2928,6 +2929,7 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
         case GGML_TYPE_Q4_0:
             return true;
         case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q6_K:
             return !g_ggml_sycl_prioritize_dmmv;
         default:
             return false;
@@ -2947,6 +2949,7 @@ inline bool ggml_sycl_supports_reorder_mmvq(enum ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q6_K:
             return true;
         default:
             return false;
@@ -3031,6 +3034,51 @@ static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
     sycl::free(tmp_buf, *stream);
 }
 
+static void reorder_qw_q6_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
+    GGML_ASSERT(size % sizeof(block_q6_K) == 0);
+    GGML_ASSERT(offset % sizeof(block_q6_K) == 0);
+
+    const int nblocks = size / sizeof(block_q6_K);
+
+    auto * tmp_buf = sycl::malloc_shared<uint8_t>(size, *stream);
+    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(tmp_buf, data_device, size).wait()));
+
+    auto *       ql_ptr     = data_device;
+    auto *       qh_ptr     = ql_ptr + (QK_K / 2) * nblocks;
+    // scales are after all quants' bits so adding both to get correct offset
+    auto *       scales_ptr = qh_ptr + (QK_K / 4) * nblocks;
+    sycl::half * dm_ptr     = (sycl::half *) (scales_ptr + (QK_K / 16) * nblocks);
+
+    stream
+        ->parallel_for(nblocks,
+                       [=](auto i) {
+                           const block_q6_K * x  = (const block_q6_K *) tmp_buf;
+                           const int          ib = i;
+
+                           const uint8_t * ql              = x[ib].ql;
+                           const uint8_t * qh              = x[ib].qh;
+                           uint8_t *       base_ql_ptr     = ql_ptr + (QK_K / 2) * ib;
+                           uint8_t *       base_qh_ptr     = qh_ptr + (QK_K / 4) * ib;
+                           uint8_t *       base_scales_ptr = scales_ptr + (QK_K / 16) * ib;
+
+                           for (int j = 0; j < QK_K / 2; ++j) {
+                               base_ql_ptr[j] = ql[j];
+                           }
+                           for (int j = 0; j < QK_K / 4; ++j) {
+                               base_qh_ptr[j] = qh[j];
+                           }
+
+                           for (int j = 0; j < QK_K / 16; ++j) {
+                               base_scales_ptr[j] = x[ib].scales[j];
+                           }
+
+                           dm_ptr[ib] = x[ib].d;
+                       })
+        .wait_and_throw();
+
+    sycl::free(tmp_buf, *stream);
+}
+
 static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     uint8_t * data_device = (uint8_t *) src0->data;
     size_t ncols = src0->ne[0];
@@ -3043,6 +3091,9 @@ static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
             break;
         case GGML_TYPE_Q4_K:
             reorder_qw_q4_k(data_device, size, 0, stream);
+            break;
+        case GGML_TYPE_Q6_K:
+            reorder_qw_q6_k(data_device, size, 0, stream);
             break;
         default:
             GGML_ABORT("reorder_qw() called with unsupported type");
