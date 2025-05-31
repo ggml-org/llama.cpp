@@ -28,6 +28,30 @@ Inference of Meta's [LLaMA](https://arxiv.org/abs/2302.13971) model (and others)
 
 ----
 
+## Quick start
+
+Getting started with llama.cpp is straightforward. Here are several ways to install it on your machine:
+
+- **⭐ Recommended**: Install `llama.cpp` using [brew, flox, nix or winget](docs/install.md)
+- Run with Docker - see our [Docker documentation](docs/docker.md)
+- Download pre-built binaries from the [releases page](https://github.com/ggml-org/llama.cpp/releases)
+- Build from source by cloning this repository - check out [our build guide](docs/build.md)
+
+Once installed, you'll need a model to work with. Head to the [Obtaining and quantizing models](#obtaining-and-quantizing-models) section to learn more.
+
+Example command:
+
+```sh
+# Use a local model file
+llama-cli -m my_model.gguf
+
+# Or download and run a model directly from Hugging Face
+llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
+
+# Launch OpenAI-compatible API server
+llama-server -hf ggml-org/gemma-3-1b-it-GGUF
+```
+
 ## Description
 
 The main goal of `llama.cpp` is to enable LLM inference with minimal setup and state-of-the-art performance on a wide
@@ -229,6 +253,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 
 </details>
 
+
 ## Supported backends
 
 | Backend | Target devices |
@@ -245,16 +270,6 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 
-## Building the project
-
-The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](include/llama.h).
-The project also includes many example programs and tools using the `llama` library. The examples range from simple, minimal code snippets to sophisticated sub-projects such as an OpenAI-compatible HTTP server. Possible methods for obtaining the binaries:
-
-- Clone this repository and build locally, see [how to build](docs/build.md)
-- On MacOS or Linux, install `llama.cpp` via [brew, flox or nix](docs/install.md)
-- Use a Docker image, see [documentation for Docker](docs/docker.md)
-- Download pre-built binaries from [releases](https://github.com/ggml-org/llama.cpp/releases)
-
 ## Obtaining and quantizing models
 
 The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](https://huggingface.co/models?library=gguf&sort=trending) compatible with `llama.cpp`:
@@ -262,7 +277,11 @@ The [Hugging Face](https://huggingface.co) platform hosts a [number of LLMs](htt
 - [Trending](https://huggingface.co/models?library=gguf&sort=trending)
 - [LLaMA](https://huggingface.co/models?sort=trending&search=llama+gguf)
 
-You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from [Hugging Face](https://huggingface.co/) or other model hosting sites, such as [ModelScope](https://modelscope.cn/), by using this CLI argument: `-hf <user>/<model>[:quant]`.
+You can either manually download the GGUF file or directly use any `llama.cpp`-compatible models from [Hugging Face](https://huggingface.co/) or other model hosting sites, such as [ModelScope](https://modelscope.cn/), by using this CLI argument: `-hf <user>/<model>[:quant]`. For example:
+
+```sh
+llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
+```
 
 By default, the CLI would download from Hugging Face, you can switch to other options with the environment variable `MODEL_ENDPOINT`. For example, you may opt to downloading model checkpoints from ModelScope or other model sharing communities by setting the environment variable, e.g. `MODEL_ENDPOINT=https://www.modelscope.cn/`.
 

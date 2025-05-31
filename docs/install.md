@@ -1,28 +1,43 @@
 # Install pre-built version of llama.cpp
 
-## Homebrew
+| Install via | Windows | Mac | Linux |
+|-------------|---------|-----|-------|
+| Winget      | ✅      |      |      |
+| Homebrew    |         | ✅   | ✅   |
+| MacPorts    |         | ✅   |      |
+| Nix         |         | ✅   | ✅   |
+| Flox        |         | ✅   | ✅   |
 
-On Mac and Linux, the homebrew package manager can be used via
+## Winget (Windows)
+
+```sh
+winget install llama.cpp
+```
+
+The package is automatically updated with new `llama.cpp` releases. More info: https://github.com/ggml-org/llama.cpp/issues/8188
+
+## Homebrew (Mac and Linux)
 
 ```sh
 brew install llama.cpp
 ```
+
 The formula is automatically updated with new `llama.cpp` releases. More info: https://github.com/ggml-org/llama.cpp/discussions/7668
 
-## MacPorts
+## MacPorts (Mac)
 
 ```sh
 sudo port install llama.cpp
 ```
-see also: https://ports.macports.org/port/llama.cpp/details/
 
-## Nix
+See also: https://ports.macports.org/port/llama.cpp/details/
 
-On Mac and Linux, the Nix package manager can be used via
+## Nix (Mac and Linux)
 
 ```sh
 nix profile install nixpkgs#llama-cpp
 ```
+
 For flake enabled installs.
 
 Or
@@ -35,9 +50,9 @@ For non-flake enabled installs.
 
 This expression is automatically updated within the [nixpkgs repo](https://github.com/NixOS/nixpkgs/blob/nixos-24.05/pkgs/by-name/ll/llama-cpp/package.nix#L164).
 
-## Flox
+## Flox (Mac and Linux)
 
-On Mac and Linux, Flox can be used to install llama.cpp within a Flox environment via
+Flox can be used to install llama.cpp within a Flox environment via
 
 ```sh
 flox install llama-cpp
