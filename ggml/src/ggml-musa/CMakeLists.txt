@@ -27,7 +27,8 @@ if (MUSAToolkit_FOUND)
 
     file(GLOB   GGML_HEADERS_MUSA "../ggml-cuda/*.cuh")
     list(APPEND GGML_HEADERS_MUSA "../../include/ggml-cuda.h")
-    list(APPEND GGML_HEADERS_MUSA "../ggml-musa/mudnn.cuh")
+    file(GLOB   HRDS "../ggml-musa/*.cuh")
+    list(APPEND GGML_HEADERS_MUSA ${HRDS})
 
     file(GLOB   GGML_SOURCES_MUSA "../ggml-cuda/*.cu")
     file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
