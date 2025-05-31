@@ -417,18 +417,41 @@ void llama_model::load_arch(llama_model_loader & ml) {
     }
 }
 
+struct LLM_KV_MATCH_WITHOUT_ARCH {
+    const LLM_KV kv_arch = LLM_KV(LLM_ARCH_UNKNOWN);
+    const std::string kv_arch_prefix = llm_arch_name(LLM_ARCH_UNKNOWN);
+
+    bool operator()(const llm_kv & kv, const std::string & kv_name) const
+    {
+        std::string kv_match = kv_arch(kv);
+        auto kv_arch_pos = kv_match.find(kv_arch_prefix);
+
+        return kv_name.find(kv_match.substr(kv_arch_pos == std::string::npos ? 0 : kv_arch_pos + kv_arch_prefix.size())) != std::string::npos;
+    }
+};
+
 void llama_model::load_hparams(llama_model_loader & ml) {
     const gguf_context * ctx = ml.meta.get();
 
     // get metadata as string
     for (int i = 0; i < gguf_get_n_kv(ctx); i++) {
-        gguf_type type = gguf_get_kv_type(ctx, i);
-        if (type == GGUF_TYPE_ARRAY) {
-            continue;
-        }
         const char * name = gguf_get_key(ctx, i);
-        const std::string value = gguf_kv_to_str(ctx, i);
-        gguf_kv.emplace(name, value);
+        gguf_type type = gguf_get_kv_type(ctx, i);
+
+        if (type == GGUF_TYPE_ARRAY) {
+            if (LLM_KV_MATCH_WITHOUT_ARCH()(LLM_KV_CLASSIFIER_OUTPUT_LABELS, name)) {
+                const size_t n_items = gguf_get_arr_n(ctx, i);
+
+                for (size_t j = 0; j < n_items; j++) {
+                    const std::string name_i = format("%s.%zu", name, j);
+                    const std::string value = gguf_get_arr_str(ctx, i, j);
+                    gguf_kv.emplace(name_i, value);
+                }
+            }
+        } else {
+            const std::string value = gguf_kv_to_str(ctx, i);
+            gguf_kv.emplace(name, value);
+        }
     }
 
     // get general kv
@@ -13591,6 +13614,21 @@ int32_t llama_model_n_head(const llama_model * model) {
 
 int32_t llama_model_n_head_kv(const llama_model * model) {
     return model->hparams.n_head_kv();
+}
+
+uint32_t llama_model_n_cls_out(const struct llama_model * model) {
+    return model->hparams.n_cls_out;
+}
+
+const char * llama_model_get_classifier_label_by_index(const struct llama_model * model, uint32_t i) {
+    const std::string key = format("%s.%u", LLM_KV(model->arch)(LLM_KV_CLASSIFIER_OUTPUT_LABELS).c_str(), i);
+    const auto & it = model->gguf_kv.find(key);
+
+    if (it != model->gguf_kv.end()) {
+        return it->second.c_str();
+    }
+
+    return nullptr;
 }
 
 // deprecated
