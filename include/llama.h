@@ -506,6 +506,12 @@ extern "C" {
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
+    // Returns the number of classifier outputs (only valid for classifier models)
+    LLAMA_API uint32_t llama_model_n_cls_out(const struct llama_model * model);
+
+    // Returns label of classifier output by index (<n_cls_out). Returns nullptr if no label provided
+    LLAMA_API const char * llama_model_get_classifier_label_by_index(const struct llama_model * model, uint32_t i);
+
     LLAMA_API enum llama_vocab_type llama_vocab_type(const struct llama_vocab * vocab);
 
     LLAMA_API int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab);
@@ -912,7 +918,7 @@ extern "C" {
 
     // Get the embeddings for a sequence id
     // Returns NULL if pooling_type is LLAMA_POOLING_TYPE_NONE
-    // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[1] with the rank of the sequence
+    // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[i] with the rank(s) of the sequence
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 
