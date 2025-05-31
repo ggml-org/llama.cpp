@@ -210,6 +210,8 @@ struct llama_layer {
     struct ggml_tensor * layer_out_norm_b = nullptr;
     struct ggml_tensor * ffn_norm_exps    = nullptr;
     struct ggml_tensor * ffn_norm_enc     = nullptr;
+    struct ggml_tensor * post_attn_norm   = nullptr;
+    struct ggml_tensor * post_mlp_norm    = nullptr;
 
     // ff
     struct ggml_tensor * ffn_gate     = nullptr; // w1
@@ -239,10 +241,11 @@ struct llama_layer {
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
 
     // mamba proj
-    struct ggml_tensor * ssm_in  = nullptr;
-    struct ggml_tensor * ssm_x   = nullptr;
-    struct ggml_tensor * ssm_dt  = nullptr;
-    struct ggml_tensor * ssm_out = nullptr;
+    struct ggml_tensor * ssm_in   = nullptr;
+    struct ggml_tensor * ssm_x    = nullptr;
+    struct ggml_tensor * ssm_bcdt = nullptr;
+    struct ggml_tensor * ssm_dt   = nullptr;
+    struct ggml_tensor * ssm_out  = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;

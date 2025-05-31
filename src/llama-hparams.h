@@ -7,6 +7,7 @@
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
 #define LLAMA_MAX_EXPERTS 256  // DeepSeekV3
+#define MAX_LAYER_BLOCK_TYPE_NAME_LEN 64
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE    = 0,
@@ -104,10 +105,12 @@ struct llama_hparams {
     llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
     // the size of the sliding window (0 - no SWA)
     uint32_t n_swa = 0;
+    uint32_t n_swa_pattern = 0; // sliding window attention pattern
     // if swa_layers[il] == true, then layer il is SWA
     // if swa_layers[il] == false, then layer il is dense (i.e. non-SWA)
     // by default, all layers are dense
     std::array<bool, LLAMA_MAX_LAYERS> swa_layers;
+    std::array<std::array<char, MAX_LAYER_BLOCK_TYPE_NAME_LEN>, LLAMA_MAX_LAYERS> layers_block_type_arr;
 
     // for State Space Models
     uint32_t ssm_d_conv  = 0;

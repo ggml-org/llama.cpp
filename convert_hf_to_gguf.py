@@ -1551,7 +1551,7 @@ class XverseModel(TextModel):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(dir_model, n_vocab=len(tokens))
+        special_vocab = gguf.SpecialVocab(dir_model, n_vocab=len(tokens), load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -2200,41 +2200,68 @@ class Plamo2Model(LlamaModel):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(dir_model, trust_remote_code=True)
-        vocab_size = len(tokenizer.vocab)
-        # Since we are checking the maximum index, we need to ensure it's strictly less than vocab_size,
-        # because vocab_size is the count of items, and indexes start at 0.
+
+        # PLaMo2 has padded vocabulary - get actual size from embedding weight
+        # Load the embedding tensor to get the real vocab size
+        import torch
+        from safetensors import safe_open
+        actual_vocab_size = None
+
+        # Check the model weight files to get actual vocab size
+        weight_map_file = dir_model / "model.safetensors.index.json"
+        if weight_map_file.exists():
+            import json
+            with open(weight_map_file, 'r') as f:
+                weight_map = json.load(f)
+            embed_file = weight_map['weight_map']['model.embed_tokens.weight']
+            embed_path = dir_model / embed_file
+
+            with safe_open(str(embed_path), framework='pt', device='cpu') as f:
+                embed_weight = f.get_tensor('model.embed_tokens.weight')
+                actual_vocab_size = embed_weight.shape[0]
+
+        vocab_size = actual_vocab_size if actual_vocab_size else len(tokenizer.vocab)
+
+        # Since we are checking the maximum index, we need to ensure it's strictly less than tokenizer vocab size,
+        # because PLaMo2 has padded vocabulary
         max_vocab_index = max(tokenizer.get_vocab().values())
-        if max_vocab_index >= vocab_size:
+        if max_vocab_index >= len(tokenizer.vocab):
             raise ValueError("Vocabulary size exceeds expected maximum size.")
         
         reverse_vocab: dict[int, str] = {id_: encoded_tok for encoded_tok, id_ in tokenizer.vocab.items()}
         added_vocab = tokenizer.get_added_vocab()
 
         for token_id in range(vocab_size):
-            token_text = reverse_vocab[token_id].encode('utf-8')
-            # replace "\x00" to string with length > 0
-            if token_text == b"\x00":
-                toktype = gguf.TokenType.BYTE  # special
-                token_text = f"<{token_text}>".encode('utf-8')
-            elif re.fullmatch(br"<0x[0-9A-Fa-f]{2}>", token_text):
-                toktype = gguf.TokenType.BYTE  # special
-            elif reverse_vocab[token_id] in added_vocab:
-                if tokenizer.added_tokens_decoder[token_id].special:
-                    toktype = gguf.TokenType.CONTROL
-                else:
-                    toktype = gguf.TokenType.USER_DEFINED
+            # Handle padding tokens for vocab entries beyond tokenizer vocabulary
+            if token_id >= len(tokenizer.vocab):
+                # Create padding tokens for the extra vocabulary entries
+                token_text = f"<pad_{token_id}>".encode('utf-8')
+                toktype = gguf.TokenType.UNUSED
             else:
-                toktype = gguf.TokenType.NORMAL
+                token_text = reverse_vocab[token_id].encode('utf-8')
+                # replace "\x00" to string with length > 0
+                if token_text == b"\x00":
+                    toktype = gguf.TokenType.BYTE  # special
+                    token_text = f"<{token_text}>".encode('utf-8')
+                elif re.fullmatch(br"<0x[0-9A-Fa-f]{2}>", token_text):
+                    toktype = gguf.TokenType.BYTE  # special
+                elif reverse_vocab[token_id] in added_vocab:
+                    if tokenizer.added_tokens_decoder[token_id].special:
+                        toktype = gguf.TokenType.CONTROL
+                    else:
+                        toktype = gguf.TokenType.USER_DEFINED
+                else:
+                    toktype = gguf.TokenType.NORMAL
 
             tokens.append(token_text)
             toktypes.append(toktype)
 
-        # self.gguf_writer.add_tokenizer_model("llama")
-        # self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_tokenizer_model("llama")
+        self.gguf_writer.add_tokenizer_pre("default")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
-        special_vocab = gguf.SpecialVocab(dir_model, n_vocab=len(tokens))
+        special_vocab = gguf.SpecialVocab(dir_model, n_vocab=len(tokens), load_merges=False)
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -2245,9 +2272,16 @@ class Plamo2Model(LlamaModel):
         # Mamba parameters
         if hparams.get("mamba_enabled", False):
             self.gguf_writer.add_ssm_conv_kernel(hparams.get("mamba_d_conv", 4))
-            self.gguf_writer.add_ssm_inner_size(hparams.get("mamba_d_state", 64) * hparams.get("intermediate_size", 13312) // hparams.get("hidden_size", 4096))
+            # PLaMo2 SSM inner size = mamba_num_heads * hidden_size_per_head
+            mamba_num_heads = hparams.get("mamba_num_heads", 64)
+            hidden_size_per_head = hparams.get("hidden_size_per_head", 128)
+            ssm_inner_size = mamba_num_heads * hidden_size_per_head
+            self.gguf_writer.add_ssm_inner_size(ssm_inner_size)
             self.gguf_writer.add_ssm_state_size(hparams.get("mamba_d_state", 64))
-            self.gguf_writer.add_ssm_time_step_rank(hparams.get("mamba_d_state", 64) // 16)  # Commonly d_state/16
+            # PLaMo2 dt_dim = max(64, hidden_size // 16)
+            hidden_size = hparams.get("hidden_size", 4096)
+            dt_dim = max(64, hidden_size // 16)
+            self.gguf_writer.add_ssm_time_step_rank(dt_dim)
 
         # Attention window parameters
         if "attention_window_size" in hparams:
@@ -2273,6 +2307,24 @@ class Plamo2Model(LlamaModel):
             # Reconstruct the name without the duplicate "layers"
             name = f"model.layers.{layer_num}.{rest}"
         
+        # Handle combined gate_up_proj tensor split
+        if name.endswith(".mlp.gate_up_proj.weight"):
+            # Split the combined gate_up tensor into separate gate and up tensors
+            # The tensor shape is (2 * intermediate_size, hidden_size)
+            # Split along dim 0 to get gate (first half) and up (second half)
+            intermediate_size = data_torch.shape[0] // 2
+            gate_weight = data_torch[:intermediate_size, :]
+            up_weight = data_torch[intermediate_size:, :]
+
+            # Map to the correct names
+            gate_name = self.map_tensor_name(name.replace("gate_up_proj", "gate_proj"))
+            up_name = self.map_tensor_name(name.replace("gate_up_proj", "up_proj"))
+
+            return [
+                (gate_name, gate_weight),
+                (up_name, up_weight)
+            ]
+
         # Handle Mamba-specific A_log tensor transformation
         if name.endswith(".A_log"):
             # Map the tensor name first

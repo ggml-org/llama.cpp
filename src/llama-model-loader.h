@@ -5,6 +5,7 @@
 #include "llama-impl.h"
 #include "llama-arch.h"
 #include "llama-mmap.h"
+#include "llama-hparams.h"
 
 #include "ggml-cpp.h"
 

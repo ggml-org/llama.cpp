@@ -756,15 +756,13 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             // Attention-specific tensors
             { LLM_TENSOR_ROPE_FREQS,      "rope_freqs" },
             { LLM_TENSOR_ATTN_ROT_EMBD,   "blk.%d.attn_rot_embd" },
-            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
-            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
-            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
-            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_ATTN_QKV,          "blk.%d.attn_qkv" },
+            { LLM_TENSOR_ATTN_OUT,          "blk.%d.attn_output" },
 
             // Mamba-specific tensors (SSM)
             { LLM_TENSOR_SSM_IN,          "blk.%d.ssm_in" },
             { LLM_TENSOR_SSM_CONV1D,      "blk.%d.ssm_conv1d" },
-            { LLM_TENSOR_SSM_X,           "blk.%d.ssm_x" },
+            { LLM_TENSOR_SSM_BCDT,          "blk.%d.ssm_bcdt" },
             { LLM_TENSOR_SSM_DT,          "blk.%d.ssm_dt" },
             { LLM_TENSOR_SSM_A,           "blk.%d.ssm_a" },
             { LLM_TENSOR_SSM_D,           "blk.%d.ssm_d" },

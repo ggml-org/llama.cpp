@@ -473,21 +473,23 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     // It's optional; if not present, it's assumed all layers are of the primary type for that architecture.
     // For Plamo2, this is crucial for hybrid models.
     if (hparams.n_layer > 0) {
-        hparams.layers_block_type_arr.resize(hparams.n_layer);
         const int32_t k_idx = gguf_find_key(ctx, LLM_KV(arch)(LLM_KV_LAYERS_BLOCK_TYPE).c_str());
         if (k_idx != -1 && gguf_get_kv_type(ctx, k_idx) == GGUF_TYPE_ARRAY &&
             gguf_get_arr_type(ctx, k_idx) == GGUF_TYPE_STRING) {
             const uint32_t n_blks = gguf_get_arr_n(ctx, k_idx);
             if (n_blks == hparams.n_layer) {
                 for (uint32_t i = 0; i < n_blks; ++i) {
-                    hparams.layers_block_type_arr[i] = gguf_get_arr_str(ctx, k_idx, i);
+                    const char* str = gguf_get_arr_str(ctx, k_idx, i);
+                    std::strncpy(hparams.layers_block_type_arr[i].data(), str, MAX_LAYER_BLOCK_TYPE_NAME_LEN - 1);
+                    hparams.layers_block_type_arr[i][MAX_LAYER_BLOCK_TYPE_NAME_LEN - 1] = '\0';
                 }
             } else {
                 LLAMA_LOG_WARN("%s: '%s' array has %u elements, expected %u\n", __func__,
                                LLM_KV(arch)(LLM_KV_LAYERS_BLOCK_TYPE).c_str(), n_blks, hparams.n_layer);
                 // Fallback: if size mismatch, assume default (attention for plamo2 initially)
                 for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                    hparams.layers_block_type_arr[i] = "attention";  // Default or primary type
+                    std::strncpy(hparams.layers_block_type_arr[i].data(), "attention", MAX_LAYER_BLOCK_TYPE_NAME_LEN - 1);
+                    hparams.layers_block_type_arr[i][MAX_LAYER_BLOCK_TYPE_NAME_LEN - 1] = '\0';
                 }
             }
         } else {
@@ -498,7 +500,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 // The build_graph logic for Plamo2 will need to handle this (e.g. default to attention).
             }
             for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-                hparams.layers_block_type_arr[i] = default_block_type;
+                std::strncpy(hparams.layers_block_type_arr[i].data(), default_block_type.c_str(), MAX_LAYER_BLOCK_TYPE_NAME_LEN - 1);
+                hparams.layers_block_type_arr[i][MAX_LAYER_BLOCK_TYPE_NAME_LEN - 1] = '\0';
             }
         }
     }
@@ -916,6 +919,19 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 switch (hparams.n_layer) {
                     case 40: type = LLM_TYPE_13B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+               }
+            } break;
+        case LLM_ARCH_PLAMO2:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,              hparams.ssm_d_conv, false);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,               hparams.ssm_d_inner, false);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,               hparams.ssm_d_state, false);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK,           hparams.ssm_dt_rank, false);
+
+                switch (hparams.n_layer) {
+                    case 32: type = LLM_TYPE_8B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                }
             } break;
@@ -2690,6 +2706,57 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
+            case LLM_ARCH_PLAMO2:
+                {
+                    const int64_t d_conv  = hparams.ssm_d_conv;
+                    const int64_t d_inner = hparams.ssm_d_inner;
+                    const int64_t d_state = hparams.ssm_d_state;
+                    const int64_t dt_rank = hparams.ssm_dt_rank;
+
+                    // only an expansion factor of 2 is supported for now
+                    if (2 * n_embd != d_inner) {
+                        throw std::runtime_error("only an expansion factor of 2 is supported for now");
+                    }
+
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        // Determine layer type from layers_block_type_arr
+                        const std::string layer_type(hparams.layers_block_type_arr[i].data());
+
+                        // Common layer norms for both layer types
+                        layer.attn_norm      = create_tensor(tn(LLM_TENSOR_ATTN_NORM,      "weight", i), {n_embd}, 0);
+                        layer.post_attn_norm = create_tensor(tn(LLM_TENSOR_POST_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_norm       = create_tensor(tn(LLM_TENSOR_FFN_NORM,       "weight", i), {n_embd}, 0);
+                        layer.post_mlp_norm  = create_tensor(tn(LLM_TENSOR_POST_MLP_NORM,  "weight", i), {n_embd}, 0);
+
+                        // FFN tensors (common to all layers)
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+
+                        if (layer_type == "attention") {
+                            // Attention layer: use QKV combined tensor
+                            layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd + 2*n_embd_gqa}, 0);
+                            layer.wo   = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+                        } else if (layer_type == "mamba") {
+                            // Mamba layer tensors
+                            layer.ssm_in    = create_tensor(tn(LLM_TENSOR_SSM_IN,     "weight", i), {n_embd, 2*d_inner}, 0);
+                            layer.ssm_conv1d = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_inner, d_conv}, 0);
+                            layer.ssm_bcdt  = create_tensor(tn(LLM_TENSOR_SSM_BCDT,   "weight", i), {d_inner, dt_rank + 2*d_state}, 0);
+                            layer.ssm_dt    = create_tensor(tn(LLM_TENSOR_SSM_DT,     "weight", i), {dt_rank, d_inner}, 0);
+                            layer.ssm_a     = create_tensor(tn(LLM_TENSOR_SSM_A,      "weight", i), {d_state, d_inner}, 0);
+                            layer.ssm_d     = create_tensor(tn(LLM_TENSOR_SSM_D,      "weight", i), {d_inner}, 0);
+                            layer.ssm_out   = create_tensor(tn(LLM_TENSOR_SSM_OUT,    "weight", i), {d_inner, n_embd}, 0);
+                        }
                     }
                 } break;
             case LLM_ARCH_GPT2:
@@ -7644,6 +7711,141 @@ struct llm_build_plamo : public llm_graph_context {
         cur = build_lora_mm(model.output, cur);
 
         cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
+struct llm_build_plamo2 : public llm_graph_context {
+    const llama_model & model;
+
+    llm_build_plamo2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params), model(model) {
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+        const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
+        const int64_t n_embd_k_gqa = hparams.n_embd_k_gqa();
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        // inp_pos - contains the positions
+        ggml_tensor * inp_pos = build_inp_pos();
+
+        auto * inp_attn = build_attn_inp_kv_unified();
+
+        // For hybrid models that may have mamba layers (simplified for now)
+        // ggml_tensor * state_copy = build_inp_s_copy();
+        // ggml_tensor * state_mask = build_inp_s_mask();
+
+        for (int il = 0; il < n_layer; ++il) {
+            // Get layer type from layers_block_type_arr
+            const std::string layer_type(hparams.layers_block_type_arr[il].data());
+
+            // pre_mixer_norm (shared by both layer types)
+            cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+            ggml_tensor * mixer_norm = cur;
+
+            if (layer_type == "attention") {
+                // Attention layer processing
+                {
+                    // Use combined QKV tensor for PLaMo2
+                    cur = build_lora_mm(model.layers[il].wqkv, mixer_norm);
+                    cb(cur, "wqkv", il);
+
+                    // PLaMo2 QKV split: q_proj_dim = n_head * n_embd_head, k_proj_dim = n_head_kv * n_embd_head, v_proj_dim = n_head_kv * n_embd_head
+                    const int64_t q_proj_dim = n_embd;        // n_head * n_embd_head
+                    const int64_t k_proj_dim = n_embd_k_gqa;  // n_head_kv * n_embd_head  
+                    const int64_t v_proj_dim = n_embd_gqa;    // n_head_kv * n_embd_head
+
+                    ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, q_proj_dim, n_tokens, cur->nb[1], 0*sizeof(float)));
+                    ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, k_proj_dim, n_tokens, cur->nb[1], q_proj_dim*sizeof(float)));
+                    ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, v_proj_dim, n_tokens, cur->nb[1], (q_proj_dim + k_proj_dim)*sizeof(float)));
+
+                    cb(Qcur, "Qcur", il);
+                    cb(Kcur, "Kcur", il);
+                    cb(Vcur, "Vcur", il);
+
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                    Qcur = ggml_rope_ext(
+                            ctx0, Qcur, inp_pos, nullptr,
+                            n_embd_head, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow
+                            );
+
+                    Kcur = ggml_rope_ext(
+                            ctx0, Kcur, inp_pos, nullptr,
+                            n_embd_head, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow
+                            );
+
+                    cur = build_attn(inp_attn, gf,
+                            model.layers[il].wo, NULL,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                }
+            } else if (layer_type == "mamba") {
+                // Mamba layer processing - simplified implementation for now
+                // TODO: Implement full mamba layer logic
+                GGML_ASSERT(false && "Mamba layers not yet fully implemented for PLaMo2");
+            } else {
+                // Default to attention-like processing for unknown layer types
+                cur = build_lora_mm(model.layers[il].wqkv, mixer_norm);
+                cb(cur, "wqkv", il);
+
+                // Simple pass-through for now
+                cur = build_lora_mm(model.layers[il].wo, cur);
+            }
+
+            cb(cur, "mixer_out", il);
+
+            // post_mixer_norm 
+            ggml_tensor * post_mixer_norm = build_norm(cur, model.layers[il].post_attn_norm, NULL, LLM_NORM_RMS, il);
+            cb(post_mixer_norm, "post_mixer_norm", il);
+
+            // residual connection after mixer
+            cur = ggml_add(ctx0, inpL, post_mixer_norm);
+            cb(cur, "mixer_residual", il);
+
+            // pre_mlp_norm
+            ggml_tensor * mlp_norm = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+            cb(mlp_norm, "mlp_norm", il);
+
+            // FFN (common to both layer types)
+            ggml_tensor * mlp_out = build_ffn(mlp_norm, 
+                model.layers[il].ffn_up, NULL, NULL,
+                model.layers[il].ffn_gate, NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL,
+                NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+            cb(mlp_out, "mlp_out", il);
+
+            // post_mlp_norm
+            ggml_tensor * post_mlp_norm = build_norm(mlp_out, model.layers[il].post_mlp_norm, NULL, LLM_NORM_RMS, il);
+            cb(post_mlp_norm, "post_mlp_norm", il);
+
+            // Final residual connection
+            cur = ggml_add(ctx0, cur, post_mlp_norm);
+            cb(cur, "layer_out", il);
+
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+        cb(cur, "result_norm", -1);
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+        cb(cur, "result_output", -1);
+
         res->t_logits = cur;
 
         ggml_build_forward_expand(gf, cur);
@@ -13385,6 +13587,10 @@ llm_graph_result_ptr llama_model::build_graph(
             {
                 llm = std::make_unique<llm_build_plamo>(*this, params, gf);
             } break;
+        case LLM_ARCH_PLAMO2:
+            {
+                llm = std::make_unique<llm_build_plamo2>(*this, params, gf);
+            } break;
         case LLM_ARCH_GPT2:
             {
                 llm = std::make_unique<llm_build_gpt2>(*this, params, gf);
@@ -13708,6 +13914,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_PHI3:
         case LLM_ARCH_PHIMOE:
         case LLM_ARCH_PLAMO:
+        case LLM_ARCH_PLAMO2:
         case LLM_ARCH_GEMMA:
         case LLM_ARCH_GEMMA2:
         case LLM_ARCH_GEMMA3:
