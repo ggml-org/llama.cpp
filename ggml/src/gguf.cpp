@@ -347,6 +347,12 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
     int64_t n_tensors = 0;
 
     if (ok && gr.read(ctx->version)) {
+        if ((ctx->version & 0xFFFF) == 0x0000) {
+            GGML_LOG_ERROR("%s: failed to load model: host and model endian mismatch, please use a model compiled with the same endian as your host system\n", __func__);
+            gguf_free(ctx);
+            return nullptr;
+        }
+
         if (ctx->version == 1) {
             GGML_LOG_ERROR("%s: GGUFv1 is no longer supported, please use a more up-to-date version\n", __func__);
             ok = false;
