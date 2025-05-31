@@ -86,3 +86,10 @@ nix:
 embedding:
     - changed-files:
         - any-glob-to-any-file: examples/embedding/
+
+Ascend NPU:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-cann.h
+            - ggml/src/ggml-cann/**
+            - docs/backend/CANN.md
