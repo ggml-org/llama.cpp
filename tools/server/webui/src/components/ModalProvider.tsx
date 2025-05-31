@@ -2,26 +2,49 @@ import React, { createContext, useState, useContext } from 'react';
 
 type ModalContextType = {
   showConfirm: (message: string) => Promise<boolean>;
+  showPrompt: (
+    message: string,
+    defaultValue?: string
+  ) => Promise<string | undefined>;
   showAlert: (message: string) => Promise<void>;
 };
 const ModalContext = createContext<ModalContextType>(null!);
 
-export function ModalProvider({ children }: { children: React.ReactNode }) {
-  const [confirmState, setConfirmState] = useState<{
-    isOpen: boolean;
-    message: string;
-    resolve: ((value: boolean) => void) | null;
-  }>({ isOpen: false, message: '', resolve: null });
+interface ModalState<T> {
+  isOpen: boolean;
+  message: string;
+  defaultValue?: string;
+  resolve: ((value: T) => void) | null;
+}
 
-  const [alertState, setAlertState] = useState<{
-    isOpen: boolean;
-    message: string;
-    resolve: (() => void) | null;
-  }>({ isOpen: false, message: '', resolve: null });
+export function ModalProvider({ children }: { children: React.ReactNode }) {
+  const [confirmState, setConfirmState] = useState<ModalState<boolean>>({
+    isOpen: false,
+    message: '',
+    resolve: null,
+  });
+  const [promptState, setPromptState] = useState<
+    ModalState<string | undefined>
+  >({ isOpen: false, message: '', resolve: null });
+  const [alertState, setAlertState] = useState<ModalState<void>>({
+    isOpen: false,
+    message: '',
+    resolve: null,
+  });
+  const inputRef = React.useRef<HTMLInputElement>(null);
 
   const showConfirm = (message: string): Promise<boolean> => {
     return new Promise((resolve) => {
       setConfirmState({ isOpen: true, message, resolve });
+    });
+  };
+
+  const showPrompt = (
+    message: string,
+    defaultValue?: string
+  ): Promise<string | undefined> => {
+    return new Promise((resolve) => {
+      setPromptState({ isOpen: true, message, defaultValue, resolve });
     });
   };
 
@@ -36,18 +59,23 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
     setConfirmState({ isOpen: false, message: '', resolve: null });
   };
 
+  const handlePrompt = (result?: string) => {
+    promptState.resolve?.(result);
+    setPromptState({ isOpen: false, message: '', resolve: null });
+  };
+
   const handleAlertClose = () => {
     alertState.resolve?.();
     setAlertState({ isOpen: false, message: '', resolve: null });
   };
 
   return (
-    <ModalContext.Provider value={{ showConfirm, showAlert }}>
+    <ModalContext.Provider value={{ showConfirm, showPrompt, showAlert }}>
       {children}
 
       {/* Confirm Modal */}
       {confirmState.isOpen && (
-        <div className="modal modal-open z-[1100]">
+        <dialog className="modal modal-open z-[1100]">
           <div className="modal-box">
             <h3 className="font-bold text-lg">{confirmState.message}</h3>
             <div className="modal-action">
@@ -65,12 +93,43 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
               </button>
             </div>
           </div>
-        </div>
+        </dialog>
+      )}
+
+      {/* Prompt Modal */}
+      {promptState.isOpen && (
+        <dialog className="modal modal-open z-[1100]">
+          <div className="modal-box">
+            <h3 className="font-bold text-lg">{promptState.message}</h3>
+            <input
+              type="text"
+              className="input input-bordered w-full mt-2"
+              defaultValue={promptState.defaultValue}
+              ref={inputRef}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  handlePrompt((e.target as HTMLInputElement).value);
+                }
+              }}
+            />
+            <div className="modal-action">
+              <button className="btn btn-ghost" onClick={() => handlePrompt()}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => handlePrompt(inputRef.current?.value)}
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        </dialog>
       )}
 
       {/* Alert Modal */}
       {alertState.isOpen && (
-        <div className="modal modal-open z-[1100]">
+        <dialog className="modal modal-open z-[1100]">
           <div className="modal-box">
             <h3 className="font-bold text-lg">{alertState.message}</h3>
             <div className="modal-action">
@@ -79,7 +138,7 @@ export function ModalProvider({ children }: { children: React.ReactNode }) {
               </button>
             </div>
           </div>
-        </div>
+        </dialog>
       )}
     </ModalContext.Provider>
   );

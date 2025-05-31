@@ -39,7 +39,7 @@ export default function Sidebar() {
       StorageUtils.offConversationChanged(handleConversationChange);
     };
   }, []);
-  const { showConfirm } = useModals();
+  const { showConfirm, showPrompt } = useModals();
 
   const groupedConv = useMemo(
     () => groupConversationsByDate(conversations),
@@ -169,14 +169,14 @@ export default function Sidebar() {
                     document.body.removeChild(a);
                     URL.revokeObjectURL(url);
                   }}
-                  onRename={() => {
+                  onRename={async () => {
                     if (isGenerating(conv.id)) {
                       toast.error(
                         'Cannot rename conversation while generating'
                       );
                       return;
                     }
-                    const newName = window.prompt(
+                    const newName = await showPrompt(
                       'Enter new name for the conversation',
                       conv.name
                     );
