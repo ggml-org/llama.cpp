@@ -523,15 +523,15 @@ class TextModel(ModelBase):
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
-        if (n_embd := self.find_hparam(["hidden_size", "n_embd"], optional=True)) is not None:
+        if (n_embd := self.find_hparam(["hidden_size", "n_embd", "dim"], optional=True)) is not None:
             self.gguf_writer.add_embedding_length(n_embd)
             logger.info(f"gguf: embedding length = {n_embd}")
 
-        if (n_ff := self.find_hparam(["intermediate_size", "n_inner"], optional=True)) is not None:
+        if (n_ff := self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"], optional=True)) is not None:
             self.gguf_writer.add_feed_forward_length(n_ff)
             logger.info(f"gguf: feed forward length = {n_ff}")
 
-        if (n_head := self.find_hparam(["num_attention_heads", "n_head"], optional=True)) is not None:
+        if (n_head := self.find_hparam(["num_attention_heads", "n_head", "n_heads"], optional=True)) is not None:
             self.gguf_writer.add_head_count(n_head)
             logger.info(f"gguf: head count = {n_head}")
 
@@ -674,12 +674,12 @@ class TextModel(ModelBase):
         if chkhsh == "8aeee3860c56296a157a1fe2fad249ec40aa59b1bb5709f4ade11c4e6fe652ed":
             # ref: https://huggingface.co/tiiuae/falcon-7b
             res = "falcon"
-        if chkhsh == "9d032fcbd5501f4a38150912590928bfb36091efb5df11b8e2124b0390e3fb1e":
-            # ref: https://huggingface.co/tiiuae/Falcon3-7B-Base
-            res = "falcon3"
         if chkhsh == "0876d13b50744004aa9aeae05e7b0647eac9d801b5ba4668afc01e709c15e19f":
             # ref: https://huggingface.co/BAAI/bge-small-en-v1.5
             res = "bert-bge"
+        if chkhsh == "9d032fcbd5501f4a38150912590928bfb36091efb5df11b8e2124b0390e3fb1e":
+            # ref: https://huggingface.co/tiiuae/Falcon3-7B-Base
+            res = "falcon3"
         if chkhsh == "8e62295832751ca1e8f92f2226f403dea30dc5165e448b5bfa05af5340c64ec7":
             # ref: https://huggingface.co/BAAI/bge-large-zh-v1.5
             res = "bert-bge-large"
@@ -731,9 +731,6 @@ class TextModel(ModelBase):
         if chkhsh == "7967bfa498ade6b757b064f31e964dddbb80f8f9a4d68d4ba7998fcf281c531a":
             # ref: https://huggingface.co/jinaai/jina-embeddings-v2-base-code
             res = "jina-v2-code"
-        if chkhsh == "b6e8e1518dc4305be2fe39c313ed643381c4da5db34a98f6a04c093f8afbe99b" or chkhsh == "81d72c7348a9f0ebe86f23298d37debe0a5e71149e29bd283904c02262b27516":
-            # ref: https://huggingface.co/THUDM/glm-4-9b-chat
-            res = "chatglm-bpe"
         if chkhsh == "7fc505bd3104ca1083b150b17d088b59534ede9bde81f0dd2090967d7fe52cee":
             # ref: https://huggingface.co/LumiOpen/Viking-7B
             res = "viking"
@@ -764,9 +761,6 @@ class TextModel(ModelBase):
         if chkhsh == "60824e3c0d9401f89943cbb2fff727f0e2d4c545ba4df2d6e4f09a6db0f5b450":
             # ref: https://huggingface.co/facebook/chameleon-7b
             res = "chameleon"
-        if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
-            # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
-            res = "minerva-7b"
         if chkhsh == "8b5a93ed704057481f240da0be7e7dca721d7f8f4755263b6807227a2cbeae65":
             # ref: https://huggingface.co/sentence-transformers/stsb-roberta-base
             res = "roberta-bpe"
@@ -797,15 +791,24 @@ class TextModel(ModelBase):
         if chkhsh == "d353350c764d8c3b39c763113960e4fb4919bea5fbf208a0e3b22e8469dc7406":
             # ref: https://huggingface.co/meta-llama/Llama-4-Scout-17B-16E-Instruct
             res = "llama4"
-        if chkhsh == "a1336059768a55c99a734006ffb02203cd450fed003e9a71886c88acf24fdbc2":
-            # ref: https://huggingface.co/THUDM/glm-4-9b-hf
-            res = "glm4"
         if chkhsh == "0e9433cbbb161f89e264eb32e8e64bfe69e834973ffca5d41d3948a604a3e2a3":
             # ref: https://huggingface.co/mistral-community/pixtral-12b
             res = "pixtral"
         if chkhsh == "d5f1dd6f980fec569fb218a81a7658ac45fc56b38c5a0adeb1c232fbe04ef5ec":
             # ref: https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base
             res = "seed-coder"
+        if chkhsh == "b6e8e1518dc4305be2fe39c313ed643381c4da5db34a98f6a04c093f8afbe99b":
+            # ref: https://huggingface.co/THUDM/glm-4-9b-chat
+            res = "chatglm-bpe"
+        if chkhsh == "81d72c7348a9f0ebe86f23298d37debe0a5e71149e29bd283904c02262b27516":
+            # ref: https://huggingface.co/THUDM/glm-4-9b-chat
+            res = "chatglm-bpe"
+        if chkhsh == "a1336059768a55c99a734006ffb02203cd450fed003e9a71886c88acf24fdbc2":
+            # ref: https://huggingface.co/THUDM/glm-4-9b-hf
+            res = "glm4"
+        if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
+            # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
+            res = "minerva-7b"
 
         if res is None:
             logger.warning("\n")
@@ -1044,6 +1047,10 @@ class TextModel(ModelBase):
         special_vocab.chat_template = "rwkv-world"
         # hack: Add '\n\n' as the EOT token to make it chat normally
         special_vocab._set_special_token("eot", 261)
+        # hack: Override these as they have already been set (incorrectly)
+        special_vocab.special_token_ids["bos"] = 0
+        special_vocab.special_token_ids["eos"] = 0
+
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def _set_vocab_builtin(self, model_name: Literal["gpt-neox", "llama-spm"], vocab_size: int):
@@ -3807,7 +3814,7 @@ class BertModel(TextModel):
             remove_whitespaces = tokenizer.clean_up_tokenization_spaces
             precompiled_charsmap = b64decode(tokenizer_json["normalizer"]["precompiled_charsmap"])
 
-            vocab_size = max(self.hparams.get('vocab_size', 0), tokenizer.vocab_size)
+            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size)
         else:
             sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
@@ -3820,7 +3827,7 @@ class BertModel(TextModel):
             tokenizer = SentencePieceProcessor()
             tokenizer.LoadFromFile(str(tokenizer_path))
 
-            vocab_size = max(self.hparams.get('vocab_size', 0), tokenizer.vocab_size())
+            vocab_size = max(self.hparams.get("vocab_size", 0), tokenizer.vocab_size())
 
         tokens: list[bytes] = [f"[PAD{i}]".encode("utf-8") for i in range(vocab_size)]
         scores: list[float] = [-10000.0] * vocab_size
@@ -3850,7 +3857,8 @@ class BertModel(TextModel):
             unk_token = tokenizer_config_json.get("unk_token")
             unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))
 
-            for token_id in range(vocab_size):
+            for token_id in range(tokenizer.vocab_size):
+                piece = tokenizer._convert_id_to_token(token_id)
                 if (piece := tokenizer._convert_id_to_token(token_id)) is not None:
                     text = piece.encode("utf-8")
                     score = tokenizer_json["model"]["vocab"][token_id][1]
@@ -3903,6 +3911,26 @@ class BertModel(TextModel):
 
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(True)
+
+
+@ModelBase.register("DistilBertModel", "DistilBertForMaskedLM", "DistilBertForSequenceClassification")
+class DistilBertModel(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
+    def set_gguf_parameters(self):
+        self.gguf_writer.add_layer_norm_eps(1e-12)
+        logger.info("gguf: layer norm epsilon = 1e-12")
+        super().set_gguf_parameters()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("distilbert."):
+            name = name[11:]
+
+        # These layers act as MLM head, so we don't need them
+        if name.startswith("vocab_"):
+            return []
+
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("RobertaModel", "RobertaForSequenceClassification")

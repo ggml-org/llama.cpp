@@ -1340,7 +1340,10 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     // allocate graph
     if (backend_ids_changed || !ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
         // the re-allocation may cause the split inputs to be moved to a different address
-        ggml_backend_sched_synchronize(sched);
+        // synchronize without ggml_backend_sched_synchronize to avoid changing cur_copy
+        for (int i = 0; i < sched->n_backends; i++) {
+            ggml_backend_synchronize(sched->backends[i]);
+        }
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: failed to allocate graph, reserving (backend_ids_changed = %d)\n", __func__, backend_ids_changed);
 #endif
@@ -1564,7 +1567,6 @@ bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
     ggml_backend_sched_split_graph(sched, graph);
 
-
     if (!ggml_backend_sched_alloc_splits(sched)) {
         return false;
     }
@@ -1598,9 +1600,12 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
     for (int i = 0; i < sched->n_backends; i++) {
         ggml_backend_synchronize(sched->backends[i]);
     }
-    // reset the current copy to 0 so that the graphs will be similar during generation
-    // necessary for CUDA graphs
-    sched->cur_copy = 0;
+    if (!sched->is_alloc) {
+        // if the graph is not already allocated, always use copy 0 after a synchronization
+        // this ensures that during generation the same copy is used every time,
+        // which avoids changes in the graph that could cause CUDA or other graphs to be disabled
+        sched->cur_copy = 0;
+    }
 }
 
 void ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data) {

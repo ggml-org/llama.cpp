@@ -5,15 +5,16 @@
 //
 //    cmake -B build && cmake --build build --parallel && ./build/bin/test-chat ../minja/build/tests/*.jinja 2>/dev/null
 //
-#include <fstream>
-#include <iostream>
-#include <json.hpp>
-#include <string>
-
 #include "chat.h"
 
 #include "../src/unicode.h"
 #include "../src/llama-grammar.h"
+
+#include <nlohmann/json.hpp>
+
+#include <fstream>
+#include <iostream>
+#include <string>
 
 using json = nlohmann::ordered_json;
 
@@ -1040,6 +1041,15 @@ static void test_template_output_parsers() {
                       "<tool_call>\n"
                       "{\"name\": \"python\", \"arguments\": {\"code\":\"# This is a program:\\nprint('hey')\"}}\n"
                       "</tool_call>");
+        assert_msg_equals(
+            simple_assist_msg("", /* reasoning_content= */ "<tool_call>nah uhg</tool_call>"),
+            common_chat_parse(
+                "<think><tool_call>nah uhg</tool_call>",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_HERMES_2_PRO,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
     }
     {
         auto tmpls = read_templates("models/templates/meta-llama-Llama-3.1-8B-Instruct.jinja");

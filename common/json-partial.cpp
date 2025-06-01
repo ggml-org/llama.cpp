@@ -1,9 +1,10 @@
-#include <json-partial.h>
-#include "ggml.h"
-#include "log.h"
-#include <string>
+#include "json-partial.h"
 
-#include <json.hpp>
+#include "log.h"
+
+#include <nlohmann/json.hpp>
+
+#include <string>
 
 using json = nlohmann::ordered_json;
 

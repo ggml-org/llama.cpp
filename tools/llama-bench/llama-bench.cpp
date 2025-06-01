@@ -315,7 +315,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --numa <distribute|isolate|numactl>       numa mode (default: disabled)\n");
     printf("  -r, --repetitions <n>                     number of times to repeat each test (default: %d)\n",
            cmd_params_defaults.reps);
-    printf("  --prio <0|1|2|3>                          process/thread priority (default: %d)\n",
+    printf("  --prio <-1|0|1|2|3>                          process/thread priority (default: %d)\n",
            cmd_params_defaults.prio);
     printf("  --delay <0...N> (seconds)                 delay between each test (default: %d)\n",
            cmd_params_defaults.delay);
