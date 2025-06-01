@@ -3854,7 +3854,7 @@ class BertModel(TextModel):
                 if (piece := tokenizer._convert_id_to_token(token_id)) is not None:
                     text = piece.encode("utf-8")
                     score = tokenizer_json["model"]["vocab"][token_id][1]
-    
+
                     toktype = SentencePieceTokenTypes.NORMAL
                     if token_id == unk_token_id:
                         toktype = SentencePieceTokenTypes.UNKNOWN
@@ -3865,7 +3865,7 @@ class BertModel(TextModel):
                     # No reliable way to detect this, but jina doesn't have any
                     # elif tokenizer.IsByte(token_id):
                     #     toktype = SentencePieceTokenTypes.BYTE
-    
+
                     tokens[token_id] = text
                     scores[token_id] = score
                     toktypes[token_id] = toktype
