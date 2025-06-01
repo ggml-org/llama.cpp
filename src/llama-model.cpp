@@ -973,9 +973,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
 
-                hparams.f_attention_scale = type == LLM_TYPE_27B
-                    ? 1.0f / std::sqrt(float(hparams.n_embd / hparams.n_head(0)))
-                    : 1.0f / std::sqrt(float(hparams.n_embd_head_k));
+                hparams.f_attention_scale = 1.0f / std::sqrt(float(hparams.n_embd_head_k));
             } break;
         case LLM_ARCH_STARCODER2:
             {
