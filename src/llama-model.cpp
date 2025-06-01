@@ -973,7 +973,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
 
-                hparams.f_attention_scale = 1.0f / std::sqrt(float(hparams.n_embd_head_k));
+                hparams.f_attention_scale = type == LLM_TYPE_27B
+                    ? 1.0f / std::sqrt(float(hparams.n_embd / hparams.n_head(0)))
+                    : 1.0f / std::sqrt(float(hparams.n_embd_head_k));
             } break;
         case LLM_ARCH_STARCODER2:
             {
@@ -8627,9 +8629,11 @@ struct llm_build_gemma3_iswa : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
+                Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
+
                 cur = build_attn(inp_attn, gf,
                         model.layers[il].wo, NULL,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, hparams.f_attention_scale, il);
+                        Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
             }
 
             cur = build_norm(cur,
