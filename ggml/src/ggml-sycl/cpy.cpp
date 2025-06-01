@@ -120,36 +120,13 @@ static void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
 }
 
 /* quantized type same copy */
-static void cpy_block_q8_0_q8_0(const char * cxi, char * cdsti) {
-    const block_q8_0 * xi = (const block_q8_0 *) cxi;
-    block_q8_0 * dsti = (block_q8_0 *) cdsti;
+template<typename T>
+static void cpy_blck_q_q(const char * cxi, char * cdsti) {
+    const T * xi = (const T *) cxi;
+    T * dsti = (T *) cdsti;
     *dsti = *xi;
 }
 
-static void cpy_block_q5_0_q5_0(const char * cxi, char * cdsti) {
-    const block_q5_0 * xi = (const block_q5_0 *) cxi;
-    block_q5_0 * dsti = (block_q5_0 *) cdsti;
-    *dsti = *xi;
-}
-
-
-static void cpy_block_q5_1_q5_1(const char * cxi, char * cdsti) {
-    const block_q5_1 * xi = (const block_q5_1 *) cxi;
-    block_q5_1 * dsti = (block_q5_1 *) cdsti;
-    *dsti = *xi;
-}
-
-static void cpy_block_q4_0_q4_0(const char * cxi, char * cdsti) {
-    const block_q4_0 * xi = (const block_q4_0 *) cxi;
-    block_q4_0 * dsti = (block_q4_0 *) cdsti;
-    *dsti = *xi;
-}
-
-static void cpy_block_q4_1_q4_1(const char * cxi, char * cdsti) {
-    const block_q4_1 * xi = (const block_q4_1 *) cxi;
-    block_q4_1 * dsti = (block_q4_1 *) cdsti;
-    *dsti = *xi;
-}
 
 static void cpy_blck_q8_0_f32(const char * cxi, char * cdsti) {
     float * cdstf = (float *) (cdsti);
@@ -347,7 +324,7 @@ template <dequantize_kernel_t dequant, int qk> static void cpy_blck_q_f32(const 
 }
 
 
-template <cpy_kernel_t cpy_blck, int qk>
+template <typename T, int qk>
 static void cpy_q_q(const char * cx, char * cdst, const int ne, const int ne00, const int ne01, const int ne02,
                       const int nb00, const int nb01, const int nb02, const int nb03, const int ne10, const int ne11,
                       const int ne12, const int nb10, const int nb11, const int nb12, const int nb13,
@@ -371,7 +348,7 @@ static void cpy_q_q(const char * cx, char * cdst, const int ne, const int ne00, 
     const int i10        = i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11 - i11 * ne10;
     const int dst_offset = (i10 / qk) * nb10 + i11 * nb11 + i12 * nb12 + i13 * nb13;
 
-    cpy_blck(cx + x_offset, cdst + dst_offset);
+    cpy_blck_q_q<T>(cx + x_offset, cdst + dst_offset);
 }
 
 template <cpy_kernel_t cpy_blck, int qk>
@@ -687,7 +664,7 @@ static void ggml_cpy_q8_0_q8_0(const char * cx, char * cdst, const int ne, const
     const int num_blocks = ne;
     stream->parallel_for(
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks), sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
-            cpy_q_q<cpy_block_q8_0_q8_0, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
+            cpy_q_q<block_q8_0, QK8_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
         });
 }
 
@@ -700,7 +677,7 @@ static void ggml_cpy_q5_0_q5_0(const char * cx, char * cdst, const int ne, const
     const int num_blocks = ne;
     stream->parallel_for(
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks), sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
-            cpy_q_q<cpy_block_q5_0_q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
+            cpy_q_q<block_q5_0, QK5_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
         });
 }
 
@@ -713,7 +690,7 @@ static void ggml_cpy_q5_1_q5_1(const char * cx, char * cdst, const int ne, const
     const int num_blocks = ne;
     stream->parallel_for(
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks), sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
-            cpy_q_q<cpy_block_q5_1_q5_1, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
+            cpy_q_q<block_q5_1, QK5_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
         });
 }
 
@@ -726,7 +703,7 @@ static void ggml_cpy_q4_0_q4_0(const char * cx, char * cdst, const int ne, const
     const int num_blocks = ne;
     stream->parallel_for(
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks), sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
-            cpy_q_q<cpy_block_q4_0_q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
+            cpy_q_q<block_q4_0, QK4_0>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
         });
 }
 
@@ -739,7 +716,7 @@ static void ggml_cpy_q4_1_q4_1(const char * cx, char * cdst, const int ne, const
     const int num_blocks = ne;
     stream->parallel_for(
         sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks), sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
-            cpy_q_q<cpy_block_q4_1_q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
+            cpy_q_q<block_q4_1, QK4_1>(cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, item_ct1);
         });
 }
 
