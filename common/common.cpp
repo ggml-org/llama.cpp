@@ -203,6 +203,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
 
     DWORD p = NORMAL_PRIORITY_CLASS;
     switch (prio) {
+        case GGML_SCHED_PRIO_LOW:      p = BELOW_NORMAL_PRIORITY_CLASS; break;
         case GGML_SCHED_PRIO_NORMAL:   p = NORMAL_PRIORITY_CLASS;       break;
         case GGML_SCHED_PRIO_MEDIUM:   p = ABOVE_NORMAL_PRIORITY_CLASS; break;
         case GGML_SCHED_PRIO_HIGH:     p = HIGH_PRIORITY_CLASS;         break;
@@ -228,6 +229,7 @@ bool set_process_priority(enum ggml_sched_priority prio) {
 
     int p = 0;
     switch (prio) {
+        case GGML_SCHED_PRIO_LOW:      p =  5;  break;
         case GGML_SCHED_PRIO_NORMAL:   p =  0;  break;
         case GGML_SCHED_PRIO_MEDIUM:   p = -5;  break;
         case GGML_SCHED_PRIO_HIGH:     p = -10; break;

@@ -1348,9 +1348,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--prio"}, "N",
-        string_format("set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: %d)\n", params.cpuparams.priority),
+        string_format("set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: %d)\n", params.cpuparams.priority),
         [](common_params & params, int prio) {
-            if (prio < 0 || prio > 3) {
+            if (prio < GGML_SCHED_PRIO_LOW || prio > GGML_SCHED_PRIO_REALTIME) {
                 throw std::invalid_argument("invalid value");
             }
             params.cpuparams.priority = (enum ggml_sched_priority) prio;

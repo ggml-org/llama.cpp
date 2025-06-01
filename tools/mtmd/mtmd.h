@@ -3,7 +3,6 @@
 
 #include "ggml.h"
 #include "llama.h"
-#include "clip.h"
 
 #include <stddef.h>
 #include <stdint.h>

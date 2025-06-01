@@ -32,6 +32,8 @@
 extern "C" {
 #endif
 
+void ggml_print_backtrace(void);
+
 #ifndef MIN
 #    define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif

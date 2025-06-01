@@ -196,6 +196,7 @@ add_library(ggml-base
             ../include/ggml-opt.h
             ../include/gguf.h
             ggml.c
+            ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp
             ggml-opt.cpp
@@ -226,6 +227,7 @@ function(ggml_add_backend_library backend)
         set_target_properties(${backend} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         target_compile_definitions(${backend} PRIVATE GGML_BACKEND_DL)
         add_dependencies(ggml ${backend})
+        install(TARGETS ${backend} LIBRARY DESTINATION ${CMAKE_INSTALL_BINDIR})
     else()
         add_library(${backend} ${ARGN})
         target_link_libraries(ggml PUBLIC ${backend})
