@@ -3807,7 +3807,7 @@ class BertModel(TextModel):
             remove_whitespaces = tokenizer.clean_up_tokenization_spaces
             precompiled_charsmap = b64decode(tokenizer_json["normalizer"]["precompiled_charsmap"])
 
-            vocab_size = self.hparams.get("vocab_size", tokenizer.vocab_size)
+            vocab_size = max(self.hparams.get('vocab_size', 0), tokenizer.vocab_size)
         else:
             sentencepiece_model = model.ModelProto()  # pyright: ignore[reportAttributeAccessIssue]
             sentencepiece_model.ParseFromString(open(tokenizer_path, "rb").read())
@@ -3851,24 +3851,24 @@ class BertModel(TextModel):
             unk_token_id = added_vocab.get(unk_token, tokenizer_json["model"].get("unk_id", 3))
 
             for token_id in range(vocab_size):
-                piece = tokenizer._convert_id_to_token(token_id)
-                text = piece.encode("utf-8")
-                score = tokenizer_json["model"]["vocab"][token_id][1]
-
-                toktype = SentencePieceTokenTypes.NORMAL
-                if token_id == unk_token_id:
-                    toktype = SentencePieceTokenTypes.UNKNOWN
-                elif token_id in tokenizer.all_special_ids:
-                    toktype = SentencePieceTokenTypes.CONTROL
-                elif token_id in added_vocab.values():
-                    toktype = SentencePieceTokenTypes.USER_DEFINED
-                # No reliable way to detect this, but jina doesn't have any
-                # elif tokenizer.IsByte(token_id):
-                #     toktype = SentencePieceTokenTypes.BYTE
-
-                tokens[token_id] = text
-                scores[token_id] = score
-                toktypes[token_id] = toktype
+                if (piece := tokenizer._convert_id_to_token(token_id)) is not None:
+                    text = piece.encode("utf-8")
+                    score = tokenizer_json["model"]["vocab"][token_id][1]
+    
+                    toktype = SentencePieceTokenTypes.NORMAL
+                    if token_id == unk_token_id:
+                        toktype = SentencePieceTokenTypes.UNKNOWN
+                    elif token_id in tokenizer.all_special_ids:
+                        toktype = SentencePieceTokenTypes.CONTROL
+                    elif token_id in added_vocab.values():
+                        toktype = SentencePieceTokenTypes.USER_DEFINED
+                    # No reliable way to detect this, but jina doesn't have any
+                    # elif tokenizer.IsByte(token_id):
+                    #     toktype = SentencePieceTokenTypes.BYTE
+    
+                    tokens[token_id] = text
+                    scores[token_id] = score
+                    toktypes[token_id] = toktype
 
         if isinstance(tokenizer, SentencePieceProcessor):
             # realign tokens (see HF tokenizer code)
