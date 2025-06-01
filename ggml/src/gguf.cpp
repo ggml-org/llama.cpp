@@ -347,6 +347,11 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
     int64_t n_tensors = 0;
 
     if (ok && gr.read(ctx->version)) {
+        if (ok && ctx->version == 0) {
+            GGML_LOG_ERROR("%s: bad GGUF version: %" PRIu32 "\n", __func__, ctx->version);
+            ok = false;
+        }
+
         /*
          * bit layout is different when reading non-native endian models.
          * assuming that the GGUF version is 3, the non-native endian model
@@ -354,18 +359,16 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
          * the last 4 hexadecimal digits to check if the model is the same
          * endianness as the host system.
         */
-        if ((ctx->version & 0x0000FFFF) == 0x00000000) {
+        if (ok && (ctx->version & 0x0000FFFF) == 0x00000000) {
             GGML_LOG_ERROR("%s: failed to load model: this GGUF file version %" PRIu32 " is extremely large, is there a mismatch between the host and model endianness?\n", __func__, ctx->version);
-            gguf_free(ctx);
-            return nullptr;
+            ok = false;
         }
 
-        GGML_ASSERT(ctx->version > 0 && ctx->version <= 65535);
-        if (ctx->version == 1) {
+        if (ok && ctx->version == 1) {
             GGML_LOG_ERROR("%s: GGUFv1 is no longer supported, please use a more up-to-date version\n", __func__);
             ok = false;
         }
-        if (ctx->version > GGUF_VERSION) {
+        if (ok && ctx->version > GGUF_VERSION) {
             GGML_LOG_ERROR("%s: this GGUF file is version %" PRIu32 " but this software only supports up to version %d\n",
                 __func__, ctx->version, GGUF_VERSION);
             ok = false;
