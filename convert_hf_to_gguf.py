@@ -2312,6 +2312,10 @@ class Plamo2Model(LlamaModel):
         # Handle Plamo2 specific tensor naming
         # The model has both attention and Mamba layers
         
+        # Debug: log all Mamba-related tensors
+        if "mixer" in name or "ssm" in name or "A_log" in name or ".D" in name:
+            logger.info(f"Processing Mamba tensor: {name}, shape: {data_torch.shape}")
+        
         # Handle the nested layer structure: layers.layers.X
         if name.startswith("model.layers.layers."):
             # Extract the layer number and rest of the name
@@ -2341,22 +2345,31 @@ class Plamo2Model(LlamaModel):
             ]
 
         # Handle Mamba-specific A_log tensor transformation
-        if name.endswith(".A_log"):
+        if name.endswith(".A_log") or name.endswith(".mixer.A_log"):
             # Map the A_log tensor directly to ssm_a
             new_name = self.map_tensor_name(name)
             # Add .weight suffix if not present
             if not new_name.endswith(".weight"):
                 new_name += ".weight"
-            logger.debug(f"A_log --> A ==> {new_name}, original shape: {data_torch.shape}")
+            logger.info(f"A_log --> A ==> {new_name}, original shape: {data_torch.shape}")
             
             # Transform A_log to A: A = -exp(A_log)
             data_torch = -torch.exp(data_torch)
             
-            # PLaMo2 A_log is shape {d_state} but llama.cpp expects {d_state, d_inner}
-            # Expand the tensor to the correct shape
+            # Handle different tensor shapes for A_log
+            logger.info(f"A_log tensor after exp transform, shape: {data_torch.shape}")
+            
+            # Ensure we have a 2D tensor
+            while len(data_torch.shape) > 2:
+                data_torch = data_torch.squeeze(0)
+            
             if len(data_torch.shape) == 1:
-                d_state = data_torch.shape[0]  # 64
-                d_inner = 8192  # SSM inner size for PLaMo2
+                # PLaMo2 A_log is shape {d_state} but llama.cpp expects {d_state, d_inner}
+                d_state = data_torch.shape[0]  # 64 for PLaMo2
+                # Get d_inner from model hyperparameters
+                mamba_num_heads = self.hparams.get("mamba_num_heads", 64)
+                hidden_size_per_head = self.hparams.get("hidden_size_per_head", 128)
+                d_inner = mamba_num_heads * hidden_size_per_head  # 64 * 128 = 8192
                 
                 # Create tensor with correct shape {d_state, d_inner} = {64, 8192}
                 # Each row of the matrix should contain the same value from the original 1D tensor
@@ -2364,7 +2377,17 @@ class Plamo2Model(LlamaModel):
                 for i in range(d_state):
                     new_tensor[i, :] = data_torch[i]  # Broadcast the single value across the inner dimension
                 data_torch = new_tensor
-                logger.debug(f"Expanded A tensor from {d_state} to shape: {data_torch.shape}")
+                logger.info(f"Expanded A tensor from {d_state} to shape: {data_torch.shape}")
+            elif len(data_torch.shape) == 2:
+                # Check if dimensions need to be transposed
+                # Expected shape is [d_state, d_inner] where d_state = 64, d_inner = 8192
+                if data_torch.shape[0] == 8192 and data_torch.shape[1] == 64:
+                    data_torch = data_torch.transpose(0, 1)
+                    logger.info(f"Transposed A tensor to shape: {data_torch.shape}")
+            
+            # Final shape check and reshape if needed
+            if data_torch.shape != torch.Size([64, 8192]):
+                logger.warning(f"Unexpected A tensor shape after processing: {data_torch.shape}, expected [64, 8192]")
             
             return [(new_name, data_torch)]
         

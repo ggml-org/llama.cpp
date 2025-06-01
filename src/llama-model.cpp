@@ -7792,9 +7792,75 @@ struct llm_build_plamo2 : public llm_graph_context {
                             Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
                 }
             } else if (layer_type == "mamba") {
-                // Mamba layer processing - simplified implementation for now
-                // TODO: Implement full mamba layer logic
-                GGML_ASSERT(false && "Mamba layers not yet fully implemented for PLaMo2");
+                // Mamba layer processing
+                const int64_t d_conv  = hparams.ssm_d_conv;
+                const int64_t d_inner = hparams.ssm_d_inner;
+                const int64_t d_state = hparams.ssm_d_state;
+                const int64_t dt_rank = hparams.ssm_dt_rank;
+
+                // Apply linear transformation: n_embd -> 2*d_inner
+                ggml_tensor * xz = build_lora_mm(model.layers[il].ssm_in, mixer_norm);
+                cb(xz, "ssm_in", il);
+
+                // Split into x and z
+                ggml_tensor * x = ggml_view_2d(ctx0, xz, d_inner, n_tokens, xz->nb[1], 0);
+                ggml_tensor * z = ggml_view_2d(ctx0, xz, d_inner, n_tokens, xz->nb[1], d_inner*ggml_element_size(xz));
+
+                // For simplified PLaMo2 implementation without state caching,
+                // we use a basic convolution approach
+                // Reshape x for convolution: {d_inner, n_tokens} -> {n_tokens, d_inner}
+                x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
+                
+                // Apply 1D convolution with proper padding
+                // Note: PLaMo2 conv1d weight shape is {d_inner, d_conv}
+                ggml_tensor * conv_w = ggml_reshape_2d(ctx0, model.layers[il].ssm_conv1d, d_conv, d_inner);
+                x = ggml_conv_1d(ctx0, conv_w, x, 1, d_conv - 1, 1);
+                
+                // Transpose back and apply SiLU
+                x = ggml_cont(ctx0, ggml_transpose(ctx0, x));
+                x = ggml_silu(ctx0, x);
+                cb(x, "ssm_conv", il);
+
+                // SSM sequence transformation
+                {
+                    // Project x to dt, B, C
+                    ggml_tensor * x_db = build_lora_mm(model.layers[il].ssm_bcdt, x);
+                    cb(x_db, "ssm_bcdt", il);
+
+                    // Split into dt, B, C
+                    ggml_tensor * dt = ggml_view_2d(ctx0, x_db, dt_rank, n_tokens, x_db->nb[1], 0);
+                    ggml_tensor * B  = ggml_view_2d(ctx0, x_db, d_state, n_tokens, x_db->nb[1], ggml_element_size(x_db)*dt_rank);
+                    ggml_tensor * C  = ggml_view_2d(ctx0, x_db, d_state, n_tokens, x_db->nb[1], ggml_element_size(x_db)*(dt_rank+d_state));
+
+                    // Project dt_rank to d_inner 
+                    dt = build_lora_mm(model.layers[il].ssm_dt, dt);
+                    cb(dt, "ssm_dt", il);
+
+                    // For simplified implementation without full SSM scan,
+                    // we'll create a basic selective scan approximation
+                    // Note: This is a simplified version and may not capture all SSM dynamics
+                    
+                    // Create dummy state tensors for ggml_ssm_scan
+                    ggml_tensor * dummy_s = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, d_state, d_inner, 1);
+                    
+                    // Use ggml_ssm_scan for proper SSM computation
+                    ggml_tensor * y_ssm = ggml_ssm_scan(ctx0, dummy_s, x, dt, model.layers[il].ssm_a, B, C);
+                    
+                    // Extract the output (first part of y_ssm)
+                    ggml_tensor * y = ggml_view_2d(ctx0, y_ssm, d_inner, n_tokens, y_ssm->nb[1], 0);
+                    
+                    // Add D parameter contribution
+                    y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
+                    x = y;
+                }
+
+                // Gated output
+                x = ggml_mul(ctx0, x, ggml_silu(ctx0, ggml_cont(ctx0, z)));
+                cb(x, "ssm_gate", il);
+
+                // Output projection
+                cur = build_lora_mm(model.layers[il].ssm_out, x);
+                cb(cur, "ssm_out", il);
             } else {
                 // Default to attention-like processing for unknown layer types
                 cur = build_lora_mm(model.layers[il].wqkv, mixer_norm);
