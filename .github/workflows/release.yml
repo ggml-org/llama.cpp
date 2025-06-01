@@ -373,11 +373,11 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     strategy:
       matrix:
-        cuda: ['12.4', '11.7']
+        cuda: ['12.6', '12.4']
 
     steps:
       - name: Clone
@@ -405,7 +405,7 @@ jobs:
         id: cmake_build
         shell: cmd
         run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_NATIVE=OFF ^
