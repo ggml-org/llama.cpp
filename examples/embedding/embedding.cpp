@@ -241,7 +241,7 @@ int main(int argc, char ** argv) {
             std::vector<std::string> cls_out_labels;
 
             for (uint32_t i = 0; i < n_cls_out; i++) {
-                const char * label = llama_model_get_classifier_label_by_index(model, i);
+                const char * label = llama_model_cls_label(model, i);
                 const std::string label_i = label == nullptr || strlen(label) == 0 ? std::to_string(i) : label;
                 cls_out_labels.emplace_back(label_i);
             }

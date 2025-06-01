@@ -363,6 +363,9 @@ struct llama_model {
     // for quantize-stats only
     std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
 
+    // for classifier models
+    std::vector<std::string> classifier_labels;
+
     int64_t t_load_us  = 0;
     int64_t t_start_us = 0;
 
