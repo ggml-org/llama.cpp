@@ -3889,11 +3889,11 @@ class BertModel(TextModel):
                 SentencePieceTokenTypes.UNKNOWN,
             ] + toktypes[3:-1]
 
-        if self.model_arch == gguf.MODEL_ARCH.NOMIC_BERT_MOE:
-            # Add mask token missing from sentencepiece.bpe.model
-            tokens[250001] = b'<mask>'
-            scores[250001] = 0.0
-            toktypes[250001] = SentencePieceTokenTypes.CONTROL
+            if self.model_arch == gguf.MODEL_ARCH.NOMIC_BERT_MOE:
+                # Add mask token missing from sentencepiece.bpe.model
+                tokens[250001] = b'<mask>'
+                scores[250001] = 0.0
+                toktypes[250001] = SentencePieceTokenTypes.CONTROL
 
         self.gguf_writer.add_tokenizer_model("t5")
         self.gguf_writer.add_tokenizer_pre("default")
