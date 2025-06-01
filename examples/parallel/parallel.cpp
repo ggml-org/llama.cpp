@@ -158,7 +158,7 @@ int main(int argc, char ** argv) {
     common_params params;
 
     params.n_predict = 128;
-    params.n_junk = 0;
+    params.n_junk = 1;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PARALLEL)) {
         return 1;
@@ -182,7 +182,7 @@ int main(int argc, char ** argv) {
     const bool is_sp_shared = params.is_pp_shared;
 
     // extra text to insert in each client's prompt in order to make it larger
-    const int32_t n_junk = params.n_junk;
+    const int32_t n_junk = std::max(1, params.n_junk);
 
     // init llama.cpp
     llama_backend_init();
