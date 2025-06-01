@@ -2292,6 +2292,21 @@ class Plamo2Model(LlamaModel):
             # Store which layers use full attention vs sliding window
             # This may need custom handling in llama.cpp
             pass
+        
+        # Set layer block types for PLaMo2 hybrid architecture
+        # PLaMo2 alternates between mamba and attention layers
+        mamba_step = hparams.get("mamba_step", 2)
+        num_layers = hparams.get("num_hidden_layers", 32)
+        
+        layer_types = []
+        for i in range(num_layers):
+            # Based on PLaMo2 architecture: even layers are mamba, odd layers are attention
+            if i % mamba_step == 0:
+                layer_types.append("mamba")
+            else:
+                layer_types.append("attention")
+        
+        self.gguf_writer.add_array("plamo2.layers_block_type", layer_types)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Handle Plamo2 specific tensor naming
@@ -2327,22 +2342,101 @@ class Plamo2Model(LlamaModel):
 
         # Handle Mamba-specific A_log tensor transformation
         if name.endswith(".A_log"):
-            # Map the tensor name first
+            # Map the A_log tensor directly to ssm_a
             new_name = self.map_tensor_name(name)
-            logger.debug(f"A_log --> A ==> {new_name}")
+            # Add .weight suffix if not present
+            if not new_name.endswith(".weight"):
+                new_name += ".weight"
+            logger.debug(f"A_log --> A ==> {new_name}, original shape: {data_torch.shape}")
+            
             # Transform A_log to A: A = -exp(A_log)
             data_torch = -torch.exp(data_torch)
+            
+            # PLaMo2 A_log is shape {d_state} but llama.cpp expects {d_state, d_inner}
+            # Expand the tensor to the correct shape
+            if len(data_torch.shape) == 1:
+                d_state = data_torch.shape[0]  # 64
+                d_inner = 8192  # SSM inner size for PLaMo2
+                
+                # Create tensor with correct shape {d_state, d_inner} = {64, 8192}
+                # Each row of the matrix should contain the same value from the original 1D tensor
+                new_tensor = data_torch.new_zeros((d_state, d_inner))
+                for i in range(d_state):
+                    new_tensor[i, :] = data_torch[i]  # Broadcast the single value across the inner dimension
+                data_torch = new_tensor
+                logger.debug(f"Expanded A tensor from {d_state} to shape: {data_torch.shape}")
+            
+            return [(new_name, data_torch)]
+        
+        # Handle Mamba D tensor - ensure .weight suffix
+        if name.endswith("mixer.D") or name.endswith("ssm.D"):
+            new_name = self.map_tensor_name(name)
+            # Add .weight suffix if not present
+            if not new_name.endswith(".weight"):
+                new_name += ".weight"
+            logger.debug(f"D tensor ==> {new_name}")
             return [(new_name, data_torch)]
         
         # Handle Mamba conv1d tensor shape adjustment
-        if "mixer.conv1d" in name:
+        if "mixer.conv1d" in name or ".ssm.conv1d" in name:
             new_name = self.map_tensor_name(name)
-            # Squeeze the conv1d tensor if needed
-            if len(data_torch.shape) == 4:
+            # For PLaMo2 conv1d tensors, reshape from (kernel_size, 1, d_inner) to (d_inner, kernel_size)
+            if len(data_torch.shape) == 3 and data_torch.shape[1] == 1:
+                # PLaMo2 conv1d is (kernel_size, 1, d_inner), needs to be (d_inner, kernel_size)
+                data_torch = data_torch.squeeze(1).transpose(0, 1)
+            elif len(data_torch.shape) == 4:
+                # For other formats, squeeze and transpose as needed
                 data_torch = data_torch.squeeze()
+                if len(data_torch.shape) == 2:
+                    # If it ends up as (kernel_size, d_inner), transpose to (d_inner, kernel_size)
+                    if data_torch.shape[0] < data_torch.shape[1]:
+                        data_torch = data_torch.transpose(0, 1)
             return [(new_name, data_torch)]
 
-        return super().modify_tensors(data_torch, name, bid)
+        # Handle Mamba ssm_dt tensor shape adjustment
+        if "mixer.dt_proj" in name:
+            new_name = self.map_tensor_name(name)
+            logger.debug(f"Processing dt_proj tensor: {name} -> {new_name}, original shape: {data_torch.shape}")
+            
+            # For PLaMo2 dt_proj tensors, original shape is (64, 256) but llama.cpp expects (256, 8192)
+            # The GGUF writer seems to transpose tensors, so we need to account for that.
+            # We want the final result to be (256, 8192) after GGUF transposition
+            
+            # First transpose from (64, 256) to (256, 64)
+            if len(data_torch.shape) == 2 and data_torch.shape[0] == 64 and data_torch.shape[1] == 256:
+                data_torch = data_torch.transpose(0, 1)  # Now (256, 64)
+                logger.debug(f"Transposed dt_proj to shape: {data_torch.shape}")
+            
+            # Expand the second dimension from 64 to 8192 (ssm_inner_size)
+            if len(data_torch.shape) == 2 and data_torch.shape[1] == 64:
+                # ssm_inner_size should be 8192 for PLaMo2 (64 heads * 128 dim_per_head)
+                expected_inner_size = 8192
+                repeat_factor = expected_inner_size // data_torch.shape[1]
+                data_torch = data_torch.repeat(1, repeat_factor)
+                logger.debug(f"Expanded dt_proj to shape: {data_torch.shape}")
+            
+            # Since GGUF writer might transpose, we need to ensure we get (256, 8192) in the end
+            # If we currently have (256, 8192) and GGUF transposes to (8192, 256), 
+            # we need to pre-transpose to (8192, 256) so GGUF ends up with (256, 8192)
+            if len(data_torch.shape) == 2 and data_torch.shape == torch.Size([256, 8192]):
+                data_torch = data_torch.transpose(0, 1)  # Pre-transpose to (8192, 256)
+                logger.debug(f"Pre-transposed dt_proj for GGUF writer: {data_torch.shape}")
+            
+            return [(new_name, data_torch)]
+
+        # Fix tensor name mappings for PLaMo2 to match llama.cpp expectations
+        result = super().modify_tensors(data_torch, name, bid)
+        fixed_result = []
+        for tensor_name, tensor_data in result:
+            # Map PLaMo2-specific norm tensor names to match llama.cpp expectations
+            if ".attn_norm_2.weight" in tensor_name:
+                tensor_name = tensor_name.replace(".attn_norm_2.weight", ".post_attn_norm.weight")
+            elif ".post_ffw_norm.weight" in tensor_name:
+                tensor_name = tensor_name.replace(".post_ffw_norm.weight", ".post_mlp_norm.weight")
+            
+            fixed_result.append((tensor_name, tensor_data))
+        
+        return fixed_result
 
 
 @ModelBase.register("DeciLMForCausalLM")
