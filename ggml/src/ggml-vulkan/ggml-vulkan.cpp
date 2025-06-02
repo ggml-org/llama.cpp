@@ -10147,8 +10147,8 @@ static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDevicePrope
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
         if (driver_props.driverID == vk::DriverId::eIntelProprietaryWindows || driver_props.driverID == vk::DriverId::eIntelOpenSourceMESA) {
-            // Only allowing Xe2 GPU at the moment because Xe2 GPU can gain significant performance boost,
-            // while some older hardware (ex. Arc A770) has performance regressions at the moment.
+            // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
+            // while some older hardware (ex. Arc A770) has performance regressions
             return arch == vk_device_architecture::INTEL_XE2;
         }
         return false;
