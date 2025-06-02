@@ -510,6 +510,7 @@ extern "C" {
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
     // Returns the number of classifier outputs (only valid for classifier models)
+    // Undefined behavior for non-classifier models
     LLAMA_API uint32_t llama_model_n_cls_out(const struct llama_model * model);
 
     // Returns label of classifier output by index (<n_cls_out). Returns nullptr if no label provided
