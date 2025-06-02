@@ -127,6 +127,7 @@ enum ggml_tsavorite_kernel_type {
   GGML_TSAVORITE_KERNEL_TYPE_ABS,
   GGML_TSAVORITE_KERNEL_TYPE_SIN,
   GGML_TSAVORITE_KERNEL_TYPE_SIGMOID,
+  GGML_TSAVORITE_KERNEL_TYPE_SILU,
 
   GGML_TSAVORITE_KERNEL_TYPE_COUNT
 };
@@ -159,6 +160,7 @@ extern void _mlir_ciface_txe_neg(void *a, void *res);
 extern void _mlir_ciface_txe_abs(void *a, void *res);
 extern void _mlir_ciface_txe_sin(void *a, void *res);
 extern void _mlir_ciface_txe_sigmoid(void *a, void *res);
+extern void _mlir_ciface_txe_silu(void *a, void *res);
 extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 
 #define NUM_OF_TXES 1

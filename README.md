@@ -580,3 +580,52 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 - [minja](https://github.com/google/minja) - Minimal Jinja parser in C++, used by various tools/examples - MIT License
 - [linenoise.cpp](./tools/run/linenoise.cpp/linenoise.cpp) - C++ library that provides readline-like line editing capabilities, used by `llama-run` - BSD 2-Clause License
 - [curl](https://curl.se/) - Client-side URL transfer library, used by various tools/examples - [CURL License](https://curl.se/docs/copyright.html)
+
+#### TSI compilation steps
+```bash
+#Pull the repo frim tsisw as follows
+git clone git@github.com:tsisw/llama.cpp.git -b FIR-699
+
+#Ensure prerequisites are met as follows
+cd llama.cpp/
+git submodule update --recursive --init
+cd ggml-tsi-kernel/
+module load tsi4 gcc/13.3.0
+python3 -m venv blob-creation
+source blob-creation/bin/activate
+pip install -r /proj/rel/sw/mlir-compiler/python/requirements-common.txt
+pip install /proj/rel/sw/mlir-compiler/python/mlir_external_packages-1.2.1-py3-none-any.whl
+pip install onnxruntime-training
+
+#build TSI kernels for the Tsavorite backend
+#First for FPGA
+cd fpga-kernel
+cmake -B build-fpga
+./create-all-kernels.sh
+#The for Posix Use cases
+cd ../posix-kernel/
+./create-all-kernels.sh
+
+#Change directory to top level llama.cpp
+cd ../../
+
+#Compile for posix with build-posix as a target folder
+
+cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix
+cmake --build build-posix --config Release
+
+#Compile for fpga with build-fpga as a target folder
+export CC="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc"
+export CXX="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++"
+cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga
+cmake --build build-fpga --config Release
+
+#For easy build one can also use which creates a FPGA specific tar bundle tsi-ggml.tz
+#If you want to release the build update the TSI-VERSION in the file tsi-pkg-build.sh and add Release as parameter
+#when running ./tsi-pkg-build.sh (Note it will overwrite what exists in /proj/rel/sw/ggml so be sure you want to do
+#it. Example ./tsi-pkg-build.sh release
+./tsi-pkg-build.sh
+
+```
+
+## References

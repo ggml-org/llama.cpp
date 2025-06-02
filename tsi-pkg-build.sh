@@ -64,13 +64,15 @@ if [ -e ${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh ]; then
    rm -fr ${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh
 fi
 
-cat > ${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh << EOL
+cat > ./${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh << EOL
 #!/bin/bash
 export LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}:\$(pwd)
-mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_mult
-mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_add
-cp blobs ${TSI_BLOB_INSTALL_DIR}/txe_mult/ -r
-cp blobs ${TSI_BLOB_INSTALL_DIR}/txe_add/ -r
+tsi_kernels=("add" "sub" "mult" "div" "abs" "inv" "neg" "sin" "sqrt" "sigmoid" "silu")
+
+for kernel in "\${tsi_kernels[@]}"; do
+    mkdir -p ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel
+    cp blobs ${TSI_BLOB_INSTALL_DIR}/txe_\$kernel/ -r
+done
 EOL
 chmod +x ${TSI_GGML_BUNDLE_INSTALL_DIR}/ggml.sh
 cp ${GGML_TSI_INSTALL_DIR}/fpga/blobs ${TSI_GGML_BUNDLE_INSTALL_DIR}/ -r
