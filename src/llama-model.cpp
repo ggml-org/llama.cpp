@@ -552,6 +552,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     uint32_t n_vocab = 0;
     ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
 
+    // for classifier models
+    if (!classifier_labels.empty()) {
+        hparams.n_cls_out = classifier_labels.size();
+    }
+
     // arch-specific KVs
     switch (arch) {
         case LLM_ARCH_LLAMA:
@@ -695,7 +700,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
                 ml.get_key(LLM_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
                 ml.get_key(LLM_KV_POOLING_TYPE,               hparams.pooling_type, false);
-                ml.get_arr_n(LLM_KV_CLASSIFIER_OUTPUT_LABELS, hparams.n_cls_out, false);
 
                 switch (hparams.n_layer) {
                     case 3:
