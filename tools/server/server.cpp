@@ -1938,6 +1938,7 @@ struct server_context {
             params_dft.n_ctx        = params_base.speculative.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_base.speculative.n_ctx;
             params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
             params_dft.n_parallel   = 1;
+            params_dft.swa_full     = true; // TODO: this is not optimal and can be improved
 
             // force F16 KV cache for the draft model for extra performance
             params_dft.cache_type_k = GGML_TYPE_F16;
@@ -3203,9 +3204,7 @@ struct server_context {
                                 }
                             } else {
                                 // if we don't cache the prompt, we have to remove the entire KV cache
-                                llama_kv_self_seq_rm(ctx, slot.id, 0, -1);
                                 slot.n_past = 0;
-                                slot.cache_tokens.clear(); // TODO: not needed, will be cleared later via "keep_first()"
                             }
 
                             if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
@@ -3220,7 +3219,6 @@ struct server_context {
                                     SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
                                     SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
                                             "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                                    llama_kv_self_seq_rm(ctx, slot.id, 0, -1);
                                     slot.n_past = 0;
                                 }
                             }
