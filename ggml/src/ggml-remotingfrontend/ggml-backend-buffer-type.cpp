@@ -16,8 +16,6 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   context->gpu = gpu;
   context->apir_context = apir_buffer_type_alloc_buffer(gpu, buft, size);
   context->base = NULL;
-  context->is_from_ptr = false;
-
 
   ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
   INFO("##");
@@ -64,15 +62,6 @@ ggml_backend_remoting_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
 const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface = {
   /* .get_name         = */ ggml_backend_remoting_buffer_type_get_name,
   /* .alloc_buffer     = */ ggml_backend_remoting_buffer_type_alloc_buffer,
-  /* .get_alignment    = */ ggml_backend_remoting_buffer_type_get_alignment,
-  /* .get_max_size     = */ ggml_backend_remoting_buffer_type_get_max_size,
-  /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
-  /* .is_host          = */ NULL,
-};
-
-const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_from_ptr_type_interface = {
-  /* .get_name         = */ ggml_backend_remoting_buffer_type_get_name,
-  /* .alloc_buffer     = */ NULL,
   /* .get_alignment    = */ ggml_backend_remoting_buffer_type_get_alignment,
   /* .get_max_size     = */ ggml_backend_remoting_buffer_type_get_max_size,
   /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes

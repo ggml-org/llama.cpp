@@ -6,9 +6,6 @@
 struct timer_data get_tensor_timer = {0, 0, 0, "get_tensor"};
 struct timer_data set_tensor_timer = {0, 0, 0, "set_tensor"};
 
-struct timer_data get_tensor_from_ptr_timer = {0, 0, 0, "get_tensor_from_ptr"};
-struct timer_data set_tensor_from_ptr_timer = {0, 0, 0, "set_tensor_from_ptr"};
-
 static void * ggml_backend_remoting_buffer_get_base(ggml_backend_buffer_t buffer) {
   IMPLEMENTED_ONCE;
 
@@ -71,32 +68,6 @@ static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer
   stop_timer(&get_tensor_timer);
 }
 
-static void ggml_backend_remoting_buffer_set_tensor_from_ptr(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-  IMPLEMENTED_ONCE;
-
-  start_timer(&set_tensor_from_ptr_timer);
-
-  UNUSED(buffer);
-
-  memcpy((char *)tensor->data + offset, data, size);
-
-  stop_timer(&set_tensor_from_ptr_timer);
-
-  return;
-}
-
-static void ggml_backend_remoting_buffer_get_tensor_from_ptr(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-  IMPLEMENTED_ONCE;
-
-  UNUSED(buffer);
-
-  start_timer(&get_tensor_from_ptr_timer);
-
-  memcpy(data, (const char *)tensor->data + offset, size);
-
-  stop_timer(&get_tensor_from_ptr_timer);
-}
-
 static bool ggml_backend_remoting_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
   NOT_IMPLEMENTED;
 
@@ -140,18 +111,6 @@ const ggml_backend_buffer_i ggml_backend_remoting_buffer_interface = {
   /* .memset_tensor   = */ ggml_backend_remoting_buffer_memset_tensor,
   /* .set_tensor      = */ ggml_backend_remoting_buffer_set_tensor,
   /* .get_tensor      = */ ggml_backend_remoting_buffer_get_tensor,
-  /* .cpy_tensor      = */ ggml_backend_remoting_buffer_cpy_tensor,
-  /* .clear           = */ ggml_backend_remoting_buffer_clear,
-  /* .reset           = */ NULL,
-};
-
-const ggml_backend_buffer_i ggml_backend_remoting_buffer_from_ptr_interface = {
-  /* .free_buffer     = */ ggml_backend_remoting_buffer_free_buffer,
-  /* .get_base        = */ ggml_backend_remoting_buffer_get_base,
-  /* .init_tensor     = */ NULL,
-  /* .memset_tensor   = */ ggml_backend_remoting_buffer_memset_tensor,
-  /* .set_tensor      = */ ggml_backend_remoting_buffer_set_tensor_from_ptr,
-  /* .get_tensor      = */ ggml_backend_remoting_buffer_get_tensor_from_ptr,
   /* .cpy_tensor      = */ ggml_backend_remoting_buffer_cpy_tensor,
   /* .clear           = */ ggml_backend_remoting_buffer_clear,
   /* .reset           = */ NULL,
