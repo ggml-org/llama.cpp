@@ -52,7 +52,12 @@ static void ggml_backend_remoting_buffer_set_tensor(ggml_backend_buffer_t buffer
   }
   INFO("\n");
 #endif
-  apir_buffer_set_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
+  struct ggml_backend_remoting_buffer_context *context = BUFFER_TO_GGML_CONTEXT(buffer);
+  if (context->is_from_ptr) {
+    memcpy((char *)tensor->data + offset, data, size);
+  } else {
+    apir_buffer_set_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
+  }
 
   stop_timer(&set_tensor_timer);
 
@@ -65,8 +70,12 @@ static void ggml_backend_remoting_buffer_get_tensor(ggml_backend_buffer_t buffer
   start_timer(&get_tensor_timer);
 
   struct virtgpu *gpu = BUFFER_TO_GPU(buffer);
-
-  apir_buffer_get_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
+  struct ggml_backend_remoting_buffer_context *context = BUFFER_TO_GGML_CONTEXT(buffer);
+  if (context->is_from_ptr) {
+    memcpy(data, (const char *)tensor->data + offset, size);
+  } else {
+    apir_buffer_get_tensor(gpu, BUFFER_TO_APIR_CONTEXT(buffer), tensor, data, offset, size);
+  }
 
   stop_timer(&get_tensor_timer);
 }

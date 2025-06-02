@@ -14,10 +14,19 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   }
 
   context->gpu = gpu;
-  context->apir_context = apir_buffer_type_alloc_buffer(gpu, buft, size);
-  context->base = NULL;
+
+  const int USE_FROM_PTR = true;
+
+  if (USE_FROM_PTR) {
+    context->apir_context = apir_device_buffer_from_ptr(gpu, size, size);
+    context->base = context->apir_context.shmem->mmap_ptr;
+    context->is_from_ptr = true;
+  } else {
+    context->apir_context = apir_buffer_type_alloc_buffer(gpu, buft, size);
+    context->is_from_ptr = false;
+    context->base = NULL;
+  }
   context->is_host_buffer = false;
-  context->is_from_ptr = false;
 
   ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
   INFO("##");

@@ -131,7 +131,6 @@ backend_device_buffer_from_ptr(struct vn_cs_encoder *enc, struct vn_cs_decoder *
   ggml_backend_buffer_t buffer;
   buffer = dev->iface.buffer_from_host_ptr(dev, shmem_ptr, size, max_tensor_size);
 
-  INFO("HOST HANDLE is %p (size=%llx)", (void*)buffer, size);
   vn_encode_ggml_buffer(enc, buffer);
   vn_encode_ggml_buffer_type(enc, buffer->buft);
 

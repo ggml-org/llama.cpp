@@ -209,8 +209,6 @@ apir_device_buffer_from_ptr(struct virtgpu *gpu,
   struct vn_cs_decoder *decoder;
   apir_buffer_context_t buffer_context;
 
-  BEING_IMPLEMENTED;
-
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR);
 
   /* *** */
@@ -228,7 +226,6 @@ apir_device_buffer_from_ptr(struct virtgpu *gpu,
   REMOTE_CALL(gpu, encoder, decoder);
 
   vn_decode_apir_buffer_host_handle_t(decoder, &buffer_context.host_handle);
-  INFO("HOST HANDLE is %p (size=%llx)", (void*)buffer_context.host_handle, size);
   buffer_context.buft_host_handle = vn_decode_apir_buffer_type_host_handle(decoder);
 
   /* *** */
