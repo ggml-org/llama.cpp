@@ -83,9 +83,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
         info.devices[i].cc =
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
-        info.devices[i].hw_info = get_device_hw_info(&device);
-        info.devices[i].opt_feature = check_gpu_optimize_feature(info.devices[i].hw_info.arch);
-
+        info.devices[i].opt_feature.reorder = !device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
     }
 
@@ -195,7 +193,7 @@ static void ggml_check_sycl() try {
 
     if (!initialized) {
         g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
-        g_ggml_sycl_disable_optimize= get_sycl_env("GGML_SYCL_DISABLE_OPT", 1);
+        g_ggml_sycl_disable_optimize = get_sycl_env("GGML_SYCL_DISABLE_OPT", 0);
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
