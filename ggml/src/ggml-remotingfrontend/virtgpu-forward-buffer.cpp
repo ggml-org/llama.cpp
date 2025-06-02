@@ -140,8 +140,6 @@ apir_buffer_free_buffer(struct virtgpu *gpu, apir_buffer_context_t *buffer_conte
   vn_encode_apir_buffer_host_handle_t(encoder, &buffer_context->host_handle);
 
   REMOTE_CALL(gpu, encoder, decoder);
-#if APIR_ALLOC_FROM_HOST_PTR
-  virtgpu_shmem_destroy(gpu, buffer_context->shmem->shmem);
-#endif
+
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 }

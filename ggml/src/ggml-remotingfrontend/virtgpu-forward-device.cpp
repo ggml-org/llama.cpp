@@ -200,3 +200,40 @@ apir_device_get_props(struct virtgpu *gpu,
 
   return;
 }
+
+apir_buffer_context_t
+apir_device_buffer_from_ptr(struct virtgpu *gpu,
+			    size_t size,
+			    size_t max_tensor_size) {
+  struct vn_cs_encoder *encoder;
+  struct vn_cs_decoder *decoder;
+  apir_buffer_context_t buffer_context;
+
+  BEING_IMPLEMENTED;
+
+  REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR);
+
+  /* *** */
+
+  buffer_context.shmem = virtgpu_shmem_create(gpu, size);
+  if (!buffer_context.shmem) {
+    FATAL("Couldn't allocate the guest-host shared buffer :/");
+  }
+
+  vn_encode_virtgpu_shmem_res_id(encoder, buffer_context.shmem->res_id);
+
+  vn_encode_size_t(encoder, &size);
+  vn_encode_size_t(encoder, &max_tensor_size);
+
+  REMOTE_CALL(gpu, encoder, decoder);
+
+  vn_decode_apir_buffer_host_handle_t(decoder, &buffer_context.host_handle);
+
+  buffer_context.buft_host_handle = vn_decode_apir_buffer_type_host_handle(decoder);
+
+  /* *** */
+
+  REMOTE_CALL_FINISH(gpu, encoder, decoder);
+
+  return buffer_context;
+}

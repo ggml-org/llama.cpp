@@ -139,14 +139,6 @@ ggml_backend_reg_t ggml_backend_remoting_frontend_reg() {
 
   INFO("ggml_backend_remoting_frontend_reg() hello :wave:");
 
-  INFO("#");
-#if APIR_ALLOC_FROM_HOST_PTR
-  INFO("# USING ALLOC_FROM_HOST_PTR");
-#else
-  INFO("# USING ALLOC_BUFFER");
-#endif
-  INFO("#");
-
   ggml_backend_remoting_reg_init_devices(&reg);
 
   int cr = atexit(showTime);

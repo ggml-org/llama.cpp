@@ -43,13 +43,18 @@ deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
     result->buffer = nullptr;
   }
 
+  uint64_t tensor_data = tensor->data;
   if (result->buffer) {
     // require that the tensor data does not go beyond the buffer end
     uint64_t tensor_size = (uint64_t) ggml_nbytes(result);
     uint64_t buffer_start = (uint64_t) ggml_backend_buffer_get_base(result->buffer);
     uint64_t buffer_size = (uint64_t) ggml_backend_buffer_get_size(result->buffer);
-    GGML_ASSERT(tensor->data + tensor_size >= tensor->data); // check for overflow
-    GGML_ASSERT(tensor->data >= buffer_start && tensor->data + tensor_size <= buffer_start + buffer_size);
+
+    // tensor->data is serialized as an offset to the buffer base address
+    tensor_data += buffer_start;
+
+    GGML_ASSERT(tensor_data + tensor_size >= tensor_data); // check for overflow
+    GGML_ASSERT(tensor_data >= buffer_start && tensor_data + tensor_size <= buffer_start + buffer_size);
   }
 
   result->op = (ggml_op) tensor->op;
@@ -57,7 +62,7 @@ deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor) {
     result->op_params[i] = tensor->op_params[i];
   }
   result->flags = tensor->flags;
-  result->data = reinterpret_cast<void *>(tensor->data);
+  result->data = reinterpret_cast<void *>(tensor_data);
   ggml_set_name(result, tensor->name);
   return result;
 }

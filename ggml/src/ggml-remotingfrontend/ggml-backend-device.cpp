@@ -103,7 +103,7 @@ ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backe
   // the API Remoting frontend
   props->caps.async = false;
   props->caps.host_buffer = false;
-  props->caps.buffer_from_host_ptr = false;
+  props->caps.buffer_from_host_ptr = true;
   props->caps.events = false;
 #endif
 
@@ -129,29 +129,59 @@ ggml_backend_remoting_device_get_buffer_type(ggml_backend_dev_t dev) {
   return &buft;
 }
 
-static ggml_backend_buffer_t ggml_backend_remoting_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
-  UNUSED(dev);
-  UNUSED(ptr);
-  UNUSED(size);
-  UNUSED(max_tensor_size);
+static ggml_backend_buffer_type_t
+ggml_backend_remoting_device_get_buffer_from_ptr_type(ggml_backend_dev_t dev) {
+  IMPLEMENTED_ONCE;
 
-  NOT_IMPLEMENTED;
-  STOP_HERE;
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
-  return nullptr;
+  apir_buffer_type_host_handle_t ctx = apir_device_get_buffer_type(gpu);
+
+  static struct ggml_backend_buffer_type buft {
+    /* .iface    = */ ggml_backend_remoting_buffer_from_ptr_type_interface,
+    /* .device   = */ dev,
+    /* .context  = */ (void *) ctx,
+  };
+
+  return &buft;
 }
 
-static ggml_backend_buffer_type_t ggml_backend_remoting_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+static ggml_backend_buffer_t
+ggml_backend_remoting_device_buffer_from_ptr(ggml_backend_dev_t dev, void * ptr, size_t size, size_t max_tensor_size) {
 
-    static struct ggml_backend_buffer_type host_bufft = {
-      /* .iface    = */ ggml_backend_remoting_host_buffer_type_interface,
-      /* .device   = */ dev,
-      /* .context  = */ nullptr,
-    };
+  struct virtgpu *gpu = DEV_TO_GPU(dev);
 
-    //IMPLEMENTED;
+  struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
+  if (!context) {
+    FATAL("Couldn't allocate the buffer context ...");
+  }
 
-    return &host_bufft;
+  UNUSED(ptr);
+  context->gpu = gpu;
+  context->apir_context = apir_device_buffer_from_ptr(gpu, size, max_tensor_size);
+  context->base = ptr;
+  context->is_from_ptr = true;
+
+  ggml_backend_buffer_t buffer = ggml_backend_buffer_init(ggml_backend_remoting_device_get_buffer_from_ptr_type(dev), ggml_backend_remoting_buffer_from_ptr_interface, (void *) context, size);
+
+  INFO("#");
+  INFO("# %s(%p, %llx) --> %p", __func__, ptr, size, buffer);
+  INFO("#\n");
+
+  return buffer;
+}
+
+static ggml_backend_buffer_type_t
+ggml_backend_remoting_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+  IMPLEMENTED_ONCE;
+
+  static struct ggml_backend_buffer_type host_bufft = {
+    /* .iface    = */ ggml_backend_remoting_host_buffer_type_interface,
+    /* .device   = */ dev,
+    /* .context  = */ nullptr,
+  };
+
+  return &host_bufft;
 }
 
 const struct ggml_backend_device_i ggml_backend_remoting_device_interface = {
@@ -163,7 +193,7 @@ const struct ggml_backend_device_i ggml_backend_remoting_device_interface = {
   /* .init_backend         = */ ggml_backend_remoting_device_init,
   /* .get_buffer_type      = */ ggml_backend_remoting_device_get_buffer_type,
   /* .get_host_buffer_type = */ NULL,
-  /* .buffer_from_host_ptr = */ NULL,
+  /* .buffer_from_host_ptr = */ ggml_backend_remoting_device_buffer_from_ptr,
   /* .supports_op          = */ ggml_backend_remoting_device_supports_op,
   /* .supports_buft        = */ ggml_backend_remoting_device_supports_buft,
   /* .offload_op           = */ ggml_backend_remoting_device_offload_op,

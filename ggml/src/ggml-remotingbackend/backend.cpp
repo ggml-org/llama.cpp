@@ -78,14 +78,6 @@ extern "C" {
       return APIR_BACKEND_INITIALIZE_MISSING_GGML_SYMBOLS;
     }
 
-    INFO("#");
-#if APIR_ALLOC_FROM_HOST_PTR
-    INFO("# USING ALLOC_FROM_HOST_PTR");
-#else
-    INFO("# USING ALLOC_BUFFER");
-#endif
-    INFO("#");
-
     return backend_dispatch_initialize(ggml_backend_reg_fct, ggml_backend_init_fct);
   }
 

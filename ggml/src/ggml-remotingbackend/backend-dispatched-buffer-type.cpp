@@ -60,30 +60,16 @@ backend_buffer_type_is_host(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec
 uint32_t
 backend_buffer_type_alloc_buffer(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
-#if APIR_ALLOC_FROM_HOST_PTR
-  uint32_t shmem_res_id;
-  vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
 
-  void *shmem_data = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
-  if (!shmem_data) {
-    FATAL("Couldn't get the shmem addr from virgl :/");
-  }
-#else
   ggml_backend_buffer_type_t buft;
   buft = vn_decode_ggml_buffer_type(dec);
-#endif
+
   size_t size;
   vn_decode_size_t(dec, &size);
 
   ggml_backend_buffer_t buffer;
-#if APIR_ALLOC_FROM_HOST_PTR
-  #define MAX_TENSOR_SIZE 323205120
-  buffer = dev->iface.buffer_from_host_ptr(dev, shmem_data, size, MAX_TENSOR_SIZE);
 
-  vn_encode_ggml_buffer_type(enc, buffer->buft);
-#else
   buffer = buft->iface.alloc_buffer(buft, size);
-#endif
 
   vn_encode_ggml_buffer(enc, buffer);
 

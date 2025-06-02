@@ -100,29 +100,14 @@ apir_buffer_type_alloc_buffer(struct virtgpu *gpu, ggml_backend_buffer_type_t bu
 
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_BUFFER_TYPE_ALLOC_BUFFER);
 
-#if APIR_ALLOC_FROM_HOST_PTR
-  UNUSED(buft);
-  
-  buffer_context.shmem = virtgpu_shmem_create(gpu, size);
-  //WARNING("%s: 0x%lx | %dkB | %dMB", __func__, size, (int)size/1024, (int)size/1024/1024);
-  if (!buffer_context.shmem) {
-    FATAL("Couldn't allocate the guest-host shared buffer :/");
-  }
-
-  vn_encode_virtgpu_shmem_res_id(encoder, buffer_context.shmem->res_id);
-#else
   vn_encode_ggml_buffer_type(encoder, buft);
-#endif
+
   vn_encode_size_t(encoder, &size);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
-#if APIR_ALLOC_FROM_HOST_PTR
-  buffer_context.buft_host_handle = vn_decode_apir_buffer_type_host_handle(decoder);
-#endif
-
   vn_decode_apir_buffer_host_handle_t(decoder, &buffer_context.host_handle);
-  
+
   REMOTE_CALL_FINISH(gpu, encoder, decoder);
 
   return buffer_context;

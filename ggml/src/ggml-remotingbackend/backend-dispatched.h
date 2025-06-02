@@ -27,6 +27,7 @@ uint32_t backend_device_get_memory(struct vn_cs_encoder *enc, struct vn_cs_decod
 uint32_t backend_device_supports_op(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 uint32_t backend_device_get_buffer_type(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 uint32_t backend_device_get_props(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
+uint32_t backend_device_buffer_from_ptr(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
 
 /* buffer-type */
 uint32_t backend_buffer_type_get_name(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx);
@@ -57,6 +58,7 @@ static inline const char *backend_dispatch_command_name(ApirBackendCommandType t
   case APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP: return "backend_device_supports_op";
   case APIR_COMMAND_TYPE_DEVICE_GET_BUFFER_TYPE: return "backend_get_buffer_type";
   case APIR_COMMAND_TYPE_DEVICE_GET_PROPS: return "backend_get_props";
+  case APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR: return "backend_buffer_from_ptr";
 
   /* buffer-type */
   case APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME: return "backend_buffer_type_get_name";
@@ -88,6 +90,7 @@ static const backend_dispatch_t apir_backend_dispatch_table[APIR_BACKEND_DISPATC
   [APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP] = backend_device_supports_op,
   [APIR_COMMAND_TYPE_DEVICE_GET_BUFFER_TYPE] = backend_device_get_buffer_type,
   [APIR_COMMAND_TYPE_DEVICE_GET_PROPS] = backend_device_get_props,
+  [APIR_COMMAND_TYPE_DEVICE_BUFFER_FROM_PTR] = backend_device_buffer_from_ptr,
 
   /* buffer-type */
   [APIR_COMMAND_TYPE_BUFFER_TYPE_GET_NAME] = backend_buffer_type_get_name,
