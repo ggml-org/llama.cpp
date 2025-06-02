@@ -1938,7 +1938,6 @@ struct server_context {
             params_dft.n_ctx        = params_base.speculative.n_ctx == 0 ? params_base.n_ctx / params_base.n_parallel : params_base.speculative.n_ctx;
             params_dft.n_gpu_layers = params_base.speculative.n_gpu_layers;
             params_dft.n_parallel   = 1;
-            params_dft.swa_full     = true; // TODO: this is not optimal and can be improved
 
             // force F16 KV cache for the draft model for extra performance
             params_dft.cache_type_k = GGML_TYPE_F16;
@@ -2016,6 +2015,11 @@ struct server_context {
             if (params_base.n_cache_reuse) {
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
+            }
+
+            if (!params_base.speculative.model.path.empty()) {
+                SRV_ERR("%s\n", "err: speculative decode is not supported by this context");
+                return false;
             }
         }
 
