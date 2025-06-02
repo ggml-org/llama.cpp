@@ -11,13 +11,14 @@ echo "✓ GGUF files cleaned"
 MODEL="/datasets/gguf/Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
 PROMPT="Write a quick sort: "
 STEPS=1
+TRACE_LAYER=2
 
 echo "=== KV Cache Alignment Test ==="
 # Create F16 reference
 CMD="./build-arm64/bin/llama-kqv-trace-monitor \
     -m \"$MODEL\" \
     -p \"$PROMPT\" \
-    --layer 0 \
+    --layer $TRACE_LAYER \
     -t 12 \
     -fa \
     -n $STEPS \
@@ -33,7 +34,7 @@ eval $CMD > /dev/null 2>&1 && echo "✓ F16 reference created"
 CMD="./build-arm64/bin/llama-tensor-diff-analyzer \
     -m \"$MODEL\" \
     -p \"$PROMPT\" \
-    --layer 0 \
+    --layer $TRACE_LAYER \
     -t 12 \
     -fa \
     -n $STEPS \

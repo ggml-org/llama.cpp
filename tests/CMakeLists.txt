@@ -168,6 +168,7 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-rope.cpp)
     llama_build_and_test(test-mul-mat.cpp)
     llama_build_and_test(test-flash-attn.cpp)
+    llama_build_and_test(test-flash-decoding-custom-op.cpp)
     llama_build_and_test(test_ggml_mul_mat.cpp)
 endif()
 
@@ -191,6 +192,7 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-kv-cache-unified.cpp)
     llama_build_and_test(test-unified-cache-copy.cpp)
     llama_build_and_test(test-kv-cache-debug.cpp)
+    llama_build_and_test(test-mixed-kv-cache-simple.cpp)
 endif()
 
 # Add llama_batch/sbatch/ubatch test

@@ -232,15 +232,24 @@ public:
     void reset_quantization_stats() { quant_stats.reset(); }
     
     // Get current memory usage and pressure
-    // struct memory_info {
-    //     size_t total_memory_bytes = 0;
-    //     size_t fp16_memory_bytes = 0;
-    //     size_t quant_memory_bytes = 0;
-    //     float  memory_pressure = 0.0f;  // 0.0 to 1.0
-    //     bool   should_quantize = false;
-    // };
+    struct memory_info {
+        size_t total_memory_bytes = 0;
+        size_t fp16_memory_bytes = 0;
+        size_t quant_memory_bytes = 0;
+        float  memory_pressure = 0.0f;  // 0.0 to 1.0
+        bool   should_quantize = false;
+    };
     
-    // memory_info get_memory_info() const;
+    memory_info get_memory_info() const;
+    
+    // Get token distribution information for a specific layer
+    struct layer_token_info {
+        uint32_t n_fp16_tokens = 0;
+        uint32_t n_quant_tokens = 0;
+        bool     valid = false;
+    };
+    
+    layer_token_info get_layer_token_info(int32_t il) const;
 
 private:
     const llama_model & model;

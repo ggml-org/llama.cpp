@@ -23,13 +23,17 @@
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #endif
 
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
+
 #ifndef CACHE_LINE_SIZE_F32
 #define CACHE_LINE_SIZE_F32 16
 #endif
 
 /*
  * Mixed KV Cache Debug Output
- * 
+ *
  * Uses llama's existing debug system. Enable with:
  * - Set log level to DEBUG or higher
  * - Look for "[mixed-kv]" prefix in debug output
@@ -62,9 +66,9 @@ static double get_duration_ms(const std::chrono::high_resolution_clock::time_poi
 
 /*
  * llama_kv_cache_mixed implementation
- * 
+ *
  * Mixed precision KV cache with automatic quantization:
- * 
+ *
  * Architecture Overview:
  * +-------------------------------------------------------------+
  * |                    Mixed KV Cache                           |
@@ -84,9 +88,9 @@ static double get_duration_ms(const std::chrono::high_resolution_clock::time_poi
  * |         | (dequantized)   |                                 |
  * |         +-----------------+                                 |
  * +-------------------------------------------------------------+
- * 
+ *
  * FIFO Quantization Strategy:
- * 
+ *
  * Time ->  [Token 1] [Token 2] [Token 3] [Token 4] [Token 5]
  *         |         |         |         |         |
  *         v         v         v         v         v
@@ -94,7 +98,7 @@ static double get_duration_ms(const std::chrono::high_resolution_clock::time_poi
  * Step 2: [  FP16   ] [  FP16  ] [  FP16  ] [  FP16  ]
  * Step 3: [ Quant   ] [  FP16  ] [  FP16  ] [  FP16  ] [  FP16  ]
  *         ^ oldest moved to quantized buffer when threshold exceeded
- * 
+ *
  * Compatibility:
  * - Only activated when use_mixed_kv_cache = true
  * - All existing cache types continue to work unchanged
@@ -119,7 +123,7 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
     : model(model), hparams(model.hparams), config(config),
       v_trans(v_trans), n_seq_max(n_seq_max), n_pad(n_pad),
       quant_mgr(config.quantization_threshold) {
-    
+
     // NOTE: `v_trans` = !flash_attn
 
     GGML_ASSERT(kv_size % n_pad == 0);
@@ -247,7 +251,7 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
 
 void llama_kv_cache_mixed::clear() {
     LLAMA_LOG_DEBUG("[mixed-kv] clearing cache (size=%u, used=%u)\n", size, used);
-    
+
     for (uint32_t i = 0; i < size; ++i) {
         cells[i].pos = -1;
         cells[i].seq_id.clear();
@@ -267,7 +271,7 @@ void llama_kv_cache_mixed::clear() {
     for (auto & buf : bufs) {
         ggml_backend_buffer_clear(buf.get(), 0);
     }
-    
+
     LLAMA_LOG_DEBUG("[mixed-kv] cache cleared successfully (cleared %u FP16 tokens)\n", total_fp16_tokens);
 }
 
@@ -493,7 +497,7 @@ void llama_kv_cache_mixed::commit() {
 
     /*
      * Quantization Handling Strategy:
-     * 
+     *
      * +-------------------------------------------------------------+
      * |                 Quantization Flow                          |
      * |                                                             |
@@ -504,19 +508,19 @@ void llama_kv_cache_mixed::commit() {
      * |  future     quantization  operations          graph       |
      * |  processing needed        in graph            operations   |
      * +-------------------------------------------------------------+
-     * 
+     *
      * Quantization is now handled correctly through the update() method
      * and graph building mechanism, rather than directly calling
      * quantization functions in commit().
-     * 
+     *
      * This ensures:
      * - Consistency with llama.cpp architecture
      * - Quantization operations coordinate with other graph operations
      * - Support for GPU acceleration and backend optimization
-     * 
+     *
      * Quantization will be automatically triggered on the next update() call.
      */
-    
+
     LLAMA_LOG_DEBUG("[mixed-kv] commit completed, quantization will be handled in next update() call\n");
 }
 
@@ -586,7 +590,7 @@ bool llama_kv_cache_mixed::update(llama_context & lctx) {
     // Check if quantization is needed
     if (config.enable_quantization) {
         bool quantization_needed = false;
-        
+
         // Check each layer for quantization needs
         for (auto & layer : layers) {
             if (layer.n_fp16_tokens >= config.quantization_threshold) {
@@ -594,43 +598,43 @@ bool llama_kv_cache_mixed::update(llama_context & lctx) {
                 break;
             }
         }
-        
+
         if (quantization_needed) {
             LLAMA_LOG_DEBUG("[mixed-kv] quantization needed, building quantization graph\n");
-            
+
             ggml_backend_sched_reset(sched);
             auto * gf = lctx.graph_init();
-            
+
             // Build quantization graph for each layer that needs it
             for (auto & layer : layers) {
                 if (layer.n_fp16_tokens >= config.quantization_threshold) {
-                    LLAMA_LOG_DEBUG("[mixed-kv] building quantization graph for layer %d (%u FP16 tokens)\n", 
+                    LLAMA_LOG_DEBUG("[mixed-kv] building quantization graph for layer %d (%u FP16 tokens)\n",
                                    layer.il, layer.n_fp16_tokens);
-                    
+
                     auto res = build_graph_quantize(lctx.get_cparams(), lctx.get_ctx_compute(), gf, layer.il);
-                    
+
                     if (res) {
                         // Calculate number of tokens to quantize
                         uint32_t tokens_to_quantize = std::min(layer.n_fp16_tokens, config.group_size);
-                        
+
                         // Pre-update counters (these values will be correct after graph execution)
                         layer.n_quant_tokens += tokens_to_quantize;
                         layer.n_fp16_tokens -= tokens_to_quantize;
-                        
-                        LLAMA_LOG_DEBUG("[mixed-kv] scheduled quantization of %u tokens for layer %d\n", 
+
+                        LLAMA_LOG_DEBUG("[mixed-kv] scheduled quantization of %u tokens for layer %d\n",
                                        tokens_to_quantize, layer.il);
                     }
                 }
             }
-            
+
             // Allocate graph and execute
             ggml_backend_sched_alloc_graph(sched, gf);
-            
+
             LLAMA_LOG_DEBUG("[mixed-kv] executing quantization graph\n");
             lctx.graph_compute(gf, false);
-            
+
             LLAMA_LOG_DEBUG("[mixed-kv] quantization graph execution completed\n");
-            
+
             need_reserve = true;
         }
     }
@@ -753,18 +757,18 @@ uint32_t llama_kv_cache_mixed::get_size() const {
 
 /*
  * FIFO Quantization Implementation:
- * 
+ *
  * Quantize oldest tokens from FP16 to quantized format using ggml operations.
  * This implements FIFO (First In, First Out) strategy.
- * 
+ *
  * Important Architecture Note:
  * In llama.cpp, quantization operations should be handled through the graph
  * building mechanism, rather than creating independent contexts within KV cache.
- * 
+ *
  * Correct approach: Mark tokens for quantization, handle in update() method
  *                   through build_graph_quantize()
  * Wrong approach: Create ggml_context inside KV cache and execute quantization
- * 
+ *
  * Before quantization:
  * +-------------------------------------------------------------+
  * | FP16 Buffer                                                 |
@@ -772,7 +776,7 @@ uint32_t llama_kv_cache_mixed::get_size() const {
  * |    ^                                                        |
  * |    +-- tokens_to_quantize                                   |
  * +-------------------------------------------------------------+
- * 
+ *
  * After quantization:
  * +-----------------+ +---------------------------------------+
  * | Quantized Buffer| | FP16 Buffer                           |
@@ -993,7 +997,7 @@ bool llama_kv_cache_mixed::do_quant(int32_t il) const {
 
 /*
  * Public API methods for getting K and V tensors
- * 
+ *
  * Simple implementation like unified cache - just return FP16 views
  */
 ggml_tensor * llama_kv_cache_mixed::get_k(ggml_context * ctx, int32_t il) const {
@@ -1048,7 +1052,7 @@ ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const 
 ggml_tensor * llama_kv_cache_mixed::k_quant(ggml_context * ctx, int32_t il) const {
     auto & layer = layers[il];
     auto * k = layer.k_fp16;
-    
+
     LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
     LLAMA_LOG_DEBUG("[mixed-kv] quantizing %d tokens from layer %d\n", config.quantization_threshold, il);
     LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
@@ -1057,13 +1061,13 @@ ggml_tensor * llama_kv_cache_mixed::k_quant(ggml_context * ctx, int32_t il) cons
     ggml_tensor * k_need_quantize = ggml_view_1d(ctx, k,
             config.quantization_threshold*hparams.n_embd_k_gqa(il),
             ggml_row_size(k->type, hparams.n_embd_k_gqa(il))*(layer.n_fp16_tokens - config.quantization_threshold));
-    
+
     ggml_tensor * k_quantized = ggml_view_1d(ctx, layer.k_quant,
             config.quantization_threshold*hparams.n_embd_k_gqa(il),
             ggml_row_size(k->type, hparams.n_embd_k_gqa(il))*layer.n_k_quant_tokens);
-    
+
     layer.n_k_quant_tokens += config.quantization_threshold;
-    
+
     return ggml_cpy(ctx, k_need_quantize, k_quantized);
 }
 
@@ -1074,17 +1078,17 @@ ggml_tensor * llama_kv_cache_mixed::v_quant(ggml_context * ctx, int32_t il) cons
     LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
     LLAMA_LOG_DEBUG("[mixed-kv] quantizing %d tokens from layer %d\n", config.quantization_threshold, il);
     LLAMA_LOG_DEBUG("[mixed-kv] ==================================================================\n");
-    
+
     ggml_tensor * v_need_quantize = ggml_view_1d(ctx, v,
             config.quantization_threshold*hparams.n_embd_v_gqa(il),
             ggml_row_size(v->type, hparams.n_embd_v_gqa(il))*(layer.n_fp16_tokens - config.quantization_threshold));
-    
+
     ggml_tensor * v_quantized = ggml_view_1d(ctx, layer.v_quant,
             config.quantization_threshold*hparams.n_embd_v_gqa(il),
             ggml_row_size(v->type, hparams.n_embd_v_gqa(il))*layer.n_v_quant_tokens);
-    
+
     layer.n_v_quant_tokens += config.quantization_threshold;
-    
+
     return ggml_cpy(ctx, v_need_quantize, v_quantized);
 }
 
@@ -1139,22 +1143,166 @@ ggml_tensor * llama_kv_cache_mixed::cpy_v(ggml_context * ctx, ggml_tensor * v_cu
     return ggml_cpy(ctx, v_cur, v_view);
 }
 
+// Get current memory usage and pressure information
+llama_kv_cache_mixed::memory_info llama_kv_cache_mixed::get_memory_info() const {
+    memory_info info;
+
+    // Calculate memory usage for FP16 and quantized tensors
+    info.fp16_memory_bytes = size_k_bytes() / 2;  // Half for FP16 (vs full for both FP16+quant)
+    info.quant_memory_bytes = size_k_bytes() / 2; // Half for quantized
+    info.total_memory_bytes = info.fp16_memory_bytes + info.quant_memory_bytes;
+
+    // Simple memory pressure calculation (can be improved)
+    const size_t max_memory = size_k_bytes() + size_v_bytes();
+    if (max_memory > 0) {
+        info.memory_pressure = (float)info.total_memory_bytes / max_memory;
+    }
+
+    // Determine if quantization should be triggered
+    info.should_quantize = quant_mgr.should_quantize(config, info.memory_pressure);
+
+    return info;
+}
+
+// Get token distribution information for a specific layer
+llama_kv_cache_mixed::layer_token_info llama_kv_cache_mixed::get_layer_token_info(int32_t il) const {
+    layer_token_info info;
+
+    auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end()) {
+        return info; // valid = false
+    }
+
+    const auto & layer = layers[it->second];
+    info.n_fp16_tokens = layer.n_fp16_tokens;
+    info.n_quant_tokens = layer.n_k_quant_tokens; // Use K quant tokens (V should be same)
+    info.valid = true;
+
+    return info;
+}
+
 //=================================================================================================
-// Custom Flash Attention Implementation for Mixed KV Cache
+// Custom Flash Attention Implementation for Mixed KV Cache with Flash-Decoding
 //=================================================================================================
 
+inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, const ggml_fp16_t * GGML_RESTRICT x, const float v) {
+#if defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F16_STEP - 1));
+
+    GGML_F16_VEC vx = GGML_F16_VEC_SET1(v);
+
+    GGML_F16_VEC ax[GGML_F16_ARR];
+    GGML_F16_VEC ay[GGML_F16_ARR];
+
+    for (int i = 0; i < np; i += GGML_F16_STEP) {
+        for (int j = 0; j < GGML_F16_ARR; j++) {
+            ax[j] = GGML_F16_VEC_LOAD(x + i + j*GGML_F16_EPR, j);
+            ay[j] = GGML_F16_VEC_LOAD(y + i + j*GGML_F16_EPR, j);
+            ay[j] = GGML_F16_VEC_FMA(ay[j], ax[j], vx);
+
+            GGML_F16_VEC_STORE(y + i + j*GGML_F16_EPR, ay, j);
+        }
+    }
+
+    // leftovers
+    for (int i = np; i < n; ++i) {
+        y[i] = GGML_FP32_TO_FP16(GGML_FP16_TO_FP32(y[i]) + GGML_FP16_TO_FP32(x[i])*v);
+    }
+#else
+    // scalar
+    for (int i = 0; i < n; ++i) {
+        y[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(y[i]) + ggml_fp16_to_fp32(x[i])*v);
+    }
+#endif
+}
+
+inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const float * GGML_RESTRICT x, const float v) {
+#if defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
+
+    GGML_F32_VEC ax[GGML_F32_ARR];
+    GGML_F32_VEC ay[GGML_F32_ARR];
+
+    for (int i = 0; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; j++) {
+            ax[j] = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
+            ay[j] = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+            ay[j] = GGML_F32_VEC_FMA(ay[j], ax[j], vx);
+
+            GGML_F32_VEC_STORE(y + i + j*GGML_F32_EPR, ay[j]);
+        }
+    }
+
+    // leftovers
+    for (int i = np; i < n; ++i) {
+        y[i] += x[i]*v;
+    }
+#else
+    // scalar
+    for (int i = 0; i < n; ++i) {
+        y[i] += x[i]*v;
+    }
+#endif
+}
+
+//inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) { for (int i = 0; i < n; ++i) y[i] *= v;          }
+inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
+#if defined(GGML_USE_ACCELERATE)
+    vDSP_vsmul(y, 1, &v, y, 1, n);
+#elif defined(GGML_SIMD)
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
+
+    GGML_F32_VEC ay[GGML_F32_ARR];
+
+    for (int i = 0; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; j++) {
+            ay[j] = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+            ay[j] = GGML_F32_VEC_MUL(ay[j], vx);
+
+            GGML_F32_VEC_STORE(y + i + j*GGML_F32_EPR, ay[j]);
+        }
+    }
+
+    // leftovers
+    for (int i = np; i < n; ++i) {
+        y[i] *= v;
+    }
+#else
+    // scalar
+    for (int i = 0; i < n; ++i) {
+        y[i] *= v;
+    }
+#endif
+}
+
 /**
- * Simplified Custom Flash Attention Implementation for Mixed KV Cache
- * 
- * This is a basic implementation that follows the ggml_custom_op_t interface.
- * It provides a foundation for flash attention with mixed precision KV cache.
- * 
+ * Flash-Decoding Style Attention Implementation for Mixed KV Cache
+ *
+ * This implements flash-decoding by splitting the KV sequence across threads,
+ * rather than splitting query rows. Each thread processes a chunk of tokens
+ * and computes partial attention with log-sum-exp tracking.
+ *
+ * Key differences from traditional flash attention:
+ * - Parallelization across KV sequence dimension instead of query dimension
+ * - Each thread computes partial attention for a chunk of KV tokens for ALL queries
+ * - Thread 0 performs final log-sum-exp reduction across all chunks
+ *
+ * Workspace Layout per thread:
+ * - chunk_output[N * n_heads * DV]: Attention output for this chunk, for all queries
+ * - log_sum_exp[N * n_heads]: Log-sum-exp values for this chunk, for all queries
+ * - temp_buffer[DV]: Temporary buffer for intermediate computations
+ * - Q_quantized[DK]: Quantized query buffer
+ *
  * @param dst Output tensor
  * @param ith Thread index
  * @param nth Total number of threads
  * @param wdata Pointer to workspace
- * @param wsize Size of workspace [1*DK + 2*DV + CACHE_LINE_SIZE_F32] * sizeof(float) * n_threads, e.g. (128 * 3 * sizeof(float) + 64) * 12 = 19200 bytes
- * @param userdata Pointer to flash attention parameters
+ * @param wsize Size of workspace
+ * @param userdata Unused (for compatibility with GGML custom operation interface)
  */
 void ggml_custom_flash_attn_mixed_simple(
         ggml_tensor * dst,
@@ -1163,26 +1311,30 @@ void ggml_custom_flash_attn_mixed_simple(
         void* wdata,
         size_t wsize,
         void * userdata) {
-    
-    GGML_UNUSED(wsize); // Mark as intentionally unused
-    
-    if (!userdata || !dst) {
-        LLAMA_LOG_ERROR("[mixed-kv] ERROR: null parameters in custom flash attention\n");
+
+    GGML_UNUSED(wsize);    // Mark as intentionally unused
+    GGML_UNUSED(userdata); // Mark as intentionally unused
+
+    if (!dst) {
+        LLAMA_LOG_ERROR("[mixed-kv] ERROR: null dst tensor in custom flash attention\n");
         return;
     }
-    
-    const auto * flash_params = static_cast<const llama_flash_attn_mixed_params *>(userdata);
-    
-    ggml_tensor * q = dst->src[0];
-    ggml_tensor * k = dst->src[1];
-    ggml_tensor * v = dst->src[2];
-    ggml_tensor * mask = dst->src[3];
-    
+
+    ggml_tensor * q     = dst->src[0];
+    ggml_tensor * k     = dst->src[1];
+    ggml_tensor * v     = dst->src[2];
+    ggml_tensor * mask  = dst->src[3];
+
     if (!q || !k || !v) {
         LLAMA_LOG_ERROR("[mixed-kv] ERROR: null tensors in custom flash attention\n");
         return;
     }
-   
+
+    //> q:    [head_dim, q_len,  n_heads, n_batch]
+    //> k:    [head_dim, kv_len, n_heads, n_batch]
+    //> v:    [head_dim, kv_len, n_heads, n_batch]
+    //> mask: [n_heads,  q_len,  kv_len,  n_batch]
+
     GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
     GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
     GGML_TENSOR_LOCALS(int64_t, nek, k,   ne)
@@ -1192,27 +1344,27 @@ void ggml_custom_flash_attn_mixed_simple(
     GGML_TENSOR_LOCALS(int64_t, ne,  dst, ne)
     GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
 
-    const int64_t DK = nek0;     //> head_dim
-    const int64_t DV = nev0;     //> head_dim 
-    const int64_t N  = neq1;     //> q_len
-    
-    // memset(dst->data, 0, ggml_nbytes(dst));
+    const int64_t DK = nek0;      //> head_dim for keys
+    const int64_t DV = nev0;      //> head_dim for values
+    const int64_t SEQ_LEN  = neq1;      //> q_len
+    const int64_t KV_LEN    = nek1; //> kv sequence length
+    const int64_t N_KV_HEAD = nek2; //> number of kv heads
+    const int64_t N_Q_HEADS   = neq2; //> number of query heads
 
-    GGML_ASSERT(ne0 == DV);     //> dst -> ne[0] == head_dim
-    GGML_ASSERT(ne2 == N);      //> dst -> ne[2] == q_len
+    GGML_ASSERT(ne0 == DV);       //> dst -> ne[0] == head_dim
+    GGML_ASSERT(ne1 == SEQ_LEN);        //> dst -> ne[1] == q_len
+    GGML_ASSERT(ne2 == N_Q_HEADS);  //> dst -> ne[2] == N_Q_HEADS
 
     // input tensor rows must be contiguous
-    //> QKV cannot do transpose.
     GGML_ASSERT(nbq0 == ggml_type_size(q->type));
     GGML_ASSERT(nbk0 == ggml_type_size(k->type));
     GGML_ASSERT(nbv0 == ggml_type_size(v->type));
 
-    //> V donot transpose before.
     GGML_ASSERT(neq0 == DK);     //> q -> ne[0] == head_dim
     GGML_ASSERT(nek0 == DK);     //> k -> ne[0] == head_dim
     GGML_ASSERT(nev0 == DV);     //> v -> ne[0] == head_dim
 
-    GGML_ASSERT(neq1 == N);      //> q -> ne[1] == q_len
+    GGML_ASSERT(neq1 == SEQ_LEN);      //> q -> ne[1] == q_len
 
     // dst cannot be transposed or permuted
     GGML_ASSERT(nb0 == sizeof(float));
@@ -1220,183 +1372,265 @@ void ggml_custom_flash_attn_mixed_simple(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    // broadcast factors
-    const int64_t rk2 = neq2/nek2;     //> n_q_head / n_kv_head   | This is q_head and k_head ratio
-    const int64_t rk3 = neq3/nek3;     //> n_q_batch / n_kv_batch | This is q_batch and k_batch ratio
+    // Flash-decoding: split KV sequence across threads
+    const int64_t kv_chunk_size = (KV_LEN + nth - 1) / nth;             //> split KV sequence into nth chunks
+    const int64_t chunk_start = ith * kv_chunk_size;                    //> start of this thread's chunk
+    const int64_t chunk_end = MIN(chunk_start + kv_chunk_size, KV_LEN); //> end of this thread's chunk
+    const int64_t chunk_len = chunk_end - chunk_start;                  //> length of this thread's chunk
 
-    const int64_t rv2 = neq2/nev2;     //> n_q_head / n_v_head   | This is q_head and v_head ratio
-    const int64_t rv3 = neq3/nev3;     //> n_q_batch / n_v_batch | This is q_batch and v_batch ratio
+    // Workspace layout per thread:
+    //> K_vec = DK, V_vec = DV, result = OUTPUT_SIZE
+    const size_t OUTPUT_SIZE    = N_Q_HEADS * SEQ_LEN * DV;
+    const size_t LOCAL_MAX_SIZE = N_Q_HEADS * SEQ_LEN;
+    float * thread_workspace    = (float *) wdata + ith * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
 
-    // parallelize by q rows using ggml_vec_dot_f32
+    const int64_t rk2 = neq2 / nek2;     //> n_q_heads / n_kv_heads
+    const int64_t rv2 = neq2 / nev2;     //> n_q_heads / n_kv_heads
 
-    // total rows in q
-    const int nr = neq1*neq2*neq3;     //> number of rows, one row is one head_dim.
+    float * chunk_output    = thread_workspace;                                                                 // [N_Q_HEADS * SEQ_LEN * DV]
+    float * local_max       = thread_workspace + OUTPUT_SIZE;                                                   // [N_Q_HEADS * SEQ_LEN]
+    float * local_exp_sum   = thread_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;                                  // [N_Q_HEADS * SEQ_LEN]
+    float * temp_buffer     = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE;                              // [DV]
+    ggml_fp16_t * Q_q       = (ggml_fp16_t *)(thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV );   // [DK]
+    float * sync_buffer     = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK;            // [1]
 
-    // NOTE: Parallelize by q rows.
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
-
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
-
-    float scale         = flash_params->scale;
-    float max_bias      = flash_params->max_bias;
-    float logit_softcap = flash_params->logit_softcap;
-
-    if (logit_softcap != 0) {
-        scale /= logit_softcap;
+    // Initialize chunk outputs and log_sum_exp for all queries
+    memset(chunk_output,   0,           OUTPUT_SIZE * sizeof(float));
+    memset(local_exp_sum,  0,           LOCAL_MAX_SIZE * sizeof(float));  // FIX: Initialize exp_sum to 0
+    memset(temp_buffer,    0,           DV * sizeof(float));
+    memset(Q_q,            0,           DK * sizeof(ggml_fp16_t));
+    memset(sync_buffer,    0,           sizeof(float));
+    for (int64_t i = 0; i < LOCAL_MAX_SIZE; i++) {
+        local_max[i] = -INFINITY;
     }
 
-    const uint32_t n_head      = neq2;
-    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
+    // Flash attention parameters (use default values for now)
+    const float scale           = 1.0f / sqrtf((float)DK);
+    const float max_bias        = 0.0f;
+    const float logit_softcap   = 0.0f;
+
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(N_Q_HEADS));
 
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    ggml_type    const k_vec_dot_type      = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
-    ggml_from_float_t const q_to_vec_dot   = ggml_get_type_traits_cpu(k_vec_dot_type)->from_float;
-    ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
-    ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
+    // Handle quantization for K/V tensor
+    ggml_type const k_vec_dot_type        = ggml_get_type_traits_cpu(k->type) -> vec_dot_type;
+    ggml_from_float_t const q_to_vec_dot  = ggml_get_type_traits_cpu(k_vec_dot_type) -> from_float;
+    ggml_vec_dot_t const kq_vec_dot       = ggml_get_type_traits_cpu(k->type) -> vec_dot;
+    ggml_to_float_t const v_to_float      = ggml_get_type_traits(v->type) -> to_float;
 
-    GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
-    GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
+    // Handle mask data type - can be F32 or F16
+    const float * mp_f32 = NULL;
+    const ggml_fp16_t * mp_f16 = NULL;
+    if (mask) {
+        if (mask->type == GGML_TYPE_F32) {
+            mp_f32 = (const float *)mask->data;
+        } else if (mask->type == GGML_TYPE_F16) {
+            mp_f16 = (const ggml_fp16_t *)mask->data;
+        }
+    }
 
-    // loop over n_batch and n_head
-    for (int ir = ir0; ir < ir1; ++ir) {
-        // q indices
-        const int iq3 = ir / (neq2*neq1);                   //> batch index 
-        const int iq2 = (ir - iq3*neq2*neq1)/neq1;          //> head  index
-        const int iq1 = (ir - iq3*neq2*neq1 - iq2*neq1);    //> token index
+    // Process this chunk of KV tokens for this specific query
+    for (int64_t kv_pos = chunk_start; kv_pos < chunk_end; ++ kv_pos) {
+        for (int64_t kv_head = 0; kv_head < N_KV_HEAD; ++ kv_head) {
+            const char * k_data = (const char *) ((char *) k->data + ( kv_pos * nbk1 + kv_head * nbk2));
+            const char * v_data = (const char *) ((char *) v->data + ( kv_pos * nbv1 + kv_head * nbv2));
 
-        const uint32_t h = iq2; // head index
-        const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+            GGML_ASSERT(k_data != nullptr);
+            GGML_ASSERT(v_data != nullptr);
 
-        float S = 0.0f;      // sum
-        float M = -INFINITY; // maximum KQ value
+            const int64_t q_head_start = kv_head * rk2;       //> q_head_start = head / rk2 * rk2
+            const int64_t q_head_end   = q_head_start + rk2;  //> q_head_end = q_head_start + rk2
 
-        float       * VKQ32 = (float       *) wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
-        float       * V32   =                 (VKQ32 + 1*DV); // (temporary) FP32 V buffer
-        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
-        ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
+            GGML_ASSERT(q_head_start >= 0);
 
-        if (v->type == GGML_TYPE_F16) {
-            memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
-        } else {
-            memset(VKQ32, 0, DV*sizeof(float));
+            for (int64_t q_head = q_head_start; q_head < q_head_end; ++ q_head) {
+                for (int64_t q_pos = 0; q_pos < SEQ_LEN; ++ q_pos) {
+                    const int64_t output_offset = q_pos * N_Q_HEADS * DV + q_head * DV;
+                    const int64_t local_max_idx = q_pos * N_Q_HEADS + q_head;
+                    float * output_ptr = chunk_output + output_offset;
+
+                    // NOTE: Q MUST be F32
+                    // TODO: cache Q quant.
+                    const float * pq = (const float *) ((char *) q->data + q_pos * nbq1 + q_head * nbq2);
+                    q_to_vec_dot(pq, Q_q, DK);
+                    float s = 0.0f; //> KQ value
+                    kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+
+                    s = s * scale; // scale KQ value
+
+                    // Compute exponential for softmax
+                    float Mold = local_max[local_max_idx];
+
+                    float ms = 1.0f;
+                    float vs = 1.0f;
+
+                    if (s > Mold) {
+                        local_max[local_max_idx] = s;
+
+                        if (Mold == -INFINITY) {
+                            ms = 1.0f;
+                        } else {
+                            ms = expf(Mold - s);
+                        }
+                    } else {
+                        vs = expf(s - Mold);  // FIX: Use original Mold, not updated local_max
+                    }
+
+                    // TODO: support F16 V
+                    GGML_ASSERT(v->type == GGML_TYPE_F32);
+
+                    local_exp_sum[local_max_idx] = local_exp_sum[local_max_idx] * ms + vs;
+
+                    if (ms != 1.0f) {
+                        // NOTE: Multiply past sum by ms
+                        ggml_vec_scale_f32(DV, (float *)output_ptr, ms);
+                    }
+
+                    ggml_vec_mad_f32(DV, (float *)output_ptr, (const float *)v_data, vs);
+                }
+            }
+        }
+    } //> end of chunk
+
+    //> Barrier-free synchronization: set sync_buffer[0] to 1
+    sync_buffer[0] = 1;
+
+    // =======================================================================================
+    // BARRIER-FREE SYNCHRONIZATION: All threads must complete before thread 0 can reduce
+    // We use a simple busy-wait pattern checking if all chunks have been computed
+    // =======================================================================================
+
+    // Thread 0 waits for all other threads and performs reduction
+    if (ith == 0 && nth > 1) {
+        LLAMA_LOG_DEBUG("[mixed-kv] Starting flash-decoding reduction across %d chunks for %ld queries\n", nth, N_Q_HEADS * SEQ_LEN);
+
+        // Simple busy-wait for all threads to complete their chunk computation
+        bool all_threads_ready = false;
+        int wait_cycles = 0;
+        const int max_wait_cycles = 1000000; // Prevent infinite wait
+
+        // NOTICE: Sync points.
+        while (!all_threads_ready && wait_cycles < max_wait_cycles) {
+            all_threads_ready = true;
+            for (int t = 1; t < nth; ++t) { // Start from 1 since thread 0 is us
+                float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+
+                // Check if this thread has completed by checking its sync_buffer
+                float * t_sync_buffer = t_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK;
+                
+                // Thread is ready if it set sync_buffer[0] to 1
+                if (t_sync_buffer[0] != 1.0f) {
+                    all_threads_ready = false;
+                    break;
+                }
+            }
+            wait_cycles++;
         }
 
-        const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
+        if (wait_cycles >= max_wait_cycles) {
+            LLAMA_LOG_WARN("[mixed-kv] WARNING: thread synchronization timeout, proceeding with reduction\n");
+        }
 
-        // k indices
-        const int ik3 = iq3 / rk3;
-        const int ik2 = iq2 / rk2;
-
-        // v indices
-        const int iv3 = iq3 / rv3;
-        const int iv2 = iq2 / rv2;
-
-        //> One head of q (F32).
-        const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
-        q_to_vec_dot(pq, Q_q, DK);
-
-        // online softmax / attention
-        // loop over n_kv and n_head_kv
-        // ref: https://arxiv.org/pdf/2112.05682.pdf
-        for (int64_t ic = 0; ic < nek1; ++ic) {
-            const float mv = mp ? slope*ggml_fp16_to_fp32(mp[ic]) : 0.0f;
-            if (mv == -INFINITY) {
-                continue;
+        // Perform log-sum-exp reduction across all threads
+        for (int64_t q_head = 0; q_head < N_Q_HEADS; ++q_head) {
+            for (int64_t q_pos = 0; q_pos < SEQ_LEN; ++q_pos) {
+                const int64_t output_offset = q_pos * N_Q_HEADS * DV + q_head * DV;
+                const int64_t local_max_idx = q_pos * N_Q_HEADS + q_head;
+                
+                // Find global maximum across all threads for this query
+                float global_max = -INFINITY;
+                for (int t = 0; t < nth; ++t) {
+                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_local_max = t_workspace + OUTPUT_SIZE;
+                    
+                    if (t_local_max[local_max_idx] > global_max) {
+                        global_max = t_local_max[local_max_idx];
+                    }
+                }
+                
+                // If all threads had -INFINITY (no valid tokens), skip this query
+                if (global_max == -INFINITY) {
+                    // Zero out the output for this query
+                    float * final_output = (float *) dst->data + output_offset;
+                    memset(final_output, 0, DV * sizeof(float));
+                    continue;
+                }
+                
+                // Compute sum of exponentials with global max for numerical stability
+                float global_sum = 0.0f;
+                for (int t = 0; t < nth; ++t) {
+                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_local_max = t_workspace + OUTPUT_SIZE;
+                    float * t_local_exp_sum = t_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;
+                    
+                    if (t_local_max[local_max_idx] != -INFINITY) {
+                        // Use the actual exp_sum from the thread, adjusted for global max
+                        const float exp_sum_adjustment = expf(t_local_max[local_max_idx] - global_max);
+                        global_sum += t_local_exp_sum[local_max_idx] * exp_sum_adjustment;
+                    }
+                }
+                
+                // Normalize factor for final attention weights
+                const float norm_factor = 1.0f / global_sum;
+                
+                // Combine weighted outputs from all threads
+                float * final_output = (float *) dst->data + output_offset;
+                memset(final_output, 0, DV * sizeof(float)); // Initialize to zero
+                
+                for (int t = 0; t < nth; ++t) {
+                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_chunk_output = t_workspace;
+                    float * t_local_max = t_workspace + OUTPUT_SIZE;
+                    float * t_local_exp_sum = t_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;
+                    
+                    if (t_local_max[local_max_idx] != -INFINITY) {
+                        // Weight this thread's contribution by its corrected exponential
+                        const float exp_sum_adjustment = expf(t_local_max[local_max_idx] - global_max);
+                        const float thread_weight = t_local_exp_sum[local_max_idx] * exp_sum_adjustment * norm_factor;
+                        
+                        // Add weighted contribution to final output
+                        const float * thread_output = t_chunk_output + output_offset;
+                        ggml_vec_mad_f32(DV, final_output, thread_output, thread_weight);
+                    }
+                }
+                
+                LLAMA_LOG_DEBUG("[mixed-kv] Reduced query (head=%ld, pos=%ld): global_max=%.6f, global_sum=%.6f, norm_factor=%.6f\n", 
+                               q_head, q_pos, global_max, global_sum, norm_factor);
             }
+        }
+        
+        LLAMA_LOG_DEBUG("[mixed-kv] Flash-decoding reduction completed for %ld queries across %d threads\n", 
+                       N_Q_HEADS * SEQ_LEN, nth);
 
-            float s; // KQ value
-
-            const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
-            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
-
-            s = s*scale; // scale KQ value
-
-            if (logit_softcap != 0.0f) {
-                s = logit_softcap*tanhf(s);
-            }
-
-            s += mv; // apply mask
-
-            const float Mold = M;
-
-            float ms = 1.0f; // upon new higher max val, scale VKQ and KQ sum with this value
-            float vs = 1.0f; // post-softmax KQ value, expf(s - M)
-
-            const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
-
-            const ggml_fp16_t * v_data_f16 = (const ggml_fp16_t *) v_data;
-
-            if (v->type == GGML_TYPE_F16) {
-                if (s > M) {
-                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
-                    M = s;
-                    ms = expf(Mold - M);
-
-                    // V = V*expf(Mold - M)
-                    for (int i = 0; i < DV; ++i) {
-                        VKQ16[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(VKQ16[i])*ms);
+    } else if (nth == 1) {
+        // Single-threaded execution: process entire KV sequence and write directly to destination
+        LLAMA_LOG_DEBUG("[mixed-kv] Single-threaded flash-decoding execution for %ld queries\n", N_Q_HEADS * SEQ_LEN);
+        
+        // For single-threaded execution, normalize the accumulated outputs correctly
+        float* thread0_workspace    = (float*)wdata;
+        float* local_exp_sum        = thread0_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;
+        
+        for (int64_t q_head = 0; q_head < N_Q_HEADS; ++q_head) {
+            for (int64_t q_pos = 0; q_pos < SEQ_LEN; ++q_pos) {
+                const int64_t output_offset = q_pos * N_Q_HEADS * DV + q_head * DV;
+                const int64_t local_max_idx = q_pos * N_Q_HEADS + q_head;
+                
+                float * final_output = (float *) dst->data + output_offset;
+                float * thread_output = thread0_workspace + output_offset;
+                
+                // Normalize by the sum of exponentials to get proper softmax weights
+                if (local_exp_sum[local_max_idx] > 0.0f) {
+                    const float norm_factor = 1.0f / local_exp_sum[local_max_idx];
+                    for (int64_t d = 0; d < DV; ++d) {
+                        final_output[d] = thread_output[d] * norm_factor;
                     }
                 } else {
-                    // no new maximum, ms == 1.0f, vs != 1.0f
-                    vs = expf(s - M);
+                    // If sum is 0, set output to 0
+                    memset(final_output, 0, DV * sizeof(float));
                 }
-
-                // V += v*expf(s - M)
-                for (int i = 0; i < DV; ++i) {
-                    VKQ16[i] = ggml_fp32_to_fp16(ggml_fp16_to_fp32(VKQ16[i]) + ggml_fp16_to_fp32(v_data_f16[i])*vs);
-                }
-            } else {
-                // if (s > M) {
-                //     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
-                //     M = s;
-                //     ms = expf(Mold - M);
-
-                //     // V = V*expf(Mold - M)
-                //     ggml_vec_scale_f32(DV, VKQ32, ms);
-                // } else {
-                //     // no new maximum, ms == 1.0f, vs != 1.0f
-                //     vs = expf(s - M);
-                // }
-
-                // // V += v*expf(s - M)
-                // if (v_to_float) {
-                //     v_to_float(v_data, V32, DV);
-                //     ggml_vec_mad_f32(DV, VKQ32, V32, vs);
-                // } else {
-                //     // V is F32
-                //     ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
-                // }
-            }
-
-            S = S*ms + vs; // scale and increment sum with partial sum
-        }
-
-        if (v->type == GGML_TYPE_F16) {
-            for (int64_t d = 0; d < DV; ++d) {
-                VKQ32[d] = ggml_fp16_to_fp32(VKQ16[d]);
             }
         }
-
-        // V /= S
-        const float S_inv = 1.0f/S;
-        for (int i = 0; i < DV; ++i) {
-            VKQ32[i] *= S_inv;
-        }
-
-        // dst indices
-        const int i1 = iq1;
-        const int i2 = iq2;
-        const int i3 = iq3;
-
-        // original
-        //memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
-
-        // permute(0, 2, 1, 3)
-        memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
     }
 }

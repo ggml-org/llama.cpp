@@ -6977,11 +6977,11 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const int nth = params->nth;
 
     const int64_t DK = nek0;     //> head_dim
-    const int64_t DV = nev0;     //> head_dim 
+    const int64_t DV = nev0;     //> head_dim
     const int64_t N  = neq1;     //> q_len
 
-    GGML_ASSERT(ne0 == DV);     //> dst -> ne[0] == head_dim
-    GGML_ASSERT(ne2 == N);      //> dst -> ne[2] == q_len
+    GGML_ASSERT(ne0 == DV);      //> dst -> ne[0] == head_dim
+    GGML_ASSERT(ne2 == N);       //> dst -> ne[2] == q_len
 
     // input tensor rows must be contiguous
     //> QKV cannot do transpose.
@@ -7096,6 +7096,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 
             float s; // KQ value
 
+            //> k_data: [head_dim, kv_len, n_kv_head, n_kv_batch]
             const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
             kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
 
@@ -7128,6 +7129,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
                 }
 
                 // V += v*expf(s - M)
+                //> VKQ16 = VKQ16 + v_data * expf(s - M)
                 ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) v_data, vs);
             } else {
                 if (s > M) {
@@ -7162,7 +7164,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         }
 
         // V /= S
-        const float S_inv = 1.0f/S;
+        const float S_inv = 1.0f / S;
         ggml_vec_scale_f32(DV, VKQ32, S_inv);
 
         // dst indices
@@ -7171,7 +7173,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
         const int i3 = iq3;
 
         // original
-        //memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
+        // memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
 
         // permute(0, 2, 1, 3)
         memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
@@ -8649,15 +8651,16 @@ void ggml_compute_forward_custom(
 
     struct ggml_custom_op_params p;
     memcpy(&p, dst->op_params, sizeof(p));
-    
-    // ggml_tensor* q = dst->src[0];
-    // ggml_tensor* k = dst->src[1];
-    // ggml_tensor* v = dst->src[2];
-    
-    // ggml_set_f32(q, 1.0f);
-    // ggml_set_f32(k, 1.0f);
-    // ggml_set_f32(v, 1.0f);
-    
+
+    ggml_tensor* q = dst->src[0];
+    ggml_tensor* k = dst->src[1];
+    ggml_tensor* v = dst->src[2];
+    ggml_tensor* mask = dst->src[3];
+
+    // q = ggml_set_f32(q, 1.0f);
+    // k = ggml_set_f32(k, 1.0f);
+    // v = ggml_set_f32(v, 1.0f);
+
     p.fun(dst, params->ith, params->nth, params->wdata, params->wsize, p.userdata);
 }
 
