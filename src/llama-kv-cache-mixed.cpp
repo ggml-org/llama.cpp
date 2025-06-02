@@ -1586,11 +1586,13 @@ void ggml_custom_flash_attn_mixed_simple(
                     float * t_local_exp_sum = t_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;
                     
                     if (t_local_max[local_max_idx] != -INFINITY) {
-                        // Weight this thread's contribution by its corrected exponential
-                        const float exp_sum_adjustment = expf(t_local_max[local_max_idx] - global_max);
-                        const float thread_weight = t_local_exp_sum[local_max_idx] * exp_sum_adjustment * norm_factor;
+                        // FIXED: Correct multi-thread reduction formula
+                        // final_output = sum(chunk_output_t * exp(local_max_t - global_max)) / global_sum
+                        // Each thread contributes: chunk_output_t * exp(local_max_t - global_max)
+                        const float max_adjustment = expf(t_local_max[local_max_idx] - global_max);
+                        const float thread_weight = max_adjustment / global_sum;
                         
-                        // Add weighted contribution to final output
+                        // Add this thread's adjusted contribution
                         const float * thread_output = t_chunk_output + output_offset;
                         ggml_vec_mad_f32(DV, final_output, thread_output, thread_weight);
                     }

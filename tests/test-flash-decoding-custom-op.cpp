@@ -65,14 +65,17 @@ int main() {
     printf("Testing Flash-Decoding Custom Operation vs Standard Flash Attention\n");
 
     // Test parameters - reduce KV length to minimize F16 accumulation errors
-    const int head_dim  = 64;
-    const int n_heads   = 1;
+    const int head_dim  = 32;
+    const int n_heads   = 4;
+    const int n_kv_heads = 1;
     const int seq_len   = 1;     // Q length
     const int kv_len    = 64;    // K/V length - reduced for better F16 precision
-    const int n_threads = 1;
+    const int n_threads = 4;
 
     printf("Test Parameters:\n");
-    printf("  head_dim=%d, n_heads=%d, seq_len=%d\n", head_dim, n_heads, seq_len);
+    printf("  head_dim=%d, n_heads=%d, n_kv_heads=%d, seq_len=%d, kv_len=%d\n", 
+           head_dim, n_heads, n_kv_heads, seq_len, kv_len);
+    printf("  GQA ratio: %d query heads per KV head\n", n_heads / n_kv_heads);
 
     // Initialize ggml context
     const size_t ctx_size = 256*1024*1024; // 256MB for context
@@ -88,14 +91,12 @@ int main() {
         return 1;
     }
 
-    printf("Created input tensors and filled with random data\n");
-
     // Create tensors for custom flash attention (our format)
     // Format: [head_dim, seq_len, n_heads, 1] for Q, K, V
-    // Based on mixed implementation: Q=F32, K=F16, V=F32
+    // Based on mixed implementation: Q=F32, K=F16, V=F32, mask=F32
     ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, seq_len, n_heads, 1);
-    ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_heads, 1);  
-    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, kv_len,  n_heads, 1);
+    ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_kv_heads, 1);  
+    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, kv_len,  n_kv_heads, 1);
 
     // Create mask tensor for custom flash attention
     ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kv_len, GGML_PAD(seq_len, 256));
@@ -188,34 +189,34 @@ int main() {
     // Create tensors for standard flash attention
     // Standard format: [head_dim, seq_len, n_heads, batch_size] for Q, K, V
     ggml_tensor * q_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim,  seq_len,    n_heads,    1);
-    ggml_tensor * k_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_heads,    1);
-    ggml_tensor * v_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_heads,    1);
+    ggml_tensor * k_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,    1);
+    ggml_tensor * v_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,    1);
 
-    // Convert F32 data to F16 format and rearrange dimensions
-    float* q_f32 = (float*)q->data;
+    // Convert data types and rearrange dimensions for GQA
+    float* q_f32_src = (float*)q->data;
     ggml_fp16_t* k_f16_src = (ggml_fp16_t*)k->data;  // K is already F16
     float* v_f32 = (float*)v->data;
-    ggml_fp16_t* q_f16 = (ggml_fp16_t*)q_std->data;
+    float* q_f32_std = (float*)q_std->data;  // Q_std is now F32
     ggml_fp16_t* k_f16 = (ggml_fp16_t*)k_std->data;
     ggml_fp16_t* v_f16 = (ggml_fp16_t*)v_std->data;
 
-    // Copy and convert Q: [head_dim, seq_len, n_heads] -> [head_dim, n_heads, seq_len]
+    // Copy Q: [head_dim, seq_len, n_heads] -> [head_dim, seq_len, n_heads] (F32 -> F32, no conversion needed)
     for (int h = 0; h < n_heads; h++) {
         for (int t = 0; t < seq_len; t++) {
             for (int d = 0; d < head_dim; d++) {
                 // Source: [d + t*head_dim + h*head_dim*seq_len]
-                // Dest:   [d + h*head_dim + t*head_dim*n_heads]
+                // Dest:   [d + t*head_dim + h*head_dim*seq_len] (same layout for now)
                 int src_idx = d + t * head_dim + h * head_dim * seq_len;
-                int dst_idx = d + h * head_dim + t * head_dim * n_heads;
-                q_f32[dst_idx] = q_f32[src_idx];
+                int dst_idx = d + t * head_dim + h * head_dim * seq_len;
+                q_f32_std[dst_idx] = q_f32_src[src_idx];
             }
         }
     }
 
-    // Copy and convert K,V: [head_dim, kv_len, n_heads] -> [head_dim, kv_len, n_heads]
-    // For K and V, we need to use kv_len, not seq_len
-    for (int h = 0; h < n_heads; h++) {
-        for (int t = 0; t < kv_len; t++) {  // Use kv_len instead of seq_len
+    // Copy and convert K,V: [head_dim, kv_len, n_kv_heads] -> [head_dim, kv_len, n_kv_heads]
+    // For K and V in GQA, we need to use n_kv_heads (not n_heads)
+    for (int h = 0; h < n_kv_heads; h++) {  // Use n_kv_heads for GQA
+        for (int t = 0; t < kv_len; t++) {
             for (int d = 0; d < head_dim; d++) {
                 // Source: [d + t*head_dim + h*head_dim*kv_len]
                 // Dest:   [d + t*head_dim + h*head_dim*kv_len]  (same layout)
@@ -226,20 +227,6 @@ int main() {
             }
         }
     }
-
-    printf("Converted tensors to F16 format for standard flash attention\n");
-    printf("Q_std shape: [%ld, %ld, %ld, %ld]\n", q_std->ne[0], q_std->ne[1], q_std->ne[2], q_std->ne[3]);
-    printf("K_std shape: [%ld, %ld, %ld, %ld]\n", k_std->ne[0], k_std->ne[1], k_std->ne[2], k_std->ne[3]);
-    printf("V_std shape: [%ld, %ld, %ld, %ld]\n", v_std->ne[0], v_std->ne[1], v_std->ne[2], v_std->ne[3]);
-    printf("Mask shape:  [%ld, %ld]\n", mask->ne[0], mask->ne[1]);
-    
-    // Debug: Check data integrity
-    printf("Q_std first few values: ");
-    ggml_fp16_t* q_debug = (ggml_fp16_t*)q_std->data;
-    for (int i = 0; i < 5; i++) {
-        printf("%.3f ", ggml_fp16_to_fp32(q_debug[i]));
-    }
-    printf("\n");
 
     const float scale = 1.0f / sqrtf((float)head_dim);
 
