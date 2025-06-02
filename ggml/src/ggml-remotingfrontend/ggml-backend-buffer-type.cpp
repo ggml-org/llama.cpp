@@ -16,10 +16,12 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   context->gpu = gpu;
   context->apir_context = apir_buffer_type_alloc_buffer(gpu, buft, size);
   context->base = NULL;
+  context->is_host_buffer = false;
+  context->is_from_ptr = false;
 
   ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
   INFO("##");
-  INFO("## %s(%llx) --> %p", __func__, size, buffer);
+  INFO("## %s(%llx) --> %p <---------------", __func__, size, buffer);
   INFO("##\n");
 
   return buffer;

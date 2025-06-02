@@ -102,8 +102,8 @@ ggml_backend_remoting_device_get_props(ggml_backend_dev_t dev, struct ggml_backe
   // ignore the actual backend answers and set it as we provide it in
   // the API Remoting frontend
   props->caps.async = false;
-  props->caps.host_buffer = true;
-  props->caps.buffer_from_host_ptr = false;
+  props->caps.host_buffer = false;
+  props->caps.buffer_from_host_ptr = true;
   props->caps.events = false;
 #endif
 

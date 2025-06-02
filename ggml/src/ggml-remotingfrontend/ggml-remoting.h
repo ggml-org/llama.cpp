@@ -94,6 +94,7 @@ struct ggml_backend_remoting_buffer_context {
 
   void *base;
 
+  bool is_host_buffer;
   bool is_from_ptr;
 };
 
