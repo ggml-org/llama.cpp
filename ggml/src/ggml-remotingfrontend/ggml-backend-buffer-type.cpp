@@ -70,4 +70,13 @@ const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_type_interface = {
   /* .is_host          = */ NULL,
 };
 
+const ggml_backend_buffer_type_i ggml_backend_remoting_buffer_from_ptr_type_interface = {
+  /* .get_name         = */ ggml_backend_remoting_buffer_type_get_name,
+  /* .alloc_buffer     = */ NULL,
+  /* .get_alignment    = */ ggml_backend_remoting_buffer_type_get_alignment,
+  /* .get_max_size     = */ ggml_backend_remoting_buffer_type_get_max_size,
+  /* .get_alloc_size   = */ NULL, // defaults to ggml_nbytes
+  /* .is_host          = */ NULL,
+};
+
 /****************************************************************************************/
