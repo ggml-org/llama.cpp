@@ -425,22 +425,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
     // get metadata as string
     for (int i = 0; i < gguf_get_n_kv(ctx); i++) {
-        const char * name = gguf_get_key(ctx, i);
         gguf_type type = gguf_get_kv_type(ctx, i);
-
         if (type == GGUF_TYPE_ARRAY) {
-            if (LLM_KV(arch)(LLM_KV_CLASSIFIER_OUTPUT_LABELS) == name) {
-                const size_t n_items = gguf_get_arr_n(ctx, i);
-
-                for (size_t j = 0; j < n_items; j++) {
-                    const std::string value = gguf_get_arr_str(ctx, i, j);
-                    classifier_labels.emplace_back(value);
-                }
-            }
-        } else {
-            const std::string value = gguf_kv_to_str(ctx, i);
-            gguf_kv.emplace(name, value);
+            continue;
         }
+        const char * name = gguf_get_key(ctx, i);
+        const std::string value = gguf_kv_to_str(ctx, i);
+        gguf_kv.emplace(name, value);
     }
 
     // get general kv
@@ -553,6 +544,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_VOCAB_SIZE, n_vocab, false) || ml.get_arr_n(LLM_KV_TOKENIZER_LIST, n_vocab, false);
 
     // for classifier models
+    ml.get_arr(LLM_KV_CLASSIFIER_OUTPUT_LABELS, classifier_labels, false);
     if (!classifier_labels.empty()) {
         hparams.n_cls_out = classifier_labels.size();
     }
