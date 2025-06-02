@@ -357,10 +357,10 @@ namespace GGUFMeta {
         }
 
         if constexpr (std::is_same<T, std::string>::value) {
-            const size_t n_items = gguf_get_arr_n(meta.get(), kid);
+            const size_t n_items = gguf_get_arr_n(ctx, kid);
 
             for (size_t i = 0; i < n_items; i++) {
-                const T value = gguf_get_arr_str(meta.get(), kid, i);
+                const T value = gguf_get_arr_str(ctx, kid, i);
                 result[i] = value;
             }
         } else {
