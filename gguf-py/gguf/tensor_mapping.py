@@ -157,6 +157,7 @@ class TensorNameMap:
             "h.{bid}.attn.c_attn",                                                 # gpt2
             "transformer.h.{bid}.mixer.Wqkv",                                      # phi2
             "encoder.layers.{bid}.attn.Wqkv",                                      # nomic-bert
+            "encoder.layers.{bid}.mixer.Wqkv",                                     # jina
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
@@ -168,6 +169,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.q_proj_no_perm",               # llama-custom
             "layers.{bid}.attention.wq",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.query",                  # bert
+            "transformer.layer.{bid}.attention.q_lin",                   # distillbert
             "transformer.h.{bid}.attn.q_proj",                           # gpt-j
             "model.layers.layers.{bid}.self_attn.q_proj",                # plamo
             "model.layers.{bid}.attention.wq",                           # internlm2
@@ -182,6 +184,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.k_proj_no_perm",             # llama-custom
             "layers.{bid}.attention.wk",                               # llama-pth
             "encoder.layer.{bid}.attention.self.key",                  # bert
+            "transformer.layer.{bid}.attention.k_lin",                 # distillbert
             "transformer.h.{bid}.attn.k_proj",                         # gpt-j
             "transformer.h.{bid}.attn.k",                              # refact
             "model.layers.layers.{bid}.self_attn.k_proj",              # plamo
@@ -196,6 +199,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
             "layers.{bid}.attention.wv",                                 # llama-pth
             "encoder.layer.{bid}.attention.self.value",                  # bert
+            "transformer.layer.{bid}.attention.v_lin",                   # distillbert
             "transformer.h.{bid}.attn.v_proj",                           # gpt-j
             "transformer.h.{bid}.attn.v",                                # refact
             "model.layers.layers.{bid}.self_attn.v_proj",                # plamo
@@ -216,6 +220,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
+            "transformer.layer.{bid}.attention.out_lin",                    # distillbert
             "transformer.h.{bid}.attn.out_proj",                            # gpt-j
             "language_model.encoder.layers.{bid}.self_attention.dense",     # persimmon
             "model.layers.{bid}.self_attn.dense",                           # persimmon
@@ -224,6 +229,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.self_attn.o_proj",                   # plamo
             "model.layers.{bid}.attention.wo",                              # internlm2
             "encoder.layers.{bid}.attn.out_proj",                           # nomic-bert
+            "encoder.layers.{bid}.mixer.out_proj",                          # jina
             "transformer.decoder_layer.{bid}.multi_head_attention.linear",  # Grok
             "transformer.blocks.{bid}.norm_attn_norm.attn.out_proj",        # dbrx
             "encoder.layers.{bid}.self_attention.dense",                    # chatglm
@@ -235,6 +241,7 @@ class TensorNameMap:
         # Attention output norm
         MODEL_TENSOR.ATTN_OUT_NORM: (
             "encoder.layer.{bid}.attention.output.LayerNorm",  # bert
+            "transformer.layer.{bid}.sa_layer_norm",           # distillbert
             "encoder.layers.{bid}.norm1",                      # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_1",      # Grok
             "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
@@ -311,6 +318,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.up_proj",                         # llama-hf refact nemotron olmo2
             "layers.{bid}.feed_forward.w3",                           # llama-pth
             "encoder.layer.{bid}.intermediate.dense",                 # bert
+            "transformer.layer.{bid}.ffn.lin1",                       # distillbert
             "transformer.h.{bid}.mlp.fc_in",                          # gpt-j
             "transformer.h.{bid}.mlp.linear_3",                       # refact
             "language_model.encoder.layers.{bid}.mlp.dense_h_to_4h",  # persimmon
@@ -394,6 +402,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.down_proj",                       # llama-hf nemotron olmo2
             "layers.{bid}.feed_forward.w2",                           # llama-pth
             "encoder.layer.{bid}.output.dense",                       # bert
+            "transformer.layer.{bid}.ffn.lin2",                       # distillbert
             "transformer.h.{bid}.mlp.fc_out",                         # gpt-j
             "language_model.encoder.layers.{bid}.mlp.dense_4h_to_h",  # persimmon
             "model.layers.{bid}.mlp.dense_4h_to_h",                   # persimmon
@@ -455,6 +464,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.LAYER_OUT_NORM: (
             "encoder.layer.{bid}.output.LayerNorm",         # bert
+            "transformer.layer.{bid}.output_layer_norm",    # distillbert
             "encoder.layers.{bid}.norm2",                   # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_3",   # Grok
             "encoder.layer.{bid}.mlp.layernorm",            # jina-bert-v2
@@ -825,6 +835,7 @@ class TensorNameMap:
         MODEL_TENSOR.CLS: (
             "classifier",       # jina
             "classifier.dense", # roberta
+            "pre_classifier",   # distillbert
         ),
 
         MODEL_TENSOR.CLS_OUT: (
@@ -902,7 +913,6 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MMPROJ_FC: (
             "model.connector.modality_projection.proj", # SmolVLM
-            "multi_modal_projector.linear_1", # llama 4
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (

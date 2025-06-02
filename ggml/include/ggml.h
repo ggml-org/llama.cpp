@@ -2095,9 +2095,6 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_graph_get_grad    (const struct ggml_cgraph * cgraph, const struct ggml_tensor * node);
     GGML_API struct ggml_tensor * ggml_graph_get_grad_acc(const struct ggml_cgraph * cgraph, const struct ggml_tensor * node);
 
-    GGML_API void                 ggml_graph_export(const struct ggml_cgraph * cgraph, const char * fname);
-    GGML_API struct ggml_cgraph * ggml_graph_import(const char * fname, struct ggml_context ** ctx_data, struct ggml_context ** ctx_eval);
-
     // print info and performance information for the graph
     GGML_API void ggml_graph_print(const struct ggml_cgraph * cgraph);
 
@@ -2181,6 +2178,7 @@ extern "C" {
 
     // scheduling priorities
     enum ggml_sched_priority {
+        GGML_SCHED_PRIO_LOW = -1,
         GGML_SCHED_PRIO_NORMAL,
         GGML_SCHED_PRIO_MEDIUM,
         GGML_SCHED_PRIO_HIGH,

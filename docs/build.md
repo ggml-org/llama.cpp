@@ -63,6 +63,7 @@ cmake --build build --config Release
       cmake --preset x64-windows-llvm-release
       cmake --build build-x64-windows-llvm-release
       ```
+- Curl usage is enabled by default and can be turned off with `-DLLAMA_CURL=OFF`. Otherwise you need to install development libraries for libcurl.
 
 ## BLAS Build
 

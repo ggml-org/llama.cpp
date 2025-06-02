@@ -2,8 +2,9 @@
 
 #include "chat.h"
 #include "json-partial.h"
-#include "json.hpp"
 #include "regex-partial.h"
+
+#include <nlohmann/json.hpp>
 
 #include <optional>
 #include <string>

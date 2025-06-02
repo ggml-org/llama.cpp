@@ -1,27 +1,4 @@
-// fix problem with std::min and std::max
-#if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-#   define NOMINMAX
-#endif
-#include <windows.h>
-#endif
-
 #include "mtmd-audio.h"
-
-//#define MTMD_AUDIO_DEBUG
-
-#define MINIAUDIO_IMPLEMENTATION
-#ifndef MTMD_AUDIO_DEBUG
-#   define MA_NO_ENCODING
-#endif
-#define MA_NO_DEVICE_IO
-#define MA_NO_RESOURCE_MANAGER
-#define MA_NO_NODE_GRAPH
-#define MA_NO_ENGINE
-#define MA_NO_GENERATION
-#define MA_API static
-#include "miniaudio.h"
 
 #define _USE_MATH_DEFINES // for M_PI
 #include <cmath>
@@ -357,69 +334,6 @@ bool preprocess_audio(
 }
 
 } // namespace whisper_preprocessor
-
-
-namespace audio_helpers {
-
-bool is_audio_file(const char * buf, size_t len) {
-    if (len < 12) {
-        return false;
-    }
-
-    // RIFF ref: https://en.wikipedia.org/wiki/Resource_Interchange_File_Format
-    // WAV ref: https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
-    bool is_wav = memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WAVE", 4) == 0;
-    bool is_mp3 = len >= 3 && (
-        memcmp(buf, "ID3", 3) == 0 ||
-        // Check for MPEG sync word (simplified check)
-        ((unsigned char)buf[0] == 0xFF && ((unsigned char)buf[1] & 0xE0) == 0xE0)
-    );
-    bool is_flac = memcmp(buf, "fLaC", 4) == 0;
-
-    return is_wav || is_mp3 || is_flac;
-}
-
-// returns true if the buffer is a valid audio file
-bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int target_sampler_rate, std::vector<float> & pcmf32_mono) {
-    ma_result result;
-    const int channels = 1;
-    ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_f32, channels, target_sampler_rate);
-    ma_decoder decoder;
-
-    result = ma_decoder_init_memory(buf_in, len, &decoder_config, &decoder);
-    if (result != MA_SUCCESS) {
-        return false;
-    }
-
-    ma_uint64 frame_count;
-    ma_uint64 frames_read;
-    result = ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count);
-    if (result != MA_SUCCESS) {
-        ma_decoder_uninit(&decoder);
-        return false;
-    }
-
-    pcmf32_mono.resize(frame_count);
-    result = ma_decoder_read_pcm_frames(&decoder, pcmf32_mono.data(), frame_count, &frames_read);
-    if (result != MA_SUCCESS) {
-        ma_decoder_uninit(&decoder);
-        return false;
-    }
-
-#ifdef MTMD_AUDIO_DEBUG
-    // save audio to wav file
-    ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_f32, 1, target_sampler_rate);
-    ma_encoder encoder;
-    ma_encoder_init_file("output.wav", &config, &encoder);
-    ma_encoder_write_pcm_frames(&encoder, pcmf32_mono.data(), pcmf32_mono.size(), &frames_read);
-    ma_encoder_uninit(&encoder);
-#endif
-
-    ma_decoder_uninit(&decoder);
-    return true;
-}
-
-} // namespace wav_utils
 
 
 // precalculated mel filter banks

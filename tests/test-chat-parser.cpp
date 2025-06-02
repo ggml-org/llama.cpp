@@ -7,15 +7,12 @@
 //
 #include <exception>
 #include <iostream>
-#include <json.hpp>
 #include <string>
 
 #include "chat-parser.h"
 #include "common.h"
 #include "log.h"
 #include "regex-partial.h"
-
-using json = nlohmann::ordered_json;
 
 template <class T>
 static void assert_equals(const T & expected, const T & actual) {

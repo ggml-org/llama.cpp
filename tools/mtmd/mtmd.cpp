@@ -819,53 +819,12 @@ bool mtmd_support_audio(mtmd_context * ctx) {
     return ctx->ctx_a != nullptr;
 }
 
-// these 2 helpers below use internal clip_image_u8_ptr,
-// so unfortunately they cannot moved to mtmd-helper.h
-// however, in theory, user can decode image file to bitmap using
-// whichever library they want, and then use mtmd_bitmap_init() to create bitmap
-
-mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(const unsigned char * buf, size_t len) {
-    if (audio_helpers::is_audio_file((const char *)buf, len)) {
-        std::vector<float> pcmf32;
-        if (!audio_helpers::decode_audio_from_buf(buf, len, COMMON_SAMPLE_RATE, pcmf32)) {
-            LOG_ERR("Unable to read WAV audio file from buffer\n");
-            return nullptr;
-        }
-        return mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
+int mtmd_get_audio_bitrate(mtmd_context * ctx) {
+    if (!ctx->ctx_a) {
+        return -1;
     }
-
-    clip_image_u8_ptr img_u8(clip_image_u8_init());
-    bool ok = clip_image_load_from_bytes(buf, len, img_u8.get());
-    if (!ok) {
-        LOG_ERR("Unable to load image from buffer\n");
-        return nullptr;
-    }
-    uint32_t nx, ny;
-    unsigned char * data = clip_image_u8_get_data(img_u8.get(), &nx, &ny);
-    return mtmd_bitmap_init(nx, ny, data);
-}
-
-mtmd_bitmap * mtmd_helper_bitmap_init_from_file(const char * fname) {
-    std::vector<unsigned char> buf;
-    FILE * f = fopen(fname, "rb");
-    if (!f) {
-        LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
-        return nullptr;
-    }
-
-    fseek(f, 0, SEEK_END);
-    long file_size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    buf.resize(file_size);
-
-    size_t n_read = fread(buf.data(), 1, file_size, f);
-    fclose(f);
-    if (n_read != (size_t)file_size) {
-        LOG_ERR("Failed to read entire file %s", fname);
-        return nullptr;
-    }
-
-    return mtmd_helper_bitmap_init_from_buf(buf.data(), buf.size());
+    // for now, we assume that all audio models have the same bitrate
+    return 16000; // 16kHz
 }
 
 //

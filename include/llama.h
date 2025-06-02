@@ -259,9 +259,9 @@ extern "C" {
         llama_token  *  token;
         float        *  embd;
         llama_pos    *  pos;
-        int32_t      *  n_seq_id;
-        llama_seq_id ** seq_id;
-        int8_t       *  logits; // TODO: rename this to "output"
+        int32_t      *  n_seq_id; // TODO: remove, should belong to only 1 sequence
+        llama_seq_id ** seq_id;   // TODO: become llama_seq_id * seq_id;
+        int8_t       *  logits;   // TODO: rename this to "output"
     } llama_batch;
 
     enum llama_model_kv_override_type {
@@ -366,6 +366,8 @@ extern "C" {
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+                          // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
+                          //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573
     };
 
     // model quantization parameters
@@ -502,6 +504,7 @@ extern "C" {
     LLAMA_API int32_t llama_model_n_layer    (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head     (const struct llama_model * model);
     LLAMA_API int32_t llama_model_n_head_kv  (const struct llama_model * model);
+    LLAMA_API int32_t llama_model_n_swa      (const struct llama_model * model);
 
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
@@ -652,7 +655,6 @@ extern "C" {
     // Adds relative position "delta" to all tokens that belong to the specified sequence and have positions in [p0, p1)
     // If the KV cache is RoPEd, the KV data is updated accordingly:
     //   - lazily on next llama_decode()
-    //   - explicitly with llama_kv_self_update()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
     LLAMA_API void llama_kv_self_seq_add(
@@ -665,7 +667,6 @@ extern "C" {
     // Integer division of the positions by factor of `d > 1`
     // If the KV cache is RoPEd, the KV data is updated accordingly:
     //   - lazily on next llama_decode()
-    //   - explicitly with llama_kv_self_update()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
     LLAMA_API void llama_kv_self_seq_div(
@@ -677,12 +678,14 @@ extern "C" {
 
     // Returns the smallest position present in the KV cache for the specified sequence
     // This is typically non-zero only for SWA caches
+    // Note that all positions in the range [pos_min, pos_max] are guaranteed to be present in the KV cache
     // Return -1 if the sequence is empty
     LLAMA_API llama_pos llama_kv_self_seq_pos_min(
             struct llama_context * ctx,
                     llama_seq_id   seq_id);
 
     // Returns the largest position present in the KV cache for the specified sequence
+    // Note that all positions in the range [pos_min, pos_max] are guaranteed to be present in the KV cache
     // Return -1 if the sequence is empty
     LLAMA_API llama_pos llama_kv_self_seq_pos_max(
             struct llama_context * ctx,
@@ -691,14 +694,15 @@ extern "C" {
     // Defragment the KV cache
     // This will be applied:
     //   - lazily on next llama_decode()
-    //   - explicitly with llama_kv_self_update()
-    LLAMA_API void llama_kv_self_defrag(struct llama_context * ctx);
+    LLAMA_API DEPRECATED(void llama_kv_self_defrag(struct llama_context * ctx),
+            "simply remove this call, the context will automatically decide when to do a defragmentation based on 'defrag_thold'");
 
     // Check if the context supports KV cache shifting
     LLAMA_API bool llama_kv_self_can_shift(const struct llama_context * ctx);
 
     // Apply the KV cache updates (such as K-shifts, defragmentation, etc.)
-    LLAMA_API void llama_kv_self_update(struct llama_context * ctx);
+    LLAMA_API DEPRECATED(void llama_kv_self_update(struct llama_context * ctx),
+            "simply remove this call, updates are applied lazily on the next llama_decode()");
 
     //
     // State / sessions

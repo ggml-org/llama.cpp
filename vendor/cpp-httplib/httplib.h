@@ -8,7 +8,7 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.20.0"
+#define CPPHTTPLIB_VERSION "0.20.1"
 
 /*
  * Configuration
@@ -143,6 +143,10 @@
 
 #ifndef CPPHTTPLIB_LISTEN_BACKLOG
 #define CPPHTTPLIB_LISTEN_BACKLOG 5
+#endif
+
+#ifndef CPPHTTPLIB_MAX_LINE_LENGTH
+#define CPPHTTPLIB_MAX_LINE_LENGTH 32768
 #endif
 
 /*
@@ -3067,6 +3071,11 @@ inline bool stream_line_reader::getline() {
 #endif
 
   for (size_t i = 0;; i++) {
+    if (size() >= CPPHTTPLIB_MAX_LINE_LENGTH) {
+      // Treat exceptionally long lines as an error to
+      // prevent infinite loops/memory exhaustion
+      return false;
+    }
     char byte;
     auto n = strm_.read(&byte, 1);
 
@@ -6055,6 +6064,8 @@ inline void calc_actual_timeout(time_t max_timeout_msec, time_t duration_msec,
   auto actual_timeout_msec =
       (std::min)(max_timeout_msec - duration_msec, timeout_msec);
 
+  if (actual_timeout_msec < 0) { actual_timeout_msec = 0; }
+
   actual_timeout_sec = actual_timeout_msec / 1000;
   actual_timeout_usec = (actual_timeout_msec % 1000) * 1000;
 }
@@ -7327,8 +7338,9 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
   }
 
   // Setup `is_connection_closed` method
-  req.is_connection_closed = [&]() {
-    return !detail::is_socket_alive(strm.socket());
+  auto sock = strm.socket();
+  req.is_connection_closed = [sock]() {
+    return !detail::is_socket_alive(sock);
   };
 
   // Routing

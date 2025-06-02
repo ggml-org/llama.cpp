@@ -11,9 +11,6 @@
 #include "ggml-backend.h"
 #include "gguf.h"
 
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-
 #include <cassert>
 #include <cmath>
 #include <cstdlib>
@@ -2784,30 +2781,6 @@ void clip_build_img_from_pixels(const unsigned char * rgb_pixels, int nx, int ny
     img->ny = ny;
     img->buf.resize(3 * nx * ny);
     memcpy(img->buf.data(), rgb_pixels, img->buf.size());
-}
-
-bool clip_image_load_from_file(const char * fname, clip_image_u8 * img) {
-    int nx, ny, nc;
-    auto * data = stbi_load(fname, &nx, &ny, &nc, 3);
-    if (!data) {
-        LOG_ERR("%s: failed to load image '%s'\n", __func__, fname);
-        return false;
-    }
-    clip_build_img_from_pixels(data, nx, ny, img);
-    stbi_image_free(data);
-    return true;
-}
-
-bool clip_image_load_from_bytes(const unsigned char * bytes, size_t bytes_length, struct clip_image_u8 * img) {
-    int nx, ny, nc;
-    auto * data = stbi_load_from_memory(bytes, bytes_length, &nx, &ny, &nc, 3);
-    if (!data) {
-        LOG_ERR("%s: failed to decode image bytes\n", __func__);
-        return false;
-    }
-    clip_build_img_from_pixels(data, nx, ny, img);
-    stbi_image_free(data);
-    return true;
 }
 
 // Normalize image to float32 - careful with pytorch .to(model.device, dtype=torch.float16) - this sometimes reduces precision (32>16>32), sometimes not

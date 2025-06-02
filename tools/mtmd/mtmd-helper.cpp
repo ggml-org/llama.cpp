@@ -1,9 +1,36 @@
+// fix problem with std::min and std::max
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#ifndef NOMINMAX
+#   define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #include "llama.h"
 
 #include <algorithm>
 #include <cinttypes>
 #include <vector>
+
+//#define MTMD_AUDIO_DEBUG
+
+#define MINIAUDIO_IMPLEMENTATION
+#ifndef MTMD_AUDIO_DEBUG
+#   define MA_NO_ENCODING
+#endif
+#define MA_NO_DEVICE_IO
+#define MA_NO_RESOURCE_MANAGER
+#define MA_NO_NODE_GRAPH
+#define MA_NO_ENGINE
+#define MA_NO_GENERATION
+#define MA_API static
+#include "miniaudio/miniaudio.h"
+
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb/stb_image.h"
 
 #define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
@@ -284,6 +311,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         GGML_ABORT("chunk type not supported");
     }
 
+    llama_batch_free(text_batch);
     return 0;
 }
 
@@ -314,4 +342,119 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
     }
 
     return 0;
+}
+
+namespace audio_helpers {
+
+static bool is_audio_file(const char * buf, size_t len) {
+    if (len < 12) {
+        return false;
+    }
+
+    // RIFF ref: https://en.wikipedia.org/wiki/Resource_Interchange_File_Format
+    // WAV ref: https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
+    bool is_wav = memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WAVE", 4) == 0;
+    bool is_mp3 = len >= 3 && (
+        memcmp(buf, "ID3", 3) == 0 ||
+        // Check for MPEG sync word (simplified check)
+        ((unsigned char)buf[0] == 0xFF && ((unsigned char)buf[1] & 0xE0) == 0xE0)
+    );
+    bool is_flac = memcmp(buf, "fLaC", 4) == 0;
+
+    return is_wav || is_mp3 || is_flac;
+}
+
+// returns true if the buffer is a valid audio file
+static bool decode_audio_from_buf(const unsigned char * buf_in, size_t len, int target_sampler_rate, std::vector<float> & pcmf32_mono) {
+    ma_result result;
+    const int channels = 1;
+    ma_decoder_config decoder_config = ma_decoder_config_init(ma_format_f32, channels, target_sampler_rate);
+    ma_decoder decoder;
+
+    result = ma_decoder_init_memory(buf_in, len, &decoder_config, &decoder);
+    if (result != MA_SUCCESS) {
+        return false;
+    }
+
+    ma_uint64 frame_count;
+    ma_uint64 frames_read;
+    result = ma_decoder_get_length_in_pcm_frames(&decoder, &frame_count);
+    if (result != MA_SUCCESS) {
+        ma_decoder_uninit(&decoder);
+        return false;
+    }
+
+    pcmf32_mono.resize(frame_count);
+    result = ma_decoder_read_pcm_frames(&decoder, pcmf32_mono.data(), frame_count, &frames_read);
+    if (result != MA_SUCCESS) {
+        ma_decoder_uninit(&decoder);
+        return false;
+    }
+
+#ifdef MTMD_AUDIO_DEBUG
+    // save audio to wav file
+    ma_encoder_config config = ma_encoder_config_init(ma_encoding_format_wav, ma_format_f32, 1, target_sampler_rate);
+    ma_encoder encoder;
+    ma_encoder_init_file("output.wav", &config, &encoder);
+    ma_encoder_write_pcm_frames(&encoder, pcmf32_mono.data(), pcmf32_mono.size(), &frames_read);
+    ma_encoder_uninit(&encoder);
+#endif
+
+    ma_decoder_uninit(&decoder);
+    return true;
+}
+
+} // namespace audio_helpers
+
+mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigned char * buf, size_t len) {
+    if (audio_helpers::is_audio_file((const char *)buf, len)) {
+        std::vector<float> pcmf32;
+        int bitrate = mtmd_get_audio_bitrate(ctx);
+        if (bitrate < 0) {
+            LOG_ERR("This model does not support audio input\n");
+            return nullptr;
+        }
+        if (!audio_helpers::decode_audio_from_buf(buf, len, bitrate, pcmf32)) {
+            LOG_ERR("Unable to read WAV audio file from buffer\n");
+            return nullptr;
+        }
+        return mtmd_bitmap_init_from_audio(pcmf32.size(), pcmf32.data());
+    }
+
+    // otherwise, we assume it's an image
+    mtmd_bitmap * result = nullptr;
+    {
+        int nx, ny, nc;
+        auto * data = stbi_load_from_memory(buf, len, &nx, &ny, &nc, 3);
+        if (!data) {
+            LOG_ERR("%s: failed to decode image bytes\n", __func__);
+            return nullptr;
+        }
+        result = mtmd_bitmap_init(nx, ny, data);
+        stbi_image_free(data);
+    }
+    return result;
+}
+
+mtmd_bitmap * mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname) {
+    std::vector<unsigned char> buf;
+    FILE * f = fopen(fname, "rb");
+    if (!f) {
+        LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
+        return nullptr;
+    }
+
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    buf.resize(file_size);
+
+    size_t n_read = fread(buf.data(), 1, file_size, f);
+    fclose(f);
+    if (n_read != (size_t)file_size) {
+        LOG_ERR("Failed to read entire file %s", fname);
+        return nullptr;
+    }
+
+    return mtmd_helper_bitmap_init_from_buf(ctx, buf.data(), buf.size());
 }

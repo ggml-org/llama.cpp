@@ -5,21 +5,24 @@ import { AppContextProvider, useAppContext } from './utils/app.context';
 import ChatScreen from './components/ChatScreen';
 import SettingDialog from './components/SettingDialog';
 import { Toaster } from 'react-hot-toast';
+import { ModalProvider } from './components/ModalProvider';
 
 function App() {
   return (
-    <HashRouter>
-      <div className="flex flex-row drawer lg:drawer-open">
-        <AppContextProvider>
-          <Routes>
-            <Route element={<AppLayout />}>
-              <Route path="/chat/:convId" element={<ChatScreen />} />
-              <Route path="*" element={<ChatScreen />} />
-            </Route>
-          </Routes>
-        </AppContextProvider>
-      </div>
-    </HashRouter>
+    <ModalProvider>
+      <HashRouter>
+        <div className="flex flex-row drawer lg:drawer-open">
+          <AppContextProvider>
+            <Routes>
+              <Route element={<AppLayout />}>
+                <Route path="/chat/:convId" element={<ChatScreen />} />
+                <Route path="*" element={<ChatScreen />} />
+              </Route>
+            </Routes>
+          </AppContextProvider>
+        </div>
+      </HashRouter>
+    </ModalProvider>
   );
 }
 
