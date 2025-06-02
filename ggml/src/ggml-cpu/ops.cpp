@@ -8652,10 +8652,10 @@ void ggml_compute_forward_custom(
     struct ggml_custom_op_params p;
     memcpy(&p, dst->op_params, sizeof(p));
 
-    ggml_tensor* q = dst->src[0];
-    ggml_tensor* k = dst->src[1];
-    ggml_tensor* v = dst->src[2];
-    ggml_tensor* mask = dst->src[3];
+    ggml_tensor* q      = dst->src[0];
+    ggml_tensor* k      = dst->src[1];
+    ggml_tensor* v      = dst->src[2];
+    ggml_tensor* mask   = dst->src[3];
 
     // q = ggml_set_f32(q, 1.0f);
     // k = ggml_set_f32(k, 1.0f);

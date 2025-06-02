@@ -1680,7 +1680,7 @@ ggml_tensor * llm_graph_context::build_attn(
     
     ggml_tensor * cur = ggml_custom_4d(
         ctx0, GGML_TYPE_F32, 
-        head_dim, n_head, n_tokens, n_batch, 
+        head_dim, n_tokens, n_head, n_batch, 
         args, n_args, 
         ggml_custom_flash_attn_mixed_simple, 
         1,              //> n_tasks

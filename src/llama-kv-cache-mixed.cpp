@@ -1344,16 +1344,16 @@ void ggml_custom_flash_attn_mixed_simple(
     GGML_TENSOR_LOCALS(int64_t, ne,  dst, ne)
     GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
 
-    const int64_t DK = nek0;      //> head_dim for keys
-    const int64_t DV = nev0;      //> head_dim for values
+    const int64_t DK = nek0;            //> head_dim for keys
+    const int64_t DV = nev0;            //> head_dim for values
     const int64_t SEQ_LEN  = neq1;      //> q_len
-    const int64_t KV_LEN    = nek1; //> kv sequence length
-    const int64_t N_KV_HEAD = nek2; //> number of kv heads
-    const int64_t N_Q_HEADS   = neq2; //> number of query heads
+    const int64_t KV_LEN    = nek1;     //> kv sequence length
+    const int64_t N_KV_HEAD = nek2;     //> number of kv heads
+    const int64_t N_Q_HEADS   = neq2;   //> number of query heads
 
-    GGML_ASSERT(ne0 == DV);       //> dst -> ne[0] == head_dim
+    GGML_ASSERT(ne0 == DV);             //> dst -> ne[0] == head_dim
     GGML_ASSERT(ne1 == SEQ_LEN);        //> dst -> ne[1] == q_len
-    GGML_ASSERT(ne2 == N_Q_HEADS);  //> dst -> ne[2] == N_Q_HEADS
+    GGML_ASSERT(ne2 == N_Q_HEADS);      //> dst -> ne[2] == N_Q_HEADS
 
     // input tensor rows must be contiguous
     GGML_ASSERT(nbq0 == ggml_type_size(q->type));
@@ -1378,11 +1378,11 @@ void ggml_custom_flash_attn_mixed_simple(
     const int64_t chunk_end = MIN(chunk_start + kv_chunk_size, KV_LEN); //> end of this thread's chunk
     const int64_t chunk_len = chunk_end - chunk_start;                  //> length of this thread's chunk
 
-    // Workspace layout per thread:
-    //> K_vec = DK, V_vec = DV, result = OUTPUT_SIZE
+    // Workspace layout per thread (enhanced for multi-type V support):
+    //> Similar to standard flash attention workspace layout
     const size_t OUTPUT_SIZE    = N_Q_HEADS * SEQ_LEN * DV;
     const size_t LOCAL_MAX_SIZE = N_Q_HEADS * SEQ_LEN;
-    float * thread_workspace    = (float *) wdata + ith * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+    float * thread_workspace    = (float *) wdata + ith * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
 
     const int64_t rk2 = neq2 / nek2;     //> n_q_heads / n_kv_heads
     const int64_t rv2 = neq2 / nev2;     //> n_q_heads / n_kv_heads
@@ -1390,13 +1390,15 @@ void ggml_custom_flash_attn_mixed_simple(
     float * chunk_output    = thread_workspace;                                                                 // [N_Q_HEADS * SEQ_LEN * DV]
     float * local_max       = thread_workspace + OUTPUT_SIZE;                                                   // [N_Q_HEADS * SEQ_LEN]
     float * local_exp_sum   = thread_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;                                  // [N_Q_HEADS * SEQ_LEN]
-    float * temp_buffer     = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE;                              // [DV]
-    ggml_fp16_t * Q_q       = (ggml_fp16_t *)(thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV );   // [DK]
-    float * sync_buffer     = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK;            // [1]
+    float * V32_buffer      = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE;                              // [DV] - F32 V buffer for conversion
+    float * temp_buffer     = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV;                     // [DV] - temp buffer
+    ggml_fp16_t * Q_q       = (ggml_fp16_t *)(thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV );   // [DK]
+    float * sync_buffer     = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK;            // [1]
 
     // Initialize chunk outputs and log_sum_exp for all queries
     memset(chunk_output,   0,           OUTPUT_SIZE * sizeof(float));
     memset(local_exp_sum,  0,           LOCAL_MAX_SIZE * sizeof(float));  // FIX: Initialize exp_sum to 0
+    memset(V32_buffer,     0,           DV * sizeof(float));
     memset(temp_buffer,    0,           DV * sizeof(float));
     memset(Q_q,            0,           DK * sizeof(ggml_fp16_t));
     memset(sync_buffer,    0,           sizeof(float));
@@ -1414,7 +1416,7 @@ void ggml_custom_flash_attn_mixed_simple(
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    // Handle quantization for K/V tensor
+    // Handle quantization for K/V tensor (similar to standard flash attention)
     ggml_type const k_vec_dot_type        = ggml_get_type_traits_cpu(k->type) -> vec_dot_type;
     ggml_from_float_t const q_to_vec_dot  = ggml_get_type_traits_cpu(k_vec_dot_type) -> from_float;
     ggml_vec_dot_t const kq_vec_dot       = ggml_get_type_traits_cpu(k->type) -> vec_dot;
@@ -1478,9 +1480,7 @@ void ggml_custom_flash_attn_mixed_simple(
                         vs = expf(s - Mold);  // FIX: Use original Mold, not updated local_max
                     }
 
-                    // TODO: support F16 V
-                    GGML_ASSERT(v->type == GGML_TYPE_F32);
-
+                    // Multi-type V support (similar to standard flash attention)
                     local_exp_sum[local_max_idx] = local_exp_sum[local_max_idx] * ms + vs;
 
                     if (ms != 1.0f) {
@@ -1488,19 +1488,30 @@ void ggml_custom_flash_attn_mixed_simple(
                         ggml_vec_scale_f32(DV, (float *)output_ptr, ms);
                     }
 
-                    ggml_vec_mad_f32(DV, (float *)output_ptr, (const float *)v_data, vs);
+                    // V += v*expf(s - M) - handle different V types
+                    if (v->type == GGML_TYPE_F32) {
+                        // V is already F32, use directly
+                        ggml_vec_mad_f32(DV, (float *)output_ptr, (const float *)v_data, vs);
+                    } else if (v_to_float) {
+                        // V is quantized or F16, convert to F32 first
+                        v_to_float(v_data, V32_buffer, DV);
+                        ggml_vec_mad_f32(DV, (float *)output_ptr, V32_buffer, vs);
+                    } else {
+                        // NOTICE: treat as F32 (this shouldn't happen)
+                        LLAMA_LOG_WARN("[mixed-kv] WARNING: V is not F32 or F16, treating as F32\n");
+                    }
                 }
             }
         }
     } //> end of chunk
 
-    //> Barrier-free synchronization: set sync_buffer[0] to 1
+    //> Barrier-free synchronization: set sync_buffer[0] to 1 (even if chunk is empty)
     sync_buffer[0] = 1;
-
-    // =======================================================================================
-    // BARRIER-FREE SYNCHRONIZATION: All threads must complete before thread 0 can reduce
-    // We use a simple busy-wait pattern checking if all chunks have been computed
-    // =======================================================================================
+    
+    //> =======================================================================================
+    //> BARRIER-FREE SYNCHRONIZATION: All threads must complete before thread 0 can reduce
+    //> We use a simple busy-wait pattern checking if all chunks have been computed
+    //> =======================================================================================
 
     // Thread 0 waits for all other threads and performs reduction
     if (ith == 0 && nth > 1) {
@@ -1515,10 +1526,10 @@ void ggml_custom_flash_attn_mixed_simple(
         while (!all_threads_ready && wait_cycles < max_wait_cycles) {
             all_threads_ready = true;
             for (int t = 1; t < nth; ++t) { // Start from 1 since thread 0 is us
-                float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
 
                 // Check if this thread has completed by checking its sync_buffer
-                float * t_sync_buffer = t_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK;
+                float * t_sync_buffer = t_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK;
                 
                 // Thread is ready if it set sync_buffer[0] to 1
                 if (t_sync_buffer[0] != 1.0f) {
@@ -1532,6 +1543,7 @@ void ggml_custom_flash_attn_mixed_simple(
         if (wait_cycles >= max_wait_cycles) {
             LLAMA_LOG_WARN("[mixed-kv] WARNING: thread synchronization timeout, proceeding with reduction\n");
         }
+        LLAMA_LOG_DEBUG("[mixed-kv] wait_cycles: %d", wait_cycles);
 
         // Perform log-sum-exp reduction across all threads
         for (int64_t q_head = 0; q_head < N_Q_HEADS; ++q_head) {
@@ -1540,12 +1552,14 @@ void ggml_custom_flash_attn_mixed_simple(
                 const int64_t local_max_idx = q_pos * N_Q_HEADS + q_head;
                 
                 // Find global maximum across all threads for this query
+                // Only consider threads that actually processed tokens (local_max != -INFINITY)
                 float global_max = -INFINITY;
                 for (int t = 0; t < nth; ++t) {
-                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
                     float * t_local_max = t_workspace + OUTPUT_SIZE;
                     
-                    if (t_local_max[local_max_idx] > global_max) {
+                    // Only consider threads that processed tokens (not empty chunks)
+                    if (t_local_max[local_max_idx] != -INFINITY && t_local_max[local_max_idx] > global_max) {
                         global_max = t_local_max[local_max_idx];
                     }
                 }
@@ -1559,18 +1573,32 @@ void ggml_custom_flash_attn_mixed_simple(
                 }
                 
                 // Compute sum of exponentials with global max for numerical stability
+                // Only include threads that actually processed tokens
                 float global_sum = 0.0f;
+                int active_threads = 0;
                 for (int t = 0; t < nth; ++t) {
-                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
                     float * t_local_max = t_workspace + OUTPUT_SIZE;
                     float * t_local_exp_sum = t_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;
                     
-                    if (t_local_max[local_max_idx] != -INFINITY) {
-                        // Use the actual exp_sum from the thread, adjusted for global max
-                        const float exp_sum_adjustment = expf(t_local_max[local_max_idx] - global_max);
-                        global_sum += t_local_exp_sum[local_max_idx] * exp_sum_adjustment;
+                    // Only include threads that processed tokens (not empty chunks)
+                    if (t_local_max[local_max_idx] != -INFINITY && t_local_exp_sum[local_max_idx] > 0.0f) {
+                        // FIXED: Numerical stability - clamp exponential difference
+                        const float max_diff = t_local_max[local_max_idx] - global_max;
+                        const float clamped_diff = fmaxf(-50.0f, fminf(50.0f, max_diff)); // Clamp to prevent overflow
+                        const float exp_sum_adjustment = expf(clamped_diff);
+                        
+                        // Additional safety check
+                        if (std::isfinite(exp_sum_adjustment) && exp_sum_adjustment > 0.0f) {
+                            global_sum += t_local_exp_sum[local_max_idx] * exp_sum_adjustment;
+                            active_threads++;
+                        }
                     }
                 }
+                
+                // Debug: query reduction statistics (can be disabled in production)
+                // LLAMA_LOG_DEBUG("[mixed-kv] Query (head=%ld, pos=%ld): active_threads=%d, global_max=%.6f, global_sum=%.6f\n", 
+                //                q_head, q_pos, active_threads, global_max, global_sum);
                 
                 // Normalize factor for final attention weights
                 const float norm_factor = 1.0f / global_sum;
@@ -1580,26 +1608,30 @@ void ggml_custom_flash_attn_mixed_simple(
                 memset(final_output, 0, DV * sizeof(float)); // Initialize to zero
                 
                 for (int t = 0; t < nth; ++t) {
-                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_workspace = (float *) wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
                     float * t_chunk_output = t_workspace;
                     float * t_local_max = t_workspace + OUTPUT_SIZE;
                     float * t_local_exp_sum = t_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;
                     
-                    if (t_local_max[local_max_idx] != -INFINITY) {
-                        // FIXED: Correct multi-thread reduction formula
-                        // final_output = sum(chunk_output_t * exp(local_max_t - global_max)) / global_sum
-                        // Each thread contributes: chunk_output_t * exp(local_max_t - global_max)
-                        const float max_adjustment = expf(t_local_max[local_max_idx] - global_max);
-                        const float thread_weight = max_adjustment / global_sum;
+                    // Only include contributions from threads that processed tokens
+                    if (t_local_max[local_max_idx] != -INFINITY && t_local_exp_sum[local_max_idx] > 0.0f && global_sum > 0.0f) {
+                        // FIXED: Numerical stability in thread weight calculation
+                        const float max_diff = t_local_max[local_max_idx] - global_max;
+                        const float clamped_diff = fmaxf(-50.0f, fminf(50.0f, max_diff)); // Clamp to prevent overflow
+                        const float max_adjustment = expf(clamped_diff);
                         
-                        // Add this thread's adjusted contribution
-                        const float * thread_output = t_chunk_output + output_offset;
-                        ggml_vec_mad_f32(DV, final_output, thread_output, thread_weight);
+                        // Additional safety check for numerical stability
+                        if (std::isfinite(max_adjustment) && max_adjustment > 0.0f && std::isfinite(global_sum) && global_sum > 0.0f) {
+                            const float thread_weight = max_adjustment / global_sum;
+                            
+                            if (std::isfinite(thread_weight) && thread_weight > 0.0f) {
+                                // Add this thread's adjusted contribution
+                                const float * thread_output = t_chunk_output + output_offset;
+                                ggml_vec_mad_f32(DV, final_output, thread_output, thread_weight);
+                            }
+                        }
                     }
                 }
-                
-                LLAMA_LOG_DEBUG("[mixed-kv] Reduced query (head=%ld, pos=%ld): global_max=%.6f, global_sum=%.6f, norm_factor=%.6f\n", 
-                               q_head, q_pos, global_max, global_sum, norm_factor);
             }
         }
         

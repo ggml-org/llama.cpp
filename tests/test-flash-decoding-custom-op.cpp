@@ -66,11 +66,11 @@ int main() {
 
     // Test parameters - reduce KV length to minimize F16 accumulation errors
     const int head_dim  = 32;
-    const int n_heads   = 4;
-    const int n_kv_heads = 1;
+    const int n_heads   = 32;
+    const int n_kv_heads = 8;
     const int seq_len   = 1;     // Q length
     const int kv_len    = 64;    // K/V length - reduced for better F16 precision
-    const int n_threads = 4;
+    const int n_threads = 8;  // Multi-thread stability test
 
     printf("Test Parameters:\n");
     printf("  head_dim=%d, n_heads=%d, n_kv_heads=%d, seq_len=%d, kv_len=%d\n", 
@@ -93,10 +93,10 @@ int main() {
 
     // Create tensors for custom flash attention (our format)
     // Format: [head_dim, seq_len, n_heads, 1] for Q, K, V
-    // Based on mixed implementation: Q=F32, K=F16, V=F32, mask=F32
+    // Test F16 V multi-type support: Q=F32, K=F16, V=F16, mask=F32
     ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, seq_len, n_heads, 1);
     ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_kv_heads, 1);  
-    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, kv_len,  n_kv_heads, 1);
+    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_kv_heads, 1);  // Test F16 V multi-type support
 
     // Create mask tensor for custom flash attention
     ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kv_len, GGML_PAD(seq_len, 256));
@@ -104,7 +104,7 @@ int main() {
     // Fill tensors with random data
     fill_random_f32((float*)q->data, ggml_nelements(q));
     fill_random_f16((ggml_fp16_t*)k->data, ggml_nelements(k));  // K is F16
-    fill_random_f32((float*)v->data, ggml_nelements(v));
+    fill_random_f16((ggml_fp16_t*)v->data, ggml_nelements(v));  // V is F16 (test multi-type support)
 
     // Fill mask - use identity mask (all positions visible)
     float* mask_data = (float*)mask->data;
@@ -153,19 +153,32 @@ int main() {
     ggml_build_forward_expand(graph_custom, custom_result);
 
     // Calculate workspace size for custom operation
-    const size_t output_size = seq_len * n_heads * head_dim;
-    const size_t local_max_size = seq_len * n_heads;  // Updated to match LOCAL_MAX_SIZE
-    const size_t local_sum_size = seq_len * n_heads;  // Add sum tracking
-    const size_t temp_buffer_size = head_dim;
-    const size_t q_quantized_float_elements = (head_dim * sizeof(ggml_fp16_t) + sizeof(float) - 1) / sizeof(float);
-    const size_t elements_per_thread = output_size + local_max_size + local_sum_size + temp_buffer_size + q_quantized_float_elements + 1 + 16; // +1 for sync_buffer, +16 for CACHE_LINE_SIZE_F32
+    // FIXED: Must match exactly the layout in ggml_custom_flash_attn_mixed_simple (updated for multi-type V support)
+    const size_t OUTPUT_SIZE = seq_len * n_heads * head_dim;           // chunk_output
+    const size_t LOCAL_MAX_SIZE = seq_len * n_heads;                   // local_max
+    const size_t LOCAL_EXP_SUM_SIZE = seq_len * n_heads;               // local_exp_sum  
+    const size_t V32_BUFFER_SIZE = head_dim;                           // V32_buffer (DV) - new for multi-type V support
+    const size_t TEMP_BUFFER_SIZE = head_dim;                          // temp_buffer (DV)
+    const size_t Q_QUANTIZED_SIZE = head_dim;                          // Q_q (DK floats for ggml_fp16_t[DK])
+    const size_t SYNC_BUFFER_SIZE = 1;                                 // sync_buffer
+    const size_t CACHE_LINE_SIZE_F32 = 16;                             // cache line padding
+    const size_t elements_per_thread = OUTPUT_SIZE + LOCAL_MAX_SIZE + LOCAL_EXP_SUM_SIZE + V32_BUFFER_SIZE + TEMP_BUFFER_SIZE + Q_QUANTIZED_SIZE + SYNC_BUFFER_SIZE + CACHE_LINE_SIZE_F32;
 
     struct ggml_cplan cplan_custom = ggml_graph_plan(graph_custom, n_threads, NULL);
 
     // Allocate workspace
     size_t workspace_size = n_threads * elements_per_thread * sizeof(float);
     workspace_size = std::max(workspace_size, cplan_custom.work_size);
+    
+    printf("Workspace: %zu elements/thread, %.2f KB total\n", 
+           elements_per_thread, workspace_size / 1024.0);
+    
     uint8_t* workspace = (uint8_t*)malloc(workspace_size);
+    if (!workspace) {
+        printf("ERROR: Failed to allocate workspace of size %zu bytes\n", workspace_size);
+        ggml_free(ctx);
+        return 1;
+    }
     cplan_custom.work_data = workspace;
     cplan_custom.work_size = workspace_size;
 
@@ -188,14 +201,14 @@ int main() {
 
     // Create tensors for standard flash attention
     // Standard format: [head_dim, seq_len, n_heads, batch_size] for Q, K, V
-    ggml_tensor * q_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim,  seq_len,    n_heads,    1);
-    ggml_tensor * k_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,    1);
-    ggml_tensor * v_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,    1);
+    ggml_tensor * q_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim,  seq_len,    n_heads,        1);
+    ggml_tensor * k_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,     1);
+    ggml_tensor * v_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,     1);
 
     // Convert data types and rearrange dimensions for GQA
     float* q_f32_src = (float*)q->data;
     ggml_fp16_t* k_f16_src = (ggml_fp16_t*)k->data;  // K is already F16
-    float* v_f32 = (float*)v->data;
+    ggml_fp16_t* v_f16_src = (ggml_fp16_t*)v->data;  // V is F16 for multi-type testing
     float* q_f32_std = (float*)q_std->data;  // Q_std is now F32
     ggml_fp16_t* k_f16 = (ggml_fp16_t*)k_std->data;
     ggml_fp16_t* v_f16 = (ggml_fp16_t*)v_std->data;
@@ -223,7 +236,7 @@ int main() {
                 int src_idx = d + t * head_dim + h * head_dim * kv_len;
                 int dst_idx = d + t * head_dim + h * head_dim * kv_len;
                 k_f16[dst_idx] = k_f16_src[src_idx];  // K is already F16, just copy
-                v_f16[dst_idx] = ggml_fp32_to_fp16(v_f32[src_idx]);
+                v_f16[dst_idx] = v_f16_src[src_idx];  // V is F16, just copy
             }
         }
     }
