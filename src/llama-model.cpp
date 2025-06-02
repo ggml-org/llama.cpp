@@ -953,6 +953,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     case 46: type = LLM_TYPE_27B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                }
+
+                // ref: https://github.com/google/gemma_pytorch/blob/014acb7ac4563a5f77c76d7ff98f31b568c16508/gemma/config.py#L173
+                hparams.f_attention_scale = type == LLM_TYPE_27B
+                    ? 1.0f / std::sqrt(float(hparams.n_embd / hparams.n_head(0)))
+                    : 1.0f / std::sqrt(float(hparams.n_embd_head_k));
             } break;
         case LLM_ARCH_GEMMA3:
             {
@@ -973,6 +978,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
 
+                // ref: https://github.com/google/gemma_pytorch/blob/014acb7ac4563a5f77c76d7ff98f31b568c16508/gemma/config.py#L289
                 hparams.f_attention_scale = type == LLM_TYPE_27B
                     ? 1.0f / std::sqrt(float(hparams.n_embd / hparams.n_head(0)))
                     : 1.0f / std::sqrt(float(hparams.n_embd_head_k));
@@ -8481,14 +8487,7 @@ struct llm_build_gemma2_iswa : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                // ref: https://github.com/google/gemma_pytorch/commit/03e657582d17cb5a8617ebf333c1c16f3694670e
-                switch (model.type) {
-                    case LLM_TYPE_2B:
-                    case LLM_TYPE_9B:
-                    case LLM_TYPE_27B: Qcur = ggml_scale(ctx0, Qcur, 1.0f / sqrtf(float(n_embd_head))); break;
-                    default: GGML_ABORT("fatal error");
-                };
-                cb(Qcur, "Qcur_scaled", il);
+                Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
 
                 cur = build_attn(inp_attn, gf,
                         model.layers[il].wo, NULL,
@@ -8629,6 +8628,7 @@ struct llm_build_gemma3_iswa : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
+                // ref: https://github.com/google/gemma_pytorch/blob/014acb7ac4563a5f77c76d7ff98f31b568c16508/gemma/model.py#L315
                 Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
 
                 cur = build_attn(inp_attn, gf,
