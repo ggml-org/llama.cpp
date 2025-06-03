@@ -222,11 +222,11 @@ void GgmlOvDecoder::add_extra_inputs() {
             past_token_len = (int64_t)(node->src[1]->op_params[0] / node->src[1]->nb[0] / head_size / num_heads);
 
             std::string name = "past_token_len";
-            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{});
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
             param_node->set_friendly_name(name);
             m_model_extra_inputs[name] = param_node;
 
-            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{});
+            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
             *tensor->data<int64_t>() = past_token_len;
             m_model_extra_input_values[name] = tensor;
             break;

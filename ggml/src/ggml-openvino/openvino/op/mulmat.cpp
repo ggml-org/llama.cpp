@@ -1,3 +1,4 @@
+#include <climits>
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -68,7 +69,7 @@ OutputVector translate_mulmat(const NodeContext& context) {
         std::vector<int64_t> src0_original_shape(src0_original_shape_.begin(), src0_original_shape_.end());
 
         if (context.is_static()) {
-            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {src0_original_shape[token_dim]});
+            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {INT_MAX});
         }
         src0_original_shape[token_dim] = -1;
 

@@ -34,7 +34,7 @@ OutputVector translate_cpy(const NodeContext& context) {
 
     auto src0 = context.get_input(0);
     auto src1 = context.get_input(1);
-    auto past_token_len_scalar = context.get_input("past_token_len");
+    auto past_token_len = context.get_input("past_token_len");
 
     src0 = std::make_shared<ov::op::v0::Convert>(src0, context.get_input_type(1));
     ov::Output<Node> res;
@@ -68,18 +68,16 @@ OutputVector translate_cpy(const NodeContext& context) {
 
         std::shared_ptr<ov::Node> indices;
         if (context.is_static()) {
-            indices = past_token_len_scalar.get_node_shared_ptr();
-            indices = std::make_shared<ov::op::v0::Unsqueeze>(
-                indices,
-                ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{0, 1}));
+            indices = past_token_len.get_node_shared_ptr();
         } else {
+            auto past_token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(past_token_len, zero);
             auto total_token_len_scalar = std::make_shared<ov::op::v1::Add>(past_token_len_scalar, token_len_scalar);
             indices = std::make_shared<ov::op::v4::Range>(past_token_len_scalar,
                                                           total_token_len_scalar,
                                                           one_scalar,
                                                           ov::element::i64);
-            indices = std::make_shared<ov::op::v0::Unsqueeze>(indices, one);
         }
+        indices = std::make_shared<ov::op::v0::Unsqueeze>(indices, one);
 
         res = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshaped_src1, indices, src0);
     } else {
@@ -108,11 +106,9 @@ OutputVector translate_cpy(const NodeContext& context) {
         // 1D tensor of shape [token_len], values starting from past_token_len
         std::shared_ptr<ov::Node> range_col;
         if (context.is_static()) {
-            range_col = past_token_len_scalar.get_node_shared_ptr();
-            range_col = std::make_shared<ov::op::v0::Unsqueeze>(
-                range_col,
-                ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{0}));
+            range_col = past_token_len.get_node_shared_ptr();
         } else {
+            auto past_token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(past_token_len, zero);
             auto total_token_len_scalar = std::make_shared<ov::op::v1::Add>(past_token_len_scalar, token_len_scalar);
             range_col = std::make_shared<ov::op::v4::Range>(past_token_len_scalar,
                                                             total_token_len_scalar,

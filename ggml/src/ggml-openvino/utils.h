@@ -2,6 +2,7 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-decoder.h"
+#include "ggml-impl.h"
 
 enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_cgraph* cgraph);
 
@@ -35,3 +36,5 @@ std::vector<T> pad_input(const ggml_tensor* tensor, size_t padded_rows, size_t p
 }
 
 void set_zero_diagonal(std::vector<float>& matrix, size_t dim);
+
+bool is_prefill(struct ggml_cgraph * cgraph);
