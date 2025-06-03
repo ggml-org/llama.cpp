@@ -429,22 +429,41 @@ const llama_kv_cache * llama_context::get_kv_self() const {
     return kv_self;
 }
 
-bool llama_context::kv_self_update() {
+void llama_context::kv_self_defrag_sched() {
+    if (!memory) {
+        return;
+    }
+
+    memory_force_optimize = true;
+}
+
+bool llama_context::kv_self_update(bool optimize) {
     if (!memory) {
         return false;
     }
 
     llama_kv_cache * kv_self = static_cast<llama_kv_cache *>(memory.get());
 
-    if (!kv_self->update(*this)) {
-        // no updates have been performed
-        return false;
+    {
+        // TODO: remove in the future
+        optimize |= memory_force_optimize;
+        memory_force_optimize = false;
+
+        const auto kv_state = kv_self->init_update(this, optimize);
+        if (kv_state->get_status() == LLAMA_MEMORY_STATUS_NO_UPDATE) {
+            // no updates have been performed
+            return false;
+        }
+
+        if (!kv_state->apply()) {
+            LLAMA_LOG_ERROR("%s: failed to apply memory update\n", __func__);
+        }
     }
 
     // if the KV cache did any computation, we have to reserve a new worst-case graph
     const auto kv_state = kv_self->init_full();
     if (!kv_state) {
-        throw std::runtime_error("failed to initialize KV cache");
+        throw std::runtime_error("failed to initialize memory state");
     }
 
     const uint32_t n_seqs   = cparams.n_seq_max;
@@ -452,7 +471,7 @@ bool llama_context::kv_self_update() {
 
     auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, kv_state.get());
     if (!gf) {
-        LLAMA_LOG_ERROR("%s: failed to reserve graph after the KV cache update\n", __func__);
+        LLAMA_LOG_ERROR("%s: failed to reserve graph after the memory update\n", __func__);
     }
 
     return true;
@@ -940,12 +959,12 @@ int llama_context::decode(llama_batch & inp_batch) {
         n_outputs_all = 1;
     }
 
+    bool did_optimize = false;
+
     // handle any pending defrags/shifts
-    kv_self_update();
+    kv_self_update(false);
 
     llama_memory_state_ptr kv_state;
-
-    bool did_defrag = false;
 
     while (true) {
         kv_state = kv_self->init_batch(batch, cparams.n_ubatch, embd_pooled, /* logits_all */ n_outputs_all == n_tokens_all);
@@ -957,14 +976,18 @@ int llama_context::decode(llama_batch & inp_batch) {
             case LLAMA_MEMORY_STATUS_SUCCESS:
                 {
                 } break;
+            case LLAMA_MEMORY_STATUS_NO_UPDATE:
+                {
+                    LLAMA_LOG_ERROR("%s: unexpected memory state status: %d\n", __func__, kv_state->get_status());
+                    return -2;
+                }
             case LLAMA_MEMORY_STATUS_FAILED_PREPARE:
                 {
-                    if (!did_defrag) {
-                        did_defrag = true;
+                    if (!did_optimize) {
+                        did_optimize = true;
 
-                        kv_self->defrag_sched(-1.0f);
-                        if (kv_self_update()) {
-                            LLAMA_LOG_DEBUG("%s: failed to init batch of size %d, retrying after defrag\n", __func__, batch.n_tokens);
+                        if (kv_self_update(true)) {
+                            LLAMA_LOG_DEBUG("%s: retrying batch size %d after cache optimization\n", __func__, batch.n_tokens);
 
                             continue;
                         }
@@ -1188,11 +1211,6 @@ int llama_context::decode(llama_batch & inp_batch) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
-
-    // decide if we need to defrag the kv cache
-    if (cparams.defrag_thold > 0.0f) {
-        kv_self->defrag_sched(cparams.defrag_thold);
-    }
 
     // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
     // overlap with device computation.
@@ -2283,7 +2301,7 @@ llama_kv_cache * llama_get_kv_self(llama_context * ctx) {
 
 // deprecated
 void llama_kv_self_update(llama_context * ctx) {
-    ctx->kv_self_update();
+    ctx->kv_self_update(false);
 }
 
 enum llama_pooling_type llama_pooling_type(const llama_context * ctx) {
@@ -2538,13 +2556,8 @@ llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
 
 // deprecated
 void llama_kv_self_defrag(llama_context * ctx) {
-    auto * kv = ctx->get_kv_self();
-    if (!kv) {
-        return;
-    }
-
     // force defrag
-    kv->defrag_sched(-1.0f);
+    ctx->kv_self_defrag_sched();
 }
 
 bool llama_kv_self_can_shift(const llama_context * ctx) {

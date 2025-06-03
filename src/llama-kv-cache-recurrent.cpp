@@ -386,6 +386,13 @@ llama_memory_state_ptr llama_kv_cache_recurrent::init_full() {
     return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_SUCCESS, this);
 }
 
+llama_memory_state_ptr llama_kv_cache_recurrent::init_update(llama_context * lctx, bool optimize) {
+    GGML_UNUSED(lctx);
+    GGML_UNUSED(optimize);
+
+    return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_NO_UPDATE);
+}
+
 bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {
     // simply remember the full state because it is very small for this type of cache
     // TODO: optimize
@@ -417,17 +424,6 @@ bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatche
     head = org_head;
 
     return success;
-}
-
-bool llama_kv_cache_recurrent::update(llama_context & lctx) {
-    GGML_UNUSED(lctx);
-    // noop
-    return false;
-}
-
-void llama_kv_cache_recurrent::defrag_sched(float thold) {
-    GGML_UNUSED(thold);
-    // noop
 }
 
 bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {

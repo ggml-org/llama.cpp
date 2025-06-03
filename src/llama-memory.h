@@ -36,8 +36,11 @@ public:
     virtual bool get_can_edit() const = 0;
 };
 
+using llama_memory_ptr = std::unique_ptr<llama_memory_i>;
+
 enum llama_memory_status {
     LLAMA_MEMORY_STATUS_SUCCESS = 0,
+    LLAMA_MEMORY_STATUS_NO_UPDATE,
     LLAMA_MEMORY_STATUS_FAILED_PREPARE,
     LLAMA_MEMORY_STATUS_FAILED_COMPUTE,
 };

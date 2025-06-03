@@ -54,9 +54,7 @@ public:
 
     llama_memory_state_ptr init_full() override;
 
-    bool update(llama_context & lctx) override;
-
-    void defrag_sched(float thold) override;
+    llama_memory_state_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;
 
@@ -86,12 +84,16 @@ public:
 
     // used to create a full-cache state
     llama_kv_cache_unified_iswa_state(
-            llama_memory_status status,
             llama_kv_cache_unified_iswa * kv);
+
+    // used to create an update state
+    llama_kv_cache_unified_iswa_state(
+            llama_kv_cache_unified_iswa * kv,
+            llama_context * lctx,
+            bool optimize);
 
     // used to create a state from a batch
     llama_kv_cache_unified_iswa_state(
-            llama_memory_status status,
             llama_kv_cache_unified_iswa * kv,
             llama_sbatch sbatch,
             std::vector<uint32_t> heads_base,
@@ -120,7 +122,7 @@ public:
     const llama_kv_cache_unified_state * get_swa()  const;
 
 private:
-    const llama_memory_status status;
+    llama_memory_status status;
 
     //llama_kv_cache_unified_iswa * kv;
 
@@ -131,6 +133,6 @@ private:
 
     std::vector<llama_ubatch> ubatches;
 
-    std::unique_ptr<llama_kv_cache_unified_state> state_base;
-    std::unique_ptr<llama_kv_cache_unified_state> state_swa;
+    llama_memory_state_ptr state_base;
+    llama_memory_state_ptr state_swa;
 };

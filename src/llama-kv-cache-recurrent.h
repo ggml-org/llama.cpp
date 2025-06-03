@@ -52,9 +52,7 @@ public:
 
     llama_memory_state_ptr init_full() override;
 
-    bool update(llama_context & lctx) override;
-
-    void defrag_sched(float thold) override;
+    llama_memory_state_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool prepare(const std::vector<llama_ubatch> & ubatches);
 
