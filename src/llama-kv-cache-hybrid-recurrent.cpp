@@ -150,8 +150,8 @@ void llama_kv_cache_hybrid_recurrent::defrag_sched(float thold) {
 }
 
 bool llama_kv_cache_hybrid_recurrent::get_can_shift() const {
-    // TODO: Should this return true if the attention cache can shift?
-    return false;
+    // Shifting is trivially supported for recurrent
+    return kv_attn->get_can_shift();
 }
 
 void llama_kv_cache_hybrid_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
