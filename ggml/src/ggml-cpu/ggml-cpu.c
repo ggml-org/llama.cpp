@@ -571,6 +571,10 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 static int get_node_from_cpu(int cpu, int cores_per_numa) {
     return cpu / cores_per_numa;
 }
+
+int ggml_cores_per_numa(void) {
+    return g_state.numa.nodes[0].n_cpus;
+}
 #endif
 
 void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
@@ -2933,6 +2937,11 @@ struct ggml_cplan ggml_graph_plan(
     cplan.n_threads  = MIN(max_tasks, n_threads);
     cplan.work_size  = work_size;
     cplan.work_data  = NULL;
+#ifdef GGML_USE_NUMA_MIGRATE
+    for (int i = 0; i < GGML_NUMA_MIGRATE_NODES; i++) {
+        cplan.work_data_numa[i] = NULL;
+    }
+#endif
 
     return cplan;
 }
@@ -2951,8 +2960,17 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         /*.nth       =*/ atomic_load_explicit(&tp->n_threads_cur, memory_order_relaxed),
         /*.wsize     =*/ cplan->work_size,
         /*.wdata     =*/ cplan->work_data,
+#ifdef GGML_USE_NUMA_MIGRATE
+        /*.wdata_numa     =*/ {NULL, NULL},
+#endif
         /*.threadpool=*/ tp,
     };
+
+#ifdef GGML_USE_NUMA_MIGRATE
+    for (int i = 0; i < GGML_NUMA_MIGRATE_NODES; i++) {
+        params.wdata_numa[i] = cplan->work_data_numa[numa_node_of_cpu(state->ith)];
+    }
+#endif
 
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
