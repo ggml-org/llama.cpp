@@ -1,6 +1,7 @@
 #include "utils.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -70,15 +71,17 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     ov::AnyMap config;
     if (device == "NPU") {
         config = {
-            {"NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean"},
-            {"NPU_USE_NPUW", "YES"},
-            {"NPUW_DEVICES", "NPU"},
-            {"NPUW_FOLD", "YES"},
-            {"NPUW_DQ", "YES"},
-            {"NPUW_FUNCALL_ASYNC", "YES"},
-            {"NPUW_HOST_GATHER", "YES"},
-            {"NPUW_WEIGHTS_BANK", "shared"},
-            // {"NPU_COMPILER_TYPE", "MLIR"},
+            { "NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean" },
+            { "NPU_USE_NPUW",                "YES"                                             },
+            { "NPUW_DEVICES",                "NPU"                                             },
+            { "NPUW_FOLD",                   "YES"                                             },
+            { "NPUW_HOST_GATHER",            "YES"                                             },
+            { "NPUW_DQ",                     "YES"                                             },
+            { "NPUW_FUNCALL_ASYNC",          "YES"                                             },
+            { "NPUW_WEIGHTS_BANK",           "shared"                                          },
+            // Option 'CACHE_DIR' is not supported with MLIR compiler type
+            // {"NPUW_CACHE_DIR", getenv("GGML_OPENVINO_CACHE_DIR") ? getenv("GGML_OPENVINO_CACHE_DIR") : ""},
+            { "NPU_COMPILER_TYPE",           "MLIR"                                            },
         };
     }
 
@@ -102,15 +105,21 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     int64_t conversion_end_time;
     int64_t compile_end_time;
 
+    bool is_first_token = is_prefill(cgraph);
+
     auto it = compiled_cache_prefill.find(cgraph);
-    bool is_first_token = it == compiled_cache_prefill.end();
-    if (!is_first_token) {
+    if (it != compiled_cache_prefill.end()) {
         ggml_decoder = get_ggml_decoder(cgraph, is_static, false);
         decoder_end_time = ggml_time_us();
 
         if (is_static) {
-            model = compiled_cache_kvcache[cgraph].first;
-            compiled_model = compiled_cache_kvcache[cgraph].second;
+            if (is_first_token) {
+                model          = compiled_cache_prefill[cgraph].first;
+                compiled_model = compiled_cache_prefill[cgraph].second;
+            } else {
+                model          = compiled_cache_kvcache[cgraph].first;
+                compiled_model = compiled_cache_kvcache[cgraph].second;
+            }
         } else {
             model = it->second.first;
             compiled_model = it->second.second;
@@ -235,8 +244,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     }
     auto end_time = ggml_time_us();
 
-    is_first_token = false;
-
     if (getenv("GGML_OPENVINO_PROFILING")) {
         GGML_LOG_INFO("GGML OpenVINO Backend: \n");
         GGML_LOG_INFO("  - Graph decoder Time: %ld ms \n", (decoder_end_time - start_time) / 1000);
@@ -304,4 +311,21 @@ void set_zero_diagonal(std::vector<float>& matrix, size_t dim) {
     for (size_t i = 0; i < dim; ++i) {
         matrix[i * dim + i] = 0.0f;
     }
+}
+
+bool is_prefill(struct ggml_cgraph * cgraph) {
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        auto * op = cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; ++j) {
+            auto* src = op->src[j];
+            if (src == nullptr) {
+                break;
+            }
+            if (std::string(src->name) == "inp_tokens") {
+                return src->ne[0] != 1;
+            }
+        }
+    }
+    GGML_LOG_ERROR("is_prefill: inp_tokens not found in cgraph");
+    throw std::runtime_error("is_prefill: inp_tokens not found in cgraph");
 }
