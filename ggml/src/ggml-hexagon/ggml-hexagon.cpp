@@ -58,6 +58,7 @@
 #include <unordered_set>
 #include <utility>
 #include <future>
+#include <algorithm>
 
 #if defined(__ANDROID__) || defined(__linux__)
 #include <unistd.h>
@@ -206,15 +207,6 @@ enum qnn_profile_level {
     PROFILE_OFF     = 0,
     PROFILE_BASIC   = 1,
     PROFILE_DETAIL  = 2,
-};
-
-//0: general approach through QNN:offload ggmlop to QNN
-//1: special approach through QNN-SINGLEGRAPH:mapping entire ggml cgraph to a single QNN graph
-//2: general approach through Hexagon cDSP:offload ggmlop to Hexagon cDSP directly
-enum hwaccel_approach_type {
-    HWACCEL_QNN                     = 0,
-    HWACCEL_QNN_SINGLEGRAPH         = 1,
-    HWACCEL_CDSP                    = 2,
 };
 
 enum hexagon_dsp_type {
@@ -381,7 +373,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.08"},
+        .ggml_hexagon_version   = {"1.09"},
         .ggml_dsp_version       = {"0.63"},
 };
 
@@ -1378,6 +1370,83 @@ public:
         value = atol(_hexagon_appcfg[section][key].c_str());
     }
 
+    bool modify_hexagon_config(std::string & cfg_filename, int new_hexagon_backend, int new_hwaccel_approach) {
+        std::ifstream inputfile(cfg_filename);
+        if (!inputfile.is_open()) {
+            GGMLHEXAGON_LOG_WARN("can't open file %s", cfg_filename.c_str());
+            return false;
+        }
+
+        std::string filedata = "";
+
+        std::string line;
+        std::string backupline;
+        bool is_rewrite = false;
+        bool is_founded = false;
+        bool is_key = true;
+        std::string key;
+        std::string value;
+        std::string newvalue;
+        while (std::getline(inputfile, line)) {
+            is_founded = false;
+            backupline = line;
+            trim(line);
+            if (0 == line.rfind("#", 0)) {
+                filedata += backupline;
+                filedata += "\n";
+                continue;
+            }
+
+            newvalue = "";
+            if (line.rfind("hexagon_backend", 0) != std::string::npos) {
+                is_founded = true;
+                is_rewrite = true;
+                newvalue = std::to_string(new_hexagon_backend);
+            }
+
+            if (line.rfind("hwaccel_approach", 0) != std::string::npos) {
+                is_founded = true;
+                is_rewrite = true;
+                newvalue = std::to_string(new_hwaccel_approach);
+            }
+
+            if (is_founded) {
+                is_key = true;
+                key = "";
+                value = "";
+
+                for (size_t i = 0; i < line.size(); ++i) {
+                    if (line[i] == '=') {
+                        is_key = false;
+                        continue;
+                    }
+                    if (is_key) {
+                        key += line[i];
+                    } else {
+                        value += line[i];
+                    }
+                }
+                trim(key);
+                trim(value);
+                GGMLHEXAGON_LOG_INFO("key %s value %s\n", key.c_str(), value.c_str());
+                GGMLHEXAGON_LOG_INFO("key %s new value %s\n", key.c_str(), newvalue.c_str());
+                backupline = key + " = " + newvalue;
+            }
+            filedata += backupline;
+            filedata += "\n";
+        }
+        inputfile.close();
+
+        if (is_rewrite) {
+            std::ofstream outputfile;
+            outputfile.open(cfg_filename);
+            outputfile.flush();
+            outputfile << filedata;
+            outputfile.close();
+        }
+        return true;
+    }
+
 private:
     void ltrim(std::string & str) {
         if (str.empty()) return;
@@ -1917,6 +1986,20 @@ static void ggmlhexagon_load_cfg() {
     }
 
     initialized = true;
+}
+
+void set_hexagon_cfg(int new_hexagon_backend, int new_hwaccel_approach) {
+    std::string cfg_filename = std::string(g_hexagon_appcfg.runtime_libpath) + std::string(g_hexagon_appcfg.cfgfilename);
+    GGMLHEXAGON_LOG_INFO("load hexagon appcfg from %s", cfg_filename.c_str());
+    hexagon_appcfg hexagoncfg_instance;
+    GGMLHEXAGON_LOG_INFO("set_hexagon_cfg with new_hexagon_backend %d, new_hwaccel_approach %d", new_hexagon_backend, new_hwaccel_approach);
+    hexagoncfg_instance.modify_hexagon_config(cfg_filename, new_hexagon_backend, new_hwaccel_approach);
+    hexagoncfg_instance.load(cfg_filename);
+    hexagoncfg_instance.dump([](const std::string & section, const std::string & key, const std::string value) {
+        std::ostringstream  tmposs;
+        tmposs << "section[" << std::setw(10) << std::left << section << "],[" << std::setw(25) << std::left << key << "] = [" << value << "]";
+        GGMLHEXAGON_LOG_INFO("%s", tmposs.str().c_str());
+    });
 }
 
 static bool ggmlhexagon_check_valid_appcfg() {
