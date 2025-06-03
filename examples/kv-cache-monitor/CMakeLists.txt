@@ -5,6 +5,8 @@ install(TARGETS ${KQV_TRACE_TARGET} RUNTIME)
 target_link_libraries(${KQV_TRACE_TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${KQV_TRACE_TARGET} PRIVATE cxx_std_17)
 
+
+
 # GGUF Reader for verifying saved tensor files
 add_executable(llama-kqv-gguf-reader gguf-reader.cpp)
 install(TARGETS llama-kqv-gguf-reader RUNTIME)
@@ -16,4 +18,10 @@ add_executable(llama-tensor-diff-analyzer tensor-diff-analyzer.cpp)
 install(TARGETS llama-tensor-diff-analyzer RUNTIME)
 target_link_libraries(llama-tensor-diff-analyzer PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(llama-tensor-diff-analyzer PRIVATE cxx_std_17)
+
+# Flash Attention Mixed KV Cache Verification Tool
+add_executable(llama-flash-attn-mixed-verify flash-attn-mixed-verify.cpp)
+install(TARGETS llama-flash-attn-mixed-verify RUNTIME)
+target_link_libraries(llama-flash-attn-mixed-verify PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(llama-flash-attn-mixed-verify PRIVATE cxx_std_17)
 

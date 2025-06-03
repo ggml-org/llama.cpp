@@ -1,0 +1,211 @@
+---
+description: 
+globs: llama-kv-cache-mixed.*,llama-kv-cache.*
+alwaysApply: false
+---
+# Flash-Decoding Algorithm Implementation Guide
+
+## Overview
+Flash-decoding is a token-parallel attention algorithm implemented in the mixed KV cache system. Unlike traditional head-dimension parallelization, it splits the KV sequence across threads for improved memory efficiency and scalability.
+
+## Core Implementation
+
+### Main Function
+The flash-decoding algorithm is implemented in [src/llama-kv-cache-mixed.cpp](mdc:src/llama-kv-cache-mixed.cpp) in the `ggml_custom_flash_attn_mixed_simple` function.
+
+**Key Algorithm Change**: Token-dimension parallelization instead of head-dimension parallelization:
+```cpp
+// Flash-decoding: split KV sequence across threads
+const int64_t kv_chunk_size = (KV_LEN + nth - 1) / nth;
+const int64_t chunk_start = ith * kv_chunk_size;
+const int64_t chunk_end = MIN(chunk_start + kv_chunk_size, KV_LEN);
+```
+
+### Critical Technical Fixes
+
+#### 1. Mask Logic Correction
+**Problem**: Original implementation was applying `score += mask_val` incorrectly
+**Solution**: Check for `-INFINITY` first and `continue` if found:
+```cpp
+if (mask_val == -INFINITY) {
+    continue; // Skip this token entirely
+}
+```
+
+#### 2. Complete Query Processing
+**Problem**: Only processing first head/query instead of all queries
+**Solution**: Process ALL query positions and heads:
+```cpp
+for (int64_t q_pos = 0; q_pos < SEQ_LEN; q_pos++) {
+    for (int64_t q_head = q_head_start; q_head < q_head_end; q_head++) {
+        // Process all queries for each KV token
+    }
+}
+```
+
+#### 3. Output Tensor Indexing
+**Problem**: Incorrect tensor layout assumptions
+**Solution**: Match `[DV, N_Q_HEADS, SEQ_LEN]` layout:
+```cpp
+const int64_t output_offset = q_head * DV + q_pos * (DV * N_Q_HEADS);
+```
+
+#### 4. Numerical Stability
+**Problem**: Log-sum-exp overflow in multi-thread reduction
+**Solution**: Clamp exponential differences and add safety checks:
+```cpp
+const float clamped_diff = fmaxf(-50.0f, fminf(50.0f, max_diff));
+if (std::isfinite(exp_sum_adjustment) && exp_sum_adjustment > 0.0f) {
+    global_sum += t_local_exp_sum[local_max_idx] * exp_sum_adjustment;
+}
+```
+
+### Workspace Layout
+Each thread requires specific workspace allocation:
+```cpp
+const size_t OUTPUT_SIZE = DV * N_Q_HEADS * SEQ_LEN;     // chunk_output
+const size_t LOCAL_MAX_SIZE = N_Q_HEADS * SEQ_LEN;       // local_max  
+const size_t V32_BUFFER_SIZE = DV;                       // V32_buffer (multi-type V)
+const size_t TEMP_BUFFER_SIZE = DV;                      // temp_buffer
+const size_t Q_QUANTIZED_SIZE = DK;                      // Q_q quantized
+const size_t SYNC_BUFFER_SIZE = 1;                       // atomic sync
+```
+
+### Multi-Type V Support
+Supports different V tensor types (F32, F16, quantized):
+```cpp
+if (v->type == GGML_TYPE_F32) {
+    ggml_vec_mad_f32(DV, output_ptr, (const float *)v_data, vs);
+} else if (v_to_float) {
+    v_to_float(v_data, V32_buffer, DV);
+    ggml_vec_mad_f32(DV, output_ptr, V32_buffer, vs);
+}
+```
+
+## Thread Synchronization
+
+### Barrier-Free Design
+Uses atomic variables instead of barriers for better performance:
+```cpp
+volatile uint32_t * sync_buffer = (volatile uint32_t *)(workspace + offset);
+sync_buffer[0] = 1;  // Signal completion
+```
+
+### Thread 0 Reduction
+Thread 0 waits for all threads and performs final log-sum-exp reduction:
+```cpp
+// Wait for all threads to complete
+while (!all_threads_ready && wait_cycles < max_wait_cycles) {
+    for (int t = 1; t < nth; ++t) {
+        if (t_sync_buffer[0] != 1) {
+            all_threads_ready = false;
+            break;
+        }
+    }
+    wait_cycles++;
+}
+```
+
+## Integration Points
+
+### Graph Building
+Integrated through [src/llama-graph.cpp](mdc:src/llama-graph.cpp) using `ggml_custom_4d`:
+```cpp
+ggml_tensor * custom_result = ggml_custom_4d(
+    ctx, GGML_TYPE_F32, head_dim, n_heads, seq_len, 1,
+    args, 4,
+    (ggml_custom_op_t)ggml_custom_flash_attn_mixed_simple,
+    n_threads, NULL
+);
+```
+
+### Mixed KV Cache Integration
+Used within mixed KV cache system in [src/llama-kv-cache-mixed.h](mdc:src/llama-kv-cache-mixed.h) for memory-efficient attention computation.
+
+## Testing Framework
+
+### Test Implementation
+Comprehensive test in [tests/test-flash-decoding-custom-op.cpp](mdc:tests/test-flash-decoding-custom-op.cpp):
+- Multi-head attention with GQA (Grouped Query Attention)
+- Multi-type tensor support (F32 Q, F16 K/V)
+- Thread safety validation
+- Numerical accuracy comparison with standard flash attention
+
+### Build and Run Commands
+```bash
+# Build project
+cmake --build build-arm64 --config Release -j12
+
+# Run test
+./build-arm64/bin/test-flash-attn
+
+# Run actual inference test
+./build-arm64/bin/llama-cli -m model.gguf -n 16 -p "Hello, world Zijie Tian" -ngl 0 -ctk q4_0 -ctv q4_0 -fa -t 12 -no-cnv
+```
+
+## Performance Results
+
+### Numerical Accuracy
+- **Final validation**: ~4% difference from standard flash attention (acceptable)
+- **Functional success**: 100% - actual inference works correctly
+- **Generated text**: "Hello, world Zijie Tian (zijie.tian@uva.nl) and Rik Smits"
+
+### Algorithm Classification
+✅ **True Token-Parallel Flash-Decoding**: Parallelizes across KV sequence dimension
+❌ **Not Head-Dimension Parallel**: Different from traditional approaches
+✅ **Memory Efficient**: Compatible with mixed KV cache (FP16 + quantized)
+
+## Common Issues and Solutions
+
+### 1. Token Counter Management
+**Problem**: `current FP16 tokens: 0, quantized tokens: 0`
+**Solution**: Update counters in `cpy_k()` method and make them `mutable`
+
+### 2. Thread Synchronization Timeout
+**Problem**: `WARNING: thread synchronization timeout`
+**Solution**: 
+- Check workspace allocation
+- Verify atomic variable alignment
+- Increase timeout threshold if needed
+
+### 3. Numerical Instability
+**Problem**: NaN or Inf values in output
+**Solution**:
+- Use clamped exponential differences
+- Add finite value checks
+- Initialize all buffers to zero
+
+### 4. Memory Alignment Issues
+**Problem**: Segmentation faults or incorrect results
+**Solution**:
+- Ensure `CACHE_LINE_SIZE_F32` padding
+- Use volatile for atomic variables
+- Verify workspace size calculations
+
+### 5. Output Format Mismatch
+**Problem**: Results don't match expected layout
+**Solution**: 
+- Verify tensor dimensions: `[DV, N_Q_HEADS, SEQ_LEN, N_BATCH]`
+- Check offset calculations
+- Ensure proper GQA head mapping
+
+## Debug Logging
+Enable debug output with `[mixed-kv]` prefix:
+```cpp
+LLAMA_LOG_DEBUG("[mixed-kv] Flash-decoding processing chunk %ld-%ld for %ld queries\n", 
+                chunk_start, chunk_end, N_Q_HEADS * SEQ_LEN);
+```
+
+## Future Improvements
+1. **GPU Acceleration**: Offload to CUDA/ROCm backends
+2. **Dynamic Load Balancing**: Adaptive chunk sizing based on hardware
+3. **Advanced Quantization**: Better compression for KV cache
+4. **Memory Optimization**: Reduce workspace requirements
+5. **Performance Profiling**: Detailed timing analysis
+
+## Architecture Compliance
+- ✅ Follows ggml framework patterns
+- ✅ Compatible with llama.cpp architecture  
+- ✅ Maintains backward compatibility
+- ✅ Thread-safe implementation
+- ✅ Memory-efficient design

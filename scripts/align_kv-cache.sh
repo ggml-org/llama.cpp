@@ -10,8 +10,8 @@ echo "✓ GGUF files cleaned"
 
 MODEL="/datasets/gguf/Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
 PROMPT="Write a quick sort: "
-STEPS=1
-TRACE_LAYER=2
+STEPS=4
+TRACE_LAYER=0
 
 echo "=== KV Cache Alignment Test ==="
 # Create F16 reference

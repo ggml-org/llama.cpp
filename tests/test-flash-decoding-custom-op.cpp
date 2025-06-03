@@ -65,11 +65,11 @@ int main() {
     printf("Testing Flash-Decoding Custom Operation vs Standard Flash Attention\n");
 
     // Test parameters - reduce KV length to minimize F16 accumulation errors
-    const int head_dim  = 32;
+    const int head_dim  = 128;
     const int n_heads   = 32;
     const int n_kv_heads = 8;
-    const int seq_len   = 1;     // Q length
-    const int kv_len    = 64;    // K/V length - reduced for better F16 precision
+    const int seq_len   = 32;     // Q length
+    const int kv_len    = 256;    // K/V length - reduced for better F16 precision
     const int n_threads = 8;  // Multi-thread stability test
 
     printf("Test Parameters:\n");
@@ -95,8 +95,8 @@ int main() {
     // Format: [head_dim, seq_len, n_heads, 1] for Q, K, V
     // Test F16 V multi-type support: Q=F32, K=F16, V=F16, mask=F32
     ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, seq_len, n_heads, 1);
-    ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_kv_heads, 1);  
-    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_kv_heads, 1);  // Test F16 V multi-type support
+    ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, GGML_PAD(kv_len, 256),  n_kv_heads, 1);  
+    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, GGML_PAD(kv_len, 256),  n_kv_heads, 1);  // Test F16 V multi-type support
 
     // Create mask tensor for custom flash attention
     ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kv_len, GGML_PAD(seq_len, 256));
@@ -110,17 +110,17 @@ int main() {
     float* mask_data = (float*)mask->data;
     fill_causal_mask(mask_data, seq_len, kv_len);
 
-    for (int i = seq_len; i < GGML_PAD(seq_len, 256); i++) {
-        for (int j = 0; j < kv_len; j++) {
+    for (int i = seq_len; i < seq_len; i++) {
+        for (int j = kv_len; j < GGML_PAD(kv_len, 256); j++) {
             mask_data[i * kv_len + j] = -INFINITY;
         }
     }
 
     //> Use random data for realistic testing 
     // ggml_set_f32(q, 1.0f);    // Q = [1, 1]
-    ggml_set_f32(k, 2.0f);    // K = [2, 2] for all tokens
+    // ggml_set_f32(k, 2.0f);    // K = [2, 2] for all tokens
     // ggml_set_f32(v, 3.0f);    // V = [3, 3] for all tokens  
-    ggml_set_f32(mask, 0.0f); // No masking
+    // ggml_set_f32(mask, 0.0f); // No masking
 
     // ============================================================================
     // Test 1: Custom Flash-Decoding Implementation
@@ -128,11 +128,12 @@ int main() {
     printf("\n--- Testing Custom Flash-Decoding Implementation ---\n");
 
     // Create custom operation for flash-decoding
+    // dst shape: [head_dim, n_heads, seq_len, n_batch]
     ggml_tensor * args[] = { q, k, v, mask };
     ggml_tensor * custom_result = ggml_custom_4d(
         ctx,
         GGML_TYPE_F32,
-        head_dim, seq_len, n_heads, 1,
+        head_dim, n_heads, seq_len, 1,
         args,
         4,                  // number of arguments
         (ggml_custom_op_t)ggml_custom_flash_attn_mixed_simple,
@@ -154,7 +155,8 @@ int main() {
 
     // Calculate workspace size for custom operation
     // FIXED: Must match exactly the layout in ggml_custom_flash_attn_mixed_simple (updated for multi-type V support)
-    const size_t OUTPUT_SIZE = seq_len * n_heads * head_dim;           // chunk_output
+    // Note: Output layout is [head_dim, n_heads, seq_len] for each thread's workspace
+    const size_t OUTPUT_SIZE = head_dim * n_heads * seq_len;           // chunk_output: [DV, N_Q_HEADS, SEQ_LEN]
     const size_t LOCAL_MAX_SIZE = seq_len * n_heads;                   // local_max
     const size_t LOCAL_EXP_SUM_SIZE = seq_len * n_heads;               // local_exp_sum  
     const size_t V32_BUFFER_SIZE = head_dim;                           // V32_buffer (DV) - new for multi-type V support
@@ -244,7 +246,7 @@ int main() {
     const float scale = 1.0f / sqrtf((float)head_dim);
 
     ggml_tensor * standard_result = ggml_flash_attn_ext(
-        ctx, q_std, k_std, v_std, NULL,  // Use NULL mask for comparison
+        ctx, q_std, k_std, v_std, mask,  // Use NULL mask for comparison
         scale,
         0.0f,  // max_bias
         0.0f   // logit_softcap
