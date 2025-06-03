@@ -499,13 +499,12 @@ def do_test_calc_result(server: ServerProcess, result_override: str | None, n_pr
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("n_predict,reasoning_format,stream,expect_reasoning_content,expect_content,hf_repo,template_override", [
-    (128, 'deepseek',   CompletionMode.NORMAL,   None, "^The sum of 102 and 7 is 109[\\s\\S]*",                                       "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",       None),
-    (128,  None,        CompletionMode.NORMAL,   None, "^The sum of 102 and 7 is 109[\\s\\S]*",                                       "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",       None),
-    (1024, 'deepseek',  CompletionMode.NORMAL,   "I need to calculate the sum of 102 and 7[\\s\\S]*", "To find the sum of[\\s\\S]*",  "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
-    (1024, 'deepseek',  CompletionMode.STREAMED, None, "^<think>I need to calculate [\\s\\S]*?</think>To find the sum of [\\s\\S]*",  "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
-    (1024, 'deepseek',  CompletionMode.NORMAL,   "First, I [\\s\\S]*", "To find the sum of[\\s\\S]*",                                 "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", ("llama-cpp-deepseek-r1", None)),
-    (1024, 'deepseek',  CompletionMode.STREAMED, None, "^<think>First, I [\\s\\S]*?</think>To find the sum of[\\s\\S]*",              "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", ("llama-cpp-deepseek-r1", None)),
+@pytest.mark.parametrize("stream", [CompletionMode.NORMAL, CompletionMode.STREAMED])
+@pytest.mark.parametrize("n_predict,reasoning_format,expect_reasoning_content,expect_content,hf_repo,template_override", [
+    (128, 'deepseek',   None, "^The sum of 102 and 7 is 109[\\s\\S]*",                                       "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",       None),
+    (128,  None,        None, "^The sum of 102 and 7 is 109[\\s\\S]*",                                       "bartowski/Phi-3.5-mini-instruct-GGUF:Q4_K_M",       None),
+    (1024, 'deepseek',  "I need to calculate the sum of 102 and 7[\\s\\S]*", "To find the sum of[\\s\\S]*",  "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
+    (1024, 'deepseek',  "First, I [\\s\\S]*", "To find the sum of[\\s\\S]*",                                 "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", ("llama-cpp-deepseek-r1", None)),
     # (1024, 'none',      CompletionMode.NORMAL,   None, "^(<think>\\s*)?I need[\\s\\S]*?</think>\\s*To find[\\s\\S]*",                 "bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M", None),
     # (128,  'deepseek',  None, "^Okay, let me figure out the sum of 102 and 7[\\s\\S]*",                      "bartowski/Qwen_QwQ-32B-GGUF:Q4_K_M",                None),
 ])

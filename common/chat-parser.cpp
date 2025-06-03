@@ -154,9 +154,10 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
             if (!rest.empty()) {
                 handle_reasoning(rest, /* closed */ !is_partial());
             }
-            if (!syntax_.thinking_forced_open) {
-                throw common_chat_msg_partial_exception(end_think);
-            }
+            // Allow unclosed thinking tags, for now (https://github.com/ggml-org/llama.cpp/issues/13812, https://github.com/ggml-org/llama.cpp/issues/13877)
+            // if (!syntax_.thinking_forced_open) {
+            //     throw common_chat_msg_partial_exception(end_think);
+            // }
             return true;
         }
     }
@@ -170,10 +171,16 @@ std::string common_chat_msg_parser::consume_rest() {
 }
 
 // Tries to find the regex, consumes it (pos right after it) and gives the prelude (right before it) and the groups to the callback.
-std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_find_regex(const common_regex & regex, size_t from) {
+std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser::try_find_regex(const common_regex & regex, size_t from, bool add_prelude_to_content) {
     auto m = regex.search(input_, from == std::string::npos ? pos_ : from);
     if (m.type == COMMON_REGEX_MATCH_TYPE_NONE) {
         return std::nullopt;
+    }
+    auto prelude = input_.substr(pos_, m.groups[0].begin - pos_);
+    pos_ = m.groups[0].end;
+
+    if (add_prelude_to_content) {
+        add_content(prelude);
     }
     if (m.type == COMMON_REGEX_MATCH_TYPE_PARTIAL) {
         if (is_partial()) {
@@ -181,9 +188,6 @@ std::optional<common_chat_msg_parser::find_regex_result> common_chat_msg_parser:
         }
         return std::nullopt;
     }
-    auto prelude = input_.substr(pos_, m.groups[0].begin - pos_);
-    pos_ = m.groups[0].end;
-
     return find_regex_result{prelude, m.groups};
 }
 

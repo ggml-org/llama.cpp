@@ -1,10 +1,11 @@
-#include "gguf.h" // for reading GGUF splits
 #include "arg.h"
 
+#include "chat.h"
 #include "common.h"
+#include "gguf.h" // for reading GGUF splits
+#include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
-#include "chat.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -14,6 +15,9 @@
 #endif
 #include <windows.h>
 #endif
+
+#define JSON_ASSERT GGML_ASSERT
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -33,8 +37,6 @@
 #include <curl/easy.h>
 #include <future>
 #endif
-
-#include "json-schema-to-grammar.h"
 
 using json = nlohmann::ordered_json;
 
@@ -242,7 +244,56 @@ static bool curl_perform_with_retry(const std::string & url, CURL * curl, int ma
 }
 
 // download one single file from remote URL to local path
-static bool common_download_file_single(const std::string & url, const std::string & path, const std::string & bearer_token) {
+static bool common_download_file_single(const std::string & url, const std::string & path, const std::string & bearer_token, bool offline) {
+    // Check if the file already exists locally
+    auto file_exists = std::filesystem::exists(path);
+
+    // If the file exists, check its JSON metadata companion file.
+    std::string metadata_path = path + ".json";
+    nlohmann::json metadata; // TODO @ngxson : get rid of this json, use regex instead
+    std::string etag;
+    std::string last_modified;
+
+    if (file_exists) {
+        if (offline) {
+            LOG_INF("%s: using cached file (offline mode): %s\n", __func__, path.c_str());
+            return true; // skip verification/downloading
+        }
+        // Try and read the JSON metadata file (note: stream autoclosed upon exiting this block).
+        std::ifstream metadata_in(metadata_path);
+        if (metadata_in.good()) {
+            try {
+                metadata_in >> metadata;
+                LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(), metadata.dump().c_str());
+                if (metadata.contains("etag") && metadata.at("etag").is_string()) {
+                    etag = metadata.at("etag");
+                }
+                if (metadata.contains("lastModified") && metadata.at("lastModified").is_string()) {
+                    last_modified = metadata.at("lastModified");
+                }
+            } catch (const nlohmann::json::exception & e) {
+                LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
+            }
+        }
+        // if we cannot open the metadata file, we assume that the downloaded file is not valid (etag and last-modified are left empty, so we will download it again)
+    } else {
+        if (offline) {
+            LOG_ERR("%s: required file is not available in cache (offline mode): %s\n", __func__, path.c_str());
+            return false;
+        }
+        LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
+    }
+
+    // Send a HEAD request to retrieve the etag and last-modified headers
+    struct common_load_model_from_url_headers {
+        std::string etag;
+        std::string last_modified;
+    };
+
+    common_load_model_from_url_headers headers;
+    bool head_request_ok = false;
+    bool should_download = !file_exists; // by default, we should download if the file does not exist
+
     // Initialize libcurl
     curl_ptr       curl(curl_easy_init(), &curl_easy_cleanup);
     curl_slist_ptr http_headers;
@@ -269,91 +320,47 @@ static bool common_download_file_single(const std::string & url, const std::stri
     curl_easy_setopt(curl.get(), CURLOPT_SSL_OPTIONS, CURLSSLOPT_NATIVE_CA);
 #endif
 
-    // Check if the file already exists locally
-    auto file_exists = std::filesystem::exists(path);
+    typedef size_t(*CURLOPT_HEADERFUNCTION_PTR)(char *, size_t, size_t, void *);
+    auto header_callback = [](char * buffer, size_t /*size*/, size_t n_items, void * userdata) -> size_t {
+        common_load_model_from_url_headers * headers = (common_load_model_from_url_headers *) userdata;
 
-    // If the file exists, check its JSON metadata companion file.
-    std::string metadata_path = path + ".json";
-    nlohmann::json metadata; // TODO @ngxson : get rid of this json, use regex instead
-    std::string etag;
-    std::string last_modified;
+        static std::regex header_regex("([^:]+): (.*)\r\n");
+        static std::regex etag_regex("ETag", std::regex_constants::icase);
+        static std::regex last_modified_regex("Last-Modified", std::regex_constants::icase);
 
-    if (file_exists) {
-        // Try and read the JSON metadata file (note: stream autoclosed upon exiting this block).
-        std::ifstream metadata_in(metadata_path);
-        if (metadata_in.good()) {
-            try {
-                metadata_in >> metadata;
-                LOG_DBG("%s: previous metadata file found %s: %s\n", __func__, metadata_path.c_str(), metadata.dump().c_str());
-                if (metadata.contains("etag") && metadata.at("etag").is_string()) {
-                    etag = metadata.at("etag");
-                }
-                if (metadata.contains("lastModified") && metadata.at("lastModified").is_string()) {
-                    last_modified = metadata.at("lastModified");
-                }
-            } catch (const nlohmann::json::exception & e) {
-                LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
+        std::string header(buffer, n_items);
+        std::smatch match;
+        if (std::regex_match(header, match, header_regex)) {
+            const std::string & key = match[1];
+            const std::string & value = match[2];
+            if (std::regex_match(key, match, etag_regex)) {
+                headers->etag = value;
+            } else if (std::regex_match(key, match, last_modified_regex)) {
+                headers->last_modified = value;
             }
         }
-        // if we cannot open the metadata file, we assume that the downloaded file is not valid (etag and last-modified are left empty, so we will download it again)
-    } else {
-        LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
-    }
-
-    // Send a HEAD request to retrieve the etag and last-modified headers
-    struct common_load_model_from_url_headers {
-        std::string etag;
-        std::string last_modified;
+        return n_items;
     };
 
-    common_load_model_from_url_headers headers;
-    bool head_request_ok = false;
-    bool should_download = !file_exists; // by default, we should download if the file does not exist
+    curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 1L); // will trigger the HEAD verb
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L); // hide head request progress
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, static_cast<CURLOPT_HEADERFUNCTION_PTR>(header_callback));
+    curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
 
-    // get ETag to see if the remote file has changed
-    {
-        typedef size_t(*CURLOPT_HEADERFUNCTION_PTR)(char *, size_t, size_t, void *);
-        auto header_callback = [](char * buffer, size_t /*size*/, size_t n_items, void * userdata) -> size_t {
-            common_load_model_from_url_headers * headers = (common_load_model_from_url_headers *) userdata;
+    // we only allow retrying once for HEAD requests
+    // this is for the use case of using running offline (no internet), retrying can be annoying
+    bool was_perform_successful = curl_perform_with_retry(url, curl.get(), 1, 0, "HEAD");
+    if (!was_perform_successful) {
+        head_request_ok = false;
+    }
 
-            static std::regex header_regex("([^:]+): (.*)\r\n");
-            static std::regex etag_regex("ETag", std::regex_constants::icase);
-            static std::regex last_modified_regex("Last-Modified", std::regex_constants::icase);
-
-            std::string header(buffer, n_items);
-            std::smatch match;
-            if (std::regex_match(header, match, header_regex)) {
-                const std::string & key = match[1];
-                const std::string & value = match[2];
-                if (std::regex_match(key, match, etag_regex)) {
-                    headers->etag = value;
-                } else if (std::regex_match(key, match, last_modified_regex)) {
-                    headers->last_modified = value;
-                }
-            }
-            return n_items;
-        };
-
-        curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 1L); // will trigger the HEAD verb
-        curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 1L); // hide head request progress
-        curl_easy_setopt(curl.get(), CURLOPT_HEADERFUNCTION, static_cast<CURLOPT_HEADERFUNCTION_PTR>(header_callback));
-        curl_easy_setopt(curl.get(), CURLOPT_HEADERDATA, &headers);
-
-        // we only allow retrying once for HEAD requests
-        // this is for the use case of using running offline (no internet), retrying can be annoying
-        bool was_perform_successful = curl_perform_with_retry(url, curl.get(), 1, 0, "HEAD");
-        if (!was_perform_successful) {
-            head_request_ok = false;
-        }
-
-        long http_code = 0;
-        curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
-        if (http_code == 200) {
-            head_request_ok = true;
-        } else {
-            LOG_WRN("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
-            head_request_ok = false;
-        }
+    long http_code = 0;
+    curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
+    if (http_code == 200) {
+        head_request_ok = true;
+    } else {
+        LOG_WRN("%s: HEAD invalid http status code received: %ld\n", __func__, http_code);
+        head_request_ok = false;
     }
 
     // if head_request_ok is false, we don't have the etag or last-modified headers
@@ -460,12 +467,12 @@ static bool common_download_file_single(const std::string & url, const std::stri
 
 // download multiple files from remote URLs to local paths
 // the input is a vector of pairs <url, path>
-static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls, const std::string & bearer_token) {
+static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> & urls, const std::string & bearer_token, bool offline) {
     // Prepare download in parallel
     std::vector<std::future<bool>> futures_download;
     for (auto const & item : urls) {
-        futures_download.push_back(std::async(std::launch::async, [bearer_token](const std::pair<std::string, std::string> & it) -> bool {
-            return common_download_file_single(it.first, it.second, bearer_token);
+        futures_download.push_back(std::async(std::launch::async, [bearer_token, offline](const std::pair<std::string, std::string> & it) -> bool {
+            return common_download_file_single(it.first, it.second, bearer_token, offline);
         }, item));
     }
 
@@ -481,14 +488,15 @@ static bool common_download_file_multiple(const std::vector<std::pair<std::strin
 
 static bool common_download_model(
         const common_params_model & model,
-        const std::string & bearer_token) {
+        const std::string & bearer_token,
+        bool offline) {
     // Basic validation of the model.url
     if (model.url.empty()) {
         LOG_ERR("%s: invalid model url\n", __func__);
         return false;
     }
 
-    if (!common_download_file_single(model.url, model.path, bearer_token)) {
+    if (!common_download_file_single(model.url, model.path, bearer_token, offline)) {
         return false;
     }
 
@@ -547,7 +555,7 @@ static bool common_download_model(
         }
 
         // Download in parallel
-        common_download_file_multiple(urls, bearer_token);
+        common_download_file_multiple(urls, bearer_token, offline);
     }
 
     return true;
@@ -608,7 +616,7 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
  *
  * Note: we use the Ollama-compatible HF API, but not using the blobId. Instead, we use the special "ggufFile" field which returns the value for "hf_file". This is done to be backward-compatible with existing cache files.
  */
-static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, const std::string & bearer_token) {
+static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_with_tag, const std::string & bearer_token, bool offline) {
     auto parts = string_split<std::string>(hf_repo_with_tag, ':');
     std::string tag = parts.size() > 1 ? parts.back() : "latest";
     std::string hf_repo = parts[0];
@@ -638,20 +646,25 @@ static struct common_hf_file_res common_get_hf_file(const std::string & hf_repo_
     long res_code = 0;
     std::string res_str;
     bool use_cache = false;
-    try {
-        auto res = common_remote_get_content(url, params);
-        res_code = res.first;
-        res_str = std::string(res.second.data(), res.second.size());
-    } catch (const std::exception & e) {
-        LOG_WRN("error: failed to get manifest: %s\n", e.what());
-        LOG_WRN("try reading from cache\n");
-        // try to read from cache
+    if (!offline) {
         try {
+            auto res = common_remote_get_content(url, params);
+            res_code = res.first;
+            res_str = std::string(res.second.data(), res.second.size());
+        } catch (const std::exception & e) {
+            LOG_WRN("error: failed to get manifest at %s: %s\n", url.c_str(), e.what());
+        }
+    }
+    if (res_code == 0) {
+        if (std::filesystem::exists(cached_response_path)) {
+            LOG_WRN("trying to read manifest from cache: %s\n", cached_response_path.c_str());
             res_str = read_file(cached_response_path);
             res_code = 200;
             use_cache = true;
-        } catch (const std::exception & e) {
-            throw std::runtime_error("error: failed to get manifest (check your internet connection)");
+        } else {
+            throw std::runtime_error(
+                offline ? "error: failed to get manifest (offline mode)"
+                : "error: failed to get manifest (check your internet connection)");
         }
     }
     std::string ggufFile;
@@ -698,24 +711,25 @@ bool common_has_curl() {
     return false;
 }
 
-static bool common_download_file_single(const std::string &, const std::string &, const std::string &) {
+static bool common_download_file_single(const std::string &, const std::string &, const std::string &, bool) {
     LOG_ERR("error: built without CURL, cannot download model from internet\n");
     return false;
 }
 
-static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> &, const std::string &) {
+static bool common_download_file_multiple(const std::vector<std::pair<std::string, std::string>> &, const std::string &, bool) {
     LOG_ERR("error: built without CURL, cannot download model from the internet\n");
     return false;
 }
 
 static bool common_download_model(
         const common_params_model &,
-        const std::string &) {
+        const std::string &,
+        bool) {
     LOG_ERR("error: built without CURL, cannot download model from the internet\n");
     return false;
 }
 
-static struct common_hf_file_res common_get_hf_file(const std::string &, const std::string &) {
+static struct common_hf_file_res common_get_hf_file(const std::string &, const std::string &, bool) {
     LOG_ERR("error: built without CURL, cannot download model from the internet\n");
     return {};
 }
@@ -742,7 +756,8 @@ struct handle_model_result {
 static handle_model_result common_params_handle_model(
         struct common_params_model & model,
         const std::string & bearer_token,
-        const std::string & model_path_default) {
+        const std::string & model_path_default,
+        bool offline) {
     handle_model_result result;
     // handle pre-fill default model path and url based on hf_repo and hf_file
     {
@@ -750,7 +765,7 @@ static handle_model_result common_params_handle_model(
             // short-hand to avoid specifying --hf-file -> default it to --model
             if (model.hf_file.empty()) {
                 if (model.path.empty()) {
-                    auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token);
+                    auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
                     if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
                         exit(1); // built without CURL, error message already printed
                     }
@@ -791,7 +806,7 @@ static handle_model_result common_params_handle_model(
 
     // then, download it if needed
     if (!model.url.empty()) {
-        bool ok = common_download_model(model, bearer_token);
+        bool ok = common_download_model(model, bearer_token, offline);
         if (!ok) {
             LOG_ERR("error: failed to download model from %s\n", model.url.c_str());
             exit(1);
@@ -934,7 +949,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // handle model and download
     {
-        auto res = common_params_handle_model(params.model, params.hf_token, DEFAULT_MODEL_PATH);
+        auto res = common_params_handle_model(params.model, params.hf_token, DEFAULT_MODEL_PATH, params.offline);
         if (params.no_mmproj) {
             params.mmproj = {};
         } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
@@ -944,12 +959,12 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         // only download mmproj if the current example is using it
         for (auto & ex : mmproj_examples) {
             if (ctx_arg.ex == ex) {
-                common_params_handle_model(params.mmproj,    params.hf_token, "");
+                common_params_handle_model(params.mmproj,    params.hf_token, "", params.offline);
                 break;
             }
         }
-        common_params_handle_model(params.speculative.model, params.hf_token, "");
-        common_params_handle_model(params.vocoder.model,     params.hf_token, "");
+        common_params_handle_model(params.speculative.model, params.hf_token, "", params.offline);
+        common_params_handle_model(params.vocoder.model,     params.hf_token, "", params.offline);
     }
 
     if (params.escape) {
@@ -1333,9 +1348,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--prio"}, "N",
-        string_format("set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: %d)\n", params.cpuparams.priority),
+        string_format("set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: %d)\n", params.cpuparams.priority),
         [](common_params & params, int prio) {
-            if (prio < 0 || prio > 3) {
+            if (prio < GGML_SCHED_PRIO_LOW || prio > GGML_SCHED_PRIO_REALTIME) {
                 throw std::invalid_argument("invalid value");
             }
             params.cpuparams.priority = (enum ggml_sched_priority) prio;
@@ -2848,15 +2863,25 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_JINJA"));
     add_opt(common_arg(
         {"--reasoning-format"}, "FORMAT",
-        "reasoning format (default: deepseek; allowed values: deepseek, none)\n"
-        "controls whether thought tags are extracted from the response, and in which format they're returned. 'none' leaves thoughts unparsed in `message.content`, 'deepseek' puts them in `message.reasoning_content` (for DeepSeek R1 & Command R7B only).\n"
-        "only supported for non-streamed responses",
+        "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
+        "- none: leaves thoughts unparsed in `message.content`\n"
+        "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
+        "(default: deepseek)",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
+            else if (value == "deepseek-legacy") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY; }
             else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
-            else { std::invalid_argument("invalid value"); }
+            else { throw std::invalid_argument("invalid value"); }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
+    add_opt(common_arg(
+        {"--reasoning-budget"}, "N",
+        "controls the amount of thinking allowed; currently only one of: -1 for unrestricted thinking budget, or 0 to disable thinking (default: -1)",
+        [](common_params & params, int value) {
+            if (value != 0 && value != -1) { throw std::invalid_argument("invalid value"); }
+            params.reasoning_budget = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK_BUDGET"));
     add_opt(common_arg(
         {"--chat-template"}, "JINJA_TEMPLATE",
         string_format(
@@ -2955,7 +2980,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             /**/ if (value == "jsonl") { params.batched_bench_output_jsonl = true; }
             else if (value == "md") { params.batched_bench_output_jsonl = false; }
-            else { std::invalid_argument("invalid value"); }
+            else { throw std::invalid_argument("invalid value"); }
         }
     ).set_examples({LLAMA_EXAMPLE_BENCH}));
     add_opt(common_arg(
@@ -2987,6 +3012,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             common_log_set_verbosity_thold(INT_MAX);
         }
     ));
+    add_opt(common_arg(
+        {"--offline"},
+        "Offline mode: forces use of cache, prevents network access",
+        [](common_params & params) {
+            params.offline = true;
+        }
+    ).set_env("LLAMA_OFFLINE"));
     add_opt(common_arg(
         {"-lv", "--verbosity", "--log-verbosity"}, "N",
         "Set the verbosity threshold. Messages with a higher verbosity will be ignored.",
