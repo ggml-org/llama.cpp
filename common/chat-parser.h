@@ -2,8 +2,9 @@
 
 #include "chat.h"
 #include "json-partial.h"
-#include "json.hpp"
 #include "regex-partial.h"
+
+#include <nlohmann/json.hpp>
 
 #include <optional>
 #include <string>
@@ -30,6 +31,7 @@ class common_chat_msg_parser {
     const std::string & healing_marker() const { return healing_marker_; }
     const bool & is_partial() const { return is_partial_; }
     const common_chat_msg & result() const { return result_; }
+    const common_chat_syntax & syntax() const { return syntax_; }
 
     void move_to(size_t pos) {
         if (pos > input_.size()) {
@@ -77,7 +79,7 @@ class common_chat_msg_parser {
         std::vector<common_string_range> groups;
     };
 
-    std::optional<find_regex_result> try_find_regex(const common_regex & regex, size_t from = std::string::npos);
+    std::optional<find_regex_result> try_find_regex(const common_regex & regex, size_t from = std::string::npos, bool add_prelude_to_content = true);
 
     bool try_consume_literal(const std::string & literal);
 

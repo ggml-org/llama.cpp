@@ -5,7 +5,9 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
-#include "json.hpp"
+
+#define JSON_ASSERT GGML_ASSERT
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>

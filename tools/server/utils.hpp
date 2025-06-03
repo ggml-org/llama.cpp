@@ -6,17 +6,17 @@
 #include "arg.h" // common_remote_get_content
 #include "base64.hpp"
 #include "mtmd.h"
+#include "mtmd-helper.h"
+#include "chat.h"
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
 // disable Nagle's algorithm
 #define CPPHTTPLIB_TCP_NODELAY true
-#include "httplib.h"
+#include <cpp-httplib/httplib.h>
 
-// Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
-#include "json.hpp"
-#include "chat.h"
+#include <nlohmann/json.hpp>
 
 #include <random>
 #include <sstream>
@@ -264,13 +264,19 @@ static size_t validate_utf8(const std::string& text) {
 static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_tokens & query, const llama_tokens & doc) {
     llama_tokens result;
 
+    // Get EOS token - use SEP token as fallback if EOS is not available
+    llama_token eos_token = llama_vocab_eos(vocab);
+    if (eos_token == LLAMA_TOKEN_NULL) {
+        eos_token = llama_vocab_sep(vocab);
+    }
+
     result.reserve(doc.size() + query.size() + 4);
     result.push_back(llama_vocab_bos(vocab));
     result.insert(result.end(), query.begin(), query.end());
-    result.push_back(llama_vocab_eos(vocab));
+    result.push_back(eos_token);
     result.push_back(llama_vocab_sep(vocab));
     result.insert(result.end(), doc.begin(), doc.end());
-    result.push_back(llama_vocab_eos(vocab));
+    result.push_back(eos_token);
 
     return result;
 }
@@ -568,11 +574,12 @@ struct oaicompat_parser_options {
     common_chat_templates * tmpls;
     bool allow_image;
     bool allow_audio;
+    bool enable_thinking = true;
 };
 
 // used by /chat/completions endpoint
 static json oaicompat_chat_params_parse(
-    const json & body, /* openai api json semantics */
+    json & body, /* openai api json semantics */
     const oaicompat_parser_options & opt,
     std::vector<raw_buffer> & out_files)
 {
@@ -623,7 +630,7 @@ static json oaicompat_chat_params_parse(
     if (!body.contains("messages")) {
         throw std::runtime_error("'messages' is required");
     }
-    json messages = body.at("messages");
+    json & messages = body.at("messages");
     if (!messages.is_array()) {
         throw std::runtime_error("Expected 'messages' to be an array");
     }
@@ -731,9 +738,14 @@ static json oaicompat_chat_params_parse(
     inputs.grammar               = grammar;
     inputs.use_jinja             = opt.use_jinja;
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
+    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.reasoning_format      = opt.reasoning_format;
-    if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && body.contains("grammar")) {
-        throw std::runtime_error("Cannot use custom grammar constraints with tools.");
+    inputs.enable_thinking       = opt.enable_thinking;
+    if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+        if (body.contains("grammar")) {
+            throw std::runtime_error("Cannot use custom grammar constraints with tools.");
+        }
+        llama_params["parse_tool_calls"] = true;
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token

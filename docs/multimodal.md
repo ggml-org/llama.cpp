@@ -33,7 +33,7 @@ llama-server -hf ggml-org/gemma-3-4b-it-GGUF --no-mmproj-offload
 
 ## Pre-quantized models
 
-These are ready-to-use models, most of them come with `Q4_K_M` quantization by default. They can be found at the Hugging Face page of the ggml-org: https://huggingface.co/ggml-org
+These are ready-to-use models, most of them come with `Q4_K_M` quantization by default. They can be found at the Hugging Face page of the ggml-org: https://huggingface.co/collections/ggml-org/multimodal-ggufs-68244e01ff1f39e5bebeeedc
 
 Replaces the `(tool_name)` with the name of binary you want to use. For example, `llama-mtmd-cli` or `llama-server`
 
@@ -81,6 +81,10 @@ NOTE: some models may require large context window, for example: `-c 8192`
 
 # Llama 4 Scout
 (tool_name) -hf ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF
+
+# Moondream2 20250414 version
+(tool_name) -hf ggml-org/moondream2-20250414-GGUF
+
 ```
 
 **Audio models**:
@@ -89,4 +93,17 @@ NOTE: some models may require large context window, for example: `-c 8192`
 # Ultravox 0.5
 (tool_name) -hf ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF
 (tool_name) -hf ggml-org/ultravox-v0_5-llama-3_1-8b-GGUF
+
+# Qwen2-Audio and SeaLLM-Audio
+# note: no pre-quantized GGUF this model, as they have very poor result
+# ref: https://github.com/ggml-org/llama.cpp/pull/13760
+```
+
+**Mixed modalities**:
+
+```sh
+# Qwen2.5 Omni
+# Capabilities: audio input, vision input
+(tool_name) -hf ggml-org/Qwen2.5-Omni-3B-GGUF
+(tool_name) -hf ggml-org/Qwen2.5-Omni-7B-GGUF
 ```

@@ -58,23 +58,20 @@ add_library(${TARGET} STATIC
     arg.cpp
     arg.h
     base64.hpp
-    chat.cpp
-    chat.h
     chat-parser.cpp
     chat-parser.h
+    chat.cpp
+    chat.h
     common.cpp
     common.h
     console.cpp
     console.h
-    json-schema-to-grammar.cpp
-    json.hpp
-    json-partial.h
     json-partial.cpp
+    json-partial.h
+    json-schema-to-grammar.cpp
     llguidance.cpp
     log.cpp
     log.h
-    minja/chat-template.hpp
-    minja/minja.hpp
     ngram-cache.cpp
     ngram-cache.h
     regex-partial.cpp
@@ -147,7 +144,7 @@ if (LLAMA_LLGUIDANCE)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} llguidance ${LLGUIDANCE_PLATFORM_LIBS})
 endif ()
 
-target_include_directories(${TARGET} PUBLIC .)
+target_include_directories(${TARGET} PUBLIC . ../vendor)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 target_link_libraries     (${TARGET} PRIVATE ${LLAMA_COMMON_EXTRA_LIBS} PUBLIC llama Threads::Threads)
 
