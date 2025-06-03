@@ -131,8 +131,9 @@ jobs:
         include:
           - build: 'x64'
             os: ubuntu-22.04
-          - build: 'arm64'
-            os: ubuntu-22.04-arm
+          # GGML_BACKEND_DL and GGML_CPU_ALL_VARIANTS are not currently supported on arm
+          # - build: 'arm64'
+          #   os: ubuntu-22.04-arm
 
     runs-on: ${{ matrix.os }}
 
@@ -159,6 +160,9 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
@@ -207,6 +211,9 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
