@@ -149,12 +149,27 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
-    for (uint32_t i = 0; i < cells.size(); ++i) {
-        if (!cells.pos_in(i, p0, p1)) {
-            continue;
-        }
+    if (seq_id >= 0) {
+        for (uint32_t i = 0; i < cells.size(); ++i) {
+            if (!cells.pos_in(i, p0, p1)) {
+                continue;
+            }
 
-        if (cells.seq_has(i, seq_id) && cells.seq_rm(i, seq_id)) {
+            if (cells.seq_has(i, seq_id) && cells.seq_rm(i, seq_id)) {
+                if (new_head == cells.size()) {
+                    new_head = i;
+                }
+            }
+        }
+    } else {
+        // match any sequence
+        for (uint32_t i = 0; i < cells.size(); ++i) {
+            if (!cells.pos_in(i, p0, p1)) {
+                continue;
+            }
+
+            cells.rm(i);
+
             if (new_head == cells.size()) {
                 new_head = i;
             }
