@@ -8,7 +8,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${source})
-    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    target_link_libraries(${TEST_TARGET} PRIVATE common ${TLIBS})
     install(TARGETS ${TEST_TARGET} RUNTIME)
 endfunction()
 
@@ -169,7 +169,7 @@ endif()
 # libmtmd
 set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
+target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd ${TLIBS})
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
