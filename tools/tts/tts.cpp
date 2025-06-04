@@ -5,7 +5,9 @@
 #include "sampling.h"
 #include "log.h"
 #include "llama.h"
-#include "json.hpp"
+
+#define JSON_ASSERT GGML_ASSERT
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -579,6 +581,8 @@ int main(int argc, char ** argv) {
 
     params.model = params.vocoder.model;
     params.embedding = true;
+    params.ctx_shift = false; // silence warning
+    params.n_ubatch = params.n_batch;
 
     common_init_result llama_init_cts = common_init_from_params(params);
 
@@ -1020,8 +1024,8 @@ lovely<|t_0.56|><|code_start|><|634|><|596|><|1766|><|1556|><|1306|><|1285|><|14
     }
     GGML_ASSERT(batch.n_tokens == n_codes);
 
-    if (llama_decode(ctx_cts, batch) != 0) {
-        LOG_ERR("%s: llama_decode() failed\n", __func__);
+    if (llama_encode(ctx_cts, batch) != 0) {
+        LOG_ERR("%s: llama_encode() failed\n", __func__);
         return 1;
     }
 

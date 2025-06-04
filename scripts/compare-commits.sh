@@ -17,14 +17,14 @@ rm -f llama-bench.sqlite > /dev/null
 
 # to test a backend, call the script with the corresponding environment variable (e.g. GGML_CUDA=1 ./scripts/compare-commits.sh ...)
 if [ -n "$GGML_CUDA" ]; then
-    cmake_opts="-DGGML_CUDA=ON"
+    CMAKE_OPTS="${CMAKE_OPTS} -DGGML_CUDA=ON"
 fi
 
 dir="build-bench"
 
 function run {
     rm -fr ${dir} > /dev/null
-    cmake -B ${dir} -S . $cmake_opts > /dev/null
+    cmake -B ${dir} -S . ${CMAKE_OPTS} > /dev/null
     cmake --build ${dir} -t llama-bench > /dev/null
     ${dir}/bin/llama-bench -o sql -oe md $bench_args | sqlite3 llama-bench.sqlite
 }

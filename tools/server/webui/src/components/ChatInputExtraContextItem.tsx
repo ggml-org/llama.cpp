@@ -1,4 +1,8 @@
-import { DocumentTextIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import {
+  DocumentTextIcon,
+  SpeakerWaveIcon,
+  XMarkIcon,
+} from '@heroicons/react/24/outline';
 import { MessageExtra } from '../utils/types';
 import { useState } from 'react';
 import { classNames } from '../utils/misc';
@@ -66,7 +70,11 @@ export default function ChatInputExtraContextItem({
                   className="w-14 h-14 flex items-center justify-center"
                   aria-description="Document icon"
                 >
-                  <DocumentTextIcon className="h-8 w-14 text-base-content/50" />
+                  {item.type === 'audioFile' ? (
+                    <SpeakerWaveIcon className="h-8 w-8 text-gray-500" />
+                  ) : (
+                    <DocumentTextIcon className="h-8 w-8 text-gray-500" />
+                  )}
                 </div>
 
                 <div className="text-xs pr-4">
@@ -98,6 +106,19 @@ export default function ChatInputExtraContextItem({
                 src={showingItem.base64Url}
                 alt={`Preview image for ${showingItem.name}`}
               />
+            ) : showingItem.type === 'audioFile' ? (
+              <audio
+                controls
+                className="w-full"
+                aria-description={`Audio file ${showingItem.name}`}
+              >
+                <source
+                  src={`data:${showingItem.mimeType};base64,${showingItem.base64Data}`}
+                  type={showingItem.mimeType}
+                  aria-description={`Audio file ${showingItem.name}`}
+                />
+                Your browser does not support the audio element.
+              </audio>
             ) : (
               <div className="overflow-x-auto">
                 <pre className="whitespace-pre-wrap break-words text-sm">

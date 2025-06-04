@@ -49,6 +49,7 @@ class TensorInfo:
 class GGUFValue:
     value: Any
     type: GGUFValueType
+    sub_type: GGUFValueType | None = None
 
 
 class WriterState(Enum):
@@ -238,7 +239,7 @@ class GGUFWriter:
 
             for key, val in kv_data.items():
                 kv_bytes += self._pack_val(key, GGUFValueType.STRING, add_vtype=False)
-                kv_bytes += self._pack_val(val.value, val.type, add_vtype=True)
+                kv_bytes += self._pack_val(val.value, val.type, add_vtype=True, sub_type=val.sub_type)
 
             fout.write(kv_bytes)
 
@@ -268,11 +269,11 @@ class GGUFWriter:
             fout.flush()
         self.state = WriterState.TI_DATA
 
-    def add_key_value(self, key: str, val: Any, vtype: GGUFValueType) -> None:
+    def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
         if any(key in kv_data for kv_data in self.kv_data):
             raise ValueError(f'Duplicated key name {key!r}')
 
-        self.kv_data[0][key] = GGUFValue(value=val, type=vtype)
+        self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
 
     def add_uint8(self, key: str, val: int) -> None:
         self.add_key_value(key,val, GGUFValueType.UINT8)
@@ -896,7 +897,7 @@ class GGUFWriter:
     def add_remove_extra_whitespaces(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.REMOVE_EXTRA_WS, value)
 
-    def add_precompiled_charsmap(self, charsmap: Sequence[bytes]) -> None:
+    def add_precompiled_charsmap(self, charsmap: bytes) -> None:
         self.add_array(Keys.Tokenizer.PRECOMPILED_CHARSMAP, charsmap)
 
     def add_chat_template(self, value: str | Sequence[Mapping[str, str]]) -> None:
@@ -936,11 +937,17 @@ class GGUFWriter:
 
     # for vision models
 
+    def add_clip_has_vision_encoder(self, value: bool) -> None:
+        self.add_bool(Keys.Clip.HAS_VISION_ENCODER, value)
+
+    def add_clip_has_audio_encoder(self, value: bool) -> None:
+        self.add_bool(Keys.Clip.HAS_AUDIO_ENCODER, value)
+
+    def add_clip_projector_type(self, value: str) -> None:
+        self.add_string(Keys.Clip.PROJECTOR_TYPE, value)
+
     def add_vision_projection_dim(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PROJECTION_DIM, value)
-
-    def add_vision_has_vision_encoder(self, value: bool) -> None:
-        self.add_bool(Keys.ClipVision.HAS_VISION_ENCODER, value)
 
     def add_vision_patch_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.PATCH_SIZE, value)
@@ -956,9 +963,6 @@ class GGUFWriter:
 
     def add_vision_head_count(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT, value)
-
-    def add_vision_projector_type(self, value: str) -> None:
-        self.add_string(Keys.ClipVision.PROJECTOR_TYPE, value)
 
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
@@ -987,13 +991,39 @@ class GGUFWriter:
     def add_vision_n_wa_pattern(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.N_WA_PATTERN, value)
 
+    # audio models
+
+    def add_audio_projection_dim(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.PROJECTION_DIM, value)
+
+    def add_audio_embedding_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.EMBEDDING_LENGTH, value)
+
+    def add_audio_feed_forward_length(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.FEED_FORWARD_LENGTH, value)
+
+    def add_audio_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.BLOCK_COUNT, value)
+
+    def add_audio_head_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Attention.HEAD_COUNT, value)
+
+    def add_audio_attention_layernorm_eps(self, value: float) -> None:
+        self.add_float32(Keys.ClipAudio.Attention.LAYERNORM_EPS, value)
+
+    def add_audio_num_mel_bins(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.NUM_MEL_BINS, value)
+
+    def add_audio_stack_factor(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
+
     def _pack(self, fmt: str, value: Any, skip_pack_prefix: bool = False) -> bytes:
         pack_prefix = ''
         if not skip_pack_prefix:
             pack_prefix = '<' if self.endianess == GGUFEndian.LITTLE else '>'
         return struct.pack(f'{pack_prefix}{fmt}', value)
 
-    def _pack_val(self, val: Any, vtype: GGUFValueType, add_vtype: bool) -> bytes:
+    def _pack_val(self, val: Any, vtype: GGUFValueType, add_vtype: bool, sub_type: GGUFValueType | None = None) -> bytes:
         kv_data = bytearray()
 
         if add_vtype:
@@ -1014,7 +1044,9 @@ class GGUFWriter:
             if len(val) == 0:
                 raise ValueError("Invalid GGUF metadata array. Empty array")
 
-            if isinstance(val, bytes):
+            if sub_type is not None:
+                ltype = sub_type
+            elif isinstance(val, bytes):
                 ltype = GGUFValueType.UINT8
             else:
                 ltype = GGUFValueType.get_type(val[0])

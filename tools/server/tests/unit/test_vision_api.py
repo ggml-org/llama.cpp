@@ -30,6 +30,7 @@ def create_server():
         ("What is this:\n", "malformed",              False, None),
         ("What is this:\n", "https://google.com/404", False, None), # non-existent image
         ("What is this:\n", "https://ggml.ai",        False, None), # non-image data
+        # TODO @ngxson : test with multiple images, no images and with audio
     ]
 )
 def test_vision_chat_completion(prompt, image_url, success, re_content):
