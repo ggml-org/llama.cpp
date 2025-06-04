@@ -1,5 +1,9 @@
 # Build llama.cpp locally
 
+The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](include/llama.h).
+
+The project also includes many example programs and tools using the `llama` library. The examples range from simple, minimal code snippets to sophisticated sub-projects such as an OpenAI-compatible HTTP server.
+
 **To get the Code:**
 
 ```bash
@@ -63,6 +67,7 @@ cmake --build build --config Release
       cmake --preset x64-windows-llvm-release
       cmake --build build-x64-windows-llvm-release
       ```
+- Curl usage is enabled by default and can be turned off with `-DLLAMA_CURL=OFF`. Otherwise you need to install development libraries for libcurl.
 
 ## BLAS Build
 

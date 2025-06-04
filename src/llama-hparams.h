@@ -131,6 +131,9 @@ struct llama_hparams {
     bool attn_soft_cap = false;
     bool use_kq_norm   = true;
 
+    // for Classifiers
+    uint32_t n_cls_out = 1;
+
     // llama4
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;

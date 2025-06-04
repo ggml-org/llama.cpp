@@ -1,12 +1,13 @@
 #include "chat.h"
 #include "chat-parser.h"
 #include "common.h"
+#include "json-partial.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
-#include "json-partial.h"
-#include "minja/chat-template.hpp"
-#include "minja/minja.hpp"
 #include "regex-partial.h"
+
+#include <minja/chat-template.hpp>
+#include <minja/minja.hpp>
 
 #include <cstdio>
 #include <exception>
@@ -15,7 +16,6 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
-
 
 static std::string format_time(const std::chrono::system_clock::time_point & now, const std::string & format) {
     auto time = std::chrono::system_clock::to_time_t(now);
@@ -82,10 +82,10 @@ json common_chat_msg::to_json_oaicompat() const
 
 std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const common_chat_msg & previous_msg, const common_chat_msg & new_msg) {
     std::vector<common_chat_msg_diff> diffs;
-    // if (previous_msg.reasoning_content != current.reasoning_content) {
-    //     auto & diff = diffs.emplace_back();
-    //     diff.reasoning_content_delta = string_diff(previous_msg.reasoning_content, current.reasoning_content);
-    // }
+    if (previous_msg.reasoning_content != new_msg.reasoning_content) {
+        auto & diff = diffs.emplace_back();
+        diff.reasoning_content_delta = string_diff(previous_msg.reasoning_content, new_msg.reasoning_content);
+    }
     if (previous_msg.content != new_msg.content) {
         auto & diff = diffs.emplace_back();
         diff.content_delta = string_diff(previous_msg.content, new_msg.content);
@@ -385,9 +385,9 @@ json common_chat_tools_to_json_oaicompat(const std::vector<common_chat_tool> & t
 
 template <> json common_chat_msg_diff_to_json_oaicompat(const common_chat_msg_diff & diff) {
     json delta = json::object();
-    // if (!diff.reasoning_content_delta.empty()) {
-    //     delta["reasoning_content"] = msg.reasoning_content;
-    // }
+    if (!diff.reasoning_content_delta.empty()) {
+        delta["reasoning_content"] = diff.reasoning_content_delta;
+    }
     if (!diff.content_delta.empty()) {
         delta["content"] = diff.content_delta;
     }
@@ -598,6 +598,7 @@ const char * common_reasoning_format_name(common_reasoning_format format) {
     switch (format) {
         case COMMON_REASONING_FORMAT_NONE:     return "none";
         case COMMON_REASONING_FORMAT_DEEPSEEK: return "deepseek";
+        case COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY: return "deepseek-legacy";
         default:
             throw std::runtime_error("Unknown reasoning format");
     }

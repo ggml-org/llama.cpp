@@ -1,10 +1,11 @@
-#include "gguf.h" // for reading GGUF splits
 #include "arg.h"
 
+#include "chat.h"
 #include "common.h"
+#include "gguf.h" // for reading GGUF splits
+#include "json-schema-to-grammar.h"
 #include "log.h"
 #include "sampling.h"
-#include "chat.h"
 
 // fix problem with std::min and std::max
 #if defined(_WIN32)
@@ -14,6 +15,9 @@
 #endif
 #include <windows.h>
 #endif
+
+#define JSON_ASSERT GGML_ASSERT
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <climits>
@@ -33,8 +37,6 @@
 #include <curl/easy.h>
 #include <future>
 #endif
-
-#include "json-schema-to-grammar.h"
 
 using json = nlohmann::ordered_json;
 
@@ -1346,9 +1348,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--prio"}, "N",
-        string_format("set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: %d)\n", params.cpuparams.priority),
+        string_format("set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: %d)\n", params.cpuparams.priority),
         [](common_params & params, int prio) {
-            if (prio < 0 || prio > 3) {
+            if (prio < GGML_SCHED_PRIO_LOW || prio > GGML_SCHED_PRIO_REALTIME) {
                 throw std::invalid_argument("invalid value");
             }
             params.cpuparams.priority = (enum ggml_sched_priority) prio;
@@ -2867,6 +2869,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "(default: deepseek)",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
+            else if (value == "deepseek-legacy") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY; }
             else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
             else { throw std::invalid_argument("invalid value"); }
         }

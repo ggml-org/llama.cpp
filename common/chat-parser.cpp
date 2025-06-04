@@ -154,9 +154,10 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
             if (!rest.empty()) {
                 handle_reasoning(rest, /* closed */ !is_partial());
             }
-            if (!syntax_.thinking_forced_open) {
-                throw common_chat_msg_partial_exception(end_think);
-            }
+            // Allow unclosed thinking tags, for now (https://github.com/ggml-org/llama.cpp/issues/13812, https://github.com/ggml-org/llama.cpp/issues/13877)
+            // if (!syntax_.thinking_forced_open) {
+            //     throw common_chat_msg_partial_exception(end_think);
+            // }
             return true;
         }
     }

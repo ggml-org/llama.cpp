@@ -29,8 +29,6 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
     static_assert(blocks_per_subgroup > 0);
     static_assert(block_elements_per_subgroup > 0);
 
-    const block_q8_1 * y = (const block_q8_1 *) vy;
-
     float partial_sum = 0.0f;
     for (int i = sg.get_local_linear_id() / block_elements_per_subgroup; i < blocks_per_row; i += blocks_per_subgroup) {
         const int ibx       = row * blocks_per_row + i;  // x block index
@@ -40,13 +38,15 @@ static void mul_mat_vec_q_reorder(const void * __restrict__ vx, const void * __r
 
         // Y block index that aligns with ibx
         const int iby = i * block_type::block_to_q8_1_ratio();
+        const int8_t* q8_1_quant_ptr = (const int8_t*)vy + iby * QK8_1;
+        const sycl::half2* q8_1_ds_ptr = (const sycl::half2*)((const char*)vy + ncols + iby * sizeof(sycl::half2));
 
 #pragma unroll
         for (int elem = 0; elem < block_elements_per_subgroup; elem += WARP_SIZE) {
             // x block quant index when casting the quants to int
             const int iqs = elem + block_traits::vdr_mmvq * (sg.get_local_linear_id() % block_elements_per_subgroup);
 
-            partial_sum += reorder_vec_dot_q_sycl()(vx, bx_offset, d_offset, &y[iby], iqs, nblocks);
+            partial_sum += reorder_vec_dot_q_sycl()(vx, bx_offset, d_offset, q8_1_quant_ptr, q8_1_ds_ptr, iqs, nblocks);
         }
     }
 

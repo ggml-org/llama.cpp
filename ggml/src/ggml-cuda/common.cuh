@@ -635,6 +635,7 @@ struct ggml_cuda_device_info {
         int     nsm;                // number of streaming multiprocessors
         size_t  smpb;               // max. shared memory per block
         size_t  smpbo;              // max. shared memory per block (with opt-in)
+        bool    integrated;         // Device is integrated as opposed to discrete
         bool    vmm;                // virtual memory support
         size_t  vmm_granularity;    // granularity of virtual memory
         size_t  total_vram;
