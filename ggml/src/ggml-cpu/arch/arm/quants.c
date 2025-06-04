@@ -129,6 +129,10 @@ void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
 #endif
 }
 
+// placeholder implementation for Apple targets
+void quantize_row_q8_K(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q8_K_ref(x, y, k);
+}
 
 //===================================== Dot products =================================
 
