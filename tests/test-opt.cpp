@@ -3,6 +3,7 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml-opt.h"
+#include "../ggml/src/ggml-impl.h"
 
 #include <cmath>
 #include <cinttypes>
@@ -10,6 +11,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#define TEST_LOG(...)       GGML_LOG_DEBUG(__VA_ARGS__)
 
 static bool almost_equal(const double a, const double b, const double atol) {
     return fabs(a - b) < atol;
@@ -40,10 +43,15 @@ struct helper_ctx_data {
 // These default values make it easier to check optimization results vs. expected values.
 static ggml_opt_optimizer_params helper_get_test_opt_pars(void * userdata) {
     ggml_opt_optimizer_params result = ggml_opt_get_default_optimizer_params(userdata);
+
     result.adamw.alpha = 1.0f;
     result.adamw.beta1 = 0.0f;
     result.adamw.beta2 = 0.0f;
     result.adamw.eps   = 0.0f;
+    result.adamw.wd    = 0.0f;
+    result.sgd.wd      = 0.0f;
+    result.sgd.alpha   = 1.0f;
+
     return result;
 }
 
@@ -137,7 +145,9 @@ static helper_ctx_data helper_get_ctx_data(
     if (!optimizer_defaults) {
         opt_params.get_opt_pars = helper_get_test_opt_pars;
     }
+    GGML_ASSERT(opt_params.get_opt_pars);
     ggml_opt_context_t opt_ctx = init_opt_ctx ? ggml_opt_init(opt_params) : nullptr;
+    GGML_ASSERT(!opt_ctx || ggml_opt_context_optimizer_type(opt_ctx) == GGML_OPT_OPTIMIZER_TYPE_ADAMW);
 
     ggml_opt_result_t result  = ggml_opt_result_init();
     ggml_opt_result_t result2 = ggml_opt_result_init();
@@ -168,6 +178,7 @@ static void helper_after_test(
         npass++;
     } else {
         printf("\033[1;31mFAIL\033[0m\n");
+        GGML_ASSERT(0);
     }
     ntest++;
 }
@@ -406,6 +417,7 @@ static std::pair<int, int> test_forward_backward(
         float weights;
         ggml_backend_tensor_get(cd.weights, &weights, 0, sizeof(float));
         const bool subtest_ok = weights == -ndata/2;
+        TEST_LOG("%s: ndata=%d weights=%f\n", __func__, (int)ndata, (double)weights);
         helper_after_test_forward_backward(__func__, high_level, shuffle, "weights_after_forward_backward", subtest_ok, ntest, npass);
     }
     {
@@ -839,6 +851,7 @@ static std::pair<int, int> test_backend(ggml_backend_sched_t backend_sched, ggml
 }
 
 int main(void) {
+    ggml_log_set(nullptr, nullptr);
     const size_t dev_count = ggml_backend_dev_count();
     printf("Testing %zu devices\n\n", dev_count);
     size_t n_ok = 0;

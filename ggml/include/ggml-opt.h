@@ -74,16 +74,30 @@ extern "C" {
         GGML_OPT_BUILD_TYPE_OPT     = 30,
     };
 
+    enum ggml_opt_optimizer_type {
+        GGML_OPT_OPTIMIZER_TYPE_ADAMW,
+        GGML_OPT_OPTIMIZER_TYPE_SGD,
+
+        GGML_OPT_OPTIMIZER_TYPE_COUNT
+    };
+
+    // "adamw" or "sgd" (case insensitive)
+    GGML_API const char *                 ggml_opt_optimizer_name(enum ggml_opt_optimizer_type);
+    GGML_API enum ggml_opt_optimizer_type ggml_opt_get_optimizer(const char *);
+
     // parameters that control which optimizer is used and how said optimizer tries to find the minimal loss
     struct ggml_opt_optimizer_params {
-        // AdamW optimizer parameters
+        struct {
+            float alpha;  // learning rate
+            float beta1;  // adamw
+            float beta2;  // adamw
+            float eps;    // epsilon for numerical stability
+            float wd;     // weight decay - 0.0f to disable
+        } adamw;
         struct {
             float alpha; // learning rate
-            float beta1;
-            float beta2;
-            float eps;   // epsilon for numerical stability
-            float wd;    // weight decay for AdamW, use 0.0f to disable
-        } adamw;
+            float wd; // weight decay
+        } sgd;
     };
 
     // callback to calculate optimizer parameters prior to a backward pass
@@ -113,7 +127,10 @@ extern "C" {
         int32_t opt_period; // after how many gradient accumulation steps an optimizer step should be done
 
         ggml_opt_get_optimizer_params get_opt_pars; // callback for calculating optimizer parameters
-        void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
+        void *                        get_opt_pars_ud;  // userdata for calculating optimizer parameters
+
+        // only GGML_OPT_OPTIMIZER_TYPE_ADAMW allocates m, v per parameter
+        enum ggml_opt_optimizer_type optimizer;
     };
 
     // get parameters for an optimization context with defaults set where possible
@@ -186,7 +203,7 @@ extern "C" {
     //    The second context should contain all other tensors and will be (re)allocated automatically.
     //    Due to this automated allocation the data of the second context is not defined when accessed in user code.
     //    Note that the second dimension of the inputs/outputs are interpreted as the number of datapoints in those tensors.
-    // 4. Call ggml_opt_fit. If you need more control you can use ggml_opt_epoch instead.
+    // 4. Call ggml_opt_fit. If you need more control (e.g. optimizer sgd) you can use ggml_opt_epoch instead.
 
     // signature for a callback while evaluating opt_ctx on dataset, called after an evaluation
     typedef void (*ggml_opt_epoch_callback)(
@@ -232,6 +249,7 @@ extern "C" {
             float                           val_split,      // fraction of the dataset to use for validation, must be in [0.0f, 1.0f)
             bool                            silent);        // whether or not info prints to stderr should be suppressed
 
+    GGML_API enum ggml_opt_optimizer_type ggml_opt_context_optimizer_type(ggml_opt_context_t);
 #ifdef  __cplusplus
 }
 #endif

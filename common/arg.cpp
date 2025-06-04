@@ -1181,6 +1181,7 @@ static void add_rpc_devices(std::string servers) {
 }
 
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **)) {
+    params.optimize = ggml_opt_get_default_optimizer_params(nullptr);
     auto ctx_arg = common_params_parser_init(params, ex, print_usage);
     const common_params params_org = ctx_arg.params; // the example can modify the default params
 
@@ -3375,6 +3376,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = 256;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(
+        common_arg(
+            { "-lr", "--learning-rate" }, "ALPHA",
+            string_format(
+                "adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~100x (no momentum)",
+                (double) params.optimize.adamw.alpha),
+            [](common_params & params, const std::string & value) { params.optimize.adamw.alpha = std::stof(value); })
+            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+                { "-wd", "--weight-decay" }, "WD",
+                string_format(
+                    "adamw or sgd optimizer weight decay (0 is off; recommend very small e.g. 1e-9) (default: %.2g).",
+                    (double) params.optimize.adamw.wd),
+                [](common_params & params, const std::string & value) { params.optimize.adamw.wd = std::stof(value); })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+                { "-val", "--val-split" }, "FRACTION",
+                string_format(
+                    "portion of data to use as validation when optimizing (default: %.2g).",
+                    (double) params.val_split),
+                [](common_params & params, const std::string & value) { params.val_split = std::stof(value); })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-epochs", "--epochs" }, "N",
+                       string_format("optimizer max # of epochs (default: %d)", params.epochs),
+                       [](common_params & params, int epochs) { params.epochs = epochs; })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-opt", "--optimizer" },
+        "sgd|adamw",
+        "adamw or sgd",
+        [](common_params & params, const std::string & name) {
+            params.optimizer = ggml_opt_get_optimizer(name.c_str());
+            if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
+                throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
+            }
+        }).set_examples({ LLAMA_EXAMPLE_FINETUNE }));
 
     return ctx_arg;
 }
