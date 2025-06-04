@@ -22,6 +22,7 @@ struct llama_memory_state_i;
 class llama_kv_cache_unified_state;
 class llama_kv_cache_unified_iswa_state;
 class llama_kv_cache_recurrent_state;
+class llama_kv_cache_hybrid_recurrent_state;
 
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
@@ -253,7 +254,7 @@ public:
         cparams(cparams),
         kv_state(kv_state) {
     }
-    ~llm_graph_input_attn_kv_unified() = default;
+    virtual ~llm_graph_input_attn_kv_unified() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
@@ -294,6 +295,16 @@ public:
     const llama_cparams & cparams;
 
     const llama_kv_cache_unified_iswa_state * kv_state;
+};
+
+class llm_graph_input_attn_kv_hybrid_recurrent : public llm_graph_input_attn_kv_unified {
+public:
+    llm_graph_input_attn_kv_hybrid_recurrent(
+            const llama_hparams & hparams,
+            const llama_cparams & cparams,
+            const llama_kv_cache_hybrid_recurrent_state * kv_state);
+
+    virtual ~llm_graph_input_attn_kv_hybrid_recurrent() = default;
 };
 
 class llm_graph_input_attn_cross : public llm_graph_input_i {
@@ -519,7 +530,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
-    ggml_tensor * build_inp_s_copy() const;
+    ggml_tensor * build_inp_s_copy(const llama_kv_cache_recurrent_state * kv_state = nullptr) const;
     ggml_tensor * build_inp_s_mask() const;
 
     ggml_tensor * build_inp_cross_embd() const;
@@ -575,6 +586,21 @@ struct llm_graph_context {
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_kv_unified_iswa * inp,
+            ggml_cgraph * gf,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+                  float   kq_scale,
+                    int   il) const;
+
+    llm_graph_input_attn_kv_hybrid_recurrent * build_attn_inp_kv_hybrid_recurrent() const;
+
+    ggml_tensor * build_attn(
+            llm_graph_input_attn_kv_hybrid_recurrent * inp,
             ggml_cgraph * gf,
             ggml_tensor * wo,
             ggml_tensor * wo_b,
