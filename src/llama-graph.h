@@ -297,16 +297,6 @@ public:
     const llama_kv_cache_unified_iswa_state * kv_state;
 };
 
-class llm_graph_input_attn_kv_hybrid_recurrent : public llm_graph_input_attn_kv_unified {
-public:
-    llm_graph_input_attn_kv_hybrid_recurrent(
-            const llama_hparams & hparams,
-            const llama_cparams & cparams,
-            const llama_kv_cache_hybrid_recurrent_state * kv_state);
-
-    virtual ~llm_graph_input_attn_kv_hybrid_recurrent() = default;
-};
-
 class llm_graph_input_attn_cross : public llm_graph_input_i {
 public:
     llm_graph_input_attn_cross(const llama_cross * cross) : cross(cross) {}
@@ -597,20 +587,7 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    llm_graph_input_attn_kv_hybrid_recurrent * build_attn_inp_kv_hybrid_recurrent() const;
-
-    ggml_tensor * build_attn(
-            llm_graph_input_attn_kv_hybrid_recurrent * inp,
-            ggml_cgraph * gf,
-            ggml_tensor * wo,
-            ggml_tensor * wo_b,
-            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
-            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
-            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
-            ggml_tensor * kq_b,
-            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
-                  float   kq_scale,
-                    int   il) const;
+    llm_graph_input_attn_kv_unified * build_attn_inp_kv_hybrid_recurrent() const;
 
     llm_graph_input_attn_cross * build_attn_inp_cross() const;
 
@@ -632,12 +609,13 @@ struct llm_graph_context {
     //
 
     ggml_tensor * build_copy_mask_state(
-             ggml_cgraph * gf,
-             ggml_tensor * s,
-             ggml_tensor * state_copy,
-             ggml_tensor * state_mask,
-                 int32_t   n_state,
-                 int32_t   n_seqs) const;
+                                 ggml_cgraph * gf,
+                                 ggml_tensor * s,
+                                 ggml_tensor * state_copy,
+                                 ggml_tensor * state_mask,
+                                     int32_t   n_state,
+                                     int32_t   n_seqs,
+        const llama_kv_cache_recurrent_state * kv_state = nullptr) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
              ggml_cgraph * gf,
