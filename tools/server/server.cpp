@@ -4356,7 +4356,7 @@ int main(int argc, char ** argv) {
                         params.max_size = 1024 * 1024 * 10; // 10MB
                         params.timeout  = 10; // seconds
                         SRV_INF("downloading image from '%s'\n", url.c_str());
-                        auto res = common_remote_get_content(url, params);
+                        auto res = common_remote_get_content(data, params);
                         if (200 <= res.first && res.first < 300) {
                             SRV_INF("downloaded %ld bytes\n", res.second.size());
                             raw_buffer buf;
