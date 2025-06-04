@@ -4215,7 +4215,7 @@ int main(int argc, char ** argv) {
                 throw std::runtime_error("prompt must be a string");
             }
 
-            if (oaicompat && has_mtmd) {
+            if (has_mtmd) {
                 // multimodal
                 std::string prompt_str = prompt.get<std::string>();
                 mtmd_input_text inp_txt = {
