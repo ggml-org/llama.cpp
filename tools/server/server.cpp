@@ -4334,7 +4334,7 @@ int main(int argc, char ** argv) {
 
     const auto handle_completions = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         json data = json::parse(req.body);
-        json & medias = json_value(data, "medias", json::array());
+        json & medias = json_value(&data, "medias", json::array());
         auto & opt = ctx_server.oai_parser_opt;
         std::vector<raw_buffer> files;
 
