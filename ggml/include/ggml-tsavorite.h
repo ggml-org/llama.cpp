@@ -151,16 +151,16 @@ typedef struct tensor_log_ {
   const ggml_tensor *tensor;
 } tensor_log;
 
-extern void _mlir_ciface_txe_add(void *a, void *b, void *res);
-extern void _mlir_ciface_txe_sub(void *a, void *b, void *res);
-extern void _mlir_ciface_txe_mult(void *a, void *b, void *res);
-extern void _mlir_ciface_txe_div(void *a, void *b, void *res);
-extern void _mlir_ciface_txe_sqrt(void *a, void *res);
-extern void _mlir_ciface_txe_neg(void *a, void *res);
-extern void _mlir_ciface_txe_abs(void *a, void *res);
-extern void _mlir_ciface_txe_sin(void *a, void *res);
-extern void _mlir_ciface_txe_sigmoid(void *a, void *res);
-extern void _mlir_ciface_txe_silu(void *a, void *res);
+extern void _mlir_ciface_txe_add_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_sub_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_mult_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_div_host(void *a, void *b, void *res);
+extern void _mlir_ciface_txe_sqrt_host(void *a, void *res);
+extern void _mlir_ciface_txe_neg_host(void *a, void *res);
+extern void _mlir_ciface_txe_abs_host(void *a, void *res);
+extern void _mlir_ciface_txe_sin_host(void *a, void *res);
+extern void _mlir_ciface_txe_sigmoid_host(void *a, void *res);
+extern void _mlir_ciface_txe_silu_host(void *a, void *res);
 extern void ggml_tsi_log_tensor_data(tensor_log log_data);
 
 #define NUM_OF_TXES 1

@@ -8,7 +8,7 @@ function(llama_build source)
     endif()
 
     add_executable(${TEST_TARGET} ${source})
-    target_link_libraries(${TEST_TARGET} PRIVATE common ${TLIBS})
+    target_link_libraries(${TEST_TARGET} PRIVATE common)
     install(TARGETS ${TEST_TARGET} RUNTIME)
 endfunction()
 
@@ -69,7 +69,7 @@ function(llama_build_and_test source)
 
     add_executable(${TEST_TARGET} ${source} get-model.cpp)
     install(TARGETS ${TEST_TARGET} RUNTIME)
-    target_link_libraries(${TEST_TARGET} PRIVATE common ${TLIBS})
+    target_link_libraries(${TEST_TARGET} PRIVATE common)
 
     add_test(
         NAME ${TEST_TARGET}
@@ -169,9 +169,9 @@ endif()
 # libmtmd
 set(LLAMA_TEST_NAME test-mtmd-c-api)
 llama_build_and_test(test-mtmd-c-api.c)
-target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd ${TLIBS})
+target_link_libraries(${LLAMA_TEST_NAME} PRIVATE mtmd)
 
 # dummy executable - not installed
 get_filename_component(TEST_TARGET test-c.c NAME_WE)
 add_executable(${TEST_TARGET} test-c.c)
-target_link_libraries(${TEST_TARGET} PRIVATE llama ${TLIBS})
+target_link_libraries(${TEST_TARGET} PRIVATE ${TLIBS} llama)
