@@ -7,6 +7,7 @@
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
 #include "llama-kv-cache-recurrent.h"
+#include "llama-kv-cache-hybrid-recurrent.h"
 
 #include <cassert>
 #include <cmath>
@@ -410,6 +411,13 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
             }
         }
     }
+}
+
+llm_graph_input_attn_kv_hybrid_recurrent::llm_graph_input_attn_kv_hybrid_recurrent(
+        const llama_hparams & hparams,
+        const llama_cparams & cparams,
+        const llama_kv_cache_hybrid_recurrent_state * kv_state) :
+    llm_graph_input_attn_kv_unified(hparams, cparams, kv_state->get_state_attn()) {
 }
 
 //
@@ -969,8 +977,10 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_s_copy() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+ggml_tensor * llm_graph_context::build_inp_s_copy(const llama_kv_cache_recurrent_state * kv_state) const {
+    if (kv_state == nullptr) {
+        kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    }
 
     auto inp = std::make_unique<llm_graph_input_s_copy>(kv_state);
 
@@ -1314,6 +1324,44 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     return cur;
+}
+
+llm_graph_input_attn_kv_hybrid_recurrent * llm_graph_context::build_attn_inp_kv_hybrid_recurrent() const {
+    const auto * kv_state = static_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate);
+
+    auto inp = std::make_unique<llm_graph_input_attn_kv_hybrid_recurrent>(hparams, cparams, kv_state);
+
+    {
+        GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Hybrid recurrent is not supported with SWA attention layers");
+
+        const auto n_kv = kv_state->get_state_attn()->get_n_kv();
+
+        inp->self_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        //cb(inp->self_kq_mask, "KQ_mask", -1);
+        ggml_set_input(inp->self_kq_mask);
+
+        inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+    }
+
+    return (llm_graph_input_attn_kv_hybrid_recurrent *) res->add_input(std::move(inp));
+}
+
+ggml_tensor * llm_graph_context::build_attn(
+        llm_graph_input_attn_kv_hybrid_recurrent * inp,
+        ggml_cgraph * gf,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * v_mla,
+            float     kq_scale,
+            int       il) const {
+    return build_attn(
+        static_cast<llm_graph_input_attn_kv_unified *>(inp),
+        gf, wo, wo_b, q_cur, k_cur, v_cur, kq_b, v_mla, kq_scale, il
+    );
 }
 
 llm_graph_input_attn_kv_unified_iswa * llm_graph_context::build_attn_inp_kv_unified_iswa() const {
