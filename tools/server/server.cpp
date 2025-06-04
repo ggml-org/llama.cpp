@@ -4355,7 +4355,7 @@ int main(int argc, char ** argv) {
                         params.headers.push_back("User-Agent: llama.cpp/" + build_info);
                         params.max_size = 1024 * 1024 * 10; // 10MB
                         params.timeout  = 10; // seconds
-                        SRV_INF("downloading image from '%s'\n", url.c_str());
+                        SRV_INF("downloading image from '%s'\n", data.c_str());
                         auto res = common_remote_get_content(data, params);
                         if (200 <= res.first && res.first < 300) {
                             SRV_INF("downloaded %ld bytes\n", res.second.size());
@@ -4367,7 +4367,7 @@ int main(int argc, char ** argv) {
                         }
                     } else {
                         // try to decode base64 image
-                        std::vector<std::string> parts = string_split<std::string>(url, /*separator*/ ',');
+                        std::vector<std::string> parts = string_split<std::string>(data, /*separator*/ ',');
                         if (parts.size() != 2) {
                             throw std::runtime_error("Invalid image_url.url value");
                         } else if (!string_starts_with(parts[0], "data:image/")) {
