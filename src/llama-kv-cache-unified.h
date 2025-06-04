@@ -27,6 +27,9 @@ public:
     using ubatch_heads = std::vector<uint32_t>;
 
     struct defrag_info {
+        // contains information about which cell moves where:
+        //  - cell i moves to ids[i]
+        //  - if ids[i] == i || ids[i] == ids.size(), then cell i is not moved
         std::vector<uint32_t> ids;
     };
 

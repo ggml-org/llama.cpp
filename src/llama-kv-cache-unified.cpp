@@ -449,6 +449,9 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
 
                 cells.mv(i, dinfo.ids[i]);
             }
+
+            // reset the head so we can find the first free slot during the next ubatch
+            head = 0;
         }
 
         ggml_backend_sched_reset(sched);
@@ -1126,15 +1129,9 @@ llama_kv_cache_unified::defrag_info llama_kv_cache_unified::defrag_prepare(int32
     const uint32_t max_moves = (n_max_nodes - 2*n_layer)/(6*n_layer);
 
     // determine which KV cells to move where
-    //
-    //  cell i moves to ids[i]
-    //
-    //  if ids[i] == i || ids[i] == n_kv, then cell i is not moved
-    //
     defrag_info res;
     auto & ids = res.ids;
 
-    ids.clear();
     ids.resize(n_kv, n_kv);
 
     for (uint32_t i0 = 0; i0 < n_used; ++i0) {
