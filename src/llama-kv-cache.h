@@ -1,8 +1,10 @@
 #pragma once
 
 #include "llama.h"
-#include "llama-io.h"
 #include "llama-memory.h"
+
+class llama_io_write_i;
+class llama_io_read_i;
 
 struct llama_kv_cache : public llama_memory_i {
     virtual ~llama_kv_cache() = default;

@@ -1,6 +1,7 @@
 #include "llama-kv-cache-recurrent.h"
 
 #include "llama-impl.h"
+#include "llama-io.h"
 #include "llama-batch.h"
 #include "llama-model.h"
 

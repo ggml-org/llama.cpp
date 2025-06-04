@@ -167,6 +167,8 @@ llama_kv_cache_unified_iswa_state::llama_kv_cache_unified_iswa_state(
         llama_kv_cache_unified_iswa * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS) {
     state_base = kv->get_base()->init_full();
     state_swa  = kv->get_swa ()->init_full();
+
+    status = llama_memory_status_combine(state_base->get_status(), state_swa->get_status());
 }
 
 llama_kv_cache_unified_iswa_state::llama_kv_cache_unified_iswa_state(
@@ -176,22 +178,7 @@ llama_kv_cache_unified_iswa_state::llama_kv_cache_unified_iswa_state(
     state_base = kv->get_base()->init_update(lctx, optimize);
     state_swa  = kv->get_swa ()->init_update(lctx, optimize);
 
-    // TODO: this is very ugly - how to make it simpler?
-    //       the llama_memory_status enum is not very well designed
-    if (state_base->get_status() != LLAMA_MEMORY_STATUS_SUCCESS && state_base->get_status() != LLAMA_MEMORY_STATUS_NO_UPDATE) {
-        status = state_base->get_status();
-        return;
-    }
-
-    if (state_swa->get_status() != LLAMA_MEMORY_STATUS_SUCCESS && state_swa->get_status() != LLAMA_MEMORY_STATUS_NO_UPDATE) {
-        status = state_swa->get_status();
-        return;
-    }
-
-    if (state_base->get_status() == LLAMA_MEMORY_STATUS_NO_UPDATE && state_swa->get_status() == LLAMA_MEMORY_STATUS_NO_UPDATE) {
-        status = LLAMA_MEMORY_STATUS_NO_UPDATE;
-        return;
-    }
+    status = llama_memory_status_combine(state_base->get_status(), state_swa->get_status());
 }
 
 llama_kv_cache_unified_iswa_state::llama_kv_cache_unified_iswa_state(
@@ -200,13 +187,15 @@ llama_kv_cache_unified_iswa_state::llama_kv_cache_unified_iswa_state(
         std::vector<uint32_t> heads_base,
         std::vector<uint32_t> heads_swa,
         std::vector<llama_ubatch> ubatches)
-    : status(LLAMA_MEMORY_STATUS_SUCCESS),
-    sbatch(std::move(sbatch)),
-    ubatches(std::move(ubatches)) {
-        // note: here we copy the ubatches. not sure if this is ideal
-        state_base.reset(new llama_kv_cache_unified_state(kv->get_base(), {}, std::move(heads_base), this->ubatches));
-        state_swa .reset(new llama_kv_cache_unified_state(kv->get_swa (), {}, std::move(heads_swa),  this->ubatches));
-    }
+        : status(LLAMA_MEMORY_STATUS_SUCCESS),
+        sbatch(std::move(sbatch)),
+        ubatches(std::move(ubatches)) {
+    // note: here we copy the ubatches. not sure if this is ideal
+    state_base.reset(new llama_kv_cache_unified_state(kv->get_base(), {}, std::move(heads_base), this->ubatches));
+    state_swa .reset(new llama_kv_cache_unified_state(kv->get_swa (), {}, std::move(heads_swa),  this->ubatches));
+
+    status = llama_memory_status_combine(state_base->get_status(), state_swa->get_status());
+}
 
 llama_kv_cache_unified_iswa_state:: ~llama_kv_cache_unified_iswa_state() = default;
 
@@ -246,6 +235,7 @@ llama_memory_status llama_kv_cache_unified_iswa_state::get_status() const {
 
 const llama_ubatch & llama_kv_cache_unified_iswa_state::get_ubatch() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+
     return ubatches[i_next];
 }
 

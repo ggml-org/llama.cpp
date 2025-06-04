@@ -451,7 +451,7 @@ bool llama_context::kv_self_update(bool optimize) {
 
         const auto kv_state = kv_self->init_update(this, optimize);
         if (kv_state->get_status() == LLAMA_MEMORY_STATUS_NO_UPDATE) {
-            // no updates have been performed
+            // no updates need to be performed
             return false;
         }
 
@@ -979,6 +979,7 @@ int llama_context::decode(llama_batch & inp_batch) {
             case LLAMA_MEMORY_STATUS_NO_UPDATE:
                 {
                     LLAMA_LOG_ERROR("%s: unexpected memory state status: %d\n", __func__, kv_state->get_status());
+
                     return -2;
                 }
             case LLAMA_MEMORY_STATUS_FAILED_PREPARE:
@@ -993,12 +994,14 @@ int llama_context::decode(llama_batch & inp_batch) {
                         }
                     }
 
-                    LLAMA_LOG_WARN("%s: failed to find KV cache slot for batch of size %d\n", __func__, batch.n_tokens);
+                    LLAMA_LOG_WARN("%s: failed to find a memory slot for batch of size %d\n", __func__, batch.n_tokens);
 
                     return 1;
                 }
             case LLAMA_MEMORY_STATUS_FAILED_COMPUTE:
                 {
+                    LLAMA_LOG_ERROR("%s: compute failed while preparing batch of size %d\n", __func__, batch.n_tokens);
+
                     return -2;
                 }
         }

@@ -1,6 +1,7 @@
 #include "llama-kv-cache-unified.h"
 
 #include "llama-impl.h"
+#include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
 
