@@ -44,8 +44,6 @@ static inline int nearest_int(float fval) {
 //                         operations durin unpacking)
 //
 
-static const int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
-
 extern "C" {
 
 void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
