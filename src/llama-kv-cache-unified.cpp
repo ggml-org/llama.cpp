@@ -435,7 +435,7 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
         cells.reset_shift();
     }
 
-    if (!dinfo.ids.empty()) {
+    if (!dinfo.empty()) {
         LLAMA_LOG_DEBUG("%s: defragmenting KV cache\n", __func__);
 
         // apply moves:
@@ -443,6 +443,8 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
             const auto n_kv = dinfo.ids.size();
 
             for (uint32_t i = 0; i < n_kv; ++i) {
+                assert(dinfo.ids[i] <= n_kv);
+
                 if (dinfo.ids[i] == n_kv) {
                     continue;
                 }
@@ -1657,7 +1659,7 @@ llama_kv_cache_unified_state::llama_kv_cache_unified_state(
         llama_context * lctx,
         bool do_shift,
         defrag_info dinfo) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), dinfo(std::move(dinfo)) {
-    if (!do_shift && dinfo.ids.empty()) {
+    if (!do_shift && dinfo.empty()) {
         status = LLAMA_MEMORY_STATUS_NO_UPDATE;
     }
 }
@@ -1684,7 +1686,7 @@ bool llama_kv_cache_unified_state::next() {
 bool llama_kv_cache_unified_state::apply() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
-    // this is a KV cache update
+    // no ubatches -> this is a KV cache update
     if (ubatches.empty()) {
         kv->update(lctx, do_shift, dinfo);
 

@@ -450,9 +450,22 @@ bool llama_context::kv_self_update(bool optimize) {
         memory_force_optimize = false;
 
         const auto kv_state = kv_self->init_update(this, optimize);
-        if (kv_state->get_status() == LLAMA_MEMORY_STATUS_NO_UPDATE) {
-            // no updates need to be performed
-            return false;
+        switch (kv_state->get_status()) {
+            case LLAMA_MEMORY_STATUS_SUCCESS:
+                {
+                    // noop
+                } break;
+            case LLAMA_MEMORY_STATUS_NO_UPDATE:
+                {
+                    // no updates need to be performed
+                    return false;
+                }
+            case LLAMA_MEMORY_STATUS_FAILED_PREPARE:
+            case LLAMA_MEMORY_STATUS_FAILED_COMPUTE:
+                {
+                    LLAMA_LOG_ERROR("%s: failed to prepare memory update\n", __func__);
+                    return false;
+                }
         }
 
         if (!kv_state->apply()) {
