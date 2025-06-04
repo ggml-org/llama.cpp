@@ -597,6 +597,18 @@ bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {
         }
     }
 
+    // Find first to-be-cleared cell
+    rs_z = -1;
+    for (int i = min; i <= max; ++i) {
+        if (rs_z < 0 && cells[i].src == -1) {
+            rs_z = i;
+        }
+        // Stage the source ids for all used cells to allow correct seq_* behavior
+        // and still make these values available when setting the inputs
+        cells[i].src0 = cells[i].src;
+        cells[i].src = i;
+    }
+
     // allow getting the range of used cells, from head to head + n
     head = min;
     n    = max - min + 1;
