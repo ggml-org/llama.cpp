@@ -115,4 +115,6 @@ class common_chat_msg_parser {
         const std::vector<std::vector<std::string>> & args_paths = {},
         const std::vector<std::vector<std::string>> & content_paths = {}
     );
+
+    void clear_tools();
 };
