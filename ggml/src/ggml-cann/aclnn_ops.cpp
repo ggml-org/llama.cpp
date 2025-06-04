@@ -67,6 +67,7 @@
 #include <aclnnop/aclnn_pow.h>
 #include <aclnnop/aclnn_grouped_matmul_v2.h>
 #include <aclnnop/aclnn_fused_infer_attention_score_v2.h>
+#include "aclnnop/aclnn_zero.h"
 #include <float.h>
 
 #include <cmath>
@@ -804,9 +805,11 @@ static aclTensor* aclnn_zero(ggml_backend_cann_context& ctx, void* buffer,
         nb[i] = nb[i - 1] * ne[i - 1];
     }
 
-    ggml_cann_async_memset(ctx, buffer, n_bytes, 0);
     aclTensor* zero =
         ggml_cann_create_tensor(buffer, type, type_size, ne, nb, dims);
+
+    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, zero);
+
     return zero;
 }
 
@@ -834,6 +837,7 @@ static aclTensor* aclnn_values(ggml_backend_cann_context& ctx, void* buffer,
                                float value = 1.0f) {
     aclTensor* acl_tensor =
         aclnn_zero(ctx, buffer, n_bytes, ne, dims, type, type_size);
+    
     float alpha_host = 1.0f;
     aclScalar* alpha = aclCreateScalar(&alpha_host, aclDataType::ACL_FLOAT);
     aclScalar* other = aclCreateScalar(&value, aclDataType::ACL_FLOAT);
