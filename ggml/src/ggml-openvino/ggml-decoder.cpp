@@ -187,6 +187,16 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
         case GGML_OP_MUL_MAT: {
             if (node->src[0]->view_src == nullptr) {
                 m_op_case = 1;
+            } else if (std::string(node->src[0]->name).find("cache_k") == 0) {
+                m_op_case = 2;
+            } else if (std::string(node->src[0]->name).find("cache_v") == 0) {
+                m_op_case = 3;
+            }
+            break;
+        }
+        case GGML_OP_PERMUTE: {
+            if (ggml_is_contiguous(node->src[0])) {
+                m_op_case = 1;
             } else {
                 m_op_case = 2;
             }
