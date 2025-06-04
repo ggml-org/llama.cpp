@@ -1019,7 +1019,10 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the KV cache
-            llama_pos pos_min[LLAMA_MAX_PARALLEL_SEQUENCES] = { std::numeric_limits<llama_pos>::max() };
+            llama_pos pos_min[LLAMA_MAX_PARALLEL_SEQUENCES];
+            for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+                pos_min[s] = std::numeric_limits<llama_pos>::max();
+            }
 
             for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
                 const auto & seq_id = ubatch.seq_id[i][0];
