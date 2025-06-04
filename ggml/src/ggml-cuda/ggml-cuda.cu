@@ -3027,6 +3027,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                             a->type == GGML_TYPE_F16 && b->type == GGML_TYPE_F16) {
                         return false;
                     }
+                    if (GGML_CUDA_CC_IS_QY2(cc) && op->op == GGML_OP_MUL_MAT_ID &&
+                            a->type == GGML_TYPE_Q2_K && b->type == GGML_TYPE_F32) {
+                        return false;
+                    }
                 }
 #endif // GGML_USE_MUSA
                 switch (a->type) {
