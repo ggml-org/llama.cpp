@@ -137,7 +137,7 @@ set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
 set(GGML_CPU_POWERPC_CPUTYPE "" CACHE STRING "ggml: CPU type for PowerPC")
 
 
-if (WIN32)
+if (MINGW)
     set(GGML_WIN_VER "0x602" CACHE STRING   "ggml: Windows version")
 endif()
 
