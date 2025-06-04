@@ -9086,6 +9086,7 @@ struct llm_build_mamba : public llm_graph_context {
 
         ggml_tensor * state_copy = build_inp_s_copy();
 
+        const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
         for (int il = 0; il < n_layer; ++il) {
             // norm
             cur = build_norm(inpL,
@@ -9094,9 +9095,9 @@ struct llm_build_mamba : public llm_graph_context {
             cb(cur, "attn_norm", il);
 
             if (use_mamba2) {
-                cur = build_mamba2_layer(this, gf, cur, state_copy, model, ubatch, il);
+                cur = build_mamba2_layer(this, kv_state, gf, cur, state_copy, model, ubatch, il);
             } else {
-                cur = build_mamba_layer(this, gf, cur, state_copy, model, ubatch, il);
+                cur = build_mamba_layer(this, kv_state, gf, cur, state_copy, model, ubatch, il);
             }
 
             if (il == n_layer - 1) {
@@ -9136,14 +9137,14 @@ struct llm_build_mamba : public llm_graph_context {
     // static layer build function that enables other models to borrow this
     // layer logic
     static ggml_tensor * build_mamba_layer(
-        const llm_graph_context * self,
-                    ggml_cgraph * gf,
-                    ggml_tensor * cur,
-                    ggml_tensor * state_copy,
-              const llama_model & model,
-             const llama_ubatch & ubatch,
-                            int   il) {
-        const auto * kv_state = self->get_state_recurrent();
+        const llm_graph_context              * self,
+        const llama_kv_cache_recurrent_state * kv_state,
+                    ggml_cgraph              * gf,
+                    ggml_tensor              * cur,
+                    ggml_tensor              * state_copy,
+              const llama_model              & model,
+             const llama_ubatch              & ubatch,
+                            int                il) {
 
         const auto kv_head = kv_state->get_head();
         auto * ctx0 = self->ctx0;
@@ -9170,9 +9171,9 @@ struct llm_build_mamba : public llm_graph_context {
         ggml_tensor * ssm_states_all  = kv_state->get_v_l(il);
 
         // (ab)using the KV cache to store the states
-        ggml_tensor * conv = self->build_recurrent_state(gf, conv_states_all, state_copy, self->hparams.n_embd_k_s(il), n_seqs);
+        ggml_tensor * conv = self->build_recurrent_state(gf, conv_states_all, state_copy, self->hparams.n_embd_k_s(il), n_seqs, false, kv_state);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
-        ggml_tensor * ssm = self->build_recurrent_state(gf, ssm_states_all, state_copy, self->hparams.n_embd_v_s(il), n_seqs, true);
+        ggml_tensor * ssm = self->build_recurrent_state(gf, ssm_states_all, state_copy, self->hparams.n_embd_v_s(il), n_seqs, true, kv_state);
         ssm = ggml_reshape_4d(ctx0, ssm, d_state, head_dim, n_head, kv_state->get_size());
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -9272,14 +9273,14 @@ struct llm_build_mamba : public llm_graph_context {
     // static layer build function that enables other models to borrow this
     // layer logic
     static ggml_tensor * build_mamba2_layer(
-        const llm_graph_context * self,
-                    ggml_cgraph * gf,
-                    ggml_tensor * cur,
-                    ggml_tensor * state_copy,
-              const llama_model & model,
-             const llama_ubatch & ubatch,
-                            int   il) {
-        const auto * kv_state = self->get_state_recurrent();
+        const llm_graph_context              * self,
+        const llama_kv_cache_recurrent_state * kv_state,
+                    ggml_cgraph              * gf,
+                    ggml_tensor              * cur,
+                    ggml_tensor              * state_copy,
+              const llama_model              & model,
+             const llama_ubatch              & ubatch,
+                            int                il) {
 
         const auto kv_head = kv_state->get_head();
         auto * ctx0 = self->ctx0;
@@ -9303,10 +9304,10 @@ struct llm_build_mamba : public llm_graph_context {
 
         // (ab)using the KV cache to store the states
         LLAMA_LOG_DEBUG("%s[%d]: Building recurrent state conv\n", __func__, il);
-        ggml_tensor * conv = self->build_recurrent_state(gf, conv_states_all, state_copy, self->hparams.n_embd_k_s(il), n_seqs);
+        ggml_tensor * conv = self->build_recurrent_state(gf, conv_states_all, state_copy, self->hparams.n_embd_k_s(il), n_seqs, false, kv_state);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2*n_group*d_state, n_seqs);
         LLAMA_LOG_DEBUG("%s[%d]: Building recurrent state ssm\n", __func__, il);
-        ggml_tensor * ssm = self->build_recurrent_state(gf, ssm_states_all, state_copy, self->hparams.n_embd_v_s(il), n_seqs, true);
+        ggml_tensor * ssm = self->build_recurrent_state(gf, ssm_states_all, state_copy, self->hparams.n_embd_v_s(il), n_seqs, true, kv_state);
         ssm = ggml_reshape_4d(ctx0, ssm, d_state, head_dim, n_head, kv_state->get_size());
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -12965,11 +12966,15 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
 
         inpL = build_inp_embd(model.tok_embd);
 
-        // Build the inputs in the recurrent cache
-        ggml_tensor * state_copy = build_inp_s_copy();
+        // Get the recurrent kv state
+        const auto * kv_state = static_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate);
+        const auto * kv_state_recurrent = kv_state->get_state_recurrent();
 
-        // Build the inputs in the attention cache
-        auto * inp_attn = build_attn_inp_kv_unified();
+        // Build the inputs in the recurrent cache
+        ggml_tensor * state_copy = build_inp_s_copy(kv_state_recurrent);
+
+        // Build the attention inputs in the hybrid attention cache
+        auto * inp_attn = build_attn_inp_kv_hybrid_recurrent();
 
         // Positional embeddings populated if rope enabled
         ggml_tensor * inp_pos = nullptr;
@@ -12989,9 +12994,9 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
             if (hparams.recurrent_layer(il)) {
                 // ssm layer //
                 if (use_mamba2) {
-                    cur = llm_build_mamba::build_mamba2_layer(this, gf, cur, state_copy, model, ubatch, il);
+                    cur = llm_build_mamba::build_mamba2_layer(this, kv_state_recurrent, gf, cur, state_copy, model, ubatch, il);
                 } else {
-                    cur = llm_build_mamba::build_mamba_layer(this, gf, cur, state_copy, model, ubatch, il);
+                    cur = llm_build_mamba::build_mamba_layer(this, kv_state_recurrent, gf, cur, state_copy, model, ubatch, il);
                 }
             } else {
                 // attention layer //
