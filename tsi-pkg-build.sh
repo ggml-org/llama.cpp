@@ -13,7 +13,7 @@ python3 -m venv blob-creation
 source blob-creation/bin/activate
 echo 'installing mlir and python dependencies'
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
-pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.2.3-py3-none-any.whl
+pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.3.0-py3-none-any.whl
 pip install onnxruntime-training
 
 #build TSI kernels for the Tsavorite backend

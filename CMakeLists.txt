@@ -35,14 +35,14 @@ if (GGML_TSAVORITE)
        set (GGML_TSI_KERNEL_DIR ${CMAKE_SOURCE_DIR}/ggml-tsi-kernel/${GGML_TSAVORITE_TARGET})
     endif()
 
-    file(GLOB TLIBS  "${RUNTIME_DIR}/lib/*.so" "${GGML_TSI_KERNEL_DIR}/host/*.o")
 
     if (${GGML_TSAVORITE_TARGET} STREQUAL fpga)
         set(CMAKE_CROSSCOMPILING ON)
         set(ARCH_FLAGS -march=armv8-a)
+        file(GLOB TLIBS  "${RUNTIME_DIR}/lib/*.so" "${GGML_TSI_KERNEL_DIR}/host/*.o")
         message("Setting target as fpga")
     elseif (${GGML_TSAVORITE_TARGET} STREQUAL "posix")
-	list(APPEND TLIBS "${MLIR_COMPILER_DIR}/lib/libFFMDeviceShim.so")
+        file(GLOB TLIBS  "${RUNTIME_DIR}/lib/*.so" "${GGML_TSI_KERNEL_DIR}/host/*.o" "${MLIR_COMPILER_DIR}/lib/libFFMDeviceShim.so" "${MLIR_COMPILER_DIR}/lib/libTsavRTPosixShimCAPI.so")
         message("Setting target as posix for tsavorite")
     endif()
 

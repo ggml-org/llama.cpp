@@ -69,7 +69,7 @@ function(llama_build_and_test source)
 
     add_executable(${TEST_TARGET} ${source} get-model.cpp)
     install(TARGETS ${TEST_TARGET} RUNTIME)
-    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    target_link_libraries(${TEST_TARGET} PRIVATE common ${TLIBS})
 
     add_test(
         NAME ${TEST_TARGET}
