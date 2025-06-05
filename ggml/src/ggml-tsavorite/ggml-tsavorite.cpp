@@ -389,12 +389,12 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
               kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_add_test;
           else
-              kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_add;
+              kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_add_host;
           kernel_pipeline->kernel_name = "TXE_ADD";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_SUB:
-          kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_sub;
+          kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_sub_host;
           kernel_pipeline->kernel_name = "TXE_SUB";
           flag = true;
           break;
@@ -402,42 +402,42 @@ static txe_compute_pipeline_state_s tsi_kernel_setup(enum ggml_tsavorite_kernel_
           if (ggml_tsavorite_kernel_mode_flag == GGML_TSAVORITE_KERNEL_MODE_CPU)
               kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_mult_test;
           else
-              kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_mult;
+              kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_mult_host;
           kernel_pipeline->kernel_name = "TXE_MULT";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_DIV:
-          kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_div;
+          kernel_pipeline->_mlir_fptr_2_input = &_mlir_ciface_txe_div_host;
           kernel_pipeline->kernel_name = "TXE_DIV";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_SQRT:
-          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_sqrt;
+          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_sqrt_host;
           kernel_pipeline->kernel_name = "TXE_SQRT";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_NEG:
-          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_neg;
+          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_neg_host;
           kernel_pipeline->kernel_name = "TXE_NEG";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_ABS:
-          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_abs;
+          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_abs_host;
           kernel_pipeline->kernel_name = "TXE_ABS";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_SIN:
-          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_sin;
+          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_sin_host;
           kernel_pipeline->kernel_name = "TXE_SIN";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_SIGMOID:
-          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_sigmoid;
+          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_sigmoid_host;
           kernel_pipeline->kernel_name = "TXE_SIGMOID";
           flag = true;
           break;
       case GGML_TSAVORITE_KERNEL_TYPE_SILU:
-          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_silu;
+          kernel_pipeline->_mlir_fptr_1_input = &_mlir_ciface_txe_silu_host;
           kernel_pipeline->kernel_name = "TXE_SILU";
           flag = true;
           break;

@@ -6,12 +6,14 @@ echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
 module load tsi4 gcc/13.3.0
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.1.3
 echo 'creating python virtual env'
+/proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
 python3 -m venv blob-creation
 source blob-creation/bin/activate
 echo 'installing mlir and python dependencies'
-pip install -r /proj/rel/sw/mlir-compiler/python/requirements-common.txt
-pip install /proj/rel/sw/mlir-compiler/python/mlir_external_packages-1.2.1-py3-none-any.whl
+pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
+pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.3.0-py3-none-any.whl
 pip install onnxruntime-training
 
 #build TSI kernels for the Tsavorite backend
@@ -31,7 +33,6 @@ cd ../posix-kernel/
 
 cd ../../
 
-export MLIR_SDK_VERSION=/proj/work/rel/sw/sdk-r.0.1.2
 #Compile for posix with build-posix as a target folder
 
 echo 'building llama.cp, ggml for tsavorite  and other binary for posix'
