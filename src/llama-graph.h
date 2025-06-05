@@ -37,7 +37,6 @@ enum llm_ffn_op_type {
     LLM_FFN_RELU,
     LLM_FFN_RELU_SQR,
     LLM_FFN_SWIGLU,
-    LLM_FFN_GEGLU,
 };
 
 enum llm_ffn_gate_type {
@@ -197,18 +196,6 @@ public:
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * s_copy; // I32 [kv_size]
-
-    const llama_kv_cache_recurrent_state * kv_state;
-};
-
-class llm_graph_input_s_mask : public llm_graph_input_i {
-public:
-    llm_graph_input_s_mask(const llama_kv_cache_recurrent_state * kv_state) : kv_state(kv_state) {}
-    virtual ~llm_graph_input_s_mask() = default;
-
-    void set_input(const llama_ubatch * ubatch) override;
-
-    ggml_tensor * s_mask; // F32 [1, n_kv]
 
     const llama_kv_cache_recurrent_state * kv_state;
 };
@@ -522,7 +509,6 @@ struct llm_graph_context {
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
     ggml_tensor * build_inp_s_copy(const llama_kv_cache_recurrent_state * kv_state = nullptr) const;
-    ggml_tensor * build_inp_s_mask() const;
 
     ggml_tensor * build_inp_cross_embd() const;
     ggml_tensor * build_inp_pos_bucket_enc() const;
@@ -609,19 +595,18 @@ struct llm_graph_context {
     // recurrent
     //
 
-    ggml_tensor * build_copy_mask_state(
+    ggml_tensor * build_recurrent_state(
                                  ggml_cgraph * gf,
                                  ggml_tensor * s,
                                  ggml_tensor * state_copy,
-                                 ggml_tensor * state_mask,
                                      int32_t   n_state,
                                      int32_t   n_seqs,
+                                        bool   avoid_copies = false,
         const llama_kv_cache_recurrent_state * kv_state = nullptr) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
              ggml_cgraph * gf,
              ggml_tensor * state_copy,
-             ggml_tensor * state_mask,
       const llama_ubatch & ubatch,
                      int   il) const;
 

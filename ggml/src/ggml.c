@@ -4575,7 +4575,6 @@ struct ggml_tensor * ggml_ssm_conv(
     const int64_t n_s     = sx->ne[2];
 
     // TODO: maybe support other strides than 1?
-    // FIXME: this is always true?
     GGML_ASSERT(sx->ne[0] == d_conv - 1 + n_t);
     GGML_ASSERT(sx->ne[1] == d_inner);
     GGML_ASSERT(n_t >= 0);
@@ -4598,36 +4597,49 @@ struct ggml_tensor * ggml_ssm_scan(
         struct ggml_tensor  * dt,
         struct ggml_tensor  * A,
         struct ggml_tensor  * B,
-        struct ggml_tensor  * C) {
+        struct ggml_tensor  * C,
+        struct ggml_tensor  * ids) {
     GGML_ASSERT(ggml_is_contiguous(s));
-    GGML_ASSERT(ggml_is_contiguous(x));
     GGML_ASSERT(ggml_is_contiguous(dt));
     GGML_ASSERT(ggml_is_contiguous(A));
-    GGML_ASSERT(ggml_is_matrix(A));
-    GGML_ASSERT(ggml_is_3d(B));
-    GGML_ASSERT(ggml_is_3d(s));
+    GGML_ASSERT(x->nb[0] == ggml_type_size(x->type));
     GGML_ASSERT(B->nb[0] == ggml_type_size(B->type));
     GGML_ASSERT(C->nb[0] == ggml_type_size(C->type));
-    GGML_ASSERT(ggml_are_same_shape(x, dt));
+    GGML_ASSERT(x->nb[1] == x->ne[0]*x->nb[0]);
+    GGML_ASSERT(B->nb[1] == B->ne[0]*B->nb[0]);
+    GGML_ASSERT(C->nb[1] == C->ne[0]*C->nb[0]);
     GGML_ASSERT(ggml_are_same_shape(B, C));
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
 
     {
         const int64_t d_state      = s->ne[0];
-        const int64_t d_inner      = s->ne[1];
-        const int64_t n_seq_tokens = x->ne[1];
-        const int64_t n_seqs       = x->ne[2];
+        const int64_t head_dim     = x->ne[0];
+        const int64_t n_head       = x->ne[1];
+        const int64_t n_seq_tokens = x->ne[2];
+        const int64_t n_seqs       = x->ne[3];
 
-        GGML_ASSERT(s->ne[2] == n_seqs);
-        GGML_ASSERT(x->ne[0] == d_inner);
-        GGML_ASSERT(A->ne[0] == d_state);
-        GGML_ASSERT(A->ne[1] == d_inner);
+        GGML_ASSERT(dt->ne[0] == n_head);
+        GGML_ASSERT(dt->ne[1] == n_seq_tokens);
+        GGML_ASSERT(dt->ne[2] == n_seqs);
+        GGML_ASSERT(ggml_is_3d(dt));
+        GGML_ASSERT(s->ne[1] == head_dim);
+        GGML_ASSERT(s->ne[2] == n_head);
         GGML_ASSERT(B->ne[0] == d_state);
-        GGML_ASSERT(B->ne[1] == n_seq_tokens);
-        GGML_ASSERT(B->ne[2] == n_seqs);
+        GGML_ASSERT(B->ne[2] == n_seq_tokens);
+        GGML_ASSERT(B->ne[3] == n_seqs);
+        GGML_ASSERT(ids->ne[0] == n_seqs);
+        GGML_ASSERT(ggml_is_vector(ids));
+        GGML_ASSERT(A->ne[1] == n_head);
+        GGML_ASSERT(ggml_is_matrix(A));
+
+        if (A->ne[0] != 1) {
+            // Mamba-1 has more granular decay factors
+            GGML_ASSERT(A->ne[0] == d_state);
+        }
     }
 
     // concatenated y + ssm_states
-    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ggml_nelements(x) + ggml_nelements(s));
+    struct ggml_tensor * result = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ggml_nelements(x) + s->ne[0]*s->ne[1]*s->ne[2]*ids->ne[0]);
 
     result->op   = GGML_OP_SSM_SCAN;
     result->src[0] = s;
@@ -4636,6 +4648,7 @@ struct ggml_tensor * ggml_ssm_scan(
     result->src[3] = A;
     result->src[4] = B;
     result->src[5] = C;
+    result->src[6] = ids;
 
     return result;
 }
