@@ -10199,12 +10199,9 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        if (driver_props.driverID == vk::DriverId::eIntelProprietaryWindows || driver_props.driverID == vk::DriverId::eIntelOpenSourceMESA) {
-            // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
-            // while some older hardware (ex. Arc A770) has performance regressions
-            return arch == vk_device_architecture::INTEL_XE2;
-        }
-        return false;
+        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
+        // while some older hardware (ex. Arc A770) has performance regressions
+        return arch == vk_device_architecture::INTEL_XE2;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
