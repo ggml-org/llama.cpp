@@ -13721,13 +13721,17 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             std::max((uint32_t) 1, cparams.n_seq_max),
                             cparams.n_seq_max);
                 } else if (llm_arch_is_hybrid_recurrent(arch)) {
+                    const auto padding = llama_kv_cache_unified::get_padding(cparams);
+
+                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+
                     res = new llama_kv_cache_hybrid_recurrent(
                         /* model             */ *this,
                         /* attn_type_k       */ params.type_k,
                         /* attn_type_v       */ params.type_v,
                         /* attn_v_trans      */ !cparams.flash_attn,
                         /* attn_kv_size      */ cparams.n_ctx,
-                        /* attn_n_pad        */ llama_kv_cache_unified::get_padding(cparams),
+                        /* attn_n_pad        */ padding,
                         /* attn_n_swa        */ hparams.n_swa,
                         /* attn_swa_type     */ hparams.swa_type,
                         /* recurrent_type_k  */ GGML_TYPE_F32,
