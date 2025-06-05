@@ -419,7 +419,7 @@ uint32_t llama_context::n_threads_batch() const {
 }
 
 llama_memory_t llama_context::get_memory() const {
-    return static_cast<llama_memory_t>(memory.get());
+    return memory.get();
 }
 
 void llama_context::kv_self_defrag_sched() {
@@ -2297,7 +2297,7 @@ const llama_model * llama_get_model(const llama_context * ctx) {
 
 // deprecated
 llama_kv_cache * llama_get_kv_self(llama_context * ctx) {
-    return static_cast<llama_kv_cache *>(ctx->get_memory());
+    return dynamic_cast<llama_kv_cache *>(ctx->get_memory());
 }
 
 // deprecated
