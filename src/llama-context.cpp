@@ -2428,6 +2428,10 @@ llama_memory_t llama_get_memory(const struct llama_context * ctx) {
 }
 
 void llama_memory_clear(llama_memory_t mem) {
+    if (!mem) {
+        return;
+    }
+
     mem->clear();
 }
 
@@ -2436,6 +2440,10 @@ bool llama_memory_seq_rm(
           llama_seq_id seq_id,
              llama_pos p0,
              llama_pos p1) {
+    if (!mem) {
+        return true;
+    }
+
     return mem->seq_rm(seq_id, p0, p1);
 }
 
@@ -2445,12 +2453,20 @@ void llama_memory_seq_cp(
           llama_seq_id seq_id_dst,
              llama_pos p0,
              llama_pos p1) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
 void llama_memory_seq_keep(
         llama_memory_t mem,
           llama_seq_id seq_id) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_keep(seq_id);
 }
 
@@ -2460,6 +2476,10 @@ void llama_memory_seq_add(
              llama_pos p0,
              llama_pos p1,
              llama_pos delta) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_add(seq_id, p0, p1, delta);
 }
 
@@ -2469,22 +2489,38 @@ void llama_memory_seq_div(
              llama_pos p0,
              llama_pos p1,
                    int d) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_div(seq_id, p0, p1, d);
 }
 
 llama_pos llama_memory_seq_pos_min(
         llama_memory_t mem,
           llama_seq_id seq_id) {
+    if (!mem) {
+        return -1;
+    }
+
     return mem->seq_pos_min(seq_id);
 }
 
 llama_pos llama_memory_seq_pos_max(
         llama_memory_t mem,
           llama_seq_id seq_id) {
+    if (!mem) {
+        return -1;
+    }
+
     return mem->seq_pos_max(seq_id);
 }
 
 bool llama_memory_can_shift(llama_memory_t mem) {
+    if (!mem) {
+        return false;
+    }
+
     return mem->get_can_shift();
 }
 
