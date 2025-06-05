@@ -608,7 +608,8 @@ bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {
 }
 
 bool llama_kv_cache_recurrent::get_can_shift() const {
-    return false;
+    // shifting is trivial, the recurrent states don't care about the absolute position
+    return true;
 }
 
 int32_t llama_kv_cache_recurrent::s_copy(int i) const {
@@ -628,23 +629,6 @@ int32_t llama_kv_cache_recurrent::s_copy(int i) const {
     // TODO: do not mutate the KV cache
     // ensure copy only happens once
     if (cell.src != (int32_t) cell_id) {
-        cell.src = cell_id;
-    }
-
-    return res;
-}
-
-float llama_kv_cache_recurrent::s_mask(int i) const {
-    const uint32_t cell_id = i + head;
-
-    //////////////////////////////////////////////
-    // TODO: this should not mutate the KV cache !
-    kv_cell & cell = const_cast<kv_cell &>(cells[cell_id]);
-
-    float res = (float) (cell.src >= 0);
-
-    // only clear once
-    if (cell.src < 0) {
         cell.src = cell_id;
     }
 
@@ -1118,6 +1102,14 @@ uint32_t llama_kv_cache_recurrent_state::get_size() const {
     return kv->size;
 }
 
+int32_t llama_kv_cache_recurrent_state::get_rs_z() const {
+    return kv->rs_z;
+}
+
+int32_t llama_kv_cache_recurrent_state::get_src0(uint32_t cell_id) const {
+    return kv->cells[cell_id].src0;
+}
+
 ggml_tensor * llama_kv_cache_recurrent_state::get_k_l(int32_t il) const {
     return kv->k_l[il];
 }
@@ -1128,8 +1120,4 @@ ggml_tensor * llama_kv_cache_recurrent_state::get_v_l(int32_t il) const {
 
 int32_t llama_kv_cache_recurrent_state::s_copy(int i) const {
     return kv->s_copy(i);
-}
-
-float llama_kv_cache_recurrent_state::s_mask(int i) const {
-    return kv->s_mask(i);
 }
