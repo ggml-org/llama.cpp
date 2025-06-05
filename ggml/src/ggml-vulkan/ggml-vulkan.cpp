@@ -1041,10 +1041,13 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
 struct vk_instance_t {
     vk::Instance instance;
 
-#ifdef GGML_VULKAN_DEBUG_UTILS
     bool debug_utils_support = false;  // VK_EXT_debug_utils enabled
-    PFN_vkSetDebugUtilsObjectNameEXT pfnSetDebugUtilsObjectNameEXT = {};
-#endif
+    PFN_vkSetDebugUtilsObjectNameEXT pfn_vkSetDebugUtilsObjectNameEXT = {};
+    PFN_vkQueueBeginDebugUtilsLabelEXT pfn_vkQueueBeginDebugUtilsLabelEXT = {};
+    PFN_vkQueueEndDebugUtilsLabelEXT   pfn_vkQueueEndDebugUtilsLabelEXT   = {};
+    PFN_vkCmdBeginDebugUtilsLabelEXT   pfn_vkCmdBeginDebugUtilsLabelEXT   = {};
+    PFN_vkCmdEndDebugUtilsLabelEXT pfn_vkCmdEndDebugUtilsLabelEXT = {};
+    PFN_vkCmdInsertDebugUtilsLabelEXT  pfn_vkCmdInsertDebugUtilsLabelEXT  = {};
 
     std::vector<size_t> device_indices;
     vk_device devices[GGML_VK_MAX_DEVICES];
@@ -1185,15 +1188,13 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
     pipeline->compiled = true;
 
-#ifdef GGML_VULKAN_DEBUG_UTILS
     if (vk_instance.debug_utils_support) {
         vk::DebugUtilsObjectNameInfoEXT duoni;
         duoni.objectType = vk::ObjectType::ePipeline;
         duoni.pObjectName = pipeline->name.c_str();
-        duoni.objectHandle = reinterpret_cast<uint64_t>(pipeline->pipeline.operator VkPipeline_T *());
-        vk_instance.pfnSetDebugUtilsObjectNameEXT(device->device, &static_cast<VkDebugUtilsObjectNameInfoEXT &>(duoni));
+        duoni.objectHandle = reinterpret_cast<uint64_t>(static_cast<VkPipeline_T*>(pipeline->pipeline));
+        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT(device->device, &static_cast<VkDebugUtilsObjectNameInfoEXT &>(duoni));
     }
-#endif
 
     {
         std::lock_guard<std::mutex> guard(device->mutex);
@@ -3576,9 +3577,7 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 
-#ifdef GGML_VULKAN_DEBUG_UTILS
 static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
-#endif
 
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
@@ -3600,9 +3599,7 @@ static void ggml_vk_instance_init() {
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
-#ifdef GGML_VULKAN_DEBUG_UTILS
-    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions);
-#endif
+    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions) && getenv("GGML_VK_DEBUG_MARKERS") != nullptr;
     std::vector<const char*> layers;
 
     if (validation_ext) {
@@ -3617,11 +3614,9 @@ static void ggml_vk_instance_init() {
         extensions.push_back("VK_KHR_portability_enumeration");
     }
 #endif
-#ifdef GGML_VULKAN_DEBUG_UTILS
     if (debug_utils_ext) {
         extensions.push_back("VK_EXT_debug_utils");
     }
-#endif
     vk::InstanceCreateInfo instance_create_info(vk::InstanceCreateFlags{}, &app_info, layers, extensions);
 #ifdef __APPLE__
     if (portability_enumeration_ext) {
@@ -3645,12 +3640,16 @@ static void ggml_vk_instance_init() {
     vk_instance.instance = vk::createInstance(instance_create_info);
     vk_instance_initialized = true;
 
-#ifdef GGML_VULKAN_DEBUG_UTILS
     if (debug_utils_ext) {
-        vk_instance.pfnSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
-        vk_instance.debug_utils_support = vk_instance.pfnSetDebugUtilsObjectNameEXT != nullptr;
+        vk_instance.debug_utils_support              = true;
+        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT = (PFN_vkQueueBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueBeginDebugUtilsLabelEXT");
+        vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT = (PFN_vkQueueEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueEndDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
+
     }
-#endif
 
     size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
@@ -9684,6 +9683,13 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
+    if (vk_instance.debug_utils_support) {
+        vk::DebugUtilsLabelEXT dul = {};
+        dul.pLabelName = "ggml_backend_vk_graph_compute";
+        dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
+    }
+
     uint64_t total_mat_mul_bytes = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_vk_build_graph(ctx, cgraph->nodes[i], i, nullptr, 0, true, false, false, false);
@@ -10373,7 +10379,6 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
     UNUSED(instance_extensions);
 }
 
-#ifdef GGML_VULKAN_DEBUG_UTILS
 // Extension availability
 static bool ggml_vk_instance_debug_utils_ext_available(
     const std::vector<vk::ExtensionProperties> & instance_extensions) {
@@ -10389,7 +10394,6 @@ static bool ggml_vk_instance_debug_utils_ext_available(
 
     UNUSED(instance_extensions);
 }
-#endif
 
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
