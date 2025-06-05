@@ -6,6 +6,8 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 
+#include "ggml-wgsl-shaders.hpp"
+
 #include <iostream>
 #include <vector>
 
@@ -28,7 +30,6 @@ struct webgpu_context_struct {
     wgpu::Instance instance;
     wgpu::Adapter adapter;
     wgpu::Device device;
-    // TODO: initialize
     wgpu::Queue queue;
     wgpu::Limits limits;
     // TODO: initialize
@@ -260,6 +261,7 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
 
     ggml_backend_webgpu_device_context * dev_ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
 
+    // Initialize device
     wgpu::DeviceDescriptor deviceDescriptor;
     deviceDescriptor.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous, 
         [](const wgpu::Device& device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
@@ -272,7 +274,7 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
             GGML_LOG_ERROR("ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
     });
     webgpu_context webgpu_ctx = dev_ctx->webgpu_ctx;
-    dev_ctx->webgpu_ctx->instance.WaitAny(dev_ctx->webgpu_ctx->adapter.RequestDevice(&deviceDescriptor, wgpu::CallbackMode::WaitAnyOnly,
+    webgpu_ctx->instance.WaitAny(webgpu_ctx->adapter.RequestDevice(&deviceDescriptor, wgpu::CallbackMode::WaitAnyOnly,
         [webgpu_ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
             if (status != wgpu::RequestDeviceStatus::Success) {
                 GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", message.data);
@@ -284,6 +286,10 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
     );
     GGML_ASSERT(dev_ctx->webgpu_ctx->device != nullptr);
 
+    // Initialize (compute) queue
+    dev_ctx->webgpu_ctx->queue = dev_ctx->webgpu_ctx->device.GetQueue();
+    
+
     static ggml_backend_webgpu_context backend_ctx;
     backend_ctx.name = GGML_WEBGPU_NAME + std::string(": ") + dev_ctx->device_name;
     backend_ctx.webgpu_ctx = dev_ctx->webgpu_ctx;
@@ -294,6 +300,7 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
         /* .device    = */ dev,
         /* .context   = */ &backend_ctx,
     };
+
     return &backend;
 }
 
