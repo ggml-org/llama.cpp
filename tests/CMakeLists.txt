@@ -151,6 +151,8 @@ llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(test-regex-partial.cpp)
 
+llama_build_and_test(test-thread-safety.cpp ARGS -hf ggml-org/Qwen3-0.6B-GGUF:Q8_0 -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4)
+
 # this fails on windows (github hosted runner) due to curl DLL not found (exit code 0xc0000135)
 if (NOT WIN32)
     llama_build_and_test(test-arg-parser.cpp)
