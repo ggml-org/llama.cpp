@@ -179,7 +179,7 @@ llama_kv_cache_hybrid_recurrent_state::llama_kv_cache_hybrid_recurrent_state(
         llama_kv_cache_hybrid_recurrent * kv,
            llama_kv_cache_unified_state * state_unified,
          llama_kv_cache_recurrent_state * state_recurrent)
-    : status(LLAMA_MEMORY_STATUS_SUCCESS),
+    : status(LLAMA_MEMORY_STATUS_NO_UPDATE),
       kv(kv),
       state_attn(state_unified),
       state_recurrent(state_recurrent) {}
