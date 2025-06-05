@@ -4,7 +4,6 @@
 #include "llama.h"
 
 #include <ctime>
-#include <cstring>
 #include <algorithm>
 
 #if defined(_MSC_VER)
