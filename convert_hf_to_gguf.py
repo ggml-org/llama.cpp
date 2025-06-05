@@ -3709,8 +3709,7 @@ class BertModel(TextModel):
         self._try_set_pooling_type()
 
         if self.cls_out_labels:
-            key_name = gguf.Keys.Classifier.OUTPUT_LABELS.format(arch = gguf.MODEL_ARCH_NAMES[self.model_arch])
-            self.gguf_writer.add_array(key_name, [v for k, v in sorted(self.cls_out_labels.items())])
+            self.gguf_writer.add_classifier_output_labels([v for k, v in sorted(self.cls_out_labels.items())])
 
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
