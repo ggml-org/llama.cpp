@@ -422,6 +422,7 @@ llama_memory_t llama_context::get_memory() const {
     return memory.get();
 }
 
+// deprecated
 void llama_context::kv_self_defrag_sched() {
     if (!memory) {
         return;
@@ -430,6 +431,7 @@ void llama_context::kv_self_defrag_sched() {
     memory_force_optimize = true;
 }
 
+// deprecated
 bool llama_context::kv_self_update(bool optimize) {
     if (!memory) {
         return false;
@@ -2533,6 +2535,7 @@ int32_t llama_kv_self_used_cells(const llama_context * ctx) {
     return res;
 }
 
+// deprecated
 void llama_kv_self_clear(llama_context * ctx) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
@@ -2542,6 +2545,7 @@ void llama_kv_self_clear(llama_context * ctx) {
     llama_memory_clear(kv);
 }
 
+// deprecated
 bool llama_kv_self_seq_rm(
         llama_context * ctx,
          llama_seq_id   seq_id,
@@ -2555,6 +2559,7 @@ bool llama_kv_self_seq_rm(
     return llama_memory_seq_rm(kv, seq_id, p0, p1);
 }
 
+// deprecated
 void llama_kv_self_seq_cp(
         llama_context * ctx,
          llama_seq_id   seq_id_src,
@@ -2569,6 +2574,7 @@ void llama_kv_self_seq_cp(
     llama_memory_seq_cp(kv, seq_id_src, seq_id_dst, p0, p1);
 }
 
+// deprecated
 void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
@@ -2578,6 +2584,7 @@ void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
     llama_memory_seq_keep(kv, seq_id);
 }
 
+// deprecated
 void llama_kv_self_seq_add(
         llama_context * ctx,
          llama_seq_id   seq_id,
@@ -2592,6 +2599,7 @@ void llama_kv_self_seq_add(
     llama_memory_seq_add(kv, seq_id, p0, p1, delta);
 }
 
+// deprecated
 void llama_kv_self_seq_div(
         llama_context * ctx,
          llama_seq_id   seq_id,
@@ -2606,6 +2614,7 @@ void llama_kv_self_seq_div(
     llama_memory_seq_div(kv, seq_id, p0, p1, d);
 }
 
+// deprecated
 llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
@@ -2615,6 +2624,7 @@ llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
     return llama_memory_seq_pos_min(kv, seq_id);
 }
 
+// deprecated
 llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
@@ -2630,6 +2640,7 @@ void llama_kv_self_defrag(llama_context * ctx) {
     ctx->kv_self_defrag_sched();
 }
 
+// deprecated
 bool llama_kv_self_can_shift(const llama_context * ctx) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {

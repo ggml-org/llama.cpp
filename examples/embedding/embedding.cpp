@@ -37,7 +37,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
 
     // clear previous kv_cache values (irrelevant for embeddings)
-    llama_kv_self_clear(ctx);
+    llama_memory_clear(llama_get_memory(ctx));
 
     // run model
     LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
