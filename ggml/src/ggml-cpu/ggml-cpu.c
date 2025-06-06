@@ -559,6 +559,14 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 #endif
 }
 
+void ggml_threadpool_chunk_set(struct ggml_threadpool * threadpool, int value) {
+    atomic_store_explicit(&threadpool->current_chunk, value, memory_order_release);
+}
+
+int ggml_threadpool_chunk_add(struct ggml_threadpool * threadpool, int value) {
+    return atomic_fetch_add_explicit(&threadpool->current_chunk, value, memory_order_acq_rel);
+}
+
 #if defined(__gnu_linux__)
 static cpu_set_t ggml_get_numa_affinity(void) {
     cpu_set_t cpuset;

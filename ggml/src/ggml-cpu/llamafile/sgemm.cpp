@@ -406,6 +406,8 @@ class tinyBLAS {
 
         if (params->ith == 0) {
             GGML_ASSERT( jj_BN * SIZE_BN + (NB_BN - jj_BN) * (SIZE_BN - 1) == xtiles);
+            // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
+            ggml_threadpool_chunk_set(params->threadpool, params->nth);
         }
 
         ggml_barrier(params->threadpool);
@@ -434,7 +436,7 @@ class tinyBLAS {
                 GGML_ASSERT(jj == jj2);
             }
 
-            job += params->nth;
+            job = ggml_threadpool_chunk_add(params->threadpool, 1);
         }
 
         ggml_barrier(params->threadpool);
