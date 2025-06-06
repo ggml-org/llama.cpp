@@ -24,11 +24,13 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
-    llama_log_set([](ggml_log_level level, const char * text, void * /*user_data*/) {
-        if (level == GGML_LOG_LEVEL_ERROR) {
-            common_log_add(common_log_main(), level, "%s", text);
-        }
-    }, NULL);
+    LOG_INF("%s\n", common_params_get_system_info(params).c_str());
+
+    //llama_log_set([](ggml_log_level level, const char * text, void * /*user_data*/) {
+    //    if (level == GGML_LOG_LEVEL_ERROR) {
+    //        common_log_add(common_log_main(), level, "%s", text);
+    //    }
+    //}, NULL);
 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
