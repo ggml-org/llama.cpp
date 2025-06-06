@@ -729,6 +729,18 @@ static void ggml_init_arm_arch_features(void) {
     ggml_arm_arch_features.has_neon = 0;
 #endif
 
+#if defined(__ARM_FEATURE_DOTPROD)
+    ggml_arm_arch_features.has_dotprod = 1;
+#else
+    ggml_arm_arch_features.has_dotprod = 0;
+#endif
+
+#if defined(__ARM_FEATURE_FP16_VECTOR_ARITHMETIC)
+    ggml_arm_arch_features.has_fp16_va = 1;
+#else
+    ggml_arm_arch_features.has_fp16_va = 0;
+#endif
+
 #if defined(__ARM_FEATURE_MATMUL_INT8)
     ggml_arm_arch_features.has_i8mm = 1;
 #else
