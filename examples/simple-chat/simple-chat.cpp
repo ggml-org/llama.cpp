@@ -110,7 +110,9 @@ int main(int argc, char ** argv) {
         // prepare a batch for the prompt
         llama_batch batch = llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size());
         llama_token new_token_id;
+        int n_remain = batch.n_tokens;
         while (true) {
+            --n_remain;
             // check if we have enough space in the context to evaluate this batch
             int n_ctx = llama_n_ctx(ctx);
             int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) + 1;
@@ -126,7 +128,7 @@ int main(int argc, char ** argv) {
             }
 
             // sample the next token
-            new_token_id = llama_sampler_sample(smpl, ctx, -1);
+            new_token_id = llama_sampler_sample(smpl, ctx, -1, n_remain);
 
             // is it an end of generation?
             if (llama_vocab_is_eog(vocab, new_token_id)) {

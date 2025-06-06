@@ -162,7 +162,9 @@ int main(int argc, char ** argv) {
 
     const auto t_main_start = ggml_time_us();
 
+    int n_remain = n_predict;
     while (n_cur <= n_predict) {
+        --n_remain;
         // prepare the next batch
         common_batch_clear(batch);
 
@@ -173,7 +175,7 @@ int main(int argc, char ** argv) {
                 continue;
             }
 
-            const llama_token new_token_id = llama_sampler_sample(smpl, ctx, i_batch[i]);
+            const llama_token new_token_id = llama_sampler_sample(smpl, ctx, i_batch[i], n_remain);
 
             // is it an end of generation? -> mark the stream as finished
             if (llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_predict) {

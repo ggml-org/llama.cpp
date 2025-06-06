@@ -699,7 +699,7 @@ int main(int argc, char ** argv) {
                 LOG_DBG("saved session to %s\n", path_session.c_str());
             }
 
-            const llama_token id = common_sampler_sample(smpl, ctx, -1);
+            const llama_token id = common_sampler_sample(smpl, ctx, -1, false, n_remain);
 
             common_sampler_accept(smpl, id, /* accept_grammar= */ true);
 
