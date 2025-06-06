@@ -809,6 +809,9 @@ class TextModel(ModelBase):
         if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
             # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
             res = "minerva-7b"
+        if chkhsh == "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c":
+            # ref: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
+            res = "qwen2"
 
         if res is None:
             logger.warning("\n")
@@ -3060,6 +3063,72 @@ class Qwen2MoeModel(TextModel):
 @ModelBase.register("Qwen3ForCausalLM")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
+
+    # extra logic for rerank models
+    token_false_id: int | None = None
+    token_true_id: int | None = None
+    sep_token_id: int = 0
+    is_tied_embeddings: bool = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # a bit hacky, but currently the only way to detect if this is a rerank model
+        # ref: https://huggingface.co/Qwen/Qwen3-Reranker-0.6B
+        readme_path = self.dir_model / "README.md"
+        readme_text = ""
+        if readme_path.exists():
+            with readme_path.open("r", encoding="utf-8") as f:
+                readme_text = f.read()
+        if "# Qwen3-Reranker" in readme_text:
+            self._find_rerank_config()
+
+    def _find_rerank_config(self):
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        self.token_false_id = tokenizer.convert_tokens_to_ids("no")
+        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")
+        self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
+        logger.info(f"gguf: token_false_id = {self.token_false_id}, token_true_id = {self.token_true_id}")
+        logger.info(f"gguf: sep_token_id = {self.sep_token_id}")
+        logger.info(f"gguf: is_tied_embeddings = {self.is_tied_embeddings}")
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        is_rerank = self.token_false_id is not None and self.token_true_id is not None
+        if is_rerank:
+            self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
+            self.gguf_writer.add_classifier_output_labels(["yes", "no"])
+            self.gguf_writer.add_chat_template([{
+                "name": "rerank",
+                "template": "<|im_start|>system\nJudge whether the Document meets the requirements based on the Query and the Instruct provided. Note that the answer can only be \"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n"
+                            "<Instruct>: Given a web search query, retrieve relevant passages that answer the query\n<Query>: {query}\n<Document>: {document}\n"
+                            "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+            }])
+
+    def _get_cls_out_tensor(self, data_torch: Tensor) -> Tensor:
+        # extract "yes" and "no" tokens from the output lm_head tensor
+        assert self.token_false_id is not None and self.token_true_id is not None
+        false_row = data_torch[self.token_false_id]
+        true_row = data_torch[self.token_true_id]
+        return torch.stack([true_row, false_row], dim=0)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        is_rerank = self.token_false_id is not None and self.token_true_id is not None
+
+        if not name.startswith("model."):
+            name = "model." + name
+
+        if is_rerank:
+            if self.is_tied_embeddings and "embed_tokens" in name:
+                return [
+                    (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight", self._get_cls_out_tensor(data_torch)),
+                    (self.map_tensor_name(name), data_torch),
+                ]
+            if not self.is_tied_embeddings and "lm_head" in name:
+                # this is the lm_head tensor, we need to extract the cls_out tensor
+                return [(gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.CLS_OUT] + ".weight", self._get_cls_out_tensor(data_torch))]
+
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("Qwen3MoeForCausalLM")

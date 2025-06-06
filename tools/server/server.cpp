@@ -4704,22 +4704,19 @@ int main(int argc, char ** argv) {
             return;
         }
 
-        llama_tokens tokenized_query = tokenize_input_prompts(ctx_server.vocab, query, /* add_special */ false, true)[0];
-
         // create and queue the task
         json responses = json::array();
         bool error = false;
         std::unordered_set<int> task_ids;
         {
             std::vector<server_task> tasks;
-            auto tokenized_docs = tokenize_input_prompts(ctx_server.vocab, documents, /* add_special */ false, true);
-            tasks.reserve(tokenized_docs.size());
-            for (size_t i = 0; i < tokenized_docs.size(); i++) {
-                auto tmp = format_rerank(ctx_server.vocab, tokenized_query, tokenized_docs[i]);
+            auto inputs = tokenize_rerank(ctx_server.model, query, documents);
+            tasks.reserve(documents.size());
+            for (size_t i = 0; i < inputs.size(); i++) {
                 server_task task   = server_task(SERVER_TASK_TYPE_RERANK);
                 task.id            = ctx_server.queue_tasks.get_new_id();
                 task.index         = i;
-                task.prompt_tokens = server_tokens(tmp, ctx_server.mctx != nullptr);
+                task.prompt_tokens = server_tokens(inputs[i], ctx_server.mctx != nullptr);
                 tasks.push_back(std::move(task));
             }
 

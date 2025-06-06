@@ -177,13 +177,14 @@ public:
 
 class llm_graph_input_cls : public llm_graph_input_i {
 public:
-    llm_graph_input_cls(const llama_cparams & cparams) : cparams(cparams) {}
+    llm_graph_input_cls(const llama_cparams & cparams, const llm_arch arch) : arch(arch), cparams(cparams) {}
     virtual ~llm_graph_input_cls() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * cls; // I32 [n_batch]
 
+    const llm_arch arch;
     const llama_cparams & cparams;
 };
 

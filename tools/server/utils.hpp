@@ -260,23 +260,48 @@ static size_t validate_utf8(const std::string& text) {
 // template utils
 //
 
-// format rerank task: [BOS]query[EOS][SEP]doc[EOS]
-static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_tokens & query, const llama_tokens & doc) {
-    llama_tokens result;
+// format and tokenize rerank task:
+// - using SEP token: [BOS]query[EOS][SEP]doc[EOS]
+// - using prompt:    <rerank_prefix>query<rerank_suffix>doc
+static std::vector<llama_tokens> tokenize_rerank(const struct llama_model * model, const std::string & query, const std::vector<std::string> & documents) {
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    std::vector<llama_tokens> result;
 
-    // Get EOS token - use SEP token as fallback if EOS is not available
-    llama_token eos_token = llama_vocab_eos(vocab);
-    if (eos_token == LLAMA_TOKEN_NULL) {
-        eos_token = llama_vocab_sep(vocab);
+    for (const auto & doc : documents) {
+        if (llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL) {
+            // Get EOS token - use SEP token as fallback if EOS is not available
+            llama_tokens tok;
+            llama_tokens tok_query = common_tokenize(vocab, query, false, false);
+            llama_tokens tok_doc   = common_tokenize(vocab, doc,   false, false);
+            llama_token  eos_token = llama_vocab_eos(vocab);
+            if (eos_token == LLAMA_TOKEN_NULL) {
+                eos_token = llama_vocab_sep(vocab);
+            }
+
+            tok.reserve(doc.size() + query.size() + 4);
+            tok.push_back(llama_vocab_bos(vocab));
+            tok.insert(tok.end(), tok_query.begin(), tok_query.end());
+            tok.push_back(eos_token);
+            tok.push_back(llama_vocab_sep(vocab));
+            tok.insert(tok.end(), tok_doc.begin(), tok_doc.end());
+            tok.push_back(eos_token);
+
+            result.push_back(std::move(tok));
+        } else {
+            // using prompt template
+            const char * tmpl = llama_model_chat_template(model, "rerank");
+            if (tmpl == nullptr) {
+                throw std::runtime_error("model does not have rerank template");
+            }
+
+            std::string prompt = tmpl;
+            // TODO: may not be efficient to call string_replace_all twice
+            string_replace_all(prompt, "{query}",    query);
+            string_replace_all(prompt, "{document}", doc);
+            llama_tokens tok = common_tokenize(vocab, prompt, true, false);
+            result.push_back(std::move(tok));
+        }
     }
-
-    result.reserve(doc.size() + query.size() + 4);
-    result.push_back(llama_vocab_bos(vocab));
-    result.insert(result.end(), query.begin(), query.end());
-    result.push_back(eos_token);
-    result.push_back(llama_vocab_sep(vocab));
-    result.insert(result.end(), doc.begin(), doc.end());
-    result.push_back(eos_token);
 
     return result;
 }

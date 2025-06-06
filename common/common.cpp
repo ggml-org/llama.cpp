@@ -905,10 +905,13 @@ struct common_init_result common_init_from_params(common_params & params) {
             ok = false;
         }
 
-        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
-        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+        bool has_eos           = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
+        bool has_sep           = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+        bool has_rerank_prompt = llama_model_chat_template(model, "rerank") != NULL;
 
-        if (!has_eos && !has_sep) {
+        if (has_rerank_prompt) {
+            // OK, do nothing
+        } else if (!has_eos && !has_sep) {
             LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
             ok = false;
         } else if (!has_eos) {
