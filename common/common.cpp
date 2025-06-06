@@ -787,7 +787,9 @@ bool fs_create_directory_with_parents(const std::string & path) {
     // process path from front to back, procedurally creating directories
     while ((pos_slash = path.find('\\', pos_slash)) != std::string::npos) {
         const std::wstring subpath = wpath.substr(0, pos_slash);
+
         pos_slash += 1;
+
         // skip the drive letter, in some systems it can return an access denied error
         if (subpath.length() == 2 && subpath[1] == ':') {
             continue;
@@ -795,10 +797,8 @@ bool fs_create_directory_with_parents(const std::string & path) {
 
         const bool success = CreateDirectoryW(subpath.c_str(), NULL);
 
-        std::wcout << "CreateDirectoryW " <<  subpath << " returned: " << (success ? "true" : "false") << std::endl;
         if (!success) {
             const DWORD error = GetLastError();
-            std::wcout << "GetLastError returned: " << error << std::endl;
 
             // if the path already exists, ensure that it's a directory
             if (error == ERROR_ALREADY_EXISTS) {
