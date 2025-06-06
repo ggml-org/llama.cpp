@@ -770,7 +770,8 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     if (weight_before_ffn) {
         // repeat cur to [n_embd, n_expert_used, n_tokens]
-        ggml_tensor * repeated = ggml_repeat_4d(ctx0, cur, n_embd, n_expert_used, n_tokens, 1);
+        ggml_tensor * target_shape = ggml_new_tensor_4d(ctx0, cur->type, n_embd, n_expert_used, n_tokens, 1);
+        ggml_tensor * repeated = ggml_repeat(ctx0, cur, target_shape);
         cur = ggml_mul(ctx0, repeated, weights);
         cb(cur, "ffn_moe_weighted", il);
     }
