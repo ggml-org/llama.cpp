@@ -79,9 +79,10 @@ struct ggml_arm_arch_features_type {
     int has_fp16_va;
     int has_i8mm;
     int has_sve;
+    int has_sve2;
     int sve_cnt;
     int has_sme;
-} ggml_arm_arch_features = {-1, -1, -1, -1, -1, 0, -1};
+} ggml_arm_arch_features = {-1, -1, -1, -1, -1, -1, 0, -1};
 #endif
 
 
@@ -693,6 +694,7 @@ static void ggml_init_arm_arch_features(void) {
     ggml_arm_arch_features.has_fp16_va = !!(hwcap & HWCAP_FPHP);
     ggml_arm_arch_features.has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
     ggml_arm_arch_features.has_sve     = !!(hwcap & HWCAP_SVE);
+    ggml_arm_arch_features.has_sve2    = !!(hwcap2 & HWCAP2_SVE2);
     ggml_arm_arch_features.has_sme     = !!(hwcap2 & HWCAP2_SME);
 
 #if defined(__ARM_FEATURE_SVE)
@@ -726,8 +728,9 @@ static void ggml_init_arm_arch_features(void) {
     }
     ggml_arm_arch_features.has_sme = oldp;
 
-    ggml_arm_arch_features.has_sve = 0;
-    ggml_arm_arch_features.sve_cnt = 0;
+    ggml_arm_arch_features.has_sve  = 0;
+    ggml_arm_arch_features.has_sve2 = 0;
+    ggml_arm_arch_features.sve_cnt  = 0;
 #else
 // Run-time CPU feature detection not implemented for this platform, fallback to compile time
 #if defined(__ARM_NEON)
@@ -760,6 +763,12 @@ static void ggml_init_arm_arch_features(void) {
 #else
     ggml_arm_arch_features.has_sve = 0;
     ggml_arm_arch_features.sve_cnt = 0;
+#endif
+
+#if defined(__ARM_FEATURE_SVE2)
+    ggml_arm_arch_features.has_sve2 = 1;
+#else
+    ggml_arm_arch_features.has_sve2 = 0;
 #endif
 
 #if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_SME2)
@@ -3471,6 +3480,14 @@ int ggml_cpu_has_fp16_va(void) {
 int ggml_cpu_has_sve(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE)
     return ggml_arm_arch_features.has_sve;
+#else
+    return 0;
+#endif
+}
+
+int ggml_cpu_has_sve2(void) {
+#if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE2)
+    return ggml_arm_arch_features.has_sve2;
 #else
     return 0;
 #endif

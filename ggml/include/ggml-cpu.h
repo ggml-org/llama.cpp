@@ -95,6 +95,7 @@ extern "C" {
     GGML_BACKEND_API int ggml_cpu_has_dotprod    (void);
     GGML_BACKEND_API int ggml_cpu_has_matmul_int8(void);
     GGML_BACKEND_API int ggml_cpu_has_sve        (void);
+    GGML_BACKEND_API int ggml_cpu_has_sve2       (void);
     GGML_BACKEND_API int ggml_cpu_get_sve_cnt    (void);  // sve vector length in bytes
     GGML_BACKEND_API int ggml_cpu_has_sme        (void);
     // other
