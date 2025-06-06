@@ -42,6 +42,19 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
+if (LLAMA_NUMA)
+    find_library(NUMA_LIB numa)
+    check_include_file_cxx("numa.h" HAVE_NUMA_HEADERS)
+    check_include_file_cxx("numaif.h" HAVE_NUMAIF_HEADERS)
+    if (HAVE_NUMA_HEADERS AND HAVE_NUMAIF_HEADERS AND NUMA_LIB)
+        target_compile_definitions(llama PRIVATE USE_LIBNUMA)
+        target_link_libraries(llama PRIVATE numa)
+        message(STATUS "libnuma found, page cache will be moved to the local node using mbind() syscall. Disable with LLAMA_NUMA=OFF")
+    else()
+        message(STATUS "Warning: NUMA headers not found - consider disabling this Warning with LLAMA_NUMA=OFF")
+    endif()
+endif()
+
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
     target_compile_definitions(llama PRIVATE LLAMA_BUILD)
