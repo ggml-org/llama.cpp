@@ -47,19 +47,11 @@ int main(int argc, char ** argv) {
     //const int num_models = std::max(1, gpu_dev_count);
     const int num_contexts = std::max(1, params.n_parallel);
 
-    struct model_context {
-        llama_model_ptr model;
-        std::vector<llama_context_ptr> contexts;
-        std::vector<std::unique_ptr<common_sampler, decltype(&common_sampler_free)>> samplers;
-    };
-
-    std::vector<model_context> models;
+    std::vector<llama_model_ptr> models;
     std::vector<std::thread> threads;
     std::atomic<bool> failed = false;
 
     for (int m = 0; m < num_models; ++m) {
-        model_context this_model;
-
         mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
         mparams.main_gpu = m < gpu_dev_count ? m : -1;
 
@@ -69,35 +61,36 @@ int main(int argc, char ** argv) {
             return 1;
         }
 
-        this_model.model.reset(model);
+        models.emplace_back(model);
 
         for (int c = 0; c < num_contexts; ++c) {
-            LOG_INF("Creating context %d/%d for model %d/%d\n", c + 1, num_contexts, m + 1, num_models);
-            llama_context * ctx = llama_init_from_model(model, cparams);
-            if (ctx == NULL) {
-                LOG_ERR("%s: failed to create context\n", __func__);
-                return 1;
-            }
-            this_model.contexts.emplace_back(ctx);
+            threads.emplace_back([&, m, c, model]() {
+                LOG_INF("Creating context %d/%d for model %d/%d\n", c + 1, num_contexts, m + 1, num_models);
 
-            common_sampler * sampler = common_sampler_init(model, params.sampling);
-            if (sampler == NULL) {
-                LOG_ERR("%s: failed to create sampler\n", __func__);
-                return 1;
-            }
-            this_model.samplers.emplace_back(sampler, common_sampler_free);
+                llama_context_ptr ctx { llama_init_from_model(model, cparams) };
+                if (ctx == NULL) {
+                    LOG_ERR("failed to create context\n");
+                    failed.store(true);
+                    return;
+                }
 
-            threads.emplace_back([model, ctx, sampler, &params, &failed, m, c, num_models, num_contexts]() {
+                std::unique_ptr<common_sampler, decltype(&common_sampler_free)> sampler { common_sampler_init(model, params.sampling), common_sampler_free };
+                if (sampler == NULL) {
+                    LOG_ERR("failed to create sampler\n");
+                    failed.store(true);
+                    return;
+                }
+
                 llama_batch batch = {};
                 {
-                    auto prompt = common_tokenize(ctx, params.prompt, true);
+                    auto prompt = common_tokenize(ctx.get(), params.prompt, true);
                     if (prompt.empty()) {
                         LOG_ERR("failed to tokenize prompt\n");
                         failed.store(true);
                         return;
                     }
                     batch = llama_batch_get_one(prompt.data(), prompt.size());
-                    if (llama_decode(ctx, batch)) {
+                    if (llama_decode(ctx.get(), batch)) {
                         LOG_ERR("failed to decode prompt\n");
                         failed.store(true);
                         return;
@@ -110,7 +103,7 @@ int main(int argc, char ** argv) {
                 for (int i = 0; i < params.n_predict; i++) {
                     llama_token token;
                     if (batch.n_tokens > 0) {
-                        token = common_sampler_sample(sampler, ctx, batch.n_tokens - 1);
+                        token = common_sampler_sample(sampler.get(), ctx.get(), batch.n_tokens - 1);
                     } else {
                         token = llama_vocab_bos(vocab);
                     }
@@ -118,10 +111,10 @@ int main(int argc, char ** argv) {
                     if (llama_vocab_is_eog(vocab, token)) {
                         break;
                     }
-                    result += common_token_to_piece(ctx, token);
+                    result += common_token_to_piece(ctx.get(), token);
 
                     batch = llama_batch_get_one(&token, 1);
-                    if (llama_decode(ctx, batch)) {
+                    if (llama_decode(ctx.get(), batch)) {
                         LOG_ERR("failed to decode\n");
                         failed.store(true);
                         return;
@@ -130,10 +123,7 @@ int main(int argc, char ** argv) {
 
                 LOG_INF("Model %d/%d, Context %d/%d: Result: '%s'\n", m + 1, num_models, c + 1, num_contexts, result.c_str());
             });
-
         }
-
-        models.emplace_back(std::move(this_model));
     }
 
     for (auto & thread : threads) {
