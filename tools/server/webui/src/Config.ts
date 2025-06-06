@@ -16,7 +16,7 @@ export const CONFIG_DEFAULT = {
   showTokensPerSecond: false,
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
-  pasteLongTextToFileLen: 2500,
+  pasteLongTextToFileLen: 0,
   pdfAsImage: false,
   // make sure these default values are in sync with `common.h`
   samplers: 'edkypmxt',
