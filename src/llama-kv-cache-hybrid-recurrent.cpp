@@ -102,9 +102,10 @@ bool llama_kv_cache_hybrid_recurrent::get_can_shift() const {
     // Shifting is trivially supported for recurrent
     return kv_attn->get_can_shift();
 }
-void llama_kv_cache_hybrid_recurrent::clear() {
-    kv_attn     ->clear();
-    kv_recurrent->clear();
+
+void llama_kv_cache_hybrid_recurrent::clear(bool data) {
+    kv_attn     ->clear(data);
+    kv_recurrent->clear(data);
 }
 
 bool llama_kv_cache_hybrid_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
