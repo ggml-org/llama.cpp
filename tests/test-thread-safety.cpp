@@ -62,7 +62,10 @@ int main(int argc, char ** argv) {
         }
 
         models.emplace_back(model);
+    }
 
+    for  (int m = 0; m < num_models; ++m) {
+        auto * model = models[m].get();
         for (int c = 0; c < num_contexts; ++c) {
             threads.emplace_back([&, m, c, model]() {
                 LOG_INF("Creating context %d/%d for model %d/%d\n", c + 1, num_contexts, m + 1, num_models);
