@@ -3,6 +3,7 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
+#include "ggml-cpu-aarch64.h"
 #include "ggml-cpu-traits.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-cpu.h"
@@ -82,7 +83,6 @@ struct ggml_arm_arch_features_type {
     int has_sme;
 } ggml_arm_arch_features = {-1, -1, -1, -1, 0, -1};
 #endif
-
 
 #if defined(_WIN32)
 
@@ -454,6 +454,9 @@ struct ggml_threadpool {
     struct ggml_compute_state * workers;   // per thread state
     int          n_threads_max; // number of threads in the pool
     atomic_int   n_threads_cur; // number of threads used in the current graph
+#if defined(GGML_YIELD_BARRIER)
+    size_t n_barrier_spin_count;
+#endif
 
     int32_t      prio;        // Scheduling priority
     uint32_t     poll;        // Polling level (0 - no polling)
@@ -521,6 +524,63 @@ struct ggml_state {
 
 static struct ggml_state g_state = {0};
 
+#if defined(__gnu_linux__) || defined(__ANDROID__)
+#include <sys/syscall.h>
+#define FUTEX_WAIT 0
+#define FUTEX_WAKE 1
+#define FUTEX_PRIVATE_FLAG   128
+#define FUTEX_WAIT_PRIVATE (FUTEX_WAIT | FUTEX_PRIVATE_FLAG)
+#define FUTEX_WAKE_PRIVATE (FUTEX_WAKE | FUTEX_PRIVATE_FLAG)
+#define futex_wait(uaddr, val) syscall(SYS_futex, uaddr, FUTEX_WAIT_PRIVATE, val, NULL, NULL, 0)
+#define futex_wake(uaddr, n)   syscall(SYS_futex, uaddr, FUTEX_WAKE_PRIVATE, n, NULL, NULL, 0)
+#elif defined(__APPLE__)
+#include <stdatomic.h>
+
+extern int __ulock_wait(uint32_t operation, volatile int *addr, uint64_t value, uint32_t timeout);
+extern int __ulock_wake(uint32_t operation, volatile int *addr, uint64_t wake_value);
+
+#define UL_COMPARE_AND_WAIT        1
+
+#define ULF_WAKE_ALL    0x00000100
+#define ULF_WAKE_THREAD 0x00000200
+
+static int futex_wait(volatile int *addr, int expected) {
+    int op = UL_COMPARE_AND_WAIT;
+    int ret = __ulock_wait(op, (volatile void *)addr, (uint64_t)expected, 0);
+    if (ret == -1) {
+        return -1;
+    }
+    return 0;
+}
+
+static int futex_wake(volatile int *addr, int count) {
+    if (count <= 0) {
+        return 0;
+    }
+    uint32_t op = UL_COMPARE_AND_WAIT;
+    if (count == INT_MAX) {
+        op |= ULF_WAKE_ALL;
+        if (__ulock_wake(op, (volatile void *)addr, 0) == -1) {
+            return -1;
+        }
+        return 0;
+    }
+    int woken = 0;
+    for (int i = 0; i < count; ++i) {
+        if (__ulock_wake(op, (volatile void *)addr, 0) == -1) {
+            if (errno == ENOENT || errno == ESRCH) {
+                break;
+            } else {
+                return -1;
+            }
+        }
+        woken++;
+    }
+    return woken;
+}
+
+#endif
+
 void ggml_barrier(struct ggml_threadpool * tp) {
     int n_threads = atomic_load_explicit(&tp->n_threads_cur, memory_order_relaxed);
     if (n_threads == 1) {
@@ -541,14 +601,34 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 
         // exit barrier (fill seq-cst fence)
         atomic_fetch_add_explicit(&tp->n_barrier_passed, 1, memory_order_seq_cst);
+#if defined(GGML_YIELD_BARRIER)
+        // wake up all threads
+        futex_wake(&tp->n_barrier_passed, INT_MAX);
+#endif
         return;
     }
 
+#if !defined(GGML_YIELD_BARRIER)
     // wait for other threads
     while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed) {
         ggml_thread_cpu_relax();
     }
+#else
+    size_t spin_count = tp->n_barrier_spin_count;
+    size_t i;
+    do {
+        for (i = 0; i < spin_count; i++) {
+            if (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) != n_passed) {
+                goto exit_barrier;
+            }
+            ggml_thread_cpu_relax();
+        }
 
+        futex_wait(&tp->n_barrier_passed, n_passed);
+    } while (atomic_load_explicit(&tp->n_barrier_passed, memory_order_relaxed) == n_passed);
+    return;
+exit_barrier:
+#endif
     // exit barrier (full seq-cst fence)
     // TSAN doesn't support standalone fence yet, we use a dummy read-modify-write instead
     #ifdef GGML_TSAN_ENABLED
@@ -2504,7 +2584,7 @@ static bool ggml_thread_apply_affinity(const bool * mask) {
 
     for (uint32_t i = 0; i < GGML_MAX_N_THREADS; i++) {
         if (mask[i]) {
-            GGML_PRINT_DEBUG("Thread %lx: adding %d to cpuset\n", pthread_self(), i);
+            printf("Thread %lx: adding %d to cpuset\n", pthread_self(), i);
             CPU_SET(i, &cpuset);
         }
     }
@@ -3059,6 +3139,9 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->poll             = tpp->poll;
         threadpool->prio             = tpp->prio;
         threadpool->ec               = GGML_STATUS_SUCCESS;
+#if defined(GGML_YIELD_BARRIER)
+        threadpool->n_barrier_spin_count = ggml_barrier_spin_count(tpp->n_threads);
+#endif
     }
 
     // Allocate and init workers state

@@ -587,6 +587,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
     #ifdef GGML_USE_ACCELERATE
         features.push_back({ "ACCELERATE", "1" });
     #endif
+    #ifdef GGML_YIELD_BARRIER
+        features.push_back({ "YIELD_BARRIER", "1" });
+    #endif
     #ifdef GGML_USE_CPU_HBM
         features.push_back({ "CPU_HBM", "1" });
     #endif
@@ -647,6 +650,136 @@ static void * ggml_backend_cpu_get_proc_address(ggml_backend_reg_t reg, const ch
 
     GGML_UNUSED(reg);
 }
+
+#if defined(GGML_YIELD_BARRIER)
+#include <thread>
+
+#if defined(__x86_64__)
+#if defined(_MSC_VER)
+#include <intrin.h>
+static void cpuid(int leaf, int subleaf, int *eax, int *ebx, int *ecx, int *edx) {
+    int regs[4];
+    __cpuidex(regs, leaf, subleaf);
+    *eax = regs[0];
+    *ebx = regs[1];
+    *ecx = regs[2];
+    *edx = regs[3];
+}
+#elif defined(__GNUC__) || defined(__clang__)
+static void cpuid(int leaf, int subleaf, int *eax, int *ebx, int *ecx, int *edx) {
+    __asm__ volatile (
+        "cpuid"
+        : "=a"(*eax), "=b"(*ebx), "=c"(*ecx), "=d"(*edx)
+        : "a"(leaf), "c"(subleaf)
+    );
+}
+#else
+  #error Unsupported compiler
+#endif
+
+static bool cpu_is_hybrid() {
+    int eax, ebx, ecx, edx;
+    cpuid(7, 0, &eax, &ebx, &ecx, &edx);
+    return !!(edx & (1u << 15));
+}
+
+#elif defined(__aarch64__) && defined(__gnu_linux__)
+
+bool cpu_is_hybrid() {
+    FILE *fp = fopen("/proc/cpuinfo", "r");
+    if (!fp) {
+        return false;
+    }
+
+    char line[256];
+    char first_cpu_part[64] = {0};
+    bool found_first = false;
+    bool hybrid = false;
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "CPU part", 8) == 0 || strncmp(line, "cpu part", 8) == 0) {
+            char *colon = strchr(line, ':');
+            if (colon) {
+                colon++;
+                while (*colon == ' ' || *colon == '\t') {
+                    colon++;
+                }
+                char *newline = strchr(colon, '\n');
+                if (newline) {
+                    *newline = '\0';
+                }
+
+                if (!found_first) {
+                    strncpy(first_cpu_part, colon, sizeof(first_cpu_part)-1);
+                    found_first = true;
+                } else {
+                    if (strcmp(first_cpu_part, colon) != 0) {
+                        hybrid = true;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    fclose(fp);
+    return hybrid;
+}
+
+#elif defined(__aarch64__) && defined(__APPLE__)
+
+bool cpu_is_hybrid() {
+    int64_t cpu_count = 0;
+    size_t size = sizeof(cpu_count);
+    if (sysctlbyname("hw.perflevel1.physicalcpu", &cpu_count, &size, NULL, 0) == 0) {
+        return cpu_count > 0;
+    }
+    return false;
+}
+
+#else
+
+bool cpu_is_hybrid() {
+    return false;
+}
+
+#endif
+
+#if defined(__gnu_linux__)
+static size_t get_affinity_cores() {
+    cpu_set_t set;
+    int num_cores = 0;
+
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(cpu_set_t), &set) == -1) {
+        return std::thread::hardware_concurrency();
+    }
+
+    for (int i = 0; i < CPU_SETSIZE; ++i) {
+        if (CPU_ISSET(i, &set)) {
+            num_cores++;
+        }
+    }
+
+    return num_cores;
+}
+#else
+static size_t get_affinity_cores() {
+    return std::thread::hardware_concurrency();
+}
+#endif
+
+extern "C"
+size_t ggml_barrier_spin_count(unsigned int n_threads) {
+    size_t count = 30000;
+    if (n_threads > get_affinity_cores()) {
+        count = 100;
+    }
+    if (cpu_is_hybrid()) {
+        count = 1;
+    }
+    return count;
+}
+#endif
 
 static const struct ggml_backend_reg_i ggml_backend_cpu_reg_i = {
     /* .get_name         = */ ggml_backend_cpu_reg_get_name,
