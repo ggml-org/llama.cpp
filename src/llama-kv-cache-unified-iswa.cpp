@@ -52,9 +52,9 @@ llama_kv_cache_unified_iswa::llama_kv_cache_unified_iswa(
             hparams.n_swa, hparams.swa_type);
 }
 
-void llama_kv_cache_unified_iswa::clear() {
-    kv_base->clear();
-    kv_swa ->clear();
+void llama_kv_cache_unified_iswa::clear(bool data) {
+    kv_base->clear(data);
+    kv_swa ->clear(data);
 }
 
 bool llama_kv_cache_unified_iswa::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {

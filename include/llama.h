@@ -514,6 +514,13 @@ extern "C" {
     // Get the model's RoPE frequency scaling factor
     LLAMA_API float llama_model_rope_freq_scale_train(const struct llama_model * model);
 
+    // Returns the number of classifier outputs (only valid for classifier models)
+    // Undefined behavior for non-classifier models
+    LLAMA_API uint32_t llama_model_n_cls_out(const struct llama_model * model);
+
+    // Returns label of classifier output by index (<n_cls_out). Returns nullptr if no label provided
+    LLAMA_API const char * llama_model_cls_label(const struct llama_model * model, uint32_t i);
+
     LLAMA_API enum llama_vocab_type llama_vocab_type(const struct llama_vocab * vocab);
 
     LLAMA_API int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab);
@@ -618,7 +625,10 @@ extern "C" {
     //
 
     // Clear the memory contents
-    LLAMA_API void llama_memory_clear(llama_memory_t mem);
+    // If data == true, the data buffers will also be cleared together with the metadata
+    LLAMA_API void llama_memory_clear(
+            llama_memory_t mem,
+                      bool data);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
@@ -698,74 +708,82 @@ extern "C" {
                "Use llama_kv_self_seq_pos_max() and llama_kv_self_seq_pos_min() instead (https://github.com/ggml-org/llama.cpp/issues/13793)");
 
     // Clear the KV cache - both cell info is erased and KV data is zeroed
-    LLAMA_API void llama_kv_self_clear(
-                struct llama_context * ctx);
+    DEPRECATED(LLAMA_API void llama_kv_self_clear(
+                struct llama_context * ctx),
+            "Use llama_memory_clear() instead");
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
     // seq_id < 0 : match any sequence
     // p0 < 0     : [0,  p1]
     // p1 < 0     : [p0, inf)
-    LLAMA_API bool llama_kv_self_seq_rm(
+    DEPRECATED(LLAMA_API bool llama_kv_self_seq_rm(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
-                       llama_pos   p1);
+                       llama_pos   p1),
+            "Use llama_memory_seq_rm() instead");
 
     // Copy all tokens that belong to the specified sequence to another sequence
     // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    LLAMA_API void llama_kv_self_seq_cp(
+    DEPRECATED(LLAMA_API void llama_kv_self_seq_cp(
             struct llama_context * ctx,
                     llama_seq_id   seq_id_src,
                     llama_seq_id   seq_id_dst,
                        llama_pos   p0,
-                       llama_pos   p1);
+                       llama_pos   p1),
+            "Use llama_memory_seq_cp() instead");
 
     // Removes all tokens that do not belong to the specified sequence
-    LLAMA_API void llama_kv_self_seq_keep(
+    DEPRECATED(LLAMA_API void llama_kv_self_seq_keep(
             struct llama_context * ctx,
-                    llama_seq_id   seq_id);
+                    llama_seq_id   seq_id),
+            "Use llama_memory_seq_keep() instead");
 
     // Adds relative position "delta" to all tokens that belong to the specified sequence and have positions in [p0, p1)
     // If the KV cache is RoPEd, the KV data is updated accordingly:
     //   - lazily on next llama_decode()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    LLAMA_API void llama_kv_self_seq_add(
+    DEPRECATED(LLAMA_API void llama_kv_self_seq_add(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
                        llama_pos   p1,
-                       llama_pos   delta);
+                       llama_pos   delta),
+            "Use llama_memory_seq_add() instead");
 
     // Integer division of the positions by factor of `d > 1`
     // If the KV cache is RoPEd, the KV data is updated accordingly:
     //   - lazily on next llama_decode()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    LLAMA_API void llama_kv_self_seq_div(
+    DEPRECATED(void llama_kv_self_seq_div(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
                        llama_pos   p1,
-                             int   d);
+                             int   d),
+            "Use llama_memory_seq_div() instead");
 
     // Returns the smallest position present in the KV cache for the specified sequence
     // This is typically non-zero only for SWA caches
     // Note that all positions in the range [pos_min, pos_max] are guaranteed to be present in the KV cache
     // Return -1 if the sequence is empty
-    LLAMA_API llama_pos llama_kv_self_seq_pos_min(
+    DEPRECATED(LLAMA_API llama_pos llama_kv_self_seq_pos_min(
             struct llama_context * ctx,
-                    llama_seq_id   seq_id);
+                    llama_seq_id   seq_id),
+            "Use llama_memory_seq_pos_min() instead");
 
     // Returns the largest position present in the KV cache for the specified sequence
     // Note that all positions in the range [pos_min, pos_max] are guaranteed to be present in the KV cache
     // Return -1 if the sequence is empty
-    LLAMA_API llama_pos llama_kv_self_seq_pos_max(
+    DEPRECATED(LLAMA_API llama_pos llama_kv_self_seq_pos_max(
             struct llama_context * ctx,
-                    llama_seq_id   seq_id);
+                    llama_seq_id   seq_id),
+            "Use llama_memory_seq_pos_max() instead");
 
     // Defragment the KV cache
     // This will be applied:
@@ -774,7 +792,8 @@ extern "C" {
             "simply remove this call, the context will automatically decide when to do a defragmentation based on 'defrag_thold'");
 
     // Check if the context supports KV cache shifting
-    LLAMA_API bool llama_kv_self_can_shift(const struct llama_context * ctx);
+    DEPRECATED(LLAMA_API bool llama_kv_self_can_shift(const struct llama_context * ctx),
+            "use llama_memory_can_shift() instead");
 
     // Apply the KV cache updates (such as K-shifts, defragmentation, etc.)
     DEPRECATED(LLAMA_API void llama_kv_self_update(struct llama_context * ctx),
@@ -992,7 +1011,7 @@ extern "C" {
 
     // Get the embeddings for a sequence id
     // Returns NULL if pooling_type is LLAMA_POOLING_TYPE_NONE
-    // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[1] with the rank of the sequence
+    // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[n_cls_out] with the rank(s) of the sequence
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 

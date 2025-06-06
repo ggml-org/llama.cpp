@@ -123,7 +123,7 @@ llama_context::llama_context(
                 __func__, n_ctx_per_seq, hparams.n_ctx_train);
     }
 
-    if (!params.swa_full && cparams.n_seq_max > 1) {
+    if (!params.swa_full && cparams.n_seq_max > 1 && hparams.is_swa_any()) {
         LLAMA_LOG_WARN("%s: requested n_seq_max (%u) > 1, but swa_full is not enabled -- performance may be degraded: %s\n",
                 __func__, cparams.n_seq_max, "https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573");
     }
@@ -422,6 +422,7 @@ llama_memory_t llama_context::get_memory() const {
     return memory.get();
 }
 
+// deprecated
 void llama_context::kv_self_defrag_sched() {
     if (!memory) {
         return;
@@ -430,6 +431,7 @@ void llama_context::kv_self_defrag_sched() {
     memory_force_optimize = true;
 }
 
+// deprecated
 bool llama_context::kv_self_update(bool optimize) {
     if (!memory) {
         return false;
@@ -839,16 +841,17 @@ int llama_context::encode(llama_batch & inp_batch) {
                 } break;
             case LLAMA_POOLING_TYPE_RANK:
                 {
-                    // extract the rerank score - a single float per sequence
+                    // extract the rerank score - n_cls_out floats per sequence
                     auto & embd_seq_out = embd_seq;
+                    const uint32_t n_cls_out = hparams.n_cls_out;
 
                     for (uint32_t s = 0; s < ubatch.n_seqs; ++s) {
                         const llama_seq_id seq_id = ubatch.seq_id[s][0];
                         if (embd_seq_out.find(seq_id) != embd_seq_out.end()) {
                             continue;
                         }
-                        embd_seq_out[seq_id].resize(1);
-                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (seq_id)*sizeof(float), sizeof(float));
+                        embd_seq_out[seq_id].resize(n_cls_out);
+                        ggml_backend_tensor_get_async(backend_embd, t_embd, embd_seq_out[seq_id].data(), (n_cls_out*seq_id)*sizeof(float), n_cls_out*sizeof(float));
                     }
                 } break;
             case LLAMA_POOLING_TYPE_UNSPECIFIED:
@@ -2052,7 +2055,7 @@ void llama_context::opt_epoch_iter(
     const uint32_t n_batch  = std::min(this->n_batch(),  n_ctx);
     const uint32_t n_ubatch = std::min(this->n_ubatch(), n_batch);
 
-    memory->clear();
+    memory->clear(true);
 
     for (uint32_t pos_ctx = 0; pos_ctx < n_ctx; pos_ctx += n_batch) {
         batch.n_tokens = n_batch;
@@ -2425,8 +2428,12 @@ llama_memory_t llama_get_memory(const struct llama_context * ctx) {
     return ctx->get_memory();
 }
 
-void llama_memory_clear(llama_memory_t mem) {
-    mem->clear();
+void llama_memory_clear(llama_memory_t mem, bool data) {
+    if (!mem) {
+        return;
+    }
+
+    mem->clear(data);
 }
 
 bool llama_memory_seq_rm(
@@ -2434,6 +2441,10 @@ bool llama_memory_seq_rm(
           llama_seq_id seq_id,
              llama_pos p0,
              llama_pos p1) {
+    if (!mem) {
+        return true;
+    }
+
     return mem->seq_rm(seq_id, p0, p1);
 }
 
@@ -2443,12 +2454,20 @@ void llama_memory_seq_cp(
           llama_seq_id seq_id_dst,
              llama_pos p0,
              llama_pos p1) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_cp(seq_id_src, seq_id_dst, p0, p1);
 }
 
 void llama_memory_seq_keep(
         llama_memory_t mem,
           llama_seq_id seq_id) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_keep(seq_id);
 }
 
@@ -2458,6 +2477,10 @@ void llama_memory_seq_add(
              llama_pos p0,
              llama_pos p1,
              llama_pos delta) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_add(seq_id, p0, p1, delta);
 }
 
@@ -2467,22 +2490,38 @@ void llama_memory_seq_div(
              llama_pos p0,
              llama_pos p1,
                    int d) {
+    if (!mem) {
+        return;
+    }
+
     mem->seq_div(seq_id, p0, p1, d);
 }
 
 llama_pos llama_memory_seq_pos_min(
         llama_memory_t mem,
           llama_seq_id seq_id) {
+    if (!mem) {
+        return -1;
+    }
+
     return mem->seq_pos_min(seq_id);
 }
 
 llama_pos llama_memory_seq_pos_max(
         llama_memory_t mem,
           llama_seq_id seq_id) {
+    if (!mem) {
+        return -1;
+    }
+
     return mem->seq_pos_max(seq_id);
 }
 
 bool llama_memory_can_shift(llama_memory_t mem) {
+    if (!mem) {
+        return false;
+    }
+
     return mem->get_can_shift();
 }
 
@@ -2533,15 +2572,17 @@ int32_t llama_kv_self_used_cells(const llama_context * ctx) {
     return res;
 }
 
+// deprecated
 void llama_kv_self_clear(llama_context * ctx) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
         return;
     }
 
-    llama_memory_clear(kv);
+    llama_memory_clear(kv, true);
 }
 
+// deprecated
 bool llama_kv_self_seq_rm(
         llama_context * ctx,
          llama_seq_id   seq_id,
@@ -2555,6 +2596,7 @@ bool llama_kv_self_seq_rm(
     return llama_memory_seq_rm(kv, seq_id, p0, p1);
 }
 
+// deprecated
 void llama_kv_self_seq_cp(
         llama_context * ctx,
          llama_seq_id   seq_id_src,
@@ -2569,6 +2611,7 @@ void llama_kv_self_seq_cp(
     llama_memory_seq_cp(kv, seq_id_src, seq_id_dst, p0, p1);
 }
 
+// deprecated
 void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
@@ -2578,6 +2621,7 @@ void llama_kv_self_seq_keep(llama_context * ctx, llama_seq_id seq_id) {
     llama_memory_seq_keep(kv, seq_id);
 }
 
+// deprecated
 void llama_kv_self_seq_add(
         llama_context * ctx,
          llama_seq_id   seq_id,
@@ -2592,6 +2636,7 @@ void llama_kv_self_seq_add(
     llama_memory_seq_add(kv, seq_id, p0, p1, delta);
 }
 
+// deprecated
 void llama_kv_self_seq_div(
         llama_context * ctx,
          llama_seq_id   seq_id,
@@ -2606,6 +2651,7 @@ void llama_kv_self_seq_div(
     llama_memory_seq_div(kv, seq_id, p0, p1, d);
 }
 
+// deprecated
 llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
@@ -2615,6 +2661,7 @@ llama_pos llama_kv_self_seq_pos_min(llama_context * ctx, llama_seq_id seq_id) {
     return llama_memory_seq_pos_min(kv, seq_id);
 }
 
+// deprecated
 llama_pos llama_kv_self_seq_pos_max(llama_context * ctx, llama_seq_id seq_id) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
@@ -2630,6 +2677,7 @@ void llama_kv_self_defrag(llama_context * ctx) {
     ctx->kv_self_defrag_sched();
 }
 
+// deprecated
 bool llama_kv_self_can_shift(const llama_context * ctx) {
     auto * kv = llama_get_memory(ctx);
     if (!kv) {
