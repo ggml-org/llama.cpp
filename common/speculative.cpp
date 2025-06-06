@@ -175,7 +175,7 @@ llama_tokens common_speculative_gen_draft(
     result.reserve(params.n_draft);
 
     if (reuse_n == 0) {
-        llama_memory_clear(mem);
+        llama_memory_clear(mem, false);
 
         prompt.clear();
     } else {

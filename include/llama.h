@@ -618,7 +618,10 @@ extern "C" {
     //
 
     // Clear the memory contents
-    LLAMA_API void llama_memory_clear(llama_memory_t mem);
+    // If data == true, the data buffers will also be cleared together with the metadata
+    LLAMA_API void llama_memory_clear(
+            llama_memory_t mem,
+                      bool data);
 
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
     // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails

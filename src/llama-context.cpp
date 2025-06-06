@@ -2054,7 +2054,7 @@ void llama_context::opt_epoch_iter(
     const uint32_t n_batch  = std::min(this->n_batch(),  n_ctx);
     const uint32_t n_ubatch = std::min(this->n_ubatch(), n_batch);
 
-    memory->clear();
+    memory->clear(true);
 
     for (uint32_t pos_ctx = 0; pos_ctx < n_ctx; pos_ctx += n_batch) {
         batch.n_tokens = n_batch;
@@ -2427,12 +2427,12 @@ llama_memory_t llama_get_memory(const struct llama_context * ctx) {
     return ctx->get_memory();
 }
 
-void llama_memory_clear(llama_memory_t mem) {
+void llama_memory_clear(llama_memory_t mem, bool data) {
     if (!mem) {
         return;
     }
 
-    mem->clear();
+    mem->clear(data);
 }
 
 bool llama_memory_seq_rm(
@@ -2578,7 +2578,7 @@ void llama_kv_self_clear(llama_context * ctx) {
         return;
     }
 
-    llama_memory_clear(kv);
+    llama_memory_clear(kv, true);
 }
 
 // deprecated

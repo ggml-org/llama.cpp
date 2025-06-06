@@ -129,13 +129,15 @@ llama_kv_cache_unified::llama_kv_cache_unified(
     }
 }
 
-void llama_kv_cache_unified::clear() {
+void llama_kv_cache_unified::clear(bool data) {
     cells.reset();
 
     head = 0;
 
-    for (auto & buf : bufs) {
-        ggml_backend_buffer_clear(buf.get(), 0);
+    if (data) {
+        for (auto & buf : bufs) {
+            ggml_backend_buffer_clear(buf.get(), 0);
+        }
     }
 }
 
@@ -1319,7 +1321,7 @@ void llama_kv_cache_unified::state_read(llama_io_read_i & io, llama_seq_id seq_i
 
     if (!res) {
         if (seq_id == -1) {
-            clear();
+            clear(true);
         } else {
             seq_rm(seq_id, -1, -1);
         }
@@ -1500,7 +1502,7 @@ bool llama_kv_cache_unified::state_read_meta(llama_io_read_i & io, uint32_t cell
             return false;
         }
 
-        clear();
+        clear(true);
 
         for (uint32_t i = 0; i < cell_count; ++i) {
             llama_pos pos;
