@@ -65,6 +65,10 @@
 #include "ggml-kompute.h"
 #endif
 
+#ifdef GGML_USE_QNN
+#include "ggml-qnn.h"
+#endif
+
 // disable C++17 deprecation warning for std::codecvt_utf8
 #if defined(__clang__)
 #    pragma clang diagnostic push
@@ -186,6 +190,9 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_KOMPUTE
         register_backend(ggml_backend_kompute_reg());
+#endif
+#ifdef GGML_USE_QNN
+        register_backend(ggml_backend_qnn_reg());
 #endif
 #ifdef GGML_USE_CPU
         register_backend(ggml_backend_cpu_reg());
