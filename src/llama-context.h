@@ -46,6 +46,9 @@ struct llama_context {
     uint32_t n_threads()       const;
     uint32_t n_threads_batch() const;
 
+    size_t n_backends() const;
+    size_t copy_backends_list(ggml_backend_t* out, size_t out_len) const;
+
     llama_memory_t get_memory() const;
 
     // return true of the KV cache was updated
