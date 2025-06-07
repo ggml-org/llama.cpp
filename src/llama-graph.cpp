@@ -7,6 +7,7 @@
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
 #include "llama-kv-cache-recurrent.h"
+#include "llama-kv-cache-hybrid-recurrent.h"
 
 #include <cassert>
 #include <cmath>
@@ -955,8 +956,10 @@ ggml_tensor * llm_graph_context::build_inp_cls() const {
     return cur;
 }
 
-ggml_tensor * llm_graph_context::build_inp_s_copy() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+ggml_tensor * llm_graph_context::build_inp_s_copy(const llama_kv_cache_recurrent_state * kv_state) const {
+    if (kv_state == nullptr) {
+        kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    }
 
     auto inp = std::make_unique<llm_graph_input_s_copy>(kv_state);
 
@@ -1270,7 +1273,9 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const auto * kv_state = static_cast<const llama_kv_cache_unified_state *>(mstate);
+    // NOTE: For hybrid caches, this may be a child of mstate, so we use the one
+    //  encapsulated in inp
+    const auto * kv_state = inp->kv_state;
 
     // store to KV cache
     {
@@ -1300,6 +1305,26 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     return cur;
+}
+
+llm_graph_input_attn_kv_unified * llm_graph_context::build_attn_inp_kv_hybrid_recurrent() const {
+    const auto * kv_state = static_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate);
+
+    auto inp = std::make_unique<llm_graph_input_attn_kv_unified>(hparams, cparams, kv_state->get_state_attn());
+
+    {
+        GGML_ASSERT(hparams.swa_type == LLAMA_SWA_TYPE_NONE && "Hybrid recurrent is not supported with SWA attention layers");
+
+        const auto n_kv = kv_state->get_state_attn()->get_n_kv();
+
+        inp->self_kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+        //cb(inp->self_kq_mask, "KQ_mask", -1);
+        ggml_set_input(inp->self_kq_mask);
+
+        inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+    }
+
+    return (llm_graph_input_attn_kv_unified *) res->add_input(std::move(inp));
 }
 
 llm_graph_input_attn_kv_unified_iswa * llm_graph_context::build_attn_inp_kv_unified_iswa() const {
@@ -1442,13 +1467,17 @@ ggml_tensor * llm_graph_context::build_attn(
 }
 
 ggml_tensor * llm_graph_context::build_copy_mask_state(
-         ggml_cgraph * gf,
-         ggml_tensor * s,
-         ggml_tensor * state_copy,
-         ggml_tensor * state_mask,
-             int32_t   n_state,
-             int32_t   n_seqs) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+                             ggml_cgraph * gf,
+                             ggml_tensor * s,
+                             ggml_tensor * state_copy,
+                             ggml_tensor * state_mask,
+                                 int32_t   n_state,
+                                 int32_t   n_seqs,
+    const llama_kv_cache_recurrent_state * kv_state) const {
+
+    if (kv_state == nullptr) {
+        kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    }
 
     const auto n_kv    = kv_state->get_n_kv();
     const auto kv_head = kv_state->get_head();

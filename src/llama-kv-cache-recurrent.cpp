@@ -16,12 +16,13 @@
 //
 
 llama_kv_cache_recurrent::llama_kv_cache_recurrent(
-        const llama_model & model,
-                ggml_type   type_k,
-                ggml_type   type_v,
-                     bool   offload,
-                 uint32_t   kv_size,
-                 uint32_t   n_seq_max) : hparams(model.hparams), n_seq_max(n_seq_max) {
+        const llama_model &  model,
+          layer_filter_cb && filter,
+                ggml_type    type_k,
+                ggml_type    type_v,
+                     bool    offload,
+                 uint32_t    kv_size,
+                 uint32_t    n_seq_max) : hparams(model.hparams), n_seq_max(n_seq_max) {
     const int32_t n_layer = hparams.n_layer;
 
     LLAMA_LOG_INFO("%s: kv_size = %u, n_seq_max = %u, type_k = '%s', type_v = '%s', n_layer = %d\n",
@@ -63,8 +64,13 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
     v_l.reserve(n_layer);
 
     for (int i = 0; i < n_layer; i++) {
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s();
-        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s();
+        if (filter && !filter(i)) {
+            LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, i);
+            continue;
+        }
+
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(i) + hparams.n_embd_k_s(i);
+        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(i) + hparams.n_embd_v_s(i);
 
         const char * dev_name = "CPU";
 
@@ -88,8 +94,8 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
         ggml_tensor * v = ggml_new_tensor_1d(ctx, type_v, n_embd_v_gqa*kv_size);
         ggml_format_name(k, "cache_k_l%d", i);
         ggml_format_name(v, "cache_v_l%d", i);
-        k_l.push_back(k);
-        v_l.push_back(v);
+        k_l[i] = k;
+        v_l[i] = v;
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
@@ -765,7 +771,7 @@ void llama_kv_cache_recurrent::state_write_data(llama_io_write_i & io, const std
     // Iterate and write all the keys first, each row is a cell
     // Get whole range at a time
     for (uint32_t il = 0; il < n_layer; ++il) {
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s(il);
 
         // Write key type
         const int32_t k_type_i = (int32_t)k_l[il]->type;
@@ -785,7 +791,7 @@ void llama_kv_cache_recurrent::state_write_data(llama_io_write_i & io, const std
 
     if (!v_trans) {
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s(il);
 
             // Write value type
             const int32_t v_type_i = (int32_t)v_l[il]->type;
@@ -806,7 +812,7 @@ void llama_kv_cache_recurrent::state_write_data(llama_io_write_i & io, const std
         // When v is transposed, we also need the element size and get the element ranges from each row
         const uint32_t kv_size = size;
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s(il);
 
             // Write value type
             const int32_t v_type_i = (int32_t)v_l[il]->type;
@@ -953,7 +959,7 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
 
     // For each layer, read the keys for each cell, one row is one cell, read as one contiguous block
     for (uint32_t il = 0; il < n_layer; ++il) {
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s();
+        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il) + hparams.n_embd_k_s(il);
 
         // Read type of key
         int32_t k_type_i_ref;
@@ -981,7 +987,7 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
 
     if (!v_trans) {
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s(il);
 
             // Read type of value
             int32_t v_type_i_ref;
@@ -1009,7 +1015,7 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
     } else {
         // For each layer, read the values for each cell (transposed)
         for (uint32_t il = 0; il < n_layer; ++il) {
-            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s();
+            const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il) + hparams.n_embd_v_s(il);
 
             // Read type of value
             int32_t v_type_i_ref;

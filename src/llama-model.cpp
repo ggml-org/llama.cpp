@@ -9,6 +9,7 @@
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
 #include "llama-kv-cache-recurrent.h"
+#include "llama-kv-cache-hybrid-recurrent.h"
 
 #include "ggml-cpp.h"
 
@@ -469,6 +470,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
     std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
     std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.end(),      0);
+    std::fill(
+        hparams.recurrent_layer_arr.begin(),
+        hparams.recurrent_layer_arr.end(),
+        llm_arch_is_recurrent(ml.get_arch()));
 
     std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
 
@@ -13207,6 +13212,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     llama_memory_i * res;
 
     switch (arch) {
+        // Models that need specific instantiation should be handled in the
+        // switch statement
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_NOMIC_BERT:
@@ -13215,57 +13222,75 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             {
                 res = nullptr;
             } break;
-        case LLM_ARCH_MAMBA:
-        case LLM_ARCH_RWKV6:
-        case LLM_ARCH_RWKV6QWEN2:
-        case LLM_ARCH_RWKV7:
-        case LLM_ARCH_ARWKV7:
-            {
-                res = new llama_kv_cache_recurrent(
-                        *this,
-                        GGML_TYPE_F32,
-                        GGML_TYPE_F32,
-                        cparams.offload_kqv,
-                        std::max((uint32_t) 1, cparams.n_seq_max),
-                        cparams.n_seq_max);
-            } break;
+        // Models that need standard caching should rely on recurrent/hybrid
+        // checks
         default:
             {
-                const auto padding = llama_kv_cache_unified::get_padding(cparams);
-
-                cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
-
-                LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
-
-                if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-                    GGML_ASSERT(hparams.is_swa_any());
-
-                    res = new llama_kv_cache_unified_iswa(
-                            *this,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
-                            cparams.offload_kqv,
-                            params.swa_full,
-                            cparams.n_ctx,
-                            cparams.n_seq_max,
-                            cparams.n_ubatch,
-                            padding);
-                } else {
-                    GGML_ASSERT(!hparams.is_swa_any());
-
-                    res = new llama_kv_cache_unified(
+                if (llm_arch_is_recurrent(arch)) {
+                    res = new llama_kv_cache_recurrent(
                             *this,
                             nullptr,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
+                            GGML_TYPE_F32,
+                            GGML_TYPE_F32,
                             cparams.offload_kqv,
-                            cparams.n_ctx,
-                            cparams.n_seq_max,
-                            padding,
-                            hparams.n_swa,
-                            hparams.swa_type);
+                            std::max((uint32_t) 1, cparams.n_seq_max),
+                            cparams.n_seq_max);
+                } else if (llm_arch_is_hybrid_recurrent(arch)) {
+                    const auto padding = llama_kv_cache_unified::get_padding(cparams);
+
+                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+
+                    res = new llama_kv_cache_hybrid_recurrent(
+                        /* model             */ *this,
+                        /* attn_type_k       */ params.type_k,
+                        /* attn_type_v       */ params.type_v,
+                        /* attn_v_trans      */ !cparams.flash_attn,
+                        /* attn_kv_size      */ cparams.n_ctx,
+                        /* attn_n_pad        */ padding,
+                        /* attn_n_swa        */ hparams.n_swa,
+                        /* attn_swa_type     */ hparams.swa_type,
+                        /* recurrent_type_k  */ GGML_TYPE_F32,
+                        /* recurrent_type_v  */ GGML_TYPE_F32,
+                        /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                        /* n_seq_max         */ cparams.n_seq_max,
+                        /* offload           */ cparams.offload_kqv);
+                } else {
+                    const auto padding = llama_kv_cache_unified::get_padding(cparams);
+
+                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+
+                    LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
+
+                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                        GGML_ASSERT(hparams.is_swa_any());
+
+                        res = new llama_kv_cache_unified_iswa(
+                                *this,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                params.swa_full,
+                                cparams.n_ctx,
+                                cparams.n_seq_max,
+                                cparams.n_ubatch,
+                                padding);
+                    } else {
+                        GGML_ASSERT(!hparams.is_swa_any());
+
+                        res = new llama_kv_cache_unified(
+                                *this,
+                                nullptr,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                cparams.n_ctx,
+                                cparams.n_seq_max,
+                                padding,
+                                hparams.n_swa,
+                                hparams.swa_type);
+                    }
                 }
             }
     }
@@ -13830,14 +13855,11 @@ llama_token llama_model_decoder_start_token(const llama_model * model) {
 }
 
 bool llama_model_is_recurrent(const llama_model * model) {
-    switch (model->arch) {
-        case     LLM_ARCH_MAMBA:      return true;
-        case     LLM_ARCH_RWKV6:      return true;
-        case     LLM_ARCH_RWKV6QWEN2: return true;
-        case     LLM_ARCH_RWKV7:      return true;
-        case     LLM_ARCH_ARWKV7:     return true;
-        default: return false;
-    }
+    return llm_arch_is_recurrent(model->arch);
+}
+
+bool llama_model_is_hybrid_recurrent(const llama_model * model) {
+    return llm_arch_is_hybrid_recurrent(model->arch);
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {

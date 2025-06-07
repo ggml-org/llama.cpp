@@ -22,6 +22,7 @@ struct llama_memory_state_i;
 class llama_kv_cache_unified_state;
 class llama_kv_cache_unified_iswa_state;
 class llama_kv_cache_recurrent_state;
+class llama_kv_cache_hybrid_recurrent_state;
 
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
@@ -253,7 +254,7 @@ public:
         cparams(cparams),
         kv_state(kv_state) {
     }
-    ~llm_graph_input_attn_kv_unified() = default;
+    virtual ~llm_graph_input_attn_kv_unified() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
@@ -519,7 +520,7 @@ struct llm_graph_context {
     ggml_tensor * build_inp_out_ids() const;
     ggml_tensor * build_inp_mean() const;
     ggml_tensor * build_inp_cls() const;
-    ggml_tensor * build_inp_s_copy() const;
+    ggml_tensor * build_inp_s_copy(const llama_kv_cache_recurrent_state * kv_state = nullptr) const;
     ggml_tensor * build_inp_s_mask() const;
 
     ggml_tensor * build_inp_cross_embd() const;
@@ -586,6 +587,8 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    llm_graph_input_attn_kv_unified * build_attn_inp_kv_hybrid_recurrent() const;
+
     llm_graph_input_attn_cross * build_attn_inp_cross() const;
 
     ggml_tensor * build_attn(
@@ -606,12 +609,13 @@ struct llm_graph_context {
     //
 
     ggml_tensor * build_copy_mask_state(
-             ggml_cgraph * gf,
-             ggml_tensor * s,
-             ggml_tensor * state_copy,
-             ggml_tensor * state_mask,
-                 int32_t   n_state,
-                 int32_t   n_seqs) const;
+                                 ggml_cgraph * gf,
+                                 ggml_tensor * s,
+                                 ggml_tensor * state_copy,
+                                 ggml_tensor * state_mask,
+                                     int32_t   n_state,
+                                     int32_t   n_seqs,
+        const llama_kv_cache_recurrent_state * kv_state = nullptr) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
              ggml_cgraph * gf,
