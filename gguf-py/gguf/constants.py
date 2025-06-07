@@ -147,6 +147,7 @@ class Keys:
         DIMENSION_COUNT         = "{arch}.rope.dimension_count"
         DIMENSION_SECTIONS      = "{arch}.rope.dimension_sections"
         FREQ_BASE               = "{arch}.rope.freq_base"
+        FREQ_BASE_SWA           = "{arch}.rope.freq_base_swa"
         SCALING_TYPE            = "{arch}.rope.scaling.type"
         SCALING_FACTOR          = "{arch}.rope.scaling.factor"
         SCALING_ATTN_FACTOR     = "{arch}.rope.scaling.attn_factor"
@@ -289,6 +290,7 @@ class MODEL_ARCH(IntEnum):
     STARCODER        = auto()
     REFACT           = auto()
     BERT             = auto()
+    MODERN_BERT      = auto()
     NOMIC_BERT       = auto()
     NOMIC_BERT_MOE   = auto()
     JINA_BERT_V2     = auto()
@@ -477,6 +479,7 @@ class MODEL_TENSOR(IntEnum):
     ENC_FFN_UP           = auto()
     ENC_OUTPUT_NORM      = auto()
     CLS                  = auto() # classifier
+    CLS_NORM             = auto() # classifier normalization
     CLS_OUT              = auto() # classifier output projection
     CONV1D               = auto()
     CONVNEXT_DW          = auto()
@@ -569,6 +572,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.STARCODER:        "starcoder",
     MODEL_ARCH.REFACT:           "refact",
     MODEL_ARCH.BERT:             "bert",
+    MODEL_ARCH.MODERN_BERT:      "modern-bert",
     MODEL_ARCH.NOMIC_BERT:       "nomic-bert",
     MODEL_ARCH.NOMIC_BERT_MOE:   "nomic-bert-moe",
     MODEL_ARCH.JINA_BERT_V2:     "jina-bert-v2",
@@ -757,6 +761,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ENC_FFN_UP:                "enc.blk.{bid}.ffn_up",
     MODEL_TENSOR.ENC_OUTPUT_NORM:           "enc.output_norm",
     MODEL_TENSOR.CLS:                       "cls",
+    MODEL_TENSOR.CLS_NORM:                  "cls.norm",
     MODEL_TENSOR.CLS_OUT:                   "cls.output",
     MODEL_TENSOR.CONV1D:                    "conv1d",
     MODEL_TENSOR.CONVNEXT_DW:               "convnext.{bid}.dw",
@@ -1045,6 +1050,20 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.LAYER_OUT_NORM,
         MODEL_TENSOR.CLS,
+        MODEL_TENSOR.CLS_OUT,
+    ],
+    MODEL_ARCH.MODERN_BERT: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_QKV,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_OUT_NORM,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ENC_OUTPUT_NORM,
+        MODEL_TENSOR.CLS,
+        MODEL_TENSOR.CLS_NORM,
         MODEL_TENSOR.CLS_OUT,
     ],
     MODEL_ARCH.NOMIC_BERT: [

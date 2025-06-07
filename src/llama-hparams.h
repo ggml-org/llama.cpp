@@ -162,6 +162,18 @@ struct llama_hparams {
     //   etc ...
     void set_swa_pattern(uint32_t n_pattern);
 
+    // Overload that allows specifying which position in the pattern is dense
+    // The remainder parameter specifies which position in the pattern is dense
+    // example: n_pattern = 3, remainder = 2
+    //   il == 0: swa     (0 % 3 = 0, which is not equal to 2)
+    //   il == 1: swa     (1 % 3 = 1, which is not equal to 2)
+    //   il == 2: dense   (2 % 3 = 2, which equals 2)
+    //   il == 3: swa     (3 % 3 = 0, which is not equal to 2)
+    //   il == 4: swa     (4 % 3 = 1, which is not equal to 2)
+    //   il == 5: dense   (5 % 3 = 2, which equals 2)
+    //   etc ...
+    void set_swa_pattern(uint32_t n_pattern, uint32_t remainder);
+
     // return true if one of the layers is SWA
     bool is_swa_any() const;
 

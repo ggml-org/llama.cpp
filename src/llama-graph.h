@@ -228,8 +228,16 @@ class llm_graph_input_attn_no_cache : public llm_graph_input_i {
 public:
     llm_graph_input_attn_no_cache(const llama_hparams & hparams, const llama_cparams & cparams) :
         hparams(hparams),
-        cparams(cparams) {
+        cparams(cparams),
+        n_swa(0) {
     }
+
+    llm_graph_input_attn_no_cache(const llama_hparams & hparams, const llama_cparams & cparams, int n_swa) :
+        hparams(hparams),
+        cparams(cparams),
+        n_swa(n_swa) {
+    }
+
     ~llm_graph_input_attn_no_cache() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -241,6 +249,7 @@ public:
 
     const llama_hparams & hparams;
     const llama_cparams & cparams;
+    const int n_swa;  // Sliding window attention size (0 = disabled)
 };
 
 class llm_graph_input_attn_kv_unified : public llm_graph_input_i {
@@ -542,6 +551,7 @@ struct llm_graph_context {
                    float   kq_scale) const;
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
+    llm_graph_input_attn_no_cache * build_attn_inp_no_cache_iswa() const;
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_no_cache * inp,
@@ -634,7 +644,8 @@ struct llm_graph_context {
             ggml_tensor * cls,
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
-            ggml_tensor * cls_out_b) const;
+            ggml_tensor * cls_out_b,
+            ggml_tensor * cls_norm) const;
 };
 
 // TODO: better name

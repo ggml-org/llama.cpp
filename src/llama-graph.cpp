@@ -278,7 +278,61 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
 
 void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     if (kq_mask) {
-        if (cparams.causal_attn) {
+        // Check if we're using sliding window attention
+        if (n_swa > 0) {
+            const int64_t n_tokens     = ubatch->n_tokens;
+            const int64_t n_seq_tokens = ubatch->n_seq_tokens;
+            const int64_t n_seqs       = ubatch->n_seqs;
+            const int64_t n_stride     = ubatch->n_tokens;
+            const int64_t half_n_swa   = n_swa / 2;
+
+            GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask->buffer));
+            float * data = (float *) kq_mask->data;
+
+            // Implement symmetric sliding window attention
+            // token i attends to tokens [i - n_swa/2, i + n_swa/2]
+            for (int h = 0; h < 1; ++h) {
+                for (int s1 = 0; s1 < n_seqs; ++s1) {
+                    const llama_seq_id seq_id = ubatch->seq_id[s1][0];
+
+                    for (int j = 0; j < n_seq_tokens; ++j) {
+                        const int32_t tj = s1*n_seq_tokens + j;
+                        const int64_t pos_j = ubatch->pos[tj];
+
+                        for (int s0 = 0; s0 < n_seqs; ++s0) {
+                            for (int i = 0; i < n_seq_tokens; ++i) {
+                                const int32_t ti = s0*n_seq_tokens + i;
+                                float f = -INFINITY;
+
+                                for (int s = 0; s < ubatch->n_seq_id[s0]; ++s) {
+                                    if (ubatch->seq_id[s0][s] == seq_id) {
+                                        const int64_t pos_i = ubatch->pos[ti];
+                                        const int64_t pos_diff = pos_j - pos_i;
+
+                                        // Apply sliding window constraint
+                                        // [i - n_swa/2, i + n_swa/2]
+                                        if (pos_diff >= -half_n_swa && pos_diff <= half_n_swa) {
+                                            if (hparams.use_alibi) {
+                                                f = -std::abs(pos_diff);
+                                            } else {
+                                                f = 0.0f;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+
+                                data[h*(n_tokens*n_tokens) + tj*n_stride + ti] = f;
+                            }
+                        }
+
+                        for (int i = n_tokens; i < n_stride; ++i) {
+                            data[h*(n_tokens*n_tokens) + tj*n_stride + i] = -INFINITY;
+                        }
+                    }
+                }
+            }
+        } else if (cparams.causal_attn) {
             const int64_t n_kv         = ubatch->n_tokens;
             const int64_t n_tokens     = ubatch->n_tokens;
             const int64_t n_seq_tokens = ubatch->n_seq_tokens;
@@ -1188,6 +1242,22 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
 }
 
+llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache_iswa() const {
+    // Use the sliding window size from hyperparameters
+    // If hparams.n_swa is 0, use a default value (128)
+    const int n_swa = hparams.n_swa > 0 ? hparams.n_swa : 128;
+
+    auto inp = std::make_unique<llm_graph_input_attn_no_cache>(hparams, cparams, n_swa);
+
+    // note: there is no KV cache, so the number of KV values is equal to the number of tokens in the batch
+    inp->kq_mask = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_tokens, GGML_PAD(n_tokens, GGML_KQ_MASK_PAD));
+    ggml_set_input(inp->kq_mask);
+
+    inp->kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->kq_mask, GGML_TYPE_F16) : inp->kq_mask;
+
+    return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
+}
+
 ggml_tensor * llm_graph_context::build_attn(
         llm_graph_input_attn_no_cache * inp,
         ggml_cgraph * gf,
@@ -1522,7 +1592,8 @@ void llm_graph_context::build_pooling(
         ggml_tensor * cls,
         ggml_tensor * cls_b,
         ggml_tensor * cls_out,
-        ggml_tensor * cls_out_b) const {
+        ggml_tensor * cls_out_b,
+        ggml_tensor * cls_norm) const {
     if (!cparams.embeddings) {
         return;
     }
@@ -1569,6 +1640,11 @@ void llm_graph_context::build_pooling(
                     // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
                     cur = ggml_add(ctx0, ggml_mul_mat(ctx0, cls, inp), cls_b);
                     cur = ggml_tanh(ctx0, cur);
+
+                    if (cls_norm) {
+                        // normalization head
+                        cur = build_norm(cur, cls_norm, nullptr, LLM_NORM, 0);
+                    }
 
                     // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
                     // https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/blob/cb5347e43979c3084a890e3f99491952603ae1b7/modeling_bert.py#L884-L896
