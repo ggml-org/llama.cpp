@@ -2908,10 +2908,10 @@ struct ggml_cplan ggml_graph_plan(
                         const int64_t N_K_HEADS = node->src[1]->ne[2]; // n_k_heads
                         const int64_t N_BATCHES = node->src[0]->ne[3]; // n_batches
                         
-                        GGML_LOG_DEBUG("[ggml-cpu] src[0]->ne[0]: %zu, src[0]->ne[1]: %zu, src[0]->ne[2]: %zu, src[0]->ne[3]: %zu\n", node->src[0]->ne[0], node->src[0]->ne[1], node->src[0]->ne[2], node->src[0]->ne[3]);
-                        GGML_LOG_DEBUG("[ggml-cpu] src[1]->ne[0]: %zu, src[1]->ne[1]: %zu, src[1]->ne[2]: %zu, src[1]->ne[3]: %zu\n", node->src[1]->ne[0], node->src[1]->ne[1], node->src[1]->ne[2], node->src[1]->ne[3]);
-                        GGML_LOG_DEBUG("[ggml-cpu] src[2]->ne[0]: %zu, src[2]->ne[1]: %zu, src[2]->ne[2]: %zu, src[2]->ne[3]: %zu\n", node->src[2]->ne[0], node->src[2]->ne[1], node->src[2]->ne[2], node->src[2]->ne[3]);
-                        GGML_LOG_DEBUG("[ggml-cpu] ne[0]: %zu, ne[1]: %zu, ne[2]: %zu, ne[3]: %zu\n", node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+                        // GGML_LOG_DEBUG("[ggml-cpu] src[0]->ne[0]: %zu, src[0]->ne[1]: %zu, src[0]->ne[2]: %zu, src[0]->ne[3]: %zu\n", node->src[0]->ne[0], node->src[0]->ne[1], node->src[0]->ne[2], node->src[0]->ne[3]);
+                        // GGML_LOG_DEBUG("[ggml-cpu] src[1]->ne[0]: %zu, src[1]->ne[1]: %zu, src[1]->ne[2]: %zu, src[1]->ne[3]: %zu\n", node->src[1]->ne[0], node->src[1]->ne[1], node->src[1]->ne[2], node->src[1]->ne[3]);
+                        // GGML_LOG_DEBUG("[ggml-cpu] src[2]->ne[0]: %zu, src[2]->ne[1]: %zu, src[2]->ne[2]: %zu, src[2]->ne[3]: %zu\n", node->src[2]->ne[0], node->src[2]->ne[1], node->src[2]->ne[2], node->src[2]->ne[3]);
+                        // GGML_LOG_DEBUG("[ggml-cpu] ne[0]: %zu, ne[1]: %zu, ne[2]: %zu, ne[3]: %zu\n", node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
                         
                         // Follow the mixed KV cache flash attention workspace layout:
                         // OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32
@@ -2919,8 +2919,8 @@ struct ggml_cplan ggml_graph_plan(
                         const size_t LOCAL_MAX_SIZE = N_Q_HEADS * SEQ_LEN;
                         
                         cur = sizeof(float)*(OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + 16)*n_tasks;
-                        GGML_LOG_DEBUG("[ggml-cpu] OUTPUT_SIZE: %zu, LOCAL_MAX_SIZE: %zu, DV: %zu, DK: %zu, N_Q_HEADS: %zu, SEQ_LEN: %zu, N_BATCHES: %zu\n", OUTPUT_SIZE, LOCAL_MAX_SIZE, DV, DK, N_Q_HEADS, SEQ_LEN, N_BATCHES);
-                        GGML_LOG_DEBUG("[ggml-cpu] Allocate %zu bytes for custom op.\n", cur);
+                        // GGML_LOG_DEBUG("[ggml-cpu] OUTPUT_SIZE: %zu, LOCAL_MAX_SIZE: %zu, DV: %zu, DK: %zu, N_Q_HEADS: %zu, SEQ_LEN: %zu, N_BATCHES: %zu\n", OUTPUT_SIZE, LOCAL_MAX_SIZE, DV, DK, N_Q_HEADS, SEQ_LEN, N_BATCHES);
+                        // GGML_LOG_DEBUG("[ggml-cpu] Allocate %zu bytes for custom op.\n", cur);
                     } break;
                 default:
                     break;

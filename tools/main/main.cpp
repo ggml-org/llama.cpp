@@ -9,11 +9,14 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+#include <cfloat>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
 #include <signal.h>
@@ -41,12 +44,179 @@ static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
+/**
+ * Callback data structure for tracing k_quant and v_quant tensors
+ */
+struct kv_quant_trace_data {
+    std::vector<uint8_t> temp_data;
+    int step_count = 0;
+    std::unordered_map<std::string, int> tensor_counts;
+    bool enabled = false;
+};
+
+static kv_quant_trace_data g_kv_trace_data;
+
+static std::string ggml_ne_string(const ggml_tensor * t) {
+    std::string str;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        str += std::to_string(t->ne[i]);
+        if (i + 1 < GGML_MAX_DIMS) {
+            str += ", ";
+        }
+    }
+    return str;
+}
+
+static std::string ggml_ne_string_from_array(const int64_t * ne) {
+    std::string str;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        str += std::to_string(ne[i]);
+        if (i + 1 < GGML_MAX_DIMS) {
+            str += ",";
+        }
+    }
+    return str;
+}
+
+static bool is_kv_quant_tensor(const char* tensor_name) {
+    if (!tensor_name) return false;
+    std::string name(tensor_name);
+    // Only match actual quantization operation tensors for layer 0 (without view suffix)
+    return name == "k_quant-0" || name == "v_quant-0";
+}
+
+static void ggml_print_tensor_kv_quant(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t n) {
+    GGML_ASSERT(n > 0);
+    float sum = 0;
+    for (int64_t i3 = 0; i3 < ne[3]; i3++) {
+        LOG_DBG("                                     [\n");
+        for (int64_t i2 = 0; i2 < ne[2]; i2++) {
+            if (i2 == n && ne[2] > 2*n) {
+                LOG_DBG("                                      ..., \n");
+                i2 = ne[2] - n;
+            }
+            LOG_DBG("                                      [\n");
+            for (int64_t i1 = 0; i1 < ne[1]; i1++) {
+                if (i1 == n && ne[1] > 2*n) {
+                    LOG_DBG("                                       ..., \n");
+                    i1 = ne[1] - n;
+                }
+                LOG_DBG("                                       [");
+                for (int64_t i0 = 0; i0 < ne[0]; i0++) {
+                    if (i0 == n && ne[0] > 2*n) {
+                        LOG_DBG("..., ");
+                        i0 = ne[0] - n;
+                    }
+                    size_t i = i3 * nb[3] + i2 * nb[2] + i1 * nb[1] + i0 * nb[0];
+                    float v;
+                    if (type == GGML_TYPE_F16) {
+                        v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
+                    } else if (type == GGML_TYPE_F32) {
+                        v = *(float *) &data[i];
+                    } else if (type == GGML_TYPE_I32) {
+                        v = (float) *(int32_t *) &data[i];
+                    } else if (type == GGML_TYPE_I16) {
+                        v = (float) *(int16_t *) &data[i];
+                    } else if (type == GGML_TYPE_I8) {
+                        v = (float) *(int8_t *) &data[i];
+                    } else {
+                        GGML_ABORT("fatal error");
+                    }
+                    LOG_DBG("%12.4f", v);
+                    sum += v;
+                    if (i0 < ne[0] - 1) LOG_DBG(", ");
+                }
+                LOG_DBG("],\n");
+            }
+            LOG_DBG("                                      ],\n");
+        }
+        LOG_DBG("                                     ]\n");
+        LOG_DBG("                                     sum = %f\n", sum);
+    }
+}
+
+static void print_kv_quant_tensor_stats(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, const char* tensor_name) {
+    if (data == nullptr || ne == nullptr) return;
+    
+    size_t total_elements = 1;
+    for (int i = 0; i < GGML_MAX_DIMS && ne[i] > 0; ++i) {
+        total_elements *= ne[i];
+    }
+    
+    LOG_DBG("[KV-QUANT-TRACE] %s: shape=[%ld,%ld,%ld,%ld] type=%s elements=%zu\n",
+        tensor_name ? tensor_name : "unknown",
+        ne[0], ne[1], ne[2], ne[3], 
+        ggml_type_name(type), total_elements);
+    
+    if (!ggml_is_quantized(type)) {
+        LOG_DBG("[KV-QUANT-CONTENT] %s tensor content (first 3 elements per dimension):\n", tensor_name);
+        ggml_print_tensor_kv_quant(data, type, ne, nb, 3);
+    } else {
+        LOG_DBG("[KV-QUANT-CONTENT] %s: quantized tensor (%s), showing raw data sample:\n", tensor_name, ggml_type_name(type));
+        
+        // Calculate the actual byte size for quantized tensors
+        size_t total_elements = 1;
+        for (int i = 0; i < GGML_MAX_DIMS && ne[i] > 0; ++i) {
+            total_elements *= ne[i];
+        }
+        
+        size_t byte_size;
+        if (ggml_is_quantized(type)) {
+            // For quantized types, calculate based on block size and type size
+            size_t blck_size = ggml_blck_size(type);
+            size_t type_size = ggml_type_size(type);
+            byte_size = (total_elements / blck_size) * type_size;
+        } else {
+            // For non-quantized types
+            byte_size = total_elements * ggml_type_size(type);
+        }
+        
+        LOG_DBG("                                     Raw bytes (first 64 bytes): ");
+        for (int i = 0; i < std::min((int)byte_size, (int)byte_size); i++) {
+            LOG_DBG("%02x ", data[i]);
+            if ((i + 1) % 16 == 0) LOG_DBG("\n                                                        ");
+        }
+        LOG_DBG("\n");
+        
+        // Try to show some structural information for Q4_0
+        if (type == GGML_TYPE_Q4_0) {
+            LOG_DBG("                                     Q4_0 structure info: block_size=%d, type_size=%zu\n", 
+                ggml_blck_size(type), ggml_type_size(type));
+            size_t num_blocks = total_elements / ggml_blck_size(type);
+            LOG_DBG("                                     Estimated blocks: %zu, total bytes: %zu\n", num_blocks, byte_size);
+        }
+    }
+}
+
+/**
+ * GGML operations callback for tracing k_quant and v_quant tensors
+ */
+static bool ggml_debug_kv_quant(struct ggml_tensor * t, bool ask, void * user_data) {
+    auto * cb_data = (kv_quant_trace_data *) user_data;
+    (void) ask; // Suppress unused parameter warning
+   
+    // Check if the tensor is a k_quant or v_quant tensor for layer 0
+    if (t && t->name[0] != '\0') {
+        // Check specifically for k_quant-0 or v_quant-0
+        if (strcmp(t->name, "k_quant-0") == 0 || strcmp(t->name, "v_quant-0") == 0) {
+            LOG_INF("[mixed-kv] Found %s tensor\n", t->name);
+
+            // print_kv_quant_tensor_stats((uint8_t *)t->data, t->type, t->ne, t->nb, t->name);
+
+            return true; // We're interested in this tensor
+        }
+    }
+
+    return true;
+}
+
 static void print_usage(int argc, char ** argv) {
     (void) argc;
 
     LOG("\nexample usage:\n");
     LOG("\n  text generation:     %s -m your_model.gguf -p \"I believe the meaning of life is\" -n 128 -no-cnv\n", argv[0]);
     LOG("\n  chat (conversation): %s -m your_model.gguf -sys \"You are a helpful assistant\"\n", argv[0]);
+    LOG("\n  k/v quant tracing:   %s -m your_model.gguf -p \"Hello\" --trace-kv-quant\n", argv[0]);
     LOG("\n");
 }
 
@@ -86,7 +256,21 @@ static void sigint_handler(int signo) {
 int main(int argc, char ** argv) {
     common_params params;
     g_params = &params;
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_MAIN, print_usage)) {
+    
+    // Parse custom parameters before common_params_parse
+    std::vector<char*> filtered_argv;
+    filtered_argv.push_back(argv[0]); // Keep program name
+    
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--trace-kv-quant") == 0) {
+            g_kv_trace_data.enabled = true;
+            LOG_INF("K/V quantized tensor tracing enabled\n");
+        } else {
+            filtered_argv.push_back(argv[i]);
+        }
+    }
+    
+    if (!common_params_parse(filtered_argv.size(), filtered_argv.data(), params, LLAMA_EXAMPLE_MAIN, print_usage)) {
         return 1;
     }
 
@@ -124,6 +308,14 @@ int main(int argc, char ** argv) {
 
     llama_backend_init();
     llama_numa_init(params.numa);
+
+    // Set up k/v quant tracing callback if enabled
+    if (g_kv_trace_data.enabled) {
+        params.cb_eval = ggml_debug_kv_quant;
+        params.cb_eval_user_data = &g_kv_trace_data;
+        params.warmup = false; // Disable warmup to avoid extra noise in tracing
+        LOG_INF("K/V quantized tensor callback configured\n");
+    }
 
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
@@ -965,6 +1157,18 @@ int main(int argc, char ** argv) {
 
     LOG("\n\n");
     common_perf_print(ctx, smpl);
+
+    // Output k/v quant tracing statistics
+    if (g_kv_trace_data.enabled) {
+        LOG_DBG("\n=== K/V Quantized Tensor Tracing Summary ===\n");
+        LOG_DBG("K/V quantized tensor tracing: %s\n", g_kv_trace_data.enabled ? "Enabled" : "Disabled");
+        LOG_DBG("Total callback steps: %d\n", g_kv_trace_data.step_count);
+        LOG_DBG("K/V quantized tensors encountered:\n");
+        for (const auto& pair : g_kv_trace_data.tensor_counts) {
+            LOG_DBG("  %s: %d times\n", pair.first.c_str(), pair.second);
+        }
+        LOG_DBG("============================================\n\n");
+    }
 
     common_sampler_free(smpl);
 

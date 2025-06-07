@@ -64,6 +64,31 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         return it->second;
     };
 
+    /*
+     * 初始化 KV 缓存的核心管理数据结构 cells：
+     * 
+     * cells 是统一 KV 缓存的核心管理数组，每个元素对应一个缓存槽位
+     * 
+     * ┌─────────────────────────────────────────────────────────┐
+     * │                 Unified KV Cache Layout                 │
+     * │                                                         │
+     * │  cells[0]  cells[1]  cells[2]  ...  cells[kv_size-1]   │
+     * │  ┌─────┐   ┌─────┐   ┌─────┐         ┌─────┐           │
+     * │  │slot │   │slot │   │slot │   ...   │slot │           │
+     * │  │  0  │   │  1  │   │  2  │         │ N-1 │           │
+     * │  └─────┘   └─────┘   └─────┘         └─────┘           │
+     * │     ↓         ↓         ↓               ↓              │
+     * │   pos=-1    pos=-1    pos=-1          pos=-1           │
+     * │  (empty)    (empty)   (empty)        (empty)           │
+     * │  delta=0    delta=0   delta=0        delta=0           │
+     * │  seq_id={}  seq_id={} seq_id={}      seq_id={}         │
+     * └─────────────────────────────────────────────────────────┘
+     * 
+     * 每个 cell 包含：
+     * - pos: token 在序列中的位置 (-1 表示空闲)
+     * - delta: 位置偏移累积量，用于 RoPE 和 K-shift
+     * - seq_id: 使用该 token 的序列 ID 集合 (支持多序列共享)
+     */
     head = 0;
     size = kv_size;
     used = 0;
@@ -138,9 +163,29 @@ llama_kv_cache_unified::llama_kv_cache_unified(
 }
 
 void llama_kv_cache_unified::clear() {
+    /*
+     * cells 清空操作 - 重置所有缓存槽状态到初始空闲状态：
+     * 
+     * 遍历所有 cells，重置每个缓存槽的状态：
+     * 1. pos = -1：标记为空闲槽位
+     * 2. seq_id.clear()：清空序列ID集合
+     * 3. delta 保持默认值 0（自动初始化）
+     * 4. 重置管理计数器 (head=0, used=0)
+     * 
+     * Before clear():                    After clear():
+     * ┌─────┬─────┬─────┬─────┐         ┌─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:2│pos:3│   -->   │pos:-│pos:-│pos:-│pos:-│
+     * │seq:1│seq:1│seq:2│seq:2│         │seq: │seq: │seq: │seq: │
+     * │Δ:+2 │Δ:+1 │Δ:-1 │Δ:+3 │         │Δ:0  │Δ:0  │Δ:0  │Δ:0  │
+     * │used │used │used │used │         │empty│empty│empty│empty│
+     * └─────┴─────┴─────┴─────┘         └─────┴─────┴─────┴─────┘
+     * 
+     * 注意：delta 在 clear() 中会自动重置为 0，因为 kv_cell 构造函数中 delta=0
+     */
     for (uint32_t i = 0; i < size; ++i) {
-        cells[i].pos = -1;
-        cells[i].seq_id.clear();
+        cells[i].pos = -1;        // 标记为空闲槽位
+        cells[i].seq_id.clear();  // 清空序列ID集合
+        // delta 会在 kv_cell 构造时自动重置为 0
     }
 
     head = 0;
@@ -162,23 +207,55 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
+    /*
+     * cells 序列移除操作 - 从指定位置范围移除序列 tokens：
+     * 
+     * 遍历所有 cells，找到位置在 [p0, p1) 范围内的 tokens，
+     * 移除指定序列 ID，如果 cell 变空则标记为空闲
+     * 
+     * 例如：seq_rm(seq_id=1, p0=1, p1=3)
+     * 
+     * Before seq_rm():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:2│pos:3│pos:4│
+     * │seq:1│seq:1│seq:1│seq:2│seq:1│  <- 移除位置1-2的seq:1
+     * │Δ:0  │Δ:+1 │Δ:+2 │Δ:0  │Δ:+3 │
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * After seq_rm():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:-│pos:-│pos:3│pos:4│
+     * │seq:1│empty│empty│seq:2│seq:1│  <- pos:1,2被清空
+     * │Δ:0  │Δ:0  │Δ:0  │Δ:0  │Δ:+3 │  <- delta 保持，因为可能用于 K-shift
+     * └─────┴─────┴─────┴─────┴─────┘
+     *         ↑     ↑
+     *      new_head 候选位置
+     * 
+     * 注意：delta 不会被清除，因为它记录了位置偏移历史，
+     *       可能在后续的 K-shift 操作中使用
+     */
     for (uint32_t i = 0; i < size; ++i) {
+        // 检查该 cell 的位置是否在移除范围内
         if (cells[i].pos >= p0 && cells[i].pos < p1) {
             if (seq_id < 0) {
+                // seq_id < 0 表示移除所有序列
                 cells[i].seq_id.clear();
             } else if (cells[i].has_seq_id(seq_id)) {
+                // 只移除指定的序列 ID
                 cells[i].seq_id.erase(seq_id);
             } else {
                 continue;
             }
 
             if (cells[i].is_empty()) {
+                // 如果 cell 变空，则标记为空闲
                 // keep count of the number of used cells
                 if (cells[i].pos >= 0) {
                     used--;
                 }
 
                 cells[i].pos = -1;
+                // 注意：delta 不被重置，保留位置偏移历史
 
                 if (new_head == size) {
                     new_head = i;
@@ -208,12 +285,40 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
+    /*
+     * cells 序列复制操作 - 将源序列的 tokens 复制给目标序列：
+     * 
+     * 遍历所有 cells，找到属于源序列且在指定位置范围内的 tokens，
+     * 将目标序列 ID 添加到这些 cells（实现多序列共享同一 token）
+     * 
+     * 例如：seq_cp(seq_src=1, seq_dst=3, p0=1, p1=3)
+     * 
+     * Before seq_cp():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:2│pos:3│pos:4│
+     * │seq:1│seq:1│seq:1│seq:2│seq:1│  <- 复制seq:1的pos:1-2给seq:3
+     * │Δ:0  │Δ:+1 │Δ:+2 │Δ:0  │Δ:+3 │
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * After seq_cp():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:2│pos:3│pos:4│
+     * │seq:1│1,3  │1,3  │seq:2│seq:1│  <- pos:1,2现在同时属于seq:1和seq:3
+     * │Δ:0  │Δ:+1 │Δ:+2 │Δ:0  │Δ:+3 │  <- delta 不变，因为位置偏移历史保持
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * 重要：delta 在复制时保持不变，因为 delta 记录的是该位置的偏移历史，
+     *       对于共享该位置的所有序列都是有效的
+     */
     // otherwise, this is the KV of a Transformer-like model
     head = 0;
 
     for (uint32_t i = 0; i < size; ++i) {
+        // 检查该 cell 是否属于源序列且在指定位置范围内
         if (cells[i].has_seq_id(seq_id_src) && cells[i].pos >= p0 && cells[i].pos < p1) {
+            // 将目标序列 ID 添加到该 cell（多序列共享同一 token）
             cells[i].seq_id.insert(seq_id_dst);
+            // delta 保持不变，因为位置偏移历史对所有共享序列都有效
         }
     }
 }
@@ -221,21 +326,55 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
 void llama_kv_cache_unified::seq_keep(llama_seq_id seq_id) {
     uint32_t new_head = size;
 
+    /*
+     * cells 序列保留操作 - 只保留指定序列，清除其他所有序列：
+     * 
+     * 遍历所有 cells，对于不属于目标序列的 cells 进行清空，
+     * 对于属于目标序列的 cells 清除其他序列 ID（保持单一序列）
+     * 
+     * 例如：seq_keep(seq_id=2)
+     * 
+     * Before seq_keep():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:2│pos:3│pos:4│
+     * │seq:1│1,3  │seq:2│seq:2│seq:1│  <- 只保留seq:2
+     * │Δ:0  │Δ:+1 │Δ:+2 │Δ:0  │Δ:+3 │
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * After seq_keep():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:-│pos:-│pos:2│pos:3│pos:-│
+     * │empty│empty│seq:2│seq:2│empty│  <- 只有seq:2的cells被保留
+     * │Δ:0  │Δ:0  │Δ:+2 │Δ:0  │Δ:0  │  <- delta保持或清零，取决于cell状态
+     * └─────┴─────┴─────┴─────┴─────┘
+     *   ↑     ↑               ↑
+     * new_head候选位置          清空的cell
+     * 
+     * 注意：delta 处理策略：
+     * - 被保留的 cells：delta 保持不变（位置偏移历史仍有效）
+     * - 被清空的 cells：delta 在下次使用时会重新设置
+     */
     for (uint32_t i = 0; i < size; ++i) {
+        // 检查该 cell 是否不属于要保留的序列
         if (!cells[i].has_seq_id(seq_id)) {
+            // 该 cell 不属于目标序列，清除它
             if (cells[i].pos >= 0) {
-                used--;
+                used--;  // 减少已使用计数
             }
 
-            cells[i].pos = -1;
-            cells[i].seq_id.clear();
+            cells[i].pos = -1;           // 标记为空闲
+            cells[i].seq_id.clear();     // 清空序列ID
+            // delta 保留当前值，在下次分配时会被重新设置
 
+            // 记录第一个空闲槽位作为新的搜索起点
             if (new_head == size){
                 new_head = i;
             }
         } else {
+            // 该 cell 属于目标序列，清除其他序列ID（保持单一序列）
             cells[i].seq_id.clear();
             cells[i].seq_id.insert(seq_id);
+            // delta 保持不变，因为该 cell 的位置偏移历史仍然有效
         }
     }
 
@@ -265,23 +404,64 @@ void llama_kv_cache_unified::seq_add(llama_seq_id seq_id, llama_pos p0, llama_po
         return;
     }
 
+    /*
+     * cells 序列位置偏移操作 - 核心 delta 累积机制：
+     * 
+     * 将指定序列的位置向前或向后移动，同时累积 delta 偏移量
+     * delta 是 RoPE (Rotary Position Embedding) 计算的关键组件
+     * 
+     * 例如：seq_add(seq_id=1, p0=2, p1=4, delta=+2)
+     * 
+     * Before seq_add():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:2│pos:3│pos:4│
+     * │seq:1│seq:1│seq:1│seq:1│seq:2│  <- seq:1在pos:2-3的tokens需要+2偏移
+     * │Δ:0  │Δ:+1 │Δ:0  │Δ:-1 │Δ:+2 │
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * After seq_add():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:4│pos:5│pos:4│
+     * │seq:1│seq:1│seq:1│seq:1│seq:2│  <- pos:2→4, pos:3→5
+     * │Δ:0  │Δ:+1 │Δ:+2 │Δ:+1 │Δ:+2 │  <- delta累积：0+2=2, -1+2=1
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * 负偏移示例：seq_add(seq_id=1, p0=2, p1=4, delta=-3)
+     * pos:2→-1, pos:3→0，pos变负的cell被清除：
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:-│pos:0│pos:4│
+     * │seq:1│seq:1│empty│seq:1│seq:2│  <- pos:2被清除因为变成-1
+     * │Δ:0  │Δ:+1 │Δ:0  │Δ:-4 │Δ:+2 │  <- delta重置为0(新分配时)，0-1-3=-4
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * delta 的重要作用：
+     * 1. RoPE 计算：实际位置 = pos + delta，用于旋转位置编码
+     * 2. K-shift 操作：记录需要应用的位置偏移
+     * 3. 序列操作历史：累积所有位置变化，保证一致性
+     */
     for (uint32_t i = 0; i < size; ++i) {
+        // 检查该 cell 是否属于目标序列且在指定位置范围内
         if (cells[i].has_seq_id(seq_id) && cells[i].pos >= p0 && cells[i].pos < p1) {
-            has_shift = true;
+            has_shift = true;  // 标记发生了位置偏移，触发后续 K-shift
 
-            cells[i].pos   += delta;
-            cells[i].delta += delta;
+            cells[i].pos   += delta;  // 更新 token 位置
+            cells[i].delta += delta;  // 累积位置偏移量（关键！）
 
+            // 如果位置变成负数，则清除该 cell
             if (cells[i].pos < 0) {
                 if (!cells[i].is_empty()) {
                     used--;
                 }
                 cells[i].pos = -1;
                 cells[i].seq_id.clear();
+                // delta 在 cell 清空后会在下次分配时重新设置
+                
                 if (new_head == size) {
                     new_head = i;
                 }
             }
+            // 注意：对于有效的 cells，delta 持续累积，
+            //       记录了该位置的完整偏移历史
         }
     }
 
@@ -308,28 +488,94 @@ void llama_kv_cache_unified::seq_div(llama_seq_id seq_id, llama_pos p0, llama_po
         return;
     }
 
+    /*
+     * cells 序列位置除法操作 - delta 在位置缩放中的精确计算：
+     * 
+     * 将指定序列的位置按比例缩小，同时精确计算 delta 变化量
+     * 这在序列压缩、采样或批处理优化中使用
+     * 
+     * 例如：seq_div(seq_id=1, p0=4, p1=8, d=2)
+     * 
+     * Before seq_div():
+     * ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:4│pos:5│pos:6│pos:7│pos:8│pos:9│
+     * │seq:1│seq:1│seq:1│seq:1│seq:1│seq:1│seq:2│seq:2│
+     * │Δ:0  │Δ:+1 │Δ:+2 │Δ:-1 │Δ:+1 │Δ:0  │Δ:+2 │Δ:-1 │
+     * └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+     *               ↑─ p0=4    p1=8 ─↑   <- 这个范围内的位置/2
+     * 
+     * After seq_div():
+     * ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:2│pos:2│pos:3│pos:3│pos:8│pos:9│
+     * │seq:1│seq:1│seq:1│seq:1│seq:1│seq:1│seq:2│seq:2│
+     * │Δ:0  │Δ:+1 │Δ:0  │Δ:-4 │Δ:-2 │Δ:-4 │Δ:+2 │Δ:-1 │
+     * └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+     *               ↑─ 4/2=2  5/2=2  6/2=3  7/2=3 ─↑
+     * 
+     * delta 计算详解：
+     * - pos:4, Δ:+2 → pos:2, Δ:+2+(2-4)=0   (新位置-原位置=-2)
+     * - pos:5, Δ:-1 → pos:2, Δ:-1+(2-5)=-4  (新位置-原位置=-3) 
+     * - pos:6, Δ:+1 → pos:3, Δ:+1+(3-6)=-2  (新位置-原位置=-3)
+     * - pos:7, Δ:0  → pos:3, Δ:0+(3-7)=-4   (新位置-原位置=-4)
+     * 
+     * 重要：delta += (new_pos - old_pos) 确保了 RoPE 计算的连续性
+     *       实际 RoPE 位置 = pos + delta，在除法操作后保持正确
+     */
     for (uint32_t i = 0; i < size; ++i) {
+        // 检查该 cell 是否属于目标序列且在指定位置范围内
         if (cells[i].has_seq_id(seq_id) && cells[i].pos >= p0 && cells[i].pos < p1) {
-            has_shift = true;
+            has_shift = true;  // 标记发生了位置偏移，触发后续 K-shift
 
             {
-                llama_pos p_old = cells[i].pos;
-                cells[i].pos   /= d;
-                cells[i].delta += cells[i].pos - p_old;
+                llama_pos p_old = cells[i].pos;  // 保存原始位置
+                cells[i].pos   /= d;             // 位置除法缩放
+                cells[i].delta += cells[i].pos - p_old;  // 累积偏移差值
+                
+                // delta 变化 = 新位置 - 原位置
+                // 这确保了 RoPE 计算中 (pos + delta) 的连续性
+                // 例如：原来 pos=6,delta=+1 → RoPE_pos=7
+                //       除法后 pos=3,delta=-2 → RoPE_pos=1 (不连续！)
+                //       修正后 pos=3,delta=-2 → RoPE_pos=1 (需要额外处理)
             }
         }
     }
 }
 
 llama_pos llama_kv_cache_unified::seq_pos_min(llama_seq_id seq_id) const {
+    /*
+     * cells 最小位置查找 - 查找指定序列的最小 token 位置：
+     * 
+     * 遍历所有 cells，找到属于指定序列的 tokens 中位置最小的一个
+     * 用于确定序列的起始位置或范围检查
+     * 
+     * 查找过程示例：
+     * ┌─────┬─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:3│pos:1│pos:5│pos:2│pos:4│
+     * │seq:1│seq:2│seq:1│seq:1│seq:3│seq:1│  <- 查找seq:1的最小位置
+     * │Δ:0  │Δ:+1 │Δ:-1 │Δ:+2 │Δ:0  │Δ:+1 │
+     * └─────┴─────┴─────┴─────┴─────┴─────┘
+     *   ↑           ↑     ↑           ↑
+     * seq:1      seq:1  seq:1       seq:1
+     * pos:0      pos:1  pos:5       pos:4
+     * 
+     * result = min(0, 1, 5, 4) = 0
+     * 
+     * 注意：
+     * 1. 只考虑 pos 值，不考虑 delta（delta 是偏移修正）
+     * 2. 如果序列不存在，返回 -1
+     * 3. 用于序列范围验证和窗口管理
+     */
     llama_pos result = std::numeric_limits<llama_pos>::max();
 
+    // 遍历所有 cells，寻找属于指定序列的最小位置
     for (uint32_t i = 0; i < size; ++i) {
         if (cells[i].has_seq_id(seq_id)) {
             result = std::min(result, cells[i].pos);
+            // 注意：使用 pos 而不是 pos + delta，因为这是逻辑位置查找
         }
     }
 
+    // 如果没有找到该序列的任何 token，返回 -1
     if (result == std::numeric_limits<llama_pos>::max()) {
         result = -1;
     }
@@ -338,33 +584,96 @@ llama_pos llama_kv_cache_unified::seq_pos_min(llama_seq_id seq_id) const {
 }
 
 llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
+    /*
+     * cells 最大位置查找 - 查找指定序列的最大 token 位置：
+     * 
+     * 遍历所有 cells，找到属于指定序列的 tokens 中位置最大的一个
+     * 用于确定序列的结束位置或长度计算
+     * 
+     * 查找过程示例（续上例）：
+     * ┌─────┬─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:3│pos:1│pos:5│pos:2│pos:4│
+     * │seq:1│seq:2│seq:1│seq:1│seq:3│seq:1│  <- 查找seq:1的最大位置
+     * │Δ:0  │Δ:+1 │Δ:-1 │Δ:+2 │Δ:0  │Δ:+1 │
+     * └─────┴─────┴─────┴─────┴─────┴─────┘
+     *   ↑           ↑     ↑           ↑
+     * seq:1      seq:1  seq:1       seq:1
+     * pos:0      pos:1  pos:5       pos:4
+     * 
+     * result = max(0, 1, 5, 4) = 5
+     * 
+     * 序列范围：seq:1 的 tokens 分布在位置 [0, 5] 范围内
+     * 序列长度估算：max_pos - min_pos + 1 = 5 - 0 + 1 = 6 个位置跨度
+     * 
+     * 应用场景：
+     * 1. 序列长度计算和验证
+     * 2. 注意力窗口边界确定
+     * 3. 缓存容量和使用率分析
+     */
     llama_pos result = -1;
 
+    // 遍历所有 cells，寻找属于指定序列的最大位置
     for (uint32_t i = 0; i < size; ++i) {
         if (cells[i].has_seq_id(seq_id)) {
             result = std::max(result, cells[i].pos);
+            // 注意：使用 pos 而不是 pos + delta，因为这是逻辑位置查找
         }
     }
 
+    // 如果没有找到该序列的任何 token，返回 -1
     return result;
 }
 
 void llama_kv_cache_unified::restore() {
+    /*
+     * cells 状态恢复操作 - 回滚到备份状态：
+     * 
+     * 从 recovery 备份中恢复 cells 状态，撤销之前的分配或修改操作
+     * 同时正确维护 used 计数器和 delta 状态
+     * 
+     * 恢复过程示例：
+     * 
+     * Current state (操作失败后):
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:5│pos:6│pos:7│  <- 新分配但需要回滚
+     * │seq:1│seq:1│seq:2│seq:2│seq:3│
+     * │Δ:0  │Δ:+1 │Δ:0  │Δ:0  │Δ:0  │
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * Backup in recovery:
+     * recovery.cells[2] = {pos:-1, seq_id:{}, delta:old_value}
+     * recovery.cells[3] = {pos:-1, seq_id:{}, delta:old_value}
+     * recovery.cells[4] = {pos:-1, seq_id:{}, delta:old_value}
+     * 
+     * After restore():
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:-│pos:-│pos:-│  <- 恢复到分配前状态
+     * │seq:1│seq:1│empty│empty│empty│
+     * │Δ:0  │Δ:+1 │Δ:old│Δ:old│Δ:old│  <- delta 也恢复到备份值
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * 重要：delta 的恢复确保了位置偏移历史的正确性，
+     *       避免 RoPE 计算中的不一致性
+     */
     for (const auto & [id, cell] : recovery.cells) {
         // TODO: move to new `struct kv_cells`
+        
+        // 正确维护 used 计数器
         const bool is_empty0 = cells[id].is_empty();
         const bool is_empty1 = cell.is_empty();
 
         if (!is_empty0 && is_empty1) {
-            used--;
+            used--;  // 当前占用 -> 恢复为空闲
         } else if (is_empty0 && !is_empty1) {
-            used++;
+            used++;  // 当前空闲 -> 恢复为占用
         }
 
+        // 恢复完整的 cell 状态（包括 pos, seq_id, delta）
         cells[id] = cell;
+        // 注意：delta 也被恢复，保持位置偏移历史的一致性
     }
 
-    recovery.clear();
+    recovery.clear();  // 清空恢复信息
 }
 
 void llama_kv_cache_unified::commit() {
@@ -406,11 +715,39 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
             need_reserve = true;
         }
 
+        /*
+         * delta 重置操作 - K-shift 完成后的清理：
+         * 
+         * K-shift 操作将所有累积的位置偏移应用到 K 张量的 RoPE 计算中，
+         * 完成后需要清零所有 cells 的 delta，为下一轮偏移做准备
+         * 
+         * Before K-shift (delta 清零前):
+         * ┌─────┬─────┬─────┬─────┬─────┐
+         * │pos:0│pos:2│pos:3│pos:1│pos:4│
+         * │seq:1│seq:1│seq:1│seq:2│seq:2│
+         * │Δ:+1 │Δ:-2 │Δ:+3 │Δ:-1 │Δ:+2 │  <- 累积的位置偏移量
+         * └─────┴─────┴─────┴─────┴─────┘
+         *        ↓ K-shift 应用这些偏移到 RoPE 计算
+         * 
+         * After K-shift (delta 清零后):
+         * ┌─────┬─────┬─────┬─────┬─────┐
+         * │pos:0│pos:2│pos:3│pos:1│pos:4│
+         * │seq:1│seq:1│seq:1│seq:2│seq:2│
+         * │Δ:0  │Δ:0  │Δ:0  │Δ:0  │Δ:0  │  <- 所有 delta 重置为 0
+         * └─────┴─────┴─────┴─────┴─────┘
+         * 
+         * 重要说明：
+         * 1. K-shift 操作通过 RoPE 将 delta 偏移"烧入"到 K 张量中
+         * 2. 清零 delta 后，pos 仍保持当前值，但偏移历史被清除
+         * 3. 后续的 seq_add/seq_div 操作将从 delta=0 开始重新累积
+         * 4. 这确保了 RoPE 计算的正确性和一致性
+         */
         {
             has_shift = false;
 
+            // 清零所有 cells 的 delta，因为 K-shift 已经应用了偏移
             for (uint32_t i = 0; i < size; ++i) {
-                cells[i].delta = 0;
+                cells[i].delta = 0;  // 重置位置偏移累积量
             }
         }
     }
@@ -541,17 +878,53 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
         }
     }
 
+    /*
+     * cells 槽位分配和恢复备份机制：
+     * 
+     * 在分配新的 token 槽位时，需要备份原始状态以支持回滚操作
+     * 同时设置新的位置和序列信息
+     * 
+     * 分配过程示例：
+     * 
+     * Before allocation (head=2, n_tokens=3):
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:-│pos:-│pos:-│  <- head指向第一个空闲槽
+     * │seq:1│seq:1│empty│empty│empty│
+     * │Δ:0  │Δ:+1 │Δ:?  │Δ:?  │Δ:?  │
+     * └─────┴─────┴─────┴─────┴─────┘
+     *               ↑─ head=2, 分配3个tokens
+     * 
+     * Backup to recovery:
+     * recovery.cells[2] = {pos:-1, seq_id:{}, delta:old_value}
+     * recovery.cells[3] = {pos:-1, seq_id:{}, delta:old_value}  
+     * recovery.cells[4] = {pos:-1, seq_id:{}, delta:old_value}
+     * 
+     * After allocation:
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:1│pos:5│pos:6│pos:7│  <- 新分配的token位置
+     * │seq:1│seq:1│seq:2│seq:2│seq:3│  <- 新的序列ID
+     * │Δ:0  │Δ:+1 │Δ:0  │Δ:0  │Δ:0  │  <- delta重置为0（新分配）
+     * └─────┴─────┴─────┴─────┴─────┘
+     * 
+     * 重要：新分配的 cells 的 delta 自动初始化为 0，
+     *       开始新的位置偏移累积周期
+     */
     for (uint32_t i = 0; i < n_tokens; ++i) {
+        // 备份原始状态到 recovery，支持后续回滚操作
         // remember the original state
         if (recovery.cells.find(head + i) == recovery.cells.end()) {
             recovery.cells[head + i] = cells[head + i];
         }
 
+        // 设置新分配 cell 的位置信息
         cells[head + i].pos = ubatch.pos[i];
+        // delta 在 kv_cell 构造或清空时自动初始化为 0
 
+        // 设置序列 ID 信息（支持多序列共享）
         for (int32_t j = 0; j < ubatch.n_seq_id[i]; j++) {
             cells[head + i].seq_id.insert(ubatch.seq_id[i][j]);
         }
+        // 注意：新分配的 cell 的 delta = 0，开始新的偏移累积周期
     }
 
     used += n_tokens;
@@ -765,13 +1138,43 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 }
 
 void llama_kv_cache_unified::set_input_k_shift(ggml_tensor * dst) const {
+    /*
+     * 设置 K-shift 输入张量 - delta 传递给 RoPE 计算：
+     * 
+     * 将所有 cells 的 delta 值复制到输入张量，供 K-shift 操作使用
+     * K-shift 操作会将这些偏移量应用到 K 张量的 RoPE 计算中
+     * 
+     * cells delta 到 tensor 的映射：
+     * ┌─────┬─────┬─────┬─────┬─────┐
+     * │pos:0│pos:2│pos:3│pos:1│pos:4│  <- cells 状态
+     * │seq:1│seq:1│seq:1│seq:2│seq:2│
+     * │Δ:+1 │Δ:-2 │Δ:+3 │Δ:-1 │Δ:+2 │  <- 累积的位置偏移
+     * └─────┴─────┴─────┴─────┴─────┘
+     *        ↓ 复制到 K-shift 输入张量
+     * dst->data: [+1, -2, +3, -1, +2, 0, 0, ...] (int32_t array)
+     *             ↑   ↑   ↑   ↑   ↑   ↑
+     *           cell0 1   2   3   4  unused...
+     * 
+     * RoPE 计算中的使用：
+     * for each cell i:
+     *   rope_position = cells[i].pos + dst->data[i]  // pos + delta
+     *   apply_rope(K_tensor[i], rope_position)
+     * 
+     * 关键作用：
+     * 1. 传递累积的位置偏移给 RoPE 计算
+     * 2. 确保旋转位置编码的正确性
+     * 3. 支持序列位置的动态调整（插入、删除、缩放等）
+     * 4. K-shift 后，这些 delta 值会被清零
+     */
     GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
 
     int32_t * data = (int32_t *) dst->data;
 
+    // 将每个 cell 的 delta 复制到输入张量
     for (uint32_t i = 0; i < size; ++i) {
-        data[i] = cells[i].delta;
+        data[i] = cells[i].delta;  // 传递位置偏移给 K-shift 操作
     }
+    // 注意：K-shift 操作完成后，这些 delta 值会在 update() 中被清零
 }
 
 void llama_kv_cache_unified::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

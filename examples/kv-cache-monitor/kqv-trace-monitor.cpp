@@ -25,8 +25,8 @@ struct tensor_save_info {
     ggml_type type;
     std::vector<int64_t> ne;
     std::vector<uint8_t> data;
-    
-    tensor_save_info(const std::string& n, ggml_type t, const int64_t* dims, const uint8_t* d, size_t data_size) 
+
+    tensor_save_info(const std::string& n, ggml_type t, const int64_t* dims, const uint8_t* d, size_t data_size)
         : name(n), type(t), data(d, d + data_size) {
         for (int i = 0; i < GGML_MAX_DIMS; ++i) {
             ne.push_back(dims[i]);
@@ -50,9 +50,9 @@ struct kqv_trace_data {
 
 static int extract_layer_number(const char* tensor_name) {
     if (!tensor_name) return -1;
-    
+
     std::string name(tensor_name);
-    
+
     // Look for kqv_out-N pattern
     size_t kqv_pos = name.find("kqv_out-");
     if (kqv_pos != std::string::npos) {
@@ -73,7 +73,7 @@ static int extract_layer_number(const char* tensor_name) {
             }
         }
     }
-    
+
     // Look for "_l" pattern (e.g., "kqv_out_l0")
     size_t l_pos = name.find("_l");
     if (l_pos != std::string::npos) {
@@ -83,39 +83,39 @@ static int extract_layer_number(const char* tensor_name) {
             while (end < name.length() && std::isdigit(name[end])) {
                 end++;
             }
-            
+
             if (end > start) {
                 std::string layer_str = name.substr(start, end - start);
                 return std::stoi(layer_str);
             }
         }
     }
-    
+
     // Look for "layer" or "blk" pattern
     size_t layer_pos = name.find("layer");
     if (layer_pos == std::string::npos) {
         layer_pos = name.find("blk");
     }
-    
+
     if (layer_pos != std::string::npos) {
         size_t start = layer_pos;
         while (start < name.length() && !std::isdigit(name[start])) {
             start++;
         }
-        
+
         if (start < name.length()) {
             size_t end = start;
             while (end < name.length() && std::isdigit(name[end])) {
                 end++;
             }
-            
+
             if (end > start) {
                 std::string layer_str = name.substr(start, end - start);
                 return std::stoi(layer_str);
             }
         }
     }
-    
+
     return -1;
 }
 
@@ -130,32 +130,32 @@ static bool should_monitor_tensor(const char* tensor_name, int target_layer) {
     if (!is_kqv_out_tensor(tensor_name)) {
         return false;
     }
-    
+
     if (target_layer == -1) {
         return true; // 监控所有层
     }
-    
+
     int layer_num = extract_layer_number(tensor_name);
     return layer_num == target_layer;
 }
 
 static void print_tensor_stats(uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, const char* tensor_name) {
     if (data == nullptr || ne == nullptr) return;
-    
+
     size_t total_elements = 1;
     for (int i = 0; i < GGML_MAX_DIMS && ne[i] > 0; ++i) {
         total_elements *= ne[i];
     }
-    
+
     if (total_elements == 0) return;
-    
+
     double sum = 0.0, sum_sq = 0.0;
     double min_val = DBL_MAX, max_val = -DBL_MAX;
     size_t valid_elements = 0;
-    
+
     for (size_t idx = 0; idx < total_elements; ++idx) {
         float v = 0.0f;
-        
+
         if (type == GGML_TYPE_F32) {
             v = ((float*)data)[idx];
         } else if (type == GGML_TYPE_F16) {
@@ -163,37 +163,37 @@ static void print_tensor_stats(uint8_t * data, ggml_type type, const int64_t * n
         } else {
             continue;
         }
-        
+
         sum += v;
         sum_sq += v * v;
         min_val = std::min(min_val, (double)v);
         max_val = std::max(max_val, (double)v);
         valid_elements++;
     }
-    
+
     if (valid_elements == 0) return;
-    
+
     double mean = sum / valid_elements;
     double variance = (sum_sq / valid_elements) - (mean * mean);
     double std_dev = std::sqrt(variance);
-    
+
     int layer_num = extract_layer_number(tensor_name);
-    
+
     LOG("[KQV-TRACE] Layer %d - %s: shape=[%ld,%ld,%ld,%ld] type=%s elements=%zu\n",
         layer_num >= 0 ? layer_num : -1,
         tensor_name ? tensor_name : "unknown",
-        ne[0], ne[1], ne[2], ne[3], 
+        ne[0], ne[1], ne[2], ne[3],
         ggml_type_name(type), valid_elements);
-    
+
     LOG("[KQV-TRACE]   stats: mean=%.6f, std=%.6f, min=%.6f, max=%.6f\n",
         mean, std_dev, min_val, max_val);
 }
 
 static void print_source_tensor_info(struct ggml_tensor * tensor, int depth = 0) {
     if (!tensor || depth > 3) return; // Limit recursion depth
-    
+
     std::string indent(depth * 2, ' ');
-    
+
     if (depth == 0) {
         LOG("%s[OP] %s: op=%s, shape=[%ld,%ld,%ld,%ld], type=%s\n",
             indent.c_str(),
@@ -202,7 +202,7 @@ static void print_source_tensor_info(struct ggml_tensor * tensor, int depth = 0)
             tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3],
             ggml_type_name(tensor->type ));
     }
-    
+
     // Recursively print source tensors
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
         if (tensor->src[i]) {
@@ -233,11 +233,11 @@ static std::string ggml_ne_string(const ggml_tensor * t) {
  */
 static void save_tensor_data(kqv_trace_data* cb_data, struct ggml_tensor* tensor, const std::string& prefix = "") {
     if (!cb_data->save_enabled || !tensor) return;
-    
+
     // Get tensor data
     const bool is_host = ggml_backend_buffer_is_host(tensor->buffer);
     uint8_t* data = nullptr;
-    
+
     if (!is_host) {
         auto n_bytes = ggml_nbytes(tensor);
         cb_data->temp_data.resize(n_bytes);
@@ -246,13 +246,13 @@ static void save_tensor_data(kqv_trace_data* cb_data, struct ggml_tensor* tensor
     } else {
         data = (uint8_t*)tensor->data;
     }
-    
+
     // Create unique name with prefix and step count
-    std::string save_name = prefix.empty() ? 
+    std::string save_name = prefix.empty() ?
         std::string(tensor->name ? tensor->name : "unnamed") :
         prefix + "_" + std::string(tensor->name ? tensor->name : "unnamed");
     save_name += "_step_" + std::to_string(cb_data->step_count);
-    
+
     // Save tensor info
     cb_data->saved_tensors.emplace_back(
         save_name,
@@ -261,8 +261,8 @@ static void save_tensor_data(kqv_trace_data* cb_data, struct ggml_tensor* tensor
         data,
         ggml_nbytes(tensor)
     );
-    
-    LOG("[GGUF-SAVE] Saved tensor: %s, type: %s, size: %zu bytes\n", 
+
+    LOG("[GGUF-SAVE] Saved tensor: %s, type: %s, size: %zu bytes\n",
         save_name.c_str(), ggml_type_name(tensor->type), ggml_nbytes(tensor));
 }
 
@@ -273,37 +273,37 @@ static bool write_tensors_to_gguf(const kqv_trace_data* cb_data) {
     if (!cb_data->save_enabled || cb_data->save_file.empty() || cb_data->saved_tensors.empty()) {
         return true; // Nothing to save
     }
-    
+
     LOG("[GGUF-SAVE] Writing %zu tensors to file: %s\n", cb_data->saved_tensors.size(), cb_data->save_file.c_str());
-    
+
     // Create GGUF context
     struct gguf_context* ctx = gguf_init_empty();
     if (!ctx) {
         LOG_ERR("[GGUF-SAVE] Failed to create GGUF context\n");
         return false;
     }
-    
+
     // Add metadata
     gguf_set_val_str(ctx, "kqv_trace.description", "KQV output tensors and their inputs traced from llama.cpp");
     gguf_set_val_i32(ctx, "kqv_trace.total_steps", cb_data->step_count);
     gguf_set_val_i32(ctx, "kqv_trace.target_layer", cb_data->target_layer);
     gguf_set_val_bool(ctx, "kqv_trace.trace_sources", cb_data->trace_sources);
     gguf_set_val_i32(ctx, "kqv_trace.tensor_count", (int32_t)cb_data->saved_tensors.size());
-    
+
     // Create GGML context for tensor data
     struct ggml_init_params params = {
         /*.mem_size   =*/ 1024ull * 1024ull * 1024ull, // 1GB should be enough
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ false,
     };
-    
+
     struct ggml_context* ctx_data = ggml_init(params);
     if (!ctx_data) {
         LOG_ERR("[GGUF-SAVE] Failed to create GGML context\n");
         gguf_free(ctx);
         return false;
     }
-    
+
     // Add tensors to GGUF
     for (const auto& tensor_info : cb_data->saved_tensors) {
         // Create GGML tensor
@@ -312,18 +312,18 @@ static bool write_tensors_to_gguf(const kqv_trace_data* cb_data) {
             LOG_ERR("[GGUF-SAVE] Failed to create tensor: %s\n", tensor_info.name.c_str());
             continue;
         }
-        
+
         ggml_set_name(tensor, tensor_info.name.c_str());
-        
+
         // Copy data
         memcpy(tensor->data, tensor_info.data.data(), tensor_info.data.size());
-        
+
         // Add to GGUF
         gguf_add_tensor(ctx, tensor);
-        
+
         LOG("[GGUF-SAVE] Added tensor to GGUF: %s\n", tensor_info.name.c_str());
     }
-    
+
     // Write to file
     bool success = gguf_write_to_file(ctx, cb_data->save_file.c_str(), false);
     if (success) {
@@ -331,11 +331,11 @@ static bool write_tensors_to_gguf(const kqv_trace_data* cb_data) {
     } else {
         LOG_ERR("[GGUF-SAVE] Failed to write GGUF file: %s\n", cb_data->save_file.c_str());
     }
-    
+
     // Cleanup
     ggml_free(ctx_data);
     gguf_free(ctx);
-    
+
     return success;
 }
 
@@ -389,17 +389,17 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
     // Save tensors recursively if enabled
     if (cb_data->save_enabled) {
         // Recursive function to save all tensors in the computation graph
-        std::function<void(struct ggml_tensor*, const std::string&, int)> save_tensor_recursive = 
+        std::function<void(struct ggml_tensor*, const std::string&, int)> save_tensor_recursive =
             [&](struct ggml_tensor* tensor, const std::string& prefix, int depth) {
                 if (!tensor || depth > 3) return; // Limit recursion depth to avoid infinite loops
-                
+
                 // Save current tensor
                 std::string tensor_name = std::string(tensor->name ? tensor->name : "unnamed");
-                LOG("[KQV-TRACE] Saving tensor: %s with prefix %s (depth %d)\n", 
+                LOG("[KQV-TRACE] Saving tensor: %s with prefix %s (depth %d)\n",
                     tensor_name.c_str(), prefix.c_str(), depth);
-                
+
                 save_tensor_data(cb_data, tensor, prefix);
-                
+
                 // Recursively save source tensors
                 for (int i = 0; i < GGML_MAX_SRC; ++i) {
                     if (tensor->src[i]) {
@@ -418,7 +418,7 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
         LOG("\n[KQV-TRACE] Source tensor hierarchy:\n");
         print_source_tensor_info(t);
     }
-    
+
     LOG("===============================\n\n");
 
     return true;
@@ -447,11 +447,11 @@ static bool run(llama_context * ctx, const common_params & params) {
     // Generate tokens one by one
     for (int i = 0; i < params.n_predict; ++i) {
         LOG("=== GENERATION STEP %d/%d ===\n", i + 1, params.n_predict);
-        
+
         // Sample next token using simple greedy approach
         auto logits = llama_get_logits_ith(ctx, -1);
         auto n_vocab = llama_n_vocab(vocab);
-        
+
         // Find token with highest probability (greedy sampling)
         llama_token new_token = 0;
         float max_logit = logits[0];
@@ -461,15 +461,15 @@ static bool run(llama_context * ctx, const common_params & params) {
                 new_token = token_id;
             }
         }
-        
+
         // Simple check for common EOS tokens (this is a simplified approach)
         if (new_token == 2 || new_token == 0) { // Common EOS token IDs
             LOG("Generated potential EOS token (id: %d), stopping generation\n", new_token);
             break;
         }
-        
+
         LOG("Generated token %d: (id: %d, logit: %.4f)\n", i + 1, new_token, max_logit);
-        
+
         // Decode the new token
         LOG("--- Decoding token %d ---\n", i + 1);
         if (llama_decode(ctx, llama_batch_get_one(&new_token, 1))) {
@@ -477,14 +477,14 @@ static bool run(llama_context * ctx, const common_params & params) {
             return false;
         }
         LOG("--- Token %d decoded ---\n\n", i + 1);
-        
+
         // Add to tokens for potential future use
         tokens.push_back(new_token);
     }
 
     LOG("=== GENERATION COMPLETED ===\n");
     LOG("Total tokens generated: %zu\n", tokens.size());
-    
+
     return true;
 }
 
@@ -497,11 +497,11 @@ int main(int argc, char ** argv) {
     int target_layer = -1; // Default: monitor all layers
     bool trace_sources = true; // Default: trace source tensors
     std::string save_file; // GGUF file to save tensors to
-    
+
     // Create new argument list, excluding our custom parameters
     std::vector<char*> new_argv;
     new_argv.push_back(argv[0]); // Keep program name
-    
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--layer") == 0 && i + 1 < argc) {
             target_layer = std::atoi(argv[i + 1]);
@@ -515,7 +515,7 @@ int main(int argc, char ** argv) {
             new_argv.push_back(argv[i]);
         }
     }
-    
+
     cb_data.target_layer = target_layer;
     cb_data.trace_sources = trace_sources;
     cb_data.save_file = save_file;
@@ -538,13 +538,13 @@ int main(int argc, char ** argv) {
     } else {
         LOG_INF("Monitoring kqv_out tensors for all layers\n");
     }
-    
+
     if (trace_sources) {
         LOG_INF("Source tensor tracing enabled\n");
     } else {
         LOG_INF("Source tensor tracing disabled\n");
     }
-    
+
     if (cb_data.save_enabled) {
         LOG_INF("Tensor saving enabled, output file: %s\n", save_file.c_str());
     } else {
@@ -619,4 +619,4 @@ int main(int argc, char ** argv) {
     llama_backend_free();
 
     return 0;
-} 
+}

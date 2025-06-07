@@ -13280,7 +13280,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     mixed_config.hot_type_v = params.type_v;
                     mixed_config.cold_type_k = GGML_TYPE_Q4_0;      // Archived tokens: compress like storing books in compact boxes
                     mixed_config.cold_type_v = GGML_TYPE_Q4_0;
-                    mixed_config.quantization_threshold =  ggml_get_type_traits(GGML_TYPE_Q4_0)->blck_size;       // Keep the last 32 tokens on the "hot desk" in full precision
+                    mixed_config.quantization_threshold = 8;       // Keep the last 32 tokens on the "hot desk" in full precision
+                    // mixed_config.quantization_threshold =  ggml_get_type_traits(GGML_TYPE_Q4_0)->blck_size;       // Keep the last 32 tokens on the "hot desk" in full precision
                     
                     res = new llama_kv_cache_mixed(
                         *this,

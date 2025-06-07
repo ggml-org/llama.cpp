@@ -28,7 +28,7 @@ struct llama_flash_attn_mixed_params {
 struct llama_kv_cache_mixed_config {
         // Quantization settings
     bool     enable_quantization = true;    // Enable quantization
-    uint32_t quantization_threshold = 32;   // Number of tokens before quantization
+    uint32_t quantization_threshold = 4;    // Number of tokens before quantization (reduced for testing)
     uint32_t group_size = 16;               // Number of tokens to quantize at once
     
     // Advanced quantization settings
@@ -113,7 +113,7 @@ public:
                      uint32_t    n_pad,
         const llama_kv_cache_mixed_config & config = {});
 
-    ~llama_kv_cache_mixed() = default;
+    ~llama_kv_cache_mixed();
 
     //
     // llama_memory_i
@@ -168,6 +168,10 @@ public:
     // get views of the current state of the cache (always returns FP16 view)
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_k_quant(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_v_quant(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_k_quant_ref(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_v_quant_ref(ggml_context * ctx, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the current head location
     ggml_tensor * k_quant(ggml_context * ctx, int32_t il) const;
@@ -258,27 +262,37 @@ private:
 
     // Extended kv_layer structure with both FP16 and quantized tensors
     struct kv_layer_mixed {
-        // layer index in the model
         uint32_t il;
 
-        // FP16 tensors for recent tokens
         ggml_tensor * k_fp16;
         ggml_tensor * v_fp16;
-        
-        // Quantized tensors for old tokens
+
         ggml_tensor * k_quant;
         ggml_tensor * v_quant;
+
+        ggml_tensor * k_dequant;
+        ggml_tensor * v_dequant;
+
+        // FIFO Quantization state - separate counters for K and V
+        mutable uint32_t total_tokens = 0;          // total tokens in this layer
+        mutable uint32_t quant_k_tokens = 0;        // number of quantized K tokens
+        mutable uint32_t quant_v_tokens = 0;        // number of quantized V tokens
+        mutable uint32_t fp16_k_tokens = 0;         // number of fp16 K tokens
+        mutable uint32_t fp16_v_tokens = 0;         // number of fp16 V tokens
+        mutable uint32_t fp16_start_pos = 0;        // start position of fp16 tokens
+
+        uint32_t get_total_cached_tokens() const {
+            return total_tokens;
+        }
         
-        // Dequantized views (for returning FP16 to attention)
-        ggml_tensor * k_dequant;  // Temporary tensor for dequantization
-        ggml_tensor * v_dequant;  // Temporary tensor for dequantization
+        // Helper methods for combined counts
+        uint32_t get_total_fp16_tokens() const {
+            return fp16_k_tokens; // K and V should be the same, return K count
+        }
         
-        // Number of tokens in FP16 buffer
-        mutable uint32_t n_fp16_tokens = 0;
-        
-        // Number of tokens in quantized buffer
-        mutable uint32_t n_k_quant_tokens = 0;
-        mutable uint32_t n_v_quant_tokens = 0;
+        uint32_t get_total_quant_tokens() const {
+            return quant_k_tokens; // K and V should be the same, return K count
+        }
     };
 
     struct kv_cell {
@@ -328,7 +342,15 @@ private:
     // recovery information
     struct {
         void clear() {
-            cells.clear();
+            try {
+                // Use swap and clear pattern for safer destruction
+                std::unordered_map<uint32_t, kv_cell> empty_map;
+                cells.swap(empty_map);
+                // empty_map destructor will handle cleanup safely
+            } catch (...) {
+                // Force clear if swap fails
+                cells.clear();
+            }
         }
 
         std::unordered_map<uint32_t, kv_cell> cells;

@@ -3,9 +3,13 @@ set(KQV_TRACE_TARGET llama-kqv-trace-monitor)
 add_executable(${KQV_TRACE_TARGET} kqv-trace-monitor.cpp)
 install(TARGETS ${KQV_TRACE_TARGET} RUNTIME)
 target_link_libraries(${KQV_TRACE_TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
-target_compile_features(${KQV_TRACE_TARGET} PRIVATE cxx_std_17)
+ target_compile_features(${KQV_TRACE_TARGET} PRIVATE cxx_std_17)
 
-
+ # KV Quant Monitor
+ add_executable(llama-kv-quant-monitor kv-quant-monitor.cpp)
+ install(TARGETS llama-kv-quant-monitor RUNTIME)
+ target_link_libraries(llama-kv-quant-monitor PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT})
+ target_compile_features(llama-kv-quant-monitor PRIVATE cxx_std_17)
 
 # GGUF Reader for verifying saved tensor files
 add_executable(llama-kqv-gguf-reader gguf-reader.cpp)

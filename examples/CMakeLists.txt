@@ -18,6 +18,7 @@ else()
     add_subdirectory(embedding)
     add_subdirectory(eval-callback)
     add_subdirectory(kv-cache-monitor)
+    add_subdirectory(mixed-kv-cache-validator)
 
     add_subdirectory(gguf-hash)
     add_subdirectory(gguf)

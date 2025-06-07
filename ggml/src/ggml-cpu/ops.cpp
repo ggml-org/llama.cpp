@@ -116,6 +116,7 @@ static void ggml_compute_forward_dup_f16(
                     }
                 }
             } else if (ggml_get_type_traits_cpu(dst->type)->from_float) {
+                // NOTICE: Do quant here.
                 ggml_from_float_t const quantize_row_q = ggml_get_type_traits_cpu(dst->type)->from_float;
                 float * src0_f32 = (float *) params->wdata + (ne00 + CACHE_LINE_SIZE_F32) * ith;
 
@@ -139,6 +140,7 @@ static void ggml_compute_forward_dup_f16(
                         id += rs * (ne01 - ir1);
                     }
                 }
+                // GGML_LOG_INFO("DO QUANT: id=%u, rs=%u, ne00=%u, ne01=%u, ne02=%u, ne03=%u\n", id, rs, ne00, ne01, ne02, ne03);
             } else {
                 GGML_ABORT("fatal error"); // TODO: implement
             }
