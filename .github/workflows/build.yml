@@ -777,6 +777,7 @@ jobs:
           cmake -S . -B build ${{ matrix.defines }} `
             -DCURL_LIBRARY="$env:CURL_PATH/lib/libcurl.dll.a" -DCURL_INCLUDE_DIR="$env:CURL_PATH/include"
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
+          cp $env:CURL_PATH/bin/libcurl-*.dll build/bin/Release
 
       - name: Add libopenblas.dll
         id: add_libopenblas_dll
