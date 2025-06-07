@@ -10,14 +10,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     list (APPEND GGML_CPU_SOURCES
         ggml-cpu/ggml-cpu.c
         ggml-cpu/ggml-cpu.cpp
-        ggml-cpu/ggml-cpu-aarch64.cpp
-        ggml-cpu/ggml-cpu-aarch64.h
-        ggml-cpu/ggml-cpu-hbm.cpp
-        ggml-cpu/ggml-cpu-hbm.h
-        ggml-cpu/ggml-cpu-quants.c
-        ggml-cpu/ggml-cpu-quants.h
-        ggml-cpu/ggml-cpu-traits.cpp
-        ggml-cpu/ggml-cpu-traits.h
+        ggml-cpu/repack.cpp
+        ggml-cpu/repack.h
+        ggml-cpu/hbm.cpp
+        ggml-cpu/hbm.h
+        ggml-cpu/quants.c
+        ggml-cpu/quants.h
+        ggml-cpu/traits.cpp
+        ggml-cpu/traits.h
         ggml-cpu/amx/amx.cpp
         ggml-cpu/amx/amx.h
         ggml-cpu/amx/mmq.cpp
@@ -84,6 +84,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (GGML_SYSTEM_ARCH STREQUAL "ARM")
         message(STATUS "ARM detected")
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/arch/arm/quants.c
+            ggml-cpu/arch/arm/repack.cpp
+            )
+
         if (MSVC AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
             message(FATAL_ERROR "MSVC is not supported for ARM, use clang")
         else()
@@ -167,6 +172,11 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "x86")
         message(STATUS "x86 detected")
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/arch/x86/quants.c
+            ggml-cpu/arch/x86/repack.cpp
+            )
+
         if (MSVC)
             # instruction set detection for MSVC only
             if (GGML_NATIVE)
@@ -302,7 +312,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             # Since multiple variants of the CPU backend may be included in the same
             # build, using set_source_files_properties() to set the arch flags is not possible
             set(GGML_CPU_FEATS_NAME ${GGML_CPU_NAME}-feats)
-            add_library(${GGML_CPU_FEATS_NAME} OBJECT ggml-cpu/cpu-feats-x86.cpp)
+            add_library(${GGML_CPU_FEATS_NAME} OBJECT ggml-cpu/arch/x86/cpu-feats.cpp)
             target_include_directories(${GGML_CPU_FEATS_NAME} PRIVATE . .. ../include)
             target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE ${ARCH_DEFINITIONS})
             target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE GGML_BACKEND_DL GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
@@ -311,6 +321,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "PowerPC")
         message(STATUS "PowerPC detected")
+        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/powerpc/quants.c)
         if (GGML_NATIVE)
             if (${CMAKE_SYSTEM_PROCESSOR} MATCHES "ppc64")
                 file(READ "/proc/cpuinfo" POWER10_M)
@@ -338,6 +349,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "loongarch64")
         message(STATUS "loongarch64 detected")
+        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/loongarch/quants.c)
+
         list(APPEND ARCH_FLAGS -march=loongarch64)
         if (GGML_LASX)
             list(APPEND ARCH_FLAGS -mlasx)
@@ -347,6 +360,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "riscv64")
         message(STATUS "riscv64 detected")
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/arch/riscv/quants.c
+            ggml-cpu/arch/riscv/repack.cpp
+            )
         if (GGML_RVV)
             if (GGML_XTHEADVECTOR)
                 list(APPEND ARCH_FLAGS -march=rv64gc_xtheadvector -mabi=lp64d)
@@ -358,6 +375,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "s390x")
         message(STATUS "s390x detected")
+        list(APPEND GGML_CPU_SOURCES ggml-cpu/arch/s390/quants.c)
         file(READ "/proc/cpuinfo" CPUINFO_CONTENTS)
         string(REGEX REPLACE "machine[ \t\r\n]*=[ \t\r\n]*([0-9]+)" "\\1" S390X_M ${CPUINFO_CONTENTS})
 
@@ -381,12 +399,16 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         if (GGML_VXE)
             list(APPEND ARCH_FLAGS -mvx -mzvector)
         endif()
+    elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "wasm")
+        message(STATUS "Wasm detected")
+        list (APPEND GGML_CPU_SOURCES ggml-cpu/arch/wasm/quants.c)
     else()
-        message(STATUS "Unknown architecture")
+        message(WARNING "Unknown CPU architecture. Falling back to generic implementations.")
+        list(APPEND ARCH_FLAGS -DGGML_CPU_GENERIC)
     endif()
 
-    if (GGML_CPU_AARCH64)
-        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_AARCH64)
+    if (GGML_CPU_REPACK)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_REPACK)
     endif()
 
     if (GGML_CPU_KLEIDIAI)
