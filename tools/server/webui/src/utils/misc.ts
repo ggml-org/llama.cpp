@@ -27,7 +27,6 @@ export async function* getSSEStreamAsync(fetchResponse: Response) {
     .pipeThrough(new TextLineStream());
   // @ts-expect-error asyncIterator complains about type, but it should work
   for await (const line of asyncIterator(lines)) {
-    //if (isDev) console.log({ line });
     if (line.startsWith('data:') && !line.endsWith('[DONE]')) {
       const data = JSON.parse(line.slice(5));
       yield data;
@@ -63,10 +62,15 @@ export const copyStr = (textToCopy: string) => {
 export function normalizeMsgsForAPI(messages: Readonly<Message[]>) {
   return messages.map((msg) => {
     if (msg.role !== 'user' || !msg.extra) {
-      return {
+      const apiMessage = {
         role: msg.role,
         content: msg.content,
       } as APIMessage;
+
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        apiMessage.tool_calls = msg.tool_calls;
+      }
+      return apiMessage;
     }
 
     // extra content first, then user text message in the end
@@ -124,15 +128,21 @@ export function filterThoughtFromMsgs(messages: APIMessage[]) {
     if (msg.role !== 'assistant') {
       return msg;
     }
-    // assistant message is always a string
-    const contentStr = msg.content as string;
-    return {
+
+    const contentStr = msg.content as string | null;
+    const { filteredContent } = parseThoughtContent(contentStr);
+
+    const filteredMessage = {
       role: msg.role,
-      content:
-        msg.role === 'assistant'
-          ? contentStr.split('</think>').at(-1)!.trim()
-          : contentStr,
+      content: filteredContent,
+      tool_calls: msg.tool_calls,
     } as APIMessage;
+
+    if (msg.tool_calls && msg.tool_calls.length > 0) {
+      filteredMessage.tool_calls = msg.tool_calls;
+    }
+
+    return filteredMessage;
   });
 }
 
@@ -173,6 +183,42 @@ export const cleanCurrentUrl = (removeQueryParams: string[]) => {
   });
   window.history.replaceState({}, '', url.toString());
 };
+
+/**
+ * Parse content with <think> tags and extract different parts
+ */
+export function parseThoughtContent(content: string | null) {
+  if (content === null) {
+    return {
+      filteredContent: null,
+      thoughtContent: '',
+      isThinking: false,
+    };
+  }
+
+  let actualContent = '';
+  let thought = '';
+  let isThinking = false;
+  let thinkSplit = content.split('<think>', 2);
+  actualContent += thinkSplit[0];
+
+  while (thinkSplit[1] !== undefined) {
+    thinkSplit = thinkSplit[1].split('</think>', 2);
+    thought += thinkSplit[0];
+    isThinking = true;
+    if (thinkSplit[1] !== undefined) {
+      isThinking = false;
+      thinkSplit = thinkSplit[1].split('<think>', 2);
+      actualContent += thinkSplit[0];
+    }
+  }
+
+  return {
+    filteredContent: actualContent,
+    thoughtContent: thought,
+    isThinking,
+  };
+}
 
 export const getServerProps = async (
   baseUrl: string,
