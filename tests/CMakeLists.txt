@@ -42,6 +42,34 @@ function(llama_test target)
     set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
 endfunction()
 
+function(llama_test_cmd target)
+    include(CMakeParseArguments)
+    set(options)
+    set(oneValueArgs NAME LABEL WORKING_DIRECTORY)
+    set(multiValueArgs ARGS)
+    cmake_parse_arguments(LLAMA_TEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    if (NOT DEFINED LLAMA_TEST_LABEL)
+        set(LLAMA_TEST_LABEL "main")
+    endif()
+    if (NOT DEFINED LLAMA_TEST_WORKING_DIRECTORY)
+        set(LLAMA_TEST_WORKING_DIRECTORY .)
+    endif()
+    if (DEFINED LLAMA_TEST_NAME)
+        set(TEST_NAME ${LLAMA_TEST_NAME})
+    else()
+        set(TEST_NAME ${target})
+    endif()
+
+    add_test(
+        NAME ${TEST_NAME}
+        WORKING_DIRECTORY ${LLAMA_TEST_WORKING_DIRECTORY}
+        COMMAND ${target}
+        ${LLAMA_TEST_ARGS})
+
+    set_property(TEST ${TEST_NAME} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+endfunction()
+
 # Builds and runs a test source file.
 # Optional args:
 # - NAME: name of the executable & test target (defaults to the source file name without extension)
@@ -97,8 +125,14 @@ llama_test(test-tokenizer-0 NAME test-tokenizer-0-qwen2             ARGS ${CMAKE
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-refact            ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-refact.gguf)
 llama_test(test-tokenizer-0 NAME test-tokenizer-0-starcoder         ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-starcoder.gguf)
 
-# TODO: missing HF tokenizer for this model in convert_hf_to_gguf_update.py, see https://github.com/ggml-org/llama.cpp/pull/13847
-# llama_test(test-tokenizer-0 NAME test-tokenizer-0-nomic-bert-moe    ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-nomic-bert-moe.gguf)
+if (NOT WIN32)
+    llama_test_cmd(
+        ${CMAKE_CURRENT_SOURCE_DIR}/test-tokenizers-repo.sh
+        NAME test-tokenizers-ggml-vocabs
+        WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+        ARGS https://huggingface.co/ggml-org/vocabs ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocabs
+    )
+endif()
 
 if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${CMAKE_CURRENT_SOURCE_DIR}/../models/ggml-vocab-llama-bpe.gguf)
