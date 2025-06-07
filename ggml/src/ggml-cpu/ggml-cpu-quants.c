@@ -3121,7 +3121,7 @@ void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(acc);
-#elif defined(__riscv_v)
+#elif defined(__riscv_v) && (__GNUC__ >= 14)
     size_t vl;
     size_t vlenb = __riscv_vlenb();
 
@@ -3460,7 +3460,7 @@ void ggml_vec_dot_q5_1_q8_1(int n, float * GGML_RESTRICT s, size_t bs, const voi
     }
 
     sumf = hsum_float_8(acc) + summs;
-#elif defined(__riscv_v)
+#elif defined(__riscv_v) && (__GNUC__ >= 14)
     size_t vl;
     size_t vlenb = __riscv_vlenb();
 
