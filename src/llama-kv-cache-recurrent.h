@@ -15,13 +15,18 @@
 //       see the implementation of llama_kv_cache_unified_state_i for an example how to do it
 class llama_kv_cache_recurrent : public llama_memory_i {
 public:
+
+    // this callback is used to filter out layers that should not be included in the cache
+    using layer_filter_cb = std::function<bool(int32_t il)>;
+
     llama_kv_cache_recurrent(
-            const llama_model & model,
-                    ggml_type   type_k,
-                    ggml_type   type_v,
-                         bool   offload,
-                     uint32_t   kv_size,
-                     uint32_t   n_seq_max);
+            const llama_model &  model,
+              layer_filter_cb && filter,
+                    ggml_type    type_k,
+                    ggml_type    type_v,
+                         bool    offload,
+                     uint32_t    kv_size,
+                     uint32_t    n_seq_max);
 
     ~llama_kv_cache_recurrent() = default;
 
@@ -59,7 +64,6 @@ public:
 
     // TODO: temporary methods - they are not really const as they do const_cast<>, fix this
     int32_t s_copy(int i) const;
-    float   s_mask(int i) const;
 
     // state write/load
 
@@ -73,10 +77,14 @@ public:
     // computed before each graph build
     uint32_t n = 0;
 
+    // first zero-ed state
+    int32_t rs_z = -1;
+
     // TODO: optimize for recurrent state needs
     struct kv_cell {
         llama_pos pos  = -1;
         int32_t   src  = -1; // used to copy states
+        int32_t   src0 = -1; // like src, but used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
 
         std::set<llama_seq_id> seq_id;
@@ -158,12 +166,14 @@ public:
     uint32_t get_n_kv() const;
     uint32_t get_head() const;
     uint32_t get_size() const;
+    int32_t  get_rs_z() const;
+
+    int32_t get_src0(uint32_t cell_id) const;
 
     ggml_tensor * get_k_l(int32_t il) const;
     ggml_tensor * get_v_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
-    float   s_mask(int i) const;
 
 private:
     const llama_memory_status status;

@@ -270,7 +270,14 @@ class GGUFWriter:
         self.state = WriterState.TI_DATA
 
     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
-        if any(key in kv_data for kv_data in self.kv_data):
+        # Disallow duplicate keys if they differ by value or type
+        if any(
+            (
+                key in kv_data
+                and (kv_data[key].value != val or kv_data[key].type != vtype)
+            )
+            for kv_data in self.kv_data
+        ):
             raise ValueError(f'Duplicated key name {key!r}')
 
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
@@ -843,8 +850,14 @@ class GGUFWriter:
     def add_ssm_time_step_rank(self, value: int) -> None:
         self.add_uint32(Keys.SSM.TIME_STEP_RANK.format(arch=self.arch), value)
 
+    def add_ssm_group_count(self, value: int) -> None:
+        self.add_uint32(Keys.SSM.GROUP_COUNT.format(arch=self.arch), value)
+
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
+
+    def add_attn_layer_indices(self, values: list[int]) -> None:
+        self.add_array(Keys.HybridAttention.ATTN_LAYER_INDICES.format(arch=self.arch), values)
 
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
