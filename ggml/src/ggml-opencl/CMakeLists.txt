@@ -80,6 +80,7 @@ set(GGML_OPENCL_KERNELS
     mul_mv_q4_0_f32_1d_8x_flat
     mul_mv_q4_0_f32_1d_16x_flat
     mul_mv_q6_k
+    mul_mv_id_q4_0_f32_8x_flat
     mul
     norm
     relu
