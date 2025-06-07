@@ -1071,6 +1071,36 @@ static void test_template_output_parsers() {
                 "{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}",
                 /* is_partial= */ false,
                 {COMMON_CHAT_FORMAT_LLAMA_3_X}));
+        assert_equals(
+            message_assist_call,
+            common_chat_parse(
+                "<|python_tag|>{\"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X}));
+        assert_equals(
+            message_assist_call,
+            common_chat_parse(
+                "<|python_tag|>{\"type\": \"function\", \"name\": \"special_function\", \"parameters\": {\"arg1\": 1}}",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X}));
+        assert_equals(
+            simple_assist_msg("{\"something\": \"else\"}"),
+            common_chat_parse(
+                "{\"something\": \"else\"}",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X}));
+        assert_equals(
+            message_assist_empty,
+            common_chat_parse(
+                "{\"some",
+                /* is_partial= */ true,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X}));
+        assert_equals(
+            message_assist_empty,
+            common_chat_parse(
+                "{\"parameters\": {\"arg1\": 1}",
+                /* is_partial= */ true,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X}));
 
         // test_templates(tmpls.get(), end_tokens, message_assist, tools, R"(?)", /* expect_grammar_triggered= */ false);
         test_templates(tmpls.get(), end_tokens, message_assist_call_code_interpreter, llama_3_1_tools,
