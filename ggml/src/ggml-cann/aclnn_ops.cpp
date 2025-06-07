@@ -714,6 +714,16 @@ static void cann_copy(ggml_backend_cann_context& ctx, aclTensor* acl_src,
 void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src0 = dst->src[0];
 
+    // ---- TODO: ----
+    // if (ctx.cann_graph && ctx.cann_graph->use_cpy_indirection) {
+    //     int &idx = ctx.cann_graph->graph_cpynode_index;  // 引用，方便自增
+    //     if (idx < ctx.cann_graph->dest_ptrs_size && ctx.cann_graph->dest_ptrs_d != nullptr) {
+    //         dst->data = ggml_cann_get_dynamic_dst_ptr(ctx, idx);
+    //         idx++;
+    //     } else {
+    //         std::cerr << "Warning: graph_cpynode_index out of range or dest_ptrs_d null!" << std::endl;
+    //     }
+    // }
     aclTensor* acl_src = ggml_cann_create_tensor(src0);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
     if (ggml_are_same_shape(src0, dst)) {
