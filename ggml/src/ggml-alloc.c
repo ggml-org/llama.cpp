@@ -10,7 +10,11 @@
 #include <string.h>
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
-#define MAX_FREE_BLOCKS 256
+#define MAX_FREE_BLOCKS 256 // TODO: Evaluate if this is suitable for page runs
+
+// Default page size for paged allocators, e.g., 2MB. Can be made configurable.
+// For now, KV cache related allocations would align to this.
+#define GGML_ALLOCATOR_DEFAULT_PAGE_SIZE (2 * 1024 * 1024)
 
 //#define GGML_ALLOCATOR_DEBUG
 
@@ -80,45 +84,74 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
 
     assert(align && !(align & (align - 1))); // power of 2
 
+    // TODO: Determine if this tallocr instance should be paged.
+    // This might depend on the buffer type or a flag.
+    // For now, assume not paged by default for ggml_tallocr.
+    // If a specific ggml_tallocr needs to ensure its allocations are page-sized multiples,
+    // a wrapper or a modified creation method would be needed.
+    // Let's assume page_size_for_allocs = 0 means standard behavior.
+    // A non-zero value would enforce page-multiple sizing.
+    size_t page_size_for_allocs = 0; // Example: Could be passed or derived from buffer properties
+
     struct ggml_tallocr talloc = (struct ggml_tallocr) {
-        /*.buffer    = */ buffer,
-        /*.base      = */ base,
-        /*.alignment = */ align,
-        /*.offset    = */ aligned_offset(base, 0, align),
+        /*.buffer               = */ buffer,
+        /*.base                 = */ base,
+        /*.alignment            = */ align,
+        /*.offset               = */ aligned_offset(base, 0, align),
+        /*.page_size_for_allocs = */ page_size_for_allocs, // if > 0, allocs are rounded up to this size
     };
     return talloc;
 }
 
 enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
-    size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
-    size = GGML_PAD(size, talloc->alignment);
+    size_t tensor_alloc_size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
+    size_t effective_size = tensor_alloc_size;
 
-    if (talloc->offset + size > ggml_backend_buffer_get_size(talloc->buffer)) {
-        GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (needed %zu, available %zu)\n",
-                __func__, tensor->name, size, ggml_backend_buffer_get_size(talloc->buffer) - talloc->offset);
+    if (talloc->page_size_for_allocs > 0) {
+        // If this allocator instance is designated to make page-sized allocations,
+        // round up the tensor's size to the nearest multiple of that page size.
+        effective_size = ((tensor_alloc_size + talloc->page_size_for_allocs - 1) / talloc->page_size_for_allocs) * talloc->page_size_for_allocs;
+    }
+
+    // Then, ensure the effective_size is padded to the base alignment requirement.
+    effective_size = GGML_PAD(effective_size, talloc->alignment);
+
+    if (talloc->offset + effective_size > ggml_backend_buffer_get_size(talloc->buffer)) {
+        GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (tensor size %zu, effective size %zu, needed %zu, available %zu)\n",
+                __func__, tensor->name, tensor_alloc_size, effective_size, effective_size, ggml_backend_buffer_get_size(talloc->buffer) - talloc->offset);
         GGML_ABORT("not enough space in the buffer");
     }
 
     void * addr = (char *)ggml_backend_buffer_get_base(talloc->buffer) + talloc->offset;
-    talloc->offset += size;
+    talloc->offset += effective_size;
 
-    assert(((uintptr_t)addr % talloc->alignment) == 0);
+    assert(((uintptr_t)addr % talloc->alignment) == 0); // Base alignment check
+    // If paged, and page_size_for_allocs is a multiple of alignment (usually is), this should hold.
+    // Also, individual tensors within this effective_size block need to be aligned.
+    // ggml_backend_tensor_alloc handles setting tensor->data, which should respect internal alignment needs
+    // if the start `addr` is sufficiently aligned.
 
     return ggml_backend_tensor_alloc(talloc->buffer, tensor, addr);
 }
 
 // dynamic tensor allocator
 
-struct free_block {
-    size_t offset;
-    size_t size;
+// Represents a run of free pages or a contiguous block of memory.
+// When used for paged allocation, 'offset' can be page index and 'size' can be number of pages.
+// For byte-based allocation, 'offset' is byte offset and 'size' is bytes.
+struct free_block { // Renaming to free_run might be clearer if exclusively pages
+    size_t offset; // Byte offset or page index
+    size_t size;   // Size in bytes or number of pages
 };
 
 struct ggml_dyn_tallocr {
-    size_t alignment;
-    int n_free_blocks;
+    size_t alignment; // For byte-based alignment of allocations
+    int n_free_blocks; // Number of free runs/blocks
     struct free_block free_blocks[MAX_FREE_BLOCKS];
-    size_t max_size;
+    size_t max_size;   // Maximum size reached by this allocator (bytes)
+
+    bool paged;      // If true, this allocator manages pages
+    size_t page_size;  // Page size in bytes, valid if paged is true
 
 #ifdef GGML_ALLOCATOR_DEBUG
     struct {
@@ -151,51 +184,74 @@ static void remove_allocated_tensor(struct ggml_dyn_tallocr * alloc, size_t offs
 #endif
 
 static size_t ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * alloc, size_t size, const struct ggml_tensor * tensor) {
-    size = aligned_offset(NULL, size, alloc->alignment);
+    size_t request_size = size; // Original requested size in bytes
+    size_t alloc_unit_size; // The unit of allocation (bytes or pages)
+    size_t num_alloc_units; // Number of allocation units (e.g. number of pages)
 
-    AT_PRINTF("%s: allocating %s (%zu bytes) - ", __func__, tensor->name, size);
+    if (alloc->paged) {
+        // Align size to page size for page-based allocation
+        // All allocations in paged mode are in multiples of page_size
+        alloc_unit_size = alloc->page_size;
+        num_alloc_units = (size + alloc->page_size - 1) / alloc->page_size;
+        size = num_alloc_units * alloc->page_size; // Total bytes to be occupied by pages
+        // The returned offset will be page-aligned by nature.
+        // Individual tensor alignment within a page needs separate handling if tensors are smaller than pages.
+        // For KV cache, tensors will likely be page-sized or occupy full pages.
+    } else {
+        // Byte-based allocation, ensure alignment
+        size = aligned_offset(NULL, size, alloc->alignment);
+        alloc_unit_size = 1; // Unit is bytes
+        num_alloc_units = size;
+    }
 
-    size_t max_avail = 0;
+    AT_PRINTF("%s: allocating %s (requested %zu, effective %zu bytes, paged: %d) - ", __func__, tensor->name, request_size, size, alloc->paged);
 
-    // find the best fitting free block besides the last block
-    int best_fit_block = -1;
-    size_t best_fit_size = SIZE_MAX;
-    for (int i = 0; i < alloc->n_free_blocks - 1; i++) {
+    size_t max_avail = 0; // Max available units (bytes or pages)
+
+    // find the best fitting free block
+    int best_fit_block_idx = -1;
+    size_t best_fit_block_size = SIZE_MAX; // In units (bytes or pages)
+
+    for (int i = 0; i < alloc->n_free_blocks; i++) {
         struct free_block * block = &alloc->free_blocks[i];
-        max_avail = MAX(max_avail, block->size);
-        if (block->size >= size && block->size <= best_fit_size) {
-            best_fit_block = i;
-            best_fit_size = block->size;
+        max_avail = MAX(max_avail, block->size); // block->size is in units
+        // block->size is num_pages if paged, or num_bytes if not paged
+        // num_alloc_units is num_pages_needed if paged, or num_bytes_aligned if not paged
+        if (block->size >= num_alloc_units && block->size <= best_fit_block_size) {
+            best_fit_block_idx = i;
+            best_fit_block_size = block->size;
         }
     }
 
-    if (best_fit_block == -1) {
-        // the last block is our last resort
-        struct free_block * block = &alloc->free_blocks[alloc->n_free_blocks - 1];
-        max_avail = MAX(max_avail, block->size);
-        if (block->size >= size) {
-            best_fit_block = alloc->n_free_blocks - 1;
-        } else {
-            // this should never happen
-            GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %zu bytes, largest block available %zu bytes\n",
-                    __func__, size, max_avail);
-            GGML_ABORT("not enough space in the buffer");
-        }
+    if (best_fit_block_idx == -1) {
+        GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %zu %s for %s (requested %zu bytes), largest block available %zu %s\n",
+                __func__, num_alloc_units, alloc->paged ? "pages" : "bytes",
+                tensor->name, request_size,
+                max_avail, alloc->paged ? "pages" : "bytes");
+        GGML_ABORT("not enough space in the buffer");
     }
 
-    struct free_block * block = &alloc->free_blocks[best_fit_block];
-    size_t offset = block->offset;
-    block->offset = offset + size;
-    block->size -= size;
-    if (block->size == 0) {
+    struct free_block * block_to_alloc_from = &alloc->free_blocks[best_fit_block_idx];
+    size_t actual_offset; // This will always be in bytes
+
+    if (alloc->paged) {
+        actual_offset = block_to_alloc_from->offset * alloc->page_size; // block_to_alloc_from->offset is page index
+        block_to_alloc_from->offset += num_alloc_units; // Advance page index
+    } else {
+        actual_offset = block_to_alloc_from->offset; // block_to_alloc_from->offset is byte offset
+        block_to_alloc_from->offset += num_alloc_units; // Advance byte offset (size = num_alloc_units here)
+    }
+    block_to_alloc_from->size -= num_alloc_units; // Reduce size in units (pages or bytes)
+
+    if (block_to_alloc_from->size == 0) {
         // remove block if empty
         alloc->n_free_blocks--;
-        for (int j = best_fit_block; j < alloc->n_free_blocks; j++) {
+        for (int j = best_fit_block_idx; j < alloc->n_free_blocks; j++) {
             alloc->free_blocks[j] = alloc->free_blocks[j+1];
         }
     }
 
-    AT_PRINTF("block %d, offset %zu\n", best_fit_block, offset);
+    AT_PRINTF("block %d, offset %zu (bytes)\n", best_fit_block_idx, actual_offset);
 
 #ifdef GGML_ALLOCATOR_DEBUG
     add_allocated_tensor(alloc, offset, tensor);
@@ -227,29 +283,40 @@ static size_t ggml_dyn_tallocr_alloc(struct ggml_dyn_tallocr * alloc, size_t siz
     }
 #endif
 
-    alloc->max_size = MAX(alloc->max_size, offset + size);
+    alloc->max_size = MAX(alloc->max_size, actual_offset + size); // size is effective_size in bytes
 
-    return offset;
+    return actual_offset; // Return byte offset
 
     GGML_UNUSED(tensor);
 }
 
 // this is a very naive implementation, but for our case the number of free blocks should be very small
-static void ggml_dyn_tallocr_free_tensor(struct ggml_dyn_tallocr * alloc, size_t offset, size_t size, const struct ggml_tensor * tensor) {
-    size = aligned_offset(NULL, size, alloc->alignment);
+static void ggml_dyn_tallocr_free_tensor(struct ggml_dyn_tallocr * alloc, size_t byte_offset, size_t original_size_bytes, const struct ggml_tensor * tensor) {
+    size_t size_in_units; // bytes or pages
+    size_t offset_in_units; // byte offset or page index
 
-    AT_PRINTF("%s: freeing %s at %zu (%zu bytes) - n_free_blocks = %d\n", __func__, tensor->name, offset, size, alloc->n_free_blocks);
+    if (alloc->paged) {
+        size_in_units = (original_size_bytes + alloc->page_size - 1) / alloc->page_size;
+        offset_in_units = byte_offset / alloc->page_size;
+        GGML_ASSERT(byte_offset % alloc->page_size == 0); // Must be page aligned for paged allocator
+    } else {
+        size_in_units = aligned_offset(NULL, original_size_bytes, alloc->alignment);
+        offset_in_units = byte_offset;
+    }
+
+    AT_PRINTF("%s: freeing %s at %zu (bytes), size %zu (bytes), %zu %s - n_free_blocks = %d\n",
+        __func__, tensor->name, byte_offset, original_size_bytes, size_in_units, alloc->paged ? "pages" : "bytes", alloc->n_free_blocks);
 
 #ifdef GGML_ALLOCATOR_DEBUG
     remove_allocated_tensor(alloc, offset, tensor);
 #endif
 
-    // see if we can merge with an existing block
+    // see if we can merge with an existing block (logic assumes sorted free_blocks by offset_in_units)
     for (int i = 0; i < alloc->n_free_blocks; i++) {
         struct free_block * block = &alloc->free_blocks[i];
-        // check if ptr is at the end of the block
-        if (block->offset + block->size == offset) {
-            block->size += size;
+        // check if freed block is adjacent to the end of the current free block
+        if (block->offset + block->size == offset_in_units) {
+            block->size += size_in_units;
             // check if we can merge with the next block
             if (i < alloc->n_free_blocks - 1 && block->offset + block->size == alloc->free_blocks[i+1].offset) {
                 block->size += alloc->free_blocks[i+1].size;
@@ -260,10 +327,10 @@ static void ggml_dyn_tallocr_free_tensor(struct ggml_dyn_tallocr * alloc, size_t
             }
             return;
         }
-        // check if ptr is at the beginning of the block
-        if (offset + size == block->offset) {
-            block->offset = offset;
-            block->size += size;
+        // check if freed block is adjacent to the beginning of the current free block
+        if (offset_in_units + size_in_units == block->offset) {
+            block->offset = offset_in_units;
+            block->size += size_in_units;
             // check if we can merge with the previous block
             if (i > 0 && alloc->free_blocks[i-1].offset + alloc->free_blocks[i-1].size == block->offset) {
                 alloc->free_blocks[i-1].size += block->size;
@@ -275,11 +342,11 @@ static void ggml_dyn_tallocr_free_tensor(struct ggml_dyn_tallocr * alloc, size_t
             return;
         }
     }
-    // otherwise, add a new block
+
+    // otherwise, add a new block, keeping blocks sorted by offset_in_units
     GGML_ASSERT(alloc->n_free_blocks < MAX_FREE_BLOCKS && "out of free blocks");
-    // insert the new block in the correct position to keep the array sorted by address (to make merging blocks faster)
     int insert_pos = 0;
-    while (insert_pos < alloc->n_free_blocks && alloc->free_blocks[insert_pos].offset < offset) {
+    while (insert_pos < alloc->n_free_blocks && alloc->free_blocks[insert_pos].offset < offset_in_units) {
         insert_pos++;
     }
     // shift all blocks from insert_pos onward to make room for the new block
@@ -287,8 +354,8 @@ static void ggml_dyn_tallocr_free_tensor(struct ggml_dyn_tallocr * alloc, size_t
         alloc->free_blocks[i] = alloc->free_blocks[i-1];
     }
     // insert the new block
-    alloc->free_blocks[insert_pos].offset = offset;
-    alloc->free_blocks[insert_pos].size = size;
+    alloc->free_blocks[insert_pos].offset = offset_in_units;
+    alloc->free_blocks[insert_pos].size = size_in_units;
     alloc->n_free_blocks++;
 
     GGML_UNUSED(tensor);
@@ -296,9 +363,16 @@ static void ggml_dyn_tallocr_free_tensor(struct ggml_dyn_tallocr * alloc, size_t
 
 static void ggml_dyn_tallocr_reset(struct ggml_dyn_tallocr * alloc) {
     alloc->n_free_blocks = 1;
-    alloc->free_blocks[0].offset = 0;
-    alloc->free_blocks[0].size = SIZE_MAX/2; // restrict maximum size of a measure allocator to half size_t max to avoid overflows
-    alloc->max_size = 0;
+    // free_blocks[0].offset is 0 (either page index 0 or byte offset 0)
+    // free_blocks[0].size is "all available space" in relevant units (pages or bytes)
+    // For a measure allocator, total size is not known upfront.
+    // It's set to a very large value and max_size tracks actual usage.
+    // If paged, this initial size should represent max possible pages.
+    // However, since total buffer size isn't known here, we use a large number.
+    // The actual number of pages will be implicitly limited by max_size / page_size later.
+    alloc->free_blocks[0].offset = 0; // Page index 0 or byte offset 0
+    alloc->free_blocks[0].size = SIZE_MAX / (alloc->paged ? alloc->page_size : 1) / 2; // Max units (pages or bytes)
+    alloc->max_size = 0; // Max bytes used
 
 #ifdef GGML_ALLOCATOR_DEBUG
     for (int i = 0; i < 1024; i++) {
@@ -307,7 +381,11 @@ static void ggml_dyn_tallocr_reset(struct ggml_dyn_tallocr * alloc) {
 #endif
 }
 
-static struct ggml_dyn_tallocr * ggml_dyn_tallocr_new(size_t alignment) {
+// Creates a new dynamic tensor allocator.
+// Can be either byte-based or paged.
+// For paged allocator, pass paged=true and page_size. Alignment is still used for base alignment.
+// For byte-based allocator, pass paged=false, page_size is ignored (can be 0).
+static struct ggml_dyn_tallocr * ggml_dyn_tallocr_new_impl(size_t alignment, bool paged, size_t page_size_param) {
     struct ggml_dyn_tallocr * alloc = (struct ggml_dyn_tallocr *)malloc(sizeof(struct ggml_dyn_tallocr));
 
     *alloc = (struct ggml_dyn_tallocr) {
@@ -315,15 +393,36 @@ static struct ggml_dyn_tallocr * ggml_dyn_tallocr_new(size_t alignment) {
         /*.n_free_blocks = */ 0,
         /*.free_blocks   = */ {{0}},
         /*.max_size      = */ 0,
+        /*.paged         = */ paged,
+        /*.page_size     = */ paged ? page_size_param : 1, // Ensure page_size is valid if paged
 #ifdef GGML_ALLOCATOR_DEBUG
         /*.allocated_tensors = */ {{0}},
 #endif
     };
+    if (alloc->paged && alloc->page_size == 0) {
+        GGML_LOG_WARN("%s: paged allocator created with page_size=0. Defaulting to %zu\n", __func__, (size_t)GGML_ALLOCATOR_DEFAULT_PAGE_SIZE);
+        alloc->page_size = GGML_ALLOCATOR_DEFAULT_PAGE_SIZE;
+    }
+
 
     ggml_dyn_tallocr_reset(alloc);
 
     return alloc;
 }
+
+// Public constructor for a standard (byte-based) dynamic allocator
+struct ggml_dyn_tallocr * ggml_dyn_tallocr_new(size_t alignment) {
+    return ggml_dyn_tallocr_new_impl(alignment, false, 0);
+}
+
+// Public constructor for a paged dynamic allocator
+// TODO: Expose this via header if needed, or make it an option in ggml_gallocr_new_n
+// For now, it's internal, and ggml_gallocr can be modified to create one of these
+// if a buffer_type indicates it needs paged allocation.
+GGML_CALL struct ggml_dyn_tallocr * ggml_dyn_tallocr_new_paged(size_t alignment, size_t page_size) {
+    return ggml_dyn_tallocr_new_impl(alignment, true, page_size == 0 ? GGML_ALLOCATOR_DEFAULT_PAGE_SIZE : page_size);
+}
+
 
 static void ggml_dyn_tallocr_free(struct ggml_dyn_tallocr * alloc) {
     free(alloc);
@@ -404,6 +503,20 @@ ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs
 
         if (galloc->buf_tallocs[i] == NULL) {
             size_t alignment = ggml_backend_buft_get_alignment(bufts[i]);
+                // TODO: Here we need to decide if the buffer type `bufts[i]` implies paged allocation.
+                // This requires extending ggml_backend_buffer_type_t or having a parallel flags array.
+                // For now, assume non-paged by default.
+                // If KV cache tensors are assigned to a specific buffer_id that IS paged, then
+                // galloc->buf_tallocs[buffer_id] should be a paged allocator.
+                // This implies ggml_gallocr_new_n might need more info about which bufts are paged.
+                // Let's assume for now all are non-paged here.
+                // The actual paged allocator would be created and used by llama.cpp's memory management for KV.
+                // However, if ggml-alloc itself needs to manage paged KV tensors within a graph, this needs to change.
+                // The subtask implies modifying ggml_dyn_tallocr for paged KV. So, if a KV tensor is part of a graph
+                // and computed by ggml, its buffer (if not pre-allocated by CPU backend) needs this.
+
+                // For now, to make progress, let's assume standard allocator here.
+                // The paged variant `ggml_dyn_tallocr_new_paged` can be used explicitly where needed.
             galloc->buf_tallocs[i] = ggml_dyn_tallocr_new(alignment);
         }
     }

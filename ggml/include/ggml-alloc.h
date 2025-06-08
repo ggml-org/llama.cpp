@@ -16,9 +16,10 @@ struct ggml_tallocr {
     void * base;
     size_t alignment;
     size_t offset;
+    size_t page_size_for_allocs; // if > 0, allocations by this linear allocator are rounded up to this size
 };
 
-GGML_API struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer);
+GGML_API struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer); // User should ensure page_size_for_allocs is set if needed after creation, or a new constructor variant.
 GGML_API enum ggml_status    ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor);
 
 // Graph allocator
@@ -57,8 +58,19 @@ GGML_API bool ggml_gallocr_reserve(ggml_gallocr_t galloc, struct ggml_cgraph * g
 GGML_API bool ggml_gallocr_reserve_n(
     ggml_gallocr_t galloc,
     struct ggml_cgraph * graph,
-    const int * node_buffer_ids,
-    const int * leaf_buffer_ids);
+    const int * node_buffer_ids, // maps graph node index to buffer_id
+    const int * leaf_buffer_ids); // maps graph leaf index to buffer_id
+
+// internal measure allocator structure is defined in ggml-alloc.c, not exported directly
+struct ggml_dyn_tallocr;
+
+// Creates a new dynamic tensor allocator that manages allocations in pages.
+// alignment: base alignment for the start of any allocated block (typically a page multiple itself or derived from page_size).
+// page_size: the size of pages to manage. If 0, a default page size will be used.
+GGML_API struct ggml_dyn_tallocr * ggml_dyn_tallocr_new_paged(size_t alignment, size_t page_size);
+// Note: ggml_dyn_tallocr_new (for byte-based allocation) is already implicitly declared via its use in ggml_gallocr,
+// but its definition is in ggml-alloc.c. To be fully explicit, it could be added here too if it were public.
+// For now, only adding the new paged constructor.
 
 // automatic reallocation if the topology changes when using a single buffer
 // returns false if using multiple buffers and a re-allocation is needed (call ggml_gallocr_reserve_n first to set the node buffers)

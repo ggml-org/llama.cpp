@@ -26,6 +26,9 @@ extern "C" {
         size_t                (*get_alloc_size)(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor);
         // (optional) check if tensor data is in host memory and uses standard ggml tensor layout (defaults to false)
         bool                  (*is_host)       (ggml_backend_buffer_type_t buft);
+        // (optional) Returns page size if this buffer type should use a paged allocator, 0 otherwise.
+        // If NULL, it's assumed not paged (returns 0).
+        size_t                (*get_page_size) (ggml_backend_buffer_type_t buft);
     };
 
     struct ggml_backend_buffer_type {

@@ -11,6 +11,62 @@ __embed_ggml-common.h__
 
 using namespace metal;
 
+// --- Paged KV Cache Structures for Metal ---
+
+struct PagedKVTokenMapping_metal {
+    int32_t page_idx;               // Index of the page in the page_pool buffer
+    int32_t offset_in_page_elements; // Offset in terms of elements from the start of the page's data area
+};
+
+// Scalar members of PagedKVSequenceView_metal, to be passed via setBytes by the host
+struct PagedKVSequenceViewScalars_metal {
+    uint32_t sequence_length;          // Logical length of the sequence (number of tokens)
+    uint16_t num_kv_heads_total;     // Total K/V heads for this layer (for GQA calculations)
+    uint16_t head_dim_elements;      // Dimension of a single head in elements (e.g., float16 count)
+    uint16_t element_size_bytes;     // Size of one element in bytes (e.g., 2 for half)
+    // uint16_t page_size_bytes; // Size of a physical page in bytes (potentially useful for debug/bounds)
+    // uint16_t v_block_start_offset_elements; // If V data follows K data in the same page element sequence for a token
+};
+
+// Device helper to get a pointer to the data for a specific head of a specific token.
+// This function now takes buffer pointers and the scalar struct as arguments.
+template<typename T> // T is the element type, e.g. half, float, or block_q8_0
+METAL_FUNC const device T* get_paged_kv_head_ptr_metal(
+    device const PagedKVTokenMapping_metal* token_mappings,
+    device const device void* const* page_pool, // Array of (device void *)
+    constant PagedKVSequenceViewScalars_metal& scalars,
+    uint logical_token_idx,
+    ushort head_idx_abs // Absolute K/V head index
+) {
+    if (logical_token_idx >= scalars.sequence_length) {
+        // This should be guarded by the calling kernel code.
+        // Consider what to return or if this is an invalid state.
+        // For now, behavior is undefined if out of bounds.
+        return nullptr;
+    }
+
+    PagedKVTokenMapping_metal mapping = token_mappings[logical_token_idx];
+
+    // TODO: Add bounds check for mapping.page_idx if number of pages can be passed to scalars.
+    // if (mapping.page_idx < 0 || mapping.page_idx >= num_physical_pages_in_pool) { return nullptr; }
+
+    device const uint8_t* page_base_byte_ptr = (device const uint8_t*)page_pool[mapping.page_idx];
+
+    // `mapping.offset_in_page_elements` is the offset from the start of the page's usable data area
+    // to the beginning of the data for `logical_token_idx` (i.e., start of its first head, head 0).
+    size_t token_base_offset_bytes = (size_t)mapping.offset_in_page_elements * scalars.element_size_bytes;
+
+    // Data for a token is typically [head0, head1, ..., headN-1].
+    // Each head is `scalars.head_dim_elements` wide.
+    size_t head_stride_bytes = (size_t)scalars.head_dim_elements * scalars.element_size_bytes;
+    size_t target_head_offset_bytes = (size_t)head_idx_abs * head_stride_bytes;
+
+    return (device const T*)(page_base_byte_ptr + token_base_offset_bytes + target_head_offset_bytes);
+}
+
+// --- End Paged KV Cache Structures ---
+
+
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
 #define SWAP(x, y) { auto tmp = (x); (x) = (y); (y) = tmp; }
@@ -6873,6 +6929,67 @@ template [[host_name("kernel_mul_mm_id_iq1_s_f16")]]   kernel mul_mm_id kernel_m
 template [[host_name("kernel_mul_mm_id_iq1_m_f16")]]   kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   block_iq1_m,   QK_NL, dequantize_iq1_m>;
 template [[host_name("kernel_mul_mm_id_iq4_nl_f16")]]  kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   block_iq4_nl,  2,     dequantize_iq4_nl>;
 template [[host_name("kernel_mul_mm_id_iq4_xs_f16")]]  kernel mul_mm_id kernel_mul_mm_id<half,   half4x4,   simdgroup_half8x8,   block_iq4_xs,  QK_NL, dequantize_iq4_xs>;
+
+// --- Paged Flash Attention Kernel Signature Sketch ---
+// Example: Paged version of kernel_flash_attn_ext_f16_h128
+// Original might be: kernel_flash_attn_ext<..., half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 128, 128>
+// Paged version signature:
+template<
+    typename q_t, typename q4_t, typename q8x8_t, // Query types
+    // K/V types in shared memory are not directly relevant to signature if gather happens first
+    // typename k_t, typename k4x4_t, typename k8x8_t,
+    // typename v_t, typename v4x4_t, typename v8x8_t,
+    typename qk_t, typename qk8x8_t, // QK types
+    typename s_t, typename s8x8_t,   // Softmax types
+    typename o_t, typename o4_t, typename o8x8_t, // Output types
+    // K/V device memory types (from paged view) and dequant functions are now internal to gather
+    short DK, short DV, short Q_tiles_per_tg, short KV_tiles_per_sg, short C_cache_lines_per_tg>
+kernel void kernel_flash_attn_ext_f16_h128_paged(
+        constant ggml_metal_kargs_flash_attn_ext & args,
+        device const char * q_data_in, // Q data remains contiguous
+        PagedKVSequenceView_metal k_view, // Paged K
+        PagedKVSequenceView_metal v_view, // Paged V
+        device const char * mask_data_in, // Mask data
+        device       char * dst_data_out, // Output
+        threadgroup  half * shmem_f16 [[threadgroup(0)]],
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3   ntg[[threads_per_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
+
+    // 1. Load Q into shared memory (sq) - similar to original kernel.
+    //    device const q_t * q_ptr = ... (derived from q_data_in)
+    //    ... load into shmem_f16 ...
+
+    // 2. Loop over KV cache blocks (ic0 from 0 to k_view.sequence_length)
+    //    For each KV block:
+    //    a. Gather K data for the current block of tokens into shared memory (e.g. sk)
+    //       Loop `token_in_kv_block` from 0 to `KV_tiles_per_sg * C_cache_lines_per_tg` (or similar block size)
+    //         `logical_token_idx = ic0 + token_in_kv_block;`
+    //         If `logical_token_idx < k_view.sequence_length`:
+    //           Loop `head_dim_idx` from 0 to `DK` (K head dimension)
+    //             `k_element_ptr = get_paged_kv_head_ptr_metal<half>(k_view, logical_token_idx, current_kv_head_idx);`
+    //             `shared_k_mem[...idx based on token_in_kv_block and head_dim_idx...] = k_element_ptr[head_dim_idx_in_token];`
+    //             (This needs careful indexing and thread mapping for efficient gather)
+    //    b. Gather V data similarly into shared memory (e.g. sv) using v_view.
+    //    c. `threadgroup_barrier(mem_flags::mem_threadgroup);`
+    //    d. Perform QK^T matrix multiplication using sq and sk.
+    //    e. Apply softmax.
+    //    f. Multiply by V (from sv) to get O_partial.
+    //    g. Accumulate O_partial into local registers (lo).
+
+    // 3. Combine partial O results and write to dst_data_out.
+
+    if (tgpig.x == 0 && tgpig.y == 0 && tgpig.z == 0 && tiisg == 0) {
+        printf("SKETCH: Metal kernel_flash_attn_ext_f16_h128_paged launched.\n");
+        printf("K_view: tokens %u, page_pool %p, mappings %p, heads %u, head_dim %u\n",
+            k_view.sequence_length, k_view.page_pool, k_view.token_mappings, k_view.num_kv_heads_total, k_view.head_dim_elements);
+    }
+    // Suppress unused warnings
+    (void)args; (void)q_data_in; (void)v_view; (void)mask_data_in; (void)dst_data_out;
+    (void)shmem_f16; (void)ntg; (void)sgitg;
+}
+// --- End Paged Flash Attention Kernel Sketch ---
 
 
 //

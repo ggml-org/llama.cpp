@@ -1,5 +1,6 @@
 #include "common.cuh"
 #include "fattn-common.cuh"
+#include "paged_attn_common.cuh" // For paged view structures
 
 template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap> // D == head size
 #ifndef GGML_USE_HIP
@@ -351,6 +352,240 @@ static __global__ void flash_attn_vec_ext_f16(
     NO_DEVICE_CODE;
 #endif // defined(FLASH_ATTN_AVAILABLE) && defined(FP16_AVAILABLE)
 }
+
+
+// Paged version of the F16 vector flash attention kernel
+template<int D, int ncols, ggml_type type_K_dummy, ggml_type type_V_dummy, bool use_logit_softcap> // D == head size
+#ifndef GGML_USE_HIP
+__launch_bounds__(D, 1) // Max threads per block is D
+#endif
+static __global__ void flash_attn_vec_ext_f16_paged(
+        const char * __restrict__ Q_data, // Q data (contiguous)
+        const paged_kv_sequence_view_gpu k_view, // Paged K view
+        const paged_kv_sequence_view_gpu v_view, // Paged V view
+        const char * __restrict__ mask_data, // Mask data (contiguous)
+        float      * __restrict__ dst_data,  // Output
+        float2     * __restrict__ dst_meta, // For fixup/metadata if stream_k or parallel_blocks > 1
+        const float scale,
+        const float max_bias,
+        const float m0, const float m1,
+        const uint32_t n_head_log2,
+        const float logit_softcap,
+        // Q dimensions
+        const int q_ne0_dkq,    // Q head dim (DKQ, matches template D)
+        const int q_ne1_seqlen, // Q seq len (number of queries this kernel call processes for this head)
+        const int q_ne2_nhead,  // Q num heads (global index for this head in blockIdx.z)
+        // const int q_ne3_batch, (assumed 1)
+        // K metadata (seq_len from k_view.num_tokens_in_logical_sequence, head_dim from k_view.k_head_size_elements)
+        // const int k_ne0_dkq,
+        // const int k_ne1_seqlen_kv,
+        const int k_ne2_nhead_kv, // Total K/V heads for GQA mapping (k_view.num_k_heads_total)
+        // V metadata (similar to K)
+        // const int v_ne0_dv,
+        // const int v_ne1_seqlen_kv,
+        // const int v_ne2_nhead_kv,
+        // Mask dimensions/strides
+        const int mask_ne1_qlen,  // Mask dim for k_seq_len (or broadcastable) - passed as ne31 in original
+        const int mask_nb1_bytes, // Mask stride for k_seq_len dim (bytes) - passed as nb31 in original
+        // Q strides (elements) - these are for the Q_data pointer
+        const int q_nb1_elements, // Stride for Q's seq_len dim
+        const int q_nb2_elements, // Stride for Q's num_heads dim
+        // Dst strides (elements)
+        const int dst_nb1_elements, // Stride for Dst's seq_len dim
+        const int dst_nb2_elements  // Stride for Dst's num_heads dim
+        // K/V strides are not needed as access is via paged views
+) {
+#if defined(FLASH_ATTN_AVAILABLE) && defined(FP16_AVAILABLE)
+    // Suppress unused warnings for dummy template args if not used
+    (void)type_K_dummy; (void)type_V_dummy;
+
+    // const int D_actual = q_ne0_dkq; // Should match template D
+    // const int q_seq_len_processed_per_block = ncols; // From template ncols
+
+    // Example: Thread indices
+    // const int tid_in_head_dim = threadIdx.x; // 0 to D-1 (if blockDim.x = D)
+    // const int q_token_idx_in_tile = threadIdx.y; // 0 to ncols-1 (if blockDim.y = ncols)
+    // const int q_head_global_idx = blockIdx.z; // Global head index
+
+    // --- Gather K/V data for the current Q token (or Q tile element) ---
+    // Vector kernels often process one Q element against all K/V elements.
+    // For a given Q_i, iterate k_idx from 0 to k_view.num_tokens_in_logical_sequence:
+    //   k_vec_ptr = get_paged_kv_data_ptr_cuda<half>(&k_view, k_idx, current_k_head_for_q_head, false);
+    //   v_vec_ptr = get_paged_kv_data_ptr_cuda<half>(&v_view, k_idx, current_k_head_for_q_head, true);
+    //   Load elements from k_vec_ptr and v_vec_ptr into registers.
+    //   Perform dot product for Q_i * K_k, apply scale, mask, softmax (potentially partial), multiply by V_k.
+
+    if (blockIdx.x == 0 && threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0) {
+        printf("SKETCH: __global__ flash_attn_vec_ext_f16_paged kernel launched. Q_head_dim %d, Q_seq_len %d, K_seq_len %d\n",
+            q_ne0_dkq, q_ne1_seqlen, k_view.num_tokens_in_logical_sequence);
+        printf("K_view: dtype %d, k_heads %d, k_dim %d, v_heads %d, v_dim %d, v_offset_bytes %u, elem_size %u\n",
+            (int)k_view.dtype, k_view.num_k_heads_total, k_view.k_head_size_elements,
+            k_view.num_v_heads_total, k_view.v_head_size_elements,
+            (unsigned)k_view.v_block_start_offset_bytes, (unsigned)k_view.element_size_bytes
+        );
+    }
+    // Suppress unused warnings
+    (void)Q_data; (void)mask_data; (void)dst_data; (void)dst_meta;
+    (void)scale; (void)max_bias; (void)m0; (void)m1; (void)n_head_log2; (void)logit_softcap;
+    (void)q_ne0_dkq; (void)q_ne1_seqlen; (void)q_ne2_nhead; (void)k_ne2_nhead;
+    (void)mask_ne1_qlen; (void)mask_nb1_bytes;
+    (void)q_nb1_elements; (void)q_nb2_elements; (void)dst_nb1_elements; (void)dst_nb2_elements;
+#if defined(FLASH_ATTN_AVAILABLE) && defined(FP16_AVAILABLE)
+
+    // Constants for kernel behavior
+    constexpr vec_dot_KQ_f16_t vec_dot_KQ_fn = get_vec_dot_KQ_f16<D>(k_view.dtype); // Get appropriate dot product function
+    constexpr bool Q_is_q8_1_for_dot = k_view.dtype != GGML_TYPE_F16; // Q needs to be q8_1 if K is quantized for vec_dot_KQ
+    constexpr dequantize_1_f16_t dequantize_v_fn = get_dequantize_1_f16(v_view.dtype);
+
+    // Thread indexing: each thread processes one Q element against all K/V elements.
+    // blockIdx.x corresponds to the Q element index within a head and batch.
+    // blockIdx.y could be used if ncols > 1 (multiple Q elements per thread block).
+    // blockIdx.z corresponds to batch_idx * num_q_heads + q_head_idx.
+
+    const int current_q_token_idx_in_block = blockIdx.x * ncols + threadIdx.y; // If ncols > 1
+    // If ncols = 1 (typical for vector path if host iterates Q sequence):
+    // const int current_q_token_idx_in_block = blockIdx.x; // This is the i-th Q vector this block processes.
+    // This assumes gridDim.x is q_seq_len / ncols.
+    // For simplicity, let's assume ncols = 1 (host iterates Q sequence for vector kernels).
+    // So, blockIdx.x is the current Q token index (0 to q_ne1_seqlen - 1).
+    // And this kernel instance computes one full output vector for one Q.
+
+    if (current_q_token_idx_in_block >= q_ne1_seqlen) {
+        return;
+    }
+
+    const int q_batch_head_idx = blockIdx.z; // Global head index (batch_idx * q_ne2_nhead + head_idx)
+    const int gqa_ratio = q_ne2_nhead / k_view.num_k_heads_total;
+    const int actual_kv_head_idx = q_batch_head_idx / gqa_ratio;
+
+    // Load Q vector for the current Q token and head into registers
+    // Q_data points to start of Q tensor. Strides are in elements.
+    // Q is F32, but kernel is F16, so Q is converted to F16 by host or needs conversion here.
+    // Assuming Q is pre-converted to F16 if this is an F16 kernel, or using float for Q and half for K/V.
+    // The original kernels take `const char * Q` and cast. Let's assume Q is F32 as per original vec kernels.
+    const float* q_vec_ptr = (const float*)(Q_data +
+                                (size_t)q_batch_head_idx * q_nb2_elements * sizeof(float) +       // Offset to current head
+                                (size_t)current_q_token_idx_in_block * q_nb1_elements * sizeof(float)); // Offset to current Q token in sequence
+
+    // For Q_q8_1 path in vec_dot_KQ, Q needs to be quantized or prepared.
+    // This sketch assumes Q is F32 and K is F16 for simplicity of dot product example.
+    // If K is quantized, Q must be prepared for ggml_cuda_dp4a.
+    // For now, let's use a simplified F16 dot product sketch.
+
+    half q_reg[D/2]; // Assuming D is head_dim, store as half2
+    if (!Q_is_q8_1_for_dot) { // If K is F16, Q should be F16 for f16 dot product
+        for(int i = threadIdx.x; i < D/2; i += blockDim.x) {
+            float2 q_f2 = ((const float2*)q_vec_ptr)[i];
+            q_reg[i] = make_half2(q_f2.x, q_f2.y);
+        }
+    } else {
+        // TODO: If K is quantized, Q needs to be quantized to Q8_1 for vec_dot_KQ.
+        // This involves quantizing q_vec_ptr into registers Q_i32_reg and Q_ds_reg.
+        // This part is complex and omitted in this sketch.
+    }
+
+    half max_qk_val = -HALF_MAX_HALF;
+    half sum_qk_exp_val = 0.0h;
+
+    // Pass 1: Calculate max_qk and sum of exp(qk - max_qk_old)
+    // This loop is over the K/V sequence length
+    for (int kv_idx = 0; kv_idx < k_view.num_tokens_in_logical_sequence; ++kv_idx) {
+        const half* k_head_ptr = get_paged_kv_data_ptr_cuda<half>(&k_view, kv_idx, actual_kv_head_idx, false);
+        if (k_head_ptr == nullptr) continue; // Skip if page not mapped or out of bounds
+
+        half qk_dot = 0.0h;
+        if (!Q_is_q8_1_for_dot) { // Simple F16 dot F16
+            for (int i = threadIdx.x; i < D/2; i += blockDim.x) { // Each thread does part of dot product
+                half2 k_val_h2 = k_head_ptr[i]; // Assumes k_head_ptr is half2 aligned
+                qk_dot += q_reg[i].x * k_val_h2.x + q_reg[i].y * k_val_h2.y;
+            }
+        } else {
+            // qk_dot = vec_dot_KQ_fn((const char*)k_head_ptr, q_reg_f32_equivalent_for_vec_dot, Q_i32_reg, Q_ds_reg);
+            // This needs Q to be prepared as q8_1 if K is quantized.
+        }
+        qk_dot = warp_reduce_sum_half(qk_dot); // Sum over threads in warp (assuming blockDim.x is warpSize)
+
+        if (threadIdx.x == 0) { // One thread per warp updates max_qk
+            if (mask_data) {
+                // Mask is [seq_q, seq_k] or broadcastable. Here current_q_token_idx_in_block is q_idx, kv_idx is k_idx.
+                // Mask stride mask_nb1_bytes is for q_idx.
+                const half mask_val = ((const half*)(mask_data + (size_t)current_q_token_idx_in_block * mask_nb1_bytes))[kv_idx];
+                qk_dot += mask_val * slope; // ALiBi slope might be 0 if max_bias is 0
+            }
+            if (use_logit_softcap) qk_dot = logit_softcap * tanhf(qk_dot);
+
+            max_qk_val = max(max_qk_val, qk_dot);
+        }
+    }
+    // Broadcast max_qk_val to all threads in warp
+    max_qk_val = __shfl_sync(0xFFFFFFFF, max_qk_val, 0);
+
+    // Pass 2: Calculate sum_exp and weighted V sum
+    half out_acc_reg[D/2]; // Accumulator for output, assuming DV=D
+    for(int i=0; i<D/2; ++i) out_acc_reg[i] = make_half2(0.0f, 0.0f);
+
+    for (int kv_idx = 0; kv_idx < k_view.num_tokens_in_logical_sequence; ++kv_idx) {
+        const half* k_head_ptr = get_paged_kv_data_ptr_cuda<half>(&k_view, kv_idx, actual_kv_head_idx, false);
+        const half* v_head_ptr = get_paged_kv_data_ptr_cuda<half>(&v_view, kv_idx, actual_kv_head_idx, true);
+
+        if (k_head_ptr == nullptr || v_head_ptr == nullptr) continue;
+
+        half qk_dot = 0.0h;
+        if (!Q_is_q8_1_for_dot) {
+            for (int i = threadIdx.x; i < D/2; i += blockDim.x) {
+                half2 k_val_h2 = k_head_ptr[i];
+                qk_dot += q_reg[i].x * k_val_h2.x + q_reg[i].y * k_val_h2.y;
+            }
+        } // else: handle quantized K case for dot product
+        qk_dot = warp_reduce_sum_half(qk_dot);
+
+        if (threadIdx.x == 0) { // One thread per warp calculates softmax score and updates V
+            if (mask_data) {
+                const half mask_val = ((const half*)(mask_data + (size_t)current_q_token_idx_in_block * mask_nb1_bytes))[kv_idx];
+                qk_dot += mask_val * slope;
+            }
+            if (use_logit_softcap) qk_dot = logit_softcap * tanhf(qk_dot);
+
+            half softmax_score = hexp(qk_dot - max_qk_val);
+            sum_qk_exp_val += softmax_score;
+
+            // Aggregate V
+            for (int i_v = 0; i_v < v_view.v_head_size_elements / 2; ++i_v) { // Iterate over V head dim (half2 elements)
+                 half2 v_val_h2 = ((const half2*)v_head_ptr)[i_v]; // Assume v_head_ptr is half2 aligned
+                 out_acc_reg[i_v].x += softmax_score * v_val_h2.x;
+                 out_acc_reg[i_v].y += softmax_score * v_val_h2.y;
+            }
+        }
+    }
+    // Broadcast sum_qk_exp_val and normalize output accumulator
+    sum_qk_exp_val = __shfl_sync(0xFFFFFFFF, sum_qk_exp_val, 0);
+    if (sum_qk_exp_val == 0.0h) sum_qk_exp_val = 1.0h; // Avoid division by zero
+
+    float* dst_float_ptr = (float*)(dst_data +
+                              (size_t)q_batch_head_idx * dst_nb2_elements * sizeof(float) +
+                              (size_t)current_q_token_idx_in_block * dst_nb1_elements * sizeof(float));
+
+    for (int i = threadIdx.x; i < D/2; i += blockDim.x) {
+        half2 final_val_h2;
+        final_val_h2.x = out_acc_reg[i].x / sum_qk_exp_val;
+        final_val_h2.y = out_acc_reg[i].y / sum_qk_exp_val;
+        // Output is F32
+        float2 final_val_f2 = __half22float2(final_val_h2);
+        ((float2*)dst_float_ptr)[i] = final_val_f2;
+    }
+
+    // Suppress unused warnings for a more complete parameter list that launch_fattn_paged expects
+    (void)q_ne0_dkq; (void)dst_meta; (void)k_ne2_nhead; (void)ncols;
+#else
+    // Original NO_DEVICE_CODE and unused parameter list
+#endif
+}
+
+
+template <int D, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
+void ggml_cuda_flash_attn_ext_vec_f16_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    constexpr int nwarps = D/WARP_SIZE;
+
 
 template <int D, int cols_per_block, ggml_type type_K, ggml_type type_V, bool use_logit_softcap>
 void ggml_cuda_flash_attn_ext_vec_f16_case_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

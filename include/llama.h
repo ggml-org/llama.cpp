@@ -366,6 +366,11 @@ extern "C" {
         bool embeddings;  // if true, extract embeddings (together with logits)
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
         bool flash_attn;  // use flash attention [EXPERIMENTAL]
+
+        // Paged KV cache parameters
+        bool use_paged_kv_cache; // if true, use paged KV cache, otherwise default.
+        uint32_t kv_page_size;   // page size in tokens for the paged KV cache, 0 = default size.
+
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
@@ -410,7 +415,7 @@ extern "C" {
     // Helpers for getting default parameters
     // TODO: update API to start accepting pointers to params structs (https://github.com/ggml-org/llama.cpp/discussions/9172)
     LLAMA_API struct llama_model_params          llama_model_default_params(void);
-    LLAMA_API struct llama_context_params        llama_context_default_params(void);
+    LLAMA_API struct llama_context_params        llama_context_default_params(void); // Check this function for new defaults
     LLAMA_API struct llama_sampler_chain_params  llama_sampler_chain_default_params(void);
     LLAMA_API struct llama_model_quantize_params llama_model_quantize_default_params(void);
 
