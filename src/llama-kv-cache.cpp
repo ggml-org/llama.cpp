@@ -753,8 +753,6 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
     }
 
     if (do_defrag) {
-        LLAMA_LOG_DEBUG("%s: defragmenting KV cache\n", __func__);
-
         if (defrag_prepare(lctx.graph_max_nodes())) {
             ggml_backend_sched_reset(sched);
 

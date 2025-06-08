@@ -1634,6 +1634,11 @@ ggml_tensor * llm_graph_context::build_attn(
     const llama_kv_cache_mixed * kv_self = static_cast<const llama_kv_cache_mixed *>(memory);
 
     {
+        if (k_cur->data != nullptr && v_cur->data != nullptr) {
+            ggml_set_f32(k_cur, 1.0f);
+            ggml_set_f32(v_cur, 2.0f);  
+        }
+
         // store to KV cache
         ggml_build_forward_expand(gf, kv_self->cpy_k(ctx0, k_cur, il));
         ggml_build_forward_expand(gf, kv_self->cpy_v(ctx0, v_cur, il));
@@ -1646,10 +1651,14 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = kv_self->get_v(ctx0, il);
     ggml_tensor * k_quant = kv_self->get_k_quant(ctx0, il);
     ggml_tensor * v_quant = kv_self->get_v_quant(ctx0, il);
-    // ggml_tensor * k_quant_ref = kv_self->get_k_quant_ref(ctx0, il);
-    // ggml_tensor * v_quant_ref = kv_self->get_v_quant_ref(ctx0, il);
 
+    // NOTICE: do_quant after the kvcache store.
     if (kv_self->do_quant(il)) {
+
+        if (il == 0) {
+            LLAMA_LOG_INFO("[llama-graph] do_quant !!!\n");
+        }
+        
         if (k_quant != nullptr) {
             cb(k_quant, "k_quant_data", il);
         }
@@ -1671,8 +1680,6 @@ ggml_tensor * llm_graph_context::build_attn(
 
         cb(k_quant_ref, "k_quant_ref", il);
         cb(v_quant_ref, "v_quant_ref", il);
-
-
     }
 
     const int n_args = 6;
@@ -1681,8 +1688,8 @@ ggml_tensor * llm_graph_context::build_attn(
     args[1] = ggml_permute(ctx0, k, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
     args[2] = ggml_permute(ctx0, v, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
     args[3] = kq_mask;
-    args[4] = k_quant;
-    args[5] = v_quant;
+    args[4] = ggml_permute(ctx0, k_quant, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    args[5] = ggml_permute(ctx0, v_quant, 0, 2, 1, 3); 
 
     if (il == 0) {
         LLAMA_LOG_DEBUG("[llama-graph] q -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);

@@ -201,13 +201,6 @@ static void print_tensor_shape_recursive(struct ggml_tensor * t, int depth = 0) 
     // Print indentation based on recursion depth
     std::string indent(depth * 2, ' ');
 
-    // // Print current tensor's shape
-    // LOG("%sTensor %s shape: [", indent.c_str(), t->name ? t->name : "unnamed");
-    // for (int i = 0; i < GGML_MAX_DIMS; ++i) {
-    //     LOG("%d", t->ne[i]);
-    // }
-    // LOG("] type: %s\n", ggml_type_name(t->type));
-
     // DEFENSIVE FIX: Add bounds checking for recursive calls
     for (int i = 0; i < GGML_MAX_SRC; ++i) {
         if (t->src[i] != nullptr) {
@@ -297,10 +290,10 @@ int main(int argc, char ** argv) {
     LOG("Verbose mode: %s\n", trace_data.verbose ? "enabled" : "disabled");
     LOG("Monitoring k_quant and v_quant tensors...\n\n");
 
-    // Initialize model and context
+    // NOTE: Following code will call graph_build, BUT it will not allocate the graph.
     auto init = common_init_from_params(params);
-    auto * model = init.model.get();
-    auto * ctx   = init.context.get();
+    auto * model    = init.model.get();
+    auto * ctx    = init.context.get();
 
     if (!model || !ctx) {
         LOG_ERR("Failed to load model or create context\n");

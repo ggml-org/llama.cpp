@@ -13275,12 +13275,14 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     
                     llama_kv_cache_mixed_config mixed_config;
                     mixed_config.enable_quantization = true;
+                    mixed_config.max_fp16_window = 32;              // Maximum number of tokens to keep in FP16 window
                     mixed_config.group_size = 64;                   // Archive books in batches of 64 for efficiency
-                    mixed_config.hot_type_k = params.type_k;        // Fresh tokens: keep in high-quality format like original manuscripts
-                    mixed_config.hot_type_v = params.type_v;
+                    mixed_config.hot_type_k = GGML_TYPE_F16;        // Fresh tokens: keep in high-quality format like original manuscripts
+                    mixed_config.hot_type_v = GGML_TYPE_F16;
                     mixed_config.cold_type_k = GGML_TYPE_Q4_0;      // Archived tokens: compress like storing books in compact boxes
                     mixed_config.cold_type_v = GGML_TYPE_Q4_0;
-                    mixed_config.quantization_threshold = 8;       // Keep the last 32 tokens on the "hot desk" in full precision
+                    mixed_config.quantization_threshold = 8;        //> When tokens > threshold + window size, compress threshold window into Quant.
+                    mixed_config.fp16_window_size = 8;              //> Max 8 tokens in FP16 window
                     // mixed_config.quantization_threshold =  ggml_get_type_traits(GGML_TYPE_Q4_0)->blck_size;       // Keep the last 32 tokens on the "hot desk" in full precision
                     
                     res = new llama_kv_cache_mixed(

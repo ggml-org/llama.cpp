@@ -971,6 +971,7 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         res->set_inputs(&ubatch);
 
+        //> DO real compute.
         const auto compute_status = graph_compute(gf, ubatch.n_tokens > 1);
         if (compute_status != GGML_STATUS_SUCCESS) {
             switch (compute_status) {
@@ -985,9 +986,9 @@ int llama_context::decode(llama_batch & inp_batch) {
         }
 
         // plot the computation graph in dot format (for debugging purposes)
-        //if (n_past%100 == 0) {
+        // if (n_outputs_prev % 100 == 0) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
-        //}
+        // }
 
         auto * t_logits = cparams.embeddings ? nullptr         : res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;

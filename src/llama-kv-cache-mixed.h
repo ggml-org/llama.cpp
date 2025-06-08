@@ -3,6 +3,7 @@
 #include "llama-kv-cache.h"
 #include "ggml.h"
 
+#include <cstdint>
 #include <memory>
 #include <functional>
 #include <vector>
@@ -30,12 +31,15 @@ struct llama_kv_cache_mixed_config {
     bool     enable_quantization = true;    // Enable quantization
     uint32_t quantization_threshold = 4;    // Number of tokens before quantization (reduced for testing)
     uint32_t group_size = 16;               // Number of tokens to quantize at once
+    uint32_t max_fp16_window = 1024;        // Maximum number of tokens to keep in FP16 window
     
     // Advanced quantization settings
     bool     adaptive_threshold = false;        // Dynamically adjust threshold based on memory pressure
     float    memory_pressure_threshold = 0.8f;  // Trigger quantization when memory usage > 80%
     uint32_t min_quantization_threshold = 16;   // Minimum threshold for adaptive mode
     uint32_t max_quantization_threshold = 128;  // Maximum threshold for adaptive mode
+
+    uint32_t fp16_window_size = 0;      //> fp16_window_size is the number of tokens in the fp16 window.
     
     // Cache types
     ggml_type hot_type_k  = GGML_TYPE_F16;  // Recent tokens (FP16)
@@ -232,9 +236,6 @@ public:
         }
     };
     
-    quantization_stats get_quantization_stats() const { return quant_stats; }
-    void reset_quantization_stats() { quant_stats.reset(); }
-    
     // Get current memory usage and pressure
     struct memory_info {
         size_t total_memory_bytes = 0;
@@ -270,9 +271,6 @@ private:
         ggml_tensor * k_quant;
         ggml_tensor * v_quant;
 
-        ggml_tensor * k_dequant;
-        ggml_tensor * v_dequant;
-
         // FIFO Quantization state - separate counters for K and V
         mutable uint32_t total_tokens = 0;          // total tokens in this layer
         mutable uint32_t quant_k_tokens = 0;        // number of quantized K tokens
@@ -280,6 +278,9 @@ private:
         mutable uint32_t fp16_k_tokens = 0;         // number of fp16 K tokens
         mutable uint32_t fp16_v_tokens = 0;         // number of fp16 V tokens
         mutable uint32_t fp16_start_pos = 0;        // start position of fp16 tokens
+
+        mutable uint32_t mixed_k_head = 0;            //> mixed_head is the END of fp16 and START of quant.
+        mutable uint32_t mixed_v_head = 0;          //> mixed_v_head is the END of fp16 and START of quant.
 
         uint32_t get_total_cached_tokens() const {
             return total_tokens;
@@ -360,74 +361,6 @@ private:
     struct {
         std::vector<uint32_t> ids;
     } defrag_info;
-
-    // Quantization management
-    struct quantization_manager {
-        uint32_t accumulated_tokens = 0;        // Tokens accumulated since last quantization
-        uint32_t current_threshold;             // Current dynamic threshold
-        bool     quantization_in_progress = false;
-        
-        // Statistics
-        quantization_stats stats;
-        
-        // Timing
-        std::chrono::high_resolution_clock::time_point last_quantization_start;
-        
-        quantization_manager(uint32_t initial_threshold) : current_threshold(initial_threshold) {}
-        
-        void reset_accumulation() {
-            accumulated_tokens = 0;
-        }
-        
-        bool should_quantize(const llama_kv_cache_mixed_config & config, float memory_pressure) const {
-            if (!config.enable_quantization || quantization_in_progress) {
-                return false;
-            }
-            
-            // Check basic threshold
-            if (accumulated_tokens >= current_threshold) {
-                return true;
-            }
-            
-            // Check memory pressure if adaptive mode is enabled
-            if (config.adaptive_threshold && memory_pressure > config.memory_pressure_threshold) {
-                return accumulated_tokens >= config.min_quantization_threshold;
-            }
-            
-            return false;
-        }
-        
-        void update_threshold(const llama_kv_cache_mixed_config & config, float memory_pressure) {
-            if (!config.adaptive_threshold) {
-                current_threshold = config.quantization_threshold;
-                return;
-            }
-            
-            // Adaptive threshold based on memory pressure
-            if (memory_pressure > config.memory_pressure_threshold) {
-                // High memory pressure: reduce threshold
-                current_threshold = std::max(config.min_quantization_threshold,
-                                           current_threshold - config.group_size);
-            } else if (memory_pressure < config.memory_pressure_threshold * 0.5f) {
-                // Low memory pressure: increase threshold
-                current_threshold = std::min(config.max_quantization_threshold,
-                                           current_threshold + config.group_size);
-            }
-        }
-    };
-    
-    mutable quantization_manager quant_mgr;
-    mutable quantization_stats quant_stats;
-
-    //
-    // Private helper methods
-    //
-
-    // Quantize FP16 tokens to quantized format
-    void quantize_tokens(int32_t il);
-    
-    // Quantize oldest tokens using FIFO strategy
-    void quantize_oldest_tokens(int32_t il, uint32_t tokens_to_quantize);
 
     // Helper functions from unified cache
     bool defrag_prepare(int32_t n_max_nodes);
