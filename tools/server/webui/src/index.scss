@@ -41,6 +41,11 @@ html {
   max-width: 900px;
 }
 
+.chat-bubble {
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
 .chat-bubble-base-300 {
   --tw-bg-opacity: 1;
   --tw-text-opacity: 1;
