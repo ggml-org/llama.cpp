@@ -1144,7 +1144,6 @@ typedef void (*ggml_cuda_op_mul_mat_t)(
 static cudaError_t ggml_cuda_cpy_tensor_2d(
     void * dst, const struct ggml_tensor * src, int64_t i3, int64_t i2, int64_t i1_low, int64_t i1_high, cudaStream_t stream) {
 
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(src->buffer));
     const char * src_ptr = (const char *) src->data;
     char       * dst_ptr = (char       *) dst;
 
@@ -1427,8 +1426,6 @@ static void ggml_cuda_op_mul_mat(
     const int64_t nb2 = dst->nb[2];
     const int64_t nb3 = dst->nb[3];
 
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(dst->buffer));
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(src1->buffer));
     ggml_backend_cuda_buffer_context * src1_ctx = (ggml_backend_cuda_buffer_context *) src1->buffer->context;
     ggml_backend_cuda_buffer_context * dst_ctx  = (ggml_backend_cuda_buffer_context *) dst->buffer->context;
 
@@ -1750,7 +1747,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     GGML_ASSERT(!ggml_is_transposed(src0));
     GGML_ASSERT(!ggml_is_transposed(src1));
 
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(src0->buffer));
+    GGML_ASSERT(!ggml_backend_buft_is_cuda_split(src0->buffer->buft));
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
 
     // Byte offsets and tensor dimensions are currently used in an inconsistent way for dst.
