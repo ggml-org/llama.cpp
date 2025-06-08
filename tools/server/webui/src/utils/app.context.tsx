@@ -188,6 +188,13 @@ export const AppContextProvider = ({
       content: null,
       parent: leafNodeId,
       children: [],
+      serverProps: serverProps
+        ? {
+            model_path: serverProps.model_path,
+            build_info: serverProps.build_info,
+            n_ctx: serverProps.n_ctx,
+          }
+        : null,
     };
     setPending(convId, pendingMsg);
 

@@ -43,6 +43,7 @@ export interface Message {
   content: string;
   timings?: TimingReport;
   extra?: MessageExtra[];
+  serverProps?: LlamaCppServerProps | null;
   // node based system for branching
   parent: Message['id'];
   children: Message['id'][];

@@ -189,6 +189,29 @@ export default function ChatMessage({
                   </div>
                 </div>
               )}
+
+              {/* render model information if enabled and available */}
+              {config.showServerInformation && msg.serverProps && (
+                <>
+                  <br />
+                  <div className="dropdown dropdown-hover dropdown-top">
+                    <div
+                      tabIndex={0}
+                      role="button"
+                      className="cursor-pointer font-semibold text-sm opacity-60"
+                    >
+                      Model:{' '}
+                      {msg.serverProps.model_path?.split(/(\\|\/)/).pop()}
+                    </div>
+                    <div className="dropdown-content bg-base-100 z-10 w-80 p-2 shadow mt-4">
+                      <b>Server Information</b>
+                      <br />- Path: {msg.serverProps.model_path}
+                      <br />- Build: {msg.serverProps.build_info}
+                      <br />- Context: {msg.serverProps.n_ctx}
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>

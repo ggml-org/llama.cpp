@@ -14,6 +14,7 @@ export const CONFIG_DEFAULT = {
   apiKey: '',
   systemMessage: '',
   showTokensPerSecond: false,
+  showServerInformation: false,
   showThoughtInProgress: false,
   excludeThoughtOnReq: true,
   pasteLongTextToFileLen: 2500,
