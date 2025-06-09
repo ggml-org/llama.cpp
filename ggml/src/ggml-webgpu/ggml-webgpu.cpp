@@ -46,6 +46,9 @@ struct webgpu_context_struct {
     wgpu::Buffer memset_params_dev_buf;
     wgpu::Buffer memset_params_host_buf;
     size_t memset_elems_per_thread;
+
+    // Staging buffer for reading data from the GPU
+    wgpu::Buffer get_tensor_staging_buf;
 };
 
 typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
@@ -116,6 +119,71 @@ static void ggml_webgpu_create_buffer(wgpu::Device &device, wgpu::Buffer &buffer
 
 /** End WebGPU object initializations */
 
+/** WebGPU Actions */
+
+static void * ggml_backend_webgpu_map_buffer(webgpu_context ctx, wgpu::Buffer buffer, wgpu::MapMode mode, size_t offset, size_t size) {
+    ctx->instance.WaitAny(buffer.MapAsync(
+        mode, offset, size, wgpu::CallbackMode::WaitAnyOnly,
+        [](wgpu::MapAsyncStatus status, wgpu::StringView message) {
+            if (status != wgpu::MapAsyncStatus::Success) {
+                GGML_LOG_ERROR("ggml_webgpu: Failed to map buffer: %s\n", message.data);
+            }
+        }),
+        UINT64_MAX
+    );
+    return buffer.GetMappedRange();
+}
+
+static void ggml_backend_webgpu_buffer_memset(webgpu_context ctx, wgpu::Buffer buf, uint8_t value, size_t offset, size_t size) {
+    wgpu::Device device = ctx->device;
+
+    // map the host parameters buffer
+    uint32_t * params = (uint32_t *)ggml_backend_webgpu_map_buffer(ctx, ctx->memset_params_host_buf, 
+        wgpu::MapMode::Write, 0, ctx->memset_params_host_buf.GetSize());
+
+    // This is a trick to set all bytes of a u32 to the same 1 byte value.
+    uint32_t val32 = (uint32_t)value * 0x01010101;
+    params[0] = (uint32_t)offset;
+    params[1] = (uint32_t)size; 
+    params[2] = val32;
+    ctx->memset_params_host_buf.Unmap();
+
+    wgpu::BindGroupEntry entries[2];
+    entries[0].binding = 0; // binding for the buffer to memset
+    entries[0].buffer = buf;
+    entries[0].offset = 0;
+    entries[0].size = buf.GetSize();
+    entries[1].binding = 1; // binding for the parameters
+    entries[1].buffer = ctx->memset_params_dev_buf;
+    entries[1].offset = 0;
+    entries[1].size = ctx->memset_params_dev_buf.GetSize();
+
+    wgpu::BindGroupDescriptor bind_group_desc;
+    bind_group_desc.layout = ctx->memset_pipeline.GetBindGroupLayout(0);
+    bind_group_desc.entryCount = 2;
+    bind_group_desc.entries = entries;
+    wgpu::BindGroup bind_group = device.CreateBindGroup(&bind_group_desc);
+
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    encoder.CopyBufferToBuffer(
+        ctx->memset_params_host_buf, 0, 
+        ctx->memset_params_dev_buf, 0, 
+        ctx->memset_params_dev_buf.GetSize()
+    );
+    wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
+    pass.SetPipeline(ctx->memset_pipeline);
+    pass.SetBindGroup(0, bind_group);
+    size_t elems_per_wg = ctx->limits.maxComputeWorkgroupSizeX * ctx->memset_elems_per_thread;
+    pass.DispatchWorkgroups((((size + 3)/4) + elems_per_wg - 1) / elems_per_wg, 1, 1);
+    pass.End();
+    wgpu::CommandBuffer commands = encoder.Finish();
+
+    // TODO, async, do we need to wait on this?
+    ctx->queue.Submit(1, &commands);
+}
+
+/** End WebGPU Actions */
+
 /** GGML Backend Interface */
 
 static const char * ggml_backend_webgpu_name(ggml_backend_t backend) {
@@ -167,66 +235,12 @@ static void ggml_backend_webgpu_buffer_memset_tensor(ggml_backend_buffer_t buffe
         WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_memset_tensor: size is zero, nothing to do.");
         return;
     }
+
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_memset_tensor(" << buffer << ", " << tensor << ", " << value << ", " << offset << ", " << size << ")");
+
     ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
-    webgpu_context webgpu_ctx = buf_ctx->webgpu_ctx;
-    wgpu::Device device = webgpu_ctx->device;
-
-    // map the host parameters buffer
-    webgpu_ctx->instance.WaitAny(webgpu_ctx->memset_params_host_buf.MapAsync(
-        wgpu::MapMode::Write, 0, webgpu_ctx->memset_params_host_buf.GetSize(), wgpu::CallbackMode::WaitAnyOnly,
-        [](wgpu::MapAsyncStatus status, wgpu::StringView message) {
-            if (status != wgpu::MapAsyncStatus::Success) {
-                GGML_LOG_ERROR("ggml_webgpu: Failed to map buffer: %s\n", message.data);
-            }
-        }),
-        UINT64_MAX
-    );
-
-    // Set the host parameter buffer 
-    uint32_t * params = (uint32_t *)webgpu_ctx->memset_params_host_buf.GetMappedRange();
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
-    uint32_t val32 = (uint32_t)value * 0x01010101;
-    params[0] = (uint32_t)total_offset;
-    params[1] = (uint32_t)size; 
-    params[2] = val32;
-    webgpu_ctx->memset_params_host_buf.Unmap();
-
-    // buffer to memset
-    wgpu::Buffer buf = buf_ctx->buffer;
-
-    wgpu::BindGroupEntry entries[2];
-    entries[0].binding = 0; // binding for the buffer to memset
-    entries[0].buffer = buf;
-    entries[0].offset = 0;
-    entries[0].size = buf.GetSize();
-    entries[1].binding = 1; // binding for the parameters
-    entries[1].buffer = webgpu_ctx->memset_params_dev_buf;
-    entries[1].offset = 0;
-    entries[1].size = webgpu_ctx->memset_params_dev_buf.GetSize();
-
-    wgpu::BindGroupDescriptor bind_group_desc;
-    bind_group_desc.layout = webgpu_ctx->memset_pipeline.GetBindGroupLayout(0);
-    bind_group_desc.entryCount = 2;
-    bind_group_desc.entries = entries;
-    wgpu::BindGroup bind_group = device.CreateBindGroup(&bind_group_desc);
-
-    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
-    encoder.CopyBufferToBuffer(
-        webgpu_ctx->memset_params_host_buf, 0, 
-        webgpu_ctx->memset_params_dev_buf, 0, 
-        webgpu_ctx->memset_params_dev_buf.GetSize()
-    );
-    wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
-    pass.SetPipeline(webgpu_ctx->memset_pipeline);
-    pass.SetBindGroup(0, bind_group);
-    size_t elems_per_wg = webgpu_ctx->limits.maxComputeWorkgroupSizeX * webgpu_ctx->memset_elems_per_thread;
-    pass.DispatchWorkgroups((((size + 3)/4) + elems_per_wg - 1) / elems_per_wg, 1, 1);
-    pass.End();
-    wgpu::CommandBuffer commands = encoder.Finish();
-
-    // TODO, async, do we need to wait on this?
-    webgpu_ctx->queue.Submit(1, &commands);
+    ggml_backend_webgpu_buffer_memset(buf_ctx->webgpu_ctx, buf_ctx->buffer, value, total_offset, size);
 }
 
 static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -243,33 +257,57 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 // TODO: we need a staging buffer for this, since WebGPU does not allow reading from storage buffers directly.
 static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
-}
 
-// TODO
-static bool ggml_backend_webgpu_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * src, ggml_tensor * dst) {
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(src);
-    GGML_UNUSED(dst);
+    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+    webgpu_context webgpu_ctx = buf_ctx->webgpu_ctx;
+    wgpu::Device device = webgpu_ctx->device;
 
-    return true;
+    size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
+
+    if (webgpu_ctx->get_tensor_staging_buf == nullptr || 
+        webgpu_ctx->get_tensor_staging_buf.GetSize() < size) {
+        // Create a new staging buffer if it doesn't exist or is too small
+        if (webgpu_ctx->get_tensor_staging_buf) {
+            webgpu_ctx->get_tensor_staging_buf.Destroy();
+        }
+        ggml_webgpu_create_buffer(device, webgpu_ctx->get_tensor_staging_buf, size, 
+            wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead);
+    }
+
+    // Copy the data from the buffer to the staging buffer
+    wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
+    encoder.CopyBufferToBuffer(buf_ctx->buffer, total_offset, webgpu_ctx->get_tensor_staging_buf, 0, size);
+    wgpu::CommandBuffer commands = encoder.Finish();
+    // Submit the command buffer to the queue
+    webgpu_ctx->queue.Submit(1, &commands);
+
+    // Map the staging buffer to read the data
+    const void * mapped_range = ggml_backend_webgpu_map_buffer(webgpu_ctx, webgpu_ctx->get_tensor_staging_buf, 
+        wgpu::MapMode::Read, 0, size);
+
+    // Copy the data from the mapped range to the output buffer
+    std::memcpy(data, mapped_range, size);
+    webgpu_ctx->get_tensor_staging_buf.Unmap();
 }
 
 // TODO
 static void ggml_backend_webgpu_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
-    GGML_UNUSED(buffer);
-    GGML_UNUSED(value);
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_clear(" << buffer << ", " << value << ")");
+
+    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+    ggml_backend_webgpu_buffer_memset(buf_ctx->webgpu_ctx, buf_ctx->buffer, value, 0, buf_ctx->buffer.GetSize());
 }
 
 static ggml_backend_buffer_i ggml_backend_webgpu_buffer_interface = {
     /* .free_buffer     = */ ggml_backend_webgpu_buffer_free_buffer,
     /* .get_base        = */ ggml_backend_webgpu_buffer_get_base,
-    /* .init_tensor     = */ NULL, // TODO: should we implement this?
+    /* .init_tensor     = */ NULL, // TODO: optional, needed?
     /* .memset_tensor   = */ ggml_backend_webgpu_buffer_memset_tensor,
     /* .set_tensor      = */ ggml_backend_webgpu_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_webgpu_buffer_get_tensor,
-    /* .cpy_tensor      = */ ggml_backend_webgpu_buffer_cpy_tensor,
+    /* .cpy_tensor      = */ NULL, // TODO: optional, implement this
     /* .clear           = */ ggml_backend_webgpu_buffer_clear,
-    /* .reset           = */ NULL,
+    /* .reset           = */ NULL, // TODO: optional, think it coordinates with .init_tensor
 };
 
 /* End GGML Backend Buffer Interface */
