@@ -225,16 +225,22 @@ static void ggml_backend_webgpu_buffer_memset_tensor(ggml_backend_buffer_t buffe
     pass.End();
     wgpu::CommandBuffer commands = encoder.Finish();
 
-    // async, do we need to wait on this?
+    // TODO, async, do we need to wait on this?
     webgpu_ctx->queue.Submit(1, &commands);
 }
 
-// TODO
 static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_set_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
+    ggml_backend_webgpu_buffer_context * buf_ctx = (ggml_backend_webgpu_buffer_context *) buffer->context;
+    webgpu_context webgpu_ctx = buf_ctx->webgpu_ctx;
+
+    size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
+
+    // TODO: wait on this?
+    webgpu_ctx->queue.WriteBuffer(buf_ctx->buffer, total_offset, data, size);
 }
 
-// TODO
+// TODO: we need a staging buffer for this, since WebGPU does not allow reading from storage buffers directly.
 static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_tensor(" << buffer << ", " << tensor << ", " << data << ", " << offset << ", " << size << ")");
 }
@@ -301,21 +307,6 @@ static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_t
 
 /* End GGML Backend Buffer Type Interface */
 
-/* GGML Backend Host Buffer Type Interface */
-
-static const char * ggml_backend_webgpu_host_buffer_type_name(ggml_backend_buffer_type_t buft) {
-    GGML_UNUSED(buft);
-    return GGML_WEBGPU_NAME "_Host";
-}
-
-// WebGPU doesn't specify a memory map alignment like Vulkan, so we use the same value as the storage buffer alignment
-static size_t ggml_backend_webgpu_host_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-    ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    return ctx->webgpu_ctx->limits.minStorageBufferOffsetAlignment;
-}
-
-/* End GGML Backend Host Buffer Type Interface */
-
 /* GGML Backend Device Interface */
 
 static const char * ggml_backend_webgpu_device_get_name(ggml_backend_dev_t dev) {
@@ -347,7 +338,7 @@ static void ggml_backend_webgpu_device_get_props(ggml_backend_dev_t dev, struct 
     ggml_backend_webgpu_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ false,
-        /* .host_buffer           = */ true, // maybe? not sure what this means yet
+        /* .host_buffer           = */ false,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
     };
@@ -448,25 +439,6 @@ static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_buffer_type(ggm
     return &ggml_backend_webgpu_buffer_type;
 }
 
-
-static ggml_backend_buffer_type_t ggml_backend_webgpu_device_get_host_buffer_type(ggml_backend_dev_t dev) {
-    // See GGML Backend Host Buffer Type Interface section
-    static struct ggml_backend_buffer_type ggml_backend_webgpu_buffer_type_host = {
-        /* .iface    = */ {
-            /* .get_name         = */ ggml_backend_webgpu_host_buffer_type_name,
-            /* .alloc_buffer     = */ NULL, // TODO
-            /* .get_alignment    = */ ggml_backend_webgpu_host_buffer_type_get_alignment,
-            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
-            /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
-            /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
-        },
-        /* .device   = */ dev,
-        /* .context  = */ NULL,
-    };
-
-    return &ggml_backend_webgpu_buffer_type_host;
-}
-
 static bool ggml_backend_webgpu_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(dev);
     return  buft->iface.get_name == ggml_backend_webgpu_buffer_type_get_name;
@@ -490,7 +462,7 @@ static struct ggml_backend_device_i ggml_backend_webgpu_device_i = {
     /* .get_props            = */ ggml_backend_webgpu_device_get_props,
     /* .init_backend         = */ ggml_backend_webgpu_device_init,
     /* .get_buffer_type      = */ ggml_backend_webgpu_device_get_buffer_type,
-    /* .get_host_buffer_type = */ ggml_backend_webgpu_device_get_host_buffer_type,
+    /* .get_host_buffer_type = */ NULL,
     /* .buffer_from_host_ptr = */ NULL,
     /* .supports_op          = */ ggml_backend_webgpu_device_supports_op,
     /* .supports_buft        = */ ggml_backend_webgpu_device_supports_buft,
