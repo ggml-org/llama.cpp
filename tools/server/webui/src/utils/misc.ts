@@ -195,3 +195,10 @@ export const getServerProps = async (
     throw error;
   }
 };
+
+export const modelNameFromPath = (path: string): string => {
+  // get the last non-empty part
+  const trimmed = path.replace(/[\\\/]+$/, '');
+  const parts = trimmed.split(/[\\\/]/);
+  return parts[parts.length - 1] || path;
+};

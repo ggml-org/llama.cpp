@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
-import { classNames } from '../utils/misc';
+import { classNames, modelNameFromPath } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
 import {
   ArrowPathIcon,
@@ -201,7 +201,7 @@ export default function ChatMessage({
                       className="cursor-pointer font-semibold text-sm opacity-60"
                     >
                       Model:{' '}
-                      {msg.serverProps.model_path?.split(/(\\|\/)/).pop()}
+                      {msg.serverProps.model_path && modelNameFromPath(msg.serverProps.model_path)}
                     </div>
                     <div className="dropdown-content bg-base-100 z-10 w-80 p-2 shadow mt-4">
                       <b>Server Information</b>
