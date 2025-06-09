@@ -2777,6 +2777,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--alias-presets-file"}, "FNAME",
+        "path to file containing alias preset configurations (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.alias_presets_file = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--ssl-key-file"}, "FNAME",
         "path to file a PEM-encoded SSL private key",
         [](common_params & params, const std::string & value) {

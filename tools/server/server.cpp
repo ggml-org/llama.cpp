@@ -23,6 +23,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cinttypes>
+#include <fstream>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -1886,6 +1887,8 @@ struct server_context {
     common_chat_templates_ptr chat_templates;
     oaicompat_parser_options  oai_parser_opt;
 
+    std::unordered_map<std::string, json> model_alias_presets;
+
     ~server_context() {
         mtmd_free(mctx);
 
@@ -1904,6 +1907,33 @@ struct server_context {
         }
 
         llama_batch_free(batch);
+    }
+
+    void load_model_alias_presets(const std::string & alias_presets_file) {
+        try {
+            std::ifstream file(alias_presets_file);
+            if (!file) {
+                SRV_ERR("failed to open alias presets file '%s'\n", alias_presets_file.c_str());
+                return;
+            }
+
+            json presets_json;
+            file >> presets_json;
+            file.close();
+
+            for (const auto & [model_alias_name, preset] : presets_json.items()) {
+                if (preset.is_object()) {
+                    model_alias_presets[model_alias_name] = preset;
+                    SRV_INF("loaded preset for model alias '%s'\n", model_alias_name.c_str());
+                } else {
+                    SRV_WRN("skipping invalid preset for model alias '%s' (not an object)\n", model_alias_name.c_str());
+                }
+            }
+
+            SRV_INF("loaded %zu model alias presets from '%s'\n", model_alias_presets.size(), alias_presets_file.c_str());
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to parse alias presets file '%s': %s\n", alias_presets_file.c_str(), e.what());
+        }
     }
 
     bool load_model(const common_params & params) {
@@ -2021,6 +2051,10 @@ struct server_context {
                 SRV_ERR("%s\n", "err: speculative decode is not supported by this context");
                 return false;
             }
+        }
+
+        if (!params_base.alias_presets_file.empty()) {
+            load_model_alias_presets(params_base.alias_presets_file);
         }
 
         return true;
@@ -4181,6 +4215,17 @@ int main(int argc, char ** argv) {
             return;
         }
 
+        // apply presets if available
+        const std::string model_alias = json_value(data, "model", std::string());
+        if (!model_alias.empty() && ctx_server.model_alias_presets.find(model_alias) != ctx_server.model_alias_presets.end()) {
+            const auto & preset = ctx_server.model_alias_presets.at(model_alias);
+            for (const auto & [key, value] : preset.items()) {
+                if (!data.contains(key)) {
+                    data[key] = value;
+                }
+            }
+        }
+
         auto completion_id = gen_chatcmplid();
         std::unordered_set<int> task_ids;
         try {
@@ -4244,6 +4289,8 @@ int main(int argc, char ** argv) {
                     inputs.push_back(std::move(tmp));
                 }
             }
+
+
 
             tasks.reserve(inputs.size());
             for (size_t i = 0; i < inputs.size(); i++) {

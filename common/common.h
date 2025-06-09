@@ -377,6 +377,7 @@ struct common_params {
 
     std::string ssl_file_key  = "";                                                                         // NOLINT
     std::string ssl_file_cert = "";                                                                         // NOLINT
+    std::string alias_presets_file = "";                                                                     // NOLINT
 
     // "advanced" endpoints are disabled by default for better security
     bool webui            = true;
