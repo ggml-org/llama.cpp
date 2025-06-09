@@ -659,6 +659,20 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cur = ggml_mul(ctx0, x0, x1);
                 cb(cur, "ffn_mul", il);
             } break;
+        case LLM_FFN_GEGLU:
+            {
+                // Split into two equal parts
+                int64_t split_point = cur->ne[0] / 2;
+                // TODO: these conts should not be needed
+                ggml_tensor * x0 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0));
+                ggml_tensor * x1 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
+
+                x0 = ggml_gelu(ctx0, x0);
+                cb(x0, "ffn_gelu", il);
+
+                cur = ggml_mul(ctx0, x0, x1);
+                cb(cur, "ffn_geglu", il);
+            } break;
     }
 
     if (gate && type_gate == LLM_FFN_PAR) {

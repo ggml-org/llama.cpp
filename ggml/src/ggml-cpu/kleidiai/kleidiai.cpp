@@ -26,7 +26,7 @@
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-threading.h"
-#include "ggml-cpu-traits.h"
+#include "traits.h"
 
 #include "kernels.h"
 
