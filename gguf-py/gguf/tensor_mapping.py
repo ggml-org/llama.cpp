@@ -334,6 +334,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.fc1",                           # nomic-bert-moe
             "model.layers.{bid}.mlp.c_fc",                            # starcoder2
             "encoder.layer.{bid}.mlp.gated_layers_v",                 # jina-bert-v2
+            "encoder.layer.{bid}.mlp.gated_layers",                   # jina-bert-v2
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone

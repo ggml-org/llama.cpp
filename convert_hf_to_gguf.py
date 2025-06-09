@@ -4798,25 +4798,6 @@ class OlmoeModel(TextModel):
 class JinaBertV2Model(BertModel):
     model_arch = gguf.MODEL_ARCH.JINA_BERT_V2
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.intermediate_size = self.hparams["intermediate_size"]
-
-    def get_tensors(self):
-        for name, data in super().get_tensors():
-            if 'gated_layer' in name:
-                d1 = data[:self.intermediate_size, :]
-                name1 = name.replace('gated_layers', 'gated_layers_w')
-                name1 = name1.replace('up_gated_layer', 'gated_layers_v')
-                d2 = data[self.intermediate_size:, :]
-                name2 = name.replace('gated_layers', 'gated_layers_v')
-                name2 = name2.replace('up_gated_layer', 'gated_layers_w')
-                yield name1, d1
-                yield name2, d2
-                continue
-
-            yield name, data
-
     def set_vocab(self):
         tokenizer_class = 'BertTokenizer'
         with open(self.dir_model / "tokenizer_config.json", "r", encoding="utf-8") as f:
@@ -4831,14 +4812,6 @@ class JinaBertV2Model(BertModel):
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(True)
-
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # if name starts with "bert.", remove the prefix
-        # e.g. https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
-        if name.startswith("bert."):
-            name = name[5:]
-
-        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("OpenELMForCausalLM")
