@@ -3727,8 +3727,8 @@ kernel void kernel_flash_attn_ext(
     bfloat, bfloat4x4, simdgroup_bfloat8x8, \
     float,             simdgroup_float8x8,  \
     float,             simdgroup_float8x8,  \
-    float,  float4,    simdgroup_float8x8
-    //half,   half4,     simdgroup_half8x8
+    half,   half4,     simdgroup_half8x8
+    //float,  float4,    simdgroup_float8x8
 
 typedef decltype(kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 64, 64>) flash_attn_ext_t;
 
