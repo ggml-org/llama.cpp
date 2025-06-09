@@ -57,6 +57,77 @@
 // CPU utils
 //
 
+#if defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) // windows 7 and later
+
+// Print CPU Information
+void print_cpu_info(const cpu_info& info) {
+    LOG_INF("CPU Information:\n");
+    LOG_INF("----------------\n");
+    LOG_INF("Is Hybrid Architecture: %s\n", info.is_hybrid ? "Yes" : "No");
+    LOG_INF("Number of Logical Cores: %d\n", info.num_logical_cores);
+    LOG_INF("Number of Physical Cores: %d\n", info.num_physical_cores);
+    LOG_INF("Number of Performance Cores (P-Cores): %d\n", info.num_p_cores);
+    LOG_INF("Number of Efficient Cores (E-Cores): %d\n", info.num_e_cores);
+    LOG_INF("\nE-Core Affinity Mask:\n");
+    LOG_INF("%s\n", info.e_core_affinity_mask.to_string().c_str());
+    LOG_INF("\nP-Core Affinity Mask:\n");
+    LOG_INF("%s\n", info.p_core_affinity_mask.to_string().c_str());
+}
+
+// Populate CPU Information
+int get_cpu_info(cpu_info& c_info) {
+    DWORD buffer_size = 0;
+    
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &buffer_size)) {
+        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+            return 0;
+        }
+    }
+
+    std::vector<char> buffer(buffer_size);
+    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data()), &buffer_size)) {
+        return 0;
+    }
+
+    c_info.num_physical_cores = 0;
+    c_info.num_logical_cores = 0;
+    c_info.num_e_cores = 0;
+    c_info.num_p_cores = 0;
+
+    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
+    while (buffer_size > 0) {
+        if (info->Relationship == RelationProcessorCore) {
+            c_info.num_physical_cores++;
+            for (int i = 0; i < info->Processor.GroupCount; ++i) {
+                GROUP_AFFINITY *groupAffinity = &info->Processor.GroupMask[i];
+                WORD groupNumber = groupAffinity->Group;
+                KAFFINITY mask = groupAffinity->Mask;
+                int baseIndex = groupNumber * 64;
+                c_info.num_logical_cores += __popcnt64(mask);
+                if (info->Processor.EfficiencyClass < 1) {
+                    c_info.e_core_affinity_mask |= (std::bitset<GGML_MAX_N_THREADS>(mask) << baseIndex);
+                    c_info.num_e_cores += __popcnt64(mask);
+                } else {
+                    c_info.p_core_affinity_mask |= (std::bitset<GGML_MAX_N_THREADS>(mask) << baseIndex);
+                    c_info.num_p_cores += __popcnt64(mask);
+                }
+            }
+        }
+
+        buffer_size -= info->Size;
+        info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(reinterpret_cast<char*>(info) + info->Size);
+    }
+
+    if (c_info.num_p_cores > 0 && c_info.num_e_cores > 0)
+        c_info.is_hybrid = true;
+
+    return 1;
+}
+
+#endif
+
+
+
 int32_t cpu_get_num_physical_cores() {
 #ifdef __linux__
     // enumerate the set of thread siblings, num entries is num cores
@@ -91,29 +162,12 @@ int32_t cpu_get_num_physical_cores() {
     unsigned int n_threads_win = std::thread::hardware_concurrency();
     unsigned int default_threads = n_threads_win > 0 ? (n_threads_win <= 4 ? n_threads_win : n_threads_win / 2) : 4;
 
-    DWORD buffer_size = 0;
-    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &buffer_size)) {
-        if (GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
-            return default_threads;
-        }
-    }
-
-    std::vector<char> buffer(buffer_size);
-    if (!GetLogicalProcessorInformationEx(RelationProcessorCore, reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data()), &buffer_size)) {
+    cpu_info info;
+    if(!get_cpu_info(info))
         return default_threads;
-    }
+     else 
+        return info.num_physical_cores > 0 ? info.num_physical_cores : default_threads;
 
-    int32_t num_physical_cores = 0;
-    PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data());
-    while (buffer_size > 0) {
-        if (info->Relationship == RelationProcessorCore) {
-            num_physical_cores += info->Processor.GroupCount;
-        }
-        buffer_size -= info->Size;
-        info = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(reinterpret_cast<char*>(info) + info->Size);
-    }
-
-    return num_physical_cores > 0 ? num_physical_cores : default_threads;
 #endif
     unsigned int n_threads = std::thread::hardware_concurrency();
     return n_threads > 0 ? (n_threads <= 4 ? n_threads : n_threads / 2) : 4;
@@ -253,12 +307,36 @@ bool set_process_priority(enum ggml_sched_priority prio) {
 void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model) {
     int32_t n_set = 0;
 
-    if (cpuparams.n_threads < 0) {
+    LOG_INF("n_threads: %d, cpu pnp strategy: %d\n", cpuparams.n_threads, cpuparams.cpu_pnp_strategy);
+
+    if (cpuparams.n_threads < 0 || cpuparams.cpu_pnp_strategy > 0) {
         // Assuming everything about cpuparams is invalid
-        if (role_model != nullptr) {
+        if (role_model != nullptr && cpuparams.cpu_pnp_strategy == 0) {
             cpuparams = *role_model;
         } else {
-            cpuparams.n_threads = cpu_get_num_math();
+            if(cpuparams.n_threads < 0)
+                cpuparams.n_threads = cpu_get_num_math();
+            
+            #if defined(_WIN32) && (_WIN32_WINNT >= 0x0601) && !defined(__MINGW64__) // windows 7 and later
+            
+            if(cpuparams.cpu_pnp_strategy == GGML_CPU_PNP_STRATEGY_EFFICIENCY) {
+                cpu_info info;
+                if(get_cpu_info(info)){
+                    print_cpu_info(info);
+                    if(info.is_hybrid){
+                        LOG_INF("hybrid platform detected: applying strategy\n");
+                        if (cpuparams.n_threads > info.num_e_cores) {
+                            LOG_INF("overriding num threads: %d to num efficient cores %d\n", cpuparams.n_threads, info.num_e_cores);
+                            cpuparams.n_threads = info.num_e_cores;
+                        }
+                        for (int32_t i = 0; i < GGML_MAX_N_THREADS; i++) {
+                            cpuparams.cpumask[i] = info.e_core_affinity_mask[i];
+                        }
+                        cpuparams.mask_valid = true;
+                    }
+                }
+            }
+            #endif
         }
     }
 
