@@ -27,6 +27,7 @@ import wget
 
 
 DEFAULT_HTTP_TIMEOUT = 12
+DEFAULT_RETRY_SLEEP = 0.1
 
 if "LLAMA_SANITIZE" in os.environ or "GITHUB_ACTION" in os.environ:
     DEFAULT_HTTP_TIMEOUT = 30
@@ -256,25 +257,56 @@ class ServerProcess:
         data: dict | Any | None = None,
         headers: dict | None = None,
         timeout: float | None = None,
+        retry_timeout: float = DEFAULT_HTTP_TIMEOUT,
+        retry_sleep: float = DEFAULT_RETRY_SLEEP,
+        exp_ok: bool = True,
     ) -> ServerResponse:
-        url = f"http://{self.server_host}:{self.server_port}{path}"
-        parse_body = False
-        if method == "GET":
-            response = requests.get(url, headers=headers, timeout=timeout)
-            parse_body = True
-        elif method == "POST":
-            response = requests.post(url, headers=headers, json=data, timeout=timeout)
-            parse_body = True
-        elif method == "OPTIONS":
-            response = requests.options(url, headers=headers, timeout=timeout)
-        else:
-            raise ValueError(f"Unimplemented method: {method}")
-        result = ServerResponse()
-        result.headers = dict(response.headers)
-        result.status_code = response.status_code
-        result.body = response.json() if parse_body else None
-        print("Response from server", json.dumps(result.body, indent=2))
-        return result
+        start_time = time.time()
+        retry = False
+        try:
+            url = f"http://{self.server_host}:{self.server_port}{path}"
+            parse_body = False
+            if method == "GET":
+                response = requests.get(url, headers=headers, timeout=timeout)
+                parse_body = True
+            elif method == "POST":
+                response = requests.post(url, headers=headers, json=data, timeout=timeout)
+                parse_body = True
+            elif method == "OPTIONS":
+                response = requests.options(url, headers=headers, timeout=timeout)
+            else:
+                raise ValueError(f"Unimplemented method: {method}")
+            request_dt = time.time() - start_time
+            result = ServerResponse()
+            result.headers = dict(response.headers)
+            result.status_code = response.status_code
+            if (
+                exp_ok and
+                (response.status_code < 200 or response.status_code >= 300) and
+                retry_timeout > request_dt
+            ):
+                retry = True
+            else:
+                result.body = response.json() if parse_body else None
+                print("Response from server", json.dumps(result.body, indent=2))
+                return result
+        except Exception:
+            request_dt = time.time() - start_time
+            if retry_timeout > request_dt:
+                retry = True
+            else:
+                raise
+        if retry:
+            time.sleep(retry_sleep)
+            return self.make_request(
+                method=method,
+                path=path,
+                data=data,
+                headers=headers,
+                timeout=timeout,
+                retry_timeout=retry_timeout - request_dt - retry_sleep,
+            )
+
 
     def make_stream_request(
         self,
