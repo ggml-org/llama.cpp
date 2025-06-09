@@ -7167,6 +7167,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_opt_step_adamw_f32;
         }
         return nullptr;
+    case GGML_OP_OPT_STEP_SGD:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            // TODO
+        }
+        return nullptr;
     case GGML_OP_LEAKY_RELU:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_leaky_relu_f32;
@@ -8013,6 +8018,20 @@ static void ggml_vk_opt_step_adamw(ggml_backend_vk_context * ctx, vk_context& su
     const size_t n = ggml_nelements(dst->src[0]);
 
     ggml_vk_op_f32_opt_step_adamw(
+        ctx, subctx, dst,
+        { (uint32_t)n, 0, 0.0f, 0.0f },
+        dryrun
+    );
+}
+
+static void ggml_vk_op_f32_opt_step_sgd(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst, const vk_op_push_constants&& pc, bool dryrun = false) {
+    GGML_ASSERT(0 && "SGD vulkan unimplemented"); // TODO
+}
+
+static void ggml_vk_opt_step_sgd(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst, bool dryrun = false) {
+    const size_t n = ggml_nelements(dst->src[0]);
+
+    ggml_vk_op_f32_opt_step_sgd(
         ctx, subctx, dst,
         { (uint32_t)n, 0, 0.0f, 0.0f },
         dryrun
@@ -9886,6 +9905,12 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_opt_step_adamw(ctx, compute_ctx, node, dryrun);
 
         break;
+
+    case GGML_OP_OPT_STEP_SGD:
+        return false; // TODO
+        ggml_vk_opt_step_sgd(ctx, compute_ctx, node, dryrun);
+
+        break;
     default:
         return false;
     }
@@ -9989,8 +10014,9 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
     case GGML_OP_REPEAT_BACK:
     case GGML_OP_OPT_STEP_ADAMW:
         buf = tensor->buffer;
-
         break;
+    case GGML_OP_OPT_STEP_SGD:
+        return false;
     case GGML_OP_UNARY:
         switch (ggml_get_unary_op(tensor)) {
         case GGML_UNARY_OP_SILU:
@@ -11153,6 +11179,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_OPT_STEP_ADAMW:
             return true;
+        case GGML_OP_OPT_STEP_SGD:
+            return false;
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
@@ -11746,6 +11774,10 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         src_clone[0]->flags = src0->flags;
         tensor_clone = ggml_opt_step_adamw(ggml_ctx, src_clone[0], src_clone[1],
         src_clone[2], src_clone[3], src_clone[4]);
+    } else if (tensor->op == GGML_OP_OPT_STEP_SGD) {
+        src_clone[0]->flags = src0->flags;
+        tensor_clone = ggml_opt_step_sgd(ggml_ctx, src_clone[0], src_clone[1],
+        src_clone[2]);
     }
     else {
         std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
