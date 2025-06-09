@@ -42,8 +42,7 @@ html {
 }
 
 .chat-bubble {
-  word-break: break-word;
-  overflow-wrap: break-word;
+  @apply break-words;
 }
 
 .chat-bubble-base-300 {
