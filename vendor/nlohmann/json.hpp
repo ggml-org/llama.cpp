@@ -1,9 +1,9 @@
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 /****************************************************************************\
@@ -34,10 +34,10 @@
 // #include <nlohmann/adl_serializer.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -47,10 +47,10 @@
 // #include <nlohmann/detail/abi_macros.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -59,18 +59,22 @@
 
 #ifndef JSON_SKIP_LIBRARY_VERSION_CHECK
     #if defined(NLOHMANN_JSON_VERSION_MAJOR) && defined(NLOHMANN_JSON_VERSION_MINOR) && defined(NLOHMANN_JSON_VERSION_PATCH)
-        #if NLOHMANN_JSON_VERSION_MAJOR != 3 || NLOHMANN_JSON_VERSION_MINOR != 11 || NLOHMANN_JSON_VERSION_PATCH != 3
+        #if NLOHMANN_JSON_VERSION_MAJOR != 3 || NLOHMANN_JSON_VERSION_MINOR != 12 || NLOHMANN_JSON_VERSION_PATCH != 0
             #warning "Already included a different version of the library!"
         #endif
     #endif
 #endif
 
 #define NLOHMANN_JSON_VERSION_MAJOR 3   // NOLINT(modernize-macro-to-enum)
-#define NLOHMANN_JSON_VERSION_MINOR 11  // NOLINT(modernize-macro-to-enum)
-#define NLOHMANN_JSON_VERSION_PATCH 3   // NOLINT(modernize-macro-to-enum)
+#define NLOHMANN_JSON_VERSION_MINOR 12  // NOLINT(modernize-macro-to-enum)
+#define NLOHMANN_JSON_VERSION_PATCH 0   // NOLINT(modernize-macro-to-enum)
 
 #ifndef JSON_DIAGNOSTICS
     #define JSON_DIAGNOSTICS 0
+#endif
+
+#ifndef JSON_DIAGNOSTIC_POSITIONS
+    #define JSON_DIAGNOSTIC_POSITIONS 0
 #endif
 
 #ifndef JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON
@@ -81,6 +85,12 @@
     #define NLOHMANN_JSON_ABI_TAG_DIAGNOSTICS _diag
 #else
     #define NLOHMANN_JSON_ABI_TAG_DIAGNOSTICS
+#endif
+
+#if JSON_DIAGNOSTIC_POSITIONS
+    #define NLOHMANN_JSON_ABI_TAG_DIAGNOSTIC_POSITIONS _dp
+#else
+    #define NLOHMANN_JSON_ABI_TAG_DIAGNOSTIC_POSITIONS
 #endif
 
 #if JSON_USE_LEGACY_DISCARDED_VALUE_COMPARISON
@@ -94,14 +104,15 @@
 #endif
 
 // Construct the namespace ABI tags component
-#define NLOHMANN_JSON_ABI_TAGS_CONCAT_EX(a, b) json_abi ## a ## b
-#define NLOHMANN_JSON_ABI_TAGS_CONCAT(a, b) \
-    NLOHMANN_JSON_ABI_TAGS_CONCAT_EX(a, b)
+#define NLOHMANN_JSON_ABI_TAGS_CONCAT_EX(a, b, c) json_abi ## a ## b ## c
+#define NLOHMANN_JSON_ABI_TAGS_CONCAT(a, b, c) \
+    NLOHMANN_JSON_ABI_TAGS_CONCAT_EX(a, b, c)
 
 #define NLOHMANN_JSON_ABI_TAGS                                       \
     NLOHMANN_JSON_ABI_TAGS_CONCAT(                                   \
             NLOHMANN_JSON_ABI_TAG_DIAGNOSTICS,                       \
-            NLOHMANN_JSON_ABI_TAG_LEGACY_DISCARDED_VALUE_COMPARISON)
+            NLOHMANN_JSON_ABI_TAG_LEGACY_DISCARDED_VALUE_COMPARISON, \
+            NLOHMANN_JSON_ABI_TAG_DIAGNOSTIC_POSITIONS)
 
 // Construct the namespace version component
 #define NLOHMANN_JSON_NAMESPACE_VERSION_CONCAT_EX(major, minor, patch) \
@@ -149,10 +160,10 @@
 // #include <nlohmann/detail/conversions/from_json.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -162,6 +173,9 @@
 #include <forward_list> // forward_list
 #include <iterator> // inserter, front_inserter, end
 #include <map> // map
+#ifdef JSON_HAS_CPP_17
+    #include <optional> // optional
+#endif
 #include <string> // string
 #include <tuple> // tuple, make_tuple
 #include <type_traits> // is_arithmetic, is_same, is_enum, underlying_type, is_convertible
@@ -172,10 +186,10 @@
 // #include <nlohmann/detail/exceptions.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -192,10 +206,10 @@
 // #include <nlohmann/detail/value_t.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -208,10 +222,10 @@
 // #include <nlohmann/detail/macro_scope.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -220,10 +234,10 @@
 // #include <nlohmann/detail/meta/detected.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -233,10 +247,10 @@
 // #include <nlohmann/detail/meta/void_t.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -320,11 +334,11 @@ NLOHMANN_JSON_NAMESPACE_END
 
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
-// SPDX-FileCopyrightText: 2016-2021 Evan Nemerson <evan@nemerson.com>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2016 - 2021 Evan Nemerson <evan@nemerson.com>
 // SPDX-License-Identifier: MIT
 
 /* Hedley - https://nemequ.github.io/hedley
@@ -2384,15 +2398,20 @@ JSON_HEDLEY_DIAGNOSTIC_POP
 
 // C++ language standard detection
 // if the user manually specified the used c++ version this is skipped
-#if !defined(JSON_HAS_CPP_20) && !defined(JSON_HAS_CPP_17) && !defined(JSON_HAS_CPP_14) && !defined(JSON_HAS_CPP_11)
-    #if (defined(__cplusplus) && __cplusplus >= 202002L) || (defined(_MSVC_LANG) && _MSVC_LANG >= 202002L)
+#if !defined(JSON_HAS_CPP_23) && !defined(JSON_HAS_CPP_20) && !defined(JSON_HAS_CPP_17) && !defined(JSON_HAS_CPP_14) && !defined(JSON_HAS_CPP_11)
+    #if (defined(__cplusplus) && __cplusplus > 202002L) || (defined(_MSVC_LANG) && _MSVC_LANG > 202002L)
+        #define JSON_HAS_CPP_23
         #define JSON_HAS_CPP_20
         #define JSON_HAS_CPP_17
         #define JSON_HAS_CPP_14
-    #elif (defined(__cplusplus) && __cplusplus >= 201703L) || (defined(_HAS_CXX17) && _HAS_CXX17 == 1) // fix for issue #464
+    #elif (defined(__cplusplus) && __cplusplus > 201703L) || (defined(_MSVC_LANG) && _MSVC_LANG > 201703L)
+        #define JSON_HAS_CPP_20
         #define JSON_HAS_CPP_17
         #define JSON_HAS_CPP_14
-    #elif (defined(__cplusplus) && __cplusplus >= 201402L) || (defined(_HAS_CXX14) && _HAS_CXX14 == 1)
+    #elif (defined(__cplusplus) && __cplusplus > 201402L) || (defined(_HAS_CXX17) && _HAS_CXX17 == 1) // fix for issue #464
+        #define JSON_HAS_CPP_17
+        #define JSON_HAS_CPP_14
+    #elif (defined(__cplusplus) && __cplusplus > 201103L) || (defined(_HAS_CXX14) && _HAS_CXX14 == 1)
         #define JSON_HAS_CPP_14
     #endif
     // the cpp 11 flag is always specified because it is the minimal required version
@@ -2568,7 +2587,9 @@ JSON_HEDLEY_DIAGNOSTIC_POP
     template<typename BasicJsonType>                                                            \
     inline void to_json(BasicJsonType& j, const ENUM_TYPE& e)                                   \
     {                                                                                           \
+        /* NOLINTNEXTLINE(modernize-type-traits) we use C++11 */                                \
         static_assert(std::is_enum<ENUM_TYPE>::value, #ENUM_TYPE " must be an enum!");          \
+        /* NOLINTNEXTLINE(modernize-avoid-c-arrays) we don't want to depend on <array> */       \
         static const std::pair<ENUM_TYPE, BasicJsonType> m[] = __VA_ARGS__;                     \
         auto it = std::find_if(std::begin(m), std::end(m),                                      \
                                [e](const std::pair<ENUM_TYPE, BasicJsonType>& ej_pair) -> bool  \
@@ -2580,7 +2601,9 @@ JSON_HEDLEY_DIAGNOSTIC_POP
     template<typename BasicJsonType>                                                            \
     inline void from_json(const BasicJsonType& j, ENUM_TYPE& e)                                 \
     {                                                                                           \
+        /* NOLINTNEXTLINE(modernize-type-traits) we use C++11 */                                \
         static_assert(std::is_enum<ENUM_TYPE>::value, #ENUM_TYPE " must be an enum!");          \
+        /* NOLINTNEXTLINE(modernize-avoid-c-arrays) we don't want to depend on <array> */       \
         static const std::pair<ENUM_TYPE, BasicJsonType> m[] = __VA_ARGS__;                     \
         auto it = std::find_if(std::begin(m), std::end(m),                                      \
                                [&j](const std::pair<ENUM_TYPE, BasicJsonType>& ej_pair) -> bool \
@@ -2743,42 +2766,146 @@ JSON_HEDLEY_DIAGNOSTIC_POP
 
 #define NLOHMANN_JSON_TO(v1) nlohmann_json_j[#v1] = nlohmann_json_t.v1;
 #define NLOHMANN_JSON_FROM(v1) nlohmann_json_j.at(#v1).get_to(nlohmann_json_t.v1);
-#define NLOHMANN_JSON_FROM_WITH_DEFAULT(v1) nlohmann_json_t.v1 = nlohmann_json_j.value(#v1, nlohmann_json_default_obj.v1);
+#define NLOHMANN_JSON_FROM_WITH_DEFAULT(v1) nlohmann_json_t.v1 = !nlohmann_json_j.is_null() ? nlohmann_json_j.value(#v1, nlohmann_json_default_obj.v1) : nlohmann_json_default_obj.v1;
 
 /*!
 @brief macro
 @def NLOHMANN_DEFINE_TYPE_INTRUSIVE
 @since version 3.9.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_type_intrusive/
 */
 #define NLOHMANN_DEFINE_TYPE_INTRUSIVE(Type, ...)  \
-    friend void to_json(nlohmann::json& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
-    friend void from_json(const nlohmann::json& nlohmann_json_j, Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM, __VA_ARGS__)) }
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM, __VA_ARGS__)) }
 
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT
+@since version 3.11.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_type_intrusive/
+*/
 #define NLOHMANN_DEFINE_TYPE_INTRUSIVE_WITH_DEFAULT(Type, ...)  \
-    friend void to_json(nlohmann::json& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
-    friend void from_json(const nlohmann::json& nlohmann_json_j, Type& nlohmann_json_t) { const Type nlohmann_json_default_obj{}; NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM_WITH_DEFAULT, __VA_ARGS__)) }
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { const Type nlohmann_json_default_obj{}; NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM_WITH_DEFAULT, __VA_ARGS__)) }
 
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_TYPE_INTRUSIVE_ONLY_SERIALIZE
+@since version 3.11.3
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_type_intrusive/
+*/
 #define NLOHMANN_DEFINE_TYPE_INTRUSIVE_ONLY_SERIALIZE(Type, ...)  \
-    friend void to_json(nlohmann::json& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) }
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) }
 
 /*!
 @brief macro
 @def NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE
 @since version 3.9.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_type_non_intrusive/
 */
 #define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Type, ...)  \
-    inline void to_json(nlohmann::json& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
-    inline void from_json(const nlohmann::json& nlohmann_json_j, Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM, __VA_ARGS__)) }
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM, __VA_ARGS__)) }
 
-#define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE(Type, ...)  \
-    inline void to_json(nlohmann::json& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) }
-
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT
+@since version 3.11.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_type_non_intrusive/
+*/
 #define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Type, ...)  \
-    inline void to_json(nlohmann::json& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
-    inline void from_json(const nlohmann::json& nlohmann_json_j, Type& nlohmann_json_t) { const Type nlohmann_json_default_obj{}; NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM_WITH_DEFAULT, __VA_ARGS__)) }
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { const Type nlohmann_json_default_obj{}; NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM_WITH_DEFAULT, __VA_ARGS__)) }
+
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE
+@since version 3.11.3
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_type_non_intrusive/
+*/
+#define NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE(Type, ...)  \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) }
+
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_DERIVED_TYPE_INTRUSIVE
+@since version 3.12.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_derived_type/
+*/
+#define NLOHMANN_DEFINE_DERIVED_TYPE_INTRUSIVE(Type, BaseType, ...)  \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { nlohmann::to_json(nlohmann_json_j, static_cast<const BaseType &>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { nlohmann::from_json(nlohmann_json_j, static_cast<BaseType&>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM, __VA_ARGS__)) }
+
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_DERIVED_TYPE_INTRUSIVE_WITH_DEFAULT
+@since version 3.12.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_derived_type/
+*/
+#define NLOHMANN_DEFINE_DERIVED_TYPE_INTRUSIVE_WITH_DEFAULT(Type, BaseType, ...)  \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { nlohmann::to_json(nlohmann_json_j, static_cast<const BaseType&>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { nlohmann::from_json(nlohmann_json_j, static_cast<BaseType&>(nlohmann_json_t)); const Type nlohmann_json_default_obj{}; NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM_WITH_DEFAULT, __VA_ARGS__)) }
+
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_DERIVED_TYPE_INTRUSIVE_ONLY_SERIALIZE
+@since version 3.12.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_derived_type/
+*/
+#define NLOHMANN_DEFINE_DERIVED_TYPE_INTRUSIVE_ONLY_SERIALIZE(Type, BaseType, ...)  \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    friend void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { nlohmann::to_json(nlohmann_json_j, static_cast<const BaseType &>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) }
+
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_DERIVED_TYPE_NON_INTRUSIVE
+@since version 3.12.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_derived_type/
+*/
+#define NLOHMANN_DEFINE_DERIVED_TYPE_NON_INTRUSIVE(Type, BaseType, ...)  \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { nlohmann::to_json(nlohmann_json_j, static_cast<const BaseType &>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { nlohmann::from_json(nlohmann_json_j, static_cast<BaseType&>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM, __VA_ARGS__)) }
+
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_DERIVED_TYPE_NON_INTRUSIVE_WITH_DEFAULT
+@since version 3.12.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_derived_type/
+*/
+#define NLOHMANN_DEFINE_DERIVED_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Type, BaseType, ...)  \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { nlohmann::to_json(nlohmann_json_j, static_cast<const BaseType &>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) } \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void from_json(const BasicJsonType& nlohmann_json_j, Type& nlohmann_json_t) { nlohmann::from_json(nlohmann_json_j, static_cast<BaseType&>(nlohmann_json_t)); const Type nlohmann_json_default_obj{}; NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_FROM_WITH_DEFAULT, __VA_ARGS__)) }
+
+/*!
+@brief macro
+@def NLOHMANN_DEFINE_DERIVED_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE
+@since version 3.12.0
+@sa https://json.nlohmann.me/api/macros/nlohmann_define_derived_type/
+*/
+#define NLOHMANN_DEFINE_DERIVED_TYPE_NON_INTRUSIVE_ONLY_SERIALIZE(Type, BaseType, ...)  \
+    template<typename BasicJsonType, nlohmann::detail::enable_if_t<nlohmann::detail::is_basic_json<BasicJsonType>::value, int> = 0> \
+    void to_json(BasicJsonType& nlohmann_json_j, const Type& nlohmann_json_t) { nlohmann::to_json(nlohmann_json_j, static_cast<const BaseType &>(nlohmann_json_t)); NLOHMANN_JSON_EXPAND(NLOHMANN_JSON_PASTE(NLOHMANN_JSON_TO, __VA_ARGS__)) }
 
 // inspired from https://stackoverflow.com/a/26745591
-// allows to call any std function as if (e.g. with begin):
+// allows calling any std function as if (e.g., with begin):
 // using std::begin; begin(x);
 //
 // it allows using the detected idiom to retrieve the return type
@@ -2939,10 +3066,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/string_escape.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -3014,10 +3141,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/input/position_t.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -3056,10 +3183,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/meta/cpp_future.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-FileCopyrightText: 2018 The Abseil Authors
 // SPDX-License-Identifier: MIT
 
@@ -3219,7 +3346,7 @@ struct static_const
 #endif
 
 template<typename T, typename... Args>
-inline constexpr std::array<T, sizeof...(Args)> make_array(Args&& ... args)
+constexpr std::array<T, sizeof...(Args)> make_array(Args&& ... args)
 {
     return std::array<T, sizeof...(Args)> {{static_cast<T>(std::forward<Args>(args))...}};
 }
@@ -3230,27 +3357,27 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/meta/type_traits.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
 
 #include <limits> // numeric_limits
+#include <string> // char_traits
+#include <tuple> // tuple
 #include <type_traits> // false_type, is_constructible, is_integral, is_same, true_type
 #include <utility> // declval
-#include <tuple> // tuple
-#include <string> // char_traits
 
 // #include <nlohmann/detail/iterators/iterator_traits.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -3293,7 +3420,7 @@ struct iterator_traits
 
 template<typename T>
 struct iterator_traits < T, enable_if_t < !std::is_pointer<T>::value >>
-            : iterator_types<T>
+    : iterator_types<T>
 {
 };
 
@@ -3315,10 +3442,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/meta/call_std/begin.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -3335,10 +3462,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/meta/call_std/end.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -3359,10 +3486,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/json_fwd.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 #ifndef INCLUDE_NLOHMANN_JSON_FWD_HPP_
@@ -3624,7 +3751,7 @@ struct char_traits<unsigned char> : std::char_traits<char>
 
     static constexpr int_type eof() noexcept
     {
-        return static_cast<int_type>(EOF);
+        return static_cast<int_type>(std::char_traits<char>::eof());
     }
 };
 
@@ -3648,7 +3775,7 @@ struct char_traits<signed char> : std::char_traits<char>
 
     static constexpr int_type eof() noexcept
     {
-        return static_cast<int_type>(EOF);
+        return static_cast<int_type>(std::char_traits<char>::eof());
     }
 };
 
@@ -3674,19 +3801,19 @@ struct is_default_constructible : std::is_default_constructible<T> {};
 
 template <typename T1, typename T2>
 struct is_default_constructible<std::pair<T1, T2>>
-            : conjunction<is_default_constructible<T1>, is_default_constructible<T2>> {};
+    : conjunction<is_default_constructible<T1>, is_default_constructible<T2>> {};
 
 template <typename T1, typename T2>
 struct is_default_constructible<const std::pair<T1, T2>>
-            : conjunction<is_default_constructible<T1>, is_default_constructible<T2>> {};
+    : conjunction<is_default_constructible<T1>, is_default_constructible<T2>> {};
 
 template <typename... Ts>
 struct is_default_constructible<std::tuple<Ts...>>
-            : conjunction<is_default_constructible<Ts>...> {};
+    : conjunction<is_default_constructible<Ts>...> {};
 
 template <typename... Ts>
 struct is_default_constructible<const std::tuple<Ts...>>
-            : conjunction<is_default_constructible<Ts>...> {};
+    : conjunction<is_default_constructible<Ts>...> {};
 
 template <typename T, typename... Args>
 struct is_constructible : std::is_constructible<T, Args...> {};
@@ -3884,8 +4011,8 @@ is_detected<range_value_t, ConstructibleArrayType>::value&&
 // special case for types like std::filesystem::path whose iterator's value_type are themselves
 // c.f. https://github.com/nlohmann/json/pull/3073
 !std::is_same<ConstructibleArrayType, detected_t<range_value_t, ConstructibleArrayType>>::value&&
-        is_complete_type <
-        detected_t<range_value_t, ConstructibleArrayType >>::value >>
+is_complete_type <
+detected_t<range_value_t, ConstructibleArrayType >>::value >>
 {
     using value_type = range_value_t<ConstructibleArrayType>;
 
@@ -4008,12 +4135,12 @@ using is_usable_as_key_type = typename std::conditional <
 template<typename BasicJsonType, typename KeyTypeCVRef, bool RequireTransparentComparator = true,
          bool ExcludeObjectKeyType = RequireTransparentComparator, typename KeyType = uncvref_t<KeyTypeCVRef>>
 using is_usable_as_basic_json_key_type = typename std::conditional <
-        is_usable_as_key_type<typename BasicJsonType::object_comparator_t,
-        typename BasicJsonType::object_t::key_type, KeyTypeCVRef,
-        RequireTransparentComparator, ExcludeObjectKeyType>::value
-        && !is_json_iterator_of<BasicJsonType, KeyType>::value,
-        std::true_type,
-        std::false_type >::type;
+    is_usable_as_key_type<typename BasicJsonType::object_comparator_t,
+    typename BasicJsonType::object_t::key_type, KeyTypeCVRef,
+    RequireTransparentComparator, ExcludeObjectKeyType>::value
+    && !is_json_iterator_of<BasicJsonType, KeyType>::value,
+    std::true_type,
+    std::false_type >::type;
 
 template<typename ObjectType, typename KeyType>
 using detect_erase_with_key_type = decltype(std::declval<ObjectType&>().erase(std::declval<KeyType>()));
@@ -4147,7 +4274,7 @@ struct value_in_range_of_impl1<OfType, T, true>
 };
 
 template<typename OfType, typename T>
-inline constexpr bool value_in_range_of(T val)
+constexpr bool value_in_range_of(T val)
 {
     return value_in_range_of_impl1<OfType, T>::test(val);
 }
@@ -4163,7 +4290,7 @@ namespace impl
 {
 
 template<typename T>
-inline constexpr bool is_c_string()
+constexpr bool is_c_string()
 {
     using TUnExt = typename std::remove_extent<T>::type;
     using TUnCVExt = typename std::remove_cv<TUnExt>::type;
@@ -4191,7 +4318,7 @@ namespace impl
 {
 
 template<typename T>
-inline constexpr bool is_transparent()
+constexpr bool is_transparent()
 {
     return is_detected<detect_is_transparent, T>::value;
 }
@@ -4210,10 +4337,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/string_concat.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -4358,6 +4485,18 @@ inline OutStringType concat(Args && ... args)
 NLOHMANN_JSON_NAMESPACE_END
 
 
+// With -Wweak-vtables, Clang will complain about the exception classes as they
+// have no out-of-line virtual method definitions and their vtable will be
+// emitted in every translation unit. This issue cannot be fixed with a
+// header-only library as there is no implementation file to move these
+// functions to. As a result, we suppress this warning here to avoid client
+// code to stumble over this. See https://github.com/nlohmann/json/issues/4087
+// for a discussion.
+#if defined(__clang__)
+    #pragma clang diagnostic push
+    #pragma clang diagnostic ignored "-Wweak-vtables"
+#endif
+
 NLOHMANN_JSON_NAMESPACE_BEGIN
 namespace detail
 {
@@ -4452,16 +4591,34 @@ class exception : public std::exception
         {
             return concat(a, '/', detail::escape(b));
         });
-        return concat('(', str, ") ");
+
+        return concat('(', str, ") ", get_byte_positions(leaf_element));
 #else
-        static_cast<void>(leaf_element);
-        return "";
+        return get_byte_positions(leaf_element);
 #endif
     }
 
   private:
     /// an exception object as storage for error messages
     std::runtime_error m;
+#if JSON_DIAGNOSTIC_POSITIONS
+    template<typename BasicJsonType>
+    static std::string get_byte_positions(const BasicJsonType* leaf_element)
+    {
+        if ((leaf_element->start_pos() != std::string::npos) && (leaf_element->end_pos() != std::string::npos))
+        {
+            return concat("(bytes ", std::to_string(leaf_element->start_pos()), "-", std::to_string(leaf_element->end_pos()), ") ");
+        }
+        return "";
+    }
+#else
+    template<typename BasicJsonType>
+    static std::string get_byte_positions(const BasicJsonType* leaf_element)
+    {
+        static_cast<void>(leaf_element);
+        return "";
+    }
+#endif
 };
 
 /// @brief exception indicating a parse error
@@ -4589,6 +4746,10 @@ class other_error : public exception
 }  // namespace detail
 NLOHMANN_JSON_NAMESPACE_END
 
+#if defined(__clang__)
+    #pragma clang diagnostic pop
+#endif
+
 // #include <nlohmann/detail/macro_scope.hpp>
 
 // #include <nlohmann/detail/meta/cpp_future.hpp>
@@ -4596,10 +4757,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/meta/identity_tag.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -4620,10 +4781,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/meta/std_fs.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -4640,7 +4801,7 @@ namespace std_fs = std::experimental::filesystem;
 }  // namespace detail
 NLOHMANN_JSON_NAMESPACE_END
 #elif JSON_HAS_FILESYSTEM
-#include <filesystem>
+#include <filesystem> // NOLINT(build/c++17)
 NLOHMANN_JSON_NAMESPACE_BEGIN
 namespace detail
 {
@@ -4669,6 +4830,24 @@ inline void from_json(const BasicJsonType& j, typename std::nullptr_t& n)
     }
     n = nullptr;
 }
+
+#ifdef JSON_HAS_CPP_17
+#ifndef JSON_USE_IMPLICIT_CONVERSIONS
+template<typename BasicJsonType, typename T>
+void from_json(const BasicJsonType& j, std::optional<T>& opt)
+{
+    if (j.is_null())
+    {
+        opt = std::nullopt;
+    }
+    else
+    {
+        opt.emplace(j.template get<T>());
+    }
+}
+
+#endif // JSON_USE_IMPLICIT_CONVERSIONS
+#endif // JSON_HAS_CPP_17
 
 // overloads for basic_json template parameters
 template < typename BasicJsonType, typename ArithmeticType,
@@ -4817,6 +4996,54 @@ auto from_json(const BasicJsonType& j, T (&arr)[N])  // NOLINT(cppcoreguidelines
     }
 }
 
+template<typename BasicJsonType, typename T, std::size_t N1, std::size_t N2>
+auto from_json(const BasicJsonType& j, T (&arr)[N1][N2])  // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
+-> decltype(j.template get<T>(), void())
+{
+    for (std::size_t i1 = 0; i1 < N1; ++i1)
+    {
+        for (std::size_t i2 = 0; i2 < N2; ++i2)
+        {
+            arr[i1][i2] = j.at(i1).at(i2).template get<T>();
+        }
+    }
+}
+
+template<typename BasicJsonType, typename T, std::size_t N1, std::size_t N2, std::size_t N3>
+auto from_json(const BasicJsonType& j, T (&arr)[N1][N2][N3])  // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
+-> decltype(j.template get<T>(), void())
+{
+    for (std::size_t i1 = 0; i1 < N1; ++i1)
+    {
+        for (std::size_t i2 = 0; i2 < N2; ++i2)
+        {
+            for (std::size_t i3 = 0; i3 < N3; ++i3)
+            {
+                arr[i1][i2][i3] = j.at(i1).at(i2).at(i3).template get<T>();
+            }
+        }
+    }
+}
+
+template<typename BasicJsonType, typename T, std::size_t N1, std::size_t N2, std::size_t N3, std::size_t N4>
+auto from_json(const BasicJsonType& j, T (&arr)[N1][N2][N3][N4])  // NOLINT(cppcoreguidelines-avoid-c-arrays,hicpp-avoid-c-arrays,modernize-avoid-c-arrays)
+-> decltype(j.template get<T>(), void())
+{
+    for (std::size_t i1 = 0; i1 < N1; ++i1)
+    {
+        for (std::size_t i2 = 0; i2 < N2; ++i2)
+        {
+            for (std::size_t i3 = 0; i3 < N3; ++i3)
+            {
+                for (std::size_t i4 = 0; i4 < N4; ++i4)
+                {
+                    arr[i1][i2][i3][i4] = j.at(i1).at(i2).at(i3).at(i4).template get<T>();
+                }
+            }
+        }
+    }
+}
+
 template<typename BasicJsonType>
 inline void from_json_array_impl(const BasicJsonType& j, typename BasicJsonType::array_t& arr, priority_tag<3> /*unused*/)
 {
@@ -4902,7 +5129,7 @@ void())
 
 template < typename BasicJsonType, typename T, std::size_t... Idx >
 std::array<T, sizeof...(Idx)> from_json_inplace_array_impl(BasicJsonType&& j,
-        identity_tag<std::array<T, sizeof...(Idx)>> /*unused*/, index_sequence<Idx...> /*unused*/)
+                     identity_tag<std::array<T, sizeof...(Idx)>> /*unused*/, index_sequence<Idx...> /*unused*/)
 {
     return { { std::forward<BasicJsonType>(j).at(Idx).template get<T>()... } };
 }
@@ -5006,6 +5233,12 @@ std::tuple<Args...> from_json_tuple_impl_base(BasicJsonType&& j, index_sequence<
     return std::make_tuple(std::forward<BasicJsonType>(j).at(Idx).template get<Args>()...);
 }
 
+template<typename BasicJsonType>
+std::tuple<> from_json_tuple_impl_base(BasicJsonType& /*unused*/, index_sequence<> /*unused*/)
+{
+    return {};
+}
+
 template < typename BasicJsonType, class A1, class A2 >
 std::pair<A1, A2> from_json_tuple_impl(BasicJsonType&& j, identity_tag<std::pair<A1, A2>> /*unused*/, priority_tag<0> /*unused*/)
 {
@@ -5091,7 +5324,12 @@ inline void from_json(const BasicJsonType& j, std_fs::path& p)
     {
         JSON_THROW(type_error::create(302, concat("type must be string, but is ", j.type_name()), &j));
     }
-    p = *j.template get_ptr<const typename BasicJsonType::string_t*>();
+    const auto& s = *j.template get_ptr<const typename BasicJsonType::string_t*>();
+#ifdef JSON_HAS_CPP_20
+    p = std_fs::path(std::u8string_view(reinterpret_cast<const char8_t*>(s.data()), s.size()));
+#else
+    p = std_fs::u8path(s); // accepts UTF-8 encoded std::string in C++17, deprecated in C++20
+#endif
 }
 #endif
 
@@ -5126,13 +5364,19 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/conversions/to_json.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
+
+// #include <nlohmann/detail/macro_scope.hpp>
+// JSON_HAS_CPP_17
+#ifdef JSON_HAS_CPP_17
+    #include <optional> // optional
+#endif
 
 #include <algorithm> // copy
 #include <iterator> // begin, end
@@ -5146,17 +5390,16 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/iterators/iteration_proxy.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
 
 #include <cstddef> // size_t
-#include <iterator> // input_iterator_tag
-#include <string> // string, to_string
+#include <iterator> // forward_iterator_tag
 #include <tuple> // tuple_size, get, tuple_element
 #include <utility> // move
 
@@ -5168,6 +5411,46 @@ NLOHMANN_JSON_NAMESPACE_END
 
 // #include <nlohmann/detail/meta/type_traits.hpp>
 
+// #include <nlohmann/detail/string_utils.hpp>
+//     __ _____ _____ _____
+//  __|  |   __|     |   | |  JSON for Modern C++
+// |  |  |__   |  |  | | | |  version 3.12.0
+// |_____|_____|_____|_|___|  https://github.com/nlohmann/json
+//
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
+// SPDX-License-Identifier: MIT
+
+
+
+#include <cstddef> // size_t
+#include <string> // string, to_string
+
+// #include <nlohmann/detail/abi_macros.hpp>
+
+
+NLOHMANN_JSON_NAMESPACE_BEGIN
+namespace detail
+{
+
+template<typename StringType>
+void int_to_string(StringType& target, std::size_t value)
+{
+    // For ADL
+    using std::to_string;
+    target = to_string(value);
+}
+
+template<typename StringType>
+StringType to_string(std::size_t value)
+{
+    StringType result;
+    int_to_string(result, value);
+    return result;
+}
+
+}  // namespace detail
+NLOHMANN_JSON_NAMESPACE_END
+
 // #include <nlohmann/detail/value_t.hpp>
 
 
@@ -5175,13 +5458,6 @@ NLOHMANN_JSON_NAMESPACE_BEGIN
 namespace detail
 {
 
-template<typename string_type>
-void int_to_string( string_type& target, std::size_t value )
-{
-    // For ADL
-    using std::to_string;
-    target = to_string(value);
-}
 template<typename IteratorType> class iteration_proxy_value
 {
   public:
@@ -5189,7 +5465,7 @@ template<typename IteratorType> class iteration_proxy_value
     using value_type = iteration_proxy_value;
     using pointer = value_type *;
     using reference = value_type &;
-    using iterator_category = std::input_iterator_tag;
+    using iterator_category = std::forward_iterator_tag;
     using string_type = typename std::remove_cv< typename std::remove_reference<decltype( std::declval<IteratorType>().key() ) >::type >::type;
 
   private:
@@ -5369,7 +5645,7 @@ namespace std
 #endif
 template<typename IteratorType>
 class tuple_size<::nlohmann::detail::iteration_proxy_value<IteratorType>> // NOLINT(cert-dcl58-cpp)
-            : public std::integral_constant<std::size_t, 2> {};
+    : public std::integral_constant<std::size_t, 2> {};
 
 template<std::size_t N, typename IteratorType>
 class tuple_element<N, ::nlohmann::detail::iteration_proxy_value<IteratorType >> // NOLINT(cert-dcl58-cpp)
@@ -5389,8 +5665,6 @@ class tuple_element<N, ::nlohmann::detail::iteration_proxy_value<IteratorType >>
     template <typename IteratorType>
     inline constexpr bool ::std::ranges::enable_borrowed_range<::nlohmann::detail::iteration_proxy<IteratorType>> = true;
 #endif
-
-// #include <nlohmann/detail/macro_scope.hpp>
 
 // #include <nlohmann/detail/meta/cpp_future.hpp>
 
@@ -5637,6 +5911,22 @@ struct external_constructor<value_t::object>
 // to_json //
 /////////////
 
+#ifdef JSON_HAS_CPP_17
+template<typename BasicJsonType, typename T,
+         enable_if_t<std::is_constructible<BasicJsonType, T>::value, int> = 0>
+void to_json(BasicJsonType& j, const std::optional<T>& opt)
+{
+    if (opt.has_value())
+    {
+        j = *opt;
+    }
+    else
+    {
+        j = nullptr;
+    }
+}
+#endif
+
 template<typename BasicJsonType, typename T,
          enable_if_t<std::is_same<T, typename BasicJsonType::boolean_t>::value, int> = 0>
 inline void to_json(BasicJsonType& j, T b) noexcept
@@ -5783,6 +6073,13 @@ inline void to_json_tuple_impl(BasicJsonType& j, const Tuple& t, index_sequence<
     j = { std::get<Idx>(t)... };
 }
 
+template<typename BasicJsonType, typename Tuple>
+inline void to_json_tuple_impl(BasicJsonType& j, const Tuple& /*unused*/, index_sequence<> /*unused*/)
+{
+    using array_t = typename BasicJsonType::array_t;
+    j = array_t();
+}
+
 template<typename BasicJsonType, typename T, enable_if_t<is_constructible_tuple<BasicJsonType, T>::value, int > = 0>
 inline void to_json(BasicJsonType& j, const T& t)
 {
@@ -5793,7 +6090,12 @@ inline void to_json(BasicJsonType& j, const T& t)
 template<typename BasicJsonType>
 inline void to_json(BasicJsonType& j, const std_fs::path& p)
 {
-    j = p.string();
+#ifdef JSON_HAS_CPP_20
+    const std::u8string s = p.u8string();
+    j = std::string(s.begin(), s.end());
+#else
+    j = p.u8string(); // returns std::string in C++17
+#endif
 }
 #endif
 
@@ -5868,10 +6170,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/byte_container_with_subtype.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -5980,10 +6282,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/hash.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -6113,10 +6415,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/input/binary_reader.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -6133,16 +6435,19 @@ NLOHMANN_JSON_NAMESPACE_END
 #include <string> // char_traits, string
 #include <utility> // make_pair, move
 #include <vector> // vector
+#ifdef __cpp_lib_byteswap
+    #include <bit>  //byteswap
+#endif
 
 // #include <nlohmann/detail/exceptions.hpp>
 
 // #include <nlohmann/detail/input/input_adapters.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -6161,6 +6466,8 @@ NLOHMANN_JSON_NAMESPACE_END
     #include <cstdio>   // FILE *
     #include <istream>  // istream
 #endif                  // JSON_NO_IO
+
+// #include <nlohmann/detail/exceptions.hpp>
 
 // #include <nlohmann/detail/iterators/iterator_traits.hpp>
 
@@ -6207,6 +6514,13 @@ class file_input_adapter
     std::char_traits<char>::int_type get_character() noexcept
     {
         return std::fgetc(m_file);
+    }
+
+    // returns the number of characters successfully read
+    template<class T>
+    std::size_t get_elements(T* dest, std::size_t count = 1)
+    {
+        return fread(dest, 1, sizeof(T) * count, m_file);
     }
 
   private:
@@ -6268,6 +6582,17 @@ class input_stream_adapter
         return res;
     }
 
+    template<class T>
+    std::size_t get_elements(T* dest, std::size_t count = 1)
+    {
+        auto res = static_cast<std::size_t>(sb->sgetn(reinterpret_cast<char*>(dest), static_cast<std::streamsize>(count * sizeof(T))));
+        if (JSON_HEDLEY_UNLIKELY(res < count * sizeof(T)))
+        {
+            is->clear(is->rdstate() | std::ios::eofbit);
+        }
+        return res;
+    }
+
   private:
     /// the associated input stream
     std::istream* is = nullptr;
@@ -6297,6 +6622,26 @@ class iterator_input_adapter
         }
 
         return char_traits<char_type>::eof();
+    }
+
+    // for general iterators, we cannot really do something better than falling back to processing the range one-by-one
+    template<class T>
+    std::size_t get_elements(T* dest, std::size_t count = 1)
+    {
+        auto* ptr = reinterpret_cast<char*>(dest);
+        for (std::size_t read_index = 0; read_index < count * sizeof(T); ++read_index)
+        {
+            if (JSON_HEDLEY_LIKELY(current != end))
+            {
+                ptr[read_index] = static_cast<char>(*current);
+                std::advance(current, 1);
+            }
+            else
+            {
+                return read_index;
+            }
+        }
+        return count * sizeof(T);
     }
 
   private:
@@ -6462,6 +6807,13 @@ class wide_string_input_adapter
         return utf8_bytes[utf8_bytes_index++];
     }
 
+    // parsing binary with wchar doesn't make sense, but since the parsing mode can be runtime, we need something here
+    template<class T>
+    std::size_t get_elements(T* /*dest*/, std::size_t /*count*/ = 1)
+    {
+        JSON_THROW(parse_error::create(112, 1, "wide string type cannot be interpreted as binary data", nullptr));
+    }
+
   private:
     BaseInputAdapter base_adapter;
 
@@ -6558,10 +6910,17 @@ typename container_input_adapter_factory_impl::container_input_adapter_factory<C
     return container_input_adapter_factory_impl::container_input_adapter_factory<ContainerType>::create(container);
 }
 
+// specialization for std::string
+using string_input_adapter_type = decltype(input_adapter(std::declval<std::string>()));
+
 #ifndef JSON_NO_IO
 // Special cases with fast paths
 inline file_input_adapter input_adapter(std::FILE* file)
 {
+    if (file == nullptr)
+    {
+        JSON_THROW(parse_error::create(101, 0, "attempting to parse an empty input; check that your input string or stream contains the expected JSON", nullptr));
+    }
     return file_input_adapter(file);
 }
 
@@ -6588,9 +6947,13 @@ template < typename CharT,
                int >::type = 0 >
 contiguous_bytes_input_adapter input_adapter(CharT b)
 {
+    if (b == nullptr)
+    {
+        JSON_THROW(parse_error::create(101, 0, "attempting to parse an empty input; check that your input string or stream contains the expected JSON", nullptr));
+    }
     auto length = std::strlen(reinterpret_cast<const char*>(b));
     const auto* ptr = reinterpret_cast<const char*>(b);
-    return input_adapter(ptr, ptr + length);
+    return input_adapter(ptr, ptr + length); // cppcheck-suppress[nullPointerArithmeticRedundantCheck]
 }
 
 template<typename T, std::size_t N>
@@ -6636,742 +6999,29 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/input/json_sax.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
 
 #include <cstddef>
 #include <string> // string
+#include <type_traits> // enable_if_t
 #include <utility> // move
 #include <vector> // vector
 
 // #include <nlohmann/detail/exceptions.hpp>
 
-// #include <nlohmann/detail/macro_scope.hpp>
-
-// #include <nlohmann/detail/string_concat.hpp>
-
-
-NLOHMANN_JSON_NAMESPACE_BEGIN
-
-/*!
-@brief SAX interface
-
-This class describes the SAX interface used by @ref nlohmann::json::sax_parse.
-Each function is called in different situations while the input is parsed. The
-boolean return value informs the parser whether to continue processing the
-input.
-*/
-template<typename BasicJsonType>
-struct json_sax
-{
-    using number_integer_t = typename BasicJsonType::number_integer_t;
-    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
-    using number_float_t = typename BasicJsonType::number_float_t;
-    using string_t = typename BasicJsonType::string_t;
-    using binary_t = typename BasicJsonType::binary_t;
-
-    /*!
-    @brief a null value was read
-    @return whether parsing should proceed
-    */
-    virtual bool null() = 0;
-
-    /*!
-    @brief a boolean value was read
-    @param[in] val  boolean value
-    @return whether parsing should proceed
-    */
-    virtual bool boolean(bool val) = 0;
-
-    /*!
-    @brief an integer number was read
-    @param[in] val  integer value
-    @return whether parsing should proceed
-    */
-    virtual bool number_integer(number_integer_t val) = 0;
-
-    /*!
-    @brief an unsigned integer number was read
-    @param[in] val  unsigned integer value
-    @return whether parsing should proceed
-    */
-    virtual bool number_unsigned(number_unsigned_t val) = 0;
-
-    /*!
-    @brief a floating-point number was read
-    @param[in] val  floating-point value
-    @param[in] s    raw token value
-    @return whether parsing should proceed
-    */
-    virtual bool number_float(number_float_t val, const string_t& s) = 0;
-
-    /*!
-    @brief a string value was read
-    @param[in] val  string value
-    @return whether parsing should proceed
-    @note It is safe to move the passed string value.
-    */
-    virtual bool string(string_t& val) = 0;
-
-    /*!
-    @brief a binary value was read
-    @param[in] val  binary value
-    @return whether parsing should proceed
-    @note It is safe to move the passed binary value.
-    */
-    virtual bool binary(binary_t& val) = 0;
-
-    /*!
-    @brief the beginning of an object was read
-    @param[in] elements  number of object elements or -1 if unknown
-    @return whether parsing should proceed
-    @note binary formats may report the number of elements
-    */
-    virtual bool start_object(std::size_t elements) = 0;
-
-    /*!
-    @brief an object key was read
-    @param[in] val  object key
-    @return whether parsing should proceed
-    @note It is safe to move the passed string.
-    */
-    virtual bool key(string_t& val) = 0;
-
-    /*!
-    @brief the end of an object was read
-    @return whether parsing should proceed
-    */
-    virtual bool end_object() = 0;
-
-    /*!
-    @brief the beginning of an array was read
-    @param[in] elements  number of array elements or -1 if unknown
-    @return whether parsing should proceed
-    @note binary formats may report the number of elements
-    */
-    virtual bool start_array(std::size_t elements) = 0;
-
-    /*!
-    @brief the end of an array was read
-    @return whether parsing should proceed
-    */
-    virtual bool end_array() = 0;
-
-    /*!
-    @brief a parse error occurred
-    @param[in] position    the position in the input where the error occurs
-    @param[in] last_token  the last read token
-    @param[in] ex          an exception object describing the error
-    @return whether parsing should proceed (must return false)
-    */
-    virtual bool parse_error(std::size_t position,
-                             const std::string& last_token,
-                             const detail::exception& ex) = 0;
-
-    json_sax() = default;
-    json_sax(const json_sax&) = default;
-    json_sax(json_sax&&) noexcept = default;
-    json_sax& operator=(const json_sax&) = default;
-    json_sax& operator=(json_sax&&) noexcept = default;
-    virtual ~json_sax() = default;
-};
-
-namespace detail
-{
-/*!
-@brief SAX implementation to create a JSON value from SAX events
-
-This class implements the @ref json_sax interface and processes the SAX events
-to create a JSON value which makes it basically a DOM parser. The structure or
-hierarchy of the JSON value is managed by the stack `ref_stack` which contains
-a pointer to the respective array or object for each recursion depth.
-
-After successful parsing, the value that is passed by reference to the
-constructor contains the parsed value.
-
-@tparam BasicJsonType  the JSON type
-*/
-template<typename BasicJsonType>
-class json_sax_dom_parser
-{
-  public:
-    using number_integer_t = typename BasicJsonType::number_integer_t;
-    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
-    using number_float_t = typename BasicJsonType::number_float_t;
-    using string_t = typename BasicJsonType::string_t;
-    using binary_t = typename BasicJsonType::binary_t;
-
-    /*!
-    @param[in,out] r  reference to a JSON value that is manipulated while
-                       parsing
-    @param[in] allow_exceptions_  whether parse errors yield exceptions
-    */
-    explicit json_sax_dom_parser(BasicJsonType& r, const bool allow_exceptions_ = true)
-        : root(r), allow_exceptions(allow_exceptions_)
-    {}
-
-    // make class move-only
-    json_sax_dom_parser(const json_sax_dom_parser&) = delete;
-    json_sax_dom_parser(json_sax_dom_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
-    json_sax_dom_parser& operator=(const json_sax_dom_parser&) = delete;
-    json_sax_dom_parser& operator=(json_sax_dom_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
-    ~json_sax_dom_parser() = default;
-
-    bool null()
-    {
-        handle_value(nullptr);
-        return true;
-    }
-
-    bool boolean(bool val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool number_integer(number_integer_t val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool number_unsigned(number_unsigned_t val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool number_float(number_float_t val, const string_t& /*unused*/)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool string(string_t& val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool binary(binary_t& val)
-    {
-        handle_value(std::move(val));
-        return true;
-    }
-
-    bool start_object(std::size_t len)
-    {
-        ref_stack.push_back(handle_value(BasicJsonType::value_t::object));
-
-        if (JSON_HEDLEY_UNLIKELY(len != static_cast<std::size_t>(-1) && len > ref_stack.back()->max_size()))
-        {
-            JSON_THROW(out_of_range::create(408, concat("excessive object size: ", std::to_string(len)), ref_stack.back()));
-        }
-
-        return true;
-    }
-
-    bool key(string_t& val)
-    {
-        JSON_ASSERT(!ref_stack.empty());
-        JSON_ASSERT(ref_stack.back()->is_object());
-
-        // add null at given key and store the reference for later
-        object_element = &(ref_stack.back()->m_data.m_value.object->operator[](val));
-        return true;
-    }
-
-    bool end_object()
-    {
-        JSON_ASSERT(!ref_stack.empty());
-        JSON_ASSERT(ref_stack.back()->is_object());
-
-        ref_stack.back()->set_parents();
-        ref_stack.pop_back();
-        return true;
-    }
-
-    bool start_array(std::size_t len)
-    {
-        ref_stack.push_back(handle_value(BasicJsonType::value_t::array));
-
-        if (JSON_HEDLEY_UNLIKELY(len != static_cast<std::size_t>(-1) && len > ref_stack.back()->max_size()))
-        {
-            JSON_THROW(out_of_range::create(408, concat("excessive array size: ", std::to_string(len)), ref_stack.back()));
-        }
-
-        return true;
-    }
-
-    bool end_array()
-    {
-        JSON_ASSERT(!ref_stack.empty());
-        JSON_ASSERT(ref_stack.back()->is_array());
-
-        ref_stack.back()->set_parents();
-        ref_stack.pop_back();
-        return true;
-    }
-
-    template<class Exception>
-    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/,
-                     const Exception& ex)
-    {
-        errored = true;
-        static_cast<void>(ex);
-        if (allow_exceptions)
-        {
-            JSON_THROW(ex);
-        }
-        return false;
-    }
-
-    constexpr bool is_errored() const
-    {
-        return errored;
-    }
-
-  private:
-    /*!
-    @invariant If the ref stack is empty, then the passed value will be the new
-               root.
-    @invariant If the ref stack contains a value, then it is an array or an
-               object to which we can add elements
-    */
-    template<typename Value>
-    JSON_HEDLEY_RETURNS_NON_NULL
-    BasicJsonType* handle_value(Value&& v)
-    {
-        if (ref_stack.empty())
-        {
-            root = BasicJsonType(std::forward<Value>(v));
-            return &root;
-        }
-
-        JSON_ASSERT(ref_stack.back()->is_array() || ref_stack.back()->is_object());
-
-        if (ref_stack.back()->is_array())
-        {
-            ref_stack.back()->m_data.m_value.array->emplace_back(std::forward<Value>(v));
-            return &(ref_stack.back()->m_data.m_value.array->back());
-        }
-
-        JSON_ASSERT(ref_stack.back()->is_object());
-        JSON_ASSERT(object_element);
-        *object_element = BasicJsonType(std::forward<Value>(v));
-        return object_element;
-    }
-
-    /// the parsed JSON value
-    BasicJsonType& root;
-    /// stack to model hierarchy of values
-    std::vector<BasicJsonType*> ref_stack {};
-    /// helper to hold the reference for the next object element
-    BasicJsonType* object_element = nullptr;
-    /// whether a syntax error occurred
-    bool errored = false;
-    /// whether to throw exceptions in case of errors
-    const bool allow_exceptions = true;
-};
-
-template<typename BasicJsonType>
-class json_sax_dom_callback_parser
-{
-  public:
-    using number_integer_t = typename BasicJsonType::number_integer_t;
-    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
-    using number_float_t = typename BasicJsonType::number_float_t;
-    using string_t = typename BasicJsonType::string_t;
-    using binary_t = typename BasicJsonType::binary_t;
-    using parser_callback_t = typename BasicJsonType::parser_callback_t;
-    using parse_event_t = typename BasicJsonType::parse_event_t;
-
-    json_sax_dom_callback_parser(BasicJsonType& r,
-                                 const parser_callback_t cb,
-                                 const bool allow_exceptions_ = true)
-        : root(r), callback(cb), allow_exceptions(allow_exceptions_)
-    {
-        keep_stack.push_back(true);
-    }
-
-    // make class move-only
-    json_sax_dom_callback_parser(const json_sax_dom_callback_parser&) = delete;
-    json_sax_dom_callback_parser(json_sax_dom_callback_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
-    json_sax_dom_callback_parser& operator=(const json_sax_dom_callback_parser&) = delete;
-    json_sax_dom_callback_parser& operator=(json_sax_dom_callback_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
-    ~json_sax_dom_callback_parser() = default;
-
-    bool null()
-    {
-        handle_value(nullptr);
-        return true;
-    }
-
-    bool boolean(bool val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool number_integer(number_integer_t val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool number_unsigned(number_unsigned_t val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool number_float(number_float_t val, const string_t& /*unused*/)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool string(string_t& val)
-    {
-        handle_value(val);
-        return true;
-    }
-
-    bool binary(binary_t& val)
-    {
-        handle_value(std::move(val));
-        return true;
-    }
-
-    bool start_object(std::size_t len)
-    {
-        // check callback for object start
-        const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::object_start, discarded);
-        keep_stack.push_back(keep);
-
-        auto val = handle_value(BasicJsonType::value_t::object, true);
-        ref_stack.push_back(val.second);
-
-        // check object limit
-        if (ref_stack.back() && JSON_HEDLEY_UNLIKELY(len != static_cast<std::size_t>(-1) && len > ref_stack.back()->max_size()))
-        {
-            JSON_THROW(out_of_range::create(408, concat("excessive object size: ", std::to_string(len)), ref_stack.back()));
-        }
-
-        return true;
-    }
-
-    bool key(string_t& val)
-    {
-        BasicJsonType k = BasicJsonType(val);
-
-        // check callback for key
-        const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::key, k);
-        key_keep_stack.push_back(keep);
-
-        // add discarded value at given key and store the reference for later
-        if (keep && ref_stack.back())
-        {
-            object_element = &(ref_stack.back()->m_data.m_value.object->operator[](val) = discarded);
-        }
-
-        return true;
-    }
-
-    bool end_object()
-    {
-        if (ref_stack.back())
-        {
-            if (!callback(static_cast<int>(ref_stack.size()) - 1, parse_event_t::object_end, *ref_stack.back()))
-            {
-                // discard object
-                *ref_stack.back() = discarded;
-            }
-            else
-            {
-                ref_stack.back()->set_parents();
-            }
-        }
-
-        JSON_ASSERT(!ref_stack.empty());
-        JSON_ASSERT(!keep_stack.empty());
-        ref_stack.pop_back();
-        keep_stack.pop_back();
-
-        if (!ref_stack.empty() && ref_stack.back() && ref_stack.back()->is_structured())
-        {
-            // remove discarded value
-            for (auto it = ref_stack.back()->begin(); it != ref_stack.back()->end(); ++it)
-            {
-                if (it->is_discarded())
-                {
-                    ref_stack.back()->erase(it);
-                    break;
-                }
-            }
-        }
-
-        return true;
-    }
-
-    bool start_array(std::size_t len)
-    {
-        const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::array_start, discarded);
-        keep_stack.push_back(keep);
-
-        auto val = handle_value(BasicJsonType::value_t::array, true);
-        ref_stack.push_back(val.second);
-
-        // check array limit
-        if (ref_stack.back() && JSON_HEDLEY_UNLIKELY(len != static_cast<std::size_t>(-1) && len > ref_stack.back()->max_size()))
-        {
-            JSON_THROW(out_of_range::create(408, concat("excessive array size: ", std::to_string(len)), ref_stack.back()));
-        }
-
-        return true;
-    }
-
-    bool end_array()
-    {
-        bool keep = true;
-
-        if (ref_stack.back())
-        {
-            keep = callback(static_cast<int>(ref_stack.size()) - 1, parse_event_t::array_end, *ref_stack.back());
-            if (keep)
-            {
-                ref_stack.back()->set_parents();
-            }
-            else
-            {
-                // discard array
-                *ref_stack.back() = discarded;
-            }
-        }
-
-        JSON_ASSERT(!ref_stack.empty());
-        JSON_ASSERT(!keep_stack.empty());
-        ref_stack.pop_back();
-        keep_stack.pop_back();
-
-        // remove discarded value
-        if (!keep && !ref_stack.empty() && ref_stack.back()->is_array())
-        {
-            ref_stack.back()->m_data.m_value.array->pop_back();
-        }
-
-        return true;
-    }
-
-    template<class Exception>
-    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/,
-                     const Exception& ex)
-    {
-        errored = true;
-        static_cast<void>(ex);
-        if (allow_exceptions)
-        {
-            JSON_THROW(ex);
-        }
-        return false;
-    }
-
-    constexpr bool is_errored() const
-    {
-        return errored;
-    }
-
-  private:
-    /*!
-    @param[in] v  value to add to the JSON value we build during parsing
-    @param[in] skip_callback  whether we should skip calling the callback
-               function; this is required after start_array() and
-               start_object() SAX events, because otherwise we would call the
-               callback function with an empty array or object, respectively.
-
-    @invariant If the ref stack is empty, then the passed value will be the new
-               root.
-    @invariant If the ref stack contains a value, then it is an array or an
-               object to which we can add elements
-
-    @return pair of boolean (whether value should be kept) and pointer (to the
-            passed value in the ref_stack hierarchy; nullptr if not kept)
-    */
-    template<typename Value>
-    std::pair<bool, BasicJsonType*> handle_value(Value&& v, const bool skip_callback = false)
-    {
-        JSON_ASSERT(!keep_stack.empty());
-
-        // do not handle this value if we know it would be added to a discarded
-        // container
-        if (!keep_stack.back())
-        {
-            return {false, nullptr};
-        }
-
-        // create value
-        auto value = BasicJsonType(std::forward<Value>(v));
-
-        // check callback
-        const bool keep = skip_callback || callback(static_cast<int>(ref_stack.size()), parse_event_t::value, value);
-
-        // do not handle this value if we just learnt it shall be discarded
-        if (!keep)
-        {
-            return {false, nullptr};
-        }
-
-        if (ref_stack.empty())
-        {
-            root = std::move(value);
-            return {true, & root};
-        }
-
-        // skip this value if we already decided to skip the parent
-        // (https://github.com/nlohmann/json/issues/971#issuecomment-413678360)
-        if (!ref_stack.back())
-        {
-            return {false, nullptr};
-        }
-
-        // we now only expect arrays and objects
-        JSON_ASSERT(ref_stack.back()->is_array() || ref_stack.back()->is_object());
-
-        // array
-        if (ref_stack.back()->is_array())
-        {
-            ref_stack.back()->m_data.m_value.array->emplace_back(std::move(value));
-            return {true, & (ref_stack.back()->m_data.m_value.array->back())};
-        }
-
-        // object
-        JSON_ASSERT(ref_stack.back()->is_object());
-        // check if we should store an element for the current key
-        JSON_ASSERT(!key_keep_stack.empty());
-        const bool store_element = key_keep_stack.back();
-        key_keep_stack.pop_back();
-
-        if (!store_element)
-        {
-            return {false, nullptr};
-        }
-
-        JSON_ASSERT(object_element);
-        *object_element = std::move(value);
-        return {true, object_element};
-    }
-
-    /// the parsed JSON value
-    BasicJsonType& root;
-    /// stack to model hierarchy of values
-    std::vector<BasicJsonType*> ref_stack {};
-    /// stack to manage which values to keep
-    std::vector<bool> keep_stack {}; // NOLINT(readability-redundant-member-init)
-    /// stack to manage which object keys to keep
-    std::vector<bool> key_keep_stack {}; // NOLINT(readability-redundant-member-init)
-    /// helper to hold the reference for the next object element
-    BasicJsonType* object_element = nullptr;
-    /// whether a syntax error occurred
-    bool errored = false;
-    /// callback function
-    const parser_callback_t callback = nullptr;
-    /// whether to throw exceptions in case of errors
-    const bool allow_exceptions = true;
-    /// a discarded value for the callback
-    BasicJsonType discarded = BasicJsonType::value_t::discarded;
-};
-
-template<typename BasicJsonType>
-class json_sax_acceptor
-{
-  public:
-    using number_integer_t = typename BasicJsonType::number_integer_t;
-    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
-    using number_float_t = typename BasicJsonType::number_float_t;
-    using string_t = typename BasicJsonType::string_t;
-    using binary_t = typename BasicJsonType::binary_t;
-
-    bool null()
-    {
-        return true;
-    }
-
-    bool boolean(bool /*unused*/)
-    {
-        return true;
-    }
-
-    bool number_integer(number_integer_t /*unused*/)
-    {
-        return true;
-    }
-
-    bool number_unsigned(number_unsigned_t /*unused*/)
-    {
-        return true;
-    }
-
-    bool number_float(number_float_t /*unused*/, const string_t& /*unused*/)
-    {
-        return true;
-    }
-
-    bool string(string_t& /*unused*/)
-    {
-        return true;
-    }
-
-    bool binary(binary_t& /*unused*/)
-    {
-        return true;
-    }
-
-    bool start_object(std::size_t /*unused*/ = static_cast<std::size_t>(-1))
-    {
-        return true;
-    }
-
-    bool key(string_t& /*unused*/)
-    {
-        return true;
-    }
-
-    bool end_object()
-    {
-        return true;
-    }
-
-    bool start_array(std::size_t /*unused*/ = static_cast<std::size_t>(-1))
-    {
-        return true;
-    }
-
-    bool end_array()
-    {
-        return true;
-    }
-
-    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/, const detail::exception& /*unused*/)
-    {
-        return false;
-    }
-};
-
-}  // namespace detail
-NLOHMANN_JSON_NAMESPACE_END
-
 // #include <nlohmann/detail/input/lexer.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -8339,7 +7989,7 @@ class lexer : public lexer_base<BasicJsonType>
           locale's decimal point is used instead of `.` to work with the
           locale-dependent converters.
     */
-    token_type scan_number()  // lgtm [cpp/use-of-goto]
+    token_type scan_number()  // lgtm [cpp/use-of-goto] `goto` is used in this function to implement the number-parsing state machine described above. By design, any finite input will eventually reach the "done" state or return token_type::parse_error. In each intermediate state, 1 byte of the input is appended to the token_buffer vector, and only the already initialized variables token_buffer, number_type, and error_message are manipulated.
     {
         // reset token_buffer to store the number's bytes
         reset();
@@ -8421,6 +8071,7 @@ scan_number_zero:
             case '.':
             {
                 add(decimal_point_char);
+                decimal_point_position = token_buffer.size() - 1;
                 goto scan_number_decimal1;
             }
 
@@ -8457,6 +8108,7 @@ scan_number_any1:
             case '.':
             {
                 add(decimal_point_char);
+                decimal_point_position = token_buffer.size() - 1;
                 goto scan_number_decimal1;
             }
 
@@ -8617,7 +8269,7 @@ scan_number_done:
         // we are done scanning a number)
         unget();
 
-        char* endptr = nullptr; // NOLINT(cppcoreguidelines-pro-type-vararg,hicpp-vararg)
+        char* endptr = nullptr; // NOLINT(misc-const-correctness,cppcoreguidelines-pro-type-vararg,hicpp-vararg)
         errno = 0;
 
         // try to parse integers first and fall back to floats
@@ -8628,7 +8280,7 @@ scan_number_done:
             // we checked the number format before
             JSON_ASSERT(endptr == token_buffer.data() + token_buffer.size());
 
-            if (errno == 0)
+            if (errno != ERANGE)
             {
                 value_unsigned = static_cast<number_unsigned_t>(x);
                 if (value_unsigned == x)
@@ -8644,7 +8296,7 @@ scan_number_done:
             // we checked the number format before
             JSON_ASSERT(endptr == token_buffer.data() + token_buffer.size());
 
-            if (errno == 0)
+            if (errno != ERANGE)
             {
                 value_integer = static_cast<number_integer_t>(x);
                 if (value_integer == x)
@@ -8694,6 +8346,7 @@ scan_number_done:
     {
         token_buffer.clear();
         token_string.clear();
+        decimal_point_position = std::string::npos;
         token_string.push_back(char_traits<char_type>::to_char_type(current));
     }
 
@@ -8802,6 +8455,11 @@ scan_number_done:
     /// return current string value (implicitly resets the token; useful only once)
     string_t& get_string()
     {
+        // translate decimal points from locale back to '.' (#4084)
+        if (decimal_point_char != '.' && decimal_point_position != std::string::npos)
+        {
+            token_buffer[decimal_point_position] = '.';
+        }
         return token_buffer;
     }
 
@@ -8999,6 +8657,8 @@ scan_number_done:
 
     /// the decimal point
     const char_int_type decimal_point_char = '.';
+    /// the position of the decimal point in the input
+    std::size_t decimal_point_position = std::string::npos;
 };
 
 }  // namespace detail
@@ -9006,13 +8666,986 @@ NLOHMANN_JSON_NAMESPACE_END
 
 // #include <nlohmann/detail/macro_scope.hpp>
 
+// #include <nlohmann/detail/string_concat.hpp>
+
+NLOHMANN_JSON_NAMESPACE_BEGIN
+
+/*!
+@brief SAX interface
+
+This class describes the SAX interface used by @ref nlohmann::json::sax_parse.
+Each function is called in different situations while the input is parsed. The
+boolean return value informs the parser whether to continue processing the
+input.
+*/
+template<typename BasicJsonType>
+struct json_sax
+{
+    using number_integer_t = typename BasicJsonType::number_integer_t;
+    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
+    using number_float_t = typename BasicJsonType::number_float_t;
+    using string_t = typename BasicJsonType::string_t;
+    using binary_t = typename BasicJsonType::binary_t;
+
+    /*!
+    @brief a null value was read
+    @return whether parsing should proceed
+    */
+    virtual bool null() = 0;
+
+    /*!
+    @brief a boolean value was read
+    @param[in] val  boolean value
+    @return whether parsing should proceed
+    */
+    virtual bool boolean(bool val) = 0;
+
+    /*!
+    @brief an integer number was read
+    @param[in] val  integer value
+    @return whether parsing should proceed
+    */
+    virtual bool number_integer(number_integer_t val) = 0;
+
+    /*!
+    @brief an unsigned integer number was read
+    @param[in] val  unsigned integer value
+    @return whether parsing should proceed
+    */
+    virtual bool number_unsigned(number_unsigned_t val) = 0;
+
+    /*!
+    @brief a floating-point number was read
+    @param[in] val  floating-point value
+    @param[in] s    raw token value
+    @return whether parsing should proceed
+    */
+    virtual bool number_float(number_float_t val, const string_t& s) = 0;
+
+    /*!
+    @brief a string value was read
+    @param[in] val  string value
+    @return whether parsing should proceed
+    @note It is safe to move the passed string value.
+    */
+    virtual bool string(string_t& val) = 0;
+
+    /*!
+    @brief a binary value was read
+    @param[in] val  binary value
+    @return whether parsing should proceed
+    @note It is safe to move the passed binary value.
+    */
+    virtual bool binary(binary_t& val) = 0;
+
+    /*!
+    @brief the beginning of an object was read
+    @param[in] elements  number of object elements or -1 if unknown
+    @return whether parsing should proceed
+    @note binary formats may report the number of elements
+    */
+    virtual bool start_object(std::size_t elements) = 0;
+
+    /*!
+    @brief an object key was read
+    @param[in] val  object key
+    @return whether parsing should proceed
+    @note It is safe to move the passed string.
+    */
+    virtual bool key(string_t& val) = 0;
+
+    /*!
+    @brief the end of an object was read
+    @return whether parsing should proceed
+    */
+    virtual bool end_object() = 0;
+
+    /*!
+    @brief the beginning of an array was read
+    @param[in] elements  number of array elements or -1 if unknown
+    @return whether parsing should proceed
+    @note binary formats may report the number of elements
+    */
+    virtual bool start_array(std::size_t elements) = 0;
+
+    /*!
+    @brief the end of an array was read
+    @return whether parsing should proceed
+    */
+    virtual bool end_array() = 0;
+
+    /*!
+    @brief a parse error occurred
+    @param[in] position    the position in the input where the error occurs
+    @param[in] last_token  the last read token
+    @param[in] ex          an exception object describing the error
+    @return whether parsing should proceed (must return false)
+    */
+    virtual bool parse_error(std::size_t position,
+                             const std::string& last_token,
+                             const detail::exception& ex) = 0;
+
+    json_sax() = default;
+    json_sax(const json_sax&) = default;
+    json_sax(json_sax&&) noexcept = default;
+    json_sax& operator=(const json_sax&) = default;
+    json_sax& operator=(json_sax&&) noexcept = default;
+    virtual ~json_sax() = default;
+};
+
+namespace detail
+{
+constexpr std::size_t unknown_size()
+{
+    return (std::numeric_limits<std::size_t>::max)();
+}
+
+/*!
+@brief SAX implementation to create a JSON value from SAX events
+
+This class implements the @ref json_sax interface and processes the SAX events
+to create a JSON value which makes it basically a DOM parser. The structure or
+hierarchy of the JSON value is managed by the stack `ref_stack` which contains
+a pointer to the respective array or object for each recursion depth.
+
+After successful parsing, the value that is passed by reference to the
+constructor contains the parsed value.
+
+@tparam BasicJsonType  the JSON type
+*/
+template<typename BasicJsonType, typename InputAdapterType>
+class json_sax_dom_parser
+{
+  public:
+    using number_integer_t = typename BasicJsonType::number_integer_t;
+    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
+    using number_float_t = typename BasicJsonType::number_float_t;
+    using string_t = typename BasicJsonType::string_t;
+    using binary_t = typename BasicJsonType::binary_t;
+    using lexer_t = lexer<BasicJsonType, InputAdapterType>;
+
+    /*!
+    @param[in,out] r  reference to a JSON value that is manipulated while
+                       parsing
+    @param[in] allow_exceptions_  whether parse errors yield exceptions
+    */
+    explicit json_sax_dom_parser(BasicJsonType& r, const bool allow_exceptions_ = true, lexer_t* lexer_ = nullptr)
+        : root(r), allow_exceptions(allow_exceptions_), m_lexer_ref(lexer_)
+    {}
+
+    // make class move-only
+    json_sax_dom_parser(const json_sax_dom_parser&) = delete;
+    json_sax_dom_parser(json_sax_dom_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
+    json_sax_dom_parser& operator=(const json_sax_dom_parser&) = delete;
+    json_sax_dom_parser& operator=(json_sax_dom_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
+    ~json_sax_dom_parser() = default;
+
+    bool null()
+    {
+        handle_value(nullptr);
+        return true;
+    }
+
+    bool boolean(bool val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool number_integer(number_integer_t val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool number_unsigned(number_unsigned_t val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool number_float(number_float_t val, const string_t& /*unused*/)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool string(string_t& val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool binary(binary_t& val)
+    {
+        handle_value(std::move(val));
+        return true;
+    }
+
+    bool start_object(std::size_t len)
+    {
+        ref_stack.push_back(handle_value(BasicJsonType::value_t::object));
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        // Manually set the start position of the object here.
+        // Ensure this is after the call to handle_value to ensure correct start position.
+        if (m_lexer_ref)
+        {
+            // Lexer has read the first character of the object, so
+            // subtract 1 from the position to get the correct start position.
+            ref_stack.back()->start_position = m_lexer_ref->get_position() - 1;
+        }
+#endif
+
+        if (JSON_HEDLEY_UNLIKELY(len != detail::unknown_size() && len > ref_stack.back()->max_size()))
+        {
+            JSON_THROW(out_of_range::create(408, concat("excessive object size: ", std::to_string(len)), ref_stack.back()));
+        }
+
+        return true;
+    }
+
+    bool key(string_t& val)
+    {
+        JSON_ASSERT(!ref_stack.empty());
+        JSON_ASSERT(ref_stack.back()->is_object());
+
+        // add null at given key and store the reference for later
+        object_element = &(ref_stack.back()->m_data.m_value.object->operator[](val));
+        return true;
+    }
+
+    bool end_object()
+    {
+        JSON_ASSERT(!ref_stack.empty());
+        JSON_ASSERT(ref_stack.back()->is_object());
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        if (m_lexer_ref)
+        {
+            // Lexer's position is past the closing brace, so set that as the end position.
+            ref_stack.back()->end_position = m_lexer_ref->get_position();
+        }
+#endif
+
+        ref_stack.back()->set_parents();
+        ref_stack.pop_back();
+        return true;
+    }
+
+    bool start_array(std::size_t len)
+    {
+        ref_stack.push_back(handle_value(BasicJsonType::value_t::array));
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        // Manually set the start position of the array here.
+        // Ensure this is after the call to handle_value to ensure correct start position.
+        if (m_lexer_ref)
+        {
+            ref_stack.back()->start_position = m_lexer_ref->get_position() - 1;
+        }
+#endif
+
+        if (JSON_HEDLEY_UNLIKELY(len != detail::unknown_size() && len > ref_stack.back()->max_size()))
+        {
+            JSON_THROW(out_of_range::create(408, concat("excessive array size: ", std::to_string(len)), ref_stack.back()));
+        }
+
+        return true;
+    }
+
+    bool end_array()
+    {
+        JSON_ASSERT(!ref_stack.empty());
+        JSON_ASSERT(ref_stack.back()->is_array());
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        if (m_lexer_ref)
+        {
+            // Lexer's position is past the closing bracket, so set that as the end position.
+            ref_stack.back()->end_position = m_lexer_ref->get_position();
+        }
+#endif
+
+        ref_stack.back()->set_parents();
+        ref_stack.pop_back();
+        return true;
+    }
+
+    template<class Exception>
+    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/,
+                     const Exception& ex)
+    {
+        errored = true;
+        static_cast<void>(ex);
+        if (allow_exceptions)
+        {
+            JSON_THROW(ex);
+        }
+        return false;
+    }
+
+    constexpr bool is_errored() const
+    {
+        return errored;
+    }
+
+  private:
+
+#if JSON_DIAGNOSTIC_POSITIONS
+    void handle_diagnostic_positions_for_json_value(BasicJsonType& v)
+    {
+        if (m_lexer_ref)
+        {
+            // Lexer has read past the current field value, so set the end position to the current position.
+            // The start position will be set below based on the length of the string representation
+            // of the value.
+            v.end_position = m_lexer_ref->get_position();
+
+            switch (v.type())
+            {
+                case value_t::boolean:
+                {
+                    // 4 and 5 are the string length of "true" and "false"
+                    v.start_position = v.end_position - (v.m_data.m_value.boolean ? 4 : 5);
+                    break;
+                }
+
+                case value_t::null:
+                {
+                    // 4 is the string length of "null"
+                    v.start_position = v.end_position - 4;
+                    break;
+                }
+
+                case value_t::string:
+                {
+                    // include the length of the quotes, which is 2
+                    v.start_position = v.end_position - v.m_data.m_value.string->size() - 2;
+                    break;
+                }
+
+                // As we handle the start and end positions for values created during parsing,
+                // we do not expect the following value type to be called. Regardless, set the positions
+                // in case this is created manually or through a different constructor. Exclude from lcov
+                // since the exact condition of this switch is esoteric.
+                // LCOV_EXCL_START
+                case value_t::discarded:
+                {
+                    v.end_position = std::string::npos;
+                    v.start_position = v.end_position;
+                    break;
+                }
+                // LCOV_EXCL_STOP
+                case value_t::binary:
+                case value_t::number_integer:
+                case value_t::number_unsigned:
+                case value_t::number_float:
+                {
+                    v.start_position = v.end_position - m_lexer_ref->get_string().size();
+                    break;
+                }
+                case value_t::object:
+                case value_t::array:
+                {
+                    // object and array are handled in start_object() and start_array() handlers
+                    // skip setting the values here.
+                    break;
+                }
+                default: // LCOV_EXCL_LINE
+                    // Handle all possible types discretely, default handler should never be reached.
+                    JSON_ASSERT(false); // NOLINT(cert-dcl03-c,hicpp-static-assert,misc-static-assert,-warnings-as-errors) LCOV_EXCL_LINE
+            }
+        }
+    }
+#endif
+
+    /*!
+    @invariant If the ref stack is empty, then the passed value will be the new
+               root.
+    @invariant If the ref stack contains a value, then it is an array or an
+               object to which we can add elements
+    */
+    template<typename Value>
+    JSON_HEDLEY_RETURNS_NON_NULL
+    BasicJsonType* handle_value(Value&& v)
+    {
+        if (ref_stack.empty())
+        {
+            root = BasicJsonType(std::forward<Value>(v));
+
+#if JSON_DIAGNOSTIC_POSITIONS
+            handle_diagnostic_positions_for_json_value(root);
+#endif
+
+            return &root;
+        }
+
+        JSON_ASSERT(ref_stack.back()->is_array() || ref_stack.back()->is_object());
+
+        if (ref_stack.back()->is_array())
+        {
+            ref_stack.back()->m_data.m_value.array->emplace_back(std::forward<Value>(v));
+
+#if JSON_DIAGNOSTIC_POSITIONS
+            handle_diagnostic_positions_for_json_value(ref_stack.back()->m_data.m_value.array->back());
+#endif
+
+            return &(ref_stack.back()->m_data.m_value.array->back());
+        }
+
+        JSON_ASSERT(ref_stack.back()->is_object());
+        JSON_ASSERT(object_element);
+        *object_element = BasicJsonType(std::forward<Value>(v));
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        handle_diagnostic_positions_for_json_value(*object_element);
+#endif
+
+        return object_element;
+    }
+
+    /// the parsed JSON value
+    BasicJsonType& root;
+    /// stack to model hierarchy of values
+    std::vector<BasicJsonType*> ref_stack {};
+    /// helper to hold the reference for the next object element
+    BasicJsonType* object_element = nullptr;
+    /// whether a syntax error occurred
+    bool errored = false;
+    /// whether to throw exceptions in case of errors
+    const bool allow_exceptions = true;
+    /// the lexer reference to obtain the current position
+    lexer_t* m_lexer_ref = nullptr;
+};
+
+template<typename BasicJsonType, typename InputAdapterType>
+class json_sax_dom_callback_parser
+{
+  public:
+    using number_integer_t = typename BasicJsonType::number_integer_t;
+    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
+    using number_float_t = typename BasicJsonType::number_float_t;
+    using string_t = typename BasicJsonType::string_t;
+    using binary_t = typename BasicJsonType::binary_t;
+    using parser_callback_t = typename BasicJsonType::parser_callback_t;
+    using parse_event_t = typename BasicJsonType::parse_event_t;
+    using lexer_t = lexer<BasicJsonType, InputAdapterType>;
+
+    json_sax_dom_callback_parser(BasicJsonType& r,
+                                 parser_callback_t cb,
+                                 const bool allow_exceptions_ = true,
+                                 lexer_t* lexer_ = nullptr)
+        : root(r), callback(std::move(cb)), allow_exceptions(allow_exceptions_), m_lexer_ref(lexer_)
+    {
+        keep_stack.push_back(true);
+    }
+
+    // make class move-only
+    json_sax_dom_callback_parser(const json_sax_dom_callback_parser&) = delete;
+    json_sax_dom_callback_parser(json_sax_dom_callback_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
+    json_sax_dom_callback_parser& operator=(const json_sax_dom_callback_parser&) = delete;
+    json_sax_dom_callback_parser& operator=(json_sax_dom_callback_parser&&) = default; // NOLINT(hicpp-noexcept-move,performance-noexcept-move-constructor)
+    ~json_sax_dom_callback_parser() = default;
+
+    bool null()
+    {
+        handle_value(nullptr);
+        return true;
+    }
+
+    bool boolean(bool val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool number_integer(number_integer_t val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool number_unsigned(number_unsigned_t val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool number_float(number_float_t val, const string_t& /*unused*/)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool string(string_t& val)
+    {
+        handle_value(val);
+        return true;
+    }
+
+    bool binary(binary_t& val)
+    {
+        handle_value(std::move(val));
+        return true;
+    }
+
+    bool start_object(std::size_t len)
+    {
+        // check callback for object start
+        const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::object_start, discarded);
+        keep_stack.push_back(keep);
+
+        auto val = handle_value(BasicJsonType::value_t::object, true);
+        ref_stack.push_back(val.second);
+
+        if (ref_stack.back())
+        {
+
+#if JSON_DIAGNOSTIC_POSITIONS
+            // Manually set the start position of the object here.
+            // Ensure this is after the call to handle_value to ensure correct start position.
+            if (m_lexer_ref)
+            {
+                // Lexer has read the first character of the object, so
+                // subtract 1 from the position to get the correct start position.
+                ref_stack.back()->start_position = m_lexer_ref->get_position() - 1;
+            }
+#endif
+
+            // check object limit
+            if (JSON_HEDLEY_UNLIKELY(len != detail::unknown_size() && len > ref_stack.back()->max_size()))
+            {
+                JSON_THROW(out_of_range::create(408, concat("excessive object size: ", std::to_string(len)), ref_stack.back()));
+            }
+        }
+        return true;
+    }
+
+    bool key(string_t& val)
+    {
+        BasicJsonType k = BasicJsonType(val);
+
+        // check callback for key
+        const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::key, k);
+        key_keep_stack.push_back(keep);
+
+        // add discarded value at given key and store the reference for later
+        if (keep && ref_stack.back())
+        {
+            object_element = &(ref_stack.back()->m_data.m_value.object->operator[](val) = discarded);
+        }
+
+        return true;
+    }
+
+    bool end_object()
+    {
+        if (ref_stack.back())
+        {
+            if (!callback(static_cast<int>(ref_stack.size()) - 1, parse_event_t::object_end, *ref_stack.back()))
+            {
+                // discard object
+                *ref_stack.back() = discarded;
+
+#if JSON_DIAGNOSTIC_POSITIONS
+                // Set start/end positions for discarded object.
+                handle_diagnostic_positions_for_json_value(*ref_stack.back());
+#endif
+            }
+            else
+            {
+
+#if JSON_DIAGNOSTIC_POSITIONS
+                if (m_lexer_ref)
+                {
+                    // Lexer's position is past the closing brace, so set that as the end position.
+                    ref_stack.back()->end_position = m_lexer_ref->get_position();
+                }
+#endif
+
+                ref_stack.back()->set_parents();
+            }
+        }
+
+        JSON_ASSERT(!ref_stack.empty());
+        JSON_ASSERT(!keep_stack.empty());
+        ref_stack.pop_back();
+        keep_stack.pop_back();
+
+        if (!ref_stack.empty() && ref_stack.back() && ref_stack.back()->is_structured())
+        {
+            // remove discarded value
+            for (auto it = ref_stack.back()->begin(); it != ref_stack.back()->end(); ++it)
+            {
+                if (it->is_discarded())
+                {
+                    ref_stack.back()->erase(it);
+                    break;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    bool start_array(std::size_t len)
+    {
+        const bool keep = callback(static_cast<int>(ref_stack.size()), parse_event_t::array_start, discarded);
+        keep_stack.push_back(keep);
+
+        auto val = handle_value(BasicJsonType::value_t::array, true);
+        ref_stack.push_back(val.second);
+
+        if (ref_stack.back())
+        {
+
+#if JSON_DIAGNOSTIC_POSITIONS
+            // Manually set the start position of the array here.
+            // Ensure this is after the call to handle_value to ensure correct start position.
+            if (m_lexer_ref)
+            {
+                // Lexer has read the first character of the array, so
+                // subtract 1 from the position to get the correct start position.
+                ref_stack.back()->start_position = m_lexer_ref->get_position() - 1;
+            }
+#endif
+
+            // check array limit
+            if (JSON_HEDLEY_UNLIKELY(len != detail::unknown_size() && len > ref_stack.back()->max_size()))
+            {
+                JSON_THROW(out_of_range::create(408, concat("excessive array size: ", std::to_string(len)), ref_stack.back()));
+            }
+        }
+
+        return true;
+    }
+
+    bool end_array()
+    {
+        bool keep = true;
+
+        if (ref_stack.back())
+        {
+            keep = callback(static_cast<int>(ref_stack.size()) - 1, parse_event_t::array_end, *ref_stack.back());
+            if (keep)
+            {
+
+#if JSON_DIAGNOSTIC_POSITIONS
+                if (m_lexer_ref)
+                {
+                    // Lexer's position is past the closing bracket, so set that as the end position.
+                    ref_stack.back()->end_position = m_lexer_ref->get_position();
+                }
+#endif
+
+                ref_stack.back()->set_parents();
+            }
+            else
+            {
+                // discard array
+                *ref_stack.back() = discarded;
+
+#if JSON_DIAGNOSTIC_POSITIONS
+                // Set start/end positions for discarded array.
+                handle_diagnostic_positions_for_json_value(*ref_stack.back());
+#endif
+            }
+        }
+
+        JSON_ASSERT(!ref_stack.empty());
+        JSON_ASSERT(!keep_stack.empty());
+        ref_stack.pop_back();
+        keep_stack.pop_back();
+
+        // remove discarded value
+        if (!keep && !ref_stack.empty() && ref_stack.back()->is_array())
+        {
+            ref_stack.back()->m_data.m_value.array->pop_back();
+        }
+
+        return true;
+    }
+
+    template<class Exception>
+    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/,
+                     const Exception& ex)
+    {
+        errored = true;
+        static_cast<void>(ex);
+        if (allow_exceptions)
+        {
+            JSON_THROW(ex);
+        }
+        return false;
+    }
+
+    constexpr bool is_errored() const
+    {
+        return errored;
+    }
+
+  private:
+
+#if JSON_DIAGNOSTIC_POSITIONS
+    void handle_diagnostic_positions_for_json_value(BasicJsonType& v)
+    {
+        if (m_lexer_ref)
+        {
+            // Lexer has read past the current field value, so set the end position to the current position.
+            // The start position will be set below based on the length of the string representation
+            // of the value.
+            v.end_position = m_lexer_ref->get_position();
+
+            switch (v.type())
+            {
+                case value_t::boolean:
+                {
+                    // 4 and 5 are the string length of "true" and "false"
+                    v.start_position = v.end_position - (v.m_data.m_value.boolean ? 4 : 5);
+                    break;
+                }
+
+                case value_t::null:
+                {
+                    // 4 is the string length of "null"
+                    v.start_position = v.end_position - 4;
+                    break;
+                }
+
+                case value_t::string:
+                {
+                    // include the length of the quotes, which is 2
+                    v.start_position = v.end_position - v.m_data.m_value.string->size() - 2;
+                    break;
+                }
+
+                case value_t::discarded:
+                {
+                    v.end_position = std::string::npos;
+                    v.start_position = v.end_position;
+                    break;
+                }
+
+                case value_t::binary:
+                case value_t::number_integer:
+                case value_t::number_unsigned:
+                case value_t::number_float:
+                {
+                    v.start_position = v.end_position - m_lexer_ref->get_string().size();
+                    break;
+                }
+
+                case value_t::object:
+                case value_t::array:
+                {
+                    // object and array are handled in start_object() and start_array() handlers
+                    // skip setting the values here.
+                    break;
+                }
+                default: // LCOV_EXCL_LINE
+                    // Handle all possible types discretely, default handler should never be reached.
+                    JSON_ASSERT(false); // NOLINT(cert-dcl03-c,hicpp-static-assert,misc-static-assert,-warnings-as-errors) LCOV_EXCL_LINE
+            }
+        }
+    }
+#endif
+
+    /*!
+    @param[in] v  value to add to the JSON value we build during parsing
+    @param[in] skip_callback  whether we should skip calling the callback
+               function; this is required after start_array() and
+               start_object() SAX events, because otherwise we would call the
+               callback function with an empty array or object, respectively.
+
+    @invariant If the ref stack is empty, then the passed value will be the new
+               root.
+    @invariant If the ref stack contains a value, then it is an array or an
+               object to which we can add elements
+
+    @return pair of boolean (whether value should be kept) and pointer (to the
+            passed value in the ref_stack hierarchy; nullptr if not kept)
+    */
+    template<typename Value>
+    std::pair<bool, BasicJsonType*> handle_value(Value&& v, const bool skip_callback = false)
+    {
+        JSON_ASSERT(!keep_stack.empty());
+
+        // do not handle this value if we know it would be added to a discarded
+        // container
+        if (!keep_stack.back())
+        {
+            return {false, nullptr};
+        }
+
+        // create value
+        auto value = BasicJsonType(std::forward<Value>(v));
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        handle_diagnostic_positions_for_json_value(value);
+#endif
+
+        // check callback
+        const bool keep = skip_callback || callback(static_cast<int>(ref_stack.size()), parse_event_t::value, value);
+
+        // do not handle this value if we just learnt it shall be discarded
+        if (!keep)
+        {
+            return {false, nullptr};
+        }
+
+        if (ref_stack.empty())
+        {
+            root = std::move(value);
+            return {true, & root};
+        }
+
+        // skip this value if we already decided to skip the parent
+        // (https://github.com/nlohmann/json/issues/971#issuecomment-413678360)
+        if (!ref_stack.back())
+        {
+            return {false, nullptr};
+        }
+
+        // we now only expect arrays and objects
+        JSON_ASSERT(ref_stack.back()->is_array() || ref_stack.back()->is_object());
+
+        // array
+        if (ref_stack.back()->is_array())
+        {
+            ref_stack.back()->m_data.m_value.array->emplace_back(std::move(value));
+            return {true, & (ref_stack.back()->m_data.m_value.array->back())};
+        }
+
+        // object
+        JSON_ASSERT(ref_stack.back()->is_object());
+        // check if we should store an element for the current key
+        JSON_ASSERT(!key_keep_stack.empty());
+        const bool store_element = key_keep_stack.back();
+        key_keep_stack.pop_back();
+
+        if (!store_element)
+        {
+            return {false, nullptr};
+        }
+
+        JSON_ASSERT(object_element);
+        *object_element = std::move(value);
+        return {true, object_element};
+    }
+
+    /// the parsed JSON value
+    BasicJsonType& root;
+    /// stack to model hierarchy of values
+    std::vector<BasicJsonType*> ref_stack {};
+    /// stack to manage which values to keep
+    std::vector<bool> keep_stack {}; // NOLINT(readability-redundant-member-init)
+    /// stack to manage which object keys to keep
+    std::vector<bool> key_keep_stack {}; // NOLINT(readability-redundant-member-init)
+    /// helper to hold the reference for the next object element
+    BasicJsonType* object_element = nullptr;
+    /// whether a syntax error occurred
+    bool errored = false;
+    /// callback function
+    const parser_callback_t callback = nullptr;
+    /// whether to throw exceptions in case of errors
+    const bool allow_exceptions = true;
+    /// a discarded value for the callback
+    BasicJsonType discarded = BasicJsonType::value_t::discarded;
+    /// the lexer reference to obtain the current position
+    lexer_t* m_lexer_ref = nullptr;
+};
+
+template<typename BasicJsonType>
+class json_sax_acceptor
+{
+  public:
+    using number_integer_t = typename BasicJsonType::number_integer_t;
+    using number_unsigned_t = typename BasicJsonType::number_unsigned_t;
+    using number_float_t = typename BasicJsonType::number_float_t;
+    using string_t = typename BasicJsonType::string_t;
+    using binary_t = typename BasicJsonType::binary_t;
+
+    bool null()
+    {
+        return true;
+    }
+
+    bool boolean(bool /*unused*/)
+    {
+        return true;
+    }
+
+    bool number_integer(number_integer_t /*unused*/)
+    {
+        return true;
+    }
+
+    bool number_unsigned(number_unsigned_t /*unused*/)
+    {
+        return true;
+    }
+
+    bool number_float(number_float_t /*unused*/, const string_t& /*unused*/)
+    {
+        return true;
+    }
+
+    bool string(string_t& /*unused*/)
+    {
+        return true;
+    }
+
+    bool binary(binary_t& /*unused*/)
+    {
+        return true;
+    }
+
+    bool start_object(std::size_t /*unused*/ = detail::unknown_size())
+    {
+        return true;
+    }
+
+    bool key(string_t& /*unused*/)
+    {
+        return true;
+    }
+
+    bool end_object()
+    {
+        return true;
+    }
+
+    bool start_array(std::size_t /*unused*/ = detail::unknown_size())
+    {
+        return true;
+    }
+
+    bool end_array()
+    {
+        return true;
+    }
+
+    bool parse_error(std::size_t /*unused*/, const std::string& /*unused*/, const detail::exception& /*unused*/)
+    {
+        return false;
+    }
+};
+
+}  // namespace detail
+NLOHMANN_JSON_NAMESPACE_END
+
+// #include <nlohmann/detail/input/lexer.hpp>
+
+// #include <nlohmann/detail/macro_scope.hpp>
+
 // #include <nlohmann/detail/meta/is_sax.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -9208,7 +9841,7 @@ static inline bool little_endianness(int num = 1) noexcept
 /*!
 @brief deserialization of CBOR, MessagePack, and UBJSON values
 */
-template<typename BasicJsonType, typename InputAdapterType, typename SAX = json_sax_dom_parser<BasicJsonType>>
+template<typename BasicJsonType, typename InputAdapterType, typename SAX = json_sax_dom_parser<BasicJsonType, InputAdapterType>>
 class binary_reader
 {
     using number_integer_t = typename BasicJsonType::number_integer_t;
@@ -9315,7 +9948,7 @@ class binary_reader
         std::int32_t document_size{};
         get_number<std::int32_t, true>(input_format_t::bson, document_size);
 
-        if (JSON_HEDLEY_UNLIKELY(!sax->start_object(static_cast<std::size_t>(-1))))
+        if (JSON_HEDLEY_UNLIKELY(!sax->start_object(detail::unknown_size())))
         {
             return false;
         }
@@ -9471,6 +10104,12 @@ class binary_reader
                 return get_number<std::int64_t, true>(input_format_t::bson, value) && sax->number_integer(value);
             }
 
+            case 0x11: // uint64
+            {
+                std::uint64_t value{};
+                return get_number<std::uint64_t, true>(input_format_t::bson, value) && sax->number_unsigned(value);
+            }
+
             default: // anything else not supported (yet)
             {
                 std::array<char, 3> cr{{}};
@@ -9537,7 +10176,7 @@ class binary_reader
         std::int32_t document_size{};
         get_number<std::int32_t, true>(input_format_t::bson, document_size);
 
-        if (JSON_HEDLEY_UNLIKELY(!sax->start_array(static_cast<std::size_t>(-1))))
+        if (JSON_HEDLEY_UNLIKELY(!sax->start_array(detail::unknown_size())))
         {
             return false;
         }
@@ -9797,7 +10436,7 @@ class binary_reader
             }
 
             case 0x9F: // array (indefinite length)
-                return get_cbor_array(static_cast<std::size_t>(-1), tag_handler);
+                return get_cbor_array(detail::unknown_size(), tag_handler);
 
             // map (0x00..0x17 pairs of data items follow)
             case 0xA0:
@@ -9851,7 +10490,7 @@ class binary_reader
             }
 
             case 0xBF: // map (indefinite length)
-                return get_cbor_object(static_cast<std::size_t>(-1), tag_handler);
+                return get_cbor_object(detail::unknown_size(), tag_handler);
 
             case 0xC6: // tagged item
             case 0xC7:
@@ -10239,7 +10878,7 @@ class binary_reader
     }
 
     /*!
-    @param[in] len  the length of the array or static_cast<std::size_t>(-1) for an
+    @param[in] len  the length of the array or detail::unknown_size() for an
                     array of indefinite size
     @param[in] tag_handler how CBOR tags should be treated
     @return whether array creation completed
@@ -10252,7 +10891,7 @@ class binary_reader
             return false;
         }
 
-        if (len != static_cast<std::size_t>(-1))
+        if (len != detail::unknown_size())
         {
             for (std::size_t i = 0; i < len; ++i)
             {
@@ -10277,7 +10916,7 @@ class binary_reader
     }
 
     /*!
-    @param[in] len  the length of the object or static_cast<std::size_t>(-1) for an
+    @param[in] len  the length of the object or detail::unknown_size() for an
                     object of indefinite size
     @param[in] tag_handler how CBOR tags should be treated
     @return whether object creation completed
@@ -10293,7 +10932,7 @@ class binary_reader
         if (len != 0)
         {
             string_t key;
-            if (len != static_cast<std::size_t>(-1))
+            if (len != detail::unknown_size())
             {
                 for (std::size_t i = 0; i < len; ++i)
                 {
@@ -11456,6 +12095,16 @@ class binary_reader
             case 'Z':  // null
                 return sax->null();
 
+            case 'B':  // byte
+            {
+                if (input_format != input_format_t::bjdata)
+                {
+                    break;
+                }
+                std::uint8_t number{};
+                return get_number(input_format, number) && sax->number_unsigned(number);
+            }
+
             case 'U':
             {
                 std::uint8_t number{};
@@ -11656,7 +12305,7 @@ class binary_reader
                 return false;
             }
 
-            if (size_and_type.second == 'C')
+            if (size_and_type.second == 'C' || size_and_type.second == 'B')
             {
                 size_and_type.second = 'U';
             }
@@ -11676,6 +12325,13 @@ class binary_reader
             }
 
             return (sax->end_array() && sax->end_object());
+        }
+
+        // If BJData type marker is 'B' decode as binary
+        if (input_format == input_format_t::bjdata && size_and_type.first != npos && size_and_type.second == 'B')
+        {
+            binary_t result;
+            return get_binary(input_format, size_and_type.first, result) && sax->binary(result);
         }
 
         if (size_and_type.first != npos)
@@ -11711,7 +12367,7 @@ class binary_reader
         }
         else
         {
-            if (JSON_HEDLEY_UNLIKELY(!sax->start_array(static_cast<std::size_t>(-1))))
+            if (JSON_HEDLEY_UNLIKELY(!sax->start_array(detail::unknown_size())))
             {
                 return false;
             }
@@ -11789,7 +12445,7 @@ class binary_reader
         }
         else
         {
-            if (JSON_HEDLEY_UNLIKELY(!sax->start_object(static_cast<std::size_t>(-1))))
+            if (JSON_HEDLEY_UNLIKELY(!sax->start_object(detail::unknown_size())))
             {
                 return false;
             }
@@ -11901,6 +12557,29 @@ class binary_reader
     }
 
     /*!
+    @brief get_to read into a primitive type
+
+    This function provides the interface to the used input adapter. It does
+    not throw in case the input reached EOF, but returns false instead
+
+    @return bool, whether the read was successful
+    */
+    template<class T>
+    bool get_to(T& dest, const input_format_t format, const char* context)
+    {
+        auto new_chars_read = ia.get_elements(&dest);
+        chars_read += new_chars_read;
+        if (JSON_HEDLEY_UNLIKELY(new_chars_read < sizeof(T)))
+        {
+            // in case of failure, advance position by 1 to report failing location
+            ++chars_read;
+            sax->parse_error(chars_read, "<end of file>", parse_error::create(110, chars_read, exception_message(format, "unexpected end of input", context), nullptr));
+            return false;
+        }
+        return true;
+    }
+
+    /*!
     @return character read from the input after ignoring all 'N' entries
     */
     char_int_type get_ignore_noop()
@@ -11912,6 +12591,28 @@ class binary_reader
         while (current == 'N');
 
         return current;
+    }
+
+    template<class NumberType>
+    static void byte_swap(NumberType& number)
+    {
+        constexpr std::size_t sz = sizeof(number);
+#ifdef __cpp_lib_byteswap
+        if constexpr (sz == 1)
+        {
+            return;
+        }
+        if constexpr(std::is_integral_v<NumberType>)
+        {
+            number = std::byteswap(number);
+            return;
+        }
+#endif
+        auto* ptr = reinterpret_cast<std::uint8_t*>(&number);
+        for (std::size_t i = 0; i < sz / 2; ++i)
+        {
+            std::swap(ptr[i], ptr[sz - i - 1]);
+        }
     }
 
     /*
@@ -11932,29 +12633,16 @@ class binary_reader
     template<typename NumberType, bool InputIsLittleEndian = false>
     bool get_number(const input_format_t format, NumberType& result)
     {
-        // step 1: read input into array with system's byte order
-        std::array<std::uint8_t, sizeof(NumberType)> vec{};
-        for (std::size_t i = 0; i < sizeof(NumberType); ++i)
+        // read in the original format
+
+        if (JSON_HEDLEY_UNLIKELY(!get_to(result, format, "number")))
         {
-            get();
-            if (JSON_HEDLEY_UNLIKELY(!unexpect_eof(format, "number")))
-            {
-                return false;
-            }
-
-            // reverse byte order prior to conversion if necessary
-            if (is_little_endian != (InputIsLittleEndian || format == input_format_t::bjdata))
-            {
-                vec[sizeof(NumberType) - i - 1] = static_cast<std::uint8_t>(current);
-            }
-            else
-            {
-                vec[i] = static_cast<std::uint8_t>(current); // LCOV_EXCL_LINE
-            }
+            return false;
         }
-
-        // step 2: convert array into number of type T and return
-        std::memcpy(&result, vec.data(), sizeof(NumberType));
+        if (is_little_endian != (InputIsLittleEndian || format == input_format_t::bjdata))
+        {
+            byte_swap(result);
+        }
         return true;
     }
 
@@ -12093,7 +12781,7 @@ class binary_reader
     }
 
   private:
-    static JSON_INLINE_VARIABLE constexpr std::size_t npos = static_cast<std::size_t>(-1);
+    static JSON_INLINE_VARIABLE constexpr std::size_t npos = detail::unknown_size();
 
     /// input adapter
     InputAdapterType ia;
@@ -12119,6 +12807,7 @@ class binary_reader
 
 #define JSON_BINARY_READER_MAKE_BJD_TYPES_MAP_ \
     make_array<bjd_type>(                      \
+    bjd_type{'B', "byte"},                     \
     bjd_type{'C', "char"},                     \
     bjd_type{'D', "double"},                   \
     bjd_type{'I', "int16"},                    \
@@ -12161,10 +12850,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/input/parser.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -12238,10 +12927,10 @@ class parser
   public:
     /// a parser reading from an input adapter
     explicit parser(InputAdapterType&& adapter,
-                    const parser_callback_t<BasicJsonType> cb = nullptr,
+                    parser_callback_t<BasicJsonType> cb = nullptr,
                     const bool allow_exceptions_ = true,
                     const bool skip_comments = false)
-        : callback(cb)
+        : callback(std::move(cb))
         , m_lexer(std::move(adapter), skip_comments)
         , allow_exceptions(allow_exceptions_)
     {
@@ -12263,7 +12952,7 @@ class parser
     {
         if (callback)
         {
-            json_sax_dom_callback_parser<BasicJsonType> sdp(result, callback, allow_exceptions);
+            json_sax_dom_callback_parser<BasicJsonType, InputAdapterType> sdp(result, callback, allow_exceptions, &m_lexer);
             sax_parse_internal(&sdp);
 
             // in strict mode, input must be completely read
@@ -12291,7 +12980,7 @@ class parser
         }
         else
         {
-            json_sax_dom_parser<BasicJsonType> sdp(result, allow_exceptions);
+            json_sax_dom_parser<BasicJsonType, InputAdapterType> sdp(result, allow_exceptions, &m_lexer);
             sax_parse_internal(&sdp);
 
             // in strict mode, input must be completely read
@@ -12363,7 +13052,7 @@ class parser
                 {
                     case token_type::begin_object:
                     {
-                        if (JSON_HEDLEY_UNLIKELY(!sax->start_object(static_cast<std::size_t>(-1))))
+                        if (JSON_HEDLEY_UNLIKELY(!sax->start_object(detail::unknown_size())))
                         {
                             return false;
                         }
@@ -12408,7 +13097,7 @@ class parser
 
                     case token_type::begin_array:
                     {
-                        if (JSON_HEDLEY_UNLIKELY(!sax->start_array(static_cast<std::size_t>(-1))))
+                        if (JSON_HEDLEY_UNLIKELY(!sax->start_array(detail::unknown_size())))
                         {
                             return false;
                         }
@@ -12690,10 +13379,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/iterators/internal_iterator.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -12703,10 +13392,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/iterators/primitive_iterator.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -12862,10 +13551,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/iterators/iter_impl.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -13332,7 +14021,7 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /*!
     @brief comparison: equal
-    @pre The iterator is initialized; i.e. `m_object != nullptr`.
+    @pre (1) Both iterators are initialized to point to the same object, or (2) both iterators are value-initialized.
     */
     template < typename IterImpl, detail::enable_if_t < (std::is_same<IterImpl, iter_impl>::value || std::is_same<IterImpl, other_iter_impl>::value), std::nullptr_t > = nullptr >
     bool operator==(const IterImpl& other) const
@@ -13343,7 +14032,11 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
             JSON_THROW(invalid_iterator::create(212, "cannot compare iterators of different containers", m_object));
         }
 
-        JSON_ASSERT(m_object != nullptr);
+        // value-initialized forward iterators can be compared, and must compare equal to other value-initialized iterators of the same type #4493
+        if (m_object == nullptr)
+        {
+            return true;
+        }
 
         switch (m_object->m_data.m_type)
         {
@@ -13368,7 +14061,7 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /*!
     @brief comparison: not equal
-    @pre The iterator is initialized; i.e. `m_object != nullptr`.
+    @pre (1) Both iterators are initialized to point to the same object, or (2) both iterators are value-initialized.
     */
     template < typename IterImpl, detail::enable_if_t < (std::is_same<IterImpl, iter_impl>::value || std::is_same<IterImpl, other_iter_impl>::value), std::nullptr_t > = nullptr >
     bool operator!=(const IterImpl& other) const
@@ -13378,7 +14071,7 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /*!
     @brief comparison: smaller
-    @pre The iterator is initialized; i.e. `m_object != nullptr`.
+    @pre (1) Both iterators are initialized to point to the same object, or (2) both iterators are value-initialized.
     */
     bool operator<(const iter_impl& other) const
     {
@@ -13388,7 +14081,12 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
             JSON_THROW(invalid_iterator::create(212, "cannot compare iterators of different containers", m_object));
         }
 
-        JSON_ASSERT(m_object != nullptr);
+        // value-initialized forward iterators can be compared, and must compare equal to other value-initialized iterators of the same type #4493
+        if (m_object == nullptr)
+        {
+            // the iterators are both value-initialized and are to be considered equal, but this function checks for smaller, so we return false
+            return false;
+        }
 
         switch (m_object->m_data.m_type)
         {
@@ -13413,7 +14111,7 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /*!
     @brief comparison: less than or equal
-    @pre The iterator is initialized; i.e. `m_object != nullptr`.
+    @pre (1) Both iterators are initialized to point to the same object, or (2) both iterators are value-initialized.
     */
     bool operator<=(const iter_impl& other) const
     {
@@ -13422,7 +14120,7 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /*!
     @brief comparison: greater than
-    @pre The iterator is initialized; i.e. `m_object != nullptr`.
+    @pre (1) Both iterators are initialized to point to the same object, or (2) both iterators are value-initialized.
     */
     bool operator>(const iter_impl& other) const
     {
@@ -13431,7 +14129,7 @@ class iter_impl // NOLINT(cppcoreguidelines-special-member-functions,hicpp-speci
 
     /*!
     @brief comparison: greater than or equal
-    @pre The iterator is initialized; i.e. `m_object != nullptr`.
+    @pre (1) The iterator is initialized; i.e. `m_object != nullptr`, or (2) both iterators are value-initialized.
     */
     bool operator>=(const iter_impl& other) const
     {
@@ -13624,10 +14322,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/iterators/json_reverse_iterator.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -13759,10 +14457,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/json_custom_base_class.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -13801,10 +14499,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/json_pointer.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -14034,7 +14732,7 @@ class json_pointer
         }
 
         const char* p = s.c_str();
-        char* p_end = nullptr;
+        char* p_end = nullptr; // NOLINT(misc-const-correctness)
         errno = 0; // strtoull doesn't reset errno
         const unsigned long long res = std::strtoull(p, &p_end, 10); // NOLINT(runtime/int)
         if (p == p_end // invalid input or empty string
@@ -14556,7 +15254,7 @@ class json_pointer
                     // iterate array and use index as reference string
                     for (std::size_t i = 0; i < value.m_data.m_value.array->size(); ++i)
                     {
-                        flatten(detail::concat(reference_string, '/', std::to_string(i)),
+                        flatten(detail::concat<string_t>(reference_string, '/', std::to_string(i)),
                                 value.m_data.m_value.array->operator[](i), result);
                     }
                 }
@@ -14575,7 +15273,7 @@ class json_pointer
                     // iterate object and use keys as reference string
                     for (const auto& element : *value.m_data.m_value.object)
                     {
-                        flatten(detail::concat(reference_string, '/', detail::escape(element.first)), element.second, result);
+                        flatten(detail::concat<string_t>(reference_string, '/', detail::escape(element.first)), element.second, result);
                     }
                 }
                 break;
@@ -14796,10 +15494,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/json_ref.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -14881,6 +15579,8 @@ NLOHMANN_JSON_NAMESPACE_END
 
 // #include <nlohmann/detail/string_escape.hpp>
 
+// #include <nlohmann/detail/string_utils.hpp>
+
 // #include <nlohmann/detail/meta/cpp_future.hpp>
 
 // #include <nlohmann/detail/meta/type_traits.hpp>
@@ -14888,10 +15588,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/output/binary_writer.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -14914,10 +15614,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/output/output_adapters.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -15067,6 +15767,13 @@ NLOHMANN_JSON_NAMESPACE_END
 NLOHMANN_JSON_NAMESPACE_BEGIN
 namespace detail
 {
+
+/// how to encode BJData
+enum class bjdata_version_t
+{
+    draft2,
+    draft3,
+};
 
 ///////////////////
 // binary writer //
@@ -15652,7 +16359,7 @@ class binary_writer
             case value_t::binary:
             {
                 // step 0: determine if the binary type has a set subtype to
-                // determine whether or not to use the ext or fixext types
+                // determine whether to use the ext or fixext types
                 const bool use_ext = j.m_data.m_value.binary->has_subtype();
 
                 // step 1: write control byte and the byte string length
@@ -15775,11 +16482,14 @@ class binary_writer
     @param[in] use_type    whether to use '$' prefixes (optimized format)
     @param[in] add_prefix  whether prefixes need to be used for this value
     @param[in] use_bjdata  whether write in BJData format, default is false
+    @param[in] bjdata_version  which BJData version to use, default is draft2
     */
     void write_ubjson(const BasicJsonType& j, const bool use_count,
                       const bool use_type, const bool add_prefix = true,
-                      const bool use_bjdata = false)
+                      const bool use_bjdata = false, const bjdata_version_t bjdata_version = bjdata_version_t::draft2)
     {
+        const bool bjdata_draft3 = use_bjdata && bjdata_version == bjdata_version_t::draft3;
+
         switch (j.type())
         {
             case value_t::null:
@@ -15869,7 +16579,7 @@ class binary_writer
 
                 for (const auto& el : *j.m_data.m_value.array)
                 {
-                    write_ubjson(el, use_count, use_type, prefix_required, use_bjdata);
+                    write_ubjson(el, use_count, use_type, prefix_required, use_bjdata, bjdata_version);
                 }
 
                 if (!use_count)
@@ -15887,11 +16597,11 @@ class binary_writer
                     oa->write_character(to_char_type('['));
                 }
 
-                if (use_type && !j.m_data.m_value.binary->empty())
+                if (use_type && (bjdata_draft3 || !j.m_data.m_value.binary->empty()))
                 {
                     JSON_ASSERT(use_count);
                     oa->write_character(to_char_type('$'));
-                    oa->write_character('U');
+                    oa->write_character(bjdata_draft3 ? 'B' : 'U');
                 }
 
                 if (use_count)
@@ -15910,7 +16620,7 @@ class binary_writer
                 {
                     for (size_t i = 0; i < j.m_data.m_value.binary->size(); ++i)
                     {
-                        oa->write_character(to_char_type('U'));
+                        oa->write_character(to_char_type(bjdata_draft3 ? 'B' : 'U'));
                         oa->write_character(j.m_data.m_value.binary->data()[i]);
                     }
                 }
@@ -15927,7 +16637,7 @@ class binary_writer
             {
                 if (use_bjdata && j.m_data.m_value.object->size() == 3 && j.m_data.m_value.object->find("_ArrayType_") != j.m_data.m_value.object->end() && j.m_data.m_value.object->find("_ArraySize_") != j.m_data.m_value.object->end() && j.m_data.m_value.object->find("_ArrayData_") != j.m_data.m_value.object->end())
                 {
-                    if (!write_bjdata_ndarray(*j.m_data.m_value.object, use_count, use_type))  // decode bjdata ndarray in the JData format (https://github.com/NeuroJSON/jdata)
+                    if (!write_bjdata_ndarray(*j.m_data.m_value.object, use_count, use_type, bjdata_version))  // decode bjdata ndarray in the JData format (https://github.com/NeuroJSON/jdata)
                     {
                         break;
                     }
@@ -15971,7 +16681,7 @@ class binary_writer
                     oa->write_characters(
                         reinterpret_cast<const CharType*>(el.first.c_str()),
                         el.first.size());
-                    write_ubjson(el.second, use_count, use_type, prefix_required, use_bjdata);
+                    write_ubjson(el.second, use_count, use_type, prefix_required, use_bjdata, bjdata_version);
                 }
 
                 if (!use_count)
@@ -16127,7 +16837,8 @@ class binary_writer
         }
         else
         {
-            JSON_THROW(out_of_range::create(407, concat("integer number ", std::to_string(j.m_data.m_value.number_unsigned), " cannot be represented by BSON as it does not fit int64"), &j));
+            write_bson_entry_header(name, 0x11 /* uint64 */);
+            write_number<std::uint64_t>(static_cast<std::uint64_t>(j.m_data.m_value.number_unsigned), true);
         }
     }
 
@@ -16655,10 +17366,11 @@ class binary_writer
     /*!
     @return false if the object is successfully converted to a bjdata ndarray, true if the type or size is invalid
     */
-    bool write_bjdata_ndarray(const typename BasicJsonType::object_t& value, const bool use_count, const bool use_type)
+    bool write_bjdata_ndarray(const typename BasicJsonType::object_t& value, const bool use_count, const bool use_type, const bjdata_version_t bjdata_version)
     {
         std::map<string_t, CharType> bjdtype = {{"uint8", 'U'},  {"int8", 'i'},  {"uint16", 'u'}, {"int16", 'I'},
-            {"uint32", 'm'}, {"int32", 'l'}, {"uint64", 'M'}, {"int64", 'L'}, {"single", 'd'}, {"double", 'D'}, {"char", 'C'}
+            {"uint32", 'm'}, {"int32", 'l'}, {"uint64", 'M'}, {"int64", 'L'}, {"single", 'd'}, {"double", 'D'},
+            {"char", 'C'}, {"byte", 'B'}
         };
 
         string_t key = "_ArrayType_";
@@ -16688,10 +17400,10 @@ class binary_writer
         oa->write_character('#');
 
         key = "_ArraySize_";
-        write_ubjson(value.at(key), use_count, use_type, true,  true);
+        write_ubjson(value.at(key), use_count, use_type, true,  true, bjdata_version);
 
         key = "_ArrayData_";
-        if (dtype == 'U' || dtype == 'C')
+        if (dtype == 'U' || dtype == 'C' || dtype == 'B')
         {
             for (const auto& el : value.at(key))
             {
@@ -16882,11 +17594,11 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/output/serializer.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2008-2009 Björn Hoehrmann <bjoern@hoehrmann.de>
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2008 - 2009 Björn Hoehrmann <bjoern@hoehrmann.de>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -16907,11 +17619,11 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/detail/conversions/to_chars.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
 // SPDX-FileCopyrightText: 2009 Florian Loitsch <https://florian.loitsch.com/>
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -17147,10 +17859,10 @@ boundaries compute_boundaries(FloatType value)
     //                       v-     m-     v             m+            v+
 
     const bool lower_boundary_is_closer = F == 0 && E > 1;
-    const diyfp m_plus = diyfp(2 * v.f + 1, v.e - 1);
+    const diyfp m_plus = diyfp((2 * v.f) + 1, v.e - 1);
     const diyfp m_minus = lower_boundary_is_closer
-                          ? diyfp(4 * v.f - 1, v.e - 2)  // (B)
-                          : diyfp(2 * v.f - 1, v.e - 1); // (A)
+                          ? diyfp((4 * v.f) - 1, v.e - 2)  // (B)
+                          : diyfp((2 * v.f) - 1, v.e - 1); // (A)
 
     // Determine the normalized w+ = m+.
     const diyfp w_plus = diyfp::normalize(m_plus);
@@ -17380,7 +18092,7 @@ inline cached_power get_cached_power_for_binary_exponent(int e)
     JSON_ASSERT(e >= -1500);
     JSON_ASSERT(e <=  1500);
     const int f = kAlpha - e - 1;
-    const int k = (f * 78913) / (1 << 18) + static_cast<int>(f > 0);
+    const int k = ((f * 78913) / (1 << 18)) + static_cast<int>(f > 0);
 
     const int index = (-kCachedPowersMinDecExp + k + (kCachedPowersDecStep - 1)) / kCachedPowersDecStep;
     JSON_ASSERT(index >= 0);
@@ -17858,15 +18570,15 @@ inline char* append_exponent(char* buf, int e)
     }
     else if (k < 100)
     {
-        *buf++ = static_cast<char>('0' + k / 10);
+        *buf++ = static_cast<char>('0' + (k / 10));
         k %= 10;
         *buf++ = static_cast<char>('0' + k);
     }
     else
     {
-        *buf++ = static_cast<char>('0' + k / 100);
+        *buf++ = static_cast<char>('0' + (k / 100));
         k %= 100;
-        *buf++ = static_cast<char>('0' + k / 10);
+        *buf++ = static_cast<char>('0' + (k / 10));
         k %= 10;
         *buf++ = static_cast<char>('0' + k);
     }
@@ -18652,7 +19364,7 @@ class serializer
     @param[in] x  unsigned integer number to count its digits
     @return    number of decimal digits
     */
-    inline unsigned int count_digits(number_unsigned_t x) noexcept
+    unsigned int count_digits(number_unsigned_t x) noexcept
     {
         unsigned int n_digits = 1;
         for (;;)
@@ -18935,7 +19647,7 @@ class serializer
                 ? (byte & 0x3fu) | (codep << 6u)
                 : (0xFFu >> type) & (byte);
 
-        const std::size_t index = 256u + static_cast<size_t>(state) * 16u + static_cast<size_t>(type);
+        const std::size_t index = 256u + (static_cast<size_t>(state) * 16u) + static_cast<size_t>(type);
         JSON_ASSERT(index < utf8d.size());
         state = utf8d[index];
         return state;
@@ -18961,7 +19673,7 @@ class serializer
      * absolute values of INT_MIN and INT_MAX are usually not the same. See
      * #1708 for details.
      */
-    inline number_unsigned_t remove_sign(number_integer_t x) noexcept
+    number_unsigned_t remove_sign(number_integer_t x) noexcept
     {
         JSON_ASSERT(x < 0 && x < (std::numeric_limits<number_integer_t>::max)()); // NOLINT(misc-redundant-expression)
         return static_cast<number_unsigned_t>(-(x + 1)) + 1;
@@ -19003,10 +19715,10 @@ NLOHMANN_JSON_NAMESPACE_END
 // #include <nlohmann/ordered_map.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -19031,7 +19743,7 @@ NLOHMANN_JSON_NAMESPACE_BEGIN
 /// for use within nlohmann::basic_json<ordered_map>
 template <class Key, class T, class IgnoredLess = std::less<Key>,
           class Allocator = std::allocator<std::pair<const Key, T>>>
-                  struct ordered_map : std::vector<std::pair<const Key, T>, Allocator>
+              struct ordered_map : std::vector<std::pair<const Key, T>, Allocator>
 {
     using key_type = Key;
     using mapped_type = T;
@@ -19346,7 +20058,7 @@ template <class Key, class T, class IgnoredLess = std::less<Key>,
 
     template<typename InputIt>
     using require_input_iter = typename std::enable_if<std::is_convertible<typename std::iterator_traits<InputIt>::iterator_category,
-            std::input_iterator_tag>::value>::type;
+        std::input_iterator_tag>::value>::type;
 
     template<typename InputIt, typename = require_input_iter<InputIt>>
     void insert(InputIt first, InputIt last)
@@ -19417,9 +20129,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     friend class ::nlohmann::detail::binary_writer;
     template<typename BasicJsonType, typename InputType, typename SAX>
     friend class ::nlohmann::detail::binary_reader;
-    template<typename BasicJsonType>
+    template<typename BasicJsonType, typename InputAdapterType>
     friend class ::nlohmann::detail::json_sax_dom_parser;
-    template<typename BasicJsonType>
+    template<typename BasicJsonType, typename InputAdapterType>
     friend class ::nlohmann::detail::json_sax_dom_callback_parser;
     friend class ::nlohmann::detail::exception;
 
@@ -19440,7 +20152,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                  )
     {
         return ::nlohmann::detail::parser<basic_json, InputAdapterType>(std::move(adapter),
-                std::move(cb), allow_exceptions, ignore_comments);
+            std::move(cb), allow_exceptions, ignore_comments);
     }
 
   private:
@@ -19473,6 +20185,8 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     using error_handler_t = detail::error_handler_t;
     /// how to treat CBOR tags
     using cbor_tag_handler_t = detail::cbor_tag_handler_t;
+    /// how to encode BJData
+    using bjdata_version_t = detail::bjdata_version_t;
     /// helper type for initializer lists of basic_json values
     using initializer_list_t = std::initializer_list<detail::json_ref<basic_json>>;
 
@@ -19552,7 +20266,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     {
         basic_json result;
 
-        result["copyright"] = "(C) 2013-2023 Niels Lohmann";
+        result["copyright"] = "(C) 2013-2025 Niels Lohmann";
         result["name"] = "JSON for Modern C++";
         result["url"] = "https://github.com/nlohmann/json";
         result["version"]["string"] =
@@ -19817,7 +20531,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                     object = nullptr;  // silence warning, see #821
                     if (JSON_HEDLEY_UNLIKELY(t == value_t::null))
                     {
-                        JSON_THROW(other_error::create(500, "961c151d2e87f2686a955a9be24d316f1362bf21 3.11.3", nullptr)); // LCOV_EXCL_LINE
+                        JSON_THROW(other_error::create(500, "961c151d2e87f2686a955a9be24d316f1362bf21 3.12.0", nullptr)); // LCOV_EXCL_LINE
                     }
                     break;
                 }
@@ -20053,10 +20767,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         return it;
     }
 
-    reference set_parent(reference j, std::size_t old_capacity = static_cast<std::size_t>(-1))
+    reference set_parent(reference j, std::size_t old_capacity = detail::unknown_size())
     {
 #if JSON_DIAGNOSTICS
-        if (old_capacity != static_cast<std::size_t>(-1))
+        if (old_capacity != detail::unknown_size())
         {
             // see https://github.com/nlohmann/json/issues/2838
             JSON_ASSERT(type() == value_t::array);
@@ -20136,8 +20850,8 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                detail::enable_if_t <
                    !detail::is_basic_json<U>::value && detail::is_compatible_type<basic_json_t, U>::value, int > = 0 >
     basic_json(CompatibleType && val) noexcept(noexcept( // NOLINT(bugprone-forwarding-reference-overload,bugprone-exception-escape)
-                JSONSerializer<U>::to_json(std::declval<basic_json_t&>(),
-                                           std::forward<CompatibleType>(val))))
+            JSONSerializer<U>::to_json(std::declval<basic_json_t&>(),
+                                       std::forward<CompatibleType>(val))))
     {
         JSONSerializer<U>::to_json(*this, std::forward<CompatibleType>(val));
         set_parents();
@@ -20150,6 +20864,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                detail::enable_if_t <
                    detail::is_basic_json<BasicJsonType>::value&& !std::is_same<basic_json, BasicJsonType>::value, int > = 0 >
     basic_json(const BasicJsonType& val)
+#if JSON_DIAGNOSTIC_POSITIONS
+        : start_position(val.start_pos()),
+          end_position(val.end_pos())
+#endif
     {
         using other_boolean_t = typename BasicJsonType::boolean_t;
         using other_number_float_t = typename BasicJsonType::number_float_t;
@@ -20196,6 +20914,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                 JSON_ASSERT(false); // NOLINT(cert-dcl03-c,hicpp-static-assert,misc-static-assert) LCOV_EXCL_LINE
         }
         JSON_ASSERT(m_data.m_type == val.type());
+
         set_parents();
         assert_invariant();
     }
@@ -20332,7 +21051,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template < class InputIT, typename std::enable_if <
                    std::is_same<InputIT, typename basic_json_t::iterator>::value ||
                    std::is_same<InputIT, typename basic_json_t::const_iterator>::value, int >::type = 0 >
-    basic_json(InputIT first, InputIT last)
+    basic_json(InputIT first, InputIT last) // NOLINT(performance-unnecessary-value-param)
     {
         JSON_ASSERT(first.m_object != nullptr);
         JSON_ASSERT(last.m_object != nullptr);
@@ -20447,6 +21166,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     /// @sa https://json.nlohmann.me/api/basic_json/basic_json/
     basic_json(const basic_json& other)
         : json_base_class_t(other)
+#if JSON_DIAGNOSTIC_POSITIONS
+        , start_position(other.start_position)
+        , end_position(other.end_position)
+#endif
     {
         m_data.m_type = other.m_data.m_type;
         // check of passed value is valid
@@ -20516,14 +21239,23 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     /// @sa https://json.nlohmann.me/api/basic_json/basic_json/
     basic_json(basic_json&& other) noexcept
         : json_base_class_t(std::forward<json_base_class_t>(other)),
-          m_data(std::move(other.m_data))
+          m_data(std::move(other.m_data)) // cppcheck-suppress[accessForwarded] TODO check
+#if JSON_DIAGNOSTIC_POSITIONS
+        , start_position(other.start_position) // cppcheck-suppress[accessForwarded] TODO check
+        , end_position(other.end_position) // cppcheck-suppress[accessForwarded] TODO check
+#endif
     {
         // check that passed value is valid
-        other.assert_invariant(false);
+        other.assert_invariant(false); // cppcheck-suppress[accessForwarded]
 
         // invalidate payload
         other.m_data.m_type = value_t::null;
         other.m_data.m_value = {};
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        other.start_position = std::string::npos;
+        other.end_position = std::string::npos;
+#endif
 
         set_parents();
         assert_invariant();
@@ -20545,6 +21277,12 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         using std::swap;
         swap(m_data.m_type, other.m_data.m_type);
         swap(m_data.m_value, other.m_data.m_value);
+
+#if JSON_DIAGNOSTIC_POSITIONS
+        swap(start_position, other.start_position);
+        swap(end_position, other.end_position);
+#endif
+
         json_base_class_t::operator=(std::move(other));
 
         set_parents();
@@ -20766,13 +21504,13 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     /// get a pointer to the value (integer number)
     number_integer_t* get_impl_ptr(number_integer_t* /*unused*/) noexcept
     {
-        return is_number_integer() ? &m_data.m_value.number_integer : nullptr;
+        return m_data.m_type == value_t::number_integer ? &m_data.m_value.number_integer : nullptr;
     }
 
     /// get a pointer to the value (integer number)
     constexpr const number_integer_t* get_impl_ptr(const number_integer_t* /*unused*/) const noexcept
     {
-        return is_number_integer() ? &m_data.m_value.number_integer : nullptr;
+        return m_data.m_type == value_t::number_integer ? &m_data.m_value.number_integer : nullptr;
     }
 
     /// get a pointer to the value (unsigned number)
@@ -20907,7 +21645,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                    detail::has_from_json<basic_json_t, ValueType>::value,
                    int > = 0 >
     ValueType get_impl(detail::priority_tag<0> /*unused*/) const noexcept(noexcept(
-                JSONSerializer<ValueType>::from_json(std::declval<const basic_json_t&>(), std::declval<ValueType&>())))
+            JSONSerializer<ValueType>::from_json(std::declval<const basic_json_t&>(), std::declval<ValueType&>())))
     {
         auto ret = ValueType();
         JSONSerializer<ValueType>::from_json(*this, ret);
@@ -20949,7 +21687,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                    detail::has_non_default_from_json<basic_json_t, ValueType>::value,
                    int > = 0 >
     ValueType get_impl(detail::priority_tag<1> /*unused*/) const noexcept(noexcept(
-                JSONSerializer<ValueType>::from_json(std::declval<const basic_json_t&>())))
+            JSONSerializer<ValueType>::from_json(std::declval<const basic_json_t&>())))
     {
         return JSONSerializer<ValueType>::from_json(*this);
     }
@@ -21099,7 +21837,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                    detail::has_from_json<basic_json_t, ValueType>::value,
                    int > = 0 >
     ValueType & get_to(ValueType& v) const noexcept(noexcept(
-                JSONSerializer<ValueType>::from_json(std::declval<const basic_json_t&>(), v)))
+            JSONSerializer<ValueType>::from_json(std::declval<const basic_json_t&>(), v)))
     {
         JSONSerializer<ValueType>::from_json(*this, v);
         return v;
@@ -21251,7 +21989,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
             {
                 // create better exception explanation
                 JSON_THROW(out_of_range::create(401, detail::concat("array index ", std::to_string(idx), " is out of range"), this));
-            }
+            } // cppcheck-suppress[missingReturn]
         }
         else
         {
@@ -21274,7 +22012,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
             {
                 // create better exception explanation
                 JSON_THROW(out_of_range::create(401, detail::concat("array index ", std::to_string(idx), " is out of range"), this));
-            }
+            } // cppcheck-suppress[missingReturn]
         }
         else
         {
@@ -21419,7 +22157,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
     /// @brief access specified object element
     /// @sa https://json.nlohmann.me/api/basic_json/operator%5B%5D/
-    reference operator[](typename object_t::key_type key)
+    reference operator[](typename object_t::key_type key) // NOLINT(performance-unnecessary-value-param)
     {
         // implicitly convert null value to an empty object
         if (is_null())
@@ -21729,7 +22467,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template < class IteratorType, detail::enable_if_t <
                    std::is_same<IteratorType, typename basic_json_t::iterator>::value ||
                    std::is_same<IteratorType, typename basic_json_t::const_iterator>::value, int > = 0 >
-    IteratorType erase(IteratorType pos)
+    IteratorType erase(IteratorType pos) // NOLINT(performance-unnecessary-value-param)
     {
         // make sure iterator fits the current value
         if (JSON_HEDLEY_UNLIKELY(this != pos.m_object))
@@ -21799,7 +22537,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template < class IteratorType, detail::enable_if_t <
                    std::is_same<IteratorType, typename basic_json_t::iterator>::value ||
                    std::is_same<IteratorType, typename basic_json_t::const_iterator>::value, int > = 0 >
-    IteratorType erase(IteratorType first, IteratorType last)
+    IteratorType erase(IteratorType first, IteratorType last) // NOLINT(performance-unnecessary-value-param)
     {
         // make sure iterator fits the current value
         if (JSON_HEDLEY_UNLIKELY(this != first.m_object || this != last.m_object))
@@ -22566,7 +23304,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     /// @note: This uses std::distance to support GCC 4.8,
     ///        see https://github.com/nlohmann/json/pull/1257
     template<typename... Args>
-    iterator insert_iterator(const_iterator pos, Args&& ... args)
+    iterator insert_iterator(const_iterator pos, Args&& ... args) // NOLINT(performance-unnecessary-value-param)
     {
         iterator result(this);
         JSON_ASSERT(m_data.m_value.array != nullptr);
@@ -22585,7 +23323,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
     /// @brief inserts element into array
     /// @sa https://json.nlohmann.me/api/basic_json/insert/
-    iterator insert(const_iterator pos, const basic_json& val)
+    iterator insert(const_iterator pos, const basic_json& val) // NOLINT(performance-unnecessary-value-param)
     {
         // insert only works for arrays
         if (JSON_HEDLEY_LIKELY(is_array()))
@@ -22605,14 +23343,14 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
     /// @brief inserts element into array
     /// @sa https://json.nlohmann.me/api/basic_json/insert/
-    iterator insert(const_iterator pos, basic_json&& val)
+    iterator insert(const_iterator pos, basic_json&& val) // NOLINT(performance-unnecessary-value-param)
     {
         return insert(pos, val);
     }
 
     /// @brief inserts copies of element into array
     /// @sa https://json.nlohmann.me/api/basic_json/insert/
-    iterator insert(const_iterator pos, size_type cnt, const basic_json& val)
+    iterator insert(const_iterator pos, size_type cnt, const basic_json& val) // NOLINT(performance-unnecessary-value-param)
     {
         // insert only works for arrays
         if (JSON_HEDLEY_LIKELY(is_array()))
@@ -22632,7 +23370,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
     /// @brief inserts range of elements into array
     /// @sa https://json.nlohmann.me/api/basic_json/insert/
-    iterator insert(const_iterator pos, const_iterator first, const_iterator last)
+    iterator insert(const_iterator pos, const_iterator first, const_iterator last) // NOLINT(performance-unnecessary-value-param)
     {
         // insert only works for arrays
         if (JSON_HEDLEY_UNLIKELY(!is_array()))
@@ -22663,7 +23401,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
     /// @brief inserts elements from initializer list into array
     /// @sa https://json.nlohmann.me/api/basic_json/insert/
-    iterator insert(const_iterator pos, initializer_list_t ilist)
+    iterator insert(const_iterator pos, initializer_list_t ilist) // NOLINT(performance-unnecessary-value-param)
     {
         // insert only works for arrays
         if (JSON_HEDLEY_UNLIKELY(!is_array()))
@@ -22683,7 +23421,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
     /// @brief inserts range of elements into object
     /// @sa https://json.nlohmann.me/api/basic_json/insert/
-    void insert(const_iterator first, const_iterator last)
+    void insert(const_iterator first, const_iterator last) // NOLINT(performance-unnecessary-value-param)
     {
         // insert only works for objects
         if (JSON_HEDLEY_UNLIKELY(!is_object()))
@@ -22704,6 +23442,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         }
 
         m_data.m_value.object->insert(first.m_it.object_iterator, last.m_it.object_iterator);
+        set_parents();
     }
 
     /// @brief updates a JSON object from another object, overwriting existing keys
@@ -22715,7 +23454,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
     /// @brief updates a JSON object from another object, overwriting existing keys
     /// @sa https://json.nlohmann.me/api/basic_json/update/
-    void update(const_iterator first, const_iterator last, bool merge_objects = false)
+    void update(const_iterator first, const_iterator last, bool merge_objects = false) // NOLINT(performance-unnecessary-value-param)
     {
         // implicitly convert null value to an empty object
         if (is_null())
@@ -23316,12 +24055,12 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     template<typename InputType>
     JSON_HEDLEY_WARN_UNUSED_RESULT
     static basic_json parse(InputType&& i,
-                            const parser_callback_t cb = nullptr,
+                            parser_callback_t cb = nullptr,
                             const bool allow_exceptions = true,
                             const bool ignore_comments = false)
     {
         basic_json result;
-        parser(detail::input_adapter(std::forward<InputType>(i)), cb, allow_exceptions, ignore_comments).parse(true, result);
+        parser(detail::input_adapter(std::forward<InputType>(i)), std::move(cb), allow_exceptions, ignore_comments).parse(true, result); // cppcheck-suppress[accessMoved,accessForwarded]
         return result;
     }
 
@@ -23331,24 +24070,24 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     JSON_HEDLEY_WARN_UNUSED_RESULT
     static basic_json parse(IteratorType first,
                             IteratorType last,
-                            const parser_callback_t cb = nullptr,
+                            parser_callback_t cb = nullptr,
                             const bool allow_exceptions = true,
                             const bool ignore_comments = false)
     {
         basic_json result;
-        parser(detail::input_adapter(std::move(first), std::move(last)), cb, allow_exceptions, ignore_comments).parse(true, result);
+        parser(detail::input_adapter(std::move(first), std::move(last)), std::move(cb), allow_exceptions, ignore_comments).parse(true, result); // cppcheck-suppress[accessMoved]
         return result;
     }
 
     JSON_HEDLEY_WARN_UNUSED_RESULT
     JSON_HEDLEY_DEPRECATED_FOR(3.8.0, parse(ptr, ptr + len))
     static basic_json parse(detail::span_input_adapter&& i,
-                            const parser_callback_t cb = nullptr,
+                            parser_callback_t cb = nullptr,
                             const bool allow_exceptions = true,
                             const bool ignore_comments = false)
     {
         basic_json result;
-        parser(i.get(), cb, allow_exceptions, ignore_comments).parse(true, result);
+        parser(i.get(), std::move(cb), allow_exceptions, ignore_comments).parse(true, result); // cppcheck-suppress[accessMoved]
         return result;
     }
 
@@ -23527,6 +24266,23 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     basic_json* m_parent = nullptr;
 #endif
 
+#if JSON_DIAGNOSTIC_POSITIONS
+    /// the start position of the value
+    std::size_t start_position = std::string::npos;
+    /// the end position of the value
+    std::size_t end_position = std::string::npos;
+  public:
+    constexpr std::size_t start_pos() const noexcept
+    {
+        return start_position;
+    }
+
+    constexpr std::size_t end_pos() const noexcept
+    {
+        return end_position;
+    }
+#endif
+
     //////////////////////////////////////////
     // binary serialization/deserialization //
     //////////////////////////////////////////
@@ -23612,27 +24368,30 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     /// @sa https://json.nlohmann.me/api/basic_json/to_bjdata/
     static std::vector<std::uint8_t> to_bjdata(const basic_json& j,
             const bool use_size = false,
-            const bool use_type = false)
+            const bool use_type = false,
+            const bjdata_version_t version = bjdata_version_t::draft2)
     {
         std::vector<std::uint8_t> result;
-        to_bjdata(j, result, use_size, use_type);
+        to_bjdata(j, result, use_size, use_type, version);
         return result;
     }
 
     /// @brief create a BJData serialization of a given JSON value
     /// @sa https://json.nlohmann.me/api/basic_json/to_bjdata/
     static void to_bjdata(const basic_json& j, detail::output_adapter<std::uint8_t> o,
-                          const bool use_size = false, const bool use_type = false)
+                          const bool use_size = false, const bool use_type = false,
+                          const bjdata_version_t version = bjdata_version_t::draft2)
     {
-        binary_writer<std::uint8_t>(o).write_ubjson(j, use_size, use_type, true, true);
+        binary_writer<std::uint8_t>(o).write_ubjson(j, use_size, use_type, true, true, version);
     }
 
     /// @brief create a BJData serialization of a given JSON value
     /// @sa https://json.nlohmann.me/api/basic_json/to_bjdata/
     static void to_bjdata(const basic_json& j, detail::output_adapter<char> o,
-                          const bool use_size = false, const bool use_type = false)
+                          const bool use_size = false, const bool use_type = false,
+                          const bjdata_version_t version = bjdata_version_t::draft2)
     {
-        binary_writer<char>(o).write_ubjson(j, use_size, use_type, true, true);
+        binary_writer<char>(o).write_ubjson(j, use_size, use_type, true, true, version);
     }
 
     /// @brief create a BSON serialization of a given JSON value
@@ -23668,9 +24427,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                 const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::forward<InputType>(i));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::cbor).sax_parse(input_format_t::cbor, &sdp, strict, tag_handler);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::cbor).sax_parse(input_format_t::cbor, &sdp, strict, tag_handler); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23684,9 +24443,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                 const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::move(first), std::move(last));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::cbor).sax_parse(input_format_t::cbor, &sdp, strict, tag_handler);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::cbor).sax_parse(input_format_t::cbor, &sdp, strict, tag_handler); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23709,10 +24468,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                 const cbor_tag_handler_t tag_handler = cbor_tag_handler_t::error)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = i.get();
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
         // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::cbor).sax_parse(input_format_t::cbor, &sdp, strict, tag_handler);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::cbor).sax_parse(input_format_t::cbor, &sdp, strict, tag_handler); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23725,9 +24484,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                    const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::forward<InputType>(i));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::msgpack).sax_parse(input_format_t::msgpack, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::msgpack).sax_parse(input_format_t::msgpack, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23740,9 +24499,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                    const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::move(first), std::move(last));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::msgpack).sax_parse(input_format_t::msgpack, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::msgpack).sax_parse(input_format_t::msgpack, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23763,10 +24522,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                    const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = i.get();
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
         // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::msgpack).sax_parse(input_format_t::msgpack, &sdp, strict);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::msgpack).sax_parse(input_format_t::msgpack, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23779,9 +24538,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                   const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::forward<InputType>(i));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::ubjson).sax_parse(input_format_t::ubjson, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::ubjson).sax_parse(input_format_t::ubjson, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23794,9 +24553,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                   const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::move(first), std::move(last));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::ubjson).sax_parse(input_format_t::ubjson, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::ubjson).sax_parse(input_format_t::ubjson, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23817,10 +24576,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                   const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = i.get();
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
         // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::ubjson).sax_parse(input_format_t::ubjson, &sdp, strict);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::ubjson).sax_parse(input_format_t::ubjson, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23833,9 +24592,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                   const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::forward<InputType>(i));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bjdata).sax_parse(input_format_t::bjdata, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bjdata).sax_parse(input_format_t::bjdata, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23848,9 +24607,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                   const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::move(first), std::move(last));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bjdata).sax_parse(input_format_t::bjdata, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bjdata).sax_parse(input_format_t::bjdata, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23863,9 +24622,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                 const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::forward<InputType>(i));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bson).sax_parse(input_format_t::bson, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bson).sax_parse(input_format_t::bson, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23878,9 +24637,9 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                 const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = detail::input_adapter(std::move(first), std::move(last));
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bson).sax_parse(input_format_t::bson, &sdp, strict);
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bson).sax_parse(input_format_t::bson, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
 
@@ -23901,10 +24660,10 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                                 const bool allow_exceptions = true)
     {
         basic_json result;
-        detail::json_sax_dom_parser<basic_json> sdp(result, allow_exceptions);
         auto ia = i.get();
+        detail::json_sax_dom_parser<basic_json, decltype(ia)> sdp(result, allow_exceptions);
         // NOLINTNEXTLINE(hicpp-move-const-arg,performance-move-const-arg)
-        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bson).sax_parse(input_format_t::bson, &sdp, strict);
+        const bool res = binary_reader<decltype(ia)>(std::move(ia), input_format_t::bson).sax_parse(input_format_t::bson, &sdp, strict); // cppcheck-suppress[accessMoved]
         return res ? result : basic_json(value_t::discarded);
     }
     /// @}
@@ -24005,7 +24764,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         // the valid JSON Patch operations
         enum class patch_operations {add, remove, replace, move, copy, test, invalid};
 
-        const auto get_op = [](const std::string & op)
+        const auto get_op = [](const string_t& op)
         {
             if (op == "add")
             {
@@ -24036,7 +24795,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         };
 
         // wrapper for "add" operation; add value at ptr
-        const auto operation_add = [&result](json_pointer & ptr, basic_json val)
+        const auto operation_add = [&result](json_pointer & ptr, const basic_json & val)
         {
             // adding to the root of the target document means replacing it
             if (ptr.empty())
@@ -24142,8 +24901,8 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
         for (const auto& val : json_patch)
         {
             // wrapper to get a value for an operation
-            const auto get_value = [&val](const std::string & op,
-                                          const std::string & member,
+            const auto get_value = [&val](const string_t& op,
+                                          const string_t& member,
                                           bool string_type) -> basic_json &
             {
                 // find value
@@ -24177,8 +24936,8 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
             }
 
             // collect mandatory members
-            const auto op = get_value("op", "op", true).template get<std::string>();
-            const auto path = get_value(op, "path", true).template get<std::string>();
+            const auto op = get_value("op", "op", true).template get<string_t>();
+            const auto path = get_value(op, "path", true).template get<string_t>();
             json_pointer ptr(path);
 
             switch (get_op(op))
@@ -24204,7 +24963,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
                 case patch_operations::move:
                 {
-                    const auto from_path = get_value("move", "from", true).template get<std::string>();
+                    const auto from_path = get_value("move", "from", true).template get<string_t>();
                     json_pointer from_ptr(from_path);
 
                     // the "from" location must exist - use at()
@@ -24221,7 +24980,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
 
                 case patch_operations::copy:
                 {
-                    const auto from_path = get_value("copy", "from", true).template get<std::string>();
+                    const auto from_path = get_value("copy", "from", true).template get<string_t>();
                     const json_pointer from_ptr(from_path);
 
                     // the "from" location must exist - use at()
@@ -24281,7 +25040,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
     /// @sa https://json.nlohmann.me/api/basic_json/diff/
     JSON_HEDLEY_WARN_UNUSED_RESULT
     static basic_json diff(const basic_json& source, const basic_json& target,
-                           const std::string& path = "")
+                           const string_t& path = "")
     {
         // the patch
         basic_json result(value_t::array);
@@ -24311,7 +25070,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                 while (i < source.size() && i < target.size())
                 {
                     // recursive call to compare array values at index i
-                    auto temp_diff = diff(source[i], target[i], detail::concat(path, '/', std::to_string(i)));
+                    auto temp_diff = diff(source[i], target[i], detail::concat<string_t>(path, '/', detail::to_string<string_t>(i)));
                     result.insert(result.end(), temp_diff.begin(), temp_diff.end());
                     ++i;
                 }
@@ -24328,7 +25087,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                     result.insert(result.begin() + end_index, object(
                     {
                         {"op", "remove"},
-                        {"path", detail::concat(path, '/', std::to_string(i))}
+                        {"path", detail::concat<string_t>(path, '/', detail::to_string<string_t>(i))}
                     }));
                     ++i;
                 }
@@ -24339,7 +25098,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                     result.push_back(
                     {
                         {"op", "add"},
-                        {"path", detail::concat(path, "/-")},
+                        {"path", detail::concat<string_t>(path, "/-")},
                         {"value", target[i]}
                     });
                     ++i;
@@ -24354,7 +25113,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                 for (auto it = source.cbegin(); it != source.cend(); ++it)
                 {
                     // escape the key name to be used in a JSON patch
-                    const auto path_key = detail::concat(path, '/', detail::escape(it.key()));
+                    const auto path_key = detail::concat<string_t>(path, '/', detail::escape(it.key()));
 
                     if (target.find(it.key()) != target.end())
                     {
@@ -24378,7 +25137,7 @@ class basic_json // NOLINT(cppcoreguidelines-special-member-functions,hicpp-spec
                     if (source.find(it.key()) == source.end())
                     {
                         // found a key that is not in this -> add it
-                        const auto path_key = detail::concat(path, '/', detail::escape(it.key()));
+                        const auto path_key = detail::concat<string_t>(path, '/', detail::escape(it.key()));
                         result.push_back(
                         {
                             {"op", "add"}, {"path", path_key},
@@ -24559,10 +25318,10 @@ inline void swap(nlohmann::NLOHMANN_BASIC_JSON_TPL& j1, nlohmann::NLOHMANN_BASIC
 // #include <nlohmann/detail/macro_unscope.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 
@@ -24593,6 +25352,7 @@ inline void swap(nlohmann::NLOHMANN_BASIC_JSON_TPL& j1, nlohmann::NLOHMANN_BASIC
     #undef JSON_HAS_CPP_14
     #undef JSON_HAS_CPP_17
     #undef JSON_HAS_CPP_20
+    #undef JSON_HAS_CPP_23
     #undef JSON_HAS_FILESYSTEM
     #undef JSON_HAS_EXPERIMENTAL_FILESYSTEM
     #undef JSON_HAS_THREE_WAY_COMPARISON
@@ -24604,10 +25364,10 @@ inline void swap(nlohmann::NLOHMANN_BASIC_JSON_TPL& j1, nlohmann::NLOHMANN_BASIC
 // #include <nlohmann/thirdparty/hedley/hedley_undef.hpp>
 //     __ _____ _____ _____
 //  __|  |   __|     |   | |  JSON for Modern C++
-// |  |  |__   |  |  | | | |  version 3.11.3
+// |  |  |__   |  |  | | | |  version 3.12.0
 // |_____|_____|_____|_|___|  https://github.com/nlohmann/json
 //
-// SPDX-FileCopyrightText: 2013-2023 Niels Lohmann <https://nlohmann.me>
+// SPDX-FileCopyrightText: 2013 - 2025 Niels Lohmann <https://nlohmann.me>
 // SPDX-License-Identifier: MIT
 
 

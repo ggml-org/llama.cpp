@@ -98,3 +98,12 @@ NOTE: some models may require large context window, for example: `-c 8192`
 # note: no pre-quantized GGUF this model, as they have very poor result
 # ref: https://github.com/ggml-org/llama.cpp/pull/13760
 ```
+
+**Mixed modalities**:
+
+```sh
+# Qwen2.5 Omni
+# Capabilities: audio input, vision input
+(tool_name) -hf ggml-org/Qwen2.5-Omni-3B-GGUF
+(tool_name) -hf ggml-org/Qwen2.5-Omni-7B-GGUF
+```

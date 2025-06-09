@@ -158,7 +158,7 @@ int main(int argc, char ** argv) {
     common_params params;
 
     params.n_predict = 128;
-    params.n_junk = 0;
+    params.n_junk = 1;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PARALLEL)) {
         return 1;
@@ -182,7 +182,7 @@ int main(int argc, char ** argv) {
     const bool is_sp_shared = params.is_pp_shared;
 
     // extra text to insert in each client's prompt in order to make it larger
-    const int32_t n_junk = params.n_junk;
+    const int32_t n_junk = std::max(1, params.n_junk);
 
     // init llama.cpp
     llama_backend_init();
@@ -193,6 +193,8 @@ int main(int argc, char ** argv) {
 
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
+
+    auto * mem = llama_get_memory(ctx);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -259,7 +261,7 @@ int main(int argc, char ** argv) {
 
         // assign the system KV cache to all parallel sequences
         for (int32_t i = 1; i <= n_clients; ++i) {
-            llama_kv_self_seq_cp(ctx, 0, i, -1, -1);
+            llama_memory_seq_cp(mem, 0, i, -1, -1);
         }
 
         LOG_INF("\n");
@@ -286,9 +288,9 @@ int main(int argc, char ** argv) {
         if (batch.n_tokens == 0) {
             // all sequences have ended - clear the entire KV cache
             for (int i = 1; i <= n_clients; ++i) {
-                llama_kv_self_seq_rm(ctx, i, -1, -1);
+                llama_memory_seq_rm(mem, i, -1, -1);
                 // but keep the system prompt
-                llama_kv_self_seq_cp(ctx, 0, i, -1, -1);
+                llama_memory_seq_cp(mem, 0, i, -1, -1);
             }
 
             LOG_INF("%s: clearing the KV cache\n", __func__);
@@ -315,7 +317,10 @@ int main(int argc, char ** argv) {
                     } else {
                         client.prompt += k_system;
                     }
-                    for (int i = 0; i < n_junk; ++i) {
+
+                    const int n_junk_cur = rand() % n_junk;
+
+                    for (int i = 0; i < n_junk_cur; ++i) {
                         const int r = rand() % k_questions.size();
                         client.prompt += "User:\n" + k_questions[r] + "\nAssistant:\n " + k_answers[r] + "\n";
                     }
@@ -340,7 +345,7 @@ int main(int argc, char ** argv) {
                     client.n_decoded = 0;
                     client.i_batch   = batch.n_tokens - 1;
 
-                    LOG_INF("\033[31mClient %3d, seq %4d, started decoding ...\033[0m\n", client.id, client.seq_id);
+                    LOG_INF("\033[31mClient %3d, seq %4d, junk = %4d, started decoding ...\033[0m\n", client.id, client.seq_id, n_junk_cur);
 
                     g_seq_id += 1;
 
@@ -359,7 +364,9 @@ int main(int argc, char ** argv) {
         // process in chunks of params.n_batch
         int32_t n_batch = params.n_batch;
 
-        for (int32_t i = 0; i < (int32_t) batch.n_tokens; i += n_batch) {
+        int32_t i_next = 0;
+
+        for (int32_t i = 0; i < batch.n_tokens; i = i_next) {
             // experiment: process in powers of 2
             //if (i + n_batch > (int32_t) batch.n_tokens && n_batch > 32) {
             //    n_batch /= 2;
@@ -367,7 +374,7 @@ int main(int argc, char ** argv) {
             //    continue;
             //}
 
-            const int32_t n_tokens = std::min(n_batch, (int32_t) (batch.n_tokens - i));
+            const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
 
             llama_batch batch_view = {
                 n_tokens,
@@ -387,18 +394,23 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
 
-                LOG_ERR("%s : failed to decode the batch, retrying with n_batch = %d\n", __func__, n_batch / 2);
+                LOG_WRN("%s : failed to decode the batch, retrying with n_batch = %d\n", __func__, n_batch / 2);
 
                 n_cache_miss += 1;
 
                 // retry with half the batch size to try to find a free slot in the KV cache
                 n_batch /= 2;
-                i -= n_batch;
 
                 continue;
             }
 
             LOG_DBG("%s : decoded batch of %d tokens\n", __func__, n_tokens);
+
+            // move the head of the batch forward with the number of tokens we just processed
+            i_next = i + n_tokens;
+
+            // on successful decode, restore the original batch size
+            n_batch = params.n_batch;
 
             for (auto & client : clients) {
                 if (client.i_batch < (int) i || client.i_batch >= (int) (i + n_tokens)) {
@@ -437,8 +449,8 @@ int main(int argc, char ** argv) {
                     }
 
                     // delete only the generated part of the sequence, i.e. keep the system prompt in the cache
-                    llama_kv_self_seq_rm(ctx,    client.id + 1, -1, -1);
-                    llama_kv_self_seq_cp(ctx, 0, client.id + 1, -1, -1);
+                    llama_memory_seq_rm(mem,    client.id + 1, -1, -1);
+                    llama_memory_seq_cp(mem, 0, client.id + 1, -1, -1);
 
                     const auto t_main_end = ggml_time_us();
 
