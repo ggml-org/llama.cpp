@@ -1634,10 +1634,10 @@ ggml_tensor * llm_graph_context::build_attn(
     const llama_kv_cache_mixed * kv_self = static_cast<const llama_kv_cache_mixed *>(memory);
 
     {
-        if (k_cur->data != nullptr && v_cur->data != nullptr) {
-            ggml_set_f32(k_cur, 1.0f);
-            ggml_set_f32(v_cur, 2.0f);  
-        }
+        // if (k_cur->data != nullptr && v_cur->data != nullptr) {
+        //     ggml_set_f32(k_cur, 1.0f);
+        //     ggml_set_f32(v_cur, 2.0f);  
+        // }
 
         // store to KV cache
         ggml_build_forward_expand(gf, kv_self->cpy_k(ctx0, k_cur, il));
@@ -1649,8 +1649,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = kv_self->get_k(ctx0, il);
     ggml_tensor * v = kv_self->get_v(ctx0, il);
-    ggml_tensor * k_quant = kv_self->get_k_quant(ctx0, il);
-    ggml_tensor * v_quant = kv_self->get_v_quant(ctx0, il);
+
 
     // NOTICE: do_quant after the kvcache store.
     if (kv_self->do_quant(il)) {
@@ -1658,29 +1657,31 @@ ggml_tensor * llm_graph_context::build_attn(
         if (il == 0) {
             LLAMA_LOG_INFO("[llama-graph] do_quant !!!\n");
         }
-        
-        if (k_quant != nullptr) {
-            cb(k_quant, "k_quant_data", il);
-        }
-        if (v_quant != nullptr) {
-            cb(v_quant, "v_quant_data", il);
-        }
 
         ggml_tensor * k_quant_op = kv_self->k_quant(ctx0, il);
         ggml_tensor * v_quant_op = kv_self->v_quant(ctx0, il);
 
         ggml_build_forward_expand(gf, k_quant_op);
         ggml_build_forward_expand(gf, v_quant_op);
-
-        ggml_tensor * k_quant_ref = kv_self->get_k_quant_ref(ctx0, il);
-        ggml_tensor * v_quant_ref = kv_self->get_v_quant_ref(ctx0, il);
-
-        ggml_build_forward_expand(gf, k_quant_ref);
-        ggml_build_forward_expand(gf, v_quant_ref);
-
-        cb(k_quant_ref, "k_quant_ref", il);
-        cb(v_quant_ref, "v_quant_ref", il);
+        
+        cb(k_quant_op, "k_quant_op", il);
+        cb(v_quant_op, "v_quant_op", il);
     }
+    
+    ggml_tensor * k_quant_ref = kv_self->get_k_quant_ref(ctx0, il);
+    ggml_tensor * v_quant_ref = kv_self->get_v_quant_ref(ctx0, il);
+
+    ggml_build_forward_expand(gf, k_quant_ref);
+    ggml_build_forward_expand(gf, v_quant_ref);
+
+    cb(k_quant_ref, "k_quant_ref", il);
+    cb(v_quant_ref, "v_quant_ref", il);
+
+    ggml_tensor * k_quant = kv_self->get_k_quant(ctx0, il);
+    ggml_tensor * v_quant = kv_self->get_v_quant(ctx0, il);
+
+    cb(k_quant, "k_quant_data", il);
+    cb(v_quant, "v_quant_data", il);
 
     const int n_args = 6;
     ggml_tensor * args[n_args];

@@ -1460,7 +1460,7 @@ ggml_tensor * llama_kv_cache_mixed::get_v_quant(ggml_context * ctx, int32_t il) 
                 ggml_row_size(v_quant->type, hparams.n_embd_head_v),
                 ggml_row_size(v_quant->type, hparams.n_embd_v_gqa(il)),
                 0
-            );
+            );  
     }
 
     // Create view similar to get_v but for quantized tensor
@@ -1489,14 +1489,12 @@ ggml_tensor * llama_kv_cache_mixed::get_k_quant_ref(ggml_context * ctx, int32_t 
     }
     const auto & layer = layers[it->second];
 
-    ggml_tensor * k_ref = ggml_view_3d(ctx, layer.k_fp16,
+    return ggml_view_3d(ctx, layer.k_fp16,
             hparams.n_embd_head_k, hparams.n_head_kv(il), layer.mixed_k_head,
             ggml_row_size(layer.k_fp16->type, hparams.n_embd_head_k),
             ggml_row_size(layer.k_fp16->type, hparams.n_embd_k_gqa(il)),
             0
         );
-
-    return k_ref;
 }
 
 ggml_tensor * llama_kv_cache_mixed::get_v_quant_ref(ggml_context * ctx, int32_t il) const {
