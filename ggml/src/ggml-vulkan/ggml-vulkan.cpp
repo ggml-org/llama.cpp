@@ -3595,11 +3595,11 @@ static void ggml_vk_instance_init() {
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
-    size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
-
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
     if (devices_env != nullptr) {
+        size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+
         std::string devices(devices_env);
         std::replace(devices.begin(), devices.end(), ',', ' ');
 
@@ -3615,9 +3615,9 @@ static void ggml_vk_instance_init() {
     } else {
         std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
 
-        // Make sure at least one device exists
+        // If no vulkan devices are found, return early
         if (devices.empty()) {
-            std::cerr << "ggml_vulkan: Error: No devices found." << std::endl;
+            GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
             return;
         }
 
@@ -3700,9 +3700,20 @@ static void ggml_vk_instance_init() {
             }
         }
 
-        // If no dedicated GPUs found, fall back to GPU 0
+        // If no dedicated GPUs found, fall back to the first non-CPU device.
+        // If only CPU devices are available, return without devices.
         if (vk_instance.device_indices.empty()) {
-            vk_instance.device_indices.push_back(0);
+            for (size_t i = 0; i < devices.size(); i++) {
+                if (devices[i].getProperties().deviceType != vk::PhysicalDeviceType::eCpu) {
+                    vk_instance.device_indices.push_back(i);
+                    break;
+                }
+            }
+        }
+
+        if (vk_instance.device_indices.empty()) {
+            GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
+            return;
         }
     }
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
