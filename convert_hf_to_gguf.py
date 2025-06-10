@@ -558,7 +558,7 @@ class TextModel(ModelBase):
         if (head_dim := self.hparams.get("head_dim")) is not None:
             # Workaround for incorrect AutoConfig value for DeepSeekV3 (is set correctly in DeepSeekV2Model class)
             # https://github.com/huggingface/transformers/blob/19224c3642705c5b6988c9f5f4251f83323d05ae/src/transformers/models/deepseek_v3/configuration_deepseek_v3.py#L210
-            if self.hparams.get("qk_rope_head_dim") != head_dim:
+            if self.hparams.get("model_type") != "deepseek_v3":
                 self.gguf_writer.add_key_length(head_dim)
                 self.gguf_writer.add_value_length(head_dim)
 
