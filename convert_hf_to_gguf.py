@@ -6458,7 +6458,7 @@ def main() -> None:
     if args.remote:
         from huggingface_hub import snapshot_download
         local_dir = snapshot_download(
-            repo_id=str(dir_model),
+            repo_id=dir_model.as_posix(),
             allow_patterns=["LICENSE", "*.json", "*.md", "*.txt", "tokenizer.model"])
         dir_model = Path(local_dir)
         logger.info(f"Downloaded config and tokenizer to {local_dir}")
@@ -6486,7 +6486,7 @@ def main() -> None:
         fname_out = args.outfile
     elif args.remote:
         # if remote, use the model ID as the output file name
-        fname_out = Path("./" + str(args.model).replace("/", "-") + "-{ftype}.gguf")
+        fname_out = Path("./" + args.model.as_posix().replace("/", "-") + "-{ftype}.gguf")
     else:
         fname_out = dir_model
 
@@ -6515,7 +6515,7 @@ def main() -> None:
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
-                                     remote_hf_model_id=str(args.model) if args.remote else None)
+                                     remote_hf_model_id=args.model.as_posix() if args.remote else None)
 
         if args.vocab_only:
             logger.info("Exporting model vocab...")
