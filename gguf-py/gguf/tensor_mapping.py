@@ -335,6 +335,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.c_fc",                            # starcoder2
             "encoder.layer.{bid}.mlp.gated_layers_v",                 # jina-bert-v2 (split up/gate, no longer used)
             "encoder.layer.{bid}.mlp.gated_layers",                   # jina-bert-v2 (GEGLU)
+            "encoder.layer.{bid}.mlp.up_gated_layer",                 # jina-v2-code (GEGLU)
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
