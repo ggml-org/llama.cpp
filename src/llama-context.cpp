@@ -6,6 +6,7 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstring>
 #include <limits>
@@ -416,6 +417,23 @@ uint32_t llama_context::n_threads() const {
 
 uint32_t llama_context::n_threads_batch() const {
     return cparams.n_threads_batch;
+}
+
+size_t llama_context::n_backends() const {
+    return backends.size();
+}
+
+size_t llama_context::copy_backends_list(ggml_backend_t* out, size_t out_len) const {
+    size_t copy_len;
+    if (out_len > backends.size()) {
+        copy_len = backends.size();
+    } else {
+        copy_len = out_len;
+    }
+    std::transform(backends.begin(), backends.begin() + copy_len, out, [](const ggml_backend_ptr& ptr) {
+        return ptr.get();
+    });
+    return copy_len;
 }
 
 llama_memory_t llama_context::get_memory() const {
@@ -2426,6 +2444,14 @@ int32_t llama_apply_adapter_cvec(
 
 llama_memory_t llama_get_memory(const struct llama_context * ctx) {
     return ctx->get_memory();
+}
+
+size_t llama_n_backends(const struct llama_context * ctx) {
+    return ctx->n_backends();
+}
+
+size_t llama_get_backends(const struct llama_context * ctx, ggml_backend_t * out, size_t out_len) {
+    return ctx->copy_backends_list(out, out_len);
 }
 
 void llama_memory_clear(llama_memory_t mem, bool data) {
