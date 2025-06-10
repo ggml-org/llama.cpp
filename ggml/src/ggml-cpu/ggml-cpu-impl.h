@@ -518,11 +518,14 @@ void ggml_barrier(struct ggml_threadpool * tp);
 #elif defined(__GNUC__)
 // GCC/Clang on *nix
 # define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
-#elif defined(_MSC_VER) && defined (_WIN64)
+#elif defined(_MSC_VER) && defined(_WIN64)
 // MSVC
 // Note: C name mangling varies across different calling conventions
 // see https://learn.microsoft.com/en-us/cpp/build/reference/decorated-names?view=msvc-170
 # define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:" #name "=" #alias))
+#elif defined(_MSC_VER) && defined(WIN32)
+// ref: https://github.com/ggml-org/whisper.cpp/pull/3239#issuecomment-2958224591
+# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:_" #name "=_" #alias))
 #else
 # error "Unsupported compiler for GGML_WEAK_ALIAS"
 #endif
