@@ -235,14 +235,18 @@ namespace ggml_cuda_mma {
     template <typename T>
     static __device__ __forceinline__ void load_ldmatrix(
             tile<32, 4, T> & t, const T * __restrict__ xs0, const int stride) {
-#ifdef NEW_MMA_AVAILABLE
+#if defined(AMD_MMA_AVAILABLE)
+        int64_t* xi = (int64_t*) t.x;
+        const int64_t* xs = (int64_t*) ((const int*) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
+        xi[0] = xs[0];
+#elif defined(NEW_MMA_AVAILABLE)
         GGML_UNUSED(t);
         GGML_UNUSED(xs0);
         GGML_UNUSED(stride);
         NO_DEVICE_CODE;
 #else
         load_generic(t, xs0, stride);
-#endif // NEW_MMA_AVAILABLE
+#endif // AMD_MMA_AVAILABLE
     }
 
     template <typename T>
