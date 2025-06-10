@@ -196,6 +196,7 @@ enum vk_device_architecture {
     AMD_RDNA1,
     AMD_RDNA2,
     AMD_RDNA3,
+    INTEL_XE2,
 };
 
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
@@ -245,6 +246,34 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
                 return vk_device_architecture::AMD_RDNA3;
             }
             return vk_device_architecture::AMD_RDNA2;
+        }
+    } else if (props.vendorID == VK_VENDOR_ID_INTEL) {
+        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+        bool subgroup_size_control = false;
+
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_EXT_subgroup_size_control", properties.extensionName) == 0) {
+                subgroup_size_control = true;
+            }
+        }
+
+        if (!subgroup_size_control) {
+            return vk_device_architecture::OTHER;
+        }
+
+        vk::PhysicalDeviceProperties2 props2;
+        vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
+
+        props2.pNext = &subgroup_size_control_props;
+        device.getProperties2(&props2);
+
+        if (subgroup_size_control_props.minSubgroupSize == 16) {
+            // Xe2 architecture uses SIMD16 while previous Xe and Gen architecture uses SIMD8.
+            // Minimum subgroup size matches the SIMD width so we distinguish architecture by checking this value.
+            // https://www.intel.com/content/www/us/en/content-details/824434/2024-intel-tech-tour-xe2-and-lunar-lake-s-gpu.html
+            // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
+            return vk_device_architecture::INTEL_XE2;
         }
     }
     return vk_device_architecture::OTHER;
@@ -396,6 +425,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_count_equal_i32;
     vk_pipeline pipeline_im2col_f32, pipeline_im2col_f32_f16;
     vk_pipeline pipeline_timestep_embedding_f32;
+    vk_pipeline pipeline_conv_transpose_1d_f32;
     vk_pipeline pipeline_pool2d_f32;
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
@@ -444,7 +474,7 @@ struct vk_device_struct {
     // for GGML_VK_PERF_LOGGER
     std::unique_ptr<vk_perf_logger> perf_logger;
     vk::QueryPool query_pool;
-    uint32_t num_queries;
+    int32_t num_queries;
 
     ~vk_device_struct() {
         VK_LOG_DEBUG("destroy device " << name);
@@ -704,6 +734,21 @@ struct vk_op_timestep_embedding_push_constants {
     uint32_t nb1;
     uint32_t dim;
     uint32_t max_period;
+};
+
+struct vk_op_conv_transpose_1d_push_constants {
+    uint32_t Cout;
+    uint32_t Cin;
+    uint32_t K;
+    uint32_t L;
+    uint32_t KL;
+
+    uint32_t nb01;
+    uint32_t nb02;
+    uint32_t nb11;
+    uint32_t nb1;
+
+    int32_t s0;
 };
 
 struct vk_op_pool2d_push_constants {
@@ -2726,6 +2771,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_timestep_embedding_f32, "timestep_embedding_f32", timestep_embedding_f32_len, timestep_embedding_f32_data, "main", 2, sizeof(vk_op_timestep_embedding_push_constants), {256, 1, 1}, {}, 1);
 
+    ggml_vk_create_pipeline(device, device->pipeline_conv_transpose_1d_f32, "conv_transpose_1d_f32", conv_transpose_1d_f32_len, conv_transpose_1d_f32_data, "main", 3, sizeof(vk_op_conv_transpose_1d_push_constants), {1, 1, 1}, {}, 1);
+
     ggml_vk_create_pipeline(device, device->pipeline_pool2d_f32, "pool2d_f32", pool2d_f32_len, pool2d_f32_data, "main", 2, sizeof(vk_op_pool2d_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv6_f32, "rwkv_wkv6_f32", rwkv_wkv6_f32_len, rwkv_wkv6_f32_data, "main", 7, sizeof(vk_op_rwkv_wkv6_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
@@ -3548,11 +3595,11 @@ static void ggml_vk_instance_init() {
 
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
-    size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
-
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
     if (devices_env != nullptr) {
+        size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+
         std::string devices(devices_env);
         std::replace(devices.begin(), devices.end(), ',', ' ');
 
@@ -3568,9 +3615,9 @@ static void ggml_vk_instance_init() {
     } else {
         std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
 
-        // Make sure at least one device exists
+        // If no vulkan devices are found, return early
         if (devices.empty()) {
-            std::cerr << "ggml_vulkan: Error: No devices found." << std::endl;
+            GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
             return;
         }
 
@@ -3653,9 +3700,20 @@ static void ggml_vk_instance_init() {
             }
         }
 
-        // If no dedicated GPUs found, fall back to GPU 0
+        // If no dedicated GPUs found, fall back to the first non-CPU device.
+        // If only CPU devices are available, return without devices.
         if (vk_instance.device_indices.empty()) {
-            vk_instance.device_indices.push_back(0);
+            for (size_t i = 0; i < devices.size(); i++) {
+                if (devices[i].getProperties().deviceType != vk::PhysicalDeviceType::eCpu) {
+                    vk_instance.device_indices.push_back(i);
+                    break;
+                }
+            }
+        }
+
+        if (vk_instance.device_indices.empty()) {
+            GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
+            return;
         }
     }
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
@@ -4061,7 +4119,33 @@ static vk_submission ggml_vk_begin_submission(vk_device& device, vk_queue& q, bo
     return s;
 }
 
-static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& subctx, vk_pipeline& pipeline, std::initializer_list<vk::DescriptorBufferInfo> const& descriptor_buffer_infos, size_t push_constant_size, const void* push_constants, std::array<uint32_t, 3> elements) {
+template <typename T> size_t push_constant_size(const T &t) {
+    static_assert(std::is_class<T>::value, "T must be a struct/class");
+    GGML_UNUSED(t);
+    return sizeof(T);
+}
+template <typename T> size_t push_constant_size(const std::vector<T> &t) {
+    GGML_UNUSED(t);
+    return sizeof(T) * t.size();
+}
+template <typename T, uint32_t N> size_t push_constant_size(const std::array<T, N> &t) {
+    GGML_UNUSED(t);
+    return sizeof(T) * N;
+}
+
+template <typename T> const T *push_constant_data(const T &t) {
+    static_assert(std::is_class<T>::value, "T must be a struct/class");
+    return &t;
+}
+template <typename T> const T *push_constant_data(const std::vector<T> &t) {
+    return t.data();
+}
+template <typename T, uint32_t N> const T *push_constant_data(const std::array<T, N> &t) {
+    return t.data();
+}
+
+template <typename T>
+static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& subctx, vk_pipeline& pipeline, std::initializer_list<vk::DescriptorBufferInfo> const& descriptor_buffer_infos, const T &push_constants, std::array<uint32_t, 3> elements) {
     const uint32_t wg0 = CEIL_DIV(elements[0], pipeline->wg_denoms[0]);
     const uint32_t wg1 = CEIL_DIV(elements[1], pipeline->wg_denoms[1]);
     const uint32_t wg2 = CEIL_DIV(elements[2], pipeline->wg_denoms[2]);
@@ -4077,7 +4161,7 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
     vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
     ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
 
-    subctx->s->buffer.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size, push_constants);
+    subctx->s->buffer.pushConstants(pipeline->layout, vk::ShaderStageFlagBits::eCompute, 0, push_constant_size(push_constants), push_constant_data(push_constants));
     subctx->s->buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
     subctx->s->buffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                                 pipeline->layout,
@@ -4540,7 +4624,7 @@ static void ggml_vk_matmul(
     ggml_vk_sync_buffers(subctx);
     if (split_k == 1) {
         const vk_mat_mat_push_constants pc = { m, n, k, stride_a, stride_b, stride_d, batch_stride_a, batch_stride_b, batch_stride_d, k, ne02, ne12, broadcast2, broadcast3, padded_n };
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, d }, sizeof(vk_mat_mat_push_constants), &pc, { m, n, batch });
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, d }, pc, { m, n, batch });
         return;
     }
 
@@ -4548,10 +4632,10 @@ static void ggml_vk_matmul(
 
     const vk_mat_mat_push_constants pc1 = { m, n, k, stride_a, stride_b, stride_d, batch_stride_a, batch_stride_b, batch_stride_d, CEIL_DIV(k, split_k), ne02, ne12, broadcast2, broadcast3, padded_n };
     // Make sure enough workgroups get assigned for split k to work
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, split_k_buffer }, sizeof(vk_mat_mat_push_constants), &pc1, { (CEIL_DIV(m, pipeline->wg_denoms[0]) * pipeline->wg_denoms[0]) * split_k, n, batch });
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, split_k_buffer }, pc1, { (CEIL_DIV(m, pipeline->wg_denoms[0]) * pipeline->wg_denoms[0]) * split_k, n, batch });
     ggml_vk_sync_buffers(subctx);
     const std::array<uint32_t, 2> pc2 = { (uint32_t)(m * n * batch), split_k };
-    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_matmul_split_k_reduce, { split_k_buffer, d }, pc2.size() * sizeof(uint32_t), pc2.data(), { m * n * batch, 1, 1 });
+    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_matmul_split_k_reduce, { split_k_buffer, d }, pc2, { m * n * batch, 1, 1 });
 }
 
 static vk_pipeline ggml_vk_guess_matmul_id_pipeline(ggml_backend_vk_context * ctx, vk_matmul_pipeline& mmp, uint32_t m, uint32_t n, bool aligned, ggml_type src0_type) {
@@ -4599,7 +4683,7 @@ static void ggml_vk_matmul_id(
     ggml_vk_sync_buffers(subctx);
     const vk_mat_mat_id_push_constants pc = { m, n, k, stride_a, stride_b, stride_d, batch_stride_a, batch_stride_b, batch_stride_d,
                                               nei0, nei1, nbi1, ne11, padded_n };
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, d, ids }, sizeof(vk_mat_mat_id_push_constants), &pc, { m, nei1, n_as });
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, d, ids }, pc, { m, nei1, n_as });
 }
 
 static bool ggml_vk_dim01_contiguous(const ggml_tensor * tensor) {
@@ -4720,7 +4804,7 @@ static void ggml_vk_cpy_to_contiguous(ggml_backend_vk_context * ctx, vk_context&
     };
     init_pushconst_fastdiv(pc);
     ggml_vk_sync_buffers(subctx);
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { in, out }, sizeof(vk_op_unary_push_constants), &pc, elements);
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { in, out }, pc, elements);
 }
 
 static vk_pipeline ggml_vk_get_quantize_pipeline(ggml_backend_vk_context * ctx, ggml_type type) {
@@ -4739,7 +4823,7 @@ static void ggml_vk_quantize_q8_1(ggml_backend_vk_context * ctx, vk_context& sub
     vk_pipeline pipeline = ggml_vk_get_quantize_pipeline(ctx, GGML_TYPE_Q8_1);
 
     ggml_vk_sync_buffers(subctx);
-    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { in, out }, sizeof(uint32_t), &ne, { ne, 1, 1 });
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { in, out }, std::array<uint32_t, 1>{ne}, { ne, 1, 1 });
 }
 
 static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -4939,7 +5023,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     } else if (qx_needs_dequant) {
         const std::vector<uint32_t> pc = { (uint32_t)ne01, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)(ggml_nelements(src0)) };
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc.size() * sizeof(uint32_t), pc.data(), { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
+        ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc, { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
     }
     if (y_non_contig) {
         ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
@@ -5155,7 +5239,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     ggml_vk_sync_buffers(subctx);
     ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
                               { vk_subbuffer{ d_X, x_buf_offset, x_sz * ne02 * ne03 }, vk_subbuffer{ d_Y, y_buf_offset, y_sz * ne12 * ne13 }, vk_subbuffer{ d_D, d_buf_offset, d_sz * ne22 * ne23} },
-                              sizeof(vk_mat_vec_push_constants), &pc, { groups_x, (uint32_t)(ne12 * ne13), groups_z });
+                              pc, { groups_x, (uint32_t)(ne12 * ne13), groups_z });
 }
 
 static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -5243,7 +5327,7 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
     }
 
     ggml_vk_sync_buffers(subctx);
-    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_mul_mat_vec_p021_f16_f32[gqa_ratio - 1], { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_Qy, qy_buffer_offset, qy_sz + qy_shader_offset }, vk_subbuffer{ d_D, d_buffer_offset, d_sz + d_shader_offset } }, 6 * sizeof(uint32_t), &pc, { 1, (uint32_t)ne01, workgroups_z });
+    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_mul_mat_vec_p021_f16_f32[gqa_ratio - 1], { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_Qy, qy_buffer_offset, qy_sz + qy_shader_offset }, vk_subbuffer{ d_D, d_buffer_offset, d_sz + d_shader_offset } }, pc, { 1, (uint32_t)ne01, workgroups_z });
 }
 
 static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -5326,7 +5410,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     const std::array<uint32_t, 9> pc = { (uint32_t)ne00, (uint32_t)ne01, row_stride_x, channel_stride_x, channel_stride_y, (uint32_t)(ne12 / ne02), (uint32_t)ne12, (uint32_t)(qy_shader_offset / ggml_type_size(src1->type)), (uint32_t)(d_shader_offset / ggml_type_size(dst->type)) };
     ggml_vk_sync_buffers(subctx);
     ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_mul_mat_vec_nc_f16_f32,
-        { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_Qy, qy_buffer_offset, qy_sz + qy_shader_offset }, vk_subbuffer{ d_D, d_buffer_offset, d_sz + d_shader_offset } }, 7 * sizeof(uint32_t), &pc, { 1, (uint32_t)ne01, (uint32_t)ne12 });
+        { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_Qy, qy_buffer_offset, qy_sz + qy_shader_offset }, vk_subbuffer{ d_D, d_buffer_offset, d_sz + d_shader_offset } }, pc, { 1, (uint32_t)ne01, (uint32_t)ne12 });
 }
 
 static void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -5542,7 +5626,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         const std::vector<uint32_t> pc = { (uint32_t)ne01, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)ne10, (uint32_t)(ggml_nelements(src0)) };
         ggml_vk_sync_buffers(subctx);
         ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0,
-            { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc.size() * sizeof(uint32_t), pc.data(), { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
+            { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc, { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
     }
     if (y_non_contig) {
         ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
@@ -5762,7 +5846,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     ggml_vk_dispatch_pipeline(ctx, subctx, dmmv,
         { vk_subbuffer{ d_X, x_buf_offset, x_sz * ne02 * ne03 },
         vk_subbuffer{ d_Y, y_buf_offset, y_sz * ne12 * ne13 }, vk_subbuffer{ d_D, d_buf_offset, d_sz * ne22 * ne23}, vk_subbuffer{ d_ids, ids_buf_offset, ids_sz } },
-        sizeof(vk_mat_vec_id_push_constants), &pc, { groups_x, (uint32_t)nei0, groups_z });
+        pc, { groups_x, (uint32_t)nei0, groups_z });
 }
 
 static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst, bool dryrun = false) {
@@ -6112,7 +6196,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                     // there's no more than one tile of rows (i.e. workgroups_x would have been
                                     // one). We reuse workgroups_x to mean the number of splits, so we need to
                                     // cancel out the divide by wg_denoms[0].
-                                    sizeof(vk_flash_attn_push_constants), &pc, { workgroups_x * pipeline->wg_denoms[0], workgroups_y, workgroups_z });
+                                    pc, { workgroups_x * pipeline->wg_denoms[0], workgroups_y, workgroups_z });
 
         ggml_vk_sync_buffers(subctx);
         const std::array<uint32_t, 3> pc2 = { D, (uint32_t)ne1, split_k };
@@ -6121,7 +6205,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                         vk_subbuffer{ctx->prealloc_split_k, 0, VK_WHOLE_SIZE},
                                         vk_subbuffer{d_D, d_buf_offset, VK_WHOLE_SIZE},
                                     },
-                                    pc2.size() * uint32_t{sizeof(uint32_t)}, pc2.data(), { (uint32_t)ne1, 1, 1 });
+                                    pc2, { (uint32_t)ne1, 1, 1 });
     } else {
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
                                     {
@@ -6131,7 +6215,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                         vk_subbuffer{d_M, m_buf_offset, VK_WHOLE_SIZE},
                                         vk_subbuffer{d_D, d_buf_offset, VK_WHOLE_SIZE},
                                     },
-                                    sizeof(vk_flash_attn_push_constants), &pc, { workgroups_x, workgroups_y, workgroups_z });
+                                    pc, { workgroups_x, workgroups_y, workgroups_z });
     }
 }
 
@@ -6390,6 +6474,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_TIMESTEP_EMBEDDING:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_timestep_embedding_f32;
+        }
+        return nullptr;
+    case GGML_OP_CONV_TRANSPOSE_1D:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_conv_transpose_1d_f32;
         }
         return nullptr;
     case GGML_OP_POOL_2D:
@@ -6726,6 +6815,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             uint32_t half_ceil = (dim + 1) / 2;
             elements = { half_ceil, (uint32_t)src0->ne[0], 1 };
         } break;
+    case GGML_OP_CONV_TRANSPOSE_1D:
+        {
+            elements = {uint32_t(src0->ne[1]), 1, 1}; // parallelize in {Cout, 1, 1}
+        } break;
     case GGML_OP_POOL_2D:
         {
             const uint32_t N = dst->ne[3];
@@ -6800,7 +6893,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         }
 
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, subbuf_y, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, sizeof(PC), &pc, elements);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, subbuf_y, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc, elements);
     } else if (op == GGML_OP_ROPE || op == GGML_OP_ROPE_BACK) {
         // Empty src2 is possible in rope, but the shader needs a buffer
         vk_subbuffer subbuf_z;
@@ -6811,26 +6904,26 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         }
 
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, subbuf_z, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, sizeof(PC), &pc, elements);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, subbuf_z, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc, elements);
     } else if (op == GGML_OP_IM2COL) {
         // im2col uses only src1 and dst buffers
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, sizeof(PC), &pc, elements);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc, elements);
     } else if (op == GGML_OP_COUNT_EQUAL) {
         ggml_vk_sync_buffers(subctx);
         // count_equal assumes that destination buffer is initialized with zeroes
         ggml_vk_buffer_memset_async(subctx, d_D, d_buf_offset, 0, d_sz);
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, sizeof(PC), &pc, elements);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc, elements);
     } else if (use_src2) {
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_Z, z_buf_offset, z_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, sizeof(PC), &pc, elements);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_Z, z_buf_offset, z_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc, elements);
     } else if (use_src1) {
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, sizeof(PC), &pc, elements);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_Y, y_buf_offset, y_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc, elements);
     } else {
         ggml_vk_sync_buffers(subctx);
-        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, sizeof(PC), &pc, elements);
+        ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { vk_subbuffer{ d_X, x_buf_offset, x_sz }, vk_subbuffer{ d_D, d_buf_offset, d_sz } }, pc, elements);
     }
 }
 
@@ -6999,7 +7092,7 @@ static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx
             vk_subbuffer{ d_srcs[4], src_offsets[4], src_sizes[4] },
             vk_subbuffer{ d_srcs[5], src_offsets[5], src_sizes[5] },
             vk_subbuffer{ d_D, dst_offset, dst_size }
-        }, sizeof(vk_op_rwkv_wkv6_push_constants), &pc, elements);
+        }, pc, elements);
     } else if (version == 7) {
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, {
             vk_subbuffer{ d_srcs[0], src_offsets[0], src_sizes[0] },
@@ -7010,7 +7103,7 @@ static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx
             vk_subbuffer{ d_srcs[5], src_offsets[5], src_sizes[5] },
             vk_subbuffer{ d_srcs[6], src_offsets[6], src_sizes[6] },
             vk_subbuffer{ d_D, dst_offset, dst_size }
-        }, sizeof(vk_op_rwkv_wkv7_push_constants), &pc, elements);
+        }, pc, elements);
     } else {
         // shouldn't happen
         GGML_ASSERT(false);
@@ -7147,7 +7240,7 @@ static void ggml_vk_op_f32_opt_step_adamw(ggml_backend_vk_context * ctx, vk_cont
         vk_subbuffer{ d_GM, gm_offset, gm_size },
         vk_subbuffer{ d_GV, gv_offset, gv_size },
         vk_subbuffer{ d_P, p_offset, p_size },
-    }, sizeof(vk_op_push_constants), &pc, elements);
+    }, pc, elements);
 }
 
 static void ggml_vk_opt_step_adamw(ggml_backend_vk_context * ctx, vk_context& subctx, ggml_tensor * dst, bool dryrun = false) {
@@ -7527,6 +7620,37 @@ static void ggml_vk_timestep_embedding(ggml_backend_vk_context * ctx, vk_context
     ggml_vk_op_f32<vk_op_timestep_embedding_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_TIMESTEP_EMBEDDING, {
         nb1, dim, max_period,
     }, dryrun);
+}
+
+static void ggml_vk_conv_transpose_1d(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
+    // src0: (K, Cout, Cin, 1) -- kernel
+    // src1: (L, Cin, 1, 1) -- input
+    // dst: (*, Cout, 1, 1)
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT(nb00 == sizeof(float));
+    GGML_ASSERT(nb10 == sizeof(float));
+
+    const int32_t s0 = dst->op_params[0];
+
+    vk_op_conv_transpose_1d_push_constants p{};
+    p.Cout = static_cast<uint32_t>(ne01);
+    p.Cin = static_cast<uint32_t>(ne02);
+    p.K = static_cast<uint32_t>(ne00);
+    p.L = static_cast<uint32_t>(ne10);
+    p.KL = static_cast<uint32_t>(ne0);
+    p.nb01 = static_cast<uint32_t>(nb01 / nb00);
+    p.nb02 = static_cast<uint32_t>(nb02 / nb00);
+    p.nb11 = static_cast<uint32_t>(nb11 / nb10);
+    p.nb1 = static_cast<uint32_t>(nb1 / nb0);
+    p.s0 = static_cast<uint32_t>(s0);
+
+    ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_CONV_TRANSPOSE_1D, std::move(p), dryrun);
 }
 
 static void ggml_vk_pool_2d(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -8005,7 +8129,7 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
     vk_context subctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
     ggml_vk_ctx_begin(ctx->device, subctx);
     const std::vector<uint32_t> pc = { 1, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne };
-    ggml_vk_dispatch_pipeline(ctx, subctx, p, { vk_subbuffer{ qx_buf, 0, qx_sz }, vk_subbuffer{ x_buf, 0, x_sz_f16 } }, pc.size() * sizeof(int), pc.data(), { (uint32_t)ne, 1, 1});
+    ggml_vk_dispatch_pipeline(ctx, subctx, p, { vk_subbuffer{ qx_buf, 0, qx_sz }, vk_subbuffer{ x_buf, 0, x_sz_f16 } }, pc, { (uint32_t)ne, 1, 1});
     ggml_vk_ctx_end(subctx);
 
     auto begin = std::chrono::high_resolution_clock::now();
@@ -8600,6 +8724,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
     case GGML_OP_COUNT_EQUAL:
     case GGML_OP_IM2COL:
     case GGML_OP_TIMESTEP_EMBEDDING:
+    case GGML_OP_CONV_TRANSPOSE_1D:
     case GGML_OP_POOL_2D:
     case GGML_OP_CONV_2D_DW:
     case GGML_OP_RWKV_WKV6:
@@ -8664,6 +8789,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_IM2COL:
         case GGML_OP_TIMESTEP_EMBEDDING:
+        case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_POOL_2D:
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_LEAKY_RELU:
@@ -8836,6 +8962,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         ggml_vk_timestep_embedding(ctx, compute_ctx, src0, node, dryrun);
 
         break;
+    case GGML_OP_CONV_TRANSPOSE_1D:
+        ggml_vk_conv_transpose_1d(ctx, compute_ctx, src0, src1, node, dryrun);
+
+        break;
     case GGML_OP_POOL_2D:
         ggml_vk_pool_2d(ctx, compute_ctx, src0, node, dryrun);
 
@@ -8963,6 +9093,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
     case GGML_OP_COUNT_EQUAL:
     case GGML_OP_IM2COL:
     case GGML_OP_TIMESTEP_EMBEDDING:
+    case GGML_OP_CONV_TRANSPOSE_1D:
     case GGML_OP_POOL_2D:
     case GGML_OP_CONV_2D_DW:
     case GGML_OP_RWKV_WKV6:
@@ -9513,8 +9644,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             if (ctx->device->query_pool) {
                 ctx->device->device.destroyQueryPool(ctx->device->query_pool);
             }
-            VkQueryPoolCreateInfo query_create_info = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
-            query_create_info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            vk::QueryPoolCreateInfo query_create_info;
+            query_create_info.queryType = vk::QueryType::eTimestamp;
             query_create_info.queryCount = cgraph->n_nodes + 100;
             ctx->device->query_pool = ctx->device->device.createQueryPool(query_create_info);
             ctx->device->num_queries = query_create_info.queryCount;
@@ -9600,7 +9731,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         // Get the results and pass them to the logger
         std::vector<uint64_t> timestamps(cgraph->n_nodes + 1);
-        ctx->device->device.getQueryPoolResults(ctx->device->query_pool, 0, cgraph->n_nodes + 1, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait);
+        VK_CHECK(ctx->device->device.getQueryPoolResults(ctx->device->query_pool, 0, cgraph->n_nodes + 1, (cgraph->n_nodes + 1)*sizeof(uint64_t), timestamps.data(), sizeof(uint64_t), vk::QueryResultFlagBits::e64 | vk::QueryResultFlagBits::eWait), "get timestamp results");
         for (int i = 0; i < cgraph->n_nodes; i++) {
             if (!ggml_vk_is_empty(cgraph->nodes[i])) {
                 ctx->device->perf_logger->log_timing(cgraph->nodes[i], uint64_t((timestamps[i+1] - timestamps[i]) * ctx->device->properties.limits.timestampPeriod));
@@ -10024,6 +10155,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_LEAKY_RELU:
         case GGML_OP_OPT_STEP_ADAMW:
             return true;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         default:
             return false;
     }
@@ -10170,8 +10303,9 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
-        // Intel drivers don't support coopmat properly yet
-        return false;
+        // Only allowing Xe2 GPU at the moment since Xe2 GPU can gain significant performance boost,
+        // while some older hardware (ex. Arc A770) has performance regressions
+        return arch == vk_device_architecture::INTEL_XE2;
     case VK_VENDOR_ID_AMD:
         if (driver_props.driverID == vk::DriverId::eAmdProprietary || driver_props.driverID == vk::DriverId::eAmdOpenSource) {
             // Workaround for AMD proprietary driver reporting support on all GPUs
@@ -10515,6 +10649,11 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
         const int32_t dim = tensor->op_params[0];
         const int32_t max_period = tensor->op_params[1];
         tensor_clone = ggml_timestep_embedding(ggml_ctx, src_clone[0], dim, max_period);
+    } else if (tensor->op == GGML_OP_CONV_TRANSPOSE_1D){
+        const int32_t s0 = tensor->op_params[0];
+        const int32_t p0 = tensor->op_params[1];
+        const int32_t d0 = tensor->op_params[2];
+        tensor_clone = ggml_conv_transpose_1d(ggml_ctx, src_clone[0], src_clone[1], s0, p0, d0);
     } else if (tensor->op == GGML_OP_POOL_2D) {
         enum ggml_op_pool op = static_cast<ggml_op_pool>(tensor->op_params[0]);
         const int32_t k0 = tensor->op_params[1];

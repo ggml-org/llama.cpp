@@ -13,13 +13,12 @@
 #include <vector>
 
 struct llama_model;
-struct llama_kv_cache;
 
 class llama_io_read_i;
 class llama_io_write_i;
 
-class llama_memory_i;
-class llama_memory_state_i;
+struct llama_memory_i;
+struct llama_memory_state_i;
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -47,12 +46,12 @@ struct llama_context {
     uint32_t n_threads()       const;
     uint32_t n_threads_batch() const;
 
-          llama_kv_cache * get_kv_self();
-    const llama_kv_cache * get_kv_self() const;
+    llama_memory_t get_memory() const;
 
     // return true of the KV cache was updated
     // TODO: remove
-    bool kv_self_update();
+    bool kv_self_update(bool optimize);
+    void kv_self_defrag_sched();
 
     enum llama_pooling_type pooling_type() const;
 
@@ -230,6 +229,9 @@ private:
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     std::unique_ptr<llama_memory_i> memory;
+
+    // TODO: temporary, until the llama_kv_self_defrag() API is removed
+    bool memory_force_optimize = false;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     size_t  logits_size = 0; // capacity (of floats) for logits
