@@ -650,8 +650,9 @@ ggml_tensor * llm_graph_context::build_ffn(
             {
                 // Project to 4h. If using swiglu double the output width, see https://arxiv.org/pdf/2002.05202.pdf
                 int64_t split_point = cur->ne[0] / 2;
-                ggml_tensor * x0 = ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0);
-                ggml_tensor * x1 = ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur));
+                // TODO: these conts should not be needed, see https://github.com/ggml-org/llama.cpp/pull/14090#discussion_r2137437217
+                ggml_tensor * x0 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0));
+                ggml_tensor * x1 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
 
                 x0 = ggml_silu(ctx0, x0);
                 cb(cur, "ffn_silu", il);
@@ -663,8 +664,9 @@ ggml_tensor * llm_graph_context::build_ffn(
             {
                 // Split into two equal parts
                 int64_t split_point = cur->ne[0] / 2;
-                ggml_tensor * x0 = ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0);
-                ggml_tensor * x1 = ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur));
+                // TODO: these conts should not be needed, see https://github.com/ggml-org/llama.cpp/pull/14090#discussion_r2137437217
+                ggml_tensor * x0 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0));
+                ggml_tensor * x1 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
 
                 x0 = ggml_gelu(ctx0, x0);
                 cb(x0, "ffn_gelu", il);
