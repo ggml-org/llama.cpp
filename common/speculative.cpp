@@ -159,7 +159,7 @@ llama_tokens common_speculative_gen_draft(
     const float p_decay = floorf((params.p_min - p_min) * 10000) / 100;               // Next 2 decimal places
     const int n_min     = roundf((params.p_min - p_min - (p_decay / 100)) * 100000);  // Last digit
 
-    printf("p_min=%f, p_decay=%f, n_min=%d\n", p_min, p_decay, n_min);
+    LOG_DBG("%s: p_min = %f, p_decay = %f, n_min = %d\n", __func__, p_min, p_decay, n_min);
 
     // reuse as much as possible from the old draft context
     // ideally, the draft context should be as big as the target context and we will always reuse the entire prompt
@@ -277,7 +277,7 @@ llama_tokens common_speculative_gen_draft(
 
         const float threshold_p = p_min * pow(std::max((int) result.size() - std::max(n_min, 1) + 1, 1), -p_decay);
 
-        printf("sequence_p=%f, threshold_p=%f\n", sequence_p, threshold_p);
+        LOG_DBG("%s: sequence_p = %f, threshold_p = %f\n", __func__, sequence_p, threshold_p);
 
         // only collect very high-confidence draft tokens
         if (sequence_p < threshold_p) {
@@ -292,7 +292,7 @@ llama_tokens common_speculative_gen_draft(
         prompt.push_back(id);
     }
 
-    printf("result.size()=%d, sequence_p=%f\n", result.size(), sequence_p);
+    LOG_DBG("%s: n_result = %d, sequence_p = %f\n", __func__, (int) result.size(), sequence_p);
 
     return result;
 }
