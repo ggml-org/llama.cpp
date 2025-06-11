@@ -154,7 +154,7 @@ llama_tokens common_speculative_gen_draft(
 
     const int i_start = std::max<int>(0, (int) prompt_tgt.size() - n_ctx);
 
-    // Extract parameters packed in p_min (format: 0.pmin_pdecay_nmin)
+    // Extract parameters packed in p_min (format: 0.{pmin:2}{pdecay:2}{nmin:1})
     const float p_min   = floorf(params.p_min * 100) / 100;                           // First 2 decimal places
     const float p_decay = floorf((params.p_min - p_min) * 10000) / 100;               // Next 2 decimal places
     const int n_min     = roundf((params.p_min - p_min - (p_decay / 100)) * 100000);  // Last digit
