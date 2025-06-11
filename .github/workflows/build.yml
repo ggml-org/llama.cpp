@@ -306,6 +306,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
+          export GGML_VK_VISIBLE_DEVICES=0
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
 

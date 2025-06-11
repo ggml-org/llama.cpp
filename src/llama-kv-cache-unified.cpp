@@ -512,8 +512,6 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
         head_cur = 0;
     }
 
-    // otherwise, one cell per token.
-
     if (n_tokens > cells.size()) {
         LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %u\n", __func__, n_tokens, cells.size());
         return -1;

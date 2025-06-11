@@ -3556,15 +3556,15 @@ struct server_context {
                 const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
 
-                // keep track of total number of tokens generated in the draft
-                slot.n_draft_total += draft.size();
-
                 // ignore small drafts
                 if (slot.params.speculative.n_min > (int) draft.size()) {
                     SLT_DBG(slot, "ignoring small draft: %d < %d\n", (int) draft.size(), slot.params.speculative.n_min);
 
                     continue;
                 }
+
+                // keep track of total number of drafted tokens tested
+                slot.n_draft_total += draft.size();
 
                 // construct the speculation batch
                 common_batch_clear(slot.batch_spec);
@@ -3584,7 +3584,7 @@ struct server_context {
                 slot.n_past    += ids.size();
                 slot.n_decoded += ids.size();
 
-                // update how many tokens out of draft was accepted
+                // update how many tokens out of those tested were accepted
                 slot.n_draft_accepted += ids.size() - 1;
 
                 slot.cache_tokens.push_back(id);

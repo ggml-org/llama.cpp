@@ -212,6 +212,7 @@ endif()
 
 add_library(ggml
             ggml-backend-reg.cpp)
+add_library(ggml::ggml ALIAS ggml)
 
 target_link_libraries(ggml PUBLIC ggml-base)
 
