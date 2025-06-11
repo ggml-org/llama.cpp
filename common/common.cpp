@@ -934,7 +934,7 @@ struct common_init_result common_init_from_params(common_params & params) {
         return iparams;
     }
 
-    if (params.ctx_shift && !llama_kv_self_can_shift(lctx)) {
+    if (params.ctx_shift && !llama_memory_can_shift(llama_get_memory(lctx))) {
         LOG_WRN("%s: KV cache shifting is not supported for this context, disabling KV cache shifting\n", __func__);
         params.ctx_shift = false;
     }
@@ -1041,7 +1041,7 @@ struct common_init_result common_init_from_params(common_params & params) {
         if (llama_model_has_decoder(model)) {
             llama_decode(lctx, llama_batch_get_one(tmp.data(), std::min(tmp.size(), (size_t) params.n_batch)));
         }
-        llama_kv_self_clear(lctx);
+        llama_memory_clear(llama_get_memory(lctx), true);
         llama_synchronize(lctx);
         llama_perf_context_reset(lctx);
         llama_set_warmup(lctx, false);

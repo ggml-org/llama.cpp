@@ -80,6 +80,9 @@ public:
         assert(isrc < pos.size());
         assert(idst < pos.size());
 
+        assert(pos[idst] == -1);
+        assert(pos[isrc] != -1);
+
         pos  [idst] = pos  [isrc];
         shift[idst] = shift[isrc];
         seq  [idst] = seq  [isrc];
@@ -144,9 +147,10 @@ public:
         assert(pos[i] != -1);
 
         seq_pos_rm(i);
+        seq[i].reset();
 
         pos[i] = -1;
-        seq[i].reset();
+        shift[i] = 0;
 
         used.erase(i);
     }
@@ -164,6 +168,7 @@ public:
 
         if (seq[i].none()) {
             pos[i] = -1;
+            shift[i] = 0;
 
             used.erase(i);
 
@@ -192,6 +197,7 @@ public:
             seq[i].reset();
 
             pos[i] = -1;
+            shift[i] = 0;
 
             used.erase(i);
 
@@ -317,20 +323,19 @@ public:
         pos[i]   += d;
         shift[i] += d;
 
-        seq_pos_add(i);
-
         has_shift = true;
 
         if (pos[i] < 0) {
-            seq_pos_rm(i);
-
             seq[i].reset();
             pos[i] = -1;
+            shift[i] = 0;
 
             used.erase(i);
 
             return true;
         }
+
+        seq_pos_add(i);
 
         return false;
     }

@@ -127,15 +127,20 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
+
+    const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
+    debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
 }
 
-void llama_kv_cache_unified::clear() {
+void llama_kv_cache_unified::clear(bool data) {
     cells.reset();
 
     head = 0;
 
-    for (auto & buf : bufs) {
-        ggml_backend_buffer_clear(buf.get(), 0);
+    if (data) {
+        for (auto & buf : bufs) {
+            ggml_backend_buffer_clear(buf.get(), 0);
+        }
     }
 }
 
@@ -460,7 +465,7 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
             for (uint32_t i = 0; i < n_kv; ++i) {
                 assert(dinfo.ids[i] <= n_kv);
 
-                if (dinfo.ids[i] == n_kv) {
+                if (dinfo.ids[i] == n_kv || dinfo.ids[i] == i) {
                     continue;
                 }
 
@@ -510,21 +515,17 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
         head_cur = 0;
     }
 
-    // otherwise, one cell per token.
-
     if (n_tokens > cells.size()) {
         LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %u\n", __func__, n_tokens, cells.size());
         return -1;
     }
 
-//#define FIND_SLOT_DEBUG 1
-#if FIND_SLOT_DEBUG
-    LLAMA_LOG_WARN("begin: n = %5d, used = %5d, head = %5d, n_swa = %5d\n", cells.used_max_p1(), cells.get_used(), head, n_swa);
+    if (debug > 0) {
+        LLAMA_LOG_CONT("\n");
+        LLAMA_LOG_DEBUG("%s: n = %5d, used = %5d, head = %5d, size = %5d, n_swa = %5d\n", __func__, cells.used_max_p1(), cells.get_used(), head, get_size(), n_swa);
 
-    // for debugging
-    {
-        std::string ss;
-        if (n_swa > 0) {
+        if ((debug == 2 && n_swa > 0) || debug > 2) {
+            std::string ss;
             for (uint32_t i = 0; i < cells.size(); ++i) {
                 if (cells.is_empty(i)) {
                     ss += '.';
@@ -532,21 +533,45 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
                     ss += std::to_string(cells.seq_get(i));
                 }
                 if (i%256 == 255) {
+                    ss += " *";
                     ss += '\n';
                 }
             }
-        }
-        LLAMA_LOG_WARN("\n%s\n", ss.c_str());
-    }
-
-    for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
-        if (cells.seq_pos_min(s) < 0) {
-            continue;
+            LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
         }
 
-        LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[%d] = %5d, max[%d] = %5d\n", n_swa, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
+        if ((debug == 2 && n_swa > 0) || debug > 2) {
+            std::string ss;
+            for (uint32_t i = 0; i < cells.size(); ++i) {
+                std::string cur;
+                if (cells.is_empty(i)) {
+                    cur = '.';
+                } else {
+                    cur = std::to_string(cells.pos_get(i));
+                }
+                const int n = cur.size();
+                for (int j = 0; j < 5 - n; ++j) {
+                    cur += ' ';
+                }
+                ss += cur;
+                if (i%256 == 255) {
+                    ss += " *";
+                }
+                if (i%64 == 63) {
+                    ss += '\n';
+                }
+            }
+            LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
+        }
+
+        for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            if (cells.seq_pos_min(s) < 0) {
+                continue;
+            }
+
+            LLAMA_LOG_DEBUG("%s: min[%d] = %5d, max[%d] = %5d\n", __func__, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
+        }
     }
-#endif
 
     uint32_t n_tested = 0;
 
@@ -557,21 +582,15 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
             continue;
         }
 
-        // keep track of what the minimum sequence positions would be if we accept the ubatch
-        llama_seq_id seq_pos_min[LLAMA_MAX_PARALLEL_SEQUENCES];
-        for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
-            seq_pos_min[s] = cells.seq_pos_min(s);
-        }
-
         bool found = true;
         for (uint32_t i = 0; i < n_tokens; i++) {
-            const llama_pos    pos    = ubatch.pos[i];
-            const llama_seq_id seq_id = ubatch.seq_id[i][0];
+            //const llama_pos    pos    = ubatch.pos[i];
+            //const llama_seq_id seq_id = ubatch.seq_id[i][0];
 
             // can we use this cell? either:
             //  - the cell is empty
             //  - the cell is occupied only by one sequence:
-            //    - mask causally, if the sequence is the same as the one we are inserting
+            //    - (disabled) mask causally, if the sequence is the same as the one we are inserting
             //    - mask SWA, using current max pos for that sequence in the cache
             //                always insert in the cell with minimum pos
             bool can_use = cells.is_empty(head_cur + i);
@@ -579,21 +598,17 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
             if (!can_use && cells.seq_count(head_cur + i) == 1) {
                 const llama_pos pos_cell = cells.pos_get(head_cur + i);
 
-                // causal mask
-                if (cells.seq_has(head_cur + i, seq_id)) {
-                    can_use = pos_cell >= pos;
-                }
+                // (disabled) causal mask
+                // note: it's better to purge any "future" tokens beforehand
+                //if (cells.seq_has(head_cur + i, seq_id)) {
+                //    can_use = pos_cell >= pos;
+                //}
 
                 if (!can_use) {
                     const llama_seq_id seq_id_cell = cells.seq_get(head_cur + i);
 
                     // SWA mask
-                    // note: we insert only in the cell with minimum pos in order to preserve the invariant that
-                    //       all positions between [pos_min, pos_max] for each sequence will be present in the cache
-                    //       ref: https://github.com/ggml-org/llama.cpp/pull/13746#issuecomment-2916057092
-                    if (pos_cell == seq_pos_min[seq_id_cell] &&
-                        is_masked_swa(pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
-                        seq_pos_min[seq_id_cell]++;
+                    if (is_masked_swa(pos_cell, cells.seq_pos_max(seq_id_cell) + 1)) {
                         can_use = true;
                     }
                 }
@@ -621,8 +636,22 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
 }
 
 void llama_kv_cache_unified::apply_ubatch(uint32_t head_cur, const llama_ubatch & ubatch) {
+    // keep track of the max sequence position that we would overwrite with this ubatch
+    // for non-SWA cache, this would be always empty
+    llama_seq_id seq_pos_max_rm[LLAMA_MAX_PARALLEL_SEQUENCES];
+    for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+        seq_pos_max_rm[s] = -1;
+    }
+
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         if (!cells.is_empty(head_cur + i)) {
+            assert(cells.seq_count(head_cur + i) == 1);
+
+            const llama_seq_id seq_id = cells.seq_get(head_cur + i);
+            const llama_pos    pos    = cells.pos_get(head_cur + i);
+
+            seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
+
             cells.rm(head_cur + i);
         }
 
@@ -630,6 +659,22 @@ void llama_kv_cache_unified::apply_ubatch(uint32_t head_cur, const llama_ubatch 
 
         for (int32_t j = 0; j < ubatch.n_seq_id[i]; j++) {
             cells.seq_add(head_cur + i, ubatch.seq_id[i][j]);
+        }
+    }
+
+    // note: we want to preserve the invariant that all positions between [pos_min, pos_max] for each sequence
+    //       will be present in the cache. so we have to purge any position which is less than those we would overwrite
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/13746#issuecomment-2916057092
+    for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+        if (seq_pos_max_rm[s] == -1) {
+            continue;
+        }
+
+        if (cells.seq_pos_min(s) <= seq_pos_max_rm[s]) {
+            LLAMA_LOG_DEBUG("%s: purging positions [%d, %d] of sequence %d from KV cache\n",
+                    __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
+
+            seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
         }
     }
 
@@ -942,11 +987,9 @@ llm_graph_result_ptr llama_kv_cache_unified::build_graph_shift(
     const auto & n_embd_head_k = hparams.n_embd_head_k;
   //const auto & n_embd_head_v = hparams.n_embd_head_v;
 
-    //GGML_ASSERT(kv_self->size == n_ctx);
-
     auto inp = std::make_unique<llm_graph_input_k_shift>(this);
 
-    inp->k_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, cparams.n_ctx);
+    inp->k_shift = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, cells.size());
     ggml_set_input(inp->k_shift);
 
     for (const auto & layer : layers) {
@@ -1319,7 +1362,7 @@ void llama_kv_cache_unified::state_read(llama_io_read_i & io, llama_seq_id seq_i
 
     if (!res) {
         if (seq_id == -1) {
-            clear();
+            clear(true);
         } else {
             seq_rm(seq_id, -1, -1);
         }
@@ -1500,7 +1543,7 @@ bool llama_kv_cache_unified::state_read_meta(llama_io_read_i & io, uint32_t cell
             return false;
         }
 
-        clear();
+        clear(true);
 
         for (uint32_t i = 0; i < cell_count; ++i) {
             llama_pos pos;

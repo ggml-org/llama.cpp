@@ -13,13 +13,12 @@
 #include <vector>
 
 struct llama_model;
-struct llama_kv_cache;
 
 class llama_io_read_i;
 class llama_io_write_i;
 
-class llama_memory_i;
-class llama_memory_state_i;
+struct llama_memory_i;
+struct llama_memory_state_i;
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -47,8 +46,7 @@ struct llama_context {
     uint32_t n_threads()       const;
     uint32_t n_threads_batch() const;
 
-          llama_kv_cache * get_kv_self();
-    const llama_kv_cache * get_kv_self() const;
+    llama_memory_t get_memory() const;
 
     // return true of the KV cache was updated
     // TODO: remove

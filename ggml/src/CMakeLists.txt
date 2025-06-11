@@ -125,7 +125,6 @@ if (NOT MSVC)
 endif()
 
 if (MINGW)
-    # Target Windows 8 for PrefetchVirtualMemory
     add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
@@ -213,6 +212,7 @@ endif()
 
 add_library(ggml
             ggml-backend-reg.cpp)
+add_library(ggml::ggml ALIAS ggml)
 
 target_link_libraries(ggml PUBLIC ggml-base)
 

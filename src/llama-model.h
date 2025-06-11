@@ -329,6 +329,9 @@ struct llama_model {
     llama_hparams hparams = {};
     llama_vocab   vocab;
 
+    // for classifier models
+    std::vector<std::string> classifier_labels;
+
     struct ggml_tensor * tok_embd   = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;

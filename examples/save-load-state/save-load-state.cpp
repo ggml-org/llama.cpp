@@ -196,7 +196,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "%s : seq 0 copied, %zd bytes\n", __func__, ncopy);
 
         // erase whole kv
-        llama_kv_self_clear(ctx3);
+        llama_memory_clear(llama_get_memory(ctx3), true);
         fprintf(stderr, "%s : kv cache cleared\n", __func__);
 
         // restore kv into seq 1
