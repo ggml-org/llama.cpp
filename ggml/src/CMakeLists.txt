@@ -103,15 +103,7 @@ endif()
 # TODO: probably these flags need to be tweaked on some architectures
 #       feel free to update the Makefile for your architecture and send a pull request or issue
 message(STATUS "CMAKE_SYSTEM_PROCESSOR: ${CMAKE_SYSTEM_PROCESSOR}")
-# Enable SVE for ARMv8-A+ architectures
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-    message(STATUS "Enabling ARM SVE support")
-    add_compile_options(-march=native -fopenmp -O3 -ftree-vectorize)
-    add_compile_definitions(
-        __ARM_FEATURE_SVE=1
-        __ARM_FEATURE_FP16_VECTOR_ARITHMETIC=1
-    )
-endif()
+
 if (MSVC)
     string(TOLOWER "${CMAKE_GENERATOR_PLATFORM}" CMAKE_GENERATOR_PLATFORM_LWR)
     message(STATUS "CMAKE_GENERATOR_PLATFORM: ${CMAKE_GENERATOR_PLATFORM}")
