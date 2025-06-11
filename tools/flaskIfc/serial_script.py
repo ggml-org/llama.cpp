@@ -4,19 +4,18 @@ import sys
 def send_serial_command(port, baudrate, command):
     try:
         # Open the serial port with 1 second timeout
-        ser = serial.Serial(port, baudrate, timeout=60)
+        ser = serial.Serial(port, baudrate, timeout=20)
 
         ser.write(command.encode())  # Encode command to bytes
         ser.write('\n'.encode())  # Encode command to bytes
         
         # Wait to read the serial port
-        # Need to add a break somewhere for when we see the phrase "root@name"
         data = '\0'
         while True:
             try:
                 line = ser.readline()
                 if line: # Check if line is not empty
-                    data += (line.decode('utf-8').strip()) # Decode and strip to remove extra chars
+                    data += line.decode('utf-8')  # Keep the line as-is with newline
                 else:
                     break  # Exit loop if no data is received
             except serial.SerialException as e:
@@ -42,4 +41,3 @@ if __name__ == "__main__":
     baudrate = int(sys.argv[2])
     command = sys.argv[3]
     response = send_serial_command(port, baudrate, command)
-    print(response)
