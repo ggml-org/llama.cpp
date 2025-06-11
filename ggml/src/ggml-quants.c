@@ -366,7 +366,6 @@ void dequantize_row_q8_0(const block_q8_0 * GGML_RESTRICT x, float * GGML_RESTRI
     #else
         for (int i = 0; i < nb; i++) {
             const float d = GGML_FP16_TO_FP32(x[i].d);
-
             for (int j = 0; j < qk; ++j) {
                 y[i*qk + j] = x[i].qs[j]*d;
             }
