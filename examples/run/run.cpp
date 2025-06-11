@@ -985,13 +985,11 @@ static inline void stop_timer(void) {
 }
 
 static void show_timer(void) {
-  //printe("[%15lld] ns\n", timer_total);
-  long long ms = timer_total/1000000;
-  long long itl = ms/timer_count;
-  float speed = 1/((float)itl) * 1000;
-  printe("INFO: generate: [%7lld] ms for %lld invokations | ITL %lldms | throughput = %.2f t/s\n", timer_total/1000000, timer_count, itl, speed);
+  double ms = timer_total/1000000;
+  double itl = ms/timer_count;
+  double speed = 1/itl * 1000;
 
-  printe("INFO: generate: [%7lld] s\n", timer_total/1000000/1000);
+  printe("LLAMA generate [%9.0f] ms for %4lld invocations | ITL %2.2f ms | throughput = %4.2f t/s\n", ms, timer_count, itl, speed);
 }
 
 
@@ -1011,14 +1009,7 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
     llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
     llama_token new_token_id;
 
-    int count = 0;
     while (true) {
-#if 0
-      if (count > 25) {
-	printe("WARNING: stopping after %d tokens", count);
-	break;
-      }
-#endif
         start_timer();
         check_context_size(llama_data.context, batch);
         if (llama_decode(llama_data.context.get(), batch)) {
@@ -1042,7 +1033,6 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
         // prepare the next batch with the sampled token
         batch = llama_batch_get_one(&new_token_id, 1);
 	stop_timer();
-	count += 1;
     }
 
     printf(LOG_COL_DEFAULT);

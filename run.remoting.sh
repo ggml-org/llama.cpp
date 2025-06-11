@@ -1,6 +1,8 @@
 #! /bin/bash
 #clear
-if [[ ${1:-} == "gdb" ]]; then
+if [[ ${1:-} == "strace" ]]; then
+    prefix="strace"
+elif [[ ${1:-} == "gdb" ]]; then
     prefix="gdb --args"
 else
     prefix=""
@@ -41,7 +43,7 @@ if [[ "$bench" == yes ]]; then
         --n-gpu-layers 99
 else
     PROMPT="say nothing"
-    PROMPT="tell what's Apple metal API"
+    #PROMPT="tell what's Apple metal API"
     $prefix \
         $LLAMA_BUILD_DIR/bin/llama-run \
         --ngl 99 \

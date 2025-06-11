@@ -40,6 +40,8 @@ serialize_tensor(const ggml_tensor * tensor) {
   result.view_src = reinterpret_cast<uint64_t>(tensor->view_src);
   result.view_offs = tensor->view_offs;
   result.data = reinterpret_cast<uint64_t>(tensor->data);
+  // tensor->data is serialized as an offset to the buffer base address
+  result.data -= reinterpret_cast<uint64_t>(BUFFER_TO_GGML_CONTEXT(tensor->buffer)->base);
   snprintf(result.name, GGML_MAX_NAME, "%s", tensor->name);
   return result;
 }

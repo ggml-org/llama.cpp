@@ -10,6 +10,8 @@ else
     FLAVOR=""
 fi
 
+export SDKROOT=$(xcrun --sdk macosx --show-sdk-path)
+
 if [[ "$FLAVOR" == "-prod" ]]; then
     cat <<EOF
 ###

@@ -109,3 +109,34 @@ backend_device_get_props(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, s
 
   return 0;
 }
+
+uint32_t
+backend_device_buffer_from_ptr(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
+  UNUSED(ctx);
+  UNUSED(dec);
+
+  uint32_t shmem_res_id;
+  vn_decode_virtgpu_shmem_res_id(dec, &shmem_res_id);
+
+  void *shmem_ptr = ctx->iface.get_shmem_ptr(ctx->virgl_ctx, shmem_res_id);
+  if (!shmem_ptr) {
+    FATAL("Couldn't get the shmem addr from virgl :/");
+  }
+
+  size_t size;
+  vn_decode_size_t(dec, &size);
+  size_t max_tensor_size;
+  vn_decode_size_t(dec, &max_tensor_size);
+
+  ggml_backend_buffer_t buffer;
+  buffer = dev->iface.buffer_from_host_ptr(dev, shmem_ptr, size, max_tensor_size);
+
+  vn_encode_ggml_buffer(enc, buffer);
+  vn_encode_ggml_buffer_type(enc, buffer->buft);
+
+  if (buffer) {
+    track_backend_buffer(buffer);
+  }
+
+  return 0;
+}

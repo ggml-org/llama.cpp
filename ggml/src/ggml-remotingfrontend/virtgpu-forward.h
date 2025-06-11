@@ -4,7 +4,7 @@
 
 #include "virtgpu-utils.h"
 
-#include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/apir_backend.h"
+#include "../ggml-remotingbackend/shared/apir_backend.h"
 
 /* device */
 int apir_device_get_count(struct virtgpu *gpu);
@@ -19,7 +19,9 @@ void apir_device_get_props(struct virtgpu *gpu,
 			   bool *host_buffer,
 			   bool *buffer_from_host_ptr,
 			   bool *events);
-
+apir_buffer_context_t apir_device_buffer_from_ptr(struct virtgpu *gpu,
+						  size_t size,
+						  size_t max_tensor_size);
 /* buffer-type */
 const char *apir_buffer_type_get_name(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);
 size_t apir_buffer_type_get_alignment(struct virtgpu *gpu, ggml_backend_buffer_type_t buft);

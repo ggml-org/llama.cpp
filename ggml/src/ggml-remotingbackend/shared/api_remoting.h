@@ -1,4 +1,3 @@
-
 #define VIRGL_APIR_COMMAND_TYPE_LoadLibrary 255
 #define VIRGL_APIR_COMMAND_TYPE_Forward 256
 

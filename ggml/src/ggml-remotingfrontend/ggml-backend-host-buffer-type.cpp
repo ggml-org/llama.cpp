@@ -42,25 +42,23 @@ ggml_backend_remoting_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 static ggml_backend_buffer_t
 ggml_backend_remoting_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
   IMPLEMENTED;
+
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  struct ggml_backend_remoting_device_context *device_ctx = GET_DEVICE_CONTEXT();
-
-  size += 32;  // Behave like the CPU buffer type (dixit ggml-vulkan)
-
-  struct vn_renderer_shmem *shmem = virtgpu_shmem_create(gpu, size);
-
-  if (!shmem) {
-    FATAL("Couldn't allocate the guest-host shared host buffer :/");
+  struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
+  if (!context) {
+    FATAL("Couldn't allocate the buffer context ...");
   }
 
-  void *ptr = shmem->mmap_ptr;
+  context->gpu = gpu;
+  context->apir_context = apir_device_buffer_from_ptr(gpu, size, size);
+  context->base = context->apir_context.shmem->mmap_ptr;
+  context->is_host_buffer = true;
 
-  device_ctx->shared_memory.push_back(std::make_tuple(ptr, size, shmem));
-
-  ggml_backend_buffer_t buffer = ggml_backend_cpu_buffer_from_ptr(ptr, size);
-  buffer->buft = buft;
-  buffer->iface.free_buffer = ggml_backend_remoting_host_buffer_free_buffer;
+  ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
+  INFO("##");
+  INFO("## %s(%llx) --> %p <======================", __func__, size, buffer);
+  INFO("##\n");
 
   return buffer;
 }

@@ -481,7 +481,7 @@ remote_call(
    */
 
   while (std::atomic_load_explicit(atomic_reply_notif, std::memory_order_acquire) == 0) {
-    int64_t base_sleep_us = 160;
+    int64_t base_sleep_us = 15;
 
     os_time_sleep(base_sleep_us);
   }
