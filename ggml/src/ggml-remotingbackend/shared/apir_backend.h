@@ -1,10 +1,5 @@
 #pragma once
 
-#define APIR_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend-prod/bin/libggml-remotingbackend.dylib"
-#define APIR_INITIALIZE_FCT_NAME "apir_backend_initialize"
-#define APIR_DEINIT_FCT_NAME "apir_backend_deinit"
-#define APIR_DISPATCH_FCT_NAME "apir_backend_dispatcher"
-
 #define APIR_BACKEND_INITIALIZE_SUCCESSS 0
 #define APIR_BACKEND_INITIALIZE_CANNOT_OPEN_BACKEND_LIBRARY 1
 #define APIR_BACKEND_INITIALIZE_CANNOT_OPEN_GGML_LIBRARY 2
@@ -24,17 +19,8 @@ typedef struct {
   apir_buffer_type_host_handle_t buft_host_handle;
 } apir_buffer_context_t;
 
-typedef uint32_t (*apir_backend_initialize_t)(void);
-typedef void (*apir_backend_deinit_t)(void);
-
 struct vn_dispatch_context;
 struct virgl_apir_context;
-
-typedef uint32_t (*apir_backend_dispatch_t)(uint32_t cmd_type, struct virgl_apir_context *ctx,
-                                            char *dec_cur, const char *dec_end,
-                                            char *enc_cur, const char *enc_end,
-                                            char **enc_cur_after
-  );
 
 typedef enum ApirBackendCommandType {
   /* device */
@@ -72,7 +58,7 @@ typedef enum ApirBackendCommandType {
 
 struct virgl_apir_callbacks {
   void *(*get_shmem_ptr)(struct vn_dispatch_context *ctx, uint32_t res_id);
-} ;
+};
 
 struct virgl_apir_context {
   struct vn_dispatch_context *virgl_ctx;

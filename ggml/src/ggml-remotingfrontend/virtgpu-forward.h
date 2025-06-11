@@ -4,7 +4,7 @@
 
 #include "virtgpu-utils.h"
 
-#include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/apir_backend.h"
+#include "../ggml-remotingbackend/shared/apir_backend.h"
 
 /* device */
 int apir_device_get_count(struct virtgpu *gpu);

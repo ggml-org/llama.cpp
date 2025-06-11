@@ -10,17 +10,10 @@
 #include "shared/apir_backend.h"
 #include "shared/venus_cs.h"
 
-#define USE_METAL 1
+#define GGML_BACKEND_LIBRARY_PATH_ENV "APIR_LLAMA_CPP_GGML_LIBRARY_PATH"
+#define GGML_BACKEND_LIBRARY_REG_ENV "APIR_LLAMA_CPP_GGML_LIBRARY_REG"
+#define GGML_BACKEND_LIBRARY_INIT_ENV "APIR_LLAMA_CPP_GGML_LIBRARY_INIT"
 
-#if USE_METAL
-#define GGML_BACKEND_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend/bin/libggml-metal.dylib"
-#define GGML_BACKEND_REG_FCT_NAME "ggml_backend_metal_reg"
-#define GGML_BACKEND_INIT_FCT_NAME "ggml_backend_metal_init"
-#else
-#define GGML_BACKEND_LIBRARY_PATH "/Users/kevinpouget/remoting/llama_cpp/build.remoting-backend/bin/libggml-vulkan.dylib"
-#define GGML_BACKEND_REG_FCT_NAME "ggml_backend_vk_reg"
-#define GGML_BACKEND_INIT_FCT_NAME "ggml_backend_vk_init"
-#endif
 
 static void *backend_library_handle = NULL;
 
@@ -52,9 +45,19 @@ extern "C" {
   uint32_t apir_backend_initialize() {
     const char* dlsym_error;
 
-    INFO("%s: hello " GGML_BACKEND_REG_FCT_NAME " :wave: \\o/", __func__);
+    const char* library_name = getenv(GGML_BACKEND_LIBRARY_PATH_ENV);
+    const char* library_reg = getenv(GGML_BACKEND_LIBRARY_REG_ENV);
+    const char* library_init = getenv(GGML_BACKEND_LIBRARY_INIT_ENV);
 
-    backend_library_handle = dlopen(GGML_BACKEND_LIBRARY_PATH, RTLD_LAZY);
+    INFO("%s: loading %s (%s|%s)", __func__, library_name, library_reg, library_init);
+
+    if (!library_name) {
+      ERROR("Cannot open library: env var '%s' not defined\n", GGML_BACKEND_LIBRARY_PATH_ENV);
+
+      return APIR_BACKEND_INITIALIZE_CANNOT_OPEN_GGML_LIBRARY;
+    }
+
+    backend_library_handle = dlopen(library_name, RTLD_LAZY);
 
     if (!backend_library_handle) {
       ERROR("Cannot open library: %s\n", dlerror());
@@ -62,7 +65,13 @@ extern "C" {
       return APIR_BACKEND_INITIALIZE_CANNOT_OPEN_GGML_LIBRARY;
     }
 
-    void *ggml_backend_reg_fct = dlsym(backend_library_handle, GGML_BACKEND_REG_FCT_NAME);
+    if (!library_reg) {
+      ERROR("Cannot register library: env var '%s' not defined\n", GGML_BACKEND_LIBRARY_REG_ENV);
+
+      return APIR_BACKEND_INITIALIZE_CANNOT_OPEN_GGML_LIBRARY;
+    }
+
+    void *ggml_backend_reg_fct = dlsym(backend_library_handle, library_reg);
     dlsym_error = dlerror();
     if (dlsym_error) {
       ERROR("Cannot load symbol: %s\n", dlsym_error);
@@ -70,7 +79,13 @@ extern "C" {
       return APIR_BACKEND_INITIALIZE_MISSING_GGML_SYMBOLS;
     }
 
-    void *ggml_backend_init_fct = dlsym(backend_library_handle, GGML_BACKEND_INIT_FCT_NAME);
+    if (!library_init) {
+      ERROR("Cannot initialize library: env var '%s' not defined\n", library_init);
+
+      return APIR_BACKEND_INITIALIZE_CANNOT_OPEN_GGML_LIBRARY;
+    }
+
+    void *ggml_backend_init_fct = dlsym(backend_library_handle, library_init);
     dlsym_error = dlerror();
     if (dlsym_error) {
       ERROR("Cannot load symbol: %s\n", dlsym_error);
