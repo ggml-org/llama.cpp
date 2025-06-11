@@ -584,18 +584,25 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 #### TSI compilation steps
 ```bash
 #Pull the repo frim tsisw as follows
-git clone git@github.com:tsisw/llama.cpp.git -b FIR-699
+git clone git@github.com:tsisw/llama.cpp.git
 
 #Ensure prerequisites are met as follows
 cd llama.cpp/
+#Ensure prerequisites are met as follows
+echo 'updating submodule'
 git submodule update --recursive --init
 cd ggml-tsi-kernel/
 module load tsi4 gcc/13.3.0
-python3 -m venv blob-creation
+export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.1.3
+echo 'creating python virtual env'
+/proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
 source blob-creation/bin/activate
-pip install -r /proj/rel/sw/mlir-compiler/python/requirements-common.txt
-pip install /proj/rel/sw/mlir-compiler/python/mlir_external_packages-1.2.1-py3-none-any.whl
+echo 'installing mlir and python dependencies'
+pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt
+pip install ${MLIR_SDK_VERSION}/compiler/python/mlir_external_packages-1.3.0-py3-none-any.whl
 pip install onnxruntime-training
+
+
 
 #build TSI kernels for the Tsavorite backend
 #First for FPGA

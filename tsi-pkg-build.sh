@@ -9,7 +9,6 @@ module load tsi4 gcc/13.3.0
 export MLIR_SDK_VERSION=/proj/rel/sw/sdk-r.0.1.3
 echo 'creating python virtual env'
 /proj/local/Python-3.10.12/bin/python3 -m venv blob-creation
-python3 -m venv blob-creation
 source blob-creation/bin/activate
 echo 'installing mlir and python dependencies'
 pip install -r ${MLIR_SDK_VERSION}/compiler/python/requirements-common.txt

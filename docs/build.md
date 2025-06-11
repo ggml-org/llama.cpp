@@ -578,8 +578,8 @@ cd ggml-tsi-kernel/
 module load tsi4 gcc/13.3.0
 python3 -m venv blob-creation
 source blob-creation/bin/activate
-pip install -r /proj/rel/sw/mlir-compiler/python/requirements-common.txt
-pip install /proj/rel/sw/mlir-compiler/python/mlir_external_packages-1.2.1-py3-none-any.whl
+pip install -r /proj/rel/sw/sdk-r.0.1.3/compiler/python/requirements-common.txt
+pip install /proj/rel/sw/sdk-r.0.1.3/compiler/python/mlir_external_packages-1.3.0-py3-none-any.whl
 pip install onnxruntime-training
 ```
 
