@@ -877,6 +877,8 @@ int llama_context::encode(llama_batch & inp_batch) {
         memcpy(cross.v_embd.data(), embd, ggml_nbytes(t_embd));
 
         // remember the sequence ids used during the encoding - needed for cross attention later
+        // TODO: the seuqence indexing here is likely not correct in the general case
+        //       probably works only for split_simple
         cross.seq_ids_enc.resize(n_tokens);
         for (int32_t i = 0; i < n_tokens; i++) {
             cross.seq_ids_enc[i].clear();
