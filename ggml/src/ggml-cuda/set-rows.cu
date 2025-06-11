@@ -17,11 +17,17 @@ static __global__ void k_set_rows_quant(
         const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t s10, const int64_t s11, const int64_t s12,
         const int64_t s1, const int64_t s2, const int64_t s3) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
     const int64_t ne_total = (ne00 * ne01 * ne02 * ne03) / qk;
 
     if (i >= ne_total) {
+        #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -47,6 +53,9 @@ static __global__ void k_set_rows_quant(
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne13);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 // Template dispatch function for quantized set_rows
@@ -95,11 +104,17 @@ static __global__ void k_set_rows(
         const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t s10, const int64_t s11, const int64_t s12,
         const int64_t s1, const int64_t s2, const int64_t s3) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     const int64_t i = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
     const int64_t ne_total = ne00 * ne01 * ne02 * ne03;
 
     if (i >= ne_total) {
+        #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -123,6 +138,9 @@ static __global__ void k_set_rows(
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne13);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<typename src_t, typename dst_t>

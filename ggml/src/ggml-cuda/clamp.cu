@@ -6,6 +6,9 @@ static __device__ __forceinline__ float op_clamp(float x, float min, float max) 
 
 template <class T>
 static __global__ void op_clamp_kernel(const T * x, T * dst, const T min, const T max, const int k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
@@ -13,6 +16,9 @@ static __global__ void op_clamp_kernel(const T * x, T * dst, const T min, const 
     }
 
     dst[i] = (T)op_clamp((float)x[i], (float)min, (float)max);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <class T>

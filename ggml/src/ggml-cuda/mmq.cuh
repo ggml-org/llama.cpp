@@ -3060,10 +3060,16 @@ static __global__ void mul_mat_q(
         const int ncols_x, const int nrows_x, const int ncols_dst, const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const int channel_ratio, const int nchannels_y, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int nsamples_y, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     // Skip unused template specializations for faster compilation:
     if (mmq_x > get_mmq_x_max_device() || mmq_x % mmq_get_granularity_device(mmq_x) != 0) {
         NO_DEVICE_CODE;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -3116,6 +3122,9 @@ static __global__ void mul_mat_q(
             offset_dst = 0;
 
             if (jt*mmq_x >= col_diff) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
                 return;
             }
 
@@ -3145,6 +3154,9 @@ static __global__ void mul_mat_q(
         mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
             (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, 0, ncols_x/qk);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 #endif // (defined(GGML_USE_HIP) && !defined(CDNA3)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
@@ -3232,6 +3244,9 @@ static __global__ void mul_mat_q(
     }
 
     if (kbc >= kbc_stop) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -3260,6 +3275,9 @@ static __global__ void mul_mat_q(
         offset_dst = 0;
 
         if (jt*mmq_x >= col_diff) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
             return;
         }
 
@@ -3290,6 +3308,9 @@ static __global__ void mul_mat_q(
     mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
         (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
          tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 
@@ -3298,6 +3319,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
         const int32_t * ids_dst, const int32_t * expert_bounds, float * __restrict__ dst, const float * __restrict__ tmp_last_tile,
         const int ncols_x, const int nrows_x, const int ncols_dst, const int stride_col_dst,
         const int nchannels_y, const int stride_channel_dst, const int nsamples_y, const int stride_sample_dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     constexpr int     mmq_y           = get_mmq_y_device();
     constexpr int     qk              = ggml_cuda_type_traits<type>::qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
@@ -3324,6 +3348,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const bool wrote_beginning_of_tile = kbc0 % blocks_per_ne00 == 0;
     const bool did_not_write_last      = kbc0/blocks_per_ne00 == kbc0_stop/blocks_per_ne00 && kbc0_stop % blocks_per_ne00 != 0;
     if (did_not_have_any_data || wrote_beginning_of_tile || did_not_write_last) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -3366,6 +3393,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
     }
 
     if (!any_fixup) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -3390,6 +3420,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
             const int j = j0 + threadIdx.y;
 
             if (j > j_max) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
                 return;
             }
 
@@ -3404,6 +3437,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
                 dst[j*stride_col_dst + i] += sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size];
             }
         }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -3428,6 +3464,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
         const int j = j0 + threadIdx.y;
 
         if (j > j_max) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
             return;
         }
 
@@ -3442,6 +3481,9 @@ static __global__ void mul_mat_q_stream_k_fixup(
             dst[ids_dst_shared[j]*stride_col_dst + i] += sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size];
         }
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 struct mmq_args {

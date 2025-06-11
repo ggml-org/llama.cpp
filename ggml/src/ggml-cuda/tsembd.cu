@@ -1,6 +1,9 @@
 #include "tsembd.cuh"
 
 static __global__ void timestep_embedding_f32(const float * timesteps, float * dst, const int nb1, const int dim, const int max_period) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     // blockIDx.y: idx of timesteps->ne[0]
     // blockIDx.x: idx of ((dim + 1) / 2) / BLOCK_SIZE
     int i = blockIdx.y;
@@ -21,6 +24,9 @@ static __global__ void timestep_embedding_f32(const float * timesteps, float * d
     float arg = timestep * freq;
     embed_data[j] = cosf(arg);
     embed_data[j + half] = sinf(arg);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void timestep_embedding_f32_cuda(const float * x, float * dst, const int ne00, const int nb1,

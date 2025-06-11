@@ -4,6 +4,9 @@ static __global__ void upscale_f32(const float * x, float * dst,
         const int nb00, const int nb01, const int nb02, const int nb03,
         const int ne10, const int ne11, const int ne12, const int ne13,
         const float sf0, const float sf1, const float sf2, const float sf3) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     int index = threadIdx.x + blockIdx.x * blockDim.x;
     if (index >= ne10 * ne11 * ne12 * ne13) {
         return;
@@ -20,6 +23,9 @@ static __global__ void upscale_f32(const float * x, float * dst,
     int i03 = i13 / sf3;
 
     dst[index] = *( (const float *)((const char *)x + i03 * nb03 + i02 * nb02 + i01 * nb01 + i00 * nb00) );
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static __global__ void upscale_f32_bilinear(const float * x, float * dst,
@@ -28,6 +34,9 @@ static __global__ void upscale_f32_bilinear(const float * x, float * dst,
         const int ne10_dst, const int ne11_dst, const int ne12_dst, const int ne13_dst,
         const float sf0, const float sf1, const float sf2, const float sf3,
         const float pixel_offset) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t index              = threadIdx.x + blockIdx.x * blockDim.x;
     const int64_t dst_total_elements = ne10_dst * ne11_dst * ne12_dst * ne13_dst;
 

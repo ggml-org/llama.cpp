@@ -505,6 +505,9 @@ template <int ncols1>
 __launch_bounds__(FATTN_KQ_STRIDE/2, 1)
 static __global__ void flash_attn_mask_to_KV_max(
         const half2 * __restrict__ mask, int * __restrict__ KV_max, const int ne30, const int s31, const int s33) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int ne31     = gridDim.x;
     const int tid      = threadIdx.x;
     const int sequence = blockIdx.y;
@@ -544,16 +547,25 @@ static __global__ void flash_attn_mask_to_KV_max(
     }
 
     if (threadIdx.x != 0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
     KV_max[sequence*ne31 + jt] = KV_max_sj;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup(
         float * __restrict__ dst, const float2 * __restrict__ dst_fixup, const int ne01, const int ne02, const int ne03, const int ne11) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
@@ -574,6 +586,9 @@ static __global__ void flash_attn_stream_k_fixup(
     const bool wrote_beginning_of_tile = kbc0 % iter_k == 0;
     const bool did_not_write_last      = kbc0/iter_k == kbc0_stop/iter_k && kbc0_stop % iter_k != 0;
     if (did_not_have_any_data || wrote_beginning_of_tile || did_not_write_last) {
+        #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -582,6 +597,9 @@ static __global__ void flash_attn_stream_k_fixup(
     const int jt = (kbc0 - iter_k*iter_j*(ne02/ncols2)*sequence - iter_k*iter_j*head) / iter_k; // j index of current tile.
 
     if (jt*ncols1 + j >= ne01) {
+        #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -639,6 +657,9 @@ static __global__ void flash_attn_stream_k_fixup(
 
     // Write back final result:
     *dst = dst_val / rowsum;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<int D> // D == head size
@@ -672,6 +693,9 @@ static __global__ void flash_attn_combine_results(
     const int tid = threadIdx.x;
     __builtin_assume(tid < D);
 
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     extern __shared__ float2 meta[];
     for (int i = tid; i < 2*parallel_blocks; i += D) {
         ((float *) meta)[i] = ((const float *)VKQ_meta) [i];
@@ -697,6 +721,9 @@ static __global__ void flash_attn_combine_results(
     }
 
     dst[tid] = VKQ_numerator / VKQ_denominator;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 [[noreturn]]

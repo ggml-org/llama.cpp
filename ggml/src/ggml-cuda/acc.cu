@@ -3,6 +3,9 @@
 static __global__ void acc_f32(const float * x, const float * y, float * dst, const int64_t ne,
         const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
         const int64_t s11, const int64_t s12, const int64_t s13, const int64_t offset) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i = blockDim.x * blockIdx.x + threadIdx.x;
 
     if (i >= ne) {
@@ -25,6 +28,9 @@ static __global__ void acc_f32(const float * x, const float * y, float * dst, co
         val += y[((i13*ne12 + i12) * ne11 + i11) * ne10 + i10];
     }
     dst[i] = val;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void acc_f32_cuda(const float * x, const float * y, float * dst, const int64_t n_elements,

@@ -1,6 +1,9 @@
 #include "pad.cuh"
 
 static __global__ void pad_f32(const float * x, float * dst, const int ne0, const int ne00, const int ne01, const int ne02, const int ne03) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     // blockIdx.z: idx of ne2*ne3, aka ne02*ne03
     // blockIdx.y: idx of ne1
     // blockIDx.x: idx of ne0 / BLOCK_SIZE
@@ -23,6 +26,9 @@ static __global__ void pad_f32(const float * x, float * dst, const int ne0, cons
     } else {
         dst[offset_dst] = 0.0f;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void pad_f32_cuda(const float * x, float * dst,

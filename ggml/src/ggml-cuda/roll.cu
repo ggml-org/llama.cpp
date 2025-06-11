@@ -21,10 +21,16 @@ static __global__ void roll_f32_cuda(const float * __restrict__ src,
                                      const int     s1,
                                      const int     s2,
                                      const int     s3) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t idx        = int64_t(blockDim.x) * blockIdx.x + threadIdx.x;
     const int64_t n_elements = ne00 * ne01 * ne02 * ne03;
 
     if (idx >= n_elements) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -40,6 +46,9 @@ static __global__ void roll_f32_cuda(const float * __restrict__ src,
 
     dst[i3 * (ne00 * ne01 * ne02) + i2 * (ne01 * ne00) + i1 * ne00 + i0] =
         src[d3 * (ne00 * ne01 * ne02) + d2 * (ne01 * ne00) + d1 * ne00 + d0];
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void ggml_cuda_op_roll(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

@@ -4,6 +4,9 @@
 template<int HEAD_SIZE>
 static __global__ void gated_linear_attn_f32(const int B, const int T, const int C, const int H, const float scale,
      const float * k, const float * v, const float * r, const float * td, const float * s, float * dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int tid = threadIdx.x;
     const int bid = blockIdx.x;
 
@@ -59,6 +62,9 @@ static __global__ void gated_linear_attn_f32(const int B, const int T, const int
     for (int i = 0; i < head_size; i++) {
         dst[T * C + batch_i * state_size + head_i * head_size * head_size + i * head_size + tid] = state[i];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void ggml_cuda_op_gated_linear_attn(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

@@ -84,10 +84,16 @@ __global__ void conv2d_dw_kernel(const T * __restrict__ input, const T * __restr
                                  const int kernel_w, const int kernel_h, const int stride_x, const int stride_y,
                                  const int padding_x, const int padding_y, const int dilation_x, const int dilation_y,
                                  const int channels, const int batches) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int global_idx     = blockIdx.x * blockDim.x + threadIdx.x;
     const int total_elements = batches * channels * out_h * out_w;
 
     if (global_idx >= total_elements) {
+        #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -114,6 +120,9 @@ __global__ void conv2d_dw_kernel(const T * __restrict__ input, const T * __restr
     }
 
     output[Layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = accumulator;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void ggml_cuda_op_conv2d_dw(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

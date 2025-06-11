@@ -6,6 +6,9 @@ static  __global__ void pool2d_nchw_kernel(
         const int kh, const int kw, const int sh, const int sw,
         const int ph, const int pw, const int parallel_elements,
         const Ti* src, To* dst, const enum ggml_op_pool op) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if (idx >= parallel_elements) {
         return;
@@ -48,6 +51,9 @@ static  __global__ void pool2d_nchw_kernel(
         }
     }
     o_ptr[cur_oh * ow + cur_ow] = res;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void pool2d_nchw_kernel_f32_f32_cuda(

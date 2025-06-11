@@ -9,6 +9,9 @@ __global__ void __launch_bounds__(splitD, 2)
                  const int src2_nb1, const int src2_nb2, const int src3_nb1,
                  const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
                  const int64_t s_off, const int64_t d_inner, const int64_t L) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
     const int bidx = blockIdx.x;  // split along B (sequences)
@@ -81,6 +84,9 @@ __global__ void __launch_bounds__(splitD, 2)
         __syncthreads();
         y_block[i * stride_y + tid] = sumf;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 // assumes as many threads as d_state
@@ -94,6 +100,9 @@ __global__ void __launch_bounds__(d_state, 1)
         const int src2_nb1, const int src2_nb2, const int src3_nb1,
         const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
         const int64_t s_off, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     const int head_idx = (blockIdx.x * splitH) / d_head;
     const int head_off = ((blockIdx.x * splitH) % d_head) * sizeof(float);

@@ -5,6 +5,9 @@ static __global__ void quantize_q8_1(
         const float * __restrict__ x, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int ne1, const int ne2) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i0 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i0 >= ne0) {
@@ -45,6 +48,9 @@ static __global__ void quantize_q8_1(
 
     reinterpret_cast<half&>(y[ib].ds.x) = d;
     reinterpret_cast<half&>(y[ib].ds.y) = sum;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <mmq_q8_1_ds_layout ds_layout>
@@ -52,6 +58,9 @@ static __global__ void quantize_mmq_q8_1(
         const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int ne1, const int ne2) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     constexpr int vals_per_scale = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 64 : 32;
     constexpr int vals_per_sum   = ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6 ? 16 : 32;
@@ -59,6 +68,9 @@ static __global__ void quantize_mmq_q8_1(
     const int64_t i0 = ((int64_t)blockDim.x*blockIdx.y + threadIdx.x)*4;
 
     if (i0 >= ne0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -116,12 +128,18 @@ static __global__ void quantize_mmq_q8_1(
 
     if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D2S6) {
         if (iqs % 16 != 0 || iqs >= 96) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
             return;
         }
 
         y[ib].d2s6[2 + iqs/16] = sum;
 
         if (iqs % 64 != 0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
             return;
         }
 
@@ -129,10 +147,16 @@ static __global__ void quantize_mmq_q8_1(
 
         y[ib].d2s6[iqs/64] = d;
 
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
     if (iqs % 32 != 0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -143,6 +167,9 @@ static __global__ void quantize_mmq_q8_1(
     } else {
         y[ib].d4[iqs/32]  = d;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void quantize_row_q8_1_cuda(

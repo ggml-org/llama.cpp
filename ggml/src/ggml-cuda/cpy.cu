@@ -12,9 +12,15 @@ static __global__ void cpy_flt(const char * cx, char * cdst_direct, const int ne
                                const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
                                const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= ne) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -35,6 +41,9 @@ static __global__ void cpy_flt(const char * cx, char * cdst_direct, const int ne
     const int64_t dst_offset = i10*nb10 + i11*nb11 + i12*nb12 + i13 * nb13;
 
     cpy_1(cx + x_offset, cdst + dst_offset);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static __device__ void cpy_blck_q8_0_f32(const char * cxi, char * cdsti) {
@@ -67,9 +76,15 @@ static __global__ void cpy_f32_q(const char * cx, char * cdst_direct, const int 
                                  const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                  const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
                                  const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i = (blockDim.x*blockIdx.x + threadIdx.x)*qk;
 
     if (i >= ne) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -88,6 +103,9 @@ static __global__ void cpy_f32_q(const char * cx, char * cdst_direct, const int 
     const int dst_offset = (i10/qk)*nb10 + i11*nb11 + i12*nb12 + i13*nb13;
 
     cpy_blck(cx + x_offset, cdst + dst_offset);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <cpy_kernel_t cpy_blck, int qk>
@@ -95,6 +113,9 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst_direct, const int 
                                  const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
                                  const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
                                  const int nb12, const int nb13, char ** cdst_indirect, int graph_cpynode_index) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i = (blockDim.x*blockIdx.x + threadIdx.x)*qk;
 
     if (i >= ne) {

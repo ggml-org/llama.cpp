@@ -7,11 +7,17 @@ __global__ void conv2d_transpose_kernel(const float * __restrict__ input, const 
                                         float * __restrict__ output, const int in_w, const int in_h, const int out_w,
                                         const int out_h, const int kernel_w, const int kernel_h, const int stride,
                                         const int c_in, const int c_out, const int batches) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     const int total_elements = out_w * out_h * c_out * batches;
 
     if (global_idx >= total_elements) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -49,6 +55,9 @@ __global__ void conv2d_transpose_kernel(const float * __restrict__ input, const 
     }
 
     output[(out_w * out_h * c_out) * n_idx + (out_w * out_h) * c_idx + (out_w) *out_y_idx + out_x_idx] = accumulator;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 //input is (W, H, C_in, N), Kernel is (W, H, C_out, C_in)

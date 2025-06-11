@@ -1,6 +1,9 @@
 #include "diagmask.cuh"
 
 static __global__ void diag_mask_inf_f32(const float * x, float * dst, const int ncols, const int rows_per_channel, const int n_past) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int col = blockDim.y*blockIdx.y + threadIdx.y;
     const int row = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -12,6 +15,9 @@ static __global__ void diag_mask_inf_f32(const float * x, float * dst, const int
     //dst[i] = col > (n_past + row % rows_per_channel) ? -INFINITY : x[i];
     //dst[i] = x[i] - (col > n_past + row % rows_per_channel) * INT_MAX; // equivalent within rounding error but slightly faster on GPU
     dst[i] = x[i] - (col > n_past + row % rows_per_channel) * FLT_MAX;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void diag_mask_inf_f32_cuda(const float * x, float * dst, const int ncols_x, const int nrows_x, const int rows_per_channel, const int n_past, cudaStream_t stream) {

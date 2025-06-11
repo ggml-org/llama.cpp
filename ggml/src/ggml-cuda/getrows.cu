@@ -9,6 +9,9 @@ static __global__ void k_get_rows(
         /*const size_t s0,*/ const size_t s1, const size_t s2, const size_t s3,
         /*const size_t nb00,*/ const size_t nb01, const size_t nb02, const size_t nb03,
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
     const int i00 = (blockIdx.y * blockDim.x + threadIdx.x)*2;
@@ -17,6 +20,9 @@ static __global__ void k_get_rows(
     const int i12 =  blockIdx.z % ne12;
 
     if (i00 >= ne00) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -36,6 +42,9 @@ static __global__ void k_get_rows(
 
     dst_row[iybs + iqs + 0]        = float(v.x);
     dst_row[iybs + iqs + y_offset] = float(v.y);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<typename src0_t, typename dst_t>
@@ -46,6 +55,9 @@ static __global__ void k_get_rows_float(
         /*const size_t s0,*/ const size_t s1, const size_t s2, const size_t s3,
         /*const size_t nb00,*/ const size_t nb01, const size_t nb02, const size_t nb03,
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
     const int i00 = blockIdx.y * blockDim.x + threadIdx.x;
@@ -54,6 +66,9 @@ static __global__ void k_get_rows_float(
     const int i12 = blockIdx.z % ne12;
 
     if (i00 >= ne00) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -63,14 +78,23 @@ static __global__ void k_get_rows_float(
     const src0_t * src0_row = (const src0_t *)((const char *) src0 + i01*nb01 + i11*nb02 + i12*nb03);
 
     dst_row[i00] = float(src0_row[i00]);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<typename grad_t, typename dst_t>
 static __global__ void k_get_rows_back_float(
         const grad_t * __restrict__ grad, const int32_t * __restrict__ rows, dst_t * __restrict__ dst, const int64_t ncols, const int64_t nrows_grad) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int col = blockIdx.x*blockDim.x + threadIdx.x;
 
     if (col >= ncols) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -86,6 +110,9 @@ static __global__ void k_get_rows_back_float(
     }
 
     dst[dst_row*ncols + col] = sum;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<int qk, int qr, dequantize_kernel_t dq, typename dst_t>

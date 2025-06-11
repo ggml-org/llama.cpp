@@ -6,6 +6,9 @@
 #include "sum.cuh"
 
 static __global__ void argmax_f32(const float * __restrict__ x, int32_t * __restrict__ dst, const int64_t ncols) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t row = blockIdx.x;
 
     float maxval = -FLT_MAX;
@@ -64,6 +67,9 @@ static __global__ void argmax_f32(const float * __restrict__ x, int32_t * __rest
     if (warp_id == 0 && lane_id == 0) {
         dst[row] = argmax;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void ggml_cuda_argmax(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

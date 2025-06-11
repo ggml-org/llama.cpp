@@ -9,6 +9,9 @@ static inline __device__ void ggml_cuda_swap(T & a, T & b) {
 
 template<ggml_sort_order order>
 static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int ncols, int ncols_pad) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     // bitonic sort
     int col = threadIdx.x;
     int row = blockIdx.y;
@@ -55,6 +58,9 @@ static __global__ void k_argsort_f32_i32(const float * x, int * dst, const int n
     if (col < ncols) {
         dst[row * ncols + col] = dst_row[col];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static int next_power_of_2(int x) {

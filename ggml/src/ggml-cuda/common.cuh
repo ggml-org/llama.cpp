@@ -47,6 +47,7 @@
 #define GGML_CUDA_CC_TURING          750
 #define GGML_CUDA_CC_AMPERE          800
 #define GGML_CUDA_CC_ADA_LOVELACE    890
+#define GGML_CUDA_CC_HOPPER          900
 #define GGML_CUDA_CC_OFFSET_AMD      0x1000000
 #define GGML_CUDA_CC_OFFSET_MTHREADS 0x0100000
 #define GGML_CUDA_CC_IS_NVIDIA(cc)   (cc < GGML_CUDA_CC_OFFSET_MTHREADS)
@@ -414,6 +415,9 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 // Row reduction kernel template - compute sum (norm=false) or mean (norm=true)
 template<bool norm>
 static __global__ void reduce_rows_f32(const float * x, float * dst, const int ncols) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int row = blockIdx.x;
     const int col = threadIdx.x;
 
@@ -425,10 +429,16 @@ static __global__ void reduce_rows_f32(const float * x, float * dst, const int n
     sum = warp_reduce_sum(sum);
 
     if (col != 0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
     dst[row] = norm ? sum / ncols : sum;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<int width = WARP_SIZE>
@@ -832,6 +842,9 @@ struct ggml_cuda_graph {
     // Index to allow each cpy kernel to be aware of it's position within the graph
     // relative to other cpy nodes.
     int graph_cpynode_index = -1;
+    std::vector<cudaGraphNode_t> graph_nodes;
+    std::vector<cudaGraphNode_t> graph_dependencies;
+    bool allow_pdl = true; // whether Programmatic Dependent Launch can be used within CUDA graph 
 #endif
 };
 

@@ -1,12 +1,18 @@
 #include "arange.cuh"
 
 static __global__ void arange_f32(float * dst, const int ne0, const float start, const float step) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     // blockIDx.x: idx of ne0 / BLOCK_SIZE
     int nidx = threadIdx.x + blockIdx.x * blockDim.x;
     if (nidx >= ne0) {
         return;
     }
     dst[nidx] = start + step * nidx;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void arange_f32_cuda(float * dst, const int ne0, const float start, const float step, cudaStream_t stream) {

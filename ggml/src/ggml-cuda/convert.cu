@@ -9,9 +9,15 @@ template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void dequantize_block(const void * __restrict__ vx, dst_t * __restrict__ y,
         const int64_t ne00, const int64_t ne01, const int64_t ne02,
         const int64_t s01, const int64_t s02, const int64_t s03) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i00 = 2 * (int64_t(blockDim.x)*blockIdx.x + threadIdx.x);
 
     if (i00 >= ne00) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -33,10 +39,16 @@ static __global__ void dequantize_block(const void * __restrict__ vx, dst_t * __
     const int64_t iy0 = ((i03*ne02 + i02)*ne01 + i01)*ne00 + iybs + iqs;
     y[iy0 + 0]        = float(v.x);
     y[iy0 + y_offset] = float(v.y);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <bool need_check>
 static __global__ void dequantize_block_q8_0_f16(const void * __restrict__ vx, half * __restrict__ y, const int64_t k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
     constexpr int nint = CUDA_Q8_0_NE_ALIGN/sizeof(int) + WARP_SIZE;
 
@@ -592,6 +604,9 @@ template <typename src_t, typename dst_t>
 static __global__ void convert_unary(
         const void * __restrict__ vx, dst_t * __restrict__ y, const int64_t ne00, const int64_t ne01, const int64_t ne02,
         const int64_t s01, const int64_t s02, const int64_t s03) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i00 = (int64_t)blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i00 >= ne00) {

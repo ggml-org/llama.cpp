@@ -42,9 +42,16 @@ static __global__ void rope_norm(
         const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
         const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
         const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
+
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -60,6 +67,9 @@ static __global__ void rope_norm(
         dst[idst + 0] = x[ix + 0];
         dst[idst + 1] = x[ix + 1];
 
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -77,6 +87,9 @@ static __global__ void rope_norm(
 
     dst[idst + 0] = x0*cos_theta - x1*sin_theta;
     dst[idst + 1] = x0*sin_theta + x1*cos_theta;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<bool forward, bool has_ff, typename T>
@@ -84,9 +97,15 @@ static __global__ void rope_neox(
         const T * x, T * dst, const int ne0, const int ne1, const int s1, const int s2, const int n_dims,
         const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
         const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -102,6 +121,9 @@ static __global__ void rope_neox(
         dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
         dst[idst + i0/2 + 1] = x[ix + i0/2 + 1];
 
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -119,6 +141,9 @@ static __global__ void rope_neox(
 
     dst[idst + 0]        = x0*cos_theta - x1*sin_theta;
     dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<bool forward, bool has_ff, typename T>
@@ -126,6 +151,9 @@ static __global__ void rope_multi(
         const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s1, const int s2,
         const int n_dims, const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
         const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors, const mrope_sections sections) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
@@ -184,6 +212,9 @@ static __global__ void rope_vision(
         const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s1, const int s2, const int n_dims,
         const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor, const rope_corr_dims corr_dims,
         const float theta_scale, const float * freq_factors, const mrope_sections sections) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {

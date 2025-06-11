@@ -5,6 +5,9 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
                                     const int src0_nb0, const int src0_nb1, const int src0_nb2, const int src1_nb1,
                                     float * __restrict__ dst, const int dst_nb0, const int dst_nb1, const int dst_nb2,
                                     const int64_t n_t) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     GGML_UNUSED(src0_nb0);
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;
@@ -43,6 +46,9 @@ static __global__ void ssm_conv_f32(const float * __restrict__ src0, const float
         }
         y_block[i * stride_y + tid] = sumf;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <size_t split_d_inner, size_t d_conv, int64_t split_n_t>
@@ -50,6 +56,9 @@ static __global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, 
                                                const int src0_nb0, const int src0_nb1, const int src0_nb2,
                                                const int src1_nb1, float * __restrict__ dst, const int dst_nb0,
                                                const int dst_nb1, const int dst_nb2, const int64_t n_t) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int tid  = threadIdx.x;
     const int bidx = blockIdx.x;
     const int bidy = blockIdx.y;
@@ -93,6 +102,9 @@ static __global__ void ssm_conv_long_token_f32(const float * __restrict__ src0, 
             y_block[i * stride_y + tid] = sumf;
         }
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void ssm_conv_f32_cuda(const float * src0, const float * src1, const int src0_nb0, const int src0_nb1,

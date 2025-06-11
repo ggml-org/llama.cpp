@@ -3,6 +3,9 @@
 
 template <int block_size>
 static __global__ void rwkv_wkv_f32(const int B, const int T, const int C, const int H, const float * k, const float * v, const float * r, const float * tf, const float * td, const float * s, float * dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int tid = threadIdx.x;
     const int bid = blockIdx.x;
 
@@ -63,10 +66,16 @@ static __global__ void rwkv_wkv_f32(const int B, const int T, const int C, const
     for (int i = 0; i < head_size; i++) {
         dst[T * C + batch_i * state_size + head_i * head_size * head_size + i * head_size + tid] = state[i];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <int block_size>
 static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, const int H, const float * r, const float * w, const float * k, const float * v, const float * a, const float * b, const float * s, float * dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int tid = threadIdx.x;
     const int bid = blockIdx.x;
 
@@ -139,6 +148,9 @@ static __global__ void rwkv_wkv7_f32(const int B, const int T, const int C, cons
     for (int i = 0; i < head_size; i++) {
         dst[T * C + batch_i * state_size + head_i * head_size * head_size + tid * head_size + i] = state[i];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void ggml_cuda_op_rwkv_wkv6(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

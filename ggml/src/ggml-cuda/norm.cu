@@ -5,6 +5,9 @@ template <int block_size>
 static __global__ void norm_f32(
         const float * x, float * dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -46,10 +49,16 @@ static __global__ void norm_f32(
     for (int col = tid; col < ncols; col += block_size) {
         dst[col] = (x[col] - mean) * inv_std;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <int block_size>
 static __global__ void group_norm_f32(const float * x, float * dst, const int group_size, const int ne_elements, const float eps) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     // blockIdx.x: num_groups idx
     // threadIdx.x: block_size idx
     const int start =     blockIdx.x*group_size + threadIdx.x;
@@ -110,6 +119,9 @@ static __global__ void rms_norm_f32(
         const int64_t stride_sample, const float eps, const float * mul = nullptr, const int64_t mul_stride_row = 0,
         const int64_t mul_stride_channel = 0, const int64_t mul_stride_sample = 0, const int mul_ncols = 0,
         const int mul_nrows = 0, const int mul_nchannels = 0, const int mul_nsamples = 0) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 
@@ -129,6 +141,10 @@ static __global__ void rms_norm_f32(
     }
 
     float tmp = 0.0f; // partial sum for thread in warp
+
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     for (int col = tid; col < ncols; col += block_size) {
         const float xi = x[col];
@@ -161,11 +177,17 @@ static __global__ void rms_norm_f32(
             dst[col] = scale * x[col];
         }
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <int block_size>
 static __global__ void rms_norm_back_f32(
         const float * grad, const float * xf, float * dst, const int ncols, const float eps) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int row = blockIdx.x*blockDim.y + threadIdx.y;
     const int tid = threadIdx.x;
 
@@ -253,6 +275,9 @@ template <int block_size>
 static __global__ void l2_norm_f32(
         const float * x, float * dst, const int ncols, const int64_t stride_row, const int64_t stride_channel,
         const int64_t stride_sample, const float eps) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int nrows     = gridDim.x;
     const int nchannels = gridDim.y;
 

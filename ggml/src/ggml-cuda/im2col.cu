@@ -10,6 +10,9 @@ static  __global__ void im2col_kernel(
         int64_t IC, int64_t IW, int64_t IH, int64_t OH, int64_t OW, int64_t KW, int64_t KH,
         int64_t IC_IH_IW, int64_t IH_IW, int64_t N_OH, int64_t KH_KW, int64_t IC_KH_KW,
         int s0, int s1, int p0, int p1, int d0, int d1) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i = threadIdx.x + blockIdx.x * blockDim.x;
     if (i >= IC_KH_KW) {
         return;
@@ -38,6 +41,9 @@ static  __global__ void im2col_kernel(
             dst[offset_dst] = x[offset_src + iih * IW + iiw];
         }
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 // im2col: [N, IC, IH, IW] => [N, OH, OW, IC*KH*KW]

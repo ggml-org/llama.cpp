@@ -2,6 +2,9 @@
 
 // contiguous kernels
 static __global__ void concat_f32_dim0(const float * x, const float * y, float * dst, const int ne0, const int ne00) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     int nidx = threadIdx.x + blockIdx.x * blockDim.x;
     if (nidx >= ne0) {
         return;
@@ -25,9 +28,15 @@ static __global__ void concat_f32_dim0(const float * x, const float * y, float *
             blockIdx.z * (ne0 - ne00) * gridDim.y;
         dst[offset_dst] = y[offset_src];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static __global__ void concat_f32_dim1(const float * x, const float * y, float * dst, const int ne0, const int ne01) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     int nidx = threadIdx.x + blockIdx.x * blockDim.x;
     if (nidx >= ne0) {
         return;
@@ -51,9 +60,15 @@ static __global__ void concat_f32_dim1(const float * x, const float * y, float *
             blockIdx.z * ne0 * (gridDim.y - ne01);
         dst[offset_dst] = y[offset_src];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static __global__ void concat_f32_dim2(const float * x, const float * y, float * dst, const int ne0, const int ne02) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     int nidx = threadIdx.x + blockIdx.x * blockDim.x;
     if (nidx >= ne0) {
         return;
@@ -77,6 +92,9 @@ static __global__ void concat_f32_dim2(const float * x, const float * y, float *
             (blockIdx.z - ne02) * ne0 *  gridDim.y;
         dst[offset_dst] = y[offset_src];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void concat_f32_cuda(const float * x, const float * y, float * dst, int ne00, int ne01, int ne02, int ne0, int ne1, int ne2, int dim, cudaStream_t stream) {
@@ -124,6 +142,9 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
           uint64_t   nb1,
           uint64_t   nb2,
           uint64_t   nb3){
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     static_assert(dim >= 0 && dim <= 3, "dim must be in [0, 3]");
 
     const int64_t i3 = blockIdx.z;
@@ -151,6 +172,9 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
 
         *y = *x;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 

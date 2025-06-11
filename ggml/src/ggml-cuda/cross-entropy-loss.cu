@@ -8,6 +8,9 @@
 template <bool use_shared>
 static __global__ void cross_entropy_loss_f32(
         const float * __restrict__ logits, const float * __restrict__ labels, float * __restrict__ dst, const int nclasses, const int k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     extern __shared__ float tmp[];
 
     logits += int64_t(blockIdx.x)*nclasses;
@@ -47,12 +50,18 @@ static __global__ void cross_entropy_loss_f32(
     }
 
     dst[blockIdx.x] = loss;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <bool use_shared>
 static __global__ void cross_entropy_loss_back_f32(
         const float * __restrict__ grad, const float * __restrict__ logits, const float * __restrict__ labels,
         float * __restrict__ dst, const int nclasses) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     extern __shared__ float tmp[];
 
     logits += int64_t(blockIdx.x)*nclasses;
@@ -89,6 +98,9 @@ static __global__ void cross_entropy_loss_back_f32(
         const float val = use_shared ? tmp[i] : dst[i];
         dst[i] = (val*sm_scale - labels[i])*d_by_nrows;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void ggml_cuda_cross_entropy_loss(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

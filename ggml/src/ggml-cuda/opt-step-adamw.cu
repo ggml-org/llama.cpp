@@ -6,10 +6,16 @@
 static __global__ void opt_step_adamw_f32(
     float * __restrict__ x, const float * __restrict__ g, float * __restrict__ g_m, float * __restrict__ g_v,
     const float * __restrict__ pars, const int64_t k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     const int64_t i = (int64_t) blockIdx.x*blockDim.x + threadIdx.x;
 
     if (i >= k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
@@ -32,6 +38,9 @@ static __global__ void opt_step_adamw_f32(
     const float vh = sqrtf(gvi*beta2h) + eps;
 
     x[i] = x[i]*(1.0f - alpha*wd) - alpha*mh/vh;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void opt_step_adamw_f32_cuda(

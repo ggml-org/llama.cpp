@@ -45,7 +45,11 @@ struct soft_max_params {
 #endif // __clang__
 template <bool use_shared, int ncols_template, int block_size_template, typename T>
 static __global__ void soft_max_f32(
+
         const float * x, const T * mask, float * dst, const soft_max_params p) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int ncols = ncols_template == 0 ? p.ncols : ncols_template;
 
     const int tid  = threadIdx.x;
@@ -155,6 +159,9 @@ static __global__ void soft_max_f32(
 
         dst[col] = vals[col] * inv_sum;
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 #ifdef __clang__
 #pragma clang diagnostic pop
@@ -162,6 +169,9 @@ static __global__ void soft_max_f32(
 
 static __global__ void soft_max_back_f32(
         const float * grad, const float * dstf, float * dst, const int ncols, const float scale) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int tid  = threadIdx.x;
     const int rowx = blockIdx.x;
 
@@ -180,6 +190,9 @@ static __global__ void soft_max_back_f32(
     for (int col = tid; col < ncols; col += WARP_SIZE) {
         dst[col] = scale * (grad[col] - dgf_dot) * dstf[col];
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<int... Ns, typename T>

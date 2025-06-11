@@ -29,6 +29,9 @@ static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst
         /*int s0, */ int s1,  int s2,  int s3,
         /*int s00,*/ int s01, int s02, int s03,
         /*int s10,*/ int s11, int s12, int s13) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i0s = blockDim.x*blockIdx.x + threadIdx.x;
     const int i1 = (blockDim.y*blockIdx.y + threadIdx.y);
     const int i2 = (blockDim.z*blockIdx.z + threadIdx.z) / ne3;
@@ -54,6 +57,9 @@ static __global__ void k_bin_bcast(const src0_t * src0, const src1_t * src1, dst
         const int i10 = i0 % ne10;
         dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0] : 0.0f, (float)src1_row[i10]);
     }
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t>
@@ -63,6 +69,9 @@ static __global__ void k_bin_bcast_unravel(const src0_t * src0, const src1_t * s
         /*int s0, */ int s1,  int s2,  int s3,
         /*int s00,*/ int s01, int s02, int s03,
         /*int s10,*/ int s11, int s12, int s13) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -89,6 +98,9 @@ static __global__ void k_bin_bcast_unravel(const src0_t * src0, const src1_t * s
 
     const int i10 = i0 % ne10;
     dst_row[i0] = (dst_t)bin_op(src0 ? (float)src0_row[i0] : 0.0f, (float)src1_row[i10]);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <typename T>
@@ -96,6 +108,9 @@ static __global__ void k_repeat_back(
     const T * __restrict__ src, T * __restrict__ dst, const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
     const size_t s00, const size_t s01, const size_t s02, const size_t s03,
     const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
 
     const int64_t tid0  = int64_t(blockIdx.x)*blockDim.x + threadIdx.x;
     const int64_t tid1  = int64_t(blockIdx.y)*blockDim.y + threadIdx.y;
@@ -118,6 +133,9 @@ static __global__ void k_repeat_back(
         }
     }
     dst[tid3*ne2*ne1*ne0 + tid2*ne1*ne0 + tid1*ne0 + tid0] = sum;
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template<float (*bin_op)(const float, const float)>

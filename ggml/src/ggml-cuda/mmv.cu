@@ -8,6 +8,9 @@ static __global__ void mul_mat_vec(
         const int ncols2, const int nchannels_y, const int stride_row, const int stride_col_y2, const int stride_col_dst,
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int row         = blockIdx.x;
     const int channel_dst = blockIdx.y;
     const int channel_x   = ids ? ids[channel_dst]          : channel_dst / channel_ratio;
@@ -118,11 +121,19 @@ static __global__ void mul_mat_vec(
         }
     }
 
+
     if (tid >= ncols_dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
     dst[tid*stride_col_dst + row] = sumf[tid];
+
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <typename T, typename type_acc, int ncols_dst>

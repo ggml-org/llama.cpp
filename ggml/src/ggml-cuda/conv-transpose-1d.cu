@@ -6,6 +6,9 @@ static  __global__ void conv_transpose_1d_kernel(
         const int src1_ne0, const int src1_ne1, const int src1_ne2, const int src1_ne3,
         const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
         const float * src0, const float * src1,  float * dst) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     int global_index = threadIdx.x + blockIdx.x * blockDim.x;
     if (global_index >= output_size) {
         return;
@@ -38,6 +41,9 @@ static  __global__ void conv_transpose_1d_kernel(
     GGML_UNUSED(src1_ne3); GGML_UNUSED(dst_ne3);
     GGML_UNUSED(src1_ne1); GGML_UNUSED(dst_ne1);
     GGML_UNUSED(src1_ne2); GGML_UNUSED(dst_ne2);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 static void conv_transpose_1d_f32_f32_cuda(

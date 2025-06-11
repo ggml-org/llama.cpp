@@ -89,13 +89,22 @@ static __device__ __forceinline__ float op_elu(float x) {
 
 template <float (*op)(float), typename T>
 static __global__ void unary_op_kernel(const T * x, T * dst, const int k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
     dst[i] = (T)op((float)x[i]);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <float (*op)(float), typename T>
@@ -207,6 +216,9 @@ void ggml_cuda_op_elu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 template <float (*op)(float), typename T>
 static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
@@ -309,13 +321,22 @@ static __device__ __forceinline__ float op_silu_back(float grad, float x) {
 
 template <class T>
 static __global__ void silu_back_kernel(const T * grad, const T * xf, T * dst, const int k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
     dst[i] = (T)op_silu_back((float)grad[i], (float)xf[i]);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <class T>
@@ -355,13 +376,22 @@ static __device__ __forceinline__ float op_leaky_relu(float x, const float negat
 
 template <class T>
 static __global__ void leaky_relu_kernel(const T * x, T * dst, const int k, const float negative_slope) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int i  = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
         return;
     }
 
     dst[i] = (T)op_leaky_relu((float)x[i], negative_slope);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 template <class T>

@@ -5,6 +5,9 @@
 
 template <typename T>
 static __global__ void count_equal(const T * __restrict__ x, const T * __restrict__ y, int64_t * __restrict__ dst, const int64_t dk, const int64_t k) {
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaGridDependencySynchronize();
+#endif
     const int64_t i0 = (int64_t) blockIdx.x*dk;
     const int64_t i1 = min(i0 + dk, k);
 
@@ -23,6 +26,9 @@ static __global__ void count_equal(const T * __restrict__ x, const T * __restric
     }
 
     atomicAdd((int *) dst, nequal);
+#if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_HOPPER
+    cudaTriggerProgrammaticLaunchCompletion();
+#endif
 }
 
 void ggml_cuda_count_equal(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
