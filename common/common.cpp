@@ -466,7 +466,7 @@ size_t string_find_partial_stop(const std::string_view & str, const std::string_
 
 std::string regex_escape(const std::string & s) {
     static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
-    return std::regex_replace(s, special_chars, "\\$0");
+    return std::regex_replace(s, special_chars, "\\$&");
 }
 
 std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
