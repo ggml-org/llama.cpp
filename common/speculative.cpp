@@ -5,6 +5,7 @@
 #include "sampling.h"
 
 #include <cstring>
+#include <cmath>
 #include <algorithm>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
@@ -153,6 +154,13 @@ llama_tokens common_speculative_gen_draft(
 
     const int i_start = std::max<int>(0, (int) prompt_tgt.size() - n_ctx);
 
+    // Extract parameters packed in p_min (format: 0.pmin_pdecay_nmin)
+    const float p_min   = floorf(params.p_min * 100) / 100;  // First 2 decimal places
+    const float p_decay = floorf(params.p_min * 10000) / 100 - p_min;  // Next 2 decimal places
+    const int   n_min   = roundf((params.p_min * 100000) - (p_min * 100000) - (p_decay * 1000));  // Last digit
+
+    printf("p_min=%f, p_decay=%f, n_min=%d\n", p_min, p_decay, n_min);
+
     // reuse as much as possible from the old draft context
     // ideally, the draft context should be as big as the target context and we will always reuse the entire prompt
     for (int i = 0; i < (int) prompt.size(); ++i) {
@@ -239,6 +247,8 @@ llama_tokens common_speculative_gen_draft(
 
     common_sampler_reset(smpl);
 
+    float sequence_p = 1.0;
+
     // sample n_draft tokens from the draft model
     for (int i = 0; i < params.n_draft; ++i) {
         common_batch_clear(batch);
@@ -263,8 +273,14 @@ llama_tokens common_speculative_gen_draft(
             break;
         }
 
+        sequence_p *= cur_p->data[0].p;
+
+        const float threshold_p = p_min * pow(std::max((int) result.size() - std::max(n_min, 1), 1), -p_decay);
+
+        printf("sequence_p=%f, threshold_p=%f\n", sequence_p, threshold_p);
+
         // only collect very high-confidence draft tokens
-        if (cur_p->data[0].p < params.p_min) {
+        if (sequence_p < threshold_p) {
             break;
         }
 
@@ -275,6 +291,8 @@ llama_tokens common_speculative_gen_draft(
 
         prompt.push_back(id);
     }
+
+    printf("result.size()=%d, sequence_p=%f\n", result.size(), sequence_p);
 
     return result;
 }
