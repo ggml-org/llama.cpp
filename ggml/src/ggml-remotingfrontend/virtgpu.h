@@ -11,8 +11,8 @@
 
 #include "virtgpu-forward.h"
 #include "virtgpu-utils.h"
-#include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/api_remoting.h"
-#include "/Users/kevinpouget/remoting/llama_cpp/src/ggml/src/ggml-remotingbackend/shared/venus_cs.h"
+#include "../ggml-remotingbackend/shared/api_remoting.h"
+#include "../ggml-remotingbackend/shared/venus_cs.h"
 
 #include "virtgpu-shm.h"
 
