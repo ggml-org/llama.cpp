@@ -158,6 +158,8 @@ private:
     // SWA
     const uint32_t n_swa = 0;
 
+    int debug = 0;
+
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     std::vector<ggml_context_ptr>        ctxs;

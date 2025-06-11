@@ -127,6 +127,9 @@ llama_kv_cache_unified::llama_kv_cache_unified(
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
     }
+
+    const char * LLAMA_KV_CACHE_DEBUG = getenv("LLAMA_KV_CACHE_DEBUG");
+    debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
 }
 
 void llama_kv_cache_unified::clear(bool data) {
@@ -517,14 +520,12 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
         return -1;
     }
 
-//#define FIND_SLOT_DEBUG 1
-#if FIND_SLOT_DEBUG
-    LLAMA_LOG_WARN("begin: n = %5d, used = %5d, head = %5d, n_swa = %5d\n", cells.used_max_p1(), cells.get_used(), head, n_swa);
+    if (debug > 0) {
+        LLAMA_LOG_CONT("\n");
+        LLAMA_LOG_DEBUG("%s: n = %5d, used = %5d, head = %5d, size = %5d, n_swa = %5d\n", __func__, cells.used_max_p1(), cells.get_used(), head, get_size(), n_swa);
 
-    // for debugging
-    {
-        std::string ss;
-        if (n_swa > 0) {
+        if ((debug == 2 && n_swa > 0) || debug > 2) {
+            std::string ss;
             for (uint32_t i = 0; i < cells.size(); ++i) {
                 if (cells.is_empty(i)) {
                     ss += '.';
@@ -532,21 +533,45 @@ int32_t llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) const {
                     ss += std::to_string(cells.seq_get(i));
                 }
                 if (i%256 == 255) {
+                    ss += " *";
                     ss += '\n';
                 }
             }
-        }
-        LLAMA_LOG_WARN("\n%s\n", ss.c_str());
-    }
-
-    for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
-        if (cells.seq_pos_min(s) < 0) {
-            continue;
+            LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
         }
 
-        LLAMA_LOG_WARN("kv_cells: n_swa = %4d, min[%d] = %5d, max[%d] = %5d\n", n_swa, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
+        if ((debug == 2 && n_swa > 0) || debug > 2) {
+            std::string ss;
+            for (uint32_t i = 0; i < cells.size(); ++i) {
+                std::string cur;
+                if (cells.is_empty(i)) {
+                    cur = '.';
+                } else {
+                    cur = std::to_string(cells.pos_get(i));
+                }
+                const int n = cur.size();
+                for (int j = 0; j < 5 - n; ++j) {
+                    cur += ' ';
+                }
+                ss += cur;
+                if (i%256 == 255) {
+                    ss += " *";
+                }
+                if (i%64 == 63) {
+                    ss += '\n';
+                }
+            }
+            LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
+        }
+
+        for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            if (cells.seq_pos_min(s) < 0) {
+                continue;
+            }
+
+            LLAMA_LOG_DEBUG("%s: min[%d] = %5d, max[%d] = %5d\n", __func__, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
+        }
     }
-#endif
 
     uint32_t n_tested = 0;
 
