@@ -18,8 +18,17 @@
 
 #define VIRGL_RENDERER_UNSTABLE_APIS 1
 #include "drm-uapi/virtgpu_drm.h"
-#include "virglrenderer_hw.h"
 #include "venus_hw.h"
+
+// must match https://gitlab.freedesktop.org/kpouget/virglrenderer/-/blob/main/src/virglrenderer_hw.h?ref_type=heads
+enum virgl_renderer_capset {
+   VIRGL_RENDERER_CAPSET_VIRGL                   = 1,
+   VIRGL_RENDERER_CAPSET_VIRGL2                  = 2,
+   /* 3 is reserved for gfxstream */
+   VIRGL_RENDERER_CAPSET_VENUS                   = 4,
+   /* 5 is reserved for cross-domain */
+   VIRGL_RENDERER_CAPSET_DRM                     = 6,
+};
 
 /* from src/virtio/vulkan/vn_renderer_virtgpu.c */
 #define VIRTGPU_PCI_VENDOR_ID 0x1af4
