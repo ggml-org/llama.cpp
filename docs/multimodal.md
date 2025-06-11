@@ -111,9 +111,3 @@ NOTE: some models may require large context window, for example: `-c 8192`
 ## Finding more models:
 
 GGUF models on Huggingface with vision capabilities can be found here: https://huggingface.co/models?pipeline_tag=image-text-to-text&sort=trending&search=gguf
-
-Below are several popular models maintained by the community that should work with llama.cpp:
-- Joy Caption Beta 1: https://huggingface.co/concedo/llama-joycaption-beta-one-hf-llava-mmproj-gguf/tree/main
-- Bakllava: https://huggingface.co/AI-Engine/BakLLaVA1-MistralLLaVA-7B-GGUF/tree/main
-- MiMo: https://huggingface.co/unsloth/MiMo-VL-7B-RL-GGUF
-- Cosmos-Reason1: https://huggingface.co/unsloth/Cosmos-Reason1-7B-GGUF
