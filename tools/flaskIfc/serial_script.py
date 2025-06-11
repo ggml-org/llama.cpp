@@ -10,6 +10,7 @@ def send_serial_command(port, baudrate, command):
         ser.write('\n'.encode())  # Encode command to bytes
         
         # Wait to read the serial port
+        # Need to add a break somewhere for when we see the phrase "root@name"
         data = '\0'
         while True:
             try:
