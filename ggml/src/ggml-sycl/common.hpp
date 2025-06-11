@@ -45,6 +45,8 @@ void ggml_sycl_host_free(void* ptr);
 extern int g_ggml_sycl_debug;
 extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
+extern int g_ggml_sycl_use_exp_gemvq;
+extern int g_ggml_sycl_exp_gemvq_tile_height;
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
 // Hint the optimizer to pipeline the more likely following instruction in branches
@@ -556,6 +558,11 @@ struct scope_op_debug_print {
   private:
     std::string_view func;
     std::string_view func_suffix;
+};
+
+enum class reorder_kind_t {
+    SOA = 0,
+    LINEAR_BLOCK_LOAD = 1,
 };
 
 #endif // GGML_SYCL_COMMON_HPP

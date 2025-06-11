@@ -42,6 +42,7 @@
 #include "ggml-sycl/presets.hpp"
 #include "ggml-sycl/gemm.hpp"
 #include "ggml-sycl/set_rows.hpp"
+#include "ggml-sycl/exp_gemvq.hpp"
 #include "ggml-sycl/sycl_hw.hpp"
 #include "ggml-sycl/getrows.hpp"
 #include "ggml-sycl/quantize.hpp"
@@ -53,6 +54,8 @@ int g_ggml_sycl_disable_optimize = 0;
 int g_ggml_sycl_disable_graph = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_prioritize_dmmv = 0;
+int g_ggml_sycl_use_exp_gemvq = 0;
+int g_ggml_sycl_exp_gemvq_tile_height = 0;
 
 static ggml_sycl_device_info ggml_sycl_init() {
     ggml_sycl_device_info info = {};
@@ -199,6 +202,9 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
+        g_ggml_sycl_use_exp_gemvq = get_sycl_env("GGML_SYCL_USE_EXP_GEMVQ", 0);
+        g_ggml_sycl_exp_gemvq_tile_height = get_sycl_env("GGML_SYCL_EXP_GEMVQ_TILE_HEIGHT", 4);
+
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
         GGML_LOG_INFO("Running with Environment Variables:\n");
         GGML_LOG_INFO("  GGML_SYCL_DEBUG: %d\n", g_ggml_sycl_debug);
@@ -214,6 +220,8 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_DNN: DNN disabled by compile flag\n");
 #endif
         GGML_LOG_INFO("  GGML_SYCL_PRIORITIZE_DMMV: %d\n", g_ggml_sycl_prioritize_dmmv);
+        GGML_LOG_INFO("  GGML_SYCL_USE_EXP_GEMVQ: %d\n", g_ggml_sycl_use_exp_gemvq);
+        GGML_LOG_INFO("  GGML_SYCL_EXP_GEMVQ_TILE_HEIGHT: %d\n", g_ggml_sycl_exp_gemvq_tile_height);
         GGML_LOG_INFO("Build with Macros:\n");
 #if defined(GGML_SYCL_FORCE_MMQ)
         GGML_LOG_INFO("  GGML_SYCL_FORCE_MMQ: yes\n");
@@ -2894,7 +2902,17 @@ enum class mul_mat_algo {
     DMMV         = 0,
     MMVQ         = 1,
     MUL_MAT_SYCL = 2,
+    EXP_GEMVQ    = 3,
 };
+
+inline bool ggml_sycl_supports_exp_gemvq(enum ggml_type type) {
+    switch (type) {
+        case GGML_TYPE_Q4_K:
+            return true;
+        default:
+            return false;
+    }
+}
 
 inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
     // TODO: accuracy issues in MMQ
@@ -2909,6 +2927,16 @@ inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q6_K:
             return !g_ggml_sycl_prioritize_dmmv;
+        default:
+            return false;
+    }
+}
+
+inline bool ggml_sycl_supports_reorder_exp_gemvq(enum ggml_type type) {
+    switch (type) {
+        // case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_K:
+            return true;
         default:
             return false;
     }
@@ -2981,7 +3009,12 @@ static void reorder_qw_q4_0(uint8_t * data_device, const int ncols, const int nr
     sycl::free(tmp_buf, *stream);
 }
 
-static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
+
+template <reorder_kind_t reorder_kind>
+static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream);
+
+template <>
+void reorder_qw_q4_k<reorder_kind_t::SOA>(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(size % sizeof(block_q4_K) == 0);
     GGML_ASSERT(offset % sizeof(block_q4_K) == 0);
 
@@ -3004,6 +3037,89 @@ static void reorder_qw_q4_k(uint8_t * data_device, size_t size, size_t offset, d
 
         for (int j = 0; j < K_SCALE_SIZE; ++j) {
             scales_ptr[ib * K_SCALE_SIZE + j] = x[ib].scales[j];
+        }
+
+        dm_ptr[ib] = x[ib].dm;
+    }).wait_and_throw();
+
+    sycl::free(tmp_buf, *stream);
+
+}
+
+// Intel intrinsics for block loads perform strided loads depending on the subgroup size.
+// This reorder ensures that the strided load ends with qs of the same block in each thread
+// So essentially each thread loads 4 consecutive iqs per superblock.
+// I.e.: Thread 0: qs  0, 1, 2, 3   4, 5, 6, 7   8, 9,10,11  12,13,14,15  -> next superblock
+//       Thread 1: qs 16,17,18,19  20,21,22,23  24,25,26,27  28,29,30,31  -> next superblock
+// And so on with all the subgroup / warp threads.
+template<>
+void reorder_qw_q4_k<reorder_kind_t::LINEAR_BLOCK_LOAD>(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
+    GGML_ASSERT(size % sizeof(block_q4_K) == 0);
+    GGML_ASSERT(offset % sizeof(block_q4_K) == 0);
+
+    const int nblocks = size / sizeof(block_q4_K);
+
+    auto * tmp_buf = sycl::malloc_shared<uint8_t>(size, *stream);
+    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy(tmp_buf, data_device, size).wait()));
+
+    auto * qs_ptr     = data_device;
+    auto * scales_ptr = qs_ptr + QK_K / 2 * nblocks;
+    auto * dm_ptr     = (sycl::half2 *) (scales_ptr + K_SCALE_SIZE * nblocks);
+
+    stream->parallel_for(nblocks, [=](auto i) {
+        block_q4_K * x  = (block_q4_K *) tmp_buf;
+        const int          ib = i;
+        const size_t block_offset = ib * (QK_K / 2);
+
+        auto repack_q4_K = [=](int from, int to_1, int to_2){
+            // Assuming mem is aligned
+            const uint16_t* qs_u16 = reinterpret_cast<const uint16_t *>(x[ib].qs + from);
+            const uint8_t* qs_pair = reinterpret_cast<const uint8_t *>(qs_u16);
+
+            // Extract low nibbles (0, 1, ..., 64, 65, ...)
+            const uint8_t q0l = qs_pair[0] & 0x0F;
+            const uint8_t q1l = qs_pair[1] & 0x0F;
+
+            // Extract high nibbles (32, 33, ..., 96, 97, ...)
+            const uint8_t q0h = (qs_pair[0] >> 4) & 0x0F;
+            const uint8_t q1h = (qs_pair[1] >> 4) & 0x0F;
+
+            qs_ptr[block_offset + to_1] = (q0l << 4) | q1l;
+            qs_ptr[block_offset + to_2] = (q0h << 4) | q1h;
+
+        };
+
+        for (int chunk = 0; chunk < QK_K / (2 * QK8_1); chunk++) {
+            int from_offset = chunk * QK8_1;
+            int to_offset = chunk * 8;
+
+#pragma unroll
+            for (int logical_index = 0; logical_index < 4; logical_index++) {
+                int from = from_offset + logical_index * 4;
+                int to_1 = to_offset + logical_index * QK8_1;
+                int to_2 = to_1 + 4;
+                repack_q4_K(from, to_1, to_2);
+                repack_q4_K(from + 2, to_1 + 1, to_2 + 1);
+            }
+
+#pragma unroll
+            for (int logical_index = 0; logical_index < 4; logical_index++) {
+                int from = from_offset + logical_index * 4 + 16;
+                int to_1 = to_offset + logical_index * QK8_1 + 2;
+                int to_2 = to_1 + 4;
+                repack_q4_K(from, to_1, to_2);
+                repack_q4_K(from + 2, to_1 + 1, to_2 + 1);
+            }
+        }
+
+#pragma unroll
+        for (int j = 0; j < (K_SCALE_SIZE - 4); ++j) {
+            if (j < 4) {
+                scales_ptr[ib * K_SCALE_SIZE + (2 * j)]     = x[ib].scales[j];
+                scales_ptr[ib * K_SCALE_SIZE + (2 * j) + 1] = x[ib].scales[j + 4];
+            } else {
+                scales_ptr[ib * K_SCALE_SIZE + j + 4] = x[ib].scales[j + 4];
+            }
         }
 
         dm_ptr[ib] = x[ib].dm;
@@ -3067,7 +3183,11 @@ static void reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
             reorder_qw_q4_0(data_device, ncols, nrows, size, 0, stream);
             break;
         case GGML_TYPE_Q4_K:
-            reorder_qw_q4_k(data_device, size, 0, stream);
+            if (!g_ggml_sycl_use_exp_gemvq) {
+                reorder_qw_q4_k<reorder_kind_t::SOA>(data_device, size, 0, stream);
+            } else {
+                reorder_qw_q4_k<reorder_kind_t::LINEAR_BLOCK_LOAD>(data_device, size, 0, stream);
+            }
             break;
         case GGML_TYPE_Q6_K:
             reorder_qw_q6_k(data_device, size, 0, stream);
@@ -3097,6 +3217,11 @@ static void opt_for_reorder(ggml_backend_sycl_context * ctx, const ggml_tensor *
     }
 
     switch (mm_algorithm) {
+        case mul_mat_algo::EXP_GEMVQ:
+            if (!ggml_sycl_supports_reorder_exp_gemvq(src0->type)) {
+                GGML_ABORT("experimental gemv only supported on reordered kernels");
+            }
+            break;
         case mul_mat_algo::DMMV:
             if (!ggml_sycl_supports_reorder_dmmv(src0->type)) {
                 return;
@@ -3167,6 +3292,9 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
 
+    bool use_mul_mat_vec_exp_gemvq = ggml_sycl_supports_exp_gemvq(src0->type) && src1->type == GGML_TYPE_F32 &&
+                                     dst->type == GGML_TYPE_F32 && src0->ne[2] == 1 && src0->ne[3] == 1 &&
+                                     src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1;
 
     // mmvq path is faster in the CUDA backend.
     if (!g_ggml_sycl_prioritize_dmmv && (ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda
@@ -3175,6 +3303,10 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
         // requires disabling DMMV if both conditions are met
         || (should_reorder_tensor(ctx, dst) && ggml_sycl_supports_reorder_mmvq(src0->type)))) {
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && !use_mul_mat_vec_q;
+    }
+
+    if (!g_ggml_sycl_use_exp_gemvq || ctx.stream()->get_backend() == sycl::backend::ext_oneapi_cuda) {
+        use_mul_mat_vec_exp_gemvq = 0;
     }
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {
@@ -3193,6 +3325,14 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1) {
         // KQ + KQV multi-batch
         ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
+    } else if (use_mul_mat_vec_exp_gemvq) {
+        opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::EXP_GEMVQ);
+        ggml_tensor_extra_gpu * extra = static_cast<ggml_tensor_extra_gpu *>(src0->extra);
+        if (extra && extra->optimized_feature.reorder) {
+            ggml_sycl_op_mul_mat<quantize_and_reorder_q8_1_linear>(ctx, src0, src1, dst, ggml_sycl_op_mul_mat_exp_gemvq);
+        } else {
+            GGML_ABORT("Exp GemvQ requires GGML_SYCL_DISABLE_OPT=0");
+        }
     } else if (use_dequantize_mul_mat_vec) {
         opt_for_reorder(&ctx, src0, src1, dst, mul_mat_algo::DMMV);
         ggml_sycl_op_mul_mat<no_quantize_q8_1>(ctx, src0, src1, dst, ggml_sycl_op_dequantize_mul_mat_vec);

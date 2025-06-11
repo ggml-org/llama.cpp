@@ -22,6 +22,7 @@
 #include "dequantize.hpp"
 #include "dmmv.hpp"
 #include "element_wise.hpp"
+#include "exp_gemvq.hpp"
 #include "gla.hpp"
 #include "im2col.hpp"
 #include "mmq.hpp"

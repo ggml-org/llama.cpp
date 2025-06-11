@@ -19,14 +19,16 @@
 
 #pragma once
 
-#include <sycl/nd_item.hpp>
-
 #include "ggml-sycl/dpct/helper.hpp"
+
+#include <sycl/nd_item.hpp>
 
 template <int ElementsPerWI>
 __dpct_inline__ static void quantize_q8_1_impl(const float * __restrict__ x,
-                                               sycl::vec<int8_t, ElementsPerWI> & quantized_values, float & d,
-                                               float & sum, const sycl::nd_item<1> & it) {
+                                               sycl::vec<int8_t, ElementsPerWI> & quantized_values,
+                                               float &                            d,
+                                               float &                            sum,
+                                               const sycl::nd_item<1> &           it) {
     auto subgroup_id = it.get_group(0);
     auto wi_id       = it.get_local_id(0);
 
@@ -60,9 +62,50 @@ template <int ElementsPerWI> struct no_quantize_q8_1 {
     void operator()(const float *, void *, int, int, const sycl::nd_item<1> &) const {}
 };
 
+template <int ElementsPerWI> struct quantize_and_reorder_q8_1_linear {
+    __dpct_inline__ void operator()(const float * __restrict__ x,
+                                    void *                   reordered_q8_tensor,
+                                    const int                kx,
+                                    const int                kx_padded,
+                                    const sycl::nd_item<1> & it) const {
+        auto subgroup_id = it.get_group(0);
+        auto wi_id       = it.get_local_id(0);
+
+        sycl::vec<int8_t, ElementsPerWI> quantized_values;
+        float                            d   = 0.0f;
+        float                            sum = 0.0f;
+        quantize_q8_1_impl<ElementsPerWI>(x, quantized_values, d, sum, it);
+
+        const int num_blocks_per_row = kx / QK8_1;
+        auto      row                = subgroup_id / num_blocks_per_row;
+        auto      col                = subgroup_id % num_blocks_per_row;
+        auto      row_offset         = row * (kx_padded / QK8_1) * sizeof(block_q8_1);
+        auto      ds_ptr = (sycl::half2 *) ((char *) reordered_q8_tensor + row_offset + kx + col * sizeof(sycl::half2));
+
+        auto sblock_offset = ((QK8_1 * subgroup_id) / QK_K) * QK_K;
+        auto quant_ptr     = (int8_t *) ((char *) reordered_q8_tensor + row_offset + sblock_offset);
+
+        // Reorder offsets to get per blockload interleave (values are 16 ints apart inside each superblock)
+        constexpr auto block_load_width = WARP_SIZE * sizeof(int);
+        auto           sg_offset        = (subgroup_id % (QK_K / QK8_1)) * (WARP_SIZE * ElementsPerWI) / sizeof(int);
+        // ElementsPerWI * (wi_id % 2)   -> WI location the designed block
+        auto           chunk_offset =
+            (wi_id / 8) * sizeof(int) + (block_load_width * (wi_id / 2)) % QK_K + ElementsPerWI * (wi_id % 2);
+
+        *reinterpret_cast<sycl::vec<int8_t, ElementsPerWI> *>(quant_ptr + sg_offset + chunk_offset) = quantized_values;
+
+        if (wi_id == 0) {
+            *ds_ptr = sycl::half2(sycl::half(d), sycl::half(sum));
+        }
+    }
+};
+
 template <int ElementsPerWI> struct quantize_and_reorder_q8_1_soa {
-    __dpct_inline__ void operator()(const float * __restrict__ x, void * reordered_q8_tensor, const int kx,
-                                    const int kx_padded, const sycl::nd_item<1> & it) const {
+    __dpct_inline__ void operator()(const float * __restrict__ x,
+                                    void *                   reordered_q8_tensor,
+                                    const int                kx,
+                                    const int                kx_padded,
+                                    const sycl::nd_item<1> & it) const {
         /*
         Quantizes and reorders the resultant q8 tensor in a per row fashion
         Each sub-group calculates one quant block. i.e. QK8_1 quant values and the d and sum values
@@ -92,7 +135,10 @@ template <int ElementsPerWI> struct quantize_and_reorder_q8_1_soa {
 };
 
 template <int ElementsPerWI> struct quantize_q8_1 {
-    __dpct_inline__ void operator()(const float * __restrict__ x, void * q8_tensor, const int kx, const int kx_padded,
+    __dpct_inline__ void operator()(const float * __restrict__ x,
+                                    void *                   q8_tensor,
+                                    const int                kx,
+                                    const int                kx_padded,
                                     const sycl::nd_item<1> & it) const {
         auto subgroup_id = it.get_group(0);
         auto wi_id       = it.get_local_id(0);
@@ -118,7 +164,11 @@ template <int ElementsPerWI> struct quantize_q8_1 {
 };
 
 template <template <int> typename quantize_f>
-void quantize_row_q8_1_sycl(const float * x, void * vy, const int kx, const int ky, const int kx_padded,
+void quantize_row_q8_1_sycl(const float *   x,
+                            void *          vy,
+                            const int       kx,
+                            const int       ky,
+                            const int       kx_padded,
                             dpct::queue_ptr stream) {
     static_assert(QK8_1 % WARP_SIZE == 0);
     auto local_range      = std::size_t(WARP_SIZE);
