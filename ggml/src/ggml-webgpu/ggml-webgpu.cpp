@@ -199,6 +199,39 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     // TODO: cleanup
 }
 
+// Returns true if node has enqueued work into the queue, false otherwise
+static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
+    if (ggml_is_empty(node)) {
+        return false;
+    }
+
+    WEBGPU_LOG_DEBUG("ggml_webgpu_encode_node(" << node << ", " << ggml_op_name(node->op) << ")");
+
+    switch (node->op) {
+        // no-op
+        case GGML_OP_NONE:
+        // these next four ops modify the logical view of the tensor, but do not change its data
+        case GGML_OP_RESHAPE:
+        case GGML_OP_VIEW:
+        case GGML_OP_PERMUTE:
+        case GGML_OP_TRANSPOSE:
+            return false;
+        default:
+            return false;
+    }
+}
+ 
+static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_graph_compute(" << cgraph->n_nodes << " nodes)");
+
+    ggml_backend_webgpu_context * backend_ctx = static_cast<ggml_backend_webgpu_context *>(backend->context);
+    webgpu_context ctx = backend_ctx->webgpu_ctx;
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_webgpu_encode_node(ctx, cgraph->nodes[i]);
+    }
+}
+
 static ggml_backend_i ggml_backend_webgpu_i = {
     /* .get_name                = */ ggml_backend_webgpu_name,
     /* .free                    = */ ggml_backend_webgpu_free,
@@ -209,8 +242,8 @@ static ggml_backend_i ggml_backend_webgpu_i = {
     /* .graph_plan_create       = */ NULL,
     /* .graph_plan_free         = */ NULL,
     /* .graph_plan_update       = */ NULL,
-    /* .graph_plan_compute      = */ NULL, // TODO
-    /* .graph_compute           = */ NULL,
+    /* .graph_plan_compute      = */ NULL,
+    /* .graph_compute           = */ ggml_backend_webgpu_graph_compute,
     /* .event_record            = */ NULL,
     /* .event_wait              = */ NULL,
 };
@@ -228,7 +261,6 @@ static void ggml_backend_webgpu_buffer_free_buffer(ggml_backend_buffer_t buffer)
 
 // Returns the "fake" base pointer.
 static void * ggml_backend_webgpu_buffer_get_base(ggml_backend_buffer_t buffer) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_buffer_get_base()");
     GGML_UNUSED(buffer);
     return webgpu_ptr_base;
 }
@@ -354,13 +386,11 @@ static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_t
 /* GGML Backend Device Interface */
 
 static const char * ggml_backend_webgpu_device_get_name(ggml_backend_dev_t dev) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_device_get_name()");
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
     return ctx->device_name.c_str();
 }
 
 static const char * ggml_backend_webgpu_device_get_description(ggml_backend_dev_t dev) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_device_get_description()");
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
     return ctx->device_desc.c_str();
 }
@@ -499,6 +529,13 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
 
     // what should we support first?
     switch (op->op) {
+        case GGML_OP_NONE:
+        case GGML_OP_RESHAPE:
+        case GGML_OP_VIEW:
+        case GGML_OP_PERMUTE:
+        case GGML_OP_TRANSPOSE:
+            return true;
+
         default:
             return false;
     }
