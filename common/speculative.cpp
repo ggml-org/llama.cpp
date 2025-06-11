@@ -155,9 +155,9 @@ llama_tokens common_speculative_gen_draft(
     const int i_start = std::max<int>(0, (int) prompt_tgt.size() - n_ctx);
 
     // Extract parameters packed in p_min (format: 0.pmin_pdecay_nmin)
-    const float p_min   = floorf(params_p_min * 100) / 100;                           // First 2 decimal places
-    const float p_decay = floorf((params_p_min - p_min) * 10000) / 100;               // Next 2 decimal places
-    const int n_min     = floorf((params_p_min - p_min - (p_decay / 100)) * 100000);  // Last digit
+    const float p_min   = floorf(params.p_min * 100) / 100;                           // First 2 decimal places
+    const float p_decay = floorf((params.p_min - p_min) * 10000) / 100;               // Next 2 decimal places
+    const int n_min     = floorf((params.p_min - p_min - (p_decay / 100)) * 100000);  // Last digit
 
     printf("p_min=%f, p_decay=%f, n_min=%d\n", p_min, p_decay, n_min);
 
@@ -275,7 +275,7 @@ llama_tokens common_speculative_gen_draft(
 
         sequence_p *= cur_p->data[0].p;
 
-        const float threshold_p = p_min * pow(std::max((int) result.size() - std::max(n_min, 1), 1), -p_decay);
+        const float threshold_p = p_min * pow(std::max((int) result.size() - std::max(n_min, 1) + 1, 1), -p_decay);
 
         printf("sequence_p=%f, threshold_p=%f\n", sequence_p, threshold_p);
 
