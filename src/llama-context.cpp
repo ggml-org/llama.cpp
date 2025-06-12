@@ -730,6 +730,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     // temporary allocate memory for the input batch if needed
     // note: during encode, we always pass the full sequence starting from pos = 0
     if (!batch_allocr->init(batch_inp, model.vocab, batch_inp.pos ? -1 : 0)) {
+        LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
 
@@ -904,6 +905,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // temporary allocate memory for the input batch if needed
     if (!batch_allocr->init(batch_inp, model.vocab, batch_inp.pos ? -1 : memory->seq_pos_max(0) + 1)) {
+        LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
 
@@ -922,12 +924,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // this indicates we are doing pooled embedding
     const bool embd_pooled = cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
 
-    uint32_t n_outputs_all = 0;
-
-    // count outputs
-    for (uint32_t i = 0; i < n_tokens_all; ++i) {
-        n_outputs_all += batch.logits[i] != 0;
-    }
+    const uint32_t n_outputs_all = batch_allocr->get_n_outputs();
 
     if (embd_pooled) {
         // require that all tokens are output

@@ -87,12 +87,17 @@ public:
 
     const llama_batch & get_batch() const;
 
+    uint32_t get_n_outputs() const;
+
 private:
     void clear();
 
     llama_batch batch;
 
+    uint32_t n_outputs;
+
     std::array<llama_seq_id, 1> seq_id_0 = { 0 }; // default sequence id
+
     std::vector<llama_pos>      pos;
     std::vector<int32_t>        n_seq_id;
     std::vector<llama_seq_id *> seq_id;

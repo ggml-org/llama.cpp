@@ -339,6 +339,10 @@ bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab &
         batch.logits = output.data();
     }
 
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        n_outputs += batch.logits[i] != 0;
+    }
+
     return true;
 }
 
@@ -346,7 +350,13 @@ const llama_batch & llama_batch_allocr::get_batch() const {
     return batch;
 }
 
+uint32_t llama_batch_allocr::get_n_outputs() const {
+    return n_outputs;
+}
+
 void llama_batch_allocr::clear() {
+    n_outputs = 0;
+
     batch = {};
     pos.clear();
     n_seq_id.clear();
