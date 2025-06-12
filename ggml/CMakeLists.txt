@@ -368,6 +368,7 @@ if (MSVC)
         /wd4005  # Macro redefinition
         /wd4244  # Conversion from one type to another type, possible loss of data
         /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4566  # Conversion from 'char' to 'wchar_t', possible loss of data
         /wd4996  # Disable POSIX deprecation warnings
         /wd4702  # Unreachable code warnings
     )
@@ -387,4 +388,30 @@ if (MSVC)
     disable_msvc_warnings(ggml-cpu-skylakex)
     disable_msvc_warnings(ggml-cpu-icelake)
     disable_msvc_warnings(ggml-cpu-alderlake)
+
+    if (GGML_BUILD_EXAMPLES)
+        disable_msvc_warnings(common-ggml)
+        disable_msvc_warnings(common)
+
+        disable_msvc_warnings(mnist-common)
+        disable_msvc_warnings(mnist-eval)
+        disable_msvc_warnings(mnist-train)
+
+        disable_msvc_warnings(gpt-2-ctx)
+        disable_msvc_warnings(gpt-2-alloc)
+        disable_msvc_warnings(gpt-2-backend)
+        disable_msvc_warnings(gpt-2-sched)
+        disable_msvc_warnings(gpt-2-quantize)
+        disable_msvc_warnings(gpt-2-batched)
+
+        disable_msvc_warnings(gpt-j)
+        disable_msvc_warnings(gpt-j-quantize)
+
+        disable_msvc_warnings(magika)
+        disable_msvc_warnings(yolov3-tiny)
+        disable_msvc_warnings(sam)
+
+        disable_msvc_warnings(simple-ctx)
+        disable_msvc_warnings(simple-backend)
+    endif()
 endif()
