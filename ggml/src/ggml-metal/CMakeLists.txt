@@ -46,16 +46,17 @@ if (GGML_METAL_EMBED_LIBRARY)
     add_custom_command(
         OUTPUT "${METALLIB_EMBED_ASM}"
         COMMAND echo "Embedding Metal library"
-        COMMAND sed -e '/__embed_ggml-common.h__/r         ${METALLIB_COMMON}' -e '/__embed_ggml-common.h__/d'         < "${METALLIB_SOURCE}"           > "${METALLIB_SOURCE_EMBED_TMP}"
-        COMMAND sed -e '/\#include \"ggml-metal-impl.h\"/r ${METALLIB_IMPL}'   -e '/\#include \"ggml-metal-impl.h\"/d' < "${METALLIB_SOURCE_EMBED_TMP}" > "${METALLIB_SOURCE_EMBED}"
+        COMMAND sed -e "/__embed_ggml-common.h__/r ${METALLIB_COMMON}"       -e "/__embed_ggml-common.h__/d"         < "${METALLIB_SOURCE}"           > "${METALLIB_SOURCE_EMBED_TMP}"
+        COMMAND sed -e "/\#include \"ggml-metal-impl.h\"/r ${METALLIB_IMPL}" -e "/\#include \"ggml-metal-impl.h\"/d" < "${METALLIB_SOURCE_EMBED_TMP}" > "${METALLIB_SOURCE_EMBED}"
         COMMAND echo ".section __DATA,__ggml_metallib"          >  "${METALLIB_EMBED_ASM}"
         COMMAND echo ".globl _ggml_metallib_start"              >> "${METALLIB_EMBED_ASM}"
         COMMAND echo "_ggml_metallib_start:"                    >> "${METALLIB_EMBED_ASM}"
-        COMMAND echo ".incbin \\\"${METALLIB_SOURCE_EMBED}\\\"" >> "${METALLIB_EMBED_ASM}"
+        COMMAND echo .incbin "\"${METALLIB_SOURCE_EMBED}\""     >> "${METALLIB_EMBED_ASM}"
         COMMAND echo ".globl _ggml_metallib_end"                >> "${METALLIB_EMBED_ASM}"
         COMMAND echo "_ggml_metallib_end:"                      >> "${METALLIB_EMBED_ASM}"
         DEPENDS ../ggml-common.h ggml-metal.metal ggml-metal-impl.h
         COMMENT "Generate assembly for embedded Metal library"
+        VERBATIM
     )
 
     target_sources(ggml-metal PRIVATE "${METALLIB_EMBED_ASM}")
