@@ -6096,7 +6096,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         // GGML_ASSERT(ggml_n_dims(op->src[1]) == 2);
 
 #ifdef GGML_USE_NUMA_MIGRATE
-        int node_id = numa_node_of_cpu(ith);
+        int node_id = ggml_get_node_from_cpu(ith);
         char *       wdata = static_cast<char *>(params->wdata_numa[node_id]);
 #else
         char *       wdata = static_cast<char *>(params->wdata);
