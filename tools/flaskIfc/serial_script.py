@@ -4,7 +4,7 @@ import sys
 def send_serial_command(port, baudrate, command):
     try:
         # Open the serial port with 1 second timeout
-        ser = serial.Serial(port, baudrate, timeout=20)
+        ser = serial.Serial(port, baudrate, timeout=60)
 
         ser.write(command.encode())  # Encode command to bytes
         ser.write('\n'.encode())  # Encode command to bytes
@@ -25,6 +25,7 @@ def send_serial_command(port, baudrate, command):
                 ser.close()
                 return ("Program interrupted by user")
         ser.close()
+        print (data)
         return data
 
     except serial.SerialException as e:
