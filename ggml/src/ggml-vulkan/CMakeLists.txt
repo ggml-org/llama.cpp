@@ -110,10 +110,6 @@ if (Vulkan_FOUND)
         add_compile_definitions(GGML_VULKAN_SHADER_DEBUG_INFO)
     endif()
 
-    if (GGML_VULKAN_PERF)
-        add_compile_definitions(GGML_VULKAN_PERF)
-    endif()
-
     if (GGML_VULKAN_VALIDATE)
         add_compile_definitions(GGML_VULKAN_VALIDATE)
     endif()

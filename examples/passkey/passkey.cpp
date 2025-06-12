@@ -126,6 +126,8 @@ int main(int argc, char ** argv) {
 
     int n_past = 0;
 
+    auto * mem = llama_get_memory(ctx);
+
     // fill the KV cache
     for (int i = 0; i < n_ctx; i += n_batch) {
         if (i > 0 && n_grp > 1) {
@@ -133,11 +135,10 @@ int main(int argc, char ** argv) {
             const int ib = i/n_batch - 1;
             const int bd = n_batch_grp*(n_grp - 1);
 
-            llama_kv_self_seq_add (ctx, 0, n_past - n_batch,         n_past,         ib*bd);
-            llama_kv_self_seq_div (ctx, 0, n_past - n_batch + ib*bd, n_past + ib*bd, n_grp);
-            llama_kv_self_update  (ctx);
+            llama_memory_seq_add(mem, 0, n_past - n_batch,         n_past,         ib*bd);
+            llama_memory_seq_div(mem, 0, n_past - n_batch + ib*bd, n_past + ib*bd, n_grp);
 
-            n_past = llama_kv_self_seq_pos_max(ctx, 0) + 1;
+            n_past = llama_memory_seq_pos_max(mem, 0) + 1;
         }
 
         common_batch_clear(batch);
@@ -167,12 +168,10 @@ int main(int argc, char ** argv) {
 
         LOG_INF("%s: shifting KV cache with %d\n", __func__, n_discard);
 
-        llama_kv_self_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
-        llama_kv_self_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
-      //llama_kv_self_defrag (ctx);
-        llama_kv_self_update (ctx);
+        llama_memory_seq_rm (mem, 0, n_keep            , n_keep + n_discard);
+        llama_memory_seq_add(mem, 0, n_keep + n_discard, n_ctx,  -n_discard);
 
-        n_past = llama_kv_self_seq_pos_max(ctx, 0) + 1;
+        n_past = llama_memory_seq_pos_max(mem, 0) + 1;
 
         common_batch_clear(batch);
 
@@ -198,12 +197,10 @@ int main(int argc, char ** argv) {
         if (n_discard > 0) {
             LOG_INF("%s: shifting KV cache with %d to free space for the answer\n", __func__, n_discard);
 
-            llama_kv_self_seq_rm (ctx, 0, n_keep            , n_keep + n_discard);
-            llama_kv_self_seq_add(ctx, 0, n_keep + n_discard, n_ctx,  -n_discard);
-          //llama_kv_self_defrag (ctx);
-            llama_kv_self_update (ctx);
+            llama_memory_seq_rm (mem, 0, n_keep            , n_keep + n_discard);
+            llama_memory_seq_add(mem, 0, n_keep + n_discard, n_ctx,  -n_discard);
 
-            n_past = llama_kv_self_seq_pos_max(ctx, 0) + 1;
+            n_past = llama_memory_seq_pos_max(mem, 0) + 1;
         }
     }
 

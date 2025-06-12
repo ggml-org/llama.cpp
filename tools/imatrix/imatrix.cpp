@@ -498,7 +498,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
         const auto t_start = std::chrono::high_resolution_clock::now();
 
         // clear the KV cache
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), true);
 
         llama_batch batch = llama_batch_init(n_batch, 0, 1);
 

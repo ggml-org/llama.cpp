@@ -7,8 +7,8 @@ llama_add_compile_flags()
 # Build info header
 #
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../.git")
-    set(GIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.git")
+if(EXISTS "${PROJECT_SOURCE_DIR}/.git")
+    set(GIT_DIR "${PROJECT_SOURCE_DIR}/.git")
 
     # Is git submodule
     if(NOT IS_DIRECTORY "${GIT_DIR}")
@@ -18,7 +18,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../.git")
         if (SLASH_POS EQUAL 0)
             set(GIT_DIR "${REAL_GIT_DIR}")
         else()
-            set(GIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../${REAL_GIT_DIR}")
+            set(GIT_DIR "${PROJECT_SOURCE_DIR}/${REAL_GIT_DIR}")
         endif()
     endif()
 
@@ -42,7 +42,7 @@ add_custom_command(
             -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
             -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME} -DCMAKE_SYSTEM_PROCESSOR=${CMAKE_SYSTEM_PROCESSOR}
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info-gen-cpp.cmake"
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/build-info.cpp.in" ${GIT_INDEX}
     VERBATIM
 )
@@ -58,19 +58,20 @@ add_library(${TARGET} STATIC
     arg.cpp
     arg.h
     base64.hpp
+    chat-parser.cpp
+    chat-parser.h
     chat.cpp
     chat.h
     common.cpp
     common.h
     console.cpp
     console.h
+    json-partial.cpp
+    json-partial.h
     json-schema-to-grammar.cpp
-    json.hpp
     llguidance.cpp
     log.cpp
     log.h
-    minja/chat-template.hpp
-    minja/minja.hpp
     ngram-cache.cpp
     ngram-cache.h
     regex-partial.cpp
@@ -143,7 +144,7 @@ if (LLAMA_LLGUIDANCE)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} llguidance ${LLGUIDANCE_PLATFORM_LIBS})
 endif ()
 
-target_include_directories(${TARGET} PUBLIC .)
+target_include_directories(${TARGET} PUBLIC . ../vendor)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 target_link_libraries     (${TARGET} PRIVATE ${LLAMA_COMMON_EXTRA_LIBS} PUBLIC llama Threads::Threads)
 

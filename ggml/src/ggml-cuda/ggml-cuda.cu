@@ -243,10 +243,10 @@ static ggml_cuda_device_info ggml_cuda_init() {
 
         info.default_tensor_split[id] = total_vram;
         total_vram += prop.totalGlobalMem;
-
-        info.devices[id].nsm       = prop.multiProcessorCount;
-        info.devices[id].smpb      = prop.sharedMemPerBlock;
-        info.devices[id].warp_size = prop.warpSize;
+        info.devices[id].integrated = prop.integrated;
+        info.devices[id].nsm        = prop.multiProcessorCount;
+        info.devices[id].smpb       = prop.sharedMemPerBlock;
+        info.devices[id].warp_size  = prop.warpSize;
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
         info.devices[id].smpbo = prop.sharedMemPerBlock;
 
@@ -615,9 +615,8 @@ static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaDeviceSynchronize());
-    CUDA_CHECK(cudaMemset(ctx->dev_ptr, value, buffer->size));
-    CUDA_CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemsetAsync(ctx->dev_ptr, value, buffer->size, cudaStreamPerThread));
+    CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
 static const ggml_backend_buffer_i ggml_backend_cuda_buffer_interface = {
@@ -1065,6 +1064,10 @@ static const char * ggml_backend_cuda_host_buffer_type_name(ggml_backend_buffer_
     GGML_UNUSED(buft);
 }
 
+static bool ggml_backend_buft_is_cuda_host(ggml_backend_buffer_type_t buft) {
+    return buft->iface.get_name == ggml_backend_cuda_host_buffer_type_name;
+}
+
 static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     CUDA_CHECK(cudaFreeHost(buffer->context));
 }
@@ -1140,7 +1143,6 @@ typedef void (*ggml_cuda_op_mul_mat_t)(
 static cudaError_t ggml_cuda_cpy_tensor_2d(
     void * dst, const struct ggml_tensor * src, int64_t i3, int64_t i2, int64_t i1_low, int64_t i1_high, cudaStream_t stream) {
 
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(src->buffer));
     const char * src_ptr = (const char *) src->data;
     char       * dst_ptr = (char       *) dst;
 
@@ -1423,8 +1425,6 @@ static void ggml_cuda_op_mul_mat(
     const int64_t nb2 = dst->nb[2];
     const int64_t nb3 = dst->nb[3];
 
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(dst->buffer));
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(src1->buffer));
     ggml_backend_cuda_buffer_context * src1_ctx = (ggml_backend_cuda_buffer_context *) src1->buffer->context;
     ggml_backend_cuda_buffer_context * dst_ctx  = (ggml_backend_cuda_buffer_context *) dst->buffer->context;
 
@@ -1746,7 +1746,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     GGML_ASSERT(!ggml_is_transposed(src0));
     GGML_ASSERT(!ggml_is_transposed(src1));
 
-    GGML_ASSERT(ggml_backend_buffer_is_cuda(src0->buffer));
+    GGML_ASSERT(!ggml_backend_buft_is_cuda_split(src0->buffer->buft));
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
 
     // Byte offsets and tensor dimensions are currently used in an inconsistent way for dst.
@@ -2641,6 +2641,8 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
     bool & graph_evaluated_or_captured, bool & use_cuda_graph, bool & cuda_graph_update_required) {
+    // flag used to determine whether it is an integrated_gpu
+    const bool integrated = ggml_cuda_info().devices[cuda_ctx->device].integrated;
 
     while (!graph_evaluated_or_captured) {
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
@@ -2659,7 +2661,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     if (node->src[j] != nullptr) {
                         assert(node->src[j]->buffer);
                         assert(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) ||
-                               ggml_backend_buft_is_cuda_split(node->src[j]->buffer->buft));
+                               ggml_backend_buft_is_cuda_split(node->src[j]->buffer->buft) || (integrated && ggml_backend_buft_is_cuda_host(node->src[j]->buffer->buft)));
                     }
                 }
 #endif
@@ -2994,9 +2996,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             {
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
-                // for small weight matrices the active device can end up without any rows, don't use row split in those cases
-                // this avoids some edge cases (and the performance would not be good anyways)
                 if (a->buffer && ggml_backend_buft_is_cuda_split(a->buffer->buft)) {
+                    if (a->ne[2] > 1 || a->ne[3] > 1) {
+                        return false;
+                    }
+                    // for small weight matrices the active device can end up without any rows, don't use row split in those cases
+                    // this avoids some edge cases (and the performance would not be good anyways)
                     ggml_backend_cuda_split_buffer_type_context * buft_ctx = (ggml_backend_cuda_split_buffer_type_context *) a->buffer->buft->context;
                     int64_t row_low;
                     int64_t row_high;
@@ -3263,7 +3268,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 }
 
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return (ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft)) && buft->device == dev;
+    ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
+    const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
+    return (((ggml_backend_buft_is_cuda(buft) || ggml_backend_buft_is_cuda_split(buft)) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft)));
 }
 
 static int64_t get_op_batch_size(const ggml_tensor * op) {

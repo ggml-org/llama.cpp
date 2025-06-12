@@ -115,7 +115,7 @@ enum common_grammar_trigger_type {
     COMMON_GRAMMAR_TRIGGER_TYPE_TOKEN,
     COMMON_GRAMMAR_TRIGGER_TYPE_WORD,
     COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_START,
+    COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
 };
 
 struct common_grammar_trigger {
@@ -215,7 +215,8 @@ struct common_params_vocoder {
 
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
-    COMMON_REASONING_FORMAT_DEEPSEEK, // Extract thinking tag contents and return as `message.reasoning_content`
+    COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY, // Extract thinking tag contents and return as `message.reasoning_content`, or leave inline in <think> tags in stream mode
+    COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
 };
 
 struct common_params {
@@ -291,6 +292,7 @@ struct common_params {
     int32_t verbosity                  = 0;
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
+    bool    offline                    = false;
 
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.
     int32_t ppl_output_type = 0;     // = 0 -> ppl output is as usual, = 1 -> ppl output is num_tokens, ppl, one per line
@@ -368,6 +370,7 @@ struct common_params {
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    int reasoning_budget = -1;
     bool prefill_assistant = true;                                                                          // if true, any trailing assistant message will be prefilled into the response
 
     std::vector<std::string> api_keys;

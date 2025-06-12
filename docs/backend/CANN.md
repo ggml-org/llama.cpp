@@ -8,6 +8,7 @@
  - [DataType Supports](#datatype-supports)
  - [Docker](#docker)
  - [Linux](#linux)
+ - [Environment variable setup](#environment-variable-setup)
  - [TODO](#todo)
 
 
@@ -280,6 +281,34 @@ cmake --build build --config release
 ### **GitHub contribution**:
 Please add the **[CANN]** prefix/tag in issues/PRs titles to help the CANN-team check/address them without delay.
 
+## Updates
+### Basic Flash Attention Support
+The basic FA kernel with aclnnops has been added in aclnn_ops.cpp.
+Currently, the FA only supports the cases with FP16 KV tensors and NO logit softcap.
+Since the aclnn interface for flash attention cannot support the logit softcap, we will only update the quantized version in the future.
+
+Authors from Peking University: Bizhao Shi (bshi@pku.edu.cn), Yuxin Yang (yxyang@pku.edu.cn), Ruiyang Ma (ruiyang@stu.pku.edu.cn), and Guojie Luo (gluo@pku.edu.cn).
+
+We would like to thank Tuo Dai, Shanni Li, and all of the project maintainers from Huawei Technologies Co., Ltd for their help during the code development and pull request.
+
+## Environment variable setup
+
+### GGML_CANN_ASYNC_MODE
+
+Enables asynchronous operator submission. Disabled by default.
+
+### GGML_CANN_MEM_POOL
+
+Specifies the memory pool management strategy:
+
+- vmm: Utilizes a virtual memory manager pool. If hardware support for VMM is unavailable, falls back to the legacy (leg) memory pool.
+
+- prio: Employs a priority queue-based memory pool management.
+- leg: Uses a fixed-size buffer pool.
+
+### GGML_CANN_DISABLE_BUF_POOL_CLEAN
+
+Controls automatic cleanup of the memory pool. This option is only effective when using the prio or leg memory pool strategies.
 
 ## TODO
 - Support more models and data types.

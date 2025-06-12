@@ -14,6 +14,7 @@ import {
 import { BtnWithTooltips } from '../utils/common';
 import { useAppContext } from '../utils/app.context';
 import toast from 'react-hot-toast';
+import { useModals } from './ModalProvider';
 
 export default function Sidebar() {
   const params = useParams();
@@ -38,6 +39,7 @@ export default function Sidebar() {
       StorageUtils.offConversationChanged(handleConversationChange);
     };
   }, []);
+  const { showConfirm, showPrompt } = useModals();
 
   const groupedConv = useMemo(
     () => groupConversationsByDate(conversations),
@@ -130,7 +132,7 @@ export default function Sidebar() {
                   onSelect={() => {
                     navigate(`/chat/${conv.id}`);
                   }}
-                  onDelete={() => {
+                  onDelete={async () => {
                     if (isGenerating(conv.id)) {
                       toast.error(
                         'Cannot delete conversation while generating'
@@ -138,7 +140,7 @@ export default function Sidebar() {
                       return;
                     }
                     if (
-                      window.confirm(
+                      await showConfirm(
                         'Are you sure to delete this conversation?'
                       )
                     ) {
@@ -167,14 +169,14 @@ export default function Sidebar() {
                     document.body.removeChild(a);
                     URL.revokeObjectURL(url);
                   }}
-                  onRename={() => {
+                  onRename={async () => {
                     if (isGenerating(conv.id)) {
                       toast.error(
                         'Cannot rename conversation while generating'
                       );
                       return;
                     }
-                    const newName = window.prompt(
+                    const newName = await showPrompt(
                       'Enter new name for the conversation',
                       conv.name
                     );

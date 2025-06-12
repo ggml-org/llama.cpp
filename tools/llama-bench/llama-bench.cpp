@@ -315,7 +315,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --numa <distribute|isolate|numactl>       numa mode (default: disabled)\n");
     printf("  -r, --repetitions <n>                     number of times to repeat each test (default: %d)\n",
            cmd_params_defaults.reps);
-    printf("  --prio <0|1|2|3>                          process/thread priority (default: %d)\n",
+    printf("  --prio <-1|0|1|2|3>                          process/thread priority (default: %d)\n",
            cmd_params_defaults.prio);
     printf("  --delay <0...N> (seconds)                 delay between each test (default: %d)\n",
            cmd_params_defaults.delay);
@@ -1900,7 +1900,7 @@ int main(int argc, char ** argv) {
 
         test t(inst, lmodel, ctx);
 
-        llama_kv_self_clear(ctx);
+        llama_memory_clear(llama_get_memory(ctx), false);
 
         // cool off before the test
         if (params.delay) {
@@ -1948,7 +1948,7 @@ int main(int argc, char ** argv) {
         }
 
         for (int i = 0; i < params.reps; i++) {
-            llama_kv_self_clear(ctx);
+            llama_memory_clear(llama_get_memory(ctx), false);
 
             if (t.n_depth > 0) {
                 if (params.progress) {

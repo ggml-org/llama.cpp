@@ -320,20 +320,16 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 
 #ifdef __wasm_simd128__
 #include <wasm_simd128.h>
-#else
+#endif
+
 #ifdef __POWER9_VECTOR__
 #include <altivec.h>
-#else
+#endif
+
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <intrin.h>
-#else
-#if defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__SSSE3__) || defined(__SSE3__) || defined(__SSE__)
-#if !defined(__riscv)
+#elif defined(__AVX__) || defined(__AVX2__) || defined(__AVX512F__) || defined(__SSSE3__) || defined(__SSE3__) || defined(__SSE__)
 #include <immintrin.h>
-#endif
-#endif
-#endif
-#endif
 #endif
 
 #ifdef __riscv_v_intrinsic
@@ -510,3 +506,28 @@ void ggml_barrier(struct ggml_threadpool * tp);
 #ifdef __cplusplus
 }
 #endif
+
+#define GGML_DO_PRAGMA_(x) _Pragma (#x)
+#define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
+#if defined(GGML_CPU_GENERIC) || defined(__HIPCC__)
+// Note for Apple targets:
+// - clang: aliases are not supported on darwin
+// - all native kernels need to be implemented in both x86 and arm files
+// - on iOS, tvOS, and visionOS, if cmake cannot determine the target architecture, all `_generic` names are replaced by defines
+# define GGML_WEAK_ALIAS(name, alias)
+#elif defined(__GNUC__)
+// GCC/Clang on *nix
+# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
+#elif defined(_MSC_VER) && defined(_WIN64)
+// MSVC
+// Note: C name mangling varies across different calling conventions
+// see https://learn.microsoft.com/en-us/cpp/build/reference/decorated-names?view=msvc-170
+# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:" #name "=" #alias))
+#elif defined(_MSC_VER) && defined(WIN32)
+// ref: https://github.com/ggml-org/whisper.cpp/pull/3239#issuecomment-2958224591
+# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:_" #name "=_" #alias))
+#else
+# error "Unsupported compiler for GGML_WEAK_ALIAS"
+#endif
+
+#define GGML_CPU_NATIVE_IMPL(name) GGML_WEAK_ALIAS(name, name ## _generic)

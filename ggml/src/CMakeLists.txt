@@ -109,6 +109,8 @@ if (MSVC)
 else ()
     set(CMAKE_GENERATOR_PLATFORM_LWR "")
 endif ()
+ggml_get_system_arch()
+message(STATUS "GGML_SYSTEM_ARCH: ${GGML_SYSTEM_ARCH}")
 
 if (NOT MSVC)
     if (GGML_STATIC)
@@ -123,7 +125,6 @@ if (NOT MSVC)
 endif()
 
 if (MINGW)
-    # Target Windows 8 for PrefetchVirtualMemory
     add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
@@ -194,6 +195,7 @@ add_library(ggml-base
             ../include/ggml-opt.h
             ../include/gguf.h
             ggml.c
+            ggml.cpp
             ggml-alloc.c
             ggml-backend.cpp
             ggml-opt.cpp
@@ -210,6 +212,7 @@ endif()
 
 add_library(ggml
             ggml-backend-reg.cpp)
+add_library(ggml::ggml ALIAS ggml)
 
 target_link_libraries(ggml PUBLIC ggml-base)
 
@@ -224,6 +227,7 @@ function(ggml_add_backend_library backend)
         set_target_properties(${backend} PROPERTIES LIBRARY_OUTPUT_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         target_compile_definitions(${backend} PRIVATE GGML_BACKEND_DL)
         add_dependencies(ggml ${backend})
+        install(TARGETS ${backend} LIBRARY DESTINATION ${CMAKE_INSTALL_BINDIR})
     else()
         add_library(${backend} ${ARGN})
         target_link_libraries(ggml PUBLIC ${backend})
@@ -266,17 +270,23 @@ endfunction()
 function(ggml_add_cpu_backend_variant tag_name)
     set(GGML_CPU_TAG_NAME ${tag_name})
     # other: OPENMP LLAMAFILE CPU_HBM
-    foreach (feat NATIVE
-                  SSE42
-                  AVX AVX2 BMI2 AVX_VNNI FMA F16C
-                  AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16
-                  AMX_TILE AMX_INT8 AMX_BF16)
-        set(GGML_${feat} OFF)
-    endforeach()
+    if (GGML_SYSTEM_ARCH STREQUAL "x86")
+        foreach (feat NATIVE
+                      SSE42
+                      AVX AVX2 BMI2 AVX_VNNI FMA F16C
+                      AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16
+                      AMX_TILE AMX_INT8 AMX_BF16)
+            set(GGML_${feat} OFF)
+        endforeach()
 
-    foreach (feat ${ARGN})
-        set(GGML_${feat} ON)
-    endforeach()
+        foreach (feat ${ARGN})
+            set(GGML_${feat} ON)
+        endforeach()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "ARM")
+        foreach (feat ${ARGN})
+            set(GGML_INTERNAL_${feat} ON)
+        endforeach()
+    endif()
 
     ggml_add_cpu_backend_variant_impl(${tag_name})
 endfunction()
@@ -286,17 +296,35 @@ ggml_add_backend(CPU)
 if (GGML_CPU_ALL_VARIANTS)
     if (NOT GGML_BACKEND_DL)
         message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS requires GGML_BACKEND_DL")
+    elseif (GGML_CPU_ARM_ARCH)
+        message(FATAL_ERROR "Cannot use both GGML_CPU_ARM_ARCH and GGML_CPU_ALL_VARIANTS")
     endif()
-    ggml_add_cpu_backend_variant(x64)
-    ggml_add_cpu_backend_variant(sse42        SSE42)
-    ggml_add_cpu_backend_variant(sandybridge  SSE42 AVX)
-    ggml_add_cpu_backend_variant(haswell      SSE42 AVX F16C AVX2 BMI2 FMA)
-    ggml_add_cpu_backend_variant(skylakex     SSE42 AVX F16C AVX2 BMI2 FMA AVX512)
-    ggml_add_cpu_backend_variant(icelake      SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI)
-    ggml_add_cpu_backend_variant(alderlake    SSE42 AVX F16C AVX2 BMI2 FMA AVX_VNNI)
-    if (NOT MSVC)
-        # MSVC doesn't support AMX
-        ggml_add_cpu_backend_variant(sapphirerapids SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
+    if (GGML_SYSTEM_ARCH STREQUAL "x86")
+        ggml_add_cpu_backend_variant(x64)
+        ggml_add_cpu_backend_variant(sse42        SSE42)
+        ggml_add_cpu_backend_variant(sandybridge  SSE42 AVX)
+        ggml_add_cpu_backend_variant(haswell      SSE42 AVX F16C AVX2 BMI2 FMA)
+        ggml_add_cpu_backend_variant(skylakex     SSE42 AVX F16C AVX2 BMI2 FMA AVX512)
+        ggml_add_cpu_backend_variant(icelake      SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI)
+        ggml_add_cpu_backend_variant(alderlake    SSE42 AVX F16C AVX2 BMI2 FMA AVX_VNNI)
+        if (NOT MSVC)
+            # MSVC doesn't support AMX
+            ggml_add_cpu_backend_variant(sapphirerapids SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
+        endif()
+    elseif(GGML_SYSTEM_ARCH STREQUAL "ARM" AND CMAKE_SYSTEM_NAME MATCHES "Linux")
+        # Many of these features are optional so we build versions with popular
+        # combinations and name the backends based on the version they were
+        # first released with
+        ggml_add_cpu_backend_variant(armv8.0_1)
+        ggml_add_cpu_backend_variant(armv8.2_1    DOTPROD)
+        ggml_add_cpu_backend_variant(armv8.2_2    DOTPROD FP16_VECTOR_ARITHMETIC)
+        ggml_add_cpu_backend_variant(armv8.2_3    DOTPROD FP16_VECTOR_ARITHMETIC SVE)
+        ggml_add_cpu_backend_variant(armv8.6_1    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8)
+        ggml_add_cpu_backend_variant(armv8.6_2    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SVE2)
+        ggml_add_cpu_backend_variant(armv9.2_1    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SME)
+        ggml_add_cpu_backend_variant(armv9.2_2    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SVE2 SME)
+    else()
+        message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS not yet supported with ${GGML_SYSTEM_ARCH} on ${CMAKE_SYSTEM_NAME}")
     endif()
 elseif (GGML_CPU)
     ggml_add_cpu_backend_variant_impl("")
