@@ -891,23 +891,56 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_dp4a(
 template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
-    constexpr int nwarps = get_mmq_nwarps_device(GGML_TYPE_Q8_0);
-    // Tile definitions
-    typedef tile<16,  8, int> tile_A;
 #if defined(AMD_MMA_AVAILABLE)
+    typedef tile<16,  8, int> tile_A;
     typedef tile<16,  8, int> tile_B;
     typedef tile<16, 16, int> tile_C;
+
+    const int   * x_qs = (const int   *) x;
+    const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;
+    const int   * y_qs = (const int   *) y + 4;
+    const half2 * y_dm = (const half2 *) y;
+
+    const int i0 = threadIdx.y * tile_A::I;
+
+    for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
+        const int k0 = k00 + k01;
+        
+        tile_A A;
+        load_ldmatrix(A, x_qs + i0*MMQ_MMA_TILE_X_K_Q8_1 + k0, MMQ_MMA_TILE_X_K_Q8_1);
+
+        float2 dmA[tile_C::ne];
+#pragma unroll
+        for (int l = 0; l < tile_C::ne; ++l) {
+            const int i = i0 + tile_C::get_i(l);
+            dmA[l] = __half22float2(x_dm[i*MMQ_MMA_TILE_X_K_Q8_1 + k0/QI8_1]);
+        }
+
+#pragma unroll
+        for (int j0 = 0; j0 < mmq_x; j0 += tile_C::J) {
+            tile_B B;
+            load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
+
+            float2 dsB;
+            const int j = j0 + tile_C::get_j(0);
+            dsB = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+
+            tile_C C;
+            mma(C, A, B);
+
+            for (int l = 0; l < tile_C::ne; ++l) {
+                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA[l].x*dsB.x*C.x[l];
+                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA[l].y*dsB.y;
+            }
+        }
+    }
 #else
+    typedef tile<16,  8, int> tile_A;
     typedef tile< 8,  8, int> tile_B;
     typedef tile<16,  8, int> tile_C;
-#endif
 
     constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q8_0, mmq_x);
-#if defined(AMD_MMA_AVAILABLE)
-    constexpr int rows_per_warp = granularity; // 16
-#else
     constexpr int rows_per_warp = 2 * granularity;
-#endif
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
     y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
@@ -918,11 +951,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     const half2 * y_dm = (const half2 *) y;
 
     tile_A   A[ntx][MMQ_TILE_NE_K/QI8_1];
-#if defined(AMD_MMA_AVAILABLE)
-    float2 dmA[ntx][tile_C::ne][MMQ_TILE_NE_K/QI8_1];
-#else
     float2 dmA[ntx][tile_C::ne/2][MMQ_TILE_NE_K/QI8_1];
-#endif
 
     const int i0 = (threadIdx.y/ntx)*rows_per_warp;
 
@@ -936,13 +965,8 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
         }
 
 #pragma unroll
-#if defined(AMD_MMA_AVAILABLE)
-        for (int l = 0; l < tile_C::ne; ++l) {
-            const int i = i0 + n*tile_A::I + tile_C::get_i(l);
-#else
         for (int l = 0; l < tile_C::ne/2; ++l) {
             const int i = i0 + n*tile_A::I + tile_C::get_i(2*l);
-#endif
 
 #pragma unroll
             for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
@@ -958,25 +982,16 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
 #pragma unroll
         for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
             tile_B   B;
-#if defined(AMD_MMA_AVAILABLE)
-            load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K); // faster than load_ldmatrix
-#else
-            load_generic(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K); // faster than load_ldmatrix
-#endif
-
-#if defined(AMD_MMA_AVAILABLE)
-            float2 dsB;
-            const int j = j0 + tile_C::get_j(0);
-            dsB = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
-#else
             float2 dsB[tile_C::ne/2];
+
+            load_generic(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K); // faster than load_ldmatrix
+            
 #pragma unroll
             for (int l = 0; l < tile_C::ne/2; ++l) {
                 const int j = j0 + tile_C::get_j(l);
 
                 dsB[l] = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
             }
-#endif
 
 #pragma unroll
             for (int n = 0; n < ntx; ++n) {
@@ -985,17 +1000,13 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
 
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
-#if defined(AMD_MMA_AVAILABLE)
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l][k01/QI8_1].x*dsB.x*C.x[l];
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l][k01/QI8_1].y*dsB.y;
-#else
                     sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].x*dsB[l%2].x*C.x[l];
                     sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA[n][l/2][k01/QI8_1].y*dsB[l%2].y;
-#endif
                 }
             }
         }
     }
+#endif // AMD_MMA_AVAILABLE
 }
 
 template <int mmq_x, int mmq_y>

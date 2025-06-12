@@ -221,7 +221,11 @@ namespace ggml_cuda_mma {
     template <typename T>
     static __device__ __forceinline__ void load_ldmatrix(
             tile<16, 8, T> & t, const T * __restrict__ xs0, const int stride) {
-#ifdef NEW_MMA_AVAILABLE
+#if defined(AMD_MMA_AVAILABLE)
+        int64_t* xi = (int64_t*) t.x;
+        const int64_t* xs = (int64_t*) ((const int*) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
+        xi[0] = xs[0];
+#elif defined(NEW_MMA_AVAILABLE)
         int * xi = (int * ) t.x;
         const int * xs = (const int *) xs0 + (threadIdx.x % t.I) * stride + (threadIdx.x / t.I) * (t.J / 2);
         asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
