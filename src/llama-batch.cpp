@@ -279,9 +279,15 @@ llama_sbatch::llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple
             );
 }
 
-llama_batch_allocr::llama_batch_allocr(struct llama_batch in_batch, llama_pos p0) {
+llama_batch_allocr::llama_batch_allocr() = default;
+
+bool llama_batch_allocr::init(struct llama_batch in_batch, llama_pos p0) {
+    GGML_ASSERT(in_batch.n_tokens > 0);
+
+    clear();
+
     batch = in_batch;
-    GGML_ASSERT(batch.n_tokens > 0);
+
     if (!batch.pos) {
         assert(p0 >= 0);
         pos.resize(batch.n_tokens);
@@ -290,6 +296,7 @@ llama_batch_allocr::llama_batch_allocr(struct llama_batch in_batch, llama_pos p0
         }
         batch.pos = pos.data();
     }
+
     if (!batch.n_seq_id) {
         n_seq_id.resize(batch.n_tokens);
         for (int32_t i = 0; i < batch.n_tokens; i++) {
@@ -297,6 +304,7 @@ llama_batch_allocr::llama_batch_allocr(struct llama_batch in_batch, llama_pos p0
         }
         batch.n_seq_id = n_seq_id.data();
     }
+
     if (!batch.seq_id) {
         seq_id.resize(batch.n_tokens + 1);
         seq_id[batch.n_tokens] = NULL;
@@ -305,12 +313,27 @@ llama_batch_allocr::llama_batch_allocr(struct llama_batch in_batch, llama_pos p0
         }
         batch.seq_id = seq_id.data();
     }
+
     if (!batch.logits) {
         // by default return the output only for the last token
         output.resize(batch.n_tokens);
         output[output.size() - 1] = true;
         batch.logits = output.data();
     }
+
+    return true;
+}
+
+const llama_batch & llama_batch_allocr::get_batch() const {
+    return batch;
+}
+
+void llama_batch_allocr::clear() {
+    batch = {};
+    pos.clear();
+    n_seq_id.clear();
+    seq_id.clear();
+    output.clear();
 }
 
 //
