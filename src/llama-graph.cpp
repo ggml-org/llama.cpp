@@ -1257,7 +1257,11 @@ ggml_tensor * llm_graph_context::build_attn(
     // store to KV cache
     {
         ggml_build_forward_expand(gf, kv_state->cpy_k(ctx0, k_cur, il));
-        ggml_build_forward_expand(gf, kv_state->cpy_v(ctx0, v_cur, il));
+
+        // note: MLA with flash attention now uses the last 512 elements of K-cache in place of a V-cache
+        if (!v_mla || !cparams.flash_attn) {
+            ggml_build_forward_expand(gf, kv_state->cpy_v(ctx0, v_cur, il));
+        }
     }
 
     const auto & kq_mask = inp->get_kq_mask();
@@ -1341,7 +1345,11 @@ ggml_tensor * llm_graph_context::build_attn(
     // store to KV cache
     {
         ggml_build_forward_expand(gf, kv_state->cpy_k(ctx0, k_cur, il));
-        ggml_build_forward_expand(gf, kv_state->cpy_v(ctx0, v_cur, il));
+
+        // note: MLA with flash attention now uses the last 512 elements of K-cache in place of a V-cache
+        if (!v_mla || !cparams.flash_attn) {
+            ggml_build_forward_expand(gf, kv_state->cpy_v(ctx0, v_cur, il));
+        }
     }
 
     const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
