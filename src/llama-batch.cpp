@@ -1,5 +1,9 @@
 #include "llama-batch.h"
 
+#include "llama-impl.h"
+#include "llama-cparams.h"
+#include "llama-vocab.h"
+
 #include <cassert>
 #include <cstring>
 #include <algorithm>
@@ -281,12 +285,26 @@ llama_sbatch::llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple
 
 llama_batch_allocr::llama_batch_allocr() = default;
 
-bool llama_batch_allocr::init(struct llama_batch in_batch, llama_pos p0) {
-    GGML_ASSERT(in_batch.n_tokens > 0);
-
+bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab & vocab, llama_pos p0) {
     clear();
 
-    batch = in_batch;
+    batch = batch_inp;
+
+    GGML_ASSERT(batch.n_tokens > 0);
+
+    if (batch.token) {
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= vocab.n_tokens()) {
+                LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
+                return false;
+            }
+
+            if (batch.seq_id && (batch.seq_id[i][0] < 0 || batch.seq_id[i][0] >= LLAMA_MAX_PARALLEL_SEQUENCES)) {
+                LLAMA_LOG_ERROR("%s: invalid seq_id[%d] = %d > %d\n", __func__, i, batch.seq_id[i][0], LLAMA_MAX_PARALLEL_SEQUENCES);
+                return false;
+            }
+        }
+    }
 
     if (!batch.pos) {
         assert(p0 >= 0);

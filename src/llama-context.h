@@ -102,8 +102,8 @@ struct llama_context {
             llama_memory_state_i * mstate,
                      ggml_status & ret);
 
-    int encode(llama_batch & inp_batch);
-    int decode(llama_batch & inp_batch);
+    int encode(const llama_batch & batch_inp);
+    int decode(const llama_batch & batch_inp);
 
     //
     // state save/load

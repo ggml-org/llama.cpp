@@ -83,7 +83,7 @@ public:
     llama_batch_allocr();
 
     // optionally fulfill the batch returned by llama_batch_get_one
-    bool init(llama_batch in_batch, llama_pos p0);
+    bool init(const llama_batch & batch_inp, const llama_vocab & vocab, llama_pos p0);
 
     const llama_batch & get_batch() const;
 

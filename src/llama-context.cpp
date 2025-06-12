@@ -721,15 +721,17 @@ llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, 
     return res;
 }
 
-int llama_context::encode(llama_batch & inp_batch) {
-    if (inp_batch.n_tokens == 0) {
+int llama_context::encode(const llama_batch & batch_inp) {
+    if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
     }
 
     // temporary allocate memory for the input batch if needed
     // note: during encode, we always pass the full sequence starting from pos = 0
-    batch_allocr->init(inp_batch, inp_batch.pos ? -1 : 0);
+    if (!batch_allocr->init(batch_inp, model.vocab, batch_inp.pos ? -1 : 0)) {
+        return -1;
+    }
 
     const llama_batch & batch = batch_allocr->get_batch();
 
@@ -738,21 +740,6 @@ int llama_context::encode(llama_batch & inp_batch) {
     const auto & hparams = model.hparams;
 
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
-
-    // TODO: move the validation to the llama_batch_allocr
-    if (batch.token) {
-        for (uint32_t i = 0; i < n_tokens; ++i) {
-            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= model.vocab.n_tokens()) {
-                LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
-                return -1;
-            }
-
-            if (batch.seq_id && (batch.seq_id[i][0] < 0 || batch.seq_id[i][0] >= LLAMA_MAX_PARALLEL_SEQUENCES)) {
-                LLAMA_LOG_ERROR("%s: invalid seq_id[%d] = %d > %d\n", __func__, i, batch.seq_id[i][0], LLAMA_MAX_PARALLEL_SEQUENCES);
-                throw -1;
-            }
-        }
-    }
 
     // micro-batching is not possible for non-causal encoding, so we process the batch in a single shot
     GGML_ASSERT(cparams.n_ubatch >= (uint32_t) n_tokens && "encoder requires n_ubatch >= n_tokens");
@@ -897,26 +884,28 @@ int llama_context::encode(llama_batch & inp_batch) {
     return 0;
 }
 
-int llama_context::decode(llama_batch & inp_batch) {
+int llama_context::decode(const llama_batch & batch_inp) {
     if (!memory) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
-        return encode(inp_batch);
+        return encode(batch_inp);
     }
 
-    if (inp_batch.n_tokens == 0) {
+    if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
     }
 
-    if (!inp_batch.pos) {
-        if (inp_batch.seq_id) {
+    if (!batch_inp.pos) {
+        if (batch_inp.seq_id) {
             LLAMA_LOG_ERROR("%s: pos == NULL, but seq_id != NULL\n", __func__);
             return -1;
         }
     }
 
     // temporary allocate memory for the input batch if needed
-    batch_allocr->init(inp_batch, inp_batch.pos ? -1 : memory->seq_pos_max(0) + 1);
+    if (!batch_allocr->init(batch_inp, model.vocab, batch_inp.pos ? -1 : memory->seq_pos_max(0) + 1)) {
+        return -1;
+    }
 
     const llama_batch & batch = batch_allocr->get_batch();
 
@@ -929,21 +918,6 @@ int llama_context::decode(llama_batch & inp_batch) {
     const uint32_t n_tokens_all = batch.n_tokens;
 
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
-
-    // TODO: move the validation to the llama_batch_allocr
-    if (batch.token) {
-        for (uint32_t i = 0; i < n_tokens_all; ++i) {
-            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= model.vocab.n_tokens()) {
-                LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
-                return -1;
-            }
-
-            if (batch.seq_id && (batch.seq_id[i][0] < 0 || batch.seq_id[i][0] >= LLAMA_MAX_PARALLEL_SEQUENCES)) {
-                LLAMA_LOG_ERROR("%s: invalid seq_id[%d] = %d >= %d\n", __func__, i, batch.seq_id[i][0], LLAMA_MAX_PARALLEL_SEQUENCES);
-                return -1;
-            }
-        }
-    }
 
     // this indicates we are doing pooled embedding
     const bool embd_pooled = cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
