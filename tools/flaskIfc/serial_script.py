@@ -3,19 +3,21 @@ import sys
 
 def send_serial_command(port, baudrate, command):
     try:
-        # Open the serial port with 1 second timeout
-        ser = serial.Serial(port, baudrate, timeout=60)
+        # Open the serial port with 1 second timeout (timeout = 60 but removed it for testing!)
+        ser = serial.Serial(port, baudrate)
 
-        ser.write(command.encode())  # Encode command to bytes
-        ser.write('\n'.encode())  # Encode command to bytes
+        ser.write((command + '\n').encode())  # Send command with newline
         
         # Wait to read the serial port
         data = '\0'
         while True:
             try:
                 line = ser.readline()
+                check = line.decode('utf-8')
+                if ("run-platform-done" in check) or ("@agilex7_dk_si_agf014ea" in check):
+                    break
                 if line: # Check if line is not empty
-                    data += line.decode('utf-8')  # Keep the line as-is with newline
+                    data += check  # Keep the line as-is with newline
                 else:
                     break  # Exit loop if no data is received
             except serial.SerialException as e:
@@ -25,7 +27,6 @@ def send_serial_command(port, baudrate, command):
                 ser.close()
                 return ("Program interrupted by user")
         ser.close()
-        print (data)
         return data
 
     except serial.SerialException as e:
@@ -42,3 +43,4 @@ if __name__ == "__main__":
     baudrate = int(sys.argv[2])
     command = sys.argv[3]
     response = send_serial_command(port, baudrate, command)
+    print(response)
