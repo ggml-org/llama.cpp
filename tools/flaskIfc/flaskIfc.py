@@ -1,5 +1,9 @@
 from flask import Flask, render_template, request
 import subprocess
+import threading
+import time
+
+job_status = {"running": False, "result": "", "thread": None}
 
 app = Flask(__name__)
 
@@ -9,6 +13,11 @@ def index():
 
 @app.route('/submit', methods=['POST'])
 def submit():
+    global job_status
+
+    if job_status["running"]:
+        return "<h2>A model is already running. Please wait or abort.</h2>"
+
     #./run_platform_test.sh "my cat's name" "10" "tinyllama-vo-5m-para.gguf" "none"
     model = request.form.get('model')
     backend = request.form.get('backend')
@@ -25,7 +34,6 @@ def submit():
     if not model_path:
         return f"<h2>Error: Model path not found for '{model}'</h2>"
 
-   # Below is for reference i will remove later
     # Build llama-cli command
     #command = [
     #    "./llama-cli",
@@ -43,18 +51,47 @@ def submit():
 
     # Currently the baudrate is hard coded to 921600 but can be parameterized
     baudrate = '921600'
-
     script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_platform_test.sh"
+    #command = script_path prompt tokens model backend
+    #command = script_path
     command = f"{script_path} \"{prompt}\" {tokens} {model_path} {backend}"
 
 
-    try:
-        result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
-        output = result.stdout  # This should have \n
-    except subprocess.CalledProcessError as e:
-        output = f"Error running model: {e.stderr}"
+    def run_script():
+        try:
+            result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
+            job_status["result"] = result.stdout
+        except subprocess.CalledProcessError as e:
+            job_status["result"] = f"Error: {e.stderr}"
+        finally:
+            job_status["running"] = False
 
-    return render_template('result.html', output=output)
+    thread = threading.Thread(target=run_script)
+    job_status = {"running": True, "result": "", "thread": thread}
+    thread.start()
+
+    return render_template("processing.html")
+
+@app.route('/status')
+def status():
+    if job_status["running"]:
+        return "running"
+    else:
+        return "done"
+
+@app.route('/result')
+def result():
+    return render_template("result.html", output=job_status["result"])
+
+@app.route('/abort')
+def abort():
+    global job_status
+    if job_status["running"] and job_status["thread"].is_alive():
+        # Use subprocess.Popen + pid handling instead for real process termination
+        job_status["running"] = False
+        job_status["result"] = "Aborted by user."
+        return "<h2>Job aborted.</h2><a href='/'>Home</a>"
+    return "<h2>No job running.</h2><a href='/'>Home</a>"
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5001)
