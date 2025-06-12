@@ -33,11 +33,11 @@ else()
 endif()
 
 set(TEMPLATE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/build-info.cpp.in")
-set(OUTPUT_FILE   "${CMAKE_CURRENT_SOURCE_DIR}/build-info.cpp")
+set(OUTPUT_FILE   "${CMAKE_CURRENT_BINARY_DIR}/build-info.cpp")
 configure_file(${TEMPLATE_FILE} ${OUTPUT_FILE})
 
 set(TARGET build_info)
-add_library(${TARGET} OBJECT build-info.cpp)
+add_library(${TARGET} OBJECT ${OUTPUT_FILE})
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
 endif()
