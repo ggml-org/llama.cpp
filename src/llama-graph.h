@@ -599,7 +599,8 @@ struct llm_graph_context {
              ggml_tensor * state_copy,
                  int32_t   state_size,
                  int32_t   n_seqs,
-                    bool   avoid_copies = false) const;
+       const std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>
+                         & get_state_rows = ggml_get_rows) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
              ggml_cgraph * gf,
