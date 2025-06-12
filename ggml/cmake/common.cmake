@@ -37,6 +37,7 @@ function(ggml_get_system_arch)
             CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|i686|AMD64|amd64)$"))
         set(GGML_SYSTEM_ARCH "x86" PARENT_SCOPE)
     elseif ("${CMAKE_SYSTEM_PROCESSOR} " STREQUAL "ppc64le " OR
+            "${CMAKE_SYSTEM_PROCESSOR} " STREQUAL "ppc64 " OR
             "${CMAKE_SYSTEM_PROCESSOR} " STREQUAL "powerpc ")
         set(GGML_SYSTEM_ARCH "PowerPC" PARENT_SCOPE)
     elseif (${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
