@@ -52,8 +52,6 @@ def submit():
     # Currently the baudrate is hard coded to 921600 but can be parameterized
     baudrate = '921600'
     script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_platform_test.sh"
-    #command = script_path prompt tokens model backend
-    #command = script_path
     command = f"{script_path} \"{prompt}\" {tokens} {model_path} {backend}"
 
 
@@ -94,4 +92,4 @@ def abort():
     return "<h2>No job running.</h2><a href='/'>Home</a>"
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5001)
+    app.run(debug=True, port=5000)
