@@ -5,6 +5,10 @@
 #include "ggml-quants.h"
 #include "quants.h"
 
+#if defined(__APPLE__)
+#include "apple-fallback.h"
+#endif
+
 #include <string.h>
 #include <assert.h>
 #include <float.h>
