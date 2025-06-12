@@ -1,0 +1,132 @@
+{%- set today = strftime_now("%Y-%m-%d") %}
+{%- set default_system_message = "You are Mistral Small 3, a Large Language Model (LLM) created by Mistral AI, a French startup headquartered in Paris.\
+Your knowledge base was last updated on 2023-10-01. The current date is " + today + ".\
+\
+When you're not sure about some information, you say that you don't have the information and don't make up anything.\
+If the user's question is not clear, ambiguous, or does not provide enough context for you to accurately answer the question, you do not try to answer it right away and you rather ask the user to clarify their request (e.g. \"What are some good restaurants around me?\" => \"Where are you?\" or \"When is the next flight to Tokyo\" => \"Where do you travel from?\")" %}
+
+{{- bos_token }}
+
+{%- if messages[0]['role'] == 'system' %}
+    {%- if messages[0]['content'] is string %}
+        {%- set system_message = messages[0]['content'] %}
+        {%- set loop_messages = messages[1:] %}
+    {%- else %}
+        {%- set system_message = messages[0]['content'][0]['text'] %}
+        {%- set loop_messages = messages[1:] %}
+    {%- endif %}
+{%- else %}
+    {%- set system_message = default_system_message %}
+    {%- set loop_messages = messages %}
+{%- endif %}
+{%- if not tools is defined %}
+    {%- set tools = none %}
+{%- elif tools is not none %}
+    {%- set parallel_tool_prompt = "You are a helpful assistant that can call tools. If you call one or more tools, format them in a single JSON array or objects, where each object is a tool call, not as separate objects outside of an array or multiple arrays. Use the format [{\"name\": tool call name, \"arguments\": tool call arguments}, additional tool calls] if you call more than one tool. If you call tools, do not attempt to interpret them or otherwise provide a response until you receive a tool call result that you can interpret for the user." %}
+    {%- if system_message is defined %}
+        {%- set system_message = parallel_tool_prompt + "\
+\
+" + system_message %}
+    {%- else %}
+        {%- set system_message = parallel_tool_prompt %}
+    {%- endif %}
+{%- endif %}
+{{- '[SYSTEM_PROMPT]' + system_message + '[/SYSTEM_PROMPT]' }}
+
+{%- set user_messages = loop_messages | selectattr("role", "equalto", "user") | list %}
+
+{%- set filtered_messages = [] %}
+{%- for message in loop_messages %}
+    {%- if message["role"] not in ["tool", "tool_results"] and not message.get("tool_calls") %}
+        {%- set filtered_messages = filtered_messages + [message] %}
+    {%- endif %}
+{%- endfor %}
+
+{%- for message in filtered_messages %}
+    {%- if (message["role"] == "user") != (loop.index0 % 2 == 0) %}
+        {{- raise_exception("After the optional system message, conversation roles must alternate user/assistant/user/assistant/...") }}
+    {%- endif %}
+{%- endfor %}
+
+{%- for message in loop_messages %}
+    {%- if message["role"] == "user" %}
+        {%- if tools is not none and (message == user_messages[-1]) %}
+            {{- "[AVAILABLE_TOOLS] [" }}
+            {%- for tool in tools %}
+                {%- set tool = tool.function %}
+                {{- '{"type": "function", "function": {' }}
+                {%- for key, val in tool.items() if key != "return" %}
+                    {%- if val is string %}
+                        {{- '"' + key + '": "' + val + '"' }}
+                    {%- else %}
+                        {{- '"' + key + '": ' + val|tojson }}
+                    {%- endif %}
+                    {%- if not loop.last %}
+                        {{- ", " }}
+                    {%- endif %}
+                {%- endfor %}
+                {{- "}}" }}
+                {%- if not loop.last %}
+                    {{- ", " }}
+                {%- else %}
+                    {{- "]" }}
+                {%- endif %}
+            {%- endfor %}
+            {{- "[/AVAILABLE_TOOLS]" }}
+        {%- endif %}
+        {%- if message['content'] is string %}
+        {{- '[INST]' + message['content'] + '[/INST]' }}
+        {%- else %}
+                {{- '[INST]' }}
+                {%- for block in message['content'] %}
+                        {%- if block['type'] == 'text' %}
+                                {{- block['text'] }}
+                        {%- elif block['type'] == 'image' or block['type'] == 'image_url' %}
+                                {{- '[IMG]' }}
+                            {%- else %}
+                                {{- raise_exception('Only text and image blocks are supported in message content!') }}
+                            {%- endif %}
+                    {%- endfor %}
+                {{- '[/INST]' }}
+            {%- endif %}
+    {%- elif message["role"] == "tool_calls" or message.tool_calls is defined %}
+        {%- if message.tool_calls is defined %}
+            {%- set tool_calls = message.tool_calls %}
+        {%- else %}
+            {%- set tool_calls = message.content %}
+        {%- endif %}
+        {{- "[TOOL_CALLS] [" }}
+        {%- for tool_call in tool_calls %}
+            {%- set out = tool_call.function|tojson %}
+            {{- out[:-1] }}
+            {%- if not tool_call.id is defined or tool_call.id|length < 9 %}
+                {{- raise_exception("Tool call IDs should be alphanumeric strings with length >= 9! (1)" + tool_call.id) }}
+            {%- endif %}
+            {{- ', "id": "' + tool_call.id[-9:] + '"}' }}
+            {%- if not loop.last %}
+                {{- ", " }}
+            {%- else %}
+                {{- "]" + eos_token }}
+            {%- endif %}
+        {%- endfor %}
+    {%- elif message['role'] == 'assistant' %}
+        {%- if message['content'] is string %}
+            {{- message['content'] + eos_token }}
+        {%- else %}
+            {{- message['content'][0]['text'] + eos_token }}
+        {%- endif %}
+    {%- elif message["role"] == "tool_results" or message["role"] == "tool" %}
+        {%- if message.content is defined and message.content.content is defined %}
+            {%- set content = message.content.content %}
+        {%- else %}
+            {%- set content = message.content %}
+        {%- endif %}
+        {{- '[TOOL_RESULTS] {"content": ' + content|string + ", " }}
+        {%- if not message.tool_call_id is defined or message.tool_call_id|length < 9 %}
+            {{- raise_exception("Tool call IDs should be alphanumeric strings with length >= 9! (2)" + message.tool_call_id) }}
+        {%- endif %}
+        {{- '"call_id": "' + message.tool_call_id[-9:] + '"}[/TOOL_RESULTS]' }}
+    {%- else %}
+        {{- raise_exception("Only user and assistant roles are supported, with the exception of an initial optional system message!") }}
+    {%- endif %}
+{%- endfor %}
