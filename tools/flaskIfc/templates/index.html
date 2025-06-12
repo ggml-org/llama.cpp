@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>TSAVORITE Web UI For Model Inference</title>
+</head>
+<body>
+    <h1>Model Inference Configuration</h1>
+    <form action="/submit" method="post">
+        <!-- Model Selection -->
+        <label for="model">Choose a model:</label>
+        <select name="model" id="model">
+            <option value="tiny-llama">Tiny LLaMA</option>
+            <option value="Tiny-llama-F32">LLaMA 2 1B</option>
+        </select>
+        <br><br>
+
+        <!-- Backend Selection -->
+        <label for="backend">Select backend:</label>
+        <select name="backend" id="backend">
+            <option value="tSavorite">TSAVORITE</option>
+            <option value="none">CPU</option>
+        </select>
+        <br><br>
+
+        <!-- Number of Tokens -->
+        <label for="tokens">Number of predicted tokens:</label>
+        <input type="number" name="tokens" id="tokens" min="1" max="1000" value="50">
+        <br><br>
+
+        <!-- Prompt Input -->
+        <label for="prompt">Prompt:</label><br>
+        <textarea name="prompt" id="prompt" rows="4" cols="50" placeholder="Enter your prompt here..."></textarea>
+        <br><br>
+
+        <button type="submit">Submit</button>
+    </form>
+</body>
+</html>

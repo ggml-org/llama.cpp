@@ -10,13 +10,12 @@ def send_serial_command(port, baudrate, command):
         ser.write('\n'.encode())  # Encode command to bytes
         
         # Wait to read the serial port
-        # Need to add a break somewhere for when we see the phrase "root@name"
         data = '\0'
         while True:
             try:
                 line = ser.readline()
                 if line: # Check if line is not empty
-                    data += (line.decode('utf-8').strip()) # Decode and strip to remove extra chars
+                    data += line.decode('utf-8')  # Keep the line as-is with newline
                 else:
                     break  # Exit loop if no data is received
             except serial.SerialException as e:
@@ -26,6 +25,7 @@ def send_serial_command(port, baudrate, command):
                 ser.close()
                 return ("Program interrupted by user")
         ser.close()
+        print (data)
         return data
 
     except serial.SerialException as e:
@@ -42,4 +42,3 @@ if __name__ == "__main__":
     baudrate = int(sys.argv[2])
     command = sys.argv[3]
     response = send_serial_command(port, baudrate, command)
-    print(response)
