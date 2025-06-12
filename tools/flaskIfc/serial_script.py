@@ -3,7 +3,6 @@ import sys
 
 def send_serial_command(port, baudrate, command):
     try:
-        # Open the serial port with 1 second timeout (timeout = 60 but removed it for testing!)
         ser = serial.Serial(port, baudrate)
 
         ser.write((command + '\n').encode())  # Send command with newline
