@@ -738,12 +738,10 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const uint32_t n_tokens = batch.n_tokens;
 
-    const auto & hparams = model.hparams;
-
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
     // micro-batching is not possible for non-causal encoding, so we process the batch in a single shot
-    GGML_ASSERT(cparams.n_ubatch >= (uint32_t) n_tokens && "encoder requires n_ubatch >= n_tokens");
+    GGML_ASSERT(cparams.n_ubatch >= n_tokens && "encoder requires n_ubatch >= n_tokens");
 
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();
@@ -753,6 +751,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
     embd_seq.clear();
 
     n_queued_tokens += n_tokens;
+
+    const auto & hparams = model.hparams;
 
     const int64_t n_embd = hparams.n_embd;
 
