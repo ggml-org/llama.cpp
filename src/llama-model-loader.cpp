@@ -164,6 +164,7 @@ namespace GGUFMeta {
                 case LLAMA_KV_OVERRIDE_TYPE_INT:   return "int";
                 case LLAMA_KV_OVERRIDE_TYPE_FLOAT: return "float";
                 case LLAMA_KV_OVERRIDE_TYPE_STR:   return "str";
+                case LLAMA_KV_OVERRIDE_TYPE_UINT: return "uint";
             }
             return "unknown";
         }
@@ -179,6 +180,9 @@ namespace GGUFMeta {
                     } break;
                     case LLAMA_KV_OVERRIDE_TYPE_INT:   {
                         LLAMA_LOG_INFO("%" PRId64 "\n", ovrd->val_i64);
+                    } break;
+                    case LLAMA_KV_OVERRIDE_TYPE_UINT:   {
+                        LLAMA_LOG_INFO("%" PRIu64 "\n", ovrd->val_u64);
                     } break;
                     case LLAMA_KV_OVERRIDE_TYPE_FLOAT: {
                         LLAMA_LOG_INFO("%.6f\n", ovrd->val_f64);
@@ -214,6 +218,10 @@ namespace GGUFMeta {
         try_override(OT & target, const struct llama_model_kv_override * ovrd) {
             if (validate_override(LLAMA_KV_OVERRIDE_TYPE_INT, ovrd)) {
                 target = ovrd->val_i64;
+                return true;
+            }
+            if (validate_override(LLAMA_KV_OVERRIDE_TYPE_UINT, ovrd)) {
+                target = ovrd->val_u64;
                 return true;
             }
             return false;
