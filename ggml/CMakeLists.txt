@@ -368,6 +368,7 @@ if (MSVC)
         /wd4005  # Macro redefinition
         /wd4244  # Conversion from one type to another type, possible loss of data
         /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4305  # Conversion from 'type1' to 'type2', possible loss of data
         /wd4566  # Conversion from 'char' to 'wchar_t', possible loss of data
         /wd4996  # Disable POSIX deprecation warnings
         /wd4702  # Unreachable code warnings
@@ -414,4 +415,20 @@ if (MSVC)
         disable_msvc_warnings(simple-ctx)
         disable_msvc_warnings(simple-backend)
     endif()
+
+    if (GGML_BUILD_TESTS)
+        disable_msvc_warnings(test-mul-mat)
+        disable_msvc_warnings(test-arange)
+        disable_msvc_warnings(test-backend-ops)
+        disable_msvc_warnings(test-cont)
+        disable_msvc_warnings(test-conv-transpose)
+        disable_msvc_warnings(test-conv-transpose-1d)
+        disable_msvc_warnings(test-conv1d)
+        disable_msvc_warnings(test-conv2d)
+        disable_msvc_warnings(test-conv2d-dw)
+        disable_msvc_warnings(test-customop)
+        disable_msvc_warnings(test-dup)
+        disable_msvc_warnings(test-opt)
+        disable_msvc_warnings(test-pool)
+    endif ()
 endif()
