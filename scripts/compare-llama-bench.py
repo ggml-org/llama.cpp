@@ -129,7 +129,6 @@ known_args, unknown_args = parser.parse_known_args()
 
 logging.basicConfig(level=logging.DEBUG if known_args.verbose else logging.INFO)
 
-# Check for matplotlib if plotting is requested
 if known_args.plot:
     try:
         import matplotlib.pyplot as plt
@@ -511,7 +510,6 @@ else:
 
 name_compare = bench_data.get_commit_name(hexsha8_compare)
 
-
 # If the user provided columns to group the results by, use them:
 if known_args.show is not None:
     show = known_args.show.split(",")
@@ -556,6 +554,14 @@ else:
             show.remove(prop)
         except ValueError:
             pass
+
+    # add plot_x parameter to if it's not already there
+    if known_args.plot:
+        for k, v in PRETTY_NAMES.items():
+            if v == known_args.plot_x and k not in show:
+                show.append(k)
+                break
+
     rows_show = bench_data.get_rows(show, hexsha8_baseline, hexsha8_compare)
 
 if not rows_show:
@@ -629,7 +635,6 @@ if known_args.plot:
                 plot_x_label = plot_x_param
             else:
                 logger.error(f"Parameter '{plot_x_param}' not found in current table columns. Available columns: {', '.join(data_headers)}")
-                logger.error(f"To plot by '{plot_x_param}', include it in --show parameter or ensure it varies in your data.")
                 return
 
         grouped_data = {}
@@ -671,7 +676,7 @@ if known_args.plot:
 
                 group_key_parts.append(f"Test={test_name}")
 
-            group_key = tuple(sorted(group_key_parts))
+            group_key = tuple(group_key_parts)
 
             if group_key not in grouped_data:
                 grouped_data[group_key] = []
@@ -692,7 +697,7 @@ if known_args.plot:
             cols = 1 if num_groups == 1 else min(max_cols, num_groups)
             rows = ceil(num_groups / cols)
 
-            # scale figure size by grid dimensions
+            # Scale figure size by grid dimensions
             w, h = base_size
             fig, ax_arr = plt.subplots(rows, cols,
                                        figsize=(w * cols, h * rows),
@@ -726,7 +731,7 @@ if known_args.plot:
             ax.plot(x_values, compare_vals, 's--', color='lightcoral', alpha=0.8,
                     label=f'{compare_name}', linewidth=2, markersize=6)
 
-            if plot_x_param == "n_depth" and max(x_values) > 0 and max(x_values) > min(x_values) * 4:
+            if plot_x_param == "n_depth" and min(x_values) > 0 and max(x_values) > min(x_values) * 4:
                 ax.set_xscale('log', base=2)
                 unique_x = sorted(set(x_values))
                 ax.set_xticks(unique_x)
@@ -741,7 +746,7 @@ if known_args.plot:
             title = ', '.join(title_parts) if title_parts else "Performance comparison"
 
             ax.set_xlabel(plot_x_label, fontsize=12, fontweight='bold')
-            ax.set_ylabel('Tokens per Second (t/s)', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Tokens per second (t/s)', fontsize=12, fontweight='bold')
             ax.set_title(title, fontsize=12, fontweight='bold')
             ax.legend(loc='best', fontsize=10)
             ax.grid(True, alpha=0.3)
@@ -751,7 +756,7 @@ if known_args.plot:
         for i in range(plot_idx, len(axes)):
             axes[i].set_visible(False)
 
-        fig.suptitle(f'Performance comparison: {compare_name} vs {baseline_name}',
+        fig.suptitle(f'Performance comparison: {compare_name} vs. {baseline_name}',
                      fontsize=14, fontweight='bold')
         fig.subplots_adjust(top=1)
 
