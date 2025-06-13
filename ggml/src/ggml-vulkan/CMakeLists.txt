@@ -49,15 +49,7 @@ if (Vulkan_FOUND)
                              ../../include/ggml-vulkan.h
                             )
 
-    set(VULKAN_SHADER_GEN_CMAKE_ARGS
-        -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}
-        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY=${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
-    )
-
-    set(VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS "")
-    if (CMAKE_BUILD_TYPE AND CMAKE_BUILD_TYPE MATCHES "Debug|Release|MinSizeRel|RelWithDebInfo")
-        list(APPEND VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS --config=${CMAKE_BUILD_TYPE})
-    endif()
+    set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
 
     # Test all shader extensions
     test_shader_extension_support(
@@ -136,38 +128,37 @@ if (Vulkan_FOUND)
         set(HOST_CMAKE_TOOLCHAIN_FILE "")
     endif()
 
-    # Always use ExternalProject_Add approach
     include(ExternalProject)
 
-    # Add toolchain file if cross-compiling
     if (CMAKE_CROSSCOMPILING)
         list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE})
         message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
     endif()
 
-    # Native build through ExternalProject_Add
     ExternalProject_Add(
         vulkan-shaders-gen
         SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders
-        CMAKE_ARGS ${VULKAN_SHADER_GEN_CMAKE_ARGS}
-        BUILD_COMMAND ${CMAKE_COMMAND} --build . ${VULKAN_SHADER_GEN_CMAKE_BUILD_ARGS}
-        INSTALL_COMMAND ${CMAKE_COMMAND} --install .
-        INSTALL_DIR ${CMAKE_BINARY_DIR}
+        CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/$<CONFIG>
+                   -DCMAKE_BUILD_TYPE=$<CONFIG>
+                   ${VULKAN_SHADER_GEN_CMAKE_ARGS}
+
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
     )
-    ExternalProject_Add_StepTargets(vulkan-shaders-gen build install)
+    ExternalProject_Add_StepTargets(vulkan-shaders-gen build)
 
     set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
-    set (_ggml_vk_genshaders_cmd ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/vulkan-shaders-gen${_ggml_vk_host_suffix})
-    set (_ggml_vk_header     ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp)
-    set (_ggml_vk_source     ${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.cpp)
-    set (_ggml_vk_input_dir  ${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders)
-    set (_ggml_vk_output_dir ${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders.spv)
+    set (_ggml_vk_genshaders_dir "$<TARGET_PROPERTY:vulkan-shaders-gen,_EP_BINARY_DIR>")
+    set (_ggml_vk_genshaders_cmd "${_ggml_vk_genshaders_dir}/$<CONFIG>/vulkan-shaders-gen${_ggml_vk_host_suffix}")
+    set (_ggml_vk_header     "${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.hpp")
+    set (_ggml_vk_source     "${CMAKE_CURRENT_BINARY_DIR}/ggml-vulkan-shaders.cpp")
+    set (_ggml_vk_input_dir  "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders")
+    set (_ggml_vk_output_dir "${CMAKE_CURRENT_BINARY_DIR}/vulkan-shaders.spv")
 
     file(GLOB _ggml_vk_shader_deps "${_ggml_vk_input_dir}/*.comp")
     set (_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen)
 
-    # Add build and install dependencies for all builds
-    set(_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen-build vulkan-shaders-gen-install)
+    # Add build dependencies for all builds
+    set(_ggml_vk_shader_deps ${_ggml_vk_shader_deps} vulkan-shaders-gen-build)
 
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
