@@ -125,6 +125,7 @@ parser.add_argument("-s", "--show", help=help_s)
 parser.add_argument("--verbose", action="store_true", help="increase output verbosity")
 parser.add_argument("--plot", help="generate a performance comparison plot and save to specified file (e.g., plot.png)")
 parser.add_argument("--plot_x", help="parameter to use as x axis for plotting (default: n_depth)", default="n_depth")
+parser.add_argument("--plot_log_scale", action="store_true", help="use log scale for x axis in plots (off by default)")
 
 known_args, unknown_args = parser.parse_known_args()
 
@@ -612,7 +613,7 @@ headers  = [PRETTY_NAMES[p] for p in show]
 headers += ["Test", f"t/s {name_baseline}", f"t/s {name_compare}", "Speedup"]
 
 if known_args.plot:
-    def create_performance_plot(table_data: list[list[str]], headers: list[str], baseline_name: str, compare_name: str, output_file: str, plot_x_param: str):
+    def create_performance_plot(table_data: list[list[str]], headers: list[str], baseline_name: str, compare_name: str, output_file: str, plot_x_param: str, log_scale: bool = False):
         try:
             import matplotlib.pyplot as plt
             import matplotlib
@@ -661,7 +662,7 @@ if known_args.plot:
                     base_test = test_name.split("@d")[0]
                     x_value = int(test_name.split("@d")[1])
                 else:
-                    assert False
+                    base_test = test_name
 
                 if base_test.strip():
                     group_key_parts.append(f"Test={base_test}")
@@ -731,7 +732,7 @@ if known_args.plot:
             ax.plot(x_values, compare_vals, 's--', color='lightcoral', alpha=0.8,
                     label=f'{compare_name}', linewidth=2, markersize=6)
 
-            if plot_x_param == "n_depth" and min(x_values) > 0 and max(x_values) > min(x_values) * 4:
+            if log_scale and min(x_values) > 0:
                 ax.set_xscale('log', base=2)
                 unique_x = sorted(set(x_values))
                 ax.set_xticks(unique_x)
@@ -764,7 +765,7 @@ if known_args.plot:
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
         plt.close()
 
-    create_performance_plot(table, headers, name_baseline, name_compare, known_args.plot, known_args.plot_x)
+    create_performance_plot(table, headers, name_baseline, name_compare, known_args.plot, known_args.plot_x, known_args.plot_log_scale)
 
 print(tabulate( # noqa: NP100
     table,
