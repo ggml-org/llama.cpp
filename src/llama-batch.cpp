@@ -372,14 +372,34 @@ bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab &
         LLAMA_LOG_DEBUG("%s:   n_outputs = %d\n", __func__, n_outputs);
 
         if (debug > 1) {
+            int seq_id_max = 0;
+            for (int32_t i = 0; i < batch.n_tokens; ++i) {
+                for (int s = 0; s < batch.n_seq_id[i]; ++s) {
+                    for (int s = 0; s < batch.n_seq_id[i]; ++s) {
+                        seq_id_max = std::max(seq_id_max, batch.seq_id[i][s]);
+                    }
+                }
+            }
+            ++seq_id_max;
+
             LLAMA_LOG_DEBUG("%s:   token     = [\n", __func__);
             for (int32_t i = 0; i < batch.n_tokens; ++i) {
-                std::stringstream ss;
+                std::vector<int8_t> seq_id(seq_id_max);
+
                 for (int s = 0; s < batch.n_seq_id[i]; ++s) {
-                    ss << batch.seq_id[i][s] << " ";
+                    seq_id[batch.seq_id[i][s]] = 1;
                 }
 
-                LLAMA_LOG_DEBUG("%s:  %4d: id = %6d (%8s), pos = %4d, n_seq_id = %2d, seq_id = [ %s], output = %d\n",
+                std::stringstream ss;
+                for (int s = 0; s < seq_id_max; ++s) {
+                    if (seq_id[s]) {
+                        ss << s%10;
+                    } else {
+                        ss << ".";
+                    }
+                }
+
+                LLAMA_LOG_DEBUG("%s:  %4d: id = %6d (%16s), pos = %4d, n_seq_id = %2d, seq_id = [%s], output = %d\n",
                         __func__, i, batch.token[i], vocab.token_to_piece(batch.token[i]).c_str(),
                         batch.pos[i], batch.n_seq_id[i], ss.str().c_str(), batch.logits[i]);
             }
