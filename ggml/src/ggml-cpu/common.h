@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ggml.h"
-#include "ggml-cpu-traits.h"
+#include "traits.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 

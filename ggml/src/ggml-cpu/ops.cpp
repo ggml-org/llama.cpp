@@ -8132,8 +8132,8 @@ static void ggml_compute_forward_rwkv_wkv6_f32(
         #define WKV_VECTOR_SIZE 4
     #endif
 
-    int wkv_vector_size;
     #ifdef WKV_VECTOR_SIZE
+        int wkv_vector_size;
         #if defined(__ARM_FEATURE_SVE)
             wkv_vector_size = svcntw();
         #else
@@ -8348,8 +8348,8 @@ static void ggml_compute_forward_gla_f32(
         #define GLA_VECTOR_SIZE 4
     #endif
 
-    int gla_vector_size;
     #ifdef GLA_VECTOR_SIZE
+        int gla_vector_size;
         #if defined(__ARM_FEATURE_SVE)
             gla_vector_size = svcntw();
         #else

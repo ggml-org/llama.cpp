@@ -342,7 +342,7 @@ int main(int argc, char ** argv) {
             }
             if (line == "/clear") {
                 ctx.n_past = 0;
-                llama_kv_self_seq_rm(ctx.lctx, 0, 1, -1); // keep BOS
+                llama_memory_seq_rm(llama_get_memory(ctx.lctx), 0, 1, -1); // keep BOS
                 LOG("Chat history cleared\n\n");
                 continue;
             }
