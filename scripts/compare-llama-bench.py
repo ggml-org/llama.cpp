@@ -548,7 +548,7 @@ else:
         except ValueError:
             pass
 
-    # add plot_x parameter to if it's not already there
+    # Add plot_x parameter to parameters to show if it's not already present:
     if known_args.plot:
         for k, v in PRETTY_NAMES.items():
             if v == known_args.plot_x and k not in show:
@@ -652,19 +652,16 @@ if known_args.plot:
                     if val is not None and str(val).strip():
                         group_key_parts.append(f"{header_name}={val}")
 
-                if plot_x_param == "n_prompt":
-                    assert "pp" in test_name, f"n_prompt test name {test_name} does not contain 'pp'"
+                if plot_x_param == "n_prompt" and "pp" in test_name:
                     base_test = test_name.split("@")[0]
                     x_value = base_test
                 elif plot_x_param == "n_gen" and "tg" in test_name:
-                    assert "tg" in test_name, f"n_gen test name {test_name} does not contain 'tg'"
                     x_value = test_name.split("@")[0]
                 elif plot_x_param == "n_depth" and "@d" in test_name:
-                    assert "@d" in test_name, f"n_depth test name {test_name} does not contain '@d'"
                     base_test = test_name.split("@d")[0]
                     x_value = int(test_name.split("@d")[1])
                 else:
-                    base_test = test_name
+                    assert False
 
                 if base_test.strip():
                     group_key_parts.append(f"Test={base_test}")
