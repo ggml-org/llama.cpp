@@ -102,4 +102,6 @@ private:
     std::vector<int32_t>        n_seq_id;
     std::vector<llama_seq_id *> seq_id;
     std::vector<int8_t>         output;
+
+    int debug;
 };
