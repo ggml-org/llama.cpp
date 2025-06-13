@@ -1654,9 +1654,9 @@ ggml_tensor * llm_graph_context::build_attn(
     // NOTICE: do_quant after the kvcache store.
     if (kv_self->do_quant(il)) {
 
-        if (il == 0) {
-            LLAMA_LOG_INFO("[llama-graph] do_quant !!!\n");
-        }
+        // if (il == 0) {
+        //     LLAMA_LOG_INFO("[llama-graph] do_quant !!!\n");
+        // }
 
         ggml_tensor * k_quant_op = kv_self->k_quant(ctx0, il);
         ggml_tensor * v_quant_op = kv_self->v_quant(ctx0, il);

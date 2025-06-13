@@ -13279,8 +13279,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                     mixed_config.group_size = 64;                   // Archive books in batches of 64 for efficiency
                     mixed_config.hot_type_k = GGML_TYPE_F32;        // Fresh tokens: keep in high-quality format like original manuscripts
                     mixed_config.hot_type_v = GGML_TYPE_F32;
-                    mixed_config.cold_type_k = GGML_TYPE_Q4_0;      // Archived tokens: compress like storing books in compact boxes
-                    mixed_config.cold_type_v = GGML_TYPE_Q4_0;
+                    mixed_config.cold_type_k = GGML_TYPE_F16;      // Archived tokens: compress like storing books in compact boxes
+                    mixed_config.cold_type_v = GGML_TYPE_F16;
                     mixed_config.quantization_threshold = 8;        //> When tokens > threshold + window size, compress threshold window into Quant.
                     mixed_config.fp16_window_size = 8;              //> Max 8 tokens in FP16 window
                     // mixed_config.quantization_threshold =  ggml_get_type_traits(GGML_TYPE_Q4_0)->blck_size;       // Keep the last 32 tokens on the "hot desk" in full precision

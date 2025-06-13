@@ -40,9 +40,9 @@ struct tensor_save_info {
 struct kqv_trace_data {
     std::vector<uint8_t> temp_data;
     int step_count = 0;
+    std::set<std::string> traced_tensors;
     std::unordered_map<std::string, int> tensor_counts;
     int target_layer = -1; // -1 means monitor all layers, >= 0 means monitor specific layer
-    bool trace_sources = true; // whether to trace source tensors
     std::string save_file; // GGUF file to save tensors to
     std::vector<tensor_save_info> saved_tensors; // tensors to save
     bool save_enabled = false; // whether saving is enabled
@@ -74,48 +74,6 @@ static int extract_layer_number(const char* tensor_name) {
         }
     }
 
-    // Look for "_l" pattern (e.g., "kqv_out_l0")
-    size_t l_pos = name.find("_l");
-    if (l_pos != std::string::npos) {
-        size_t start = l_pos + 2;
-        if (start < name.length() && std::isdigit(name[start])) {
-            size_t end = start;
-            while (end < name.length() && std::isdigit(name[end])) {
-                end++;
-            }
-
-            if (end > start) {
-                std::string layer_str = name.substr(start, end - start);
-                return std::stoi(layer_str);
-            }
-        }
-    }
-
-    // Look for "layer" or "blk" pattern
-    size_t layer_pos = name.find("layer");
-    if (layer_pos == std::string::npos) {
-        layer_pos = name.find("blk");
-    }
-
-    if (layer_pos != std::string::npos) {
-        size_t start = layer_pos;
-        while (start < name.length() && !std::isdigit(name[start])) {
-            start++;
-        }
-
-        if (start < name.length()) {
-            size_t end = start;
-            while (end < name.length() && std::isdigit(name[end])) {
-                end++;
-            }
-
-            if (end > start) {
-                std::string layer_str = name.substr(start, end - start);
-                return std::stoi(layer_str);
-            }
-        }
-    }
-
     return -1;
 }
 
@@ -126,7 +84,6 @@ static bool is_kqv_out_tensor(const char* tensor_name) {
 }
 
 static bool should_monitor_tensor(const char* tensor_name, int target_layer) {
-    LOG("[KQV-TRACE] Checking tensor: %s, target_layer: %d\n", tensor_name, target_layer);
     if (!is_kqv_out_tensor(tensor_name)) {
         return false;
     }
@@ -231,7 +188,7 @@ static std::string ggml_ne_string(const ggml_tensor * t) {
 /**
  * Save tensor data for later writing to GGUF file
  */
-static void save_tensor_data(kqv_trace_data* cb_data, struct ggml_tensor* tensor, const std::string& prefix = "") {
+static void save_tensor_data(kqv_trace_data* cb_data, struct ggml_tensor* tensor) {
     if (!cb_data->save_enabled || !tensor) return;
 
     // Get tensor data
@@ -247,10 +204,8 @@ static void save_tensor_data(kqv_trace_data* cb_data, struct ggml_tensor* tensor
         data = (uint8_t*)tensor->data;
     }
 
-    // Create unique name with prefix and step count
-    std::string save_name = prefix.empty() ?
-        std::string(tensor->name ? tensor->name : "unnamed") :
-        prefix + "_" + std::string(tensor->name ? tensor->name : "unnamed");
+    // Create unique name with step count
+    std::string save_name = std::string(tensor->name ? tensor->name : "unnamed");
     save_name += "_step_" + std::to_string(cb_data->step_count);
 
     // Save tensor info
@@ -261,9 +216,6 @@ static void save_tensor_data(kqv_trace_data* cb_data, struct ggml_tensor* tensor
         data,
         ggml_nbytes(tensor)
     );
-
-    LOG("[GGUF-SAVE] Saved tensor: %s, type: %s, size: %zu bytes\n",
-        save_name.c_str(), ggml_type_name(tensor->type), ggml_nbytes(tensor));
 }
 
 /**
@@ -287,7 +239,6 @@ static bool write_tensors_to_gguf(const kqv_trace_data* cb_data) {
     gguf_set_val_str(ctx, "kqv_trace.description", "KQV output tensors and their inputs traced from llama.cpp");
     gguf_set_val_i32(ctx, "kqv_trace.total_steps", cb_data->step_count);
     gguf_set_val_i32(ctx, "kqv_trace.target_layer", cb_data->target_layer);
-    gguf_set_val_bool(ctx, "kqv_trace.trace_sources", cb_data->trace_sources);
     gguf_set_val_i32(ctx, "kqv_trace.tensor_count", (int32_t)cb_data->saved_tensors.size());
 
     // Create GGML context for tensor data
@@ -319,9 +270,12 @@ static bool write_tensors_to_gguf(const kqv_trace_data* cb_data) {
         memcpy(tensor->data, tensor_info.data.data(), tensor_info.data.size());
 
         // Add to GGUF
-        gguf_add_tensor(ctx, tensor);
-
-        LOG("[GGUF-SAVE] Added tensor to GGUF: %s\n", tensor_info.name.c_str());
+        if (tensor->data != nullptr) {
+            gguf_add_tensor(ctx, tensor);
+            LOG("[GGUF-SAVE] Added tensor to GGUF: %s\n", tensor_info.name.c_str());
+        } else {
+            LOG_ERR("[GGUF-SAVE] Tensor data is nullptr: %s, shape: %s\n", tensor_info.name.c_str(), ggml_ne_string(tensor).c_str());
+        }
     }
 
     // Write to file
@@ -348,15 +302,22 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
     const struct ggml_tensor * src0 = t->src[0];
     const struct ggml_tensor * src1 = t->src[1];
 
-    if (ask) {
-        // Only interested in kqv_out related tensors
-        return should_monitor_tensor(t->name, cb_data->target_layer);
-    }
-
     // Only process kqv_out related tensors
     if (!should_monitor_tensor(t->name, cb_data->target_layer)) {
         return true;
     }
+    
+    // Check if we've already traced a tensor with the same name
+    std::string tensor_name = t->name ? t->name : "unnamed";
+    if (cb_data->traced_tensors.find(tensor_name) != cb_data->traced_tensors.end()) {
+        return true;
+    }
+    cb_data->traced_tensors.insert(tensor_name);
+    
+    //> ===================================================================================================
+    //> Traced target tensor.
+    //> ===================================================================================================
+    LOG("[KQV-TRACE] Tracing tensor: %s, target_layer: %d tensor->data pointer: %p\n", t->name, cb_data->target_layer, t->data);
 
     cb_data->step_count++;
     cb_data->tensor_counts[std::string(t->name)]++;
@@ -372,6 +333,35 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
          src0 ? src0->name : "NULL", src0 ? ggml_ne_string(src0).c_str() : "",
          src1 ? src1_str : "",
          ggml_ne_string(t).c_str());
+    
+    // Lambda function to recursively print source tensors
+    std::function<void(const ggml_tensor*, int)> print_src_recursive = [&](const ggml_tensor* tensor, int depth) {
+        if (!tensor) return;
+        
+        std::string indent(depth * 2, ' ');
+        LOG("[KQV-TRACE] %s└─ %s (op=%s, type=%s, shape=[%ld,%ld,%ld,%ld])\n", 
+            indent.c_str(), 
+            tensor->name ? tensor->name : "unnamed",
+            ggml_op_desc(tensor),
+            ggml_type_name(tensor->type),
+            tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+        
+        // Limit recursion depth to avoid excessive output
+        if (depth < 3) {
+            for (int i = 0; i < GGML_MAX_SRC; ++i) {
+                if (tensor->src[i]) {
+                    print_src_recursive(tensor->src[i], depth + 1);
+                }
+            }
+        }
+    };
+    // Print recursive source tree
+    LOG("[KQV-TRACE] Source tensor tree for %s:\n", t->name ? t->name : "unnamed");
+    for (int i = 0; i < GGML_MAX_SRC; ++i) {
+        if (t->src[i]) {
+            print_src_recursive(t->src[i], 0);
+        }
+    }
 
     // copy the data from the GPU memory if needed
     const bool is_host = ggml_backend_buffer_is_host(t->buffer);
@@ -386,37 +376,23 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
     uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->temp_data.data();
     print_tensor_stats(data, t->type, t->ne, t->nb, t->name);
 
-    // Save tensors recursively if enabled
-    if (cb_data->save_enabled) {
-        // Recursive function to save all tensors in the computation graph
-        std::function<void(struct ggml_tensor*, const std::string&, int)> save_tensor_recursive =
-            [&](struct ggml_tensor* tensor, const std::string& prefix, int depth) {
-                if (!tensor || depth > 3) return; // Limit recursion depth to avoid infinite loops
+    // Save tensors if enabled - only save kqv_out and its direct src inputs
+    if (cb_data->save_enabled && tensor_name.find("kqv_out") != std::string::npos) {
+        ggml_tensor * attn_result = t->src[0];
 
-                // Save current tensor
-                std::string tensor_name = std::string(tensor->name ? tensor->name : "unnamed");
-                LOG("[KQV-TRACE] Saving tensor: %s with prefix %s (depth %d)\n",
-                    tensor_name.c_str(), prefix.c_str(), depth);
+        // Save the main kqv_out tensor
+        save_tensor_data(cb_data, t);
 
-                save_tensor_data(cb_data, tensor, prefix);
-
-                // Recursively save source tensors
-                for (int i = 0; i < GGML_MAX_SRC; ++i) {
-                    if (tensor->src[i]) {
-                        std::string src_prefix = "src" + std::to_string(i);
-                        save_tensor_recursive(const_cast<struct ggml_tensor*>(tensor->src[i]), src_prefix, depth + 1);
-                    }
-                }
-            };
-
-        // Start recursive saving from the main tensor
-        save_tensor_recursive(t, "kqv_out", 0);
-    }
-
-    // Trace source tensors
-    if (cb_data->trace_sources) {
-        LOG("\n[KQV-TRACE] Source tensor hierarchy:\n");
-        print_source_tensor_info(t);
+        // Save all direct src tensors (QKV, mask, etc.)
+        // For mixed-kvcache, there can be up to 7 src tensors, so iterate until nullptr
+        for (int i = 0; i < GGML_MAX_SRC; ++i) {
+            if (attn_result->src[i]) {
+                save_tensor_data(cb_data, attn_result->src[i]);
+            } else {
+                // Stop when we encounter the first nullptr src
+                break;
+            }
+        }
     }
 
     LOG("===============================\n\n");
@@ -432,21 +408,23 @@ static bool run(llama_context * ctx, const common_params & params) {
 
     std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos);
 
-    LOG("Initial prompt tokens: %zu\n", tokens.size());
-    LOG("Starting generation with %d tokens to generate\n", params.n_predict);
-    LOG("========================================\n\n");
+    // Get the callback data pointer
+    kqv_trace_data* cb_data = (kqv_trace_data*)params.cb_eval_user_data;
 
     // Process initial prompt
-    LOG("=== PROCESSING INITIAL PROMPT ===\n");
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
         LOG_ERR("%s : failed to eval initial prompt\n", __func__);
         return false;
     }
-    LOG("=== INITIAL PROMPT PROCESSED ===\n\n");
+    
+    // Reset traced tensors after initial prompt processing
+    if (cb_data) {
+        cb_data->traced_tensors.clear();
+    }
 
     // Generate tokens one by one
     for (int i = 0; i < params.n_predict; ++i) {
-        LOG("=== GENERATION STEP %d/%d ===\n", i + 1, params.n_predict);
+        LOG("\n\n>>>>>>>>>>>>>>>>>>>> GENERATION STEP %d/%d <<<<<<<<<<<<<<<<<<<\n\n", i + 1, params.n_predict);
 
         // Sample next token using simple greedy approach
         auto logits = llama_get_logits_ith(ctx, -1);
@@ -462,28 +440,20 @@ static bool run(llama_context * ctx, const common_params & params) {
             }
         }
 
-        // Simple check for common EOS tokens (this is a simplified approach)
-        if (new_token == 2 || new_token == 0) { // Common EOS token IDs
-            LOG("Generated potential EOS token (id: %d), stopping generation\n", new_token);
-            break;
-        }
-
-        LOG("Generated token %d: (id: %d, logit: %.4f)\n", i + 1, new_token, max_logit);
-
         // Decode the new token
-        LOG("--- Decoding token %d ---\n", i + 1);
         if (llama_decode(ctx, llama_batch_get_one(&new_token, 1))) {
             LOG_ERR("%s : failed to eval token %d\n", __func__, i + 1);
             return false;
         }
-        LOG("--- Token %d decoded ---\n\n", i + 1);
+        
+        // Reset traced tensors after each token decode
+        if (cb_data) {
+            cb_data->traced_tensors.clear();
+        }
 
         // Add to tokens for potential future use
         tokens.push_back(new_token);
     }
-
-    LOG("=== GENERATION COMPLETED ===\n");
-    LOG("Total tokens generated: %zu\n", tokens.size());
 
     return true;
 }
@@ -495,7 +465,6 @@ int main(int argc, char ** argv) {
 
     // Add custom parameter parsing
     int target_layer = -1; // Default: monitor all layers
-    bool trace_sources = true; // Default: trace source tensors
     std::string save_file; // GGUF file to save tensors to
 
     // Create new argument list, excluding our custom parameters
@@ -506,8 +475,6 @@ int main(int argc, char ** argv) {
         if (strcmp(argv[i], "--layer") == 0 && i + 1 < argc) {
             target_layer = std::atoi(argv[i + 1]);
             i++; // Skip next parameter (layer number)
-        } else if (strcmp(argv[i], "--no-trace-sources") == 0) {
-            trace_sources = false;
         } else if (strcmp(argv[i], "--save-gguf") == 0 && i + 1 < argc) {
             save_file = argv[i + 1];
             i++; // Skip next parameter (filename)
@@ -517,14 +484,12 @@ int main(int argc, char ** argv) {
     }
 
     cb_data.target_layer = target_layer;
-    cb_data.trace_sources = trace_sources;
     cb_data.save_file = save_file;
     cb_data.save_enabled = !save_file.empty();
 
     if (!common_params_parse(new_argv.size(), new_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
-        LOG_ERR("Usage: %s [options] [--layer <layer_number>] [--no-trace-sources] [--save-gguf <filename>]\n", argv[0]);
+        LOG_ERR("Usage: %s [options] [--layer <layer_number>] [--save-gguf <filename>]\n", argv[0]);
         LOG_ERR("  --layer <n>           Monitor only layer n (0-based). Use -1 or omit to monitor all layers.\n");
-        LOG_ERR("  --no-trace-sources    Disable tracing of source tensors.\n");
         LOG_ERR("  --save-gguf <file>    Save traced tensors to GGUF file.\n");
         LOG_ERR("Examples:\n");
         LOG_ERR("  %s -m model.gguf -p \"Hello\" --layer 0    # Monitor only layer 0\n", argv[0]);
@@ -537,12 +502,6 @@ int main(int argc, char ** argv) {
         LOG_INF("Monitoring kqv_out tensors for layer %d only\n", target_layer);
     } else {
         LOG_INF("Monitoring kqv_out tensors for all layers\n");
-    }
-
-    if (trace_sources) {
-        LOG_INF("Source tensor tracing enabled\n");
-    } else {
-        LOG_INF("Source tensor tracing disabled\n");
     }
 
     if (cb_data.save_enabled) {
@@ -592,27 +551,6 @@ int main(int argc, char ** argv) {
             return 1;
         }
     }
-
-    // Output kqv_out monitoring statistics
-    LOG("\n=== KQV_OUT Monitoring Summary ===\n");
-    if (cb_data.target_layer >= 0) {
-        LOG("Monitored layer: %d\n", cb_data.target_layer);
-    } else {
-        LOG("Monitored layers: All layers\n");
-    }
-    LOG("Source tracing: %s\n", cb_data.trace_sources ? "Enabled" : "Disabled");
-    LOG("Tensor saving: %s\n", cb_data.save_enabled ? "Enabled" : "Disabled");
-    if (cb_data.save_enabled) {
-        LOG("Output file: %s\n", cb_data.save_file.c_str());
-        LOG("Tensors saved: %zu\n", cb_data.saved_tensors.size());
-    }
-    LOG("Total callback steps: %d\n", cb_data.step_count);
-    LOG("KQV_OUT tensors encountered:\n");
-    for (const auto& pair : cb_data.tensor_counts) {
-        int layer_num = extract_layer_number(pair.first.c_str());
-        LOG("  %s (layer %d): %d times\n", pair.first.c_str(), layer_num, pair.second);
-    }
-    LOG("===================================\n\n");
 
     llama_perf_context_print(ctx);
 
