@@ -11,6 +11,56 @@ app = Flask(__name__)
 def index():
     return render_template('index.html')
 
+@app.route('/llama-cli', methods=['GET'])
+def serial_command():
+    # Currently the port is hard coded to /dev/ttyUSB3 but can be parameterized
+    port = '/dev/ttyUSB3'
+    #port = request.args.get('port')
+
+    # Currently the baudrate is hard coded to 921600 but can be parameterized
+    #baudrate = request.args.get('baudrate')
+    baudrate = '921600'
+    #./run_platform_test.sh "my cat's name" "10" "tinyllama-vo-5m-para.gguf" "none"
+    model = request.args.get('model')
+    backend = request.args.get('backend')
+    tokens = request.args.get('tokens')
+    prompt = request.args.get('prompt')
+
+    # Define the model path (update with actual paths)
+    model_paths = {
+        "tiny-llama": "tinyllama-vo-5m-para.gguf",
+        "Tiny-llama-F32": "Tiny-Llama-v0.3-FP32-1.1B-F32.gguf"
+    }
+
+    model_path = model_paths.get(model, "")
+    if not model_path:
+        return f"<h2>Error: Model path not found for '{model}'</h2>"
+
+    # Build llama-cli command
+    #command = [
+    #    "./llama-cli",
+    #    "-p", prompt,
+    #    "-m", model_path,
+    #    "--device", backend,
+    #    "--temp", "0",
+    #    "--n-predict", tokens,
+    #    "--repeat-penalty", "1",
+    #    "--top-k", "0",
+    #    "--top-p", "1"
+    #]
+    # URL to Test this end point is as follows
+    # http://10.50.30.167:5001/llama-cli?model=tiny-llama&backend=tSavorite&tokens=5&prompt=Hello+How+are+you
+    script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_platform_test.sh"
+    command = f"{script_path} \"{prompt}\" {tokens} {model_path} {backend}"
+
+    try:
+        result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
+        return result.stdout, 200
+    except subprocess.CalledProcessError as e:
+        return f"Error executing script: {e.stderr}", 500
+
+
+
 @app.route('/submit', methods=['POST'])
 def submit():
     global job_status
