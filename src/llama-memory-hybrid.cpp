@@ -4,6 +4,8 @@
 #include "llama-model.h"
 #include "llama-context.h"
 
+#include <iostream>
+
 //
 // llama_memory_hybrid
 //
