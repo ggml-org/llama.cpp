@@ -163,6 +163,8 @@ if (LLAMA_USE_SYSTEM_GGML)
 endif()
 
 if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
+    set(GGML_BUILD_NUMBER ${LLAMA_BUILD_NUMBER})
+    set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
 endif()
