@@ -37,7 +37,7 @@ static void batch_decode(llama_context * ctx, llama_batch & batch, float * outpu
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
 
     // clear previous kv_cache values (irrelevant for embeddings)
-    llama_kv_self_clear(ctx);
+    llama_memory_clear(llama_get_memory(ctx), true);
 
     // run model
     LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
@@ -236,9 +236,24 @@ int main(int argc, char ** argv) {
                 LOG("\n");
             }
         } else if (pooling_type == LLAMA_POOLING_TYPE_RANK) {
+            const uint32_t n_cls_out = llama_model_n_cls_out(model);
+            std::vector<std::string> cls_out_labels;
+
+            for (uint32_t i = 0; i < n_cls_out; i++) {
+                const char * label = llama_model_cls_label(model, i);
+                const std::string label_i(label == nullptr ? "" : label);
+                cls_out_labels.emplace_back(label_i.empty() ? std::to_string(i) : label_i);
+            }
+
             for (int j = 0; j < n_embd_count; j++) {
-                // NOTE: if you change this log - update the tests in ci/run.sh
-                LOG("rerank score %d: %8.3f\n", j, emb[j * n_embd]);
+                for (uint32_t i = 0; i < n_cls_out; i++) {
+                    // NOTE: if you change this log - update the tests in ci/run.sh
+                    if (n_cls_out == 1) {
+                        LOG("rerank score %d: %8.3f\n", j, emb[j * n_embd]);
+                    } else {
+                        LOG("rerank score %d: %8.3f [%s]\n", j, emb[j * n_embd + i], cls_out_labels[i].c_str());
+                    }
+                }
             }
         } else {
             // print the first part of the embeddings or for a single prompt, the full embedding

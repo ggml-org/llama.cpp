@@ -131,8 +131,9 @@ jobs:
         include:
           - build: 'x64'
             os: ubuntu-22.04
-          - build: 'arm64'
-            os: ubuntu-22.04-arm
+          # GGML_BACKEND_DL and GGML_CPU_ALL_VARIANTS are not currently supported on arm
+          # - build: 'arm64'
+          #   os: ubuntu-22.04-arm
 
     runs-on: ${{ matrix.os }}
 
@@ -159,6 +160,9 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
@@ -207,6 +211,9 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
             -DGGML_VULKAN=ON \
             ${{ env.CMAKE_ARGS }}
           cmake --build build --config Release -j $(nproc)
@@ -373,11 +380,11 @@ jobs:
           name: llama-bin-win-${{ matrix.backend }}-${{ matrix.arch }}.zip
 
   windows-cuda:
-    runs-on: windows-2019
+    runs-on: windows-2022
 
     strategy:
       matrix:
-        cuda: ['12.4', '11.7']
+        cuda: ['12.4']
 
     steps:
       - name: Clone
@@ -405,7 +412,7 @@ jobs:
         id: cmake_build
         shell: cmd
         run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DGGML_BACKEND_DL=ON ^
             -DGGML_NATIVE=OFF ^

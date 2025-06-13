@@ -7,6 +7,8 @@
 //
 #include "chat.h"
 
+#include "log.h"
+
 #include "../src/unicode.h"
 #include "../src/llama-grammar.h"
 
@@ -1428,6 +1430,8 @@ static void test_msg_diffs_compute() {
 }
 
 int main(int argc, char ** argv) {
+    common_log_set_verbosity_thold(999);
+
     // try {
 #ifndef _WIN32
         if (argc > 1) {
