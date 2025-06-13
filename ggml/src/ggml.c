@@ -888,12 +888,6 @@ struct ggml_context {
     struct ggml_object * objects_end;
 };
 
-struct ggml_context_container {
-    bool used;
-
-    struct ggml_context context;
-};
-
 //
 // data types
 //
