@@ -4,6 +4,7 @@
 
 #include <array>
 #include <vector>
+#include <set>
 
 // very similar to llama_batch,
 // but has more metadata about sequences
@@ -83,11 +84,15 @@ public:
     llama_batch_allocr();
 
     // optionally fulfill the batch returned by llama_batch_get_one
+    // TODO: extend p0 to be per-sequence: provide `seq_pos_min` and `seq_pos_max` from the memory
     bool init(const llama_batch & batch_inp, const llama_vocab & vocab, llama_pos p0);
 
     const llama_batch & get_batch() const;
 
     uint32_t get_n_outputs() const;
+
+    llama_pos seq_pos_min(llama_seq_id seq_id) const;
+    llama_pos seq_pos_max(llama_seq_id seq_id) const;
 
 private:
     void clear();
@@ -102,6 +107,9 @@ private:
     std::vector<int32_t>        n_seq_id;
     std::vector<llama_seq_id *> seq_id;
     std::vector<int8_t>         output;
+
+    std::vector<std::set<llama_pos>> seq_pos; // the positions of each sequence
+    std::vector<std::vector<bool>>   seq_cpl; // if sequences i and j are coupled
 
     int debug;
 };

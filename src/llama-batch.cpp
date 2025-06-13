@@ -287,6 +287,12 @@ llama_sbatch::llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple
 llama_batch_allocr::llama_batch_allocr() {
     const char * LLAMA_BATCH_DEBUG = getenv("LLAMA_BATCH_DEBUG");
     debug = LLAMA_BATCH_DEBUG ? atoi(LLAMA_BATCH_DEBUG) : 0;
+
+    seq_pos.resize(LLAMA_MAX_PARALLEL_SEQUENCES);
+    seq_cpl.resize(LLAMA_MAX_PARALLEL_SEQUENCES);
+    for (auto & cur : seq_cpl) {
+        cur.resize(LLAMA_MAX_PARALLEL_SEQUENCES);
+    }
 }
 
 bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab & vocab, llama_pos p0) {
@@ -296,6 +302,11 @@ bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab &
 
     GGML_ASSERT(batch.n_tokens > 0);
 
+    //
+    // validate input batch
+    //
+
+    // TODO: remove
     if (!batch.pos) {
         if (batch.seq_id) {
             LLAMA_LOG_ERROR("%s: pos == NULL, but seq_id != NULL\n", __func__);
@@ -322,6 +333,10 @@ bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab &
             }
         }
     }
+
+    //
+    // auto-generate missing fields
+    //
 
     if (!batch.pos) {
         assert(p0 >= 0);
@@ -356,9 +371,28 @@ bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab &
         batch.logits = output.data();
     }
 
+    //
+    // compute stats
+    //
+
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
         n_outputs += batch.logits[i] != 0;
     }
+
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
+            seq_pos[batch.seq_id[i][s]].insert(batch.pos[i]);
+
+            if (s > 0) {
+                seq_cpl[batch.seq_id[i][0]][batch.seq_id[i][s]] = true;
+            }
+        }
+    }
+
+    // TODO:
+    // - verify that coupled sequences have same "position contexts"
+    // - verify that input sequences are "contiguous" (no position gaps)
+    // - verify that input sequences begin from the last poition currently in the context
 
     if (debug > 0) {
         LLAMA_LOG_DEBUG("%s: input batch info (p0 = %d):\n", __func__, p0);
@@ -404,6 +438,17 @@ bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab &
                         batch.pos[i], batch.n_seq_id[i], ss.str().c_str(), batch.logits[i]);
             }
             LLAMA_LOG_DEBUG("%s:   ]\n", __func__);
+
+            LLAMA_LOG_DEBUG("%s:   seq_pos   = [\n", __func__);
+            for (int s = 0; s < (int) seq_pos.size(); ++s) {
+                const auto & cur = seq_pos[s];
+                if (cur.empty()) {
+                    continue;
+                }
+
+                LLAMA_LOG_DEBUG("%s:  %4d: [%4d, %4d]\n", __func__, s, seq_pos_min(s), seq_pos_max(s));
+            }
+            LLAMA_LOG_DEBUG("%s:   ]\n", __func__);
         }
     }
 
@@ -418,6 +463,14 @@ uint32_t llama_batch_allocr::get_n_outputs() const {
     return n_outputs;
 }
 
+llama_pos llama_batch_allocr::seq_pos_min(llama_seq_id seq_id) const {
+    return seq_pos[seq_id].empty() ? -1 : *seq_pos[seq_id].begin();
+}
+
+llama_pos llama_batch_allocr::seq_pos_max(llama_seq_id seq_id) const {
+    return seq_pos[seq_id].empty() ? -1 : *seq_pos[seq_id].rbegin();
+}
+
 void llama_batch_allocr::clear() {
     n_outputs = 0;
 
@@ -426,6 +479,14 @@ void llama_batch_allocr::clear() {
     n_seq_id.clear();
     seq_id.clear();
     output.clear();
+
+    for (auto & cur : seq_pos) {
+        cur.clear();
+    }
+
+    for (auto & cur : seq_cpl) {
+        cur.clear();
+    }
 }
 
 //
