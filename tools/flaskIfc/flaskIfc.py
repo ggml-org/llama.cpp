@@ -50,7 +50,7 @@ def serial_command():
     #]
     # URL to Test this end point is as follows
     # http://10.50.30.167:5001/llama-cli?model=tiny-llama&backend=tSavorite&tokens=5&prompt=Hello+How+are+you
-    script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_platform_test.sh"
+    script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_llama_cli.sh"
     command = f"{script_path} \"{prompt}\" {tokens} {model_path} {backend}"
 
     try:
