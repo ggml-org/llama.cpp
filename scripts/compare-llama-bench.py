@@ -19,6 +19,7 @@ except ImportError as e:
     print("the following Python libraries are required: GitPython, tabulate.") # noqa: NP100
     raise e
 
+
 logger = logging.getLogger("compare-llama-bench")
 
 # All llama-bench SQL fields
@@ -129,14 +130,6 @@ known_args, unknown_args = parser.parse_known_args()
 
 logging.basicConfig(level=logging.DEBUG if known_args.verbose else logging.INFO)
 
-if known_args.plot:
-    try:
-        import matplotlib.pyplot as plt
-        import matplotlib
-        matplotlib.use('Agg')
-    except ImportError as e:
-        logger.error("matplotlib is required for --plot.")
-        raise e
 
 if known_args.check:
     # Check if all required Python libraries are installed. Would have failed earlier if not.
@@ -620,6 +613,13 @@ headers += ["Test", f"t/s {name_baseline}", f"t/s {name_compare}", "Speedup"]
 
 if known_args.plot:
     def create_performance_plot(table_data: list[list[str]], headers: list[str], baseline_name: str, compare_name: str, output_file: str, plot_x_param: str):
+        try:
+            import matplotlib.pyplot as plt
+            import matplotlib
+            matplotlib.use('Agg')
+        except ImportError as e:
+            logger.error("matplotlib is required for --plot.")
+            raise e
 
         data_headers = headers[:-4] # Exclude the last 4 columns (Test, baseline t/s, compare t/s, Speedup)
         plot_x_index = None
@@ -642,6 +642,9 @@ if known_args.plot:
         for i, row in enumerate(table_data):
             group_key_parts = []
             test_name = row[-4]
+
+            base_test = ""
+            x_value = None
 
             if plot_x_param in ["n_prompt", "n_gen", "n_depth"]:
                 for j, val in enumerate(row[:-4]):
