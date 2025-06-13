@@ -1,5 +1,6 @@
 #include "llama-graph.h"
 
+#include "ggml.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"

@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <array>
+#include <vector>
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
@@ -114,11 +115,19 @@ struct llama_hparams {
     uint32_t ssm_d_inner = 0;
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
+    uint32_t ssm_num_heads = 0;
+    uint32_t ssm_head_dim = 0;
 
     // for hybrid state space models
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
     bool ssm_dt_b_c_rms = false;
+
+    // for PLaMo 2 hybrid architecture
+    float ssm_dt_min = 0.001f;
+    float ssm_dt_max = 0.1f;
+    uint32_t mamba_step = 2;
+    std::array<bool, LLAMA_MAX_LAYERS> mamba_layers;  // true if layer is Mamba, false if Attention
 
     float f_clamp_kqv      = 0.0f;
     float f_max_alibi_bias = 0.0f;
