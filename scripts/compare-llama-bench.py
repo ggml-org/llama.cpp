@@ -123,7 +123,7 @@ parser.add_argument("--check", action="store_true", help="check if all required 
 parser.add_argument("-s", "--show", help=help_s)
 parser.add_argument("--verbose", action="store_true", help="increase output verbosity")
 parser.add_argument("--plot", help="generate a performance comparison plot and save to specified file (e.g., plot.png)")
-parser.add_argument("--plot_x", help="parameter to use as x-axis for plotting (default: n_depth)", default="n_depth")
+parser.add_argument("--plot_x", help="parameter to use as x axis for plotting (default: n_depth)", default="n_depth")
 
 known_args, unknown_args = parser.parse_known_args()
 
@@ -136,7 +136,7 @@ if known_args.plot:
         import matplotlib
         matplotlib.use('Agg')
     except ImportError as e:
-        print("matplotlib is required for --plot.")
+        logger.error("matplotlib is required for --plot.")
         raise e
 
 if known_args.check:
@@ -613,9 +613,9 @@ headers  = [PRETTY_NAMES[p] for p in show]
 headers += ["Test", f"t/s {name_baseline}", f"t/s {name_compare}", "Speedup"]
 
 if known_args.plot:
-    def create_performance_plot(table_data, headers, baseline_name, compare_name, output_file, plot_x_param):
+    def create_performance_plot(table_data: list[list[str]], headers: list[str], baseline_name: str, compare_name: str, output_file: str, plot_x_param: str):
 
-        data_headers = headers[:-4] #Exclude the last 4 columns (Test, baseline t/s, compare t/s, Speedup)
+        data_headers = headers[:-4] # Exclude the last 4 columns (Test, baseline t/s, compare t/s, Speedup)
         plot_x_index = None
         plot_x_label = plot_x_param
 
@@ -687,7 +687,6 @@ if known_args.plot:
             logger.error("No data available for plotting")
             return
 
-
         def make_axes(num_groups, max_cols=2, base_size=(8, 4)):
             from math import ceil
             cols = 1 if num_groups == 1 else min(max_cols, num_groups)
@@ -696,8 +695,8 @@ if known_args.plot:
             # scale figure size by grid dimensions
             w, h = base_size
             fig, ax_arr = plt.subplots(rows, cols,
-                                    figsize=(w * cols, h * rows),
-                                    squeeze=False)
+                                       figsize=(w * cols, h * rows),
+                                       squeeze=False)
 
             axes = ax_arr.flatten()[:num_groups]
             return fig, axes
@@ -739,7 +738,7 @@ if known_args.plot:
                     key, value = part.split('=', 1)
                     title_parts.append(f"{key}: {value}")
 
-            title = ', '.join(title_parts) if title_parts else "Performance Comparison"
+            title = ', '.join(title_parts) if title_parts else "Performance comparison"
 
             ax.set_xlabel(plot_x_label, fontsize=12, fontweight='bold')
             ax.set_ylabel('Tokens per Second (t/s)', fontsize=12, fontweight='bold')
@@ -752,10 +751,9 @@ if known_args.plot:
         for i in range(plot_idx, len(axes)):
             axes[i].set_visible(False)
 
-        fig.suptitle(f'Performance Comparison: {compare_name} vs {baseline_name}',
-                    fontsize=14, fontweight='bold')
+        fig.suptitle(f'Performance comparison: {compare_name} vs {baseline_name}',
+                     fontsize=14, fontweight='bold')
         fig.subplots_adjust(top=1)
-
 
         plt.tight_layout()
         plt.savefig(output_file, dpi=300, bbox_inches='tight')
