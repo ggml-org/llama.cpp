@@ -867,6 +867,24 @@ class GGUFWriter:
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
+    def add_ssm_dt_min(self, value: float) -> None:
+        self.add_float32(Keys.SSM.DT_MIN.format(arch=self.arch), value)
+
+    def add_ssm_dt_max(self, value: float) -> None:
+        self.add_float32(Keys.SSM.DT_MAX.format(arch=self.arch), value)
+
+    def add_ssm_num_heads(self, value: int) -> None:
+        self.add_uint32(Keys.SSM.NUM_HEADS.format(arch=self.arch), value)
+
+    def add_ssm_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.SSM.HEAD_DIM.format(arch=self.arch), value)
+
+    def add_hybrid_mamba_layers(self, layers: list[int]) -> None:
+        self.add_array(Keys.Hybrid.MAMBA_LAYERS.format(arch=self.arch), layers)
+
+    def add_hybrid_mamba_step(self, step: int) -> None:
+        self.add_uint32(Keys.Hybrid.MAMBA_STEP.format(arch=self.arch), step)
+
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 

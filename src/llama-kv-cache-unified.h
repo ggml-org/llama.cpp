@@ -236,6 +236,14 @@ public:
 
     virtual ~llama_kv_cache_unified_context();
 
+    // Delete copy constructor and copy assignment to prevent shallow copies
+    llama_kv_cache_unified_context(const llama_kv_cache_unified_context&) = delete;
+    llama_kv_cache_unified_context& operator=(const llama_kv_cache_unified_context&) = delete;
+    
+    // Delete move constructor and move assignment to prevent issues
+    llama_kv_cache_unified_context(llama_kv_cache_unified_context&&) = delete;
+    llama_kv_cache_unified_context& operator=(llama_kv_cache_unified_context&&) = delete;
+
     //
     // llama_memory_context_i
     //
@@ -265,10 +273,12 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    llama_kv_cache_unified * kv;
+    // the beginning of the current slot in which the ubatch will be inserted
+    int32_t head;
 private:
     llama_memory_status status;
 
-    llama_kv_cache_unified * kv;
     llama_context * lctx;
 
     //
@@ -297,7 +307,4 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
-
-    // the beginning of the current slot in which the ubatch will be inserted
-    int32_t head;
 };

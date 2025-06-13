@@ -1,6 +1,7 @@
 #include "llama-hparams.h"
 
 #include "ggml.h"
+#include <iostream>
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern) {
     for (uint32_t il = 0; il < n_layer; ++il) {
@@ -71,6 +72,12 @@ uint32_t llama_hparams::n_embd_r() const {
         return token_shift_count * n_embd;
     }
 
+    // for PLaMo-2 hybrid models that use mamba_step
+    if (mamba_step > 0 && ssm_num_heads > 0 && ssm_head_dim > 0) {
+        // PLaMo-2 uses mamba_num_heads * hidden_size_per_head for Mamba layers
+        return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_num_heads * ssm_head_dim);
+    }
+
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
     // Corresponds to Mamba's conv_states size
@@ -81,6 +88,12 @@ uint32_t llama_hparams::n_embd_s() const {
     if (wkv_head_size != 0) {
         // corresponds to RWKV's wkv_states size
         return n_embd * wkv_head_size;
+    }
+
+    // for PLaMo-2 hybrid models that use mamba_step
+    if (mamba_step > 0 && ssm_num_heads > 0 && ssm_head_dim > 0) {
+        // PLaMo-2 uses mamba_num_heads * hidden_size_per_head for Mamba layers
+        return ssm_d_state * (ssm_num_heads * ssm_head_dim);
     }
 
     // corresponds to Mamba's ssm_states size

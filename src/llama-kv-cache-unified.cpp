@@ -11,6 +11,7 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+#include <iostream>
 
 //
 // llama_kv_cache_unified
@@ -779,11 +780,30 @@ ggml_tensor * llama_kv_cache_unified::cpy_k(ggml_context * ctx, ggml_tensor * k_
 
     const int64_t n_tokens = k_cur->ne[2];
 
-    ggml_tensor * k_view = ggml_view_1d(ctx, k,
-            n_tokens*hparams.n_embd_k_gqa(il),
-            ggml_row_size(k->type, hparams.n_embd_k_gqa(il))*head_cur);
+    // Handle PLaMo-2 GQA: k_cur might be expanded (128, 32, 512) but cache expects (128, 4, 512)
+    ggml_tensor * k_view;
+    if (k_cur->ne[1] != hparams.n_head_kv(il)) {
+        // k_cur is GQA-expanded, need to take only the first n_head_kv heads
+        ggml_tensor * k_cur_orig = ggml_view_3d(ctx, k_cur,
+                k_cur->ne[0], hparams.n_head_kv(il), k_cur->ne[2],
+                k_cur->nb[1], k_cur->nb[2], 0);
 
-    return ggml_cpy(ctx, k_cur, k_view);
+        k_view = ggml_view_3d(ctx, k,
+                hparams.n_embd_head_k, hparams.n_head_kv(il), n_tokens,
+                ggml_row_size(k->type, hparams.n_embd_head_k),
+                ggml_row_size(k->type, hparams.n_embd_k_gqa(il)),
+                ggml_row_size(k->type, hparams.n_embd_k_gqa(il))*head_cur);
+
+        return ggml_cpy(ctx, k_cur_orig, k_view);
+    } else {
+        k_view = ggml_view_3d(ctx, k,
+                hparams.n_embd_head_k, hparams.n_head_kv(il), n_tokens,
+                ggml_row_size(k->type, hparams.n_embd_head_k),
+                ggml_row_size(k->type, hparams.n_embd_k_gqa(il)),
+                ggml_row_size(k->type, hparams.n_embd_k_gqa(il))*head_cur);
+
+        return ggml_cpy(ctx, k_cur, k_view);
+    }
 }
 
 ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il, uint32_t head_cur) const {
@@ -793,6 +813,14 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
 
     const int64_t n_tokens = v_cur->ne[2];
 
+    // Handle PLaMo-2 GQA: v_cur might be expanded (128, 32, 512) but cache expects (128, 4, 512)
+    if (v_cur->ne[1] != hparams.n_head_kv(il)) {
+        // v_cur is GQA-expanded, need to take only the first n_head_kv heads
+        v_cur = ggml_view_3d(ctx, v_cur,
+                v_cur->ne[0], hparams.n_head_kv(il), v_cur->ne[2],
+                v_cur->nb[1], v_cur->nb[2], 0);
+    }
+    v_cur = ggml_cont(ctx, v_cur);
     v_cur = ggml_reshape_2d(ctx, v_cur, hparams.n_embd_v_gqa(il), n_tokens);
 
     ggml_tensor * v_view = nullptr;

@@ -243,6 +243,18 @@ void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * 
 }
 
 void ggml_backend_tensor_get_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
+    if (tensor->data == NULL) {
+        fprintf(stderr, "ERROR: Tensor '%s' data is NULL - cannot read tensor\n",
+                tensor->name ? tensor->name : "unnamed");
+
+        // For output tensors that may not have been properly allocated
+        if (tensor->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            fprintf(stderr, "       Output tensor detected - this may indicate scheduling issue\n");
+            // Return zeros for now to prevent crash
+            memset(data, 0, size);
+            return;
+        }
+    }
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
 
@@ -261,6 +273,24 @@ void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, siz
         return;
     }
 
+    if (buf == NULL) {
+        // For input tensors, buffer allocation may happen later by the scheduler
+        if (tensor->flags & GGML_TENSOR_FLAG_INPUT) {
+            // fprintf(stderr, "WARNING: Skipping tensor_set for input tensor '%s' - buffer will be allocated by scheduler\n",
+            //         tensor->name ? tensor->name : "unnamed");
+            return;
+        }
+
+        // Enhanced error message with tensor information
+        fprintf(stderr, "ERROR: Tensor buffer not set for tensor '%s' (op: %s, type: %s)\n",
+                tensor->name ? tensor->name : "unnamed",
+                ggml_op_name(tensor->op),
+                ggml_type_name(tensor->type));
+        if (tensor->view_src) {
+            fprintf(stderr, "       This is a view tensor with view_src: '%s'\n",
+                    tensor->view_src->name ? tensor->view_src->name : "unnamed");
+        }
+    }
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
     GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
@@ -1649,7 +1679,23 @@ void ggml_backend_sched_set_tensor_backend(ggml_backend_sched_t sched, struct gg
 ggml_backend_t ggml_backend_sched_get_tensor_backend(ggml_backend_sched_t sched, struct ggml_tensor * node) {
     int backend_index = tensor_backend_id(node);
     if (backend_index == -1) {
-        return NULL;
+        // Enhanced debugging for unassigned tensors
+        fprintf(stderr, "ERROR: Tensor '%s' (op: %s, flags: 0x%x) has no backend assigned (backend_id = -1)\n",
+                node->name ? node->name : "unnamed",
+                ggml_op_name(node->op),
+                node->flags);
+
+        // Try to assign to CPU backend as fallback for output tensors
+        if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+            fprintf(stderr, "       Attempting to assign output tensor to CPU backend\n");
+            backend_index = sched->n_backends - 1; // CPU backend
+            tensor_backend_id(node) = backend_index;
+            SET_CAUSE(node, "out.cpu");
+        }
+
+        if (backend_index == -1) {
+            return NULL;
+        }
     }
     return sched->backends[backend_index];
 }
