@@ -822,7 +822,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
                     GGML_ASSERT(!ubatch.equal_seqs); // TODO: handle equal splits
 
-                    // TODO: fix sequence indexing
+                    // TODO: fix indexing [UBATCH_IDX]
                     for (uint32_t i = 0; i < n_tokens; i++) {
                         const llama_seq_id seq_id = ubatch.seq_id[i][0];
                         if (embd_seq_out.find(seq_id) != embd_seq_out.end()) {
@@ -838,6 +838,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     auto & embd_seq_out = embd_seq;
                     const uint32_t n_cls_out = hparams.n_cls_out;
 
+                    // TODO: fix indexing [UBATCH_IDX]
                     for (uint32_t s = 0; s < ubatch.n_seqs; ++s) {
                         const llama_seq_id seq_id = ubatch.seq_id[s][0];
                         if (embd_seq_out.find(seq_id) != embd_seq_out.end()) {
@@ -870,13 +871,11 @@ int llama_context::encode(const llama_batch & batch_inp) {
         memcpy(cross.v_embd.data(), embd, ggml_nbytes(t_embd));
 
         // remember the sequence ids used during the encoding - needed for cross attention later
-        // TODO: the seuqence indexing here is likely not correct in the general case
-        //       probably works only for split_simple
         cross.seq_ids_enc.resize(n_tokens);
         for (uint32_t i = 0; i < n_tokens; i++) {
             cross.seq_ids_enc[i].clear();
-            for (int s = 0; s < ubatch.n_seq_id[i]; s++) {
-                llama_seq_id seq_id = ubatch.seq_id[i][s];
+            for (int s = 0; s < batch.n_seq_id[i]; s++) {
+                llama_seq_id seq_id = batch.seq_id[i][s];
                 cross.seq_ids_enc[i].insert(seq_id);
             }
         }
@@ -894,13 +893,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     if (batch_inp.n_tokens == 0) {
         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
         return -1;
-    }
-
-    if (!batch_inp.pos) {
-        if (batch_inp.seq_id) {
-            LLAMA_LOG_ERROR("%s: pos == NULL, but seq_id != NULL\n", __func__);
-            return -1;
-        }
     }
 
     // temporary allocate memory for the input batch if needed

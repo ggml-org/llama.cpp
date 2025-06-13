@@ -292,16 +292,29 @@ bool llama_batch_allocr::init(const llama_batch & batch_inp, const llama_vocab &
 
     GGML_ASSERT(batch.n_tokens > 0);
 
+    if (!batch.pos) {
+        if (batch.seq_id) {
+            LLAMA_LOG_ERROR("%s: pos == NULL, but seq_id != NULL\n", __func__);
+            return false;
+        }
+    }
+
     if (batch.token) {
         for (int32_t i = 0; i < batch.n_tokens; ++i) {
             if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= vocab.n_tokens()) {
                 LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
                 return false;
             }
+        }
+    }
 
-            if (batch.seq_id && (batch.seq_id[i][0] < 0 || batch.seq_id[i][0] >= LLAMA_MAX_PARALLEL_SEQUENCES)) {
-                LLAMA_LOG_ERROR("%s: invalid seq_id[%d] = %d > %d\n", __func__, i, batch.seq_id[i][0], LLAMA_MAX_PARALLEL_SEQUENCES);
-                return false;
+    if (batch.seq_id) {
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
+                if (batch.seq_id && (batch.seq_id[i][s] < 0 || batch.seq_id[i][s] >= LLAMA_MAX_PARALLEL_SEQUENCES)) {
+                    LLAMA_LOG_ERROR("%s: invalid seq_id[%d][%d] = %d > %d\n", __func__, i, s, batch.seq_id[i][s], LLAMA_MAX_PARALLEL_SEQUENCES);
+                    return false;
+                }
             }
         }
     }
