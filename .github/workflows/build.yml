@@ -306,6 +306,7 @@ jobs:
         id: cmake_test
         run: |
           cd build
+          export GGML_VK_VISIBLE_DEVICES=0
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
 
@@ -687,8 +688,8 @@ jobs:
     strategy:
       matrix:
         include:
-          - build: 'cpu-x64'
-            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF'
+          - build: 'cpu-x64 (static)'
+            defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DBUILD_SHARED_LIBS=OFF'
           - build: 'openblas-x64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=OpenBLAS -DBLAS_INCLUDE_DIRS="$env:RUNNER_TEMP/openblas/include" -DBLAS_LIBRARIES="$env:RUNNER_TEMP/openblas/lib/openblas.lib"'
           - build: 'vulkan-x64'
@@ -839,12 +840,12 @@ jobs:
               -DGGML_CUDA=ON
             cmake --build build
 
-  windows-2019-cmake-cuda:
-    runs-on: windows-2019
+  windows-2022-cmake-cuda:
+    runs-on: windows-2022
 
     strategy:
       matrix:
-        cuda: ['12.4', '11.7']
+        cuda: ['12.4']
 
     steps:
       - name: Clone
@@ -878,7 +879,7 @@ jobs:
         env:
           CURL_PATH: ${{ steps.get_libcurl.outputs.curl_path }}
         run: |
-          call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
           cmake -S . -B build -G "Ninja Multi-Config" ^
             -DLLAMA_BUILD_SERVER=ON ^
             -DGGML_NATIVE=OFF ^
