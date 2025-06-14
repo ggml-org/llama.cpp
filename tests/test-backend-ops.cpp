@@ -1151,6 +1151,60 @@ struct test_glu : public test_case {
     }
 };
 
+struct test_glu_split : public test_case {
+    const ggml_glu_op op;
+    const ggml_type type;
+    const std::array<int64_t, 4> ne_a;
+    int v; // view (1 : non-contiguous a)
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne_a, v);
+    }
+
+    test_glu_split(ggml_glu_op op,
+            ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne_a = {128, 2, 2, 2},
+            int v = 0)
+        : op(op), type(type), ne_a(ne_a), v(v) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a;
+        ggml_tensor * b;
+        if (v & 1) {
+            auto ne = ne_a; ne[0] *= 3;
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
+
+            b = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(b, "b");
+
+            b = ggml_view_4d(ctx, b, ne_a[0], ne_a[1], ne_a[2], ne_a[3], b->nb[1], b->nb[2], b->nb[3], 0);
+            ggml_set_name(a, "view_of_b");
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne_a.data());
+            ggml_set_name(a, "a");
+
+            b = ggml_new_tensor(ctx, type, 4, ne_a.data());
+            ggml_set_name(b, "b");
+        }
+
+        ggml_tensor * out = ggml_glu_split(ctx, a, b, op);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            // test extended range of values to check for NaNs in GELU
+            init_tensor_uniform(t, -150.f, 150.f);
+        }
+    }
+};
+
 // GGML_OP_GET_ROWS
 struct test_get_rows : public test_case {
     const ggml_type type;
@@ -3986,6 +4040,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                     test_cases.emplace_back(new test_glu((ggml_glu_op) op, type, { 128, 2, 2, 2 }, v, swapped));
                     test_cases.emplace_back(new test_glu((ggml_glu_op) op, type, { 5, 7, 11, 13 }, v, swapped));
                 }
+
+                test_cases.emplace_back(new test_glu_split((ggml_glu_op) op, type, { 128, 2, 2, 2 }, v));
+                test_cases.emplace_back(new test_glu_split((ggml_glu_op) op, type, { 5, 7, 11, 13 }, v));
             }
         }
     }
