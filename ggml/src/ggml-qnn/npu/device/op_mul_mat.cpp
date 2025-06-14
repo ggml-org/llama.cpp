@@ -102,15 +102,18 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         auto *       dst_plane  = dst_ptr + i3 * dst->get_nb(3) + i2 * dst->get_nb(2);
         for (int64_t col_idx = start_end_element.first; col_idx < start_end_element.second;
              col_idx += src0_plane_slice_row_count) {
+            const auto actual_row_count =
+                std::min<int64_t>(src0_plane_slice_row_count,
+                                  start_end_element.second - col_idx);  // number of rows in this slice
             const uint8_t * src0_plane =
                 src0_ptr + i3 / r03 * src0->get_nb(3) + i2 / r02 * src0->get_nb(2) + col_idx * src0->get_nb(1);
             if (src0_plane_cache_ptr) {
                 if (last_cached_plane_ptr != src0_plane) {
                     DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_SUB_PROC(dequant);
 
-                    for (int64_t ir = 0; ir < (int64_t) src0_plane_slice_row_count; ir++) {
+                    for (int64_t ir = 0; ir < (int64_t) actual_row_count; ir++) {
                         auto * src0_row = src0_plane + ir * src0->get_nb(1);
-                        if (ir + 1 < src0_plane_slice_row_count) {
+                        if (ir + 1 < actual_row_count) {
                             hexagon::l2fetch_row(src0_row + src0->get_nb(1), src0->get_nb(1));
                         }
 
@@ -129,9 +132,9 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
             for (int64_t i1 = start_end_row.first; i1 < start_end_row.second; i1++) {
                 auto * src1_row = src1_plane + i1 * src1->get_nb(1);
                 auto * dst_row  = reinterpret_cast<float *>(dst_plane + i1 * dst->get_nb(1)) + col_idx;
-                for (int64_t i0 = 0; i0 < (int64_t) src0_plane_slice_row_count; i0++) {
+                for (int64_t i0 = 0; i0 < (int64_t) actual_row_count; i0++) {
                     auto * src0_row = src0_plane + i0 * src0_actual_row_size;
-                    if (i0 + 1 < src0_plane_slice_row_count) {
+                    if (i0 + 1 < actual_row_count) {
                         if (!src0_plane_cache_ptr || is_mem_cache) {
                             hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row0_bytes);
                         }
