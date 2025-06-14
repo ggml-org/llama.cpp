@@ -93,8 +93,9 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         return;
     }
 
-    const uint8_t * src0_ptr = src0->get_read_buffer();
-    const uint8_t * src1_ptr = src1->get_read_buffer();
+    const bool      should_fetch_src0_row = !src0_plane_cache_ptr || is_mem_cache;
+    const uint8_t * src0_ptr              = src0->get_read_buffer();
+    const uint8_t * src1_ptr              = src1->get_read_buffer();
     for (int64_t ip = start_end_plane.first; ip < start_end_plane.second; ip++) {
         const auto   i3         = ip / dst->get_ne(2);
         const auto   i2         = ip - i3 * dst->get_ne(2);
@@ -129,7 +130,6 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                 src0_plane = src0_plane_cache_ptr;
             }
 
-            const bool should_fetch_src0_row = !src0_plane_cache_ptr || is_mem_cache;
             for (int64_t i1 = start_end_row.first; i1 < start_end_row.second; i1++) {
                 DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 1, vec_dot);
                 auto *  src1_row = src1_plane + i1 * src1->get_nb(1);
@@ -149,6 +149,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                         hexagon::l2fetch_row(src0_row + src0_actual_row_size + src0_actual_row_size, valid_row0_bytes);
                     }
 
+                    // TODO: figure dst how to handle a entire row
                     dst_row[i0 + 1] =
                         _DotFunc(reinterpret_cast<const data_type0 *>(src0_row + src0_actual_row_size),
                                  reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
