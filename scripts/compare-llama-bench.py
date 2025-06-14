@@ -732,7 +732,7 @@ if known_args.plot:
             ax.plot(x_values, compare_vals, 's--', color='lightcoral', alpha=0.8,
                     label=f'{compare_name}', linewidth=2, markersize=6)
 
-            if log_scale and min(x_values) > 0:
+            if log_scale:
                 ax.set_xscale('log', base=2)
                 unique_x = sorted(set(x_values))
                 ax.set_xticks(unique_x)
