@@ -219,6 +219,7 @@ public:
         hparams(hparams),
         cparams(cparams) {
     }
+
     ~llm_graph_input_attn_no_cache() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -621,7 +622,8 @@ struct llm_graph_context {
             ggml_tensor * cls,
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
-            ggml_tensor * cls_out_b) const;
+            ggml_tensor * cls_out_b,
+            ggml_tensor * cls_norm) const;
 };
 
 // TODO: better name

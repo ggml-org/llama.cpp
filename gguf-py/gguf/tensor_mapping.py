@@ -16,6 +16,7 @@ class TensorNameMap:
             "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
+            "embeddings.tok_embeddings",                 # modern-bert
             "language_model.embedding.word_embeddings",  # persimmon
             "wte",                                       # gpt2
             "transformer.embd.wte",                      # phi2
@@ -42,6 +43,7 @@ class TensorNameMap:
         MODEL_TENSOR.TOKEN_EMBD_NORM: (
             "word_embeddings_layernorm",  # bloom
             "embeddings.LayerNorm",       # bert
+            "embeddings.norm",            # modern-bert
             "emb_ln",                     # nomic-bert
             "transformer.norm",           # openelm
             "rwkv.blocks.0.pre_ln",       # rwkv
@@ -134,6 +136,7 @@ class TensorNameMap:
             "rwkv.blocks.{bid}.ln1",                                # rwkv6
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
+            "layers.{bid}.attn_norm",                               # modern-bert
         ),
 
         # Attention norm 2
@@ -161,6 +164,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
+            "layers.{bid}.attn.Wqkv",                                              # modern-bert
         ),
 
         # Attention query
@@ -236,6 +240,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
+            "layers.{bid}.attn.Wo",                                         # modern-bert
         ),
 
         # Attention output norm
@@ -245,6 +250,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.norm1",                      # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_1",      # Grok
             "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
+            "layers.{bid}.mlp_norm"                            # modern-bert
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
@@ -340,6 +346,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4
+            "layers.{bid}.mlp.Wi"                                     # modern-bert
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -422,6 +429,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4
+            "layers.{bid}.mlp.Wo"                                     # modern-bert
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -832,12 +840,18 @@ class TensorNameMap:
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
         MODEL_TENSOR.ENC_OUTPUT_NORM: (
             "encoder.final_layer_norm", # t5
+            "final_norm",               # modern-bert
         ),
 
         MODEL_TENSOR.CLS: (
             "classifier",       # jina
             "classifier.dense", # roberta
             "pre_classifier",   # distillbert
+            "head.dense",       # modern-bert
+        ),
+
+        MODEL_TENSOR.CLS_NORM: (
+            "head.norm",        # modern-bert
         ),
 
         MODEL_TENSOR.CLS_OUT: (

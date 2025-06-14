@@ -1328,6 +1328,12 @@ bool llama_kv_cache_unified::is_masked_swa(llama_pos p0, llama_pos p1) const {
                     return true;
                 }
             } break;
+        case LLAMA_SWA_TYPE_SYMMETRIC:
+            {
+                if ( p1 - p0 <= (int32_t) n_swa / 2 || p0 - p1 >= (int32_t) n_swa / 2) {
+                    return true;
+                }
+            } break;
     }
 
     return false;
