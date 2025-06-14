@@ -142,15 +142,15 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
 
     constexpr const size_t kElementsPerVector1 = hexagon::kBytesPerVector / sizeof(_TElem1);
 
-    const _TElem0 * const src0_ptr_end     = src0 + count;
-    HVX_Vector *          src0_vec_ptr     = ((HVX_Vector *) src0);
-    HVX_Vector *          src1_vec_ptr     = ((HVX_Vector *) src1);
-    HVX_Vector * const    src1_vec_ptr_end = ((HVX_Vector *) src1) + count / kElementsPerVector1;
-    HVX_Vector            prev0            = *src0_vec_ptr++;
-    HVX_Vector            prev1            = *src1_vec_ptr++;
-    HVX_Vector            sum              = Q6_V_vzero();
-    HVX_Vector            sum0             = Q6_V_vzero();
-    HVX_Vector            sum1             = Q6_V_vzero();
+    const auto * const src0_ptr_end     = src0 + count;
+    HVX_Vector *       src0_vec_ptr     = ((HVX_Vector *) src0);
+    HVX_Vector *       src1_vec_ptr     = ((HVX_Vector *) src1);
+    HVX_Vector * const src1_vec_ptr_end = ((HVX_Vector *) src1) + count / kElementsPerVector1;
+    HVX_Vector         prev0            = *src0_vec_ptr++;
+    HVX_Vector         prev1            = *src1_vec_ptr++;
+    HVX_Vector         sum              = Q6_V_vzero();
+    HVX_Vector         sum0             = Q6_V_vzero();
+    HVX_Vector         sum1             = Q6_V_vzero();
 
     while (src1_vec_ptr_end - src1_vec_ptr > 1) {
         HVX_Vector     curr0 = src0_vec_ptr[0];
@@ -220,31 +220,35 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     return _ReduceFunc(sum);
 }
 
+inline HVX_Vector vec_mpy_qf32_qf32_sf(HVX_Vector src0, HVX_Vector src1) {
+    return Q6_Vqf32_vmpy_Vqf32Vqf32(src0, hexagon::qhmath_hvx_vqf32_convert_vsf(src1));
+}
+
 }  // namespace
 
 namespace hexagon {
 
 float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count) {
-    return vec_dot_product_impl<float, vec_mpy_qf32, vec_add_qf32, hexagon::vec_reduction_qf32_f32>(src0, src1, count);
+    return vec_dot_product_impl<float, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32_f32>(src0, src1, count);
 }
 
 float vec_dot_product_aligned_f32_f32(const float * src0, const float * src1, size_t count) {
-    return vec_dot_product_aligned_impl<float, vec_mpy_qf32, vec_add_qf32, hexagon::vec_reduction_qf32_f32>(src0, src1,
-                                                                                                            count);
+    return vec_dot_product_aligned_impl<float, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32_f32>(src0, src1, count);
 }
 
 float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count) {
-    return vec_dot_product_impl<npu_device_fp16_t, vec_mpy_qf16, vec_add_qf16, hexagon::vec_reduction_qf16_f32>(
-        src0, src1, count);
+    return vec_dot_product_impl<npu_device_fp16_t, vec_mpy_qf16, vec_add_qf16, vec_reduction_qf16_f32>(src0, src1,
+                                                                                                       count);
 }
 
 float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count) {
-    return vec_dot_product_aligned_impl<npu_device_fp16_t, vec_mpy_qf16, vec_add_qf16, hexagon::vec_reduction_qf16_f32>(
+    return vec_dot_product_aligned_impl<npu_device_fp16_t, vec_mpy_qf16, vec_add_qf16, vec_reduction_qf16_f32>(
         src0, src1, count);
 }
 
-float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count) {
-    return 0;  // TODO: Implement this function
+float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
+    return vec_dot_product_mixed_impl<npu_device_fp16_t, float, hvx_vqf32_convert_vhf, vec_mpy_qf32_qf32_sf,
+                                      vec_add_qf32, vec_reduction_qf32_f32>(src0, src1, count);
 }
 
 }  // namespace hexagon
