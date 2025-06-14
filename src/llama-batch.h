@@ -78,12 +78,13 @@ struct llama_sbatch {
     llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple_split = false);
 };
 
-// temporary allocate memory for the input batch if needed
+// a helper for sanitizing and fullfilling a batch
 class llama_batch_allocr {
 public:
     llama_batch_allocr();
 
-    // optionally fulfill the batch returned by llama_batch_get_one
+    // sanitize and auto-gen missing data in the input batch
+    // memory is optional. if provided will be used to check for sequence continuity
     bool init(
             const llama_batch & batch_inp,
             const llama_vocab & vocab,

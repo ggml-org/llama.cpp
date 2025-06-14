@@ -366,7 +366,12 @@ bool llama_batch_allocr::init(
 
         for (int32_t i = 0; i < batch.n_tokens; i++) {
             const llama_seq_id seq_id = batch.seq_id[i][0];
-            pos[i] = p0[seq_id] + i;
+
+            pos[i] = p0[seq_id];
+
+            for (int32_t s = 0; s < batch.n_seq_id[i]; ++s) {
+                p0[batch.seq_id[i][s]] = pos[i] + 1;
+            }
         }
 
         batch.pos = pos.data();
@@ -397,7 +402,11 @@ bool llama_batch_allocr::init(
                 const llama_seq_id s0 = batch.seq_id[i][0];
                 const llama_seq_id s1 = batch.seq_id[i][s];
 
+                // mark that sequences s1 is couled to s0
                 seq_cpl[s1][s0] = true;
+
+                // note: the other way around is not necessary for now
+                //seq_cpl[s0][s1] = true;
             }
         }
     }
@@ -467,6 +476,10 @@ bool llama_batch_allocr::init(
         }
     }
 
+    //
+    // consistency checks
+    //
+
     for (int32_t s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
         if (seq_pos[s].empty()) {
             continue;
@@ -478,7 +491,7 @@ bool llama_batch_allocr::init(
         }
 
         if (seq_pos_max(s) - seq_pos_min(s) + 1 > (int) seq_pos[s].size()) {
-            LLAMA_LOG_ERROR("%s: sequence %d is not contiguous\n", __func__, s);
+            LLAMA_LOG_ERROR("%s: sequence %d positions are not continuous\n", __func__, s);
             return false;
         }
     }
