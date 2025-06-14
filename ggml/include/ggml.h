@@ -518,6 +518,8 @@ extern "C" {
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
         GGML_OP_OPT_STEP_ADAMW,
 
+        GGML_OP_FILL,
+
         GGML_OP_COUNT,
     };
 
@@ -1826,6 +1828,12 @@ extern "C" {
             float                 start,
             float                 stop,
             float                 step);
+
+    // fill in-place the tensor with a constant value, return view(a)
+    GGML_API struct ggml_tensor * ggml_fill(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            float                 value);
 
     // top k elements per row
     GGML_API struct ggml_tensor * ggml_top_k(
