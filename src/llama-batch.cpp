@@ -402,36 +402,6 @@ bool llama_batch_allocr::init(
         }
     }
 
-    for (int32_t s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
-        if (seq_pos[s].empty()) {
-            continue;
-        }
-
-        if (memory && seq_pos_min(s) != memory->seq_pos_max(s) + 1) {
-            LLAMA_LOG_ERROR("%s: sequence %d does not start from the last position stored in the memory\n", __func__, s);
-            return false;
-        }
-
-        if (seq_pos_max(s) - seq_pos_min(s) + 1 > (int) seq_pos[s].size()) {
-            LLAMA_LOG_ERROR("%s: sequence %d is not contiguous\n", __func__, s);
-            return false;
-        }
-    }
-
-    if (memory) {
-        for (int32_t s0 = 0; s0 < LLAMA_MAX_PARALLEL_SEQUENCES; ++s0) {
-            for (int32_t s1 = 0; s1 < LLAMA_MAX_PARALLEL_SEQUENCES; ++s1) {
-                if (seq_cpl[s0][s1]) {
-                    if (memory->seq_pos_min(s0) != memory->seq_pos_min(s1) ||
-                        memory->seq_pos_max(s0) != memory->seq_pos_max(s1)) {
-                        LLAMA_LOG_ERROR("%s: sequence %d is coupled to %d in the input batch, but have divereged\n", __func__, s0, s1);
-                        return false;
-                    }
-                }
-            }
-        }
-    }
-
     if (debug > 0) {
         LLAMA_LOG_DEBUG("%s: input batch info:\n", __func__);
         LLAMA_LOG_DEBUG("%s:   n_tokens  = %d\n", __func__,          batch.n_tokens);
@@ -494,6 +464,36 @@ bool llama_batch_allocr::init(
                         __func__, s0, seq_pos_min(s0), seq_pos_max(s0), ss.str().empty() ? "-" : ss.str().c_str());
             }
             LLAMA_LOG_DEBUG("%s:   ]\n", __func__);
+        }
+    }
+
+    for (int32_t s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+        if (seq_pos[s].empty()) {
+            continue;
+        }
+
+        if (memory && seq_pos_min(s) != memory->seq_pos_max(s) + 1) {
+            LLAMA_LOG_ERROR("%s: sequence %d does not start from the last position stored in the memory\n", __func__, s);
+            return false;
+        }
+
+        if (seq_pos_max(s) - seq_pos_min(s) + 1 > (int) seq_pos[s].size()) {
+            LLAMA_LOG_ERROR("%s: sequence %d is not contiguous\n", __func__, s);
+            return false;
+        }
+    }
+
+    if (memory) {
+        for (int32_t s0 = 0; s0 < LLAMA_MAX_PARALLEL_SEQUENCES; ++s0) {
+            for (int32_t s1 = 0; s1 < LLAMA_MAX_PARALLEL_SEQUENCES; ++s1) {
+                if (seq_cpl[s0][s1]) {
+                    if (memory->seq_pos_min(s0) != memory->seq_pos_min(s1) ||
+                        memory->seq_pos_max(s0) != memory->seq_pos_max(s1)) {
+                        LLAMA_LOG_ERROR("%s: sequence %d is coupled to %d in the input batch, but have divereged\n", __func__, s0, s1);
+                        return false;
+                    }
+                }
+            }
         }
     }
 
