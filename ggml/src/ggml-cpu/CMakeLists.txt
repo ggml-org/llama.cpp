@@ -28,7 +28,6 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/repack.h
         ggml-cpu/hbm.cpp
         ggml-cpu/hbm.h
-        ggml-cpu/quants.c
         ggml-cpu/quants.h
         ggml-cpu/traits.cpp
         ggml-cpu/traits.h
@@ -452,6 +451,12 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         message(WARNING "Unknown CPU architecture. Falling back to generic implementations.")
         list(APPEND ARCH_FLAGS -DGGML_CPU_GENERIC)
     endif()
+
+    # Include generic implementations last to avoid accidentally overriding arch-specific implementations in static linking
+    list (APPEND GGML_CPU_SOURCES
+        ggml-cpu/repack-impl.cpp
+        ggml-cpu/quants.c
+        )
 
     if (GGML_CPU_REPACK)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_REPACK)
