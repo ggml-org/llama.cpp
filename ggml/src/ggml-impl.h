@@ -292,6 +292,8 @@ enum ggml_cgraph_eval_order {
     GGML_CGRAPH_EVAL_ORDER_COUNT
 };
 
+struct ggml_profile_data;
+
 struct ggml_cgraph {
     int size;    // maximum number of nodes/leafs/grads/grad_accs
     int n_nodes; // number of nodes currently in use
@@ -301,6 +303,8 @@ struct ggml_cgraph {
     struct ggml_tensor ** grads;     // the outputs of these tensors are the gradients of the nodes
     struct ggml_tensor ** grad_accs; // accumulators for node gradients
     struct ggml_tensor ** leafs;     // tensors with constant data
+
+    struct ggml_profile_data * prof;
 
     struct ggml_hash_set visited_hash_set;
 
