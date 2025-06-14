@@ -84,8 +84,10 @@ public:
     llama_batch_allocr();
 
     // optionally fulfill the batch returned by llama_batch_get_one
-    // TODO: extend p0 to be per-sequence: provide `seq_pos_min` and `seq_pos_max` from the memory
-    bool init(const llama_batch & batch_inp, const llama_vocab & vocab, llama_pos p0);
+    bool init(
+            const llama_batch & batch_inp,
+            const llama_vocab & vocab,
+            const llama_memory_i * memory);
 
     const llama_batch & get_batch() const;
 
@@ -109,7 +111,7 @@ private:
     std::vector<int8_t>         output;
 
     std::vector<std::set<llama_pos>> seq_pos; // the positions of each sequence
-    std::vector<std::vector<bool>>   seq_cpl; // if sequences i and j are coupled
+    std::vector<std::vector<bool>>   seq_cpl; // if sequences i is coupled to sequence j
 
     int debug;
 };
