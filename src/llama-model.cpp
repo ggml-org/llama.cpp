@@ -8847,9 +8847,7 @@ struct llm_build_starcoder2 : public llm_graph_context {
 };
 
 struct llm_build_mamba : public llm_graph_context {
-    const llama_model & model;
-
-    llm_build_mamba(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params), model(model) {
+    llm_build_mamba(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
         ggml_tensor * cur;
         ggml_tensor * inpL;
 
@@ -8865,7 +8863,7 @@ struct llm_build_mamba : public llm_graph_context {
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
-            cur = build_mamba_layer(gf, cur, state_copy, ubatch, il);
+            cur = build_mamba_layer(gf, cur, state_copy, model, ubatch, il);
 
             if (il == n_layer - 1) {
                 // skip computing output for unused tokens
@@ -8906,6 +8904,7 @@ struct llm_build_mamba : public llm_graph_context {
              ggml_cgraph * gf,
              ggml_tensor * cur,
              ggml_tensor * state_copy,
+       const llama_model & model,
       const llama_ubatch & ubatch,
                      int   il) const {
         const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
