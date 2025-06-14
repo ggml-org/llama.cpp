@@ -402,7 +402,7 @@ bool llama_batch_allocr::init(
                 const llama_seq_id s0 = batch.seq_id[i][0];
                 const llama_seq_id s1 = batch.seq_id[i][s];
 
-                // mark that sequences s1 is couled to s0
+                // mark that sequence s1 is coupled to s0
                 seq_cpl[s1][s0] = true;
 
                 // note: the other way around is not necessary for now

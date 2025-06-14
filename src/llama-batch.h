@@ -78,7 +78,7 @@ struct llama_sbatch {
     llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple_split = false);
 };
 
-// a helper for sanitizing and fullfilling a batch
+// a helper for sanitizing and fulfilling a batch
 class llama_batch_allocr {
 public:
     llama_batch_allocr();
