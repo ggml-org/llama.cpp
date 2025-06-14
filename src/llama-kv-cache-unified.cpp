@@ -674,6 +674,7 @@ void llama_kv_cache_unified::apply_ubatch(uint32_t head_cur, const llama_ubatch 
 
             cells.pos_set(head_cur + idx, ubatch.pos[idx]);
 
+            // TODO: fix indexing [UBATCH_IDX]
             for (int32_t i = 0; i < ubatch.n_seq_id[s]; i++) {
                 cells.seq_add(head_cur + idx, ubatch.seq_id[s][i]);
             }

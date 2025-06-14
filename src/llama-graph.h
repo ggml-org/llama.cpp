@@ -378,7 +378,7 @@ struct llm_graph_params {
     const llama_memory_state_i * mstate;
     const llama_cross          * cross;
 
-    int32_t n_outputs;
+    uint32_t n_outputs;
 
     const llm_graph_cb & cb;
 };
@@ -412,8 +412,8 @@ struct llm_graph_context {
     const float norm_eps;
     const float norm_rms_eps;
 
-    const int32_t n_tokens;
-    const int32_t n_outputs;
+    const int64_t n_tokens;
+    const int64_t n_outputs;
     const int32_t n_ctx_orig; // yarn
 
     const enum llama_pooling_type pooling_type;

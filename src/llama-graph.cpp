@@ -139,6 +139,7 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
 
         std::vector<uint64_t> sum(n_tokens, 0);
 
+        // TODO: fix indexing [UBATCH_IDX]
         for (int s = 0; s < n_seqs; ++s) {
             const llama_seq_id seq_id = ubatch->seq_id[s][0];
 
@@ -156,6 +157,7 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
             }
         }
 
+        // TODO: fix indexing [UBATCH_IDX]
         for (int s = 0; s < n_seqs; ++s) {
             const llama_seq_id seq_id = ubatch->seq_id[s][0];
 
@@ -180,6 +182,7 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
         uint32_t * data = (uint32_t *) cls->data;
         memset(cls->data, 0, n_tokens * ggml_element_size(cls));
 
+        // TODO: fix indexing [UBATCH_IDX]
         for (int s = 0; s < n_seqs; ++s) {
             const llama_seq_id seq_id = ubatch->seq_id[s][0];
 
@@ -210,6 +213,7 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
         std::vector<int> last_pos(n_tokens, -1);
         std::vector<int> last_row(n_tokens, -1);
 
+        // TODO: fix indexing [UBATCH_IDX]
         for (int s = 0; s < n_seqs; ++s) {
             const llama_seq_id seq_id = ubatch->seq_id[s][0];
 
@@ -283,6 +287,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                                 const int32_t ti = s0*n_seq_tokens + i;
                                 float f = -INFINITY;
 
+                                // TODO: fix indexing [UBATCH_IDX]
                                 for (int s = 0; s < ubatch->n_seq_id[s0]; ++s) {
                                     if (ubatch->seq_id[s0][s] == seq_id && ubatch->pos[ti] <= ubatch->pos[tj]) {
                                         if (hparams.use_alibi) {
@@ -322,6 +327,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
                                 const int32_t ti = s0*n_seq_tokens + i;
                                 float f = -INFINITY;
 
+                                // TODO: fix indexing [UBATCH_IDX]
                                 for (int s = 0; s < ubatch->n_seq_id[s0]; ++s) {
                                     if (ubatch->seq_id[s0][s] == seq_id) {
                                         if (hparams.use_alibi) {
@@ -377,6 +383,7 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
             for (int j = 0; j < n_tokens; ++j) {
                 for (int i = 0; i < n_enc; ++i) {
                     float f = -INFINITY;
+                    // TODO: fix indexing [UBATCH_IDX]
                     for (int s = 0; s < ubatch->n_seq_id[j]; ++s) {
                         const llama_seq_id seq_id = ubatch->seq_id[j][s];
                         if (cross->seq_ids_enc[i].find(seq_id) != cross->seq_ids_enc[i].end()) {
@@ -1556,23 +1563,30 @@ void llm_graph_context::build_pooling(
                 ggml_tensor * inp_cls = build_inp_cls();
                 inp = ggml_get_rows(ctx0, inp, inp_cls);
 
-                if (cls != nullptr && cls_b != nullptr) {
+                if (cls) {
                     // classification head
                     // https://github.com/huggingface/transformers/blob/5af7d41e49bbfc8319f462eb45253dcb3863dfb7/src/transformers/models/roberta/modeling_roberta.py#L1566
-                    cur = ggml_add(ctx0, ggml_mul_mat(ctx0, cls, inp), cls_b);
+                    cur = ggml_mul_mat(ctx0, cls, inp);
+                    if (cls_b) {
+                        cur = ggml_add(ctx0, cur, cls_b);
+                    }
                     cur = ggml_tanh(ctx0, cur);
 
                     // some models don't have `cls_out`, for example: https://huggingface.co/jinaai/jina-reranker-v1-tiny-en
                     // https://huggingface.co/jinaai/jina-reranker-v1-tiny-en/blob/cb5347e43979c3084a890e3f99491952603ae1b7/modeling_bert.py#L884-L896
                     if (cls_out) {
-                        GGML_ASSERT(cls_out_b != nullptr);
-                        cur = ggml_add(ctx0, ggml_mul_mat(ctx0, cls_out, cur), cls_out_b);
+                        cur = ggml_mul_mat(ctx0, cls_out, cur);
+                        if (cls_out_b) {
+                            cur = ggml_add(ctx0, cur, cls_out_b);
+                        }
                     }
                 } else if (cls_out) {
                     // Single layer classification head (direct projection)
                     // https://github.com/huggingface/transformers/blob/f4fc42216cd56ab6b68270bf80d811614d8d59e4/src/transformers/models/bert/modeling_bert.py#L1476
-                    GGML_ASSERT(cls_out_b != nullptr);
-                    cur = ggml_add(ctx0, ggml_mul_mat(ctx0, cls_out, inp), cls_out_b);
+                    cur = ggml_mul_mat(ctx0, cls_out, inp);
+                    if (cls_out_b) {
+                        cur = ggml_add(ctx0, cur, cls_out_b);
+                    }
                 } else {
                     GGML_ABORT("RANK pooling requires either cls+cls_b or cls_out+cls_out_b");
                 }

@@ -513,9 +513,9 @@ constexpr size_t ceil_div(const size_t m, const size_t n) {
 
 bool gpu_has_xmx(sycl::device &dev);
 
-template <int N, class T> void debug_print_array(const std::string & prefix, const T array[N]) {
+template <int N, class T> std::string debug_get_array_str(const std::string & prefix, const T array[N]) {
     if (LIKELY(!g_ggml_sycl_debug)) {
-        return;
+        return "";
     }
     std::stringstream ss;
     ss << prefix << "=[";
@@ -526,29 +526,26 @@ template <int N, class T> void debug_print_array(const std::string & prefix, con
         ss << array[N - 1];
     }
     ss << "]";
-    GGML_SYCL_DEBUG("%s", ss.str().c_str());
+    return ss.str();
 }
 
-inline void debug_print_tensor(const std::string & prefix, const ggml_tensor * tensor,
-                               const std::string & suffix = "") {
-    if (LIKELY(!g_ggml_sycl_debug)) {
-        return;
-    }
-    GGML_SYCL_DEBUG("%s=", prefix.c_str());
+inline std::string debug_get_tensor_str(const std::string &prefix,
+        const ggml_tensor *tensor, const std::string &suffix = "") {
+    std::stringstream ss;
+    if (LIKELY(!g_ggml_sycl_debug)) { return ss.str(); }
+    ss << prefix.c_str() << "=";
     if (tensor) {
-        GGML_SYCL_DEBUG("'%s':type=%s", tensor->name, ggml_type_name(tensor->type));
-        debug_print_array<GGML_MAX_DIMS>(";ne", tensor->ne);
-        debug_print_array<GGML_MAX_DIMS>(";nb", tensor->nb);
-        if (!ggml_is_contiguous(tensor)) {
-            GGML_SYCL_DEBUG(";strided");
-        }
-        if (ggml_is_permuted(tensor)) {
-            GGML_SYCL_DEBUG(";permuted");
-        }
+        ss << "'" << tensor->name << "':type=" << ggml_type_name(tensor->type);
+        ss << debug_get_array_str<GGML_MAX_DIMS>(";ne", tensor->ne);
+        ss << debug_get_array_str<GGML_MAX_DIMS>(";nb", tensor->nb);
+
+        if (!ggml_is_contiguous(tensor)) { ss << ";strided"; }
+        if (ggml_is_permuted(tensor)) { ss << ";permuted"; }
     } else {
-        GGML_SYCL_DEBUG("nullptr");
+        ss << "nullptr";
     }
-    GGML_SYCL_DEBUG("%s", suffix.c_str());
+    ss << suffix;
+    return ss.str();
 }
 
 // Use scope_op_debug_print to log operations coming from running a model
@@ -564,10 +561,10 @@ struct scope_op_debug_print {
             return;
         }
         GGML_SYCL_DEBUG("[SYCL][OP] call %s%s:", func.data(), func_suffix.data());
-        debug_print_tensor(" dst", dst);
+        GGML_SYCL_DEBUG("%s", debug_get_tensor_str(" dst", dst).c_str());
         if (dst) {
             for (std::size_t i = 0; i < num_src; ++i) {
-                debug_print_tensor("\tsrc" + std::to_string(i), dst->src[i]);
+                GGML_SYCL_DEBUG("%s", debug_get_tensor_str("\tsrc" + std::to_string(i), dst->src[i]).c_str());
             }
         }
         GGML_SYCL_DEBUG("%s\n", suffix.data());
