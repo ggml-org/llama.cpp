@@ -199,30 +199,36 @@ void ggml_cuda_op_log(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 /* gated ops */
 
 template <float (*op)(float), typename T>
-static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o) {
+static __global__ void unary_gated_op_kernel(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1) {
     const int64_t i = int64_t(blockDim.x)*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
 
-    // perform base op on half of the row and multiply with gate in other half
-    const int64_t j = (i / n) * o + (i % n);
-    dst[i] = (T)(op((float)x[j]) * (float)g[j]);
+    // perform base op and multiply with gate (either offset in same tensor or a separate one)
+    const int64_t j0 = (i / n) * o0 + (i % n);
+    const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+
+    dst[i] = (T)(op((float)x[j0]) * (float)g[j1]);
 }
 
 template <float (*op)(float), typename T>
-static void unary_gated_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o, cudaStream_t stream) {
+static void unary_gated_cuda(const T * x, const T * g, T * dst, const int64_t k, const int64_t n, const int64_t o0, const int64_t o1, cudaStream_t stream) {
     const int64_t num_blocks = (k + CUDA_GLU_BLOCK_SIZE - 1) / CUDA_GLU_BLOCK_SIZE;
-    unary_gated_op_kernel<op><<<num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(x, g, dst, k, n, o);
+    unary_gated_op_kernel<op><<<num_blocks, CUDA_GLU_BLOCK_SIZE, 0, stream>>>(x, g, dst, k, n, o0, o1);
 }
 
 template <float (*op)(float)>
 void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const void * src0_d = src0->data;
+    const ggml_tensor * src1 = dst->src[1];
+    void * src0_d = src0->data;
+    void * src1_d = src1 ? src1->data : src0->data;
+    const int64_t src0_o = src0->nb[1];
+    const int64_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
     void * dst_d = dst->data;
-    const int64_t nc = src0->ne[0] / 2;
+    const int64_t nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
@@ -235,26 +241,35 @@ void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     GGML_ASSERT(dst->ne[0] == nc);
     GGML_ASSERT(ggml_nrows(dst) == ggml_nrows(src0));
 
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src1->nb[0] == ggml_element_size(src1));
+        GGML_ASSERT(src1->ne[0] == nc);
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
     const int32_t swapped = ((const int32_t *) dst->op_params)[1];
 
     if (src0->type == GGML_TYPE_F16) {
-        unary_gated_cuda<op>(
-                (const half *)src0_d + (swapped ? nc : 0),
-                (const half *)src0_d + (swapped ? 0 : nc),
-                (half *)dst_d,
-                ggml_nelements(dst),
-                nc,
-                src0->nb[1] / sizeof(half),
-                stream);
+        half * src0_p = (half *) src0_d;
+        half * src1_p = (half *) src1_d;
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        unary_gated_cuda<op>(src0_p, src1_p, (half *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(half), src1_o / sizeof(half), stream);
     } else {
-        unary_gated_cuda<op>(
-                (const float *)src0_d + (swapped ? nc : 0),
-                (const float *)src0_d + (swapped ? 0 : nc),
-                (float *)dst_d,
-                ggml_nelements(dst),
-                nc,
-                src0->nb[1] / sizeof(float),
-                stream);
+        float * src0_p = (float *) src0_d;
+        float * src1_p = (float *) src1_d;
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        unary_gated_cuda<op>(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), stream);
     }
 }
 

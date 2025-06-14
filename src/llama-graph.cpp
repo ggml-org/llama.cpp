@@ -604,12 +604,20 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     switch (type_op) {
         case LLM_FFN_SILU:
-            {
+            if (gate && type_gate == LLM_FFN_PAR) {
+                cur = ggml_swiglu_split(ctx0, cur, tmp);
+                cb(cur, "ffn_swiglu", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
                 cur = ggml_silu(ctx0, cur);
                 cb(cur, "ffn_silu", il);
             } break;
         case LLM_FFN_GELU:
-            {
+            if (gate && type_gate == LLM_FFN_PAR) {
+                cur = ggml_geglu_split(ctx0, cur, tmp);
+                cb(cur, "ffn_geglu", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_gelu", il);
                 if (act_scales != NULL) {
@@ -618,7 +626,11 @@ ggml_tensor * llm_graph_context::build_ffn(
                 }
             } break;
         case LLM_FFN_RELU:
-            {
+            if (gate && type_gate == LLM_FFN_PAR) {
+                cur = ggml_reglu_split(ctx0, cur, tmp);
+                cb(cur, "ffn_reglu", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
                 cur = ggml_relu(ctx0, cur);
                 cb(cur, "ffn_relu", il);
             } break;
@@ -774,22 +786,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     switch (type_op) {
         case LLM_FFN_SILU:
-            {
+            if (gate_exps) {
+                cur = ggml_swiglu_split(ctx0, cur, up);
+                cb(cur, "ffn_moe_swiglu", il);
+            } else {
                 cur = ggml_silu(ctx0, cur);
                 cb(cur, "ffn_moe_silu", il);
             } break;
         case LLM_FFN_GELU:
-            {
+            if (gate_exps) {
+                cur = ggml_geglu_split(ctx0, cur, up);
+                cb(cur, "ffn_moe_geglu", il);
+            } else {
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_moe_gelu", il);
             } break;
         default:
             GGML_ABORT("fatal error");
-    }
-
-    if (gate_exps) {
-        cur = ggml_mul(ctx0, cur, up); // [n_ff, n_expert_used, n_tokens]
-        cb(cur, "ffn_moe_gate_par", il);
     }
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
