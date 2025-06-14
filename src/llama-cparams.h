@@ -4,6 +4,7 @@
 
 #include <cstdint>
 
+// TODO: rename to something shorter
 #define LLAMA_MAX_PARALLEL_SEQUENCES 64
 
 struct llama_cparams {
