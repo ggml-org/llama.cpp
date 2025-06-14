@@ -14,7 +14,6 @@
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
 
-#define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
 
 #if defined(__GNUC__)
