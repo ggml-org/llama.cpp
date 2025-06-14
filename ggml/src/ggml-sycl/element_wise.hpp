@@ -24,6 +24,9 @@ typed_data<T> cast_data(ggml_tensor * dst) {
     };
 }
 
+const float GELU_QUICK_COEF = -1.702f;
+
+
 void ggml_sycl_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_sin(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
@@ -73,5 +76,10 @@ void ggml_sycl_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 void ggml_sycl_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
+void ggml_sycl_geglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_reglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_swiglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 #endif // GGML_SYCL_ELEMENTWISE_HPP
 

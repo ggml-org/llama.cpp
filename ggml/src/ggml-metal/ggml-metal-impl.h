@@ -422,6 +422,12 @@ typedef struct {
     int32_t  KHW; // KH * KW, pre-computed on CPU to save GPU resources
 } ggml_metal_kargs_im2col;
 
+typedef struct{
+    int32_t  ne00;
+    uint64_t nb01;
+    uint64_t nb1;
+} ggml_metal_kargs_glu;
+
 typedef struct {
     int64_t  ne00;
     int64_t  ne01;
