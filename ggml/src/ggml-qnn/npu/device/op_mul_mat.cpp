@@ -130,21 +130,31 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
             }
 
             for (int64_t i1 = start_end_row.first; i1 < start_end_row.second; i1++) {
-                auto * src1_row = src1_plane + i1 * src1->get_nb(1);
-                auto * dst_row  = reinterpret_cast<float *>(dst_plane + i1 * dst->get_nb(1)) + col_idx;
-                for (int64_t i0 = 0; i0 < (int64_t) actual_row_count; i0++) {
+                auto *  src1_row = src1_plane + i1 * src1->get_nb(1);
+                auto *  dst_row  = reinterpret_cast<float *>(dst_plane + i1 * dst->get_nb(1)) + col_idx;
+                int64_t i0       = 0;
+                for (; i0 + 1 < (int64_t) actual_row_count; i0 += 2) {
                     auto * src0_row = src0_plane + i0 * src0_actual_row_size;
-                    if (i0 + 1 < actual_row_count) {
-                        if (!src0_plane_cache_ptr || is_mem_cache) {
-                            hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row0_bytes);
-                        }
-                    } else if (ip + 1 < start_end_plane.second) {
-                        hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row1_bytes);
+                    if (!src0_plane_cache_ptr || is_mem_cache) {
+                        hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row0_bytes);
                     }
 
                     // TODO: figure dst how to handle a entire row
                     dst_row[i0] = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row),
                                            reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
+                    dst_row[i0 + 1] =
+                        _DotFunc(reinterpret_cast<const data_type0 *>(src0_row + src0_actual_row_size),
+                                 reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
+                }
+
+                if (ip + 1 < start_end_plane.second) {
+                    hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row1_bytes);
+                }
+
+                if (i0 < (int64_t) actual_row_count) {
+                    auto * src0_row = src0_plane + i0 * src0_actual_row_size;
+                    dst_row[i0]     = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row),
+                                               reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
                 }
             }
         }
