@@ -44,6 +44,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_410M:          return "410M";
         case LLM_TYPE_450M:          return "450M";
         case LLM_TYPE_475M:          return "475M";
+        case LLM_TYPE_558M:          return "558M";
         case LLM_TYPE_770M:          return "770M";
         case LLM_TYPE_780M:          return "780M";
         case LLM_TYPE_0_5B:          return "0.5B";
@@ -719,6 +720,18 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 switch (hparams.n_layer) {
                     case 4:  type = LLM_TYPE_33M;  break; // jina-embeddings-small
                     case 12: type = LLM_TYPE_137M; break; // jina-embeddings-base
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
+        case LLM_ARCH_JINA_BERT_V3:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
+                ml.get_key(LLM_KV_ATTENTION_CAUSAL,           hparams.causal_attn);
+                ml.get_key(LLM_KV_POOLING_TYPE,               hparams.pooling_type, false);
+
+                switch (hparams.n_layer) {
+                    case 24:
+                        type = LLM_TYPE_558M; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -2126,6 +2139,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
             case LLM_ARCH_BERT:
             case LLM_ARCH_NOMIC_BERT:
             case LLM_ARCH_NOMIC_BERT_MOE:
+            case LLM_ARCH_JINA_BERT_V3:
                 {
                     tok_embd     = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,  "weight"), {n_embd, n_vocab}, 0);
                     type_embd    = create_tensor(tn(LLM_TENSOR_TOKEN_TYPES, "weight"), {n_embd, n_token_types}, TENSOR_NOT_REQUIRED);
@@ -2161,24 +2175,22 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
 
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,      "weight", i), {n_embd, n_embd}, 0);
+                        layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT,      "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
 
                         layer.attn_out_norm   = create_tensor(tn(LLM_TENSOR_ATTN_OUT_NORM, "weight", i), {n_embd}, 0);
                         layer.attn_out_norm_b = create_tensor(tn(LLM_TENSOR_ATTN_OUT_NORM, "bias", i),   {n_embd}, 0);
 
                         if (hparams.moe_every_n_layers > 0 && i % hparams.moe_every_n_layers == 1) {
-                            layer.bo         = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, 0);
                             layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff,   n_expert}, 0);
                             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff,   n_embd, n_expert}, 0);
                             layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,   "weight", i), {n_embd, n_expert}, 0);
                         } else {
-                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,        "weight", i), {n_embd, n_ff}, 0);
-                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN,      "weight", i), {n_ff, n_embd}, 0);
+                            layer.ffn_up     = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
+                            layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i),   {n_ff}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                            layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i),   {n_embd}, TENSOR_NOT_REQUIRED);
 
-                            if (arch == LLM_ARCH_BERT || arch == LLM_ARCH_NOMIC_BERT_MOE) {
-                                layer.bo         = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd}, 0);
-                                layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {n_ff}, 0);
-                                layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i), {n_embd}, 0);
-                            } else {
+                            if (arch == LLM_ARCH_NOMIC_BERT) {
                                 layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
                             }
                         }
@@ -5969,7 +5981,7 @@ struct llm_build_bert : public llm_graph_context {
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             // RoPE
-            if (model.arch == LLM_ARCH_NOMIC_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
+            if (model.arch == LLM_ARCH_NOMIC_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE || model.arch == LLM_ARCH_JINA_BERT_V3) {
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -6029,7 +6041,7 @@ struct llm_build_bert : public llm_graph_context {
                         0.0f,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il);
                 cb(cur, "ffn_moe_out", il);
-            } else if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
+            } else if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE || model.arch == LLM_ARCH_JINA_BERT_V3) {
                 cur = build_ffn(cur,
                         model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   NULL,
                         NULL,                      NULL,                        NULL,
@@ -13200,6 +13212,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     switch (arch) {
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
+        case LLM_ARCH_JINA_BERT_V3:
         case LLM_ARCH_NOMIC_BERT:
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_WAVTOKENIZER_DEC:
@@ -13305,6 +13318,7 @@ llm_graph_result_ptr llama_model::build_graph(
             } break;
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
+        case LLM_ARCH_JINA_BERT_V3:
         case LLM_ARCH_NOMIC_BERT:
         case LLM_ARCH_NOMIC_BERT_MOE:
             {
@@ -13688,6 +13702,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GROK:
         case LLM_ARCH_DBRX:
         case LLM_ARCH_BERT:
+        case LLM_ARCH_JINA_BERT_V3:
         case LLM_ARCH_NOMIC_BERT:
         case LLM_ARCH_NOMIC_BERT_MOE:
         case LLM_ARCH_STABLELM:
