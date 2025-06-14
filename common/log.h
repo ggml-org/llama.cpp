@@ -90,11 +90,20 @@ void common_log_set_timestamps(struct common_log * log,       bool   timestamps)
 #define LOG(...)             LOG_TMPL(GGML_LOG_LEVEL_NONE, 0,         __VA_ARGS__)
 #define LOGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_NONE, verbosity, __VA_ARGS__)
 
+#if ENABLE_LOG
 #define LOG_INF(...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  0,                 __VA_ARGS__)
 #define LOG_WRN(...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  0,                 __VA_ARGS__)
 #define LOG_ERR(...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, 0,                 __VA_ARGS__)
 #define LOG_DBG(...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, LOG_DEFAULT_DEBUG, __VA_ARGS__)
 #define LOG_CNT(...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  0,                 __VA_ARGS__)
+#else
+#define LOG_INF(...)
+#define LOG_WRN(...)
+#define LOG_ERR(...)
+#define LOG_DBG(...)
+#define LOG_CNT(...)
+#endif
+#define LOG_TSAVORITE(...) LOG_TMPL(GGML_LOG_LEVEL_TSAVORITE,  0,                 __VA_ARGS__)
 
 #define LOG_INFV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  verbosity, __VA_ARGS__)
 #define LOG_WRNV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  verbosity, __VA_ARGS__)

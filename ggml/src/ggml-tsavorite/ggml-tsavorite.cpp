@@ -504,7 +504,6 @@ static void *ggml_tsavorite_host_malloc(size_t n) {
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
 
   GGML_TSAVORITE_LOG_INFO("\n Allocating memory from tsi_alloc with size  %ld \n", n);
-  printf("\n ANoop Allocating memory from tsi_alloc with size  %ld \n", n);
   data = tsi_alloc(n);
   GGML_TSAVORITE_LOG_CONT("\n Allocating memory from tsi_alloc with size  %ld starting memory %p\n",
                           n, data);
@@ -1800,7 +1799,6 @@ static bool ggml_backend_tsavorite_device_supports_buft(ggml_backend_dev_t dev,
 // ggml_backend_sched_backend_id_from_cur  -> ggml_backend_offload_op ->
 static bool ggml_backend_tsavorite_device_offload_op(ggml_backend_dev_t dev,
                                                      const struct ggml_tensor *op) {
-  // printf("\n ANoop Calling %s \n ", __func__);
   if (op->type != GGML_TYPE_F32)
     return false;
   switch (op->op) {
@@ -1894,8 +1892,9 @@ static struct ggml_backend_reg_i ggml_backend_tsavorite_reg_i = {
     /* .get_proc_address = */ NULL,
 };
 
+
 ggml_backend_reg_t ggml_backend_tsavorite_reg(void) {
-  ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_ERROR;
+  ggml_tsavorite_log_type_val = GGML_TSAVORITE_LOG_NONE;
   ggml_tsavorite_kernel_mode_flag = GGML_TSAVORITE_KERNEL_MODE_MLIR;
   GGML_TSAVORITE_LOG_INFO("Start %s\n", __func__);
   g_ggml_backend_tsavorite_reg.iface = ggml_backend_tsavorite_reg_i;
