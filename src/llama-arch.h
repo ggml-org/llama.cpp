@@ -148,6 +148,7 @@ enum llm_kv {
     LLM_KV_ATTENTION_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
+    LLM_KV_ATTENTION_LAYER_INDICES,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
@@ -436,3 +437,6 @@ const char * llm_arch_name(llm_arch arch);
 llm_arch llm_arch_from_string(const std::string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
+
+bool llm_arch_is_recurrent(const llm_arch& arch);
+bool llm_arch_is_hybrid_recurrent(const llm_arch& arch);

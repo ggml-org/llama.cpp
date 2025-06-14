@@ -86,6 +86,10 @@ uint32_t llama_hparams::n_embd_v_s() const {
     return ssm_d_state * ssm_d_inner;
 }
 
+bool llama_hparams::recurrent_layer(uint32_t il) const {
+    return recurrent_layer_arr[il];
+}
+
 bool llama_hparams::is_swa(uint32_t il) const {
     if (il < n_layer) {
         return swa_layers[il];

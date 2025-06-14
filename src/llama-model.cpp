@@ -9,6 +9,7 @@
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
 #include "llama-kv-cache-recurrent.h"
+#include "llama-kv-cache-hybrid-recurrent.h"
 
 #include "ggml-cpp.h"
 
@@ -469,6 +470,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     std::fill(hparams.n_head_arr.begin(),    hparams.n_head_arr.end(),    0);
     std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
     std::fill(hparams.n_ff_arr.begin(),      hparams.n_ff_arr.end(),      0);
+    std::fill(
+        hparams.recurrent_layer_arr.begin(),
+        hparams.recurrent_layer_arr.end(),
+        llm_arch_is_recurrent(ml.get_arch()));
 
     std::fill(hparams.rope_sections.begin(), hparams.rope_sections.end(), 0);
 
@@ -8856,7 +8861,7 @@ struct llm_build_mamba : public llm_graph_context {
         // {n_embd, n_tokens}
         inpL = build_inp_embd(model.tok_embd);
 
-        ggml_tensor * state_copy = build_inp_s_copy();
+        auto * rs_inp = build_rs_inp_recurrent();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -8865,7 +8870,7 @@ struct llm_build_mamba : public llm_graph_context {
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
-            cur = build_mamba_layer(gf, cur, state_copy, ubatch, il);
+            cur = build_mamba_layer(rs_inp, gf, cur, ubatch, il);
 
             if (il == n_layer - 1) {
                 // skip computing output for unused tokens
@@ -8903,11 +8908,11 @@ struct llm_build_mamba : public llm_graph_context {
 
     // TODO: split
     ggml_tensor * build_mamba_layer(
-             ggml_cgraph * gf,
-             ggml_tensor * cur,
-             ggml_tensor * state_copy,
-      const llama_ubatch & ubatch,
-                     int   il) const {
+        llm_graph_input_rs * inp,
+               ggml_cgraph * gf,
+               ggml_tensor * cur,
+        const llama_ubatch & ubatch,
+                       int   il) const {
         const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
 
         const auto kv_head = kv_state->get_head();
@@ -8932,12 +8937,12 @@ struct llm_build_mamba : public llm_graph_context {
         ggml_tensor * ssm_states_all  = kv_state->get_v_l(il);
 
         // (ab)using the KV cache to store the states
-        ggml_tensor * conv = build_recurrent_state(
-                gf, conv_states_all, state_copy,
+        ggml_tensor * conv = build_rs(
+                inp, gf, conv_states_all,
                 hparams.n_embd_k_s(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
-        ggml_tensor * ssm = build_recurrent_state(
-                gf, ssm_states_all, state_copy,
+        ggml_tensor * ssm = build_rs(
+                inp, gf, ssm_states_all,
                 hparams.n_embd_v_s(), n_seqs);
         ssm = ggml_reshape_3d(ctx0, ssm, d_state, d_inner, n_seqs);
 
@@ -11649,10 +11654,10 @@ struct llm_build_rwkv6_base : public llm_graph_context {
     }
 
     ggml_tensor * build_rwkv6_time_mix(
+            llm_graph_input_rs * inp,
             ggml_cgraph * gf,
             ggml_tensor * cur,
             ggml_tensor * x_prev,
-            ggml_tensor * state_copy,
             const llama_ubatch & ubatch,
             int   il) const {
         const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
@@ -11776,8 +11781,8 @@ struct llm_build_rwkv6_base : public llm_graph_context {
             k = ggml_sub(ctx0, k, ggml_mul(ctx0, k, w));
         }
 
-        ggml_tensor * wkv_state = build_recurrent_state(
-                gf, kv_state->get_v_l(il), state_copy,
+        ggml_tensor * wkv_state = build_rs(
+                inp, gf, kv_state->get_v_l(il),
                 hparams.n_embd_v_s(), n_seqs);
 
         ggml_tensor * wkv_output;
@@ -11832,7 +11837,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
         inpL = build_inp_embd(model.tok_embd);
         inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, -1);
 
-        ggml_tensor * state_copy = build_inp_s_copy();
+        auto * rs_inp = build_rs_inp_recurrent();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
@@ -11842,9 +11847,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(
-                    gf, state_copy, ubatch, il
-                    );
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
 
             ggml_tensor * att_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], 0);
             ggml_tensor * ffn_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], n_embd * ggml_element_size(token_shift));
@@ -11859,7 +11862,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
                     1
                     );
 
-            cur = build_rwkv6_time_mix(gf, att_norm, x_prev, state_copy, ubatch, il);
+            cur = build_rwkv6_time_mix(rs_inp, gf, att_norm, x_prev, ubatch, il);
 
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
             cb(ffn_inp, "ffn_inp", il);
@@ -11929,7 +11932,7 @@ struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
 
         inpL = build_inp_embd(model.tok_embd);
 
-        ggml_tensor * state_copy = build_inp_s_copy();
+        auto * rs_inp = build_rs_inp_recurrent();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
@@ -11939,9 +11942,7 @@ struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(
-                    gf, state_copy, ubatch, il
-                    );
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
 
             ggml_tensor * att_norm = build_norm(inpL, layer->attn_norm, layer->attn_norm_b, LLM_NORM_RMS, il);
             cb(att_norm, "attn_norm", il);
@@ -11953,7 +11954,7 @@ struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
                     1
                     );
 
-            cur = build_rwkv6_time_mix(gf, att_norm, x_prev, state_copy, ubatch, il);
+            cur = build_rwkv6_time_mix(rs_inp, gf, att_norm, x_prev, ubatch, il);
 
             token_shift = ggml_view_3d(ctx0, att_norm, n_embd, 1, n_seqs, att_norm->nb[1], att_norm->nb[2], (n_seq_tokens-1)*n_embd*ggml_element_size(att_norm));
             ggml_build_forward_expand(gf, build_rwkv_token_shift_store(token_shift, ubatch, il));
@@ -12041,10 +12042,10 @@ struct llm_build_rwkv7_base : public llm_graph_context {
     }
 
     ggml_tensor * build_rwkv7_time_mix(
+            llm_graph_input_rs * inp,
             ggml_cgraph * gf,
             ggml_tensor * cur,
             ggml_tensor * x_prev,
-            ggml_tensor * state_copy,
             ggml_tensor *& first_layer_value,
             const llama_ubatch & ubatch,
             int   il) const {
@@ -12127,8 +12128,8 @@ struct llm_build_rwkv7_base : public llm_graph_context {
         v = ggml_reshape_3d(ctx0, v, head_size, head_count, n_tokens);
         a = ggml_reshape_3d(ctx0, a, head_size, head_count, n_tokens);
 
-        ggml_tensor * wkv_state = build_recurrent_state(
-                gf, kv_state->get_v_l(il), state_copy,
+        ggml_tensor * wkv_state = build_rs(
+                inp, gf, kv_state->get_v_l(il),
                 hparams.n_embd_v_s(), n_seqs);
 
         ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, ggml_neg(ctx0, kk), ggml_mul(ctx0, kk, a), wkv_state);
@@ -12185,7 +12186,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
         inpL = build_inp_embd(model.tok_embd);
         inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, -1);
 
-        ggml_tensor * state_copy = build_inp_s_copy();
+        auto * rs_inp = build_rs_inp_recurrent();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
@@ -12195,9 +12196,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(
-                    gf, state_copy, ubatch, il
-                    );
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
 
             ggml_tensor * att_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], 0);
             ggml_tensor * ffn_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], n_embd * ggml_element_size(token_shift));
@@ -12212,7 +12211,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
                     1
                     );
 
-            cur = build_rwkv7_time_mix(gf, att_norm, x_prev, state_copy, v_first, ubatch, il);
+            cur = build_rwkv7_time_mix(rs_inp, gf, att_norm, x_prev, v_first, ubatch, il);
 
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
             cb(ffn_inp, "ffn_inp", il);
@@ -12278,7 +12277,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
 
         inpL = build_inp_embd(model.tok_embd);
 
-        ggml_tensor * state_copy = build_inp_s_copy();
+        auto * rs_inp = build_rs_inp_recurrent();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
@@ -12288,9 +12287,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(
-                    gf, state_copy, ubatch, il
-                    );
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
 
             ggml_tensor * att_norm = build_norm(inpL, layer->attn_norm, layer->attn_norm_b, LLM_NORM_RMS, il);
             cb(att_norm, "attn_norm", il);
@@ -12302,7 +12299,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
                     1
                     );
 
-            cur = build_rwkv7_time_mix(gf, att_norm, x_prev, state_copy, v_first, ubatch, il);
+            cur = build_rwkv7_time_mix(rs_inp, gf, att_norm, x_prev, v_first, ubatch, il);
 
             token_shift = ggml_view_3d(ctx0, att_norm, n_embd, 1, n_seqs, att_norm->nb[1], att_norm->nb[2], (n_seq_tokens-1)*n_embd*ggml_element_size(att_norm));
             ggml_build_forward_expand(gf, build_rwkv_token_shift_store(token_shift, ubatch, il));
@@ -13198,6 +13195,8 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     llama_memory_i * res;
 
     switch (arch) {
+        // Models that need specific instantiation should be handled in the
+        // switch statement
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_NOMIC_BERT:
@@ -13206,57 +13205,75 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             {
                 res = nullptr;
             } break;
-        case LLM_ARCH_MAMBA:
-        case LLM_ARCH_RWKV6:
-        case LLM_ARCH_RWKV6QWEN2:
-        case LLM_ARCH_RWKV7:
-        case LLM_ARCH_ARWKV7:
-            {
-                res = new llama_kv_cache_recurrent(
-                        *this,
-                        GGML_TYPE_F32,
-                        GGML_TYPE_F32,
-                        cparams.offload_kqv,
-                        std::max((uint32_t) 1, cparams.n_seq_max),
-                        cparams.n_seq_max);
-            } break;
+        // Models that need standard caching should rely on recurrent/hybrid
+        // checks
         default:
             {
-                const auto padding = llama_kv_cache_unified::get_padding(cparams);
-
-                cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
-
-                LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
-
-                if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-                    GGML_ASSERT(hparams.is_swa_any());
-
-                    res = new llama_kv_cache_unified_iswa(
-                            *this,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
-                            cparams.offload_kqv,
-                            params.swa_full,
-                            cparams.n_ctx,
-                            cparams.n_seq_max,
-                            cparams.n_ubatch,
-                            padding);
-                } else {
-                    GGML_ASSERT(!hparams.is_swa_any());
-
-                    res = new llama_kv_cache_unified(
+                if (llm_arch_is_recurrent(arch)) {
+                    res = new llama_kv_cache_recurrent(
                             *this,
                             nullptr,
-                            params.type_k,
-                            params.type_v,
-                            !cparams.flash_attn,
+                            GGML_TYPE_F32,
+                            GGML_TYPE_F32,
                             cparams.offload_kqv,
-                            cparams.n_ctx,
-                            cparams.n_seq_max,
-                            padding,
-                            hparams.n_swa,
-                            hparams.swa_type);
+                            std::max((uint32_t) 1, cparams.n_seq_max),
+                            cparams.n_seq_max);
+                } else if (llm_arch_is_hybrid_recurrent(arch)) {
+                    const auto padding = llama_kv_cache_unified::get_padding(cparams);
+
+                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+
+                    res = new llama_kv_cache_hybrid_recurrent(
+                        /* model             */ *this,
+                        /* attn_type_k       */ params.type_k,
+                        /* attn_type_v       */ params.type_v,
+                        /* attn_v_trans      */ !cparams.flash_attn,
+                        /* attn_kv_size      */ cparams.n_ctx,
+                        /* attn_n_pad        */ padding,
+                        /* attn_n_swa        */ hparams.n_swa,
+                        /* attn_swa_type     */ hparams.swa_type,
+                        /* recurrent_type_k  */ GGML_TYPE_F32,
+                        /* recurrent_type_v  */ GGML_TYPE_F32,
+                        /* recurrent_kv_size */ std::max((uint32_t) 1, cparams.n_seq_max),
+                        /* n_seq_max         */ cparams.n_seq_max,
+                        /* offload           */ cparams.offload_kqv);
+                } else {
+                    const auto padding = llama_kv_cache_unified::get_padding(cparams);
+
+                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+
+                    LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
+
+                    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
+                        GGML_ASSERT(hparams.is_swa_any());
+
+                        res = new llama_kv_cache_unified_iswa(
+                                *this,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                params.swa_full,
+                                cparams.n_ctx,
+                                cparams.n_seq_max,
+                                cparams.n_ubatch,
+                                padding);
+                    } else {
+                        GGML_ASSERT(!hparams.is_swa_any());
+
+                        res = new llama_kv_cache_unified(
+                                *this,
+                                nullptr,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                cparams.n_ctx,
+                                cparams.n_seq_max,
+                                padding,
+                                hparams.n_swa,
+                                hparams.swa_type);
+                    }
                 }
             }
     }
@@ -13821,14 +13838,7 @@ llama_token llama_model_decoder_start_token(const llama_model * model) {
 }
 
 bool llama_model_is_recurrent(const llama_model * model) {
-    switch (model->arch) {
-        case     LLM_ARCH_MAMBA:      return true;
-        case     LLM_ARCH_RWKV6:      return true;
-        case     LLM_ARCH_RWKV6QWEN2: return true;
-        case     LLM_ARCH_RWKV7:      return true;
-        case     LLM_ARCH_ARWKV7:     return true;
-        default: return false;
-    }
+    return llm_arch_is_recurrent(model->arch);
 }
 
 const std::vector<std::pair<std::string, ggml_tensor *>> & llama_internal_get_tensor_map(const llama_model * model) {
