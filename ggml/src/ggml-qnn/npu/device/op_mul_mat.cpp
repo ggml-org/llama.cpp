@@ -9,14 +9,17 @@ namespace {
 
 template <typename T> struct get_data_type {};
 
-template <typename _TyData> struct get_data_type<float (*)(const _TyData *, const _TyData *, size_t)> {
-    using type = _TyData;
+template <typename _TyData0, typename _TyData1>
+struct get_data_type<float (*)(const _TyData0 *, const _TyData1 *, size_t)> {
+    using data_type0 = _TyData0;
+    using data_type1 = _TyData1;
 };
 
 template <auto _DotFunc>
 void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tensor * dst,
                   hexagon::compute_params * params) {
-    using data_type = typename get_data_type<decltype(_DotFunc)>::type;
+    using data_type0 = typename get_data_type<decltype(_DotFunc)>::data_type0;
+    using data_type1 = typename get_data_type<decltype(_DotFunc)>::data_type1;
 
     const bool is_quantized         = hexagon::is_quantized_type(src0->get_type());
     const auto src0_actual_row_size = hexagon::get_dequantized_row_size(src0);
@@ -79,7 +82,8 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         src0_actual_row_size, src0_plane_slice_row_count, is_quantized, (void *) src0_plane_cache_ptr,
         src0_plane_cache_size);
 
-    const size_t valid_row_bytes = src1->get_ne(0) * sizeof(data_type);
+    const size_t valid_row0_bytes = src0->get_ne(0) * sizeof(data_type0);
+    const size_t valid_row1_bytes = src1->get_ne(0) * sizeof(data_type1);
     DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_SUB_PROC(dst, params->get_thread_index(), dequant);
 
     uint8_t * dst_ptr = dst->get_write_buffer();
@@ -98,7 +102,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         auto *       dst_plane  = dst_ptr + i3 * dst->get_nb(3) + i2 * dst->get_nb(2);
         for (int64_t col_idx = start_end_element.first; col_idx < start_end_element.second;
              col_idx += src0_plane_slice_row_count) {
-            const auto * src0_plane =
+            const uint8_t * src0_plane =
                 src0_ptr + i3 / r03 * src0->get_nb(3) + i2 / r02 * src0->get_nb(2) + col_idx * src0->get_nb(1);
             if (src0_plane_cache_ptr) {
                 if (last_cached_plane_ptr != src0_plane) {
@@ -110,9 +114,10 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                             hexagon::l2fetch_row(src0_row + src0->get_nb(1), src0->get_nb(1));
                         }
 
-                        auto * dst_row = reinterpret_cast<float *>(src0_plane_cache_ptr + ir * src0_actual_row_size);
-                        dequantize_row_func(src0_row, reinterpret_cast<float *>(dst_row), src0->get_ne(0),
-                                            params->f16_to_f32_table);
+                        auto * dst_row = reinterpret_cast<hexagon::dequantized_element_type *>(
+                            src0_plane_cache_ptr + ir * src0_actual_row_size);
+                        dequantize_row_func(src0_row, reinterpret_cast<hexagon::dequantized_element_type *>(dst_row),
+                                            src0->get_ne(0), params->f16_to_f32_table);
                     }
 
                     last_cached_plane_ptr = src0_plane;
@@ -128,15 +133,15 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                     auto * src0_row = src0_plane + i0 * src0_actual_row_size;
                     if (i0 + 1 < src0_plane_slice_row_count) {
                         if (!src0_plane_cache_ptr || is_mem_cache) {
-                            hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row_bytes);
+                            hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row0_bytes);
                         }
                     } else if (ip + 1 < start_end_plane.second) {
-                        hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row_bytes);
+                        hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row1_bytes);
                     }
 
                     // TODO: figure dst how to handle a entire row
-                    dst_row[i0] = _DotFunc(reinterpret_cast<const data_type *>(src0_row),
-                                           reinterpret_cast<const data_type *>(src1_row), (size_t) src0->get_ne(0));
+                    dst_row[i0] = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row),
+                                           reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
                 }
             }
         }
@@ -195,7 +200,11 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
 
     switch (src1->get_type()) {
         case NPU_DATA_TYPE_F32:
-            mul_mat_impl<hexagon::vec_dot_product_f32_f32>(src0, src1, out, params);
+            if (src0->get_type() == NPU_DATA_TYPE_F16) {
+                mul_mat_impl<hexagon::vec_dot_product_f16_f32>(src0, src1, out, params);
+            } else {
+                mul_mat_impl<hexagon::vec_dot_product_f32_f32>(src0, src1, out, params);
+            }
             return true;
 
         case NPU_DATA_TYPE_F16:
