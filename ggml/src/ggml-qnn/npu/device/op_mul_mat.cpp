@@ -84,7 +84,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
 
     const size_t valid_row0_bytes = src0->get_ne(0) * sizeof(data_type0);
     const size_t valid_row1_bytes = src1->get_ne(0) * sizeof(data_type1);
-    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_SUB_PROC(dst, params->get_thread_index(), dequant);
+    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_MULTI_SUB_PROC(dst, params->get_thread_index(), mul_mat);
 
     uint8_t * dst_ptr = dst->get_write_buffer();
     if (!dst_ptr) {
@@ -109,7 +109,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                 src0_ptr + i3 / r03 * src0->get_nb(3) + i2 / r02 * src0->get_nb(2) + col_idx * src0->get_nb(1);
             if (src0_plane_cache_ptr) {
                 if (last_cached_plane_ptr != src0_plane) {
-                    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_SUB_PROC(dequant);
+                    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 0, dequant);
 
                     for (int64_t ir = 0; ir < (int64_t) actual_row_count; ir++) {
                         auto * src0_row = src0_plane + ir * src0->get_nb(1);
@@ -130,6 +130,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
             }
 
             for (int64_t i1 = start_end_row.first; i1 < start_end_row.second; i1++) {
+                DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 1, vec_dot);
                 auto *  src1_row = src1_plane + i1 * src1->get_nb(1);
                 auto *  dst_row  = reinterpret_cast<float *>(dst_plane + i1 * dst->get_nb(1)) + col_idx;
                 int64_t i0       = 0;
