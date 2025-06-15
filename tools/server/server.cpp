@@ -4878,7 +4878,9 @@ int main(int argc, char ** argv) {
     };
 
     bool was_bound = false;
+    bool is_sock = false;
     if (string_ends_with(std::string(params.hostname), ".sock")) {
+        is_sock = true;
         LOG_INF("%s: setting address family to AF_UNIX\n", __func__);
         svr->set_address_family(AF_UNIX);
         // bind_to_port requires a second arg, any value other than 0 should
@@ -4956,7 +4958,9 @@ int main(int argc, char ** argv) {
     SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
 
-    LOG_INF("%s: server is listening on http://%s:%d - starting the main loop\n", __func__, params.hostname.c_str(), params.port);
+    LOG_INF("%s: server is listening on %s - starting the main loop\n", __func__,
+            is_sock ? string_format("unix://%s", params.hostname.c_str()).c_str() :
+                      string_format("http://%s:%d", params.hostname.c_str(), params.port).c_str());
 
     // this call blocks the main thread until queue_tasks.terminate() is called
     ctx_server.queue_tasks.start_loop();

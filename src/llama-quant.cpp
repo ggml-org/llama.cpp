@@ -585,7 +585,8 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (o.tag == LLAMA_KV_OVERRIDE_TYPE_FLOAT) {
                 gguf_set_val_f32(ctx_out.get(), o.key, o.val_f64);
             } else if (o.tag == LLAMA_KV_OVERRIDE_TYPE_INT) {
-                gguf_set_val_i32(ctx_out.get(), o.key, o.val_i64);
+                // Setting type to UINT32. See https://github.com/ggml-org/llama.cpp/pull/14182 for context
+                gguf_set_val_u32(ctx_out.get(), o.key, (uint32_t)abs(o.val_i64));
             } else if (o.tag == LLAMA_KV_OVERRIDE_TYPE_BOOL) {
                 gguf_set_val_bool(ctx_out.get(), o.key, o.val_bool);
             } else if (o.tag == LLAMA_KV_OVERRIDE_TYPE_STR) {

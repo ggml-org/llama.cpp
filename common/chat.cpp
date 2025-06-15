@@ -1921,7 +1921,9 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
     } catch (const common_chat_msg_partial_exception & ex) {
         LOG_DBG("Partial parse: %s\n", ex.what());
         if (!is_partial) {
-            throw std::runtime_error(ex.what());
+            builder.clear_tools();
+            builder.move_to(0);
+            common_chat_parse_content_only(builder);
         }
     }
     auto msg = builder.result();

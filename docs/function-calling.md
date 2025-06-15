@@ -11,7 +11,7 @@ Function calling is supported for all models (see https://github.com/ggml-org/ll
   - Llama 3.1 / 3.3 (including builtin tools support - tool names for `wolfram_alpha`, `web_search` / `brave_search`, `code_interpreter`), Llama 3.2
   - Functionary v3.1 / v3.2
   - Hermes 2/3, Qwen 2.5
-  - Qwen 2.5 Coder (WIP: https://github.com/ggml-org/llama.cpp/pull/12034)
+  - Qwen 2.5 Coder
   - Mistral Nemo
   - Firefunction v2
   - Command R7B
