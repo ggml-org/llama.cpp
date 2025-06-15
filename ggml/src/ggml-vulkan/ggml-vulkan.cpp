@@ -431,6 +431,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_tanh[2];
     vk_pipeline pipeline_sigmoid[2];
 
+    vk_pipeline pipeline_geglu[2];
+    vk_pipeline pipeline_reglu[2];
+    vk_pipeline pipeline_swiglu[2];
+
     vk_pipeline pipeline_leaky_relu_f32;
     vk_pipeline pipeline_silu_back_f32;
     vk_pipeline pipeline_diag_mask_inf_f32;
@@ -2727,6 +2731,15 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_UNARY(tanh)
     CREATE_UNARY(sigmoid)
 #undef CREATE_UNARY
+
+#define CREATE_GLU(name)  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
+
+    CREATE_GLU(geglu)
+    CREATE_GLU(reglu)
+    CREATE_GLU(swiglu)
+#undef CREATE_GLU
 
     ggml_vk_create_pipeline(device, device->pipeline_leaky_relu_f32, "leaky_relu_f32", leaky_relu_f32_len, leaky_relu_f32_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_silu_back_f32, "silu_back_f32", silu_back_f32_len, silu_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
@@ -6415,6 +6428,24 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 break;
         }
         return nullptr;
+    case GGML_OP_GLU:
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) ||
+            (src0->type != dst->type)) {
+            return nullptr;
+        }
+
+        switch (ggml_get_glu_op(dst)) {
+            case GGML_GLU_OP_GEGLU:
+                return ctx->device->pipeline_geglu[dst->type == GGML_TYPE_F16];
+            case GGML_GLU_OP_REGLU:
+                return ctx->device->pipeline_reglu[dst->type == GGML_TYPE_F16];
+            case GGML_GLU_OP_SWIGLU:
+                return ctx->device->pipeline_swiglu[dst->type == GGML_TYPE_F16];
+            default:
+                break;
+        }
+        return nullptr;
     case GGML_OP_DIAG_MASK_INF:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_diag_mask_inf_f32;
@@ -6791,6 +6822,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_SOFT_MAX_BACK:
     case GGML_OP_SUM_ROWS:
     case GGML_OP_ARGMAX:
+    case GGML_OP_GLU:
         {
             const uint32_t nr = ggml_nrows(src0);
             if (nr > 262144) {
@@ -7505,6 +7537,14 @@ static void ggml_vk_l2_norm(ggml_backend_vk_context * ctx, vk_context& subctx, c
 
 static void ggml_vk_unary(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UNARY, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f }, dryrun);
+}
+
+static void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
+    GGML_ASSERT(src0->ne[0] / 2 == dst->ne[0]);
+
+    const uint32_t swapped = (uint32_t)dst->op_params[1];
+
+    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_GLU, { (uint32_t)src0->ne[0], swapped, 0.0f, 0.0f }, dryrun);
 }
 
 static void ggml_vk_diag_mask_inf(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -8718,6 +8758,16 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
             return false;
         }
         break;
+    case GGML_OP_GLU:
+        switch (ggml_get_glu_op(node)) {
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_REGLU:
+        case GGML_GLU_OP_SWIGLU:
+            break;
+        default:
+            return false;
+        }
+        break;
     case GGML_OP_REPEAT:
     case GGML_OP_REPEAT_BACK:
     case GGML_OP_GET_ROWS:
@@ -8810,6 +8860,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_L2_NORM:
         case GGML_OP_UNARY:
+        case GGML_OP_GLU:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
@@ -8947,6 +8998,17 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
             return false;
         }
         break;
+    case GGML_OP_GLU:
+        switch (ggml_get_glu_op(node)) {
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_REGLU:
+        case GGML_GLU_OP_SWIGLU:
+            ggml_vk_glu(ctx, compute_ctx, src0, node, dryrun);
+            break;
+        default:
+            return false;
+        }
+        break;
     case GGML_OP_DIAG_MASK_INF:
         ggml_vk_diag_mask_inf(ctx, compute_ctx, src0, node, dryrun);
 
@@ -9072,8 +9134,9 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         if (!ok) {
             if (node->op == GGML_OP_UNARY) {
                 std::cerr << __func__ << ": error: op not supported UNARY " << node->name << " (" << ggml_unary_op_name(static_cast<ggml_unary_op>(node->op_params[0])) << ")" << std::endl;
-            }
-            else {
+            } else if (node->op == GGML_OP_GLU) {
+                std::cerr << __func__ << ": error: op not supported GLU " << node->name << " (" << ggml_glu_op_name(static_cast<ggml_glu_op>(node->op_params[0])) << ")" << std::endl;
+            } else {
                 std::cerr << __func__ << ": error: op not supported " << node->name << " (" << ggml_op_name(node->op) << ")" << std::endl;
             }
         }
@@ -9146,6 +9209,17 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
+            buf = tensor->buffer;
+            break;
+        default:
+            return false;
+        }
+        break;
+    case GGML_OP_GLU:
+        switch (ggml_get_glu_op(tensor)) {
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_REGLU:
+        case GGML_GLU_OP_SWIGLU:
             buf = tensor->buffer;
             break;
         default:
@@ -9923,6 +9997,19 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     return false;
             }
             break;
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_REGLU:
+                case GGML_GLU_OP_SWIGLU:
+                    return ggml_is_contiguous(op->src[0]) &&
+                           (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                           (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                           (op->src[0]->type == op->type);
+                default:
+                    return false;
+            }
+            break;
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
@@ -10637,6 +10724,8 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
             std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
             GGML_ABORT("fatal error");
         }
+    } else if (tensor->op == GGML_OP_GLU) {
+        tensor_clone = ggml_glu(ggml_ctx, src_clone[0], (ggml_glu_op) tensor->op_params[0], tensor->op_params[1]);
     } else if (tensor->op == GGML_OP_CPY || tensor->op == GGML_OP_DUP) {
         if (src1 == nullptr) {
             tensor_clone = ggml_dup(ggml_ctx, src_clone[0]);

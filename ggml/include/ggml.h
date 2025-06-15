@@ -518,6 +518,8 @@ extern "C" {
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
         GGML_OP_OPT_STEP_ADAMW,
 
+        GGML_OP_GLU,
+
         GGML_OP_COUNT,
     };
 
@@ -539,6 +541,14 @@ extern "C" {
         GGML_UNARY_OP_GELU_ERF,
 
         GGML_UNARY_OP_COUNT,
+    };
+
+    enum ggml_glu_op {
+        GGML_GLU_OP_REGLU,
+        GGML_GLU_OP_GEGLU,
+        GGML_GLU_OP_SWIGLU,
+
+        GGML_GLU_OP_COUNT,
     };
 
     enum ggml_object_type {
@@ -656,6 +666,7 @@ extern "C" {
     GGML_API const char * ggml_op_symbol(enum ggml_op   op);
 
     GGML_API const char * ggml_unary_op_name(enum ggml_unary_op op);
+    GGML_API const char * ggml_glu_op_name(enum ggml_glu_op op);
     GGML_API const char * ggml_op_desc(const struct ggml_tensor * t); // unary or op name
 
     GGML_API size_t  ggml_element_size(const struct ggml_tensor * tensor);
@@ -757,6 +768,7 @@ extern "C" {
     GGML_API void ggml_unravel_index(const struct ggml_tensor * tensor, int64_t i, int64_t * i0, int64_t * i1, int64_t * i2, int64_t * i3);
 
     GGML_API enum ggml_unary_op ggml_get_unary_op(const struct ggml_tensor * tensor);
+    GGML_API enum ggml_glu_op ggml_get_glu_op(const struct ggml_tensor * tensor);
 
     GGML_API void *  ggml_get_data    (const struct ggml_tensor * tensor);
     GGML_API float * ggml_get_data_f32(const struct ggml_tensor * tensor);
@@ -1082,6 +1094,40 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_exp_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    // gated linear unit ops
+    // A: n columns, r rows,
+    // result is n / 2 columns, r rows,
+    // expects gate in second half of row, unless swapped is true
+    GGML_API struct ggml_tensor * ggml_glu(
+            struct ggml_context * ctx,
+             struct ggml_tensor * a,
+             enum ggml_glu_op     op,
+             bool                 swapped);
+
+    GGML_API struct ggml_tensor * ggml_reglu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_reglu_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_swiglu(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_swiglu_swapped(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
