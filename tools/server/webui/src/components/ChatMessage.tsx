@@ -37,7 +37,7 @@ export default function ChatMessage({
   onChangeSibling(sibling: Message['id']): void;
   isPending?: boolean;
 }) {
-  const { viewingChat, config } = useAppContext();
+  const { viewingChat, config, serverProps } = useAppContext();
   const [editingContent, setEditingContent] = useState<string | null>(null);
   const timings = useMemo(
     () =>
@@ -189,11 +189,18 @@ export default function ChatMessage({
                   </div>
                 </div>
               )}
+              
+              {/* Show model name only after AI messages */}
+              {msg.role === 'assistant' && serverProps?.model_path && (
+                <div className="text-xs opacity-50 mt-2">
+                  {serverProps.model_path.split(/(\\|\/)/).pop()}
+                </div>
+              )}
             </>
           )}
         </div>
       </div>
-
+        
       {/* actions for each message */}
       {msg.content !== null && (
         <div
