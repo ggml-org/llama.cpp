@@ -7,7 +7,10 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Sequence, Mapping, Iterable, Protocol, ClassVar, runtime_checkable
 
-from sentencepiece import SentencePieceProcessor
+try:
+    from sentencepiece import SentencePieceProcessor
+except ImportError:
+    SentencePieceProcessor = None
 
 import gguf
 
@@ -302,6 +305,9 @@ class SentencePieceVocab(Vocab):
     name = "spm"
 
     def __init__(self, base_path: Path):
+        if SentencePieceProcessor is None:
+            raise RuntimeError("sentencepiece is not installed")
+
         added_tokens: dict[str, int] = {}
         if (fname_tokenizer := base_path / 'tokenizer.model').exists():
             # normal location
