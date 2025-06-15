@@ -84,7 +84,7 @@ public:
     llama_batch_allocr();
 
     // sanitize and auto-gen missing data in the input batch
-    // memory is optional. if provided will be used to check for sequence continuity
+    // memory is optional. if provided will be used to check for sequence continuity and to determine the positions
     bool init(
             const llama_batch & batch_inp,
             const llama_vocab & vocab,
@@ -111,8 +111,8 @@ private:
     std::vector<llama_seq_id *> seq_id;
     std::vector<int8_t>         output;
 
-    std::vector<std::set<llama_pos>> seq_pos; // the positions of each sequence
-    std::vector<std::vector<bool>>   seq_cpl; // if sequences i is coupled to sequence j
+    std::vector<std::set<llama_pos>> seq_pos; // seq_pos[s]: the set of positions in sequence s
+    std::vector<std::vector<bool>>   seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
 
     int debug;
 };

@@ -727,7 +727,6 @@ int llama_context::encode(const llama_batch & batch_inp) {
         return -1;
     }
 
-    // temporary allocate memory for the input batch if needed
     // note: during encode, we always pass the full sequence starting from pos = 0
     if (!batch_allocr->init(batch_inp, model.vocab, nullptr)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
@@ -895,7 +894,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return -1;
     }
 
-    // temporary allocate memory for the input batch if needed
     if (!batch_allocr->init(batch_inp, model.vocab, memory.get())) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
