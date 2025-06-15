@@ -115,6 +115,9 @@ struct llama_hparams {
     uint32_t ssm_d_state = 0;
     uint32_t ssm_dt_rank = 0;
 
+    // for hybrid state space models
+    std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
+
     bool ssm_dt_b_c_rms = false;
 
     float f_clamp_kqv      = 0.0f;
@@ -185,6 +188,9 @@ struct llama_hparams {
 
     // dimension of the recurrent state embeddings
     uint32_t n_embd_v_s() const;
+
+    // whether or not the given layer is recurrent (for hybrid models)
+    bool recurrent_layer(uint32_t il) const;
 
     bool is_swa(uint32_t il) const;
 };
