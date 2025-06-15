@@ -52,6 +52,17 @@ struct llama_kv_cache_mixed_config {
     uint32_t stats_report_interval = 1000; // Report stats every N tokens
 };
 
+//> ===================================================================================================
+//> Custom Flash Attention Implementation for F32
+//> ===================================================================================================
+void ggml_compute_forward_flash_attn_ext_f32(
+        ggml_tensor * dst,
+        int ith,
+        int nth,
+        void* wdata,
+        size_t wsize,
+        void * userdatat);
+
 //> =================================================================================================
 //> Custom Flash Attention Implementation for Mixed KV Cache
 //> =================================================================================================

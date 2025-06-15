@@ -356,13 +356,13 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
         if (flash_result) {
             LOG_INF("✅ Flash Attention computation successful!\n");
             ggml_print_tensor_info((uint8_t*)flash_result->data, flash_result->type, 
-                                 flash_result->ne, flash_result->nb, "Flash Attention Result", 2);
+                                 flash_result->ne, flash_result->nb, "Flash Attention Result", 4);
             
             // Compare with original kqv_out if available
             if (kqv_out && kqv_out->data) {
                 LOG_INF("📊 Comparing with original kqv_out:\n");
                 ggml_print_tensor_info((uint8_t*)kqv_out->data, kqv_out->type, 
-                                     kqv_out->ne, kqv_out->nb, "Original KQV_OUT", 2);
+                                     kqv_out->ne, kqv_out->nb, "Original KQV_OUT", 4);
                 
                 // Calculate difference if same size
                 if (ggml_nelements(flash_result) == ggml_nelements(kqv_out) && 

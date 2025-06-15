@@ -9,10 +9,11 @@ rm -f *.gguf
 echo "✓ GGUF files cleaned"
 
 MODEL="/datasets/gguf/Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
-PROMPT="Write a quick sort: "
+PROMPT=""
 STEPS=2
 TRACE_LAYER=0
 OUTPUT_FILE="reference_f32.gguf"
+THREADS=1
 
 echo "=== KQV Tensor Reader Test ==="
 
@@ -21,7 +22,7 @@ CMD="./build-arm64/bin/kqv-trace-monitor \
     -m \"$MODEL\" \
     -p \"$PROMPT\" \
     --layer $TRACE_LAYER \
-    -t 12 \
+    -t $THREADS \
     -fa \
     -n $STEPS \
     -ngl 0 \

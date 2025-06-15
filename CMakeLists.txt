@@ -84,6 +84,7 @@ option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 # 3rd party libs
 option(LLAMA_CURL       "llama: use libcurl to download model from an URL" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
+option(LLAMA_TORCH      "llama: enable PyTorch C++ support" OFF)
 
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
@@ -142,6 +143,77 @@ if (NOT MSVC)
         add_compile_options(-fsanitize=undefined)
         link_libraries     (-fsanitize=undefined)
     endif()
+endif()
+
+#
+# PyTorch Configuration
+#
+
+if (LLAMA_TORCH)
+    message(STATUS "PyTorch C++ support enabled")
+    
+    # Get PyTorch paths dynamically
+    execute_process(
+        COMMAND python -c "import torch; print(torch.utils.cmake_prefix_path, end='')"
+        OUTPUT_VARIABLE TORCH_CMAKE_PREFIX_PATH
+        RESULT_VARIABLE TORCH_PYTHON_EXIT_CODE
+    )
+
+    execute_process(
+        COMMAND python -c "import torch; import os; print(os.path.join(torch.__path__[0], 'include'), end='')"
+        OUTPUT_VARIABLE TORCH_INCLUDE_DIR
+        RESULT_VARIABLE TORCH_INCLUDE_EXIT_CODE
+    )
+
+    execute_process(
+        COMMAND python -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'), end='')"
+        OUTPUT_VARIABLE TORCH_LIB_DIR
+        RESULT_VARIABLE TORCH_LIB_EXIT_CODE
+    )
+
+    # Check if PyTorch paths were found successfully
+    if(TORCH_PYTHON_EXIT_CODE EQUAL 0 AND TORCH_INCLUDE_EXIT_CODE EQUAL 0 AND TORCH_LIB_EXIT_CODE EQUAL 0)
+        message(STATUS "Found PyTorch at: ${TORCH_CMAKE_PREFIX_PATH}")
+        message(STATUS "PyTorch include dir: ${TORCH_INCLUDE_DIR}")
+        message(STATUS "PyTorch lib dir: ${TORCH_LIB_DIR}")
+        
+        # Set CMAKE_PREFIX_PATH to find PyTorch
+        list(APPEND CMAKE_PREFIX_PATH ${TORCH_CMAKE_PREFIX_PATH})
+        
+        # Find PyTorch package
+        find_package(Torch QUIET)
+        
+        if(Torch_FOUND)
+            message(STATUS "PyTorch found successfully")
+            set(LLAMA_TORCH_AVAILABLE TRUE)
+        else()
+            message(WARNING "PyTorch package config not found, using manual configuration")
+            # Manual configuration fallback
+            set(TORCH_INCLUDE_DIRS ${TORCH_INCLUDE_DIR})
+            set(TORCH_LIBRARIES 
+                ${TORCH_LIB_DIR}/libtorch.so
+                ${TORCH_LIB_DIR}/libtorch_cpu.so
+                ${TORCH_LIB_DIR}/libc10.so
+            )
+            # Check if CUDA is available
+            execute_process(
+                COMMAND python -c "import torch; print('1' if torch.cuda.is_available() else '0', end='')"
+                OUTPUT_VARIABLE TORCH_CUDA_AVAILABLE
+            )
+            if(TORCH_CUDA_AVAILABLE STREQUAL "1")
+                list(APPEND TORCH_LIBRARIES 
+                    ${TORCH_LIB_DIR}/libtorch_cuda.so
+                    ${TORCH_LIB_DIR}/libc10_cuda.so
+                )
+            endif()
+            set(LLAMA_TORCH_AVAILABLE TRUE)
+        endif()
+    else()
+        message(WARNING "Failed to find PyTorch installation")
+        set(LLAMA_TORCH_AVAILABLE FALSE)
+    endif()
+else()
+    set(LLAMA_TORCH_AVAILABLE FALSE)
 endif()
 
 #

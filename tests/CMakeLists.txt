@@ -9,6 +9,21 @@ function(llama_build source)
 
     add_executable(${TEST_TARGET} ${source})
     target_link_libraries(${TEST_TARGET} PRIVATE common)
+    
+    # Link PyTorch libraries if available
+    if(LLAMA_TORCH_AVAILABLE)
+        if(Torch_FOUND)
+            target_link_libraries(${TEST_TARGET} PRIVATE ${TORCH_LIBRARIES})
+            target_include_directories(${TEST_TARGET} PRIVATE ${TORCH_INCLUDE_DIRS})
+        else()
+            # Manual linking
+            target_include_directories(${TEST_TARGET} PRIVATE ${TORCH_INCLUDE_DIRS})
+            target_link_libraries(${TEST_TARGET} PRIVATE ${TORCH_LIBRARIES})
+        endif()
+        target_compile_definitions(${TEST_TARGET} PRIVATE LLAMA_TORCH_AVAILABLE)
+        target_compile_features(${TEST_TARGET} PRIVATE cxx_std_17)
+    endif()
+    
     install(TARGETS ${TEST_TARGET} RUNTIME)
 endfunction()
 
@@ -70,6 +85,20 @@ function(llama_build_and_test source)
     add_executable(${TEST_TARGET} ${source} get-model.cpp)
     install(TARGETS ${TEST_TARGET} RUNTIME)
     target_link_libraries(${TEST_TARGET} PRIVATE common)
+    
+    # Link PyTorch libraries if available
+    if(LLAMA_TORCH_AVAILABLE)
+        if(Torch_FOUND)
+            target_link_libraries(${TEST_TARGET} PRIVATE ${TORCH_LIBRARIES})
+            target_include_directories(${TEST_TARGET} PRIVATE ${TORCH_INCLUDE_DIRS})
+        else()
+            # Manual linking
+            target_include_directories(${TEST_TARGET} PRIVATE ${TORCH_INCLUDE_DIRS})
+            target_link_libraries(${TEST_TARGET} PRIVATE ${TORCH_LIBRARIES})
+        endif()
+        target_compile_definitions(${TEST_TARGET} PRIVATE LLAMA_TORCH_AVAILABLE)
+        target_compile_features(${TEST_TARGET} PRIVATE cxx_std_17)
+    endif()
 
     add_test(
         NAME ${TEST_TARGET}
@@ -78,6 +107,36 @@ function(llama_build_and_test source)
         ${LLAMA_TEST_ARGS})
 
     set_property(TEST ${TEST_TARGET} PROPERTY LABELS ${LLAMA_TEST_LABEL})
+endfunction()
+
+# Function to build tests with PyTorch support
+function(llama_build_torch source)
+    # Always use the source filename for PyTorch tests, ignore global LLAMA_TEST_NAME
+    get_filename_component(TEST_TARGET ${source} NAME_WE)
+
+    if(NOT LLAMA_TORCH_AVAILABLE)
+        message(WARNING "PyTorch not available, skipping ${TEST_TARGET}")
+        return()
+    endif()
+
+    add_executable(${TEST_TARGET} ${source})
+    target_link_libraries(${TEST_TARGET} PRIVATE common)
+    
+    # PyTorch linking
+    if(Torch_FOUND)
+        target_link_libraries(${TEST_TARGET} PRIVATE ${TORCH_LIBRARIES})
+        target_include_directories(${TEST_TARGET} PRIVATE ${TORCH_INCLUDE_DIRS})
+    else()
+        # Manual linking
+        target_include_directories(${TEST_TARGET} PRIVATE ${TORCH_INCLUDE_DIRS})
+        target_link_libraries(${TEST_TARGET} PRIVATE ${TORCH_LIBRARIES})
+    endif()
+    target_compile_definitions(${TEST_TARGET} PRIVATE LLAMA_TORCH_AVAILABLE)
+    
+    # Set C++ standard for PyTorch compatibility
+    target_compile_features(${TEST_TARGET} PRIVATE cxx_std_17)
+    
+    install(TARGETS ${TEST_TARGET} RUNTIME)
 endfunction()
 
 # build test-tokenizer-0 target once and add many tests
