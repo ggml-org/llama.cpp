@@ -140,6 +140,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     static_assert((sizeof(_TElem1) % sizeof(_TElem0)) == 0,
                   "Element size mismatch: _TElem1 must be a multiple of _TElem0");
 
+    constexpr const size_t kElementsPerVector0 = hexagon::kBytesPerVector / sizeof(_TElem0);
     constexpr const size_t kElementsPerVector1 = hexagon::kBytesPerVector / sizeof(_TElem1);
 
     const auto * const src0_ptr_end     = src0 + count;
@@ -162,7 +163,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         HVX_VectorPair s0_pair = _ExpandFunc(s0);
         prev0                  = curr0;
         prev1                  = Q6_V_hi_W(curr1);
-        src0_vec_ptr += 1;
+        src0_vec_ptr++;
         src1_vec_ptr += 2;
 
         sum0 = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), l1), sum0);
@@ -171,9 +172,11 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
 
     sum = _AddFunc(sum0, sum1);
     if (src1_vec_ptr_end - src1_vec_ptr > 0) {
-        HVX_Vector curr0 = reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end ? *src0_vec_ptr : prev0;
+        const bool should_fetch_src0 = reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end &&
+                                       hexagon::bytes_to_vector_boundary(src0) < sizeof(_TElem0) * kElementsPerVector1;
+        HVX_Vector curr0 = should_fetch_src0 ? *src0_vec_ptr : prev0;
         HVX_Vector curr1 = *src1_vec_ptr++;
-        src0_vec_ptr += reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end ? 1 : 0;
+        src0_vec_ptr += should_fetch_src0 ? 1 : 0;
         HVX_Vector     s0      = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         HVX_Vector     s1      = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         HVX_VectorPair s0_pair = _ExpandFunc(s0);
@@ -183,16 +186,20 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);  // TODO: figure out how to handle the high part
     }
 
-    const size_t leftover = count % kElementsPerVector1;
+    const size_t leftover0 = count % kElementsPerVector0;
+    const size_t leftover1 = count % kElementsPerVector1;
     if ((src1_vec_ptr_end - ((HVX_Vector *) src1)) > 0) {
         // handle the last vector
         // see also:
         //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
         //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        bool       should_fetch_src1 = leftover != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
-        HVX_Vector curr0 = reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end ? *src0_vec_ptr : prev0;
-        HVX_Vector curr1 = should_fetch_src1 ? *src1_vec_ptr : prev1;
-        src0_vec_ptr += reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end ? 1 : 0;
+        const bool should_fetch_src0 =
+            reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end &&
+            hexagon::bytes_to_vector_boundary(src0) < sizeof(_TElem0) * kElementsPerVector1 * 2;
+        bool       should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
+        HVX_Vector curr0             = should_fetch_src0 ? *src0_vec_ptr : prev0;
+        HVX_Vector curr1             = should_fetch_src1 ? *src1_vec_ptr : prev1;
+        src0_vec_ptr += should_fetch_src0 ? 1 : 0;
         src1_vec_ptr += should_fetch_src1 ? 1 : 0;
         HVX_Vector     s0      = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         HVX_Vector     s1      = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
@@ -203,18 +210,19 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         sum = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), s1), sum);
     }
 
-    const size_t leftover_bytes = leftover * sizeof(_TElem1);
-    if (leftover > 0) {
+    const size_t leftover_bytes1 = leftover1 * sizeof(_TElem1);
+    if (leftover1 > 0) {
         // handle the leftover elements
         HVX_Vector curr0 = reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end ? *src0_vec_ptr : prev0;
-        HVX_Vector curr1 = (leftover_bytes + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
+        HVX_Vector curr1 = (leftover_bytes1 + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
                                *src1_vec_ptr :
                                prev1;
         curr0            = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         HVX_VectorPair curr0_pair = _ExpandFunc(curr0);
 
-        sum = _AddFunc(Q6_V_valign_VVR(_MpyFunc(Q6_V_lo_W(curr0_pair), curr1), Q6_V_vzero(), leftover_bytes), sum);
+        curr0 = leftover1 < leftover0 ? Q6_V_hi_W(curr0_pair) : Q6_V_lo_W(curr0_pair);
+        sum   = _AddFunc(Q6_V_valign_VVR(_MpyFunc(curr0, curr1), Q6_V_vzero(), leftover_bytes1), sum);
     }
 
     return _ReduceFunc(sum);

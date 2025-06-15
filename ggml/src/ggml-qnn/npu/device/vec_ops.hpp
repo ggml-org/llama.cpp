@@ -16,6 +16,10 @@ inline size_t unaligned_bytes(const void * addr) {
     return ((size_t) addr) & kAlignMask;
 }
 
+inline size_t bytes_to_vector_boundary(const void * addr) {
+    return kBytesPerVector - unaligned_bytes(addr);
+}
+
 inline bool is_addr_aligned(const void * addr) {
     return unaligned_bytes(addr) == 0;
 }
