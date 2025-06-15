@@ -1158,7 +1158,7 @@ struct test_glu_split : public test_case {
     int v; // view (1 : non-contiguous a)
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne_a, v);
+        return VARS_TO_STR3(type, ne_a, v) + ",split";
     }
 
     test_glu_split(ggml_glu_op op,
