@@ -103,6 +103,7 @@ export interface Conversation {
   lastModified: number; // timestamp from Date.now()
   currNode: Message['id']; // the current message node being viewed
   name: string;
+  modelName?: string; // optional model name extracted from serverProps
 }
 
 export interface ViewingChat {
