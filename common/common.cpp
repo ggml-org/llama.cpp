@@ -1535,3 +1535,21 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
 
     return result;
 }
+
+ggml_opt_optimizer_params common_opt_lr_pars(void * userdata) {
+    ggml_opt_optimizer_params result = ggml_opt_get_default_optimizer_params(nullptr);
+    const lr_opt &            d      = *(lr_opt *) userdata;
+    result.adamw.alpha = result.sgd.alpha = d.get_lr(d.epoch);
+    result.sgd.wd = result.adamw.wd = d.wd;
+    return result;
+}
+
+GGML_API enum ggml_opt_optimizer_type common_opt_get_optimizer(const char * n) {
+    if (!strcasecmp("adamw", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    } else if (!strcasecmp("sgd", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_SGD;
+    } else {
+        return GGML_OPT_OPTIMIZER_TYPE_COUNT;
+    }
+}

@@ -2,13 +2,15 @@
 
 #pragma once
 
-#include "llama-cpp.h"
-
 #include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
-#include <sstream>
+#include <cmath>
+
+#include "ggml-opt.h"
+#include "llama-cpp.h"
 
 #ifdef _WIN32
 #define DIRECTORY_SEPARATOR '\\'
@@ -80,6 +82,7 @@ enum llama_example {
     LLAMA_EXAMPLE_LOOKUP,
     LLAMA_EXAMPLE_PARALLEL,
     LLAMA_EXAMPLE_TTS,
+    LLAMA_EXAMPLE_FINETUNE,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -219,6 +222,42 @@ enum common_reasoning_format {
     COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
 };
 
+
+static float constexpr k_log_2 = std::log(2.f);
+
+struct lr_opt {
+    float    lr0             = 1e-5; // learning rate at first epoch
+    float    lr_min          = 0;
+    float    min_epochs      = -1;  // if >0, constant (lr_min) after this many epochs
+    float    halflife_epochs = 100;
+    float    halvings        = 10;
+    float    epoch           = 0;
+    float    wd              = 0;
+    unsigned epochs          = 2;
+
+    float get_lr(float epoch) const {
+        float maxepoch = halvings * halflife_epochs;
+        return lr0 * std::pow(.5, (epoch > maxepoch ? maxepoch : epoch) / halflife_epochs);
+    }
+
+    void init() {
+        if (lr_min > 0 && lr_min < lr0) {
+            float nhalf = std::log(lr0 / lr_min) / k_log_2;
+            halvings    = nhalf;
+            float e     = epoch;
+            if (min_epochs > 0 && min_epochs < e)
+                e = min_epochs;
+            halflife_epochs = e / nhalf;
+        } else if (min_epochs > 0) {
+            float h = min_epochs / halflife_epochs;
+            if (h < halvings)
+                halvings = h;
+        }
+    }
+};
+
+struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
+
 struct common_params {
     int32_t n_predict             =    -1; // new tokens to predict
     int32_t n_ctx                 =  4096; // context size
@@ -349,6 +388,12 @@ struct common_params {
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
+
+    // finetune
+    struct lr_opt lr;
+    enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    float val_split = 0.05f; // fraction of the data used for the validation set
+    std::string opt_save_model_to = "finetuned-model.gguf";
 
     // embedding
     bool embedding         = false; // get only sentence embedding
@@ -671,3 +716,6 @@ const char * const LLM_KV_SPLIT_TENSORS_COUNT = "split.tensors.count";
 //
 
 ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std::vector<llama_token> & tokens, int64_t stride);
+
+// "adamw" or "sgd" (case insensitive)
+enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
