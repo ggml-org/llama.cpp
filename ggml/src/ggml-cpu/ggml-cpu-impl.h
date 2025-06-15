@@ -509,7 +509,7 @@ void ggml_barrier(struct ggml_threadpool * tp);
 
 #define GGML_DO_PRAGMA_(x) _Pragma (#x)
 #define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
-#if defined(GGML_CPU_GENERIC) || defined(__HIPCC__)
+#if defined(GGML_CPU_GENERIC) || defined(__HIPCC__) || defined(__APPLE__)
 // Note for Apple targets:
 // - clang: aliases are not supported on darwin
 // - all native kernels need to be implemented in both x86 and arm files
