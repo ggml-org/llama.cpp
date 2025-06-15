@@ -29,8 +29,8 @@ llama_context::llama_context(
     const auto & hparams = model.hparams;
 
     cparams.n_seq_max = std::max(1u, params.n_seq_max);
-    if (cparams.n_seq_max > LLAMA_MAX_PARALLEL_SEQUENCES) {
-        throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_PARALLEL_SEQUENCES));
+    if (cparams.n_seq_max > LLAMA_MAX_SEQ) {
+        throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
 
     cparams.n_threads        = params.n_threads;
@@ -1023,8 +1023,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the KV cache
-            llama_pos pos_min[LLAMA_MAX_PARALLEL_SEQUENCES];
-            for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            llama_pos pos_min[LLAMA_MAX_SEQ];
+            for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
                 pos_min[s] = std::numeric_limits<llama_pos>::max();
             }
 
@@ -1035,7 +1035,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 pos_min[seq_id] = std::min(pos_min[seq_id], ubatch.pos[i]);
             }
 
-            for (int s = 0; s < LLAMA_MAX_PARALLEL_SEQUENCES; ++s) {
+            for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
                 if (pos_min[s] == std::numeric_limits<llama_pos>::max()) {
                     continue;
                 }
