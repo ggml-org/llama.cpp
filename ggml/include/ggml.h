@@ -554,6 +554,7 @@ extern "C" {
         GGML_LOG_LEVEL_WARN  = 3,
         GGML_LOG_LEVEL_ERROR = 4,
         GGML_LOG_LEVEL_CONT  = 5, // continue previous log
+        GGML_LOG_LEVEL_TSAVORITE  = 42,
     };
 
     // this tensor...

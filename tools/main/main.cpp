@@ -41,6 +41,12 @@ static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
+static void my_logger(ggml_log_level level, const char *text, void *user_data) {
+    if (level == GGML_LOG_LEVEL_TSAVORITE) {
+        fprintf(stderr, "%s", text);  // only show warnings or errors
+    }
+}
+
 static void print_usage(int argc, char ** argv) {
     (void) argc;
 
@@ -120,6 +126,7 @@ int main(int argc, char ** argv) {
         LOG_WRN("%s: warning: scaling RoPE frequency by %g.\n", __func__, params.rope_freq_scale);
     }
 
+    llama_log_set(my_logger, nullptr);
     LOG_INF("%s: llama backend init\n", __func__);
 
     llama_backend_init();
