@@ -3201,14 +3201,24 @@ static void ggml_compute_forward_reglu_f32(
         ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    char * src0_d = (char *) src0->data;
+    char * src1_d = (char *) (src1 ? src1->data : src0->data);
+    const size_t src0_o = src0->nb[1];
+    const size_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_is_contiguous_1(dst));
 
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0] / 2;
+    const int nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     const int nr = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[0] == nc);
@@ -3224,10 +3234,15 @@ static void ggml_compute_forward_reglu_f32(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
-        ggml_vec_reglu_f32(nc,
-                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
-                (float *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? nc : 0),
-                (float *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? 0 : nc));
+        float * src0_p = (float *) (src0_d + i1*src0_o);
+        float * src1_p = (float *) (src1_d + i1*src1_o);
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        ggml_vec_reglu_f32(nc, (float *) ((char *) dst->data + i1*(dst->nb[1])), src0_p, src1_p);
 
 #ifndef NDEBUG
         for (int k = 0; k < nc; k++) {
@@ -3245,14 +3260,24 @@ static void ggml_compute_forward_reglu_f16(
     ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    char * src0_d = (char *) src0->data;
+    char * src1_d = (char *) (src1 ? src1->data : src0->data);
+    const size_t src0_o = src0->nb[1];
+    const size_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_is_contiguous_1(dst));
 
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0] / 2;
+    const int nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     const int nr = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[0] == nc);
@@ -3268,10 +3293,15 @@ static void ggml_compute_forward_reglu_f16(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
-        ggml_vec_reglu_f16(nc,
-                (ggml_fp16_t *) ((char *) dst->data  + i1*( dst->nb[1])),
-                (ggml_fp16_t *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? nc : 0),
-                (ggml_fp16_t *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? 0 : nc));
+        ggml_fp16_t * src0_p = (ggml_fp16_t *) (src0_d + i1*src0_o);
+        ggml_fp16_t * src1_p = (ggml_fp16_t *) (src1_d + i1*src1_o);
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        ggml_vec_reglu_f16(nc, (ggml_fp16_t *) ((char *) dst->data + i1*(dst->nb[1])), src0_p, src1_p);
 
 #ifndef NDEBUG
         for (int k = 0; k < nc; k++) {
@@ -3314,14 +3344,24 @@ static void ggml_compute_forward_geglu_f32(
         ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    char * src0_d = (char *) src0->data;
+    char * src1_d = (char *) (src1 ? src1->data : src0->data);
+    const size_t src0_o = src0->nb[1];
+    const size_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_is_contiguous_1(dst));
 
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0] / 2;
+    const int nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     const int nr = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[0] == nc);
@@ -3337,10 +3377,15 @@ static void ggml_compute_forward_geglu_f32(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
-        ggml_vec_geglu_f32(nc,
-                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
-                (float *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? nc : 0),
-                (float *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? 0 : nc));
+        float * src0_p = (float *) (src0_d + i1*src0_o);
+        float * src1_p = (float *) (src1_d + i1*src1_o);
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        ggml_vec_geglu_f32(nc, (float *) ((char *) dst->data + i1*(dst->nb[1])), src0_p, src1_p);
 
 #ifndef NDEBUG
         for (int k = 0; k < nc; k++) {
@@ -3358,14 +3403,24 @@ static void ggml_compute_forward_geglu_f16(
     ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    char * src0_d = (char *) src0->data;
+    char * src1_d = (char *) (src1 ? src1->data : src0->data);
+    const size_t src0_o = src0->nb[1];
+    const size_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_is_contiguous_1(dst));
 
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0] / 2;
+    const int nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     const int nr = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[0] == nc);
@@ -3381,10 +3436,15 @@ static void ggml_compute_forward_geglu_f16(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
-        ggml_vec_geglu_f16(nc,
-                (ggml_fp16_t *) ((char *) dst->data  + i1*( dst->nb[1])),
-                (ggml_fp16_t *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? nc : 0),
-                (ggml_fp16_t *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? 0 : nc));
+        ggml_fp16_t * src0_p = (ggml_fp16_t *) (src0_d + i1*src0_o);
+        ggml_fp16_t * src1_p = (ggml_fp16_t *) (src1_d + i1*src1_o);
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        ggml_vec_geglu_f16(nc, (ggml_fp16_t *) ((char *) dst->data + i1*(dst->nb[1])), src0_p, src1_p);
 
 #ifndef NDEBUG
         for (int k = 0; k < nc; k++) {
@@ -3427,14 +3487,24 @@ static void ggml_compute_forward_swiglu_f32(
         ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    char * src0_d = (char *) src0->data;
+    char * src1_d = (char *) (src1 ? src1->data : src0->data);
+    const size_t src0_o = src0->nb[1];
+    const size_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_is_contiguous_1(dst));
 
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0] / 2;
+    const int nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     const int nr = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[0] == nc);
@@ -3450,10 +3520,15 @@ static void ggml_compute_forward_swiglu_f32(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
-        ggml_vec_swiglu_f32(nc,
-                (float *) ((char *) dst->data  + i1*( dst->nb[1])),
-                (float *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? nc : 0),
-                (float *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? 0 : nc));
+        float * src0_p = (float *) (src0_d + i1*src0_o);
+        float * src1_p = (float *) (src1_d + i1*src1_o);
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        ggml_vec_swiglu_f32(nc, (float *) ((char *) dst->data + i1*(dst->nb[1])), src0_p, src1_p);
 
 #ifndef NDEBUG
         for (int k = 0; k < nc; k++) {
@@ -3471,14 +3546,24 @@ static void ggml_compute_forward_swiglu_f16(
     ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    char * src0_d = (char *) src0->data;
+    char * src1_d = (char *) (src1 ? src1->data : src0->data);
+    const size_t src0_o = src0->nb[1];
+    const size_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
 
     GGML_ASSERT(ggml_is_contiguous_1(src0));
     GGML_ASSERT(ggml_is_contiguous_1(dst));
 
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
     const int ith = params->ith;
     const int nth = params->nth;
 
-    const int nc = src0->ne[0] / 2;
+    const int nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     const int nr = ggml_nrows(src0);
 
     GGML_ASSERT(dst->ne[0] == nc);
@@ -3494,10 +3579,15 @@ static void ggml_compute_forward_swiglu_f16(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int i1 = ir0; i1 < ir1; i1++) {
-        ggml_vec_swiglu_f16(nc,
-                (ggml_fp16_t *) ((char *) dst->data  + i1*( dst->nb[1])),
-                (ggml_fp16_t *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? nc : 0),
-                (ggml_fp16_t *) ((char *) src0->data + i1*(src0->nb[1])) + (swapped ? 0 : nc));
+        ggml_fp16_t * src0_p = (ggml_fp16_t *) (src0_d + i1*src0_o);
+        ggml_fp16_t * src1_p = (ggml_fp16_t *) (src1_d + i1*src1_o);
+
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+
+        ggml_vec_swiglu_f16(nc, (ggml_fp16_t *) ((char *) dst->data + i1*(dst->nb[1])), src0_p, src1_p);
 
 #ifndef NDEBUG
         for (int k = 0; k < nc; k++) {

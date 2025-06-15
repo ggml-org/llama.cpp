@@ -659,6 +659,11 @@ struct vk_op_push_constants {
     float param2;
 };
 
+struct vk_op_glu_push_constants {
+    uint32_t ne00;
+    uint32_t mode;  // 0: default, 1: swapped, 2: split
+};
+
 struct vk_op_unary_push_constants {
     uint32_t ne;
     uint32_t ne00; uint32_t ne01; uint32_t ne02; uint32_t ne03; uint32_t nb00; uint32_t nb01; uint32_t nb02; uint32_t nb03;
@@ -2733,8 +2738,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
 #undef CREATE_UNARY
 
 #define CREATE_GLU(name)  \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);  \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 3, sizeof(vk_op_glu_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
     CREATE_GLU(geglu)
     CREATE_GLU(reglu)
@@ -6947,7 +6952,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         }
     }
 
-    if (op == GGML_OP_SOFT_MAX) {
+    if (op == GGML_OP_SOFT_MAX || op == GGML_OP_GLU) {
         // Empty src1 is possible in soft_max, but the shader needs a buffer
         vk_subbuffer subbuf_y;
         if (use_src1) {
@@ -7539,12 +7544,23 @@ static void ggml_vk_unary(ggml_backend_vk_context * ctx, vk_context& subctx, con
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UNARY, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f }, dryrun);
 }
 
-static void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    GGML_ASSERT(src0->ne[0] / 2 == dst->ne[0]);
+static void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
+    const bool swapped = (bool)dst->op_params[1];
+    const bool split = src1 != nullptr;
 
-    const uint32_t swapped = (uint32_t)dst->op_params[1];
+    GGML_ASSERT(ggml_is_contiguous(src0));
 
-    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_GLU, { (uint32_t)src0->ne[0], swapped, 0.0f, 0.0f }, dryrun);
+    if (!split) {
+        GGML_ASSERT(src0->ne[0] / 2 == dst->ne[0]);
+    } else {
+        GGML_ASSERT(src0->ne[0] == src1->ne[0]);
+        GGML_ASSERT(src0->ne[0] == dst->ne[0]);
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
+    const uint32_t mode = split ? 2 : (swapped ? 1 : 0);
+
+    ggml_vk_op_f32<vk_op_glu_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_GLU, { (uint32_t)src0->ne[0], mode }, dryrun);
 }
 
 static void ggml_vk_diag_mask_inf(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -9003,7 +9019,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         case GGML_GLU_OP_GEGLU:
         case GGML_GLU_OP_REGLU:
         case GGML_GLU_OP_SWIGLU:
-            ggml_vk_glu(ctx, compute_ctx, src0, node, dryrun);
+            ggml_vk_glu(ctx, compute_ctx, src0, src1, node, dryrun);
             break;
         default:
             return false;
@@ -10725,7 +10741,11 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
             GGML_ABORT("fatal error");
         }
     } else if (tensor->op == GGML_OP_GLU) {
-        tensor_clone = ggml_glu(ggml_ctx, src_clone[0], (ggml_glu_op) tensor->op_params[0], tensor->op_params[1]);
+        if (src_clone[1] == nullptr) {
+            tensor_clone = ggml_glu(ggml_ctx, src_clone[0], (ggml_glu_op) tensor->op_params[0], tensor->op_params[1]);
+        } else {
+            tensor_clone = ggml_glu_split(ggml_ctx, src_clone[0], src_clone[1], (ggml_glu_op) tensor->op_params[0]);
+        }
     } else if (tensor->op == GGML_OP_CPY || tensor->op == GGML_OP_DUP) {
         if (src1 == nullptr) {
             tensor_clone = ggml_dup(ggml_ctx, src_clone[0]);
