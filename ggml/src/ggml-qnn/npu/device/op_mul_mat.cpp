@@ -259,6 +259,12 @@ bool is_mul_mat_supported(npu_device_tensor_op op, const npu_device_tensor_spec 
     const auto & src0 = srcs[0];
     const auto & src1 = srcs[1];
     if (src0.type != src1.type) {
+        if (src1.type == NPU_DATA_TYPE_F32 && src0.type == NPU_DATA_TYPE_F16) {
+            DEVICE_LOG_DEBUG("[%s]src0.type(%s) and src1.type(%s) mismatch, but src0 is F16 and src1 is F32\n",
+                             op_get_name(op), get_type_name(src0.type), get_type_name(src1.type));
+            return true;  // F16 * F32 is supported
+        }
+
 #ifdef GGML_HEXAGON_ENABLE_QUANTIZED_TENSORS
         if (!is_quantized_mul_mat_supported(src0, src1)) {
             return false;
