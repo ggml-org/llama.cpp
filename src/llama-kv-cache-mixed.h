@@ -283,15 +283,15 @@ private:
         ggml_tensor * v_quant;
 
         // FIFO Quantization state - separate counters for K and V
-        mutable uint32_t total_tokens = 0;          // total tokens in this layer
-        mutable uint32_t quant_k_tokens = 0;        // number of quantized K tokens
-        mutable uint32_t quant_v_tokens = 0;        // number of quantized V tokens
-        mutable uint32_t fp16_k_tokens = 0;         // number of fp16 K tokens
-        mutable uint32_t fp16_v_tokens = 0;         // number of fp16 V tokens
-        mutable uint32_t fp16_start_pos = 0;        // start position of fp16 tokens
+        mutable int64_t total_tokens = 0;          // total tokens in this layer
+        mutable int64_t quant_k_tokens = 0;        // number of quantized K tokens
+        mutable int64_t quant_v_tokens = 0;        // number of quantized V tokens
+        mutable int64_t fp16_k_tokens = 0;         // number of fp16 K tokens
+        mutable int64_t fp16_v_tokens = 0;         // number of fp16 V tokens
+        mutable int64_t fp16_start_pos = 0;        // start position of fp16 tokens
 
-        mutable uint32_t mixed_k_head = 0;            //> mixed_head is the END of fp16 and START of quant.
-        mutable uint32_t mixed_v_head = 0;          //> mixed_v_head is the END of fp16 and START of quant.
+        mutable int64_t mixed_k_head = 0;            //> mixed_head is the END of fp16 and START of quant.
+        mutable int64_t mixed_v_head = 0;          //> mixed_v_head is the END of fp16 and START of quant.
 
         uint32_t get_total_cached_tokens() const {
             return total_tokens;

@@ -407,6 +407,7 @@ extern "C" {
     enum ggml_prec {
         GGML_PREC_DEFAULT =  0, // stored as ggml_tensor.op_params, 0 by default
         GGML_PREC_F32     = 10,
+        GGML_PREC_MIXED   = 11,
     };
 
     // model file types

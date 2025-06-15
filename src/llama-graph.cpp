@@ -1,5 +1,6 @@
 #include "llama-graph.h"
 
+#include "ggml.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
@@ -1650,79 +1651,53 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = kv_self->get_k(ctx0, il);
     ggml_tensor * v = kv_self->get_v(ctx0, il);
 
+    q = ggml_permute(ctx0, q, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    k = ggml_permute(ctx0, k, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    v = ggml_permute(ctx0, v, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
 
-    // NOTICE: do_quant after the kvcache store.
-    if (kv_self->do_quant(il)) {
-
-        // if (il == 0) {
-        //     LLAMA_LOG_INFO("[llama-graph] do_quant !!!\n");
-        // }
-
-        ggml_tensor * k_quant_op = kv_self->k_quant(ctx0, il);
-        ggml_tensor * v_quant_op = kv_self->v_quant(ctx0, il);
-
-        ggml_build_forward_expand(gf, k_quant_op);
-        ggml_build_forward_expand(gf, v_quant_op);
-        
-        cb(k_quant_op, "k_quant_op", il);
-        cb(v_quant_op, "v_quant_op", il);
+    if (k->type == GGML_TYPE_F32) {
+        k = ggml_cast(ctx0, k, GGML_TYPE_F16);
     }
-    
-    ggml_tensor * k_quant_ref = kv_self->get_k_quant_ref(ctx0, il);
-    ggml_tensor * v_quant_ref = kv_self->get_v_quant_ref(ctx0, il);
-
-    ggml_build_forward_expand(gf, k_quant_ref);
-    ggml_build_forward_expand(gf, v_quant_ref);
-
-    cb(k_quant_ref, "k_quant_ref", il);
-    cb(v_quant_ref, "v_quant_ref", il);
-
-    ggml_tensor * k_quant = kv_self->get_k_quant(ctx0, il);
-    ggml_tensor * v_quant = kv_self->get_v_quant(ctx0, il);
-
-    cb(k_quant, "k_quant_data", il);
-    cb(v_quant, "v_quant_data", il);
-
-    const int n_args = 6;
-    ggml_tensor * args[n_args];
-    args[0] = ggml_permute(ctx0, q, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
-    args[1] = ggml_permute(ctx0, k, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
-    args[2] = ggml_permute(ctx0, v, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
-    args[3] = kq_mask;
-    args[4] = ggml_permute(ctx0, k_quant, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
-    args[5] = ggml_permute(ctx0, v_quant, 0, 2, 1, 3); 
-
-    if (il == 0) {
-        LLAMA_LOG_DEBUG("[llama-graph] q -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
-        LLAMA_LOG_DEBUG("[llama-graph] k -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", k->ne[0], k->ne[1], k->ne[2], k->ne[3]);
-        LLAMA_LOG_DEBUG("[llama-graph] v -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", v->ne[0], v->ne[1], v->ne[2], v->ne[3]);
-
-        if (k_quant && v_quant) {
-            LLAMA_LOG_DEBUG("[llama-graph] k_quant -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", k_quant->ne[0], k_quant->ne[1], k_quant->ne[2], k_quant->ne[3]);
-            LLAMA_LOG_DEBUG("[llama-graph] v_quant -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", v_quant->ne[0], v_quant->ne[1], v_quant->ne[2], v_quant->ne[3]);
-        }
+    if (v->type == GGML_TYPE_F32) {
+        v = ggml_cast(ctx0, v, GGML_TYPE_F16);
     }
 
-    const auto n_batch  = q->ne[3];
-    const auto n_heads  = q->ne[1];
-    const auto n_tokens = q->ne[2];
-    const auto n_kv     = k->ne[1];
-    const auto head_dim = v->ne[0];
+    ggml_tensor * cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
+                                hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
 
-    llama_flash_attn_mixed_params* flashdecoding_params = (llama_flash_attn_mixed_params*)malloc(sizeof(llama_flash_attn_mixed_params));
-    flashdecoding_params->scale = kq_scale;
-    flashdecoding_params->max_bias = 0.0f;
-    flashdecoding_params->logit_softcap = 0.0f;
-    flashdecoding_params->layer_id = il;
+    ggml_flash_attn_ext_set_prec(cur, GGML_PREC_MIXED);
 
-    ggml_tensor * cur = ggml_custom_4d(
-        ctx0, GGML_TYPE_F32,
-        head_dim, n_head, n_tokens, n_batch,
-        args, n_args,
-        ggml_custom_flash_attn_mixed_simple,
-        1,              //> n_tasks
-        flashdecoding_params
-    );
+    // if (il == 0) {
+    //     LLAMA_LOG_DEBUG("[llama-graph] q -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", q->ne[0], q->ne[1], q->ne[2], q->ne[3]);
+    //     LLAMA_LOG_DEBUG("[llama-graph] k -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", k->ne[0], k->ne[1], k->ne[2], k->ne[3]);
+    //     LLAMA_LOG_DEBUG("[llama-graph] v -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", v->ne[0], v->ne[1], v->ne[2], v->ne[3]);
+
+    //     if (k_quant && v_quant) {
+    //         LLAMA_LOG_DEBUG("[llama-graph] k_quant -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", k_quant->ne[0], k_quant->ne[1], k_quant->ne[2], k_quant->ne[3]);
+    //         LLAMA_LOG_DEBUG("[llama-graph] v_quant -> ne[0]: %d, ne[1]: %d, ne[2]: %d, ne[3]: %d.\n", v_quant->ne[0], v_quant->ne[1], v_quant->ne[2], v_quant->ne[3]);
+    //     }
+    // }
+
+    // const auto n_batch  = q->ne[3];
+    // const auto n_heads  = q->ne[1];
+    // const auto n_tokens = q->ne[2];
+    // const auto n_kv     = k->ne[1];
+    // const auto head_dim = v->ne[0];
+
+    // llama_flash_attn_mixed_params* flashdecoding_params = (llama_flash_attn_mixed_params*)malloc(sizeof(llama_flash_attn_mixed_params));
+    // flashdecoding_params->scale = kq_scale;
+    // flashdecoding_params->max_bias = 0.0f;
+    // flashdecoding_params->logit_softcap = 0.0f;
+    // flashdecoding_params->layer_id = il;
+
+    // ggml_tensor * cur = ggml_custom_4d(
+    //     ctx0, GGML_TYPE_F32,
+    //     head_dim, n_head, n_tokens, n_batch,
+    //     args, n_args,
+    //     ggml_custom_flash_attn_mixed_simple,
+    //     1,              //> n_tasks
+    //     flashdecoding_params
+    // );
     cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*n_head, n_tokens);
 
     // ggml_tensor * cur = build_attn_mha(gf, q, k, v, kq_b, kq_mask, v_mla, kq_scale);

@@ -922,8 +922,15 @@ void llama_kv_cache_mixed::defrag_sched(float thold) {
 }
 
 void llama_kv_cache_mixed::set_full() {
-    n = size;
-    head = 0;
+    used  = size;   //> used is the end of the cache (loop buffer)
+    head  = 0;      //> head is the start of the cache (loop buffer)
+    n     = size;   //> n is the size of the cache (loop buffer)
+
+    for (auto & layer : layers) {
+        layer.mixed_k_head = std::max(0u, size > config.fp16_window_size ?
+                                           size - config.fp16_window_size : 0u);
+        layer.mixed_v_head = layer.mixed_k_head;
+    }
 }
 
 llama_sbatch llama_kv_cache_mixed::sbatch_init(const llama_batch & batch, bool logits_all) {
@@ -1366,7 +1373,7 @@ ggml_tensor * llama_kv_cache_mixed::get_k(ggml_context * ctx, int32_t il) const 
     auto * k = layer.k_fp16;
 
     //> Calculate total FP16 tokens available. (> 0 check is for pre-built graph.)
-    const uint32_t fp16_tokens = used - layer.mixed_k_head > 0 ? used - layer.mixed_k_head : 0;
+    const int64_t fp16_tokens = (int64_t)used - layer.mixed_k_head > 0 ? (int64_t)used - layer.mixed_k_head : 0;
 
     // Create view exactly like unified cache, but limit to actual available tokens
     return ggml_view_3d(ctx, k,
@@ -1387,7 +1394,7 @@ ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const 
     auto * v = layer.v_fp16;
 
     //> Calculate total FP16 tokens available. (> 0 check is for pre-built graph.)
-    const uint32_t fp16_tokens = used - layer.mixed_v_head > 0 ? used - layer.mixed_v_head : 0;
+    const int64_t fp16_tokens = (int64_t)used - layer.mixed_v_head > 0 ? (int64_t)used - layer.mixed_v_head : 0;
 
     // Create view exactly like unified cache, but limit to actual available tokens
     if (!v_trans) {

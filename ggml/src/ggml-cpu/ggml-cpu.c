@@ -2058,6 +2058,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_FLASH_ATTN_EXT:
             {
                 // TODO : Add new flash decoding op here.
+                // if (tensor->op_params[3] != GGML_PREC_MIXED) {
+                //     ggml_compute_forward_flash_attn_ext(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], tensor);
+                // } else {
+                //     GGML_ASSERT(false && "enter mixed branch.");
+                // }
                 ggml_compute_forward_flash_attn_ext(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], tensor);
             } break;
         case GGML_OP_FLASH_ATTN_BACK:
