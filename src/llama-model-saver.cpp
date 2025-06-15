@@ -265,6 +265,7 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model.output_norm_enc);
     add_tensor(model.cls);
     add_tensor(model.cls_b);
+    add_tensor(model.cls_norm);
     add_tensor(model.cls_out);
     add_tensor(model.cls_out_b);
 

@@ -2002,6 +2002,7 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     llama_set_param(model->output_norm_enc, param_filter, param_filter_ud);
     llama_set_param(model->cls,             param_filter, param_filter_ud);
     llama_set_param(model->cls_b,           param_filter, param_filter_ud);
+    llama_set_param(model->cls_norm,        param_filter, param_filter_ud);
     llama_set_param(model->cls_out,         param_filter, param_filter_ud);
     llama_set_param(model->cls_out_b,       param_filter, param_filter_ud);
 
