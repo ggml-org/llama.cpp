@@ -1,0 +1,31 @@
+void main() {
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    const uint col = gl_LocalInvocationID.x;
+
+    if (p.mode == 0) {
+        // Default
+        const uint offset = p.ne00 / 2;
+
+        for (uint i = col; i < offset; i += BLOCK_SIZE) {
+            const uint idx = row * p.ne00 + i;
+
+            data_d[row * offset + i] = D_TYPE(op(float(data_a[idx]), float(data_a[idx + offset])));
+        }
+    } else if (p.mode == 1) {
+        // Swapped
+        const uint offset = p.ne00 / 2;
+
+        for (uint i = col; i < offset; i += BLOCK_SIZE) {
+            const uint idx = row * p.ne00 + i;
+
+            data_d[row * offset + i] = D_TYPE(op(float(data_a[idx + offset]), float(data_a[idx])));
+        }
+    } else {
+        // Split
+        for (uint i = col; i < p.ne00; i += BLOCK_SIZE) {
+            const uint idx = row * p.ne00 + i;
+
+            data_d[idx] = D_TYPE(op(float(data_a[idx]), float(data_b[idx])));
+        }
+    }
+}

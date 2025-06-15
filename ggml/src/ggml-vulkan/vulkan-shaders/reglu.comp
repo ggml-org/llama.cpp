@@ -1,36 +1,9 @@
 #version 450
 
-#include "generic_head.comp"
-#include "types.comp"
+#include "glu_head.comp"
 
-#extension GL_EXT_control_flow_attributes : enable
-
-layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
-
-layout (binding = 0) readonly buffer X {A_TYPE data_a[];};
-layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
-
-layout (constant_id = 0) const uint BLOCK_SIZE = 32;
-
-void main() {
-    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
-    const uint col = gl_LocalInvocationID.x;
-
-    const uint offset = p.KX / 2;
-
-    const bool swapped = p.KY > 0;
-
-    if (!swapped) {
-        for (uint i = col; i < offset; i += BLOCK_SIZE) {
-            const uint idx = row * p.KX + i;
-
-            data_d[row * offset + i] = D_TYPE(max(float(data_a[idx]), 0.0f) * float(data_a[idx + offset]));
-        }
-    } else {
-        for (uint i = col; i < offset; i += BLOCK_SIZE) {
-            const uint idx = row * p.KX + i;
-
-            data_d[row * offset + i] = D_TYPE(max(float(data_a[idx + offset]), 0.0f) * float(data_a[idx]));
-        }
-    }
+float op(float a, float b) {
+    return max(a, 0.0f) * b;
 }
+
+#include "glu_main.comp"
