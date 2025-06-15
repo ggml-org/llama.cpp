@@ -13327,7 +13327,7 @@ struct llm_build_arcee : public llm_graph_context {
             cb(ffn_inp, "ffn_inp", il);
 
             // feed-forward network
-            // ARCEE uses relu^2 instead of swiglu
+            // ARCEE uses relu^2 instead of silu
             cur = build_norm(ffn_inp,
                     model.layers[il].ffn_norm, NULL,
                     LLM_NORM_RMS, il);
