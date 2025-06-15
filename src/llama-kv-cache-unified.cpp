@@ -1739,7 +1739,7 @@ llama_kv_cache_unified_state::llama_kv_cache_unified_state(
         llama_context * lctx,
         bool do_shift,
         defrag_info dinfo) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), dinfo(std::move(dinfo)) {
-    if (!do_shift && dinfo.empty()) {
+    if (!do_shift && this->dinfo.empty()) {
         status = LLAMA_MEMORY_STATUS_NO_UPDATE;
     }
 }
