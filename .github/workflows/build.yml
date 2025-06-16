@@ -304,12 +304,10 @@ jobs:
 
       - name: Test
         id: cmake_test
-        # disabled due to failing thread safety test: https://github.com/ggml-org/llama.cpp/pull/14035
-        if: false
         run: |
           cd build
           # This is using llvmpipe and runs slower than other backends
-          # ctest -L main --verbose --timeout 3600
+          ctest -L main --verbose --timeout 3600
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
