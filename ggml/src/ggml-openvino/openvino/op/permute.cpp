@@ -1,4 +1,11 @@
+#include <climits>
+#include <cstdint>
+#include <memory>
+#include <openvino/core/node.hpp>
+#include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/reshape.hpp>
+#include <openvino/op/slice.hpp>
 #include <openvino/op/transpose.hpp>
 
 #include "../node_context.hpp"
@@ -13,7 +20,7 @@ OutputVector translate_permute(const NodeContext& context) {
     num_inputs_check(context, 1, 1);
 
     int op_case = context.get_op_case();
-    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2, "Unsupported CONT case");
+    FRONT_END_CHECK_IMPLEMENTED(op_case == 1 || op_case == 2 || op_case == 3, "Unsupported CONT case");
     ov::Output<Node> res;
 
     if (op_case == 1) {
@@ -22,8 +29,48 @@ OutputVector translate_permute(const NodeContext& context) {
                                                            ov::op::v0::Constant::create(ov::element::i64, {3}, perm));
         return rename_outputs_with_suffix({res}, context.get_name());
     } else {
-        auto res = context.get_input(0);
-        return {res};
+        auto src = context.get_input(0);
+        auto attention_size = context.get_input("attention_size");
+        if (context.is_static()) {
+            attention_size = ov::op::v0::Constant::create(ov::element::i64, {1}, {INT_MAX});
+        }
+
+        auto src_shape_ = context.get_input_shape(0).to_shape();
+        std::vector<int64_t> src_shape(src_shape_.begin(), src_shape_.end());
+
+        std::shared_ptr<ov::Node> src_reshaped;
+        if (op_case == 2) {
+            src_reshaped = std::make_shared<ov::op::v1::Reshape>(
+                src,
+                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, src_shape[1], src_shape[2]}),
+                false);
+        } else {
+            src_reshaped = std::make_shared<ov::op::v1::Reshape>(
+                src,
+                ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{src_shape[1], src_shape[0], -1}),
+                false);
+        }
+
+        auto slice_start = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>(3, 0));
+        auto slice_step = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>(3, 1));
+        std::shared_ptr<ov::Node> slice_end;
+        if (op_case == 2) {
+            slice_end = std::make_shared<ov::op::v0::Concat>(
+                ov::OutputVector{attention_size, ov::op::v0::Constant::create(ov::element::i64, {2}, {src_shape[1], src_shape[2]})},
+                0);
+        } else {
+            slice_end = std::make_shared<ov::op::v0::Concat>(
+                ov::OutputVector{ov::op::v0::Constant::create(ov::element::i64, {2}, {src_shape[1], src_shape[0]}), attention_size},
+                0);
+        }
+        auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, slice_start, slice_end, slice_step);
+
+        if (op_case == 2) {
+            res = std::make_shared<ov::op::v1::Transpose>(src_slice, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
+        } else {
+            res = src_slice;
+        }
+        return rename_outputs_with_suffix({res}, context.get_name());
     }
 }
 
