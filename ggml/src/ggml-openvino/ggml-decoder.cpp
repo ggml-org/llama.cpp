@@ -216,9 +216,9 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
 void GgmlOvDecoder::set_max_token_len() {
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         auto* node = m_cgraph->nodes[i];
-        if (std::string(node->name) == "k-0") {
+        if (std::string(node->name) == "cache_k_l0 (view)") {
             auto* cache_k = node->src[0];
-            m_max_token_len = cache_k->ne[0] / node->ne[0] / node->ne[2];
+            m_max_token_len = cache_k->ne[1];
             break;
         }
     }
