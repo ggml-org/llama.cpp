@@ -101,7 +101,7 @@ def submit():
 
     # Currently the baudrate is hard coded to 921600 but can be parameterized
     baudrate = '921600'
-    script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_platform_test.sh"
+    script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_llama_cli.sh"
     command = f"{script_path} \"{prompt}\" {tokens} {model_path} {backend}"
 
 
