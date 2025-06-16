@@ -44,10 +44,6 @@ static inline int nearest_int(float fval) {
 //                         operations durin unpacking)
 //
 
-#if !(defined(__GNUC__) && defined(__clang__))
-extern "C" {
-#endif
-
 void ggml_quantize_mat_q8_0_4x4_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
@@ -754,7 +750,3 @@ void ggml_gemm_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs
     }
 }
 GGML_CPU_NATIVE_IMPL(ggml_gemm_iq4_nl_4x4_q8_0)
-
-#if !(defined(__GNUC__) && defined(__clang__))
-} // extern "C"
-#endif
