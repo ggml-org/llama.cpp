@@ -1933,7 +1933,7 @@ struct server_context {
     // also we cannot split if the pooling would require any past tokens
     bool can_split() const {
         return
-            !llama_get_embeddings(ctx) ||
+            !params_base.embedding ||
             (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST);
     }
 
