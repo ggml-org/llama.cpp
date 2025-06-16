@@ -509,28 +509,3 @@ int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
 #ifdef __cplusplus
 }
 #endif
-
-#define GGML_DO_PRAGMA_(x) _Pragma (#x)
-#define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
-#if defined(GGML_CPU_GENERIC) || defined(__HIPCC__) || defined(__APPLE__)
-// Note for Apple targets:
-// - clang: aliases are not supported on darwin
-// - all native kernels need to be implemented in both x86 and arm files
-// - on iOS, tvOS, and visionOS, if cmake cannot determine the target architecture, all `_generic` names are replaced by defines
-# define GGML_WEAK_ALIAS(name, alias)
-#elif defined(__GNUC__)
-// GCC/Clang on *nix
-# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
-#elif defined(_MSC_VER) && defined(_WIN64)
-// MSVC
-// Note: C name mangling varies across different calling conventions
-// see https://learn.microsoft.com/en-us/cpp/build/reference/decorated-names?view=msvc-170
-# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:" #name "=" #alias))
-#elif defined(_MSC_VER) && defined(WIN32)
-// ref: https://github.com/ggml-org/whisper.cpp/pull/3239#issuecomment-2958224591
-# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:_" #name "=_" #alias))
-#else
-# error "Unsupported compiler for GGML_WEAK_ALIAS"
-#endif
-
-#define GGML_CPU_NATIVE_IMPL(name) GGML_WEAK_ALIAS(name, name ## _generic)
