@@ -41,6 +41,7 @@ llama_context::llama_context(
     cparams.yarn_beta_slow   = params.yarn_beta_slow;
     cparams.defrag_thold     = params.defrag_thold;
     cparams.embeddings       = params.embeddings;
+    cparams.embeddings_org   = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
     cparams.no_perf          = params.no_perf;
@@ -629,6 +630,12 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
 }
 
 void llama_context::set_embeddings(bool value) {
+    if (value && !cparams.embeddings_org) {
+        LLAMA_LOG_ERROR("%s: cannot enable embeddings for this context (%s)\n",
+                __func__, "https://github.com/ggml-org/llama.cpp/pull/14208");
+        return;
+    }
+
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
     cparams.embeddings = value;

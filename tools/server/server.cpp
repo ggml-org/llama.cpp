@@ -88,6 +88,26 @@ enum error_type {
     ERROR_TYPE_NOT_SUPPORTED, // custom error
 };
 
+static bool server_task_type_need_embd(server_task_type task_type) {
+    switch (task_type) {
+        case SERVER_TASK_TYPE_EMBEDDING:
+        case SERVER_TASK_TYPE_RERANK:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool server_task_type_need_logits(server_task_type task_type) {
+    switch (task_type) {
+        case SERVER_TASK_TYPE_COMPLETION:
+        case SERVER_TASK_TYPE_INFILL:
+            return true;
+        default:
+            return false;
+    }
+}
+
 struct slot_params {
     bool stream        = true;
     bool cache_prompt  = true; // remember the prompt to avoid reprocessing all prompt
@@ -1328,6 +1348,14 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
+    }
+
+    bool need_embd() const {
+        return server_task_type_need_embd(task_type);
+    }
+
+    bool need_logits() const {
+        return server_task_type_need_logits(task_type);
     }
 
     bool can_batch_with(server_slot & other_slot) const {
@@ -3095,6 +3123,13 @@ struct server_context {
                             continue;
                         }
 
+                        // TODO: support memory-less logits computation
+                        if (slot.need_logits() && !llama_get_memory(ctx)) {
+                            slot.release();
+                            send_error(slot, "the current context does not logits computation. skipping", ERROR_TYPE_SERVER);
+                            continue;
+                        }
+
                         if (!can_split()) {
                             if (slot.n_prompt_tokens > n_ubatch) {
                                 slot.release();
@@ -3292,7 +3327,7 @@ struct server_context {
                         }
 
                         // embedding requires all tokens in the batch to be output
-                        const bool need_embd = slot.task_type == SERVER_TASK_TYPE_EMBEDDING || slot.task_type == SERVER_TASK_TYPE_RERANK;
+                        const bool need_embd = server_task_type_need_embd(slot.task_type);
 
                         common_batch_add(batch, cur_tok, slot.n_past, { slot.id }, need_embd);
                         slot.cache_tokens.push_back(cur_tok);
@@ -3348,13 +3383,13 @@ struct server_context {
         if (slot_batched) {
             // apply lora, only need to do it once per batch
             common_set_adapter_lora(ctx, slot_batched->lora);
-        }
 
-        const bool do_encode = params_base.embedding;
+            llama_set_embeddings(ctx, slot_batched->need_embd());
+        }
 
         // pad the batch so that batch.n_tokens >= n_slots
         // TODO: temporary workaround for https://github.com/ggml-org/llama.cpp/issues/13689
-        if (do_encode) {
+        if (llama_get_embeddings(ctx)) {
             const int n_slots = slots.size();
 
             if (batch.n_tokens < n_slots) {
@@ -4175,11 +4210,6 @@ int main(int argc, char ** argv) {
             oaicompat_type oaicompat) -> void {
         GGML_ASSERT(type == SERVER_TASK_TYPE_COMPLETION || type == SERVER_TASK_TYPE_INFILL);
 
-        if (ctx_server.params_base.embedding) {
-            res_error(res, format_error_response("This server does not support completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
-            return;
-        }
-
         auto completion_id = gen_chatcmplid();
         std::unordered_set<int> task_ids;
         try {
@@ -4434,12 +4464,8 @@ int main(int argc, char ** argv) {
             OAICOMPAT_TYPE_NONE); // infill is not OAI compatible
     };
 
-    const auto handle_chat_completions = [&ctx_server, &res_error, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
+    const auto handle_chat_completions = [&ctx_server, &handle_completions_impl](const httplib::Request & req, httplib::Response & res) {
         LOG_DBG("request: %s\n", req.body.c_str());
-        if (ctx_server.params_base.embedding) {
-            res_error(res, format_error_response("This server does not support completions. Start it without `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
-            return;
-        }
 
         auto body = json::parse(req.body);
         std::vector<raw_buffer> files;
