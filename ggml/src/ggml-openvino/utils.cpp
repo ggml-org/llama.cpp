@@ -262,6 +262,7 @@ size_t checksum(const void* data, size_t size) {
     const uint8_t* bytes = static_cast<const uint8_t*>(data);
     size_t sum = 0;
     for (size_t i = 0; i < size; ++i) {
+        sum += (uint8_t)i;
         sum += bytes[i];
     }
     return sum;

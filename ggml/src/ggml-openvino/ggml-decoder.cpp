@@ -195,10 +195,15 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
             break;
         }
         case GGML_OP_PERMUTE: {
-            if (ggml_is_contiguous(node->src[0])) {
+            if (node->src[0]->view_src == nullptr) {
+                // Permute Qcur
                 m_op_case = 1;
-            } else {
+            } else if (ggml_is_contiguous(node->src[0])) {
+                // Permute cache_k (view)
                 m_op_case = 2;
+            } else {
+                // Permute cache_v (view)
+                m_op_case = 3;
             }
             break;
         }
