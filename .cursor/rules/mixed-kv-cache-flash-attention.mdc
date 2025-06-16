@@ -1,0 +1,131 @@
+---
+description: 
+globs: ops.cpp
+alwaysApply: false
+---
+# Mixed KV Cache Flash Attention Implementation Guide
+
+## Overview
+This guide covers the implementation of mixed KV cache flash attention in llama.cpp, specifically focusing on the `ggml_compute_forward_flash_attn_ext_mixed` function in [ggml/src/ggml-cpu/ops.cpp](mdc:ggml/src/ggml-cpu/ops.cpp).
+
+## Architecture Design
+
+### Mixed KV Cache Concept
+The mixed KV cache combines two types of tensors:
+- **FP16 tensors** (`k`, `v`): Recent tokens stored in high precision
+- **Quantized tensors** (`k_quant`, `v_quant`): Older tokens stored in compressed format
+
+### Total KV Length Calculation
+```cpp
+const int64_t KV_LEN_FP16   = nek1;     // fp16 kv sequence length
+const int64_t KV_LEN_QUANT  = nek_quant1; // quantized kv sequence length  
+const int64_t KV_LEN        = KV_LEN_FP16 + KV_LEN_QUANT; // total kv sequence length
+```
+
+## Thread-Based Chunk Processing
+
+### Chunk Allocation Strategy
+Each thread processes a contiguous chunk of the total KV sequence:
+```cpp
+const int64_t kv_chunk_size = (KV_LEN + nth - 1) / nth;
+const int64_t chunk_start = ith * kv_chunk_size;
+const int64_t chunk_end = MIN(chunk_start + kv_chunk_size, KV_LEN);
+```
+
+### Tensor Selection Logic
+Threads determine which tensor to use based on the KV position:
+```cpp
+if (kv_pos < KV_LEN_FP16) {
+    // Use FP16 tensors
+    k_data = (char *) k->data + (kv_pos * nbk1 + kv_head * nbk2);
+    v_data = (char *) v->data + (kv_pos * nbv1 + kv_head * nbv2);
+} else {
+    // Use quantized tensors - adjust position offset
+    const int64_t quant_pos = kv_pos - KV_LEN_FP16;
+    k_data = (char *) k_quant->data + (quant_pos * nbk_quant1 + kv_head * nbk_quant2);
+    v_data = (char *) v_quant->data + (quant_pos * nbv_quant1 + kv_head * nbv_quant2);
+}
+```
+
+## Type Conversion Handling
+
+### Multi-Type Support
+The implementation supports different tensor types for both FP16 and quantized parts:
+```cpp
+ggml_to_float_t const k_to_float       = ggml_get_type_traits(k->type) -> to_float;
+ggml_to_float_t const k_quant_to_float = ggml_get_type_traits(k_quant->type) -> to_float;
+ggml_to_float_t const v_to_float       = ggml_get_type_traits(v->type) -> to_float;
+ggml_to_float_t const v_quant_to_float = ggml_get_type_traits(v_quant->type) -> to_float;
+```
+
+### Value Processing
+Different conversion functions are used based on tensor type:
+```cpp
+if (kv_pos < KV_LEN_FP16) {
+    // FP16 tensor processing
+    if (v->type == GGML_TYPE_F32) {
+        ggml_vec_mad_f32(DV, output_ptr, (const float *)v_data, vs);
+    } else if (v_to_float) {
+        v_to_float(v_data, temp_buffer, DV);
+        ggml_vec_mad_f32(DV, output_ptr, temp_buffer, vs);
+    }
+} else {
+    // Quantized tensor processing
+    if (v_quant->type == GGML_TYPE_F32) {
+        ggml_vec_mad_f32(DV, output_ptr, (const float *)v_data, vs);
+    } else if (v_quant_to_float) {
+        v_quant_to_float(v_data, temp_buffer, DV);
+        ggml_vec_mad_f32(DV, output_ptr, temp_buffer, vs);
+    }
+}
+```
+
+## Flash-Decoding Strategy
+
+### Token-Parallel Processing
+- Each thread processes a chunk of KV tokens for ALL queries simultaneously
+- KV sequence is split across threads rather than head-dimension parallelization
+- Thread workspace layout: `chunk_output`, `local_max`, `local_exp_sum`, `temp_buffer`, `Q_q`, `sync_buffer`
+
+### Synchronization and Reduction
+1. Each thread processes its assigned chunk independently
+2. Thread 0 waits for all other threads to complete using `sync_buffer`
+3. Global reduction phase combines results from all threads with numerical stability
+
+## Testing Integration
+
+### Test Setup in [tests/test-flash-decoding-custom-op.cpp](mdc:tests/test-flash-decoding-custom-op.cpp)
+```cpp
+// Create mixed KV views
+ggml_tensor * k_fp16  = ggml_view_4d(ctx, k, head_dim, fp16_window, n_kv_heads, 1, ...);
+ggml_tensor * v_fp16  = ggml_view_4d(ctx, v, head_dim, fp16_window, n_kv_heads, 1, ...);
+ggml_tensor * k_quant = ggml_view_4d(ctx, k, head_dim, quant_len, n_kv_heads, 1, ...);
+ggml_tensor * v_quant = ggml_view_4d(ctx, v, head_dim, quant_len, n_kv_heads, 1, ...);
+
+// Call mixed flash attention
+ggml_tensor * result = ggml_flash_attn_mixed(
+    ctx, q, k_fp16, v_fp16, k_quant, v_quant, mask, scale, max_bias, logit_softcap
+);
+```
+
+## Key Benefits
+
+1. **Memory Efficiency**: Combines high-precision recent tokens with compressed older tokens
+2. **Scalability**: Supports arbitrary combinations of FP16 and quantized sequence lengths
+3. **Performance**: Maintains flash-decoding parallelization strategy
+4. **Flexibility**: Supports different quantization types for K and V tensors
+
+## Implementation Status
+
+- ✅ Total KV length calculation with mixed tensors
+- ✅ Thread chunk allocation for combined sequence
+- ✅ Tensor selection logic based on position
+- ✅ Type conversion handling for multiple tensor types
+- 🔄 Complete flash attention computation loop (in progress)
+- ⏳ Thread synchronization and global reduction (pending)
+
+## Related Files
+
+- [ggml/src/ggml-cpu/ops.cpp](mdc:ggml/src/ggml-cpu/ops.cpp) - Main implementation
+- [tests/test-flash-decoding-custom-op.cpp](mdc:tests/test-flash-decoding-custom-op.cpp) - Test cases
+- [ggml/include/ggml.h](mdc:ggml/include/ggml.h) - Interface definitions

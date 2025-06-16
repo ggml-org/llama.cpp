@@ -82,6 +82,8 @@ void ggml_compute_forward_flash_attn_ext(
     const struct ggml_tensor * k,
     const struct ggml_tensor * v,
     const struct ggml_tensor * mask,
+    const struct ggml_tensor * k_quant,
+    const struct ggml_tensor * v_quant,
     struct ggml_tensor * dst);
 void ggml_compute_forward_flash_attn_back(
         const struct ggml_compute_params * params,

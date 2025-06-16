@@ -5,6 +5,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <vector>
@@ -96,10 +97,10 @@ int main() {
 
     // Test parameters - reduce KV length to minimize F16 accumulation errors
     const int head_dim  = 4;
-    const int n_heads   = 1;
+    const int n_heads   = 4;
     const int n_kv_heads = 1;
     const int seq_len   = 1;     // Q length
-    const int kv_len    = 4;    // K/V length - reduced for better F16 precision
+    const int kv_len    = 32;    // K/V length - reduced for better F16 precision
     const int n_threads = 4;
 
     printf("Test Parameters:\n");
@@ -157,109 +158,46 @@ int main() {
     }
 
     //> Use random data for realistic testing
-    ggml_set_f32(q, 1.0f);    // Q = [1, 1]
+    // ggml_set_f32(q, 1.0f);    // Q = [1, 1]
     // ggml_set_f32(k, 2.0f);    // K = [2, 2] for all tokens
     // ggml_set_f32(v, 3.0f);    // V = [3, 3] for all tokens
 
     ggml_set_f32(mask, 0.0f); // No masking
 
-    // // ============================================================================
-    // // Test 1: Custom Flash-Decoding Implementation
-    // // ============================================================================
-    // printf("\n--- Testing Custom Flash-Decoding Implementation ---\n");
+    // Adjust fp16_window to fit within kv_len for this test
+    size_t fp16_window  = std::min((size_t)kv_len, (size_t)32);
+    size_t quant_len = kv_len - fp16_window > 0 ? kv_len - fp16_window : 0;
+    size_t fp16_nb1          = head_dim * ggml_type_size(k->type);
+    size_t fp16_nb2          = fp16_window * fp16_nb1;
+    size_t fp16_nb3          = fp16_nb2 * n_kv_heads;
 
-    // // Create custom operation for flash-decoding
-    // ggml_tensor * args[] = { q, k, v, mask };
-    // ggml_tensor * custom_result = ggml_custom_4d(
-    //     ctx,
-    //     GGML_TYPE_F32,
-    //     head_dim, seq_len, n_heads, 1,
-    //     args,
-    //     4,                  // number of arguments
-    //     (ggml_custom_op_t)ggml_custom_flash_attn_mixed_simple,
-    //     n_threads,          // number of threads
-    //     NULL                // userdata
-    // );
+    size_t quant_nb1          = head_dim * ggml_type_size(k->type);
+    size_t quant_nb2          = quant_len * quant_nb1;
+    size_t quant_nb3          = quant_nb2 * n_kv_heads;
+    
+    size_t kv_quant_offset = n_kv_heads * fp16_window * fp16_nb1;
 
-    // // ggml_set_f32(custom_result, 1.2f);
-
-    // if (!custom_result) {
-    //     printf("ERROR: Failed to create custom flash attention operation\n");
-    //     ggml_free(ctx);
-    //     return 1;
-    // }
-
-    // // Build and execute computation graph for custom implementation
-    // struct ggml_cgraph * graph_custom = ggml_new_graph(ctx);
-    // ggml_build_forward_expand(graph_custom, custom_result);
-
-    // // Calculate workspace size for custom operation
-    // const size_t output_size = seq_len * n_heads * head_dim;
-    // const size_t local_max_size = seq_len * n_heads;  // Updated to match LOCAL_MAX_SIZE
-    // const size_t local_sum_size = seq_len * n_heads;  // Add sum tracking
-    // const size_t temp_buffer_size = head_dim;
-    // const size_t q_quantized_float_elements = (head_dim * sizeof(ggml_fp16_t) + sizeof(float) - 1) / sizeof(float);
-    // const size_t elements_per_thread = output_size + local_max_size + local_sum_size + 2 * temp_buffer_size + q_quantized_float_elements + 1 + 16; // +1 for sync_buffer, +16 for CACHE_LINE_SIZE_F32
-
-    // struct ggml_threadpool_params * tp_params = (struct ggml_threadpool_params *)malloc(sizeof(struct ggml_threadpool_params));
-    // for (int i = 0; i < GGML_MAX_N_THREADS; i++) {
-    //     tp_params->cpumask[i] = false;
-    // }
-    // tp_params->n_threads = n_threads;
-    // tp_params->prio = GGML_SCHED_PRIO_HIGH;
-    // tp_params->poll = 0;
-    // tp_params->strict_cpu = false;
-    // tp_params->paused = false;
-
-    // struct ggml_threadpool * tp = ggml_threadpool_new(tp_params);
-
-    // struct ggml_cplan cplan_custom = ggml_graph_plan(graph_custom, n_threads, tp);
-
-    // // Build and execute computation graph for custom implementation
-    // // ggml_build_forward_expand(graph_custom, custom_result);
-
-    // // Allocate workspace
-    // size_t workspace_size = n_threads * elements_per_thread * sizeof(float);
-    // workspace_size = std::max(workspace_size, cplan_custom.work_size);
-    // uint8_t* workspace = (uint8_t*)malloc(workspace_size);
-    // cplan_custom.work_data = workspace;
-    // cplan_custom.work_size = workspace_size;
-
-    // // printf("Computing custom flash-decoding...\n");
-    // enum ggml_status status_custom = ggml_graph_compute(graph_custom, &cplan_custom);
-
-    // printf("Computing standard flash attention...\n");
-    // // enum ggml_status status_custom = ggml_graph_compute_with_ctx(ctx, graph_custom, n_threads);
-
-    // if (status_custom != GGML_STATUS_SUCCESS) {
-    //     printf("ERROR: Custom flash attention computation failed with status: %d\n", status_custom);
-    //     // free(workspace);
-    //     ggml_free(ctx);
-    //     return 1;
-    // }
-
-    // printf("Custom flash-decoding computation successful\n");
+    ggml_tensor * k_fp16    = ggml_view_4d(ctx, k, head_dim, fp16_window, n_kv_heads, 1, fp16_nb1,  fp16_nb2, fp16_nb3, 0);
+    ggml_tensor * v_fp16    = ggml_view_4d(ctx, v, head_dim, fp16_window, n_kv_heads, 1, fp16_nb1,  fp16_nb2, fp16_nb3, 0);
+    
+    // Only create quantized views if we have quantized tokens
+    // NOTICE: This quant_len can be 0;
+    ggml_tensor * k_quant = ggml_view_4d(ctx, k, head_dim, quant_len, n_kv_heads, 1, quant_nb1, quant_nb2, quant_nb3, kv_quant_offset);
+    ggml_tensor * v_quant = ggml_view_4d(ctx, v, head_dim, quant_len, n_kv_heads, 1, quant_nb1, quant_nb2, quant_nb3, kv_quant_offset);
 
     // ============================================================================
-    // Test 2: Custom F32 Flash-attention Implementation
+    // Test 1: Custom F32 Flash-attention Implementation
     // ============================================================================
     printf("\n--- Testing Custom Flash-Decoding Implementation ---\n");
 
-    // Create custom operation for flash-decoding (use NULL mask to match standard)
-    ggml_tensor * args[] = { q, k, v, mask };
-    ggml_tensor * custom_result = ggml_custom_4d(
-        ctx,
-        GGML_TYPE_F32,
-        head_dim, n_heads, seq_len, 1,  // [head_dim, n_heads, seq_len, n_batch]
-        args,
-        4,                  // number of arguments
-        (ggml_custom_op_t)ggml_compute_forward_flash_attn_ext_f32,
-        n_threads,          // number of threads
-        NULL                // userdata
+    ggml_tensor * custom_result = ggml_flash_attn_mixed(
+        ctx, q, k_fp16, v_fp16, 
+        k_quant, v_quant, mask,  // Use NULL mask for comparison
+        1 / std::sqrt(head_dim),
+        0.0f,  // max_bias
+        0.0f   // logit_softcap
     );
-
-    // Parameters will be set to defaults in the custom implementation:
-    // scale = 1.0f / sqrtf(head_dim), max_bias = 0.0f, logit_softcap = 0.0f
+    ggml_flash_attn_ext_set_prec(custom_result, GGML_PREC_MIXED);
 
     // ggml_set_f32(custom_result, 1.2f);
 
@@ -321,7 +259,7 @@ int main() {
     printf("Custom flash-decoding computation successful\n");
 
     // ============================================================================
-    // Test 3: Standard Flash Attention Implementation (for comparison)
+    // Test 2: Standard Flash Attention Implementation (for comparison)
     // ============================================================================
     printf("\n--- Testing Standard Flash Attention ---\n");
 
@@ -390,6 +328,7 @@ int main() {
         0.0f,  // max_bias
         0.0f   // logit_softcap
     );
+    ggml_flash_attn_ext_set_prec(standard_result, GGML_PREC_F32);
 
     if (!standard_result) {
         printf("ERROR: Failed to create standard flash attention operation\n");

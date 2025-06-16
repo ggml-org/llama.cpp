@@ -2063,7 +2063,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
                 // } else {
                 //     GGML_ASSERT(false && "enter mixed branch.");
                 // }
-                ggml_compute_forward_flash_attn_ext(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], tensor);
+                ggml_compute_forward_flash_attn_ext(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], tensor->src[4], tensor->src[5], tensor);
             } break;
         case GGML_OP_FLASH_ATTN_BACK:
             {
@@ -2874,10 +2874,32 @@ struct ggml_cplan ggml_graph_plan(
                     } break;
                 case GGML_OP_FLASH_ATTN_EXT:
                     {
-                        const int64_t ne10 = node->src[1]->ne[0]; // DK
-                        const int64_t ne20 = node->src[2]->ne[0]; // DV
+                        int32_t mode = node->op_params[3];
+                        if (mode == GGML_PREC_F32) {
+                            const int64_t ne10 = node->src[1]->ne[0]; // DK
+                            const int64_t ne20 = node->src[2]->ne[0]; // DV
 
-                        cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
+                            cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
+                        } else if (mode == GGML_PREC_MIXED) {
+                            const int64_t N_Q_HEADS = node->src[0]->ne[2];  // n_q_heads
+                            const int64_t SEQ_LEN   = node->src[0]->ne[1];  // sequence length
+                            const int64_t KV_LEN    = node->src[1]->ne[1];  // KV length
+                            const int64_t DK        = node->src[0]->ne[0];  // DK
+                            const int64_t DV        = node->src[2]->ne[0];  // DV
+                            
+                            const size_t OUTPUT_SIZE    = N_Q_HEADS * SEQ_LEN * DV;
+                            const size_t LOCAL_MAX_SIZE = N_Q_HEADS * SEQ_LEN;
+
+                            cur = sizeof(float)*(OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 2 * DV + 1 * DK + 1 + 16)*n_tasks;
+
+                        } else if (mode == GGML_PREC_DEFAULT) {
+                            const int64_t ne10 = node->src[1]->ne[0]; // DK
+                            const int64_t ne20 = node->src[2]->ne[0]; // DV
+
+                            cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
+                        }
+
+
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {
