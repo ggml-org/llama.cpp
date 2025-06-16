@@ -490,6 +490,8 @@ These words will not be included in the completion, so make sure to add them to 
 
 `lora`: A list of LoRA adapters to be applied to this specific request. Each object in the list must contain `id` and `scale` fields. For example: `[{"id": 0, "scale": 0.5}, {"id": 1, "scale": 1.1}]`. If a LoRA adapter is not specified in the list, its scale will default to `0.0`. Please note that requests with different LoRA configurations will not be batched together, which may result in performance degradation.
 
+`alias-presets-file`: A JSON file of model-alias and it's parameter presets. E.g. `{ "llama-low": {"temperature": 0.1}, "llama-high": {"temperature": 1.0}" }`. If a `model` is specified in the request and has a preset, it will be applied before handling a completion. In case there is a conflict in the request's parameters vs presets, the request's parameters take precedence.
+
 **Response format**
 
 - Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
