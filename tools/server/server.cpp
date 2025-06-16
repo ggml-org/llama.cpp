@@ -1901,8 +1901,8 @@ struct server_context {
         llama_batch_free(batch);
     }
 
-    // if the context does not have a memory module then all embeddings have to be computed without a single ubatch
-    // also we cannot split if the pooling requires any past tokens
+    // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
+    // also we cannot split if the pooling would require any past tokens
     bool can_split() const {
         return
             !llama_get_embeddings(ctx) ||
