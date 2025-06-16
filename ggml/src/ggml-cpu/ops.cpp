@@ -7289,6 +7289,10 @@ void ggml_compute_forward_flash_attn_ext_mixed(
     ggml_from_float_t const q_to_vec_dot  = ggml_get_type_traits_cpu(k_vec_dot_type) -> from_float;
     ggml_vec_dot_t const kq_vec_dot       = ggml_get_type_traits_cpu(k->type) -> vec_dot;
 
+    ggml_type const k_quant_vec_dot_type = ggml_get_type_traits_cpu(k_quant->type) -> vec_dot_type;
+    ggml_from_float_t const k_quant_q_to_vec_dot = ggml_get_type_traits_cpu(k_quant_vec_dot_type) -> from_float;
+    ggml_vec_dot_t const kq_vec_dot_quant = ggml_get_type_traits_cpu(k_quant->type) -> vec_dot;
+
     ggml_to_float_t const k_to_float       = ggml_get_type_traits(k->type) -> to_float;
     ggml_to_float_t const k_quant_to_float = ggml_get_type_traits(k_quant->type) -> to_float;
     ggml_to_float_t const v_to_float       = ggml_get_type_traits(v->type) -> to_float;
@@ -7326,9 +7330,16 @@ void ggml_compute_forward_flash_attn_ext_mixed(
 
                     // NOTE: Q MUST be F32
                     const float * pq = (const float *) ((char *) q->data + q_pos * nbq1 + q_head * nbq2);
-                    q_to_vec_dot(pq, Q_q, DK);
                     float s = 0.0f;
-                    kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+
+                    // TODO: Support more q_to_vec_dot types, Currently only F16.
+                    q_to_vec_dot(pq, Q_q, DK);
+
+                    if (kv_pos < KV_LEN_FP16) {
+                        kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+                    } else {
+                        kq_vec_dot_quant(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+                    }
 
                     s = s * scale; // scale KQ value
 

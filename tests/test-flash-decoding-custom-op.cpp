@@ -100,8 +100,8 @@ int main() {
     const int n_heads   = 4;
     const int n_kv_heads = 1;
     const int seq_len   = 1;     // Q length
-    const int kv_len    = 32;    // K/V length - reduced for better F16 precision
-    const int n_threads = 4;
+    const int kv_len    = 48;    // K/V length - reduced for better F16 precision
+    const int n_threads = 12;
 
     printf("Test Parameters:\n");
     printf("  head_dim=%d, n_heads=%d, n_kv_heads=%d, seq_len=%d, kv_len=%d\n",
@@ -559,7 +559,7 @@ int main() {
     }
 
     // Print detailed comparison table
-    printf("\nDetailed Comparison Table (first 16 elements):\n");
+    printf("\nDetailed Comparison Table (first 128 elements):\n");
     if (torch_success) {
         printf("Index | Custom      | Standard    | PyTorch     | C-S Diff    | C-P Diff    | S-P Diff\n");
         printf("------|-------------|-------------|-------------|-------------|-------------|----------\n");
@@ -568,7 +568,7 @@ int main() {
         printf("------|-------------|-------------|-----------\n");
     }
 
-    size_t show_elements = std::min(size_t(16), min_elements);
+    size_t show_elements = std::min(size_t(128), min_elements);
     for (size_t i = 0; i < show_elements; i++) {
         float custom_val = custom_data[i];
         float standard_val = standard_data[i];
