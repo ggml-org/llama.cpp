@@ -170,7 +170,8 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), h1), sum1);
     }
 
-    sum = _AddFunc(sum0, sum1);
+    sum                        = _AddFunc(sum0, sum1);
+    bool src0_low_vec_consumed = false;
     if (src1_vec_ptr_end - src1_vec_ptr > 0) {
         const bool should_fetch_src0 = reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end &&
                                        hexagon::bytes_to_vector_boundary(src0) < sizeof(_TElem0) * kElementsPerVector1;
@@ -184,6 +185,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         prev1                  = curr1;
 
         sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);  // TODO: figure out how to handle the high part
+        src0_low_vec_consumed = true;
     }
 
     const size_t leftover0 = count % kElementsPerVector0;
@@ -193,9 +195,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         // see also:
         //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
         //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        const bool should_fetch_src0 =
-            reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end &&
-            hexagon::bytes_to_vector_boundary(src0) < sizeof(_TElem0) * kElementsPerVector1 * 2;
+        const bool should_fetch_src0 = reinterpret_cast<const _TElem0 *>(src0_vec_ptr) < src0_ptr_end;
         bool       should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
         HVX_Vector curr0             = should_fetch_src0 ? *src0_vec_ptr : prev0;
         HVX_Vector curr1             = should_fetch_src1 ? *src1_vec_ptr : prev1;
@@ -207,7 +207,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         prev0                  = curr0;
         prev1                  = curr1;
 
-        sum = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), s1), sum);
+        sum = _AddFunc(_MpyFunc(src0_low_vec_consumed ? Q6_V_hi_W(s0_pair) : Q6_V_lo_W(s0_pair), s1), sum);
     }
 
     const size_t leftover_bytes1 = leftover1 * sizeof(_TElem1);
@@ -221,7 +221,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         HVX_VectorPair curr0_pair = _ExpandFunc(curr0);
 
-        curr0 = leftover1 < leftover0 ? Q6_V_hi_W(curr0_pair) : Q6_V_lo_W(curr0_pair);
+        curr0 = leftover1 == leftover0 ? Q6_V_lo_W(curr0_pair) : Q6_V_hi_W(curr0_pair);
         sum   = _AddFunc(Q6_V_valign_VVR(_MpyFunc(curr0, curr1), Q6_V_vzero(), leftover_bytes1), sum);
     }
 
