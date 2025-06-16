@@ -3389,7 +3389,7 @@ struct server_context {
 
         // pad the batch so that batch.n_tokens >= n_slots
         // TODO: temporary workaround for https://github.com/ggml-org/llama.cpp/issues/13689
-        if (llama_get_embeddings(ctx)) {
+        if (slot_batched->need_embd()) {
             const int n_slots = slots.size();
 
             if (batch.n_tokens < n_slots) {

@@ -965,7 +965,6 @@ extern "C" {
     LLAMA_API int32_t llama_n_threads_batch(struct llama_context * ctx);
 
     // Set whether the context outputs embeddings or not
-    // Note: set to true only if the context was created with llama_context_params.embeddings = true
     LLAMA_API void llama_set_embeddings(struct llama_context * ctx, bool embeddings);
 
     // Set whether to use causal attention or not

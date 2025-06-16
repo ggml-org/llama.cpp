@@ -27,7 +27,6 @@ struct llama_cparams {
     float defrag_thold;
 
     bool embeddings;
-    bool embeddings_org;
     bool causal_attn;
     bool offload_kqv;
     bool flash_attn;
