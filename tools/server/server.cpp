@@ -1901,8 +1901,8 @@ struct server_context {
         llama_batch_free(batch);
     }
 
-    // if the context does not have a memory module then all inputs have to be processed within a single ubatch
-    // also we cannot split if the input requires any past tokens
+    // if the context does not have a memory module then all embeddings have to be computed without a single ubatch
+    // also we cannot split if the pooling requires any past tokens
     bool can_split() const {
         return
             !llama_get_embeddings(ctx) ||
@@ -3238,7 +3238,6 @@ struct server_context {
                         slot.n_prompt_tokens_processed = 0;
                     }
 
-                    // non-causal tasks require to fit the entire prompt in the physical batch
                     if (!can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
                         if (batch.n_tokens + slot.n_prompt_tokens > n_batch) {
@@ -3293,7 +3292,7 @@ struct server_context {
                         }
 
                         // embedding requires all tokens in the batch to be output
-                        const bool need_embd = slot.task_type == SERVER_TASK_TYPE_EMBEDDING;
+                        const bool need_embd = slot.task_type == SERVER_TASK_TYPE_EMBEDDING || slot.task_type == SERVER_TASK_TYPE_RERANK;
 
                         common_batch_add(batch, cur_tok, slot.n_past, { slot.id }, need_embd);
                         slot.cache_tokens.push_back(cur_tok);
