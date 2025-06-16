@@ -3350,7 +3350,7 @@ struct server_context {
             common_set_adapter_lora(ctx, slot_batched->lora);
         }
 
-        const bool do_encode = (params_base.embedding || params_base.reranking);
+        const bool do_encode = params_base.embedding;
 
         // pad the batch so that batch.n_tokens >= n_slots
         // TODO: temporary workaround for https://github.com/ggml-org/llama.cpp/issues/13689
@@ -4567,12 +4567,17 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_embeddings_impl = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res, oaicompat_type oaicompat) {
-        const json body = json::parse(req.body);
+        if (!ctx_server.params_base.embedding) {
+            res_error(res, format_error_response("This server does not support embeddings. Start it with `--embeddings`", ERROR_TYPE_NOT_SUPPORTED));
+            return;
+        }
 
         if (oaicompat != OAICOMPAT_TYPE_NONE && llama_pooling_type(ctx_server.ctx) == LLAMA_POOLING_TYPE_NONE) {
             res_error(res, format_error_response("Pooling type 'none' is not OAI compatible. Please use a different pooling type", ERROR_TYPE_INVALID_REQUEST));
             return;
         }
+
+        const json body = json::parse(req.body);
 
         // for the shape of input/content, see tokenize_input_prompts()
         json prompt;
@@ -4663,8 +4668,8 @@ int main(int argc, char ** argv) {
     };
 
     const auto handle_rerank = [&ctx_server, &res_error, &res_ok](const httplib::Request & req, httplib::Response & res) {
-        if (!ctx_server.params_base.reranking || ctx_server.params_base.embedding) {
-            res_error(res, format_error_response("This server does not support reranking. Start it with `--reranking` and without `--embedding`", ERROR_TYPE_NOT_SUPPORTED));
+        if (!ctx_server.params_base.embedding || ctx_server.params_base.pooling_type != LLAMA_POOLING_TYPE_RANK) {
+            res_error(res, format_error_response("This server does not support reranking. Start it with `--reranking`", ERROR_TYPE_NOT_SUPPORTED));
             return;
         }
 
