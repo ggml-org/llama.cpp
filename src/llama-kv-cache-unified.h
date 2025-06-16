@@ -59,7 +59,7 @@ public:
     llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
-            bool embd_pooled) override;
+            bool embd_all) override;
 
     llama_memory_state_ptr init_full() override;
 

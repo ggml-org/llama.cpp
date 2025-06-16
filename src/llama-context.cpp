@@ -81,6 +81,12 @@ llama_context::llama_context(
         }
     }
 
+    if (!cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE) {
+        LLAMA_LOG_WARN("%s: pooling_type is set to %d but embeddings is set to false - disabling pooling\n", __func__, cparams.pooling_type);
+
+        cparams.pooling_type = LLAMA_POOLING_TYPE_NONE;
+    }
+
     if (params.attention_type == LLAMA_ATTENTION_TYPE_UNSPECIFIED) {
         cparams.causal_attn = hparams.causal_attn;
     } else {
@@ -728,7 +734,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     }
 
     // note: during encode, we always pass the full sequence starting from pos = 0
-    if (!batch_allocr->init(batch_inp, model.vocab, nullptr)) {
+    if (!batch_allocr->init(batch_inp, model.vocab, nullptr, true)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -894,7 +900,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return -1;
     }
 
-    if (!batch_allocr->init(batch_inp, model.vocab, memory.get())) {
+    // when computing embeddings, all tokens are output
+    const bool embd_all = cparams.embeddings;
+
+    if (!batch_allocr->init(batch_inp, model.vocab, memory.get(), embd_all)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -911,12 +920,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     GGML_ASSERT((!batch.token && batch.embd) || (batch.token && !batch.embd)); // NOLINT
 
-    // this indicates we are doing pooled embedding
-    const bool embd_pooled = cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
-
     const uint32_t n_outputs_all = batch_allocr->get_n_outputs();
 
-    if (embd_pooled) {
+    if (embd_all) {
         // require that all tokens are output
         if (n_outputs_all != n_tokens_all) {
             LLAMA_LOG_ERROR("%s: pooled embedding requires that all tokens are output (n_outputs_all = %d, n_tokens_all = %d)\n",
@@ -945,7 +951,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     llama_memory_state_ptr mstate;
 
     while (true) {
-        mstate = memory->init_batch(batch, cparams.n_ubatch, embd_pooled);
+        mstate = memory->init_batch(batch, cparams.n_ubatch, embd_all);
         if (!mstate) {
             return -2;
         }
@@ -1058,7 +1064,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
 
-        auto * t_logits = cparams.embeddings ? nullptr         : res->get_logits();
+        auto * t_logits = res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
 
         if (t_embd && res->get_embd_pooled()) {
@@ -1222,9 +1228,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_vocab = vocab.n_tokens();
     const auto n_embd  = hparams.n_embd;
 
-    // TODO: use a per-batch flag for logits presence instead
-    bool has_logits = !cparams.embeddings;
-    bool has_embd   =  cparams.embeddings && (cparams.pooling_type == LLAMA_POOLING_TYPE_NONE);
+    bool has_logits = true;
+    bool has_embd   = cparams.embeddings;
 
     // TODO: hacky enc-dec support
     if (model.arch == LLM_ARCH_T5) {
@@ -2044,14 +2049,11 @@ void llama_context::opt_epoch_iter(
 
         n_queued_tokens += n_tokens_all;
 
-        // this indicates we are doing pooled embedding
-        const bool embd_pooled = cparams.embeddings && cparams.pooling_type != LLAMA_POOLING_TYPE_NONE;
-
         embd_seq.clear();
 
         uint32_t n_outputs_all = n_tokens_all;
 
-        auto mstate = memory->init_batch(batch, cparams.n_ubatch, embd_pooled);
+        auto mstate = memory->init_batch(batch, cparams.n_ubatch, true);
         if (!mstate || mstate->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
             LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
             break;

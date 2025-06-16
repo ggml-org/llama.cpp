@@ -70,10 +70,11 @@ struct llama_memory_i {
     // split the input batch into a set of ubatches and verify that they can fit into the cache
     // return a state object containing the ubatches and KV cache state required to process them
     // check the llama_memory_state_i::get_status() for the result
+    // TODO: remove embd_all argument
     virtual llama_memory_state_ptr init_batch(
             const llama_batch & batch,
             uint32_t n_ubatch,
-            bool embd_pooled) = 0;
+            bool embd_all) = 0;
 
     // simulate full cache, used for allocating worst-case compute buffers
     virtual llama_memory_state_ptr init_full() = 0;

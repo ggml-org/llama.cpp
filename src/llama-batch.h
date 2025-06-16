@@ -88,7 +88,8 @@ public:
     bool init(
             const llama_batch & batch_inp,
             const llama_vocab & vocab,
-            const llama_memory_i * memory);
+            const llama_memory_i * memory,
+            bool embd_all);
 
     const llama_batch & get_batch() const;
 

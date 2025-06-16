@@ -299,7 +299,8 @@ llama_batch_allocr::llama_batch_allocr() {
 bool llama_batch_allocr::init(
         const llama_batch & batch_inp,
         const llama_vocab & vocab,
-        const llama_memory_i * memory) {
+        const llama_memory_i * memory,
+        bool embd_all) {
     clear();
 
     batch = batch_inp;
@@ -378,10 +379,31 @@ bool llama_batch_allocr::init(
     }
 
     if (!batch.logits) {
-        // by default return the output only for the last token
-        output.resize(batch.n_tokens);
-        output[output.size() - 1] = true;
+        if (embd_all) {
+            // return the output for all tokens
+            output.resize(batch.n_tokens, true);
+        } else {
+            // return the output only for the last token
+            output.resize(batch.n_tokens, false);
+            output[output.size() - 1] = true;
+        }
+
         batch.logits = output.data();
+    } else if (embd_all) {
+        bool warn = false;
+
+        for (int32_t i = 0; i < batch.n_tokens; ++i) {
+            if (batch.logits[i] == 0) {
+                warn = true;
+            }
+        }
+
+        if (warn) {
+            LLAMA_LOG_WARN("%s: embeddings required but some input tokens were not marked as outputs -> overriding\n", __func__);
+
+            output.resize(batch.n_tokens, true);
+            batch.logits = output.data();
+        }
     }
 
     //
