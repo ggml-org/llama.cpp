@@ -32,7 +32,6 @@ int main(int argc, char ** argv) {
     //    }
     //}, NULL);
 
-    auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
     int dev_count = ggml_backend_dev_count();
@@ -43,7 +42,7 @@ int main(int argc, char ** argv) {
             gpu_dev_count++;
         }
     }
-    const int num_models = gpu_dev_count + 1; // GPUs + 1 CPU model
+    const int num_models = gpu_dev_count + 1 + 1; // GPUs + 1 CPU model + 1 layer split
     //const int num_models = std::max(1, gpu_dev_count);
     const int num_contexts = std::max(1, params.n_parallel);
 
@@ -52,8 +51,17 @@ int main(int argc, char ** argv) {
     std::atomic<bool> failed = false;
 
     for (int m = 0; m < num_models; ++m) {
-        mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
-        mparams.main_gpu = m < gpu_dev_count ? m : -1;
+        auto mparams = common_model_params_to_llama(params);
+
+        if (m < gpu_dev_count) {
+            mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
+            mparams.main_gpu = m;
+        } else if (m == gpu_dev_count) {
+            mparams.split_mode = LLAMA_SPLIT_MODE_NONE;
+            mparams.main_gpu = -1; // CPU model
+        } else {
+            mparams.split_mode = LLAMA_SPLIT_MODE_LAYER;;
+        }
 
         llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
         if (model == NULL) {
@@ -111,20 +119,21 @@ int main(int argc, char ** argv) {
                         token = llama_vocab_bos(vocab);
                     }
 
+                    result += common_token_to_piece(ctx.get(), token);
+
                     if (llama_vocab_is_eog(vocab, token)) {
                         break;
                     }
-                    result += common_token_to_piece(ctx.get(), token);
 
                     batch = llama_batch_get_one(&token, 1);
                     if (llama_decode(ctx.get(), batch)) {
-                        LOG_ERR("failed to decode\n");
+                        LOG_ERR("Model %d/%d, Context %d/%d: failed to decode\n", m + 1, num_models, c + 1, num_contexts);
                         failed.store(true);
                         return;
                     }
                 }
 
-                LOG_INF("Model %d/%d, Context %d/%d: Result: '%s'\n", m + 1, num_models, c + 1, num_contexts, result.c_str());
+                LOG_INF("Model %d/%d, Context %d/%d: %s\n\n", m + 1, num_models, c + 1, num_contexts, result.c_str());
             });
         }
     }
@@ -138,6 +147,6 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    LOG_INF("All threads completed successfully.\n");
+    LOG_INF("All threads finished without errors.\n");
     return 0;
 }
