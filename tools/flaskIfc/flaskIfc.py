@@ -11,6 +11,7 @@ app = Flask(__name__)
 
 port = '/dev/ttyUSB3'
 baudrate = '921600'
+exe_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/"
 
 @app.route('/')
 def index():
@@ -49,8 +50,8 @@ def llama_cli_serial_command():
     #]
     # URL to Test this end point is as follows
     # http://10.50.30.167:5001/llama-cli?model=tiny-llama&backend=tSavorite&tokens=5&prompt=Hello+How+are+you
-    script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_llama_cli.sh"
-    command = f"{script_path} \"{prompt}\" {tokens} {model_path} {backend}"
+    script_path = "./run_llama_cli.sh"
+    command = f"cd {exe_path}; {script_path} \"{prompt}\" {tokens} {model_path} {backend}"
 
     try:
         result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
@@ -109,11 +110,17 @@ def upload_file():
 
 @app.route('/restart-txe', methods=['GET'])
 def restart_txe_serial_command():
-    command = f"telnet localhost 8000; close all"
+    command = f"telnet localhost 8000\r\nclose all\r\n"
 
     try:
         result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
-        return result.stdout, 200
+        time.sleep(5)
+        command = f"{exe_path}/../install/tsi-start\nyes\n"
+        try:
+            result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
+            return result.stdout, 200
+        except subprocess.CalledProcessError as e:
+            return f"Error executing script: {e.stderr}", 500
     except subprocess.CalledProcessError as e:
         return f"Error executing script: {e.stderr}", 500
 
@@ -140,7 +147,7 @@ def test_serial_command():
 @app.route('/system-info', methods=['GET'])
 def system_info_serial_command():
 
-    command = f"lscpu"
+    command = f"{exe_path}../install/tsi-version;lscpu"
 
     try:
         result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
@@ -184,8 +191,8 @@ def submit():
     #    "--top-p", "1"
     #]
 
-    script_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/run_llama_cli.sh"
-    command = f"{script_path} \"{prompt}\" {tokens} {model_path} {backend}"
+    script_path = "./run_llama_cli.sh"
+    command = f"cd {exe_path}; {script_path} \"{prompt}\" {tokens} {model_path} {backend}"
 
 
     def run_script():
