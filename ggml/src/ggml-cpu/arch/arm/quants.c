@@ -43,7 +43,8 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
     const int nb = k / QK8_0;
 
     block_q8_0 * GGML_RESTRICT y = vy;
-
+    
+    // printf("Here");
 #if defined(__ARM_FEATURE_SVE)
     const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
     const int ggml_f32_epr = sve_register_length / 32;
