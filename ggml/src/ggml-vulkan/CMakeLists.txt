@@ -144,7 +144,14 @@ if (Vulkan_FOUND)
                    ${VULKAN_SHADER_GEN_CMAKE_ARGS}
 
         BUILD_COMMAND   ${CMAKE_COMMAND} --build   . --config $<CONFIG>
-        INSTALL_COMMAND ${CMAKE_COMMAND} --install . --config $<CONFIG>
+
+        # NOTE: When DESTDIR is set using Makefile generators and
+        # "make install" triggers the build step, vulkan-shaders-gen
+        # would be installed into the DESTDIR prefix, so it is unset
+        # to ensure that does not happen.
+
+        INSTALL_COMMAND ${CMAKE_COMMAND} -E env --unset=DESTDIR
+                        ${CMAKE_COMMAND} --install . --config $<CONFIG>
     )
 
     set (_ggml_vk_host_suffix $<IF:$<STREQUAL:${CMAKE_HOST_SYSTEM_NAME},Windows>,.exe,>)
