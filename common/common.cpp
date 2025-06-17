@@ -466,7 +466,7 @@ size_t string_find_partial_stop(const std::string_view & str, const std::string_
 
 std::string regex_escape(const std::string & s) {
     static const std::regex special_chars("[.^$|()*+?\\[\\]{}\\\\]");
-    return std::regex_replace(s, special_chars, "\\$0");
+    return std::regex_replace(s, special_chars, "\\$&");
 }
 
 std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
@@ -767,6 +767,9 @@ bool fs_validate_filename(const std::string & filename) {
     return true;
 }
 
+#include <iostream>
+
+
 // returns true if successful, false otherwise
 bool fs_create_directory_with_parents(const std::string & path) {
 #ifdef _WIN32
@@ -784,9 +787,16 @@ bool fs_create_directory_with_parents(const std::string & path) {
     // process path from front to back, procedurally creating directories
     while ((pos_slash = path.find('\\', pos_slash)) != std::string::npos) {
         const std::wstring subpath = wpath.substr(0, pos_slash);
-        const wchar_t * test = subpath.c_str();
 
-        const bool success = CreateDirectoryW(test, NULL);
+        pos_slash += 1;
+
+        // skip the drive letter, in some systems it can return an access denied error
+        if (subpath.length() == 2 && subpath[1] == ':') {
+            continue;
+        }
+
+        const bool success = CreateDirectoryW(subpath.c_str(), NULL);
+
         if (!success) {
             const DWORD error = GetLastError();
 
@@ -800,8 +810,6 @@ bool fs_create_directory_with_parents(const std::string & path) {
                 return false;
             }
         }
-
-        pos_slash += 1;
     }
 
     return true;
@@ -897,34 +905,6 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
-    if (params.reranking) {
-        bool ok = true;
-
-        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
-            LOG_WRN("%s: warning: vocab does not have a  BOS token, reranking will not work\n", __func__);
-            ok = false;
-        }
-
-        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
-        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
-
-        if (!has_eos && !has_sep) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
-            ok = false;
-        } else if (!has_eos) {
-            LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
-        } else if (!has_sep) {
-            LOG_WRN("%s: warning: vocab does not have a SEP token, reranking will not work\n", __func__);
-            ok = false;
-        }
-
-        if (!ok) {
-            llama_model_free(model);
-
-            return iparams;
-        }
-    }
-
     auto cparams = common_context_params_to_llama(params);
 
     llama_context * lctx = llama_init_from_model(model, cparams);
@@ -959,6 +939,35 @@ struct common_init_result common_init_from_params(common_params & params) {
                 params.control_vector_layer_start,
                 params.control_vector_layer_end);
         if (err) {
+            llama_free(lctx);
+            llama_model_free(model);
+
+            return iparams;
+        }
+    }
+
+    if (llama_pooling_type(lctx) == LLAMA_POOLING_TYPE_RANK) {
+        bool ok = true;
+
+        if (llama_vocab_bos(vocab) == LLAMA_TOKEN_NULL) {
+            LOG_WRN("%s: warning: vocab does not have a  BOS token, reranking will not work\n", __func__);
+            ok = false;
+        }
+
+        bool has_eos = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
+        bool has_sep = llama_vocab_sep(vocab) != LLAMA_TOKEN_NULL;
+
+        if (!has_eos && !has_sep) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token or SEP token, reranking will not work\n", __func__);
+            ok = false;
+        } else if (!has_eos) {
+            LOG_WRN("%s: warning: vocab does not have an EOS token, using SEP token as fallback\n", __func__);
+        } else if (!has_sep) {
+            LOG_WRN("%s: warning: vocab does not have a SEP token, reranking will not work\n", __func__);
+            ok = false;
+        }
+
+        if (!ok) {
             llama_free(lctx);
             llama_model_free(model);
 
@@ -1142,11 +1151,6 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
     cparams.swa_full          = params.swa_full;
-
-    if (params.reranking) {
-        cparams.embeddings    = true;
-        cparams.pooling_type  = LLAMA_POOLING_TYPE_RANK;
-    }
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;

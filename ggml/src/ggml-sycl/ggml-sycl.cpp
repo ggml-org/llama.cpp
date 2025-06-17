@@ -347,7 +347,7 @@ static enum ggml_status
 ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
                                      ggml_tensor *tensor) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor, "\n");
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor, "\n").c_str());
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *)buffer->context;
 
     if (tensor->view_src != NULL) {
@@ -385,7 +385,7 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                 const void *data, size_t offset,
                                                 size_t size) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
     ggml_sycl_set_device(ctx->device);
@@ -413,7 +413,7 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                 void *data, size_t offset,
                                                 size_t size) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
 
@@ -444,8 +444,8 @@ ggml_backend_sycl_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
                                     ggml_tensor *dst) try {
     bool is_cpy_supported = ggml_backend_buffer_is_sycl(src->buffer);
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": dst=", dst);
-    debug_print_tensor(" src=", src);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": dst", dst).c_str());
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(" src", src).c_str());
     GGML_SYCL_DEBUG(" is_cpy_supported=%d\n", is_cpy_supported);
     if (is_cpy_supported) {
         ggml_backend_sycl_buffer_context * src_ctx = (ggml_backend_sycl_buffer_context *)src->buffer->context;
@@ -525,7 +525,7 @@ catch (sycl::exception const &exc) {
 static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value,
                                                    size_t offset, size_t size) {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu value=%u\n", size, offset, value);
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
     SYCL_CHECK(ggml_sycl_set_device(ctx->device));
@@ -805,7 +805,7 @@ static enum ggml_status
 ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
                                            ggml_tensor *tensor) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor, "\n");
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor, "\n").c_str());
     GGML_ASSERT(tensor->view_src == nullptr); // views of split tensors are not supported
 
     ggml_backend_sycl_split_buffer_context * ctx = (ggml_backend_sycl_split_buffer_context *)buffer->context;
@@ -891,7 +891,7 @@ ggml_backend_sycl_split_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                           ggml_tensor *tensor, const void *data,
                                           size_t offset, size_t size) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     // split tensors must always be set in their entirety at once
     GGML_ASSERT(offset == 0);
@@ -947,7 +947,7 @@ ggml_backend_sycl_split_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                           const ggml_tensor *tensor, void *data,
                                           size_t offset, size_t size) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     // split tensors must always be set in their entirety at once
     GGML_ASSERT(offset == 0);
@@ -2127,21 +2127,18 @@ inline void ggml_sycl_op_mul_mat_sycl(
         const sycl::half *src1_ptr = src1->type == GGML_TYPE_F16
                 ? (const sycl::half *)src1->data + src1_padded_row_size
                                          : src1_as_f16.get();
-        ggml_sycl_pool_alloc<sycl::half> dst_f16(ctx.pool(), row_diff * src1_ncols);
 
 #if GGML_SYCL_DNNL
         if (!g_ggml_sycl_disable_dnn) {
             DnnlGemmWrapper::row_gemm(ctx, src1_ncols, row_diff, ne10, src1_ptr,
                                       DnnlGemmWrapper::to_dt<sycl::half>(), src0_ptr, DnnlGemmWrapper::to_dt<sycl::half>(),
-                                      dst_f16.get(), DnnlGemmWrapper::to_dt<sycl::half>(), stream);
-            scope_op_debug_print scope_dbg_print(__func__, "/to_fp32_sycl", dst, /*num_src=*/2,
-                                                 " : converting dst to fp32");
-            const to_fp32_sycl_t to_fp32_sycl = ggml_get_to_fp32_sycl(GGML_TYPE_F16, dst);
-            to_fp32_sycl(dst_f16.get(), dst_dd_i, row_diff* src1_ncols, stream);
+                                      dst_dd_i, DnnlGemmWrapper::to_dt<float>(), stream);
         }
         else
 #endif
         {
+            ggml_sycl_pool_alloc<sycl::half> dst_f16(ctx.pool(), row_diff * src1_ncols);
+
             const sycl::half alpha_f16 = 1.0f;
             const sycl::half beta_f16  = 0.0f;
             SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm(
@@ -3866,7 +3863,7 @@ static void ggml_backend_sycl_set_tensor_async(ggml_backend_t backend,
                                                const void *data, size_t offset,
                                                size_t size) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
@@ -3887,7 +3884,7 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
                                                void *data, size_t offset,
                                                size_t size) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": tensor=", tensor);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
     ggml_backend_buffer_t buf = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
@@ -3910,8 +3907,8 @@ static bool ggml_backend_sycl_cpy_tensor_async(ggml_backend_t backend,
     bool is_cpy_supported                = dst->buffer->buft == ggml_backend_sycl_buffer_type(sycl_ctx->device) &&
                             ggml_backend_buffer_is_sycl(src->buffer);
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
-    debug_print_tensor(": dst=", dst);
-    debug_print_tensor(" src=", src);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": dst", dst).c_str());
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(" src", src).c_str());
     GGML_SYCL_DEBUG(" is_cpy_supported=%d\n", is_cpy_supported);
     if (is_cpy_supported) {
         /*

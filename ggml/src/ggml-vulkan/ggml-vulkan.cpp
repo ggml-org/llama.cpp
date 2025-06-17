@@ -168,6 +168,11 @@ struct vk_command_pool {
     vk_queue *q;
 };
 
+// Prevent simultaneous submissions to the same queue.
+// This could be per vk_queue if we stopped having two vk_queue structures
+// sharing the same vk::Queue.
+static std::mutex queue_mutex;
+
 struct vk_queue {
     uint32_t queue_family_index;
     vk::Queue queue;
@@ -1266,6 +1271,7 @@ static vk::CommandBuffer ggml_vk_create_cmd_buffer(vk_device& device, vk_command
 static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     if (ctx->seqs.empty()) {
         if (fence) {
+            std::lock_guard<std::mutex> guard(queue_mutex);
             ctx->p->q->queue.submit({}, fence);
         }
         return;
@@ -1335,6 +1341,7 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
         }
     }
 
+    std::lock_guard<std::mutex> guard(queue_mutex);
     ctx->p->q->queue.submit(submit_infos, fence);
 
     ctx->seqs.clear();

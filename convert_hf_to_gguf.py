@@ -519,7 +519,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions"], optional=True)) is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions", "max_length"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -2018,6 +2018,20 @@ class LlamaModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("ArceeForCausalLM")
+class ArceeModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.ARCEE
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
 
 
 @ModelBase.register(
@@ -4062,6 +4076,34 @@ class NomicBertModel(BertModel):
         raise ValueError(f"unknown tokenizer: {toktyp}")
 
 
+@ModelBase.register("NeoBERT", "NeoBERTLMHead", "NeoBERTForSequenceClassification")
+class NeoBert(BertModel):
+    model_arch = gguf.MODEL_ARCH.NEO_BERT
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        # NeoBERT uses 2/3 of the intermediate size as feed forward length
+        self.gguf_writer.add_feed_forward_length(int(2 * self.hparams["intermediate_size"] / 3))
+        self.gguf_writer.add_rope_freq_base(10000.0)  # default value for NeoBERT
+        self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+        f_rms_eps = self.hparams.get("norm_eps", 1e-6)  # default value for NeoBERT
+        self.gguf_writer.add_layer_norm_rms_eps(f_rms_eps)
+        logger.info(f"gguf: rms norm epsilon = {f_rms_eps}")
+
+        self.gguf_writer.add_pooling_type(gguf.PoolingType.CLS) # https://huggingface.co/chandar-lab/NeoBERT#how-to-use
+
+    def modify_tensors(self, data_torch, name, bid):
+        if name.startswith("decoder."):
+            return []
+
+        if name.startswith("model."):
+            name = name[6:]
+
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("XLMRobertaModel", "XLMRobertaForSequenceClassification")
 class XLMRobertaModel(BertModel):
     model_arch = gguf.MODEL_ARCH.BERT
@@ -5260,6 +5302,34 @@ class DeepseekV2Model(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Dots1ForCausalLM")
+class Dots1Model(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.DOTS1
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.hparams["num_experts"] = self.hparams["n_routed_experts"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_leading_dense_block_count(self.hparams["first_k_dense_replace"])
+        self.gguf_writer.add_expert_shared_count(self.hparams["n_shared_experts"])
+        self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
+        self.gguf_writer.add_expert_weights_norm(self.hparams["norm_topk_prob"])
+
+        if self.hparams["scoring_func"] == "noaux_tc":
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        else:
+            raise ValueError(f"Unsupported scoring_func value: {self.hparams['scoring_func']}")
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        if name.endswith("e_score_correction_bias"):
+            name = name.replace("e_score_correction_bias", "e_score_correction.bias")
+        if "shared_experts" in name:
+            return [(self.map_tensor_name(name), data_torch)]
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("PLMForCausalLM")

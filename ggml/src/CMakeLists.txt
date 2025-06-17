@@ -270,17 +270,23 @@ endfunction()
 function(ggml_add_cpu_backend_variant tag_name)
     set(GGML_CPU_TAG_NAME ${tag_name})
     # other: OPENMP LLAMAFILE CPU_HBM
-    foreach (feat NATIVE
-                  SSE42
-                  AVX AVX2 BMI2 AVX_VNNI FMA F16C
-                  AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16
-                  AMX_TILE AMX_INT8 AMX_BF16)
-        set(GGML_${feat} OFF)
-    endforeach()
+    if (GGML_SYSTEM_ARCH STREQUAL "x86")
+        foreach (feat NATIVE
+                      SSE42
+                      AVX AVX2 BMI2 AVX_VNNI FMA F16C
+                      AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16
+                      AMX_TILE AMX_INT8 AMX_BF16)
+            set(GGML_${feat} OFF)
+        endforeach()
 
-    foreach (feat ${ARGN})
-        set(GGML_${feat} ON)
-    endforeach()
+        foreach (feat ${ARGN})
+            set(GGML_${feat} ON)
+        endforeach()
+    elseif (GGML_SYSTEM_ARCH STREQUAL "ARM")
+        foreach (feat ${ARGN})
+            set(GGML_INTERNAL_${feat} ON)
+        endforeach()
+    endif()
 
     ggml_add_cpu_backend_variant_impl(${tag_name})
 endfunction()
@@ -290,6 +296,8 @@ ggml_add_backend(CPU)
 if (GGML_CPU_ALL_VARIANTS)
     if (NOT GGML_BACKEND_DL)
         message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS requires GGML_BACKEND_DL")
+    elseif (GGML_CPU_ARM_ARCH)
+        message(FATAL_ERROR "Cannot use both GGML_CPU_ARM_ARCH and GGML_CPU_ALL_VARIANTS")
     endif()
     if (GGML_SYSTEM_ARCH STREQUAL "x86")
         ggml_add_cpu_backend_variant(x64)
@@ -303,8 +311,30 @@ if (GGML_CPU_ALL_VARIANTS)
             # MSVC doesn't support AMX
             ggml_add_cpu_backend_variant(sapphirerapids SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI AVX512_BF16 AMX_TILE AMX_INT8)
         endif()
+    elseif(GGML_SYSTEM_ARCH STREQUAL "ARM")
+        if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+            # Many of these features are optional so we build versions with popular
+            # combinations and name the backends based on the version they were
+            # first released with
+            ggml_add_cpu_backend_variant(armv8.0_1)
+            ggml_add_cpu_backend_variant(armv8.2_1    DOTPROD)
+            ggml_add_cpu_backend_variant(armv8.2_2    DOTPROD FP16_VECTOR_ARITHMETIC)
+            ggml_add_cpu_backend_variant(armv8.2_3    DOTPROD FP16_VECTOR_ARITHMETIC SVE)
+            ggml_add_cpu_backend_variant(armv8.6_1    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8)
+            ggml_add_cpu_backend_variant(armv8.6_2    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SVE2)
+            ggml_add_cpu_backend_variant(armv9.2_1    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SME)
+            ggml_add_cpu_backend_variant(armv9.2_2    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SVE2 SME)
+        elseif (CMAKE_SYSTEM_NAME MATCHES "Android")
+            # Android-specific backends with SoC-compatible feature sets
+            ggml_add_cpu_backend_variant(android_armv8.0_1)
+            ggml_add_cpu_backend_variant(android_armv8.2_1    DOTPROD)
+            ggml_add_cpu_backend_variant(android_armv8.2_2    DOTPROD FP16_VECTOR_ARITHMETIC)
+            ggml_add_cpu_backend_variant(android_armv8.6_1    DOTPROD FP16_VECTOR_ARITHMETIC MATMUL_INT8)
+        else()
+            message(FATAL_ERROR "Unsupported ARM target OS: ${CMAKE_SYSTEM_NAME}")
+        endif()
     else()
-        message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS not yet supported on ${GGML_SYSTEM_ARCH}")
+        message(FATAL_ERROR "GGML_CPU_ALL_VARIANTS not yet supported with ${GGML_SYSTEM_ARCH} on ${CMAKE_SYSTEM_NAME}")
     endif()
 elseif (GGML_CPU)
     ggml_add_cpu_backend_variant_impl("")

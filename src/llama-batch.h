@@ -4,6 +4,7 @@
 
 #include <array>
 #include <vector>
+#include <set>
 
 // very similar to llama_batch,
 // but has more metadata about sequences
@@ -18,8 +19,8 @@ struct llama_ubatch {
     llama_token  *  token;    // [n_tokens]
     float        *  embd;     // [n_embd, n_tokens]
     llama_pos    *  pos;      // [n_tokens]
-    int32_t      *  n_seq_id; // [n_seqs] // TODO: remove, should belong to only 1 sequence
-    llama_seq_id ** seq_id;   // [n_seqs] // TODO: become llama_seq_id * seq_id;
+    int32_t      *  n_seq_id; // [n_seqs]
+    llama_seq_id ** seq_id;   // [n_seqs]
     int8_t       *  output;   // [n_tokens]
 };
 
@@ -38,8 +39,6 @@ struct llama_sbatch {
     size_t n_tokens;
 
     size_t n_embd;
-
-    bool logits_all; // TODO: remove once lctx.logits_all is removed too
 
     // sorted indices into the batch
     std::vector<int64_t> ids;
@@ -76,19 +75,45 @@ struct llama_sbatch {
     llama_ubatch split_seq(size_t n_ubatch);
 
     llama_sbatch() = default;
-    llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple_split = false, bool logits_all = false);
+    llama_sbatch(const llama_batch & batch, size_t n_embd, bool simple_split = false);
 };
 
-// temporary allocate memory for the input batch if needed
-struct llama_batch_allocr {
-    struct llama_batch batch;
+// a helper for sanitizing and fulfilling a batch
+class llama_batch_allocr {
+public:
+    llama_batch_allocr();
+
+    // sanitize and auto-gen missing data in the input batch
+    // memory is optional. if provided will be used to check for sequence continuity and to determine the positions
+    bool init(
+            const llama_batch & batch_inp,
+            const llama_vocab & vocab,
+            const llama_memory_i * memory,
+            bool embd_all);
+
+    const llama_batch & get_batch() const;
+
+    uint32_t get_n_outputs() const;
+
+    llama_pos seq_pos_min(llama_seq_id seq_id) const;
+    llama_pos seq_pos_max(llama_seq_id seq_id) const;
+
+private:
+    void clear();
+
+    llama_batch batch;
+
+    uint32_t n_outputs;
 
     std::array<llama_seq_id, 1> seq_id_0 = { 0 }; // default sequence id
+
     std::vector<llama_pos>      pos;
     std::vector<int32_t>        n_seq_id;
     std::vector<llama_seq_id *> seq_id;
-    std::vector<int8_t>         logits;
+    std::vector<int8_t>         output;
 
-    // optionally fulfill the batch returned by llama_batch_get_one
-    llama_batch_allocr(struct llama_batch in_batch, llama_pos p0);
+    std::vector<std::set<llama_pos>> seq_pos; // seq_pos[s]: the set of positions in sequence s
+    std::vector<std::vector<bool>>   seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
+
+    int debug;
 };

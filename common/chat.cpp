@@ -1838,7 +1838,7 @@ static common_chat_params common_chat_templates_apply_legacy(
     if (res < 0) {
         // if the custom "tmpl" is not supported, we throw an error
         // this is a bit redundant (for good), since we're not sure if user validated the custom template with llama_chat_verify_template()
-        throw std::runtime_error("this custom template is not supported");
+        throw std::runtime_error("this custom template is not supported, try using --jinja");
     }
 
     // if it turns out that our buffer is too small, we resize it
@@ -1921,7 +1921,9 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
     } catch (const common_chat_msg_partial_exception & ex) {
         LOG_DBG("Partial parse: %s\n", ex.what());
         if (!is_partial) {
-            throw std::runtime_error(ex.what());
+            builder.clear_tools();
+            builder.move_to(0);
+            common_chat_parse_content_only(builder);
         }
     }
     auto msg = builder.result();

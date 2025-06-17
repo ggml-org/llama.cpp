@@ -988,10 +988,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    if (params.reranking && params.embedding) {
-        throw std::invalid_argument("error: either --embedding or --reranking can be specified, but not both");
-    }
-
     if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
         throw std::runtime_error(string_format(
             "error: the supplied chat template is not supported: %s%s\n",
@@ -2747,9 +2743,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--reranking", "--rerank"},
-        string_format("enable reranking endpoint on server (default: %s)", params.reranking ? "enabled" : "disabled"),
+        string_format("enable reranking endpoint on server (default: %s)", "disabled"),
         [](common_params & params) {
-            params.reranking = true;
+            params.embedding = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_RANK;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
     add_opt(common_arg(

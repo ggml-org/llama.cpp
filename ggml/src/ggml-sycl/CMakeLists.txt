@@ -142,7 +142,7 @@ else()
         FetchContent_Declare(
             ONEMATH
             GIT_REPOSITORY https://github.com/uxlfoundation/oneMath.git
-            GIT_TAG c255b1b4c41e2ee3059455c1f96a965d6a62568a
+            GIT_TAG 8efe85f5aaebb37f1d8c503b7af66315feabf142
         )
         FetchContent_MakeAvailable(ONEMATH)
         # Create alias to match with find_package targets name

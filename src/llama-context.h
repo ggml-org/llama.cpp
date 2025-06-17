@@ -1,7 +1,6 @@
 #pragma once
 
 #include "llama.h"
-#include "llama-batch.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
@@ -13,6 +12,7 @@
 #include <vector>
 
 struct llama_model;
+class llama_batch_allocr;
 
 class llama_io_read_i;
 class llama_io_write_i;
@@ -102,8 +102,8 @@ struct llama_context {
             llama_memory_state_i * mstate,
                      ggml_status & ret);
 
-    int encode(llama_batch & inp_batch);
-    int decode(llama_batch & inp_batch);
+    int encode(const llama_batch & batch_inp);
+    int decode(const llama_batch & batch_inp);
 
     //
     // state save/load
@@ -181,7 +181,7 @@ private:
 
     // Make sure enough space is available for outputs.
     // Returns max number of outputs for which space was reserved.
-    int32_t output_reserve(int32_t n_outputs);
+    uint32_t output_reserve(int32_t n_outputs);
 
     //
     // graph
@@ -246,8 +246,10 @@ private:
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
     std::map<llama_seq_id, std::vector<float>> embd_seq;
 
-    int32_t n_outputs     = 0; // number of actually-used outputs in the current ubatch or last logical batch
-    int32_t n_outputs_max = 0; // capacity (of tokens positions) for the output buffers
+    // reuse the batch_allocr to avoid unnecessary memory allocations
+    std::unique_ptr<llama_batch_allocr> batch_allocr;
+
+    uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
 

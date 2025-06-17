@@ -31,6 +31,7 @@ class TensorNameMap:
             "model.embeddings",                          # rwkv7
             "model.word_embeddings",                     # bailingmoe
             "language_model.model.embed_tokens",         # llama4
+            "encoder",                                   # neobert
         ),
 
         # Token type embeddings
@@ -134,6 +135,7 @@ class TensorNameMap:
             "rwkv.blocks.{bid}.ln1",                                # rwkv6
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
+            "transformer_encoder.{bid}.attention_norm",             # neobert
         ),
 
         # Attention norm 2
@@ -161,6 +163,7 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
+            "transformer_encoder.{bid}.qkv",                                       # neobert
         ),
 
         # Attention query
@@ -236,6 +239,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.attn.out_proj",                       # openelm
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
+            "transformer_encoder.{bid}.wo",                                 # neobert
         ),
 
         # Attention output norm
@@ -276,6 +280,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
+            "transformer_encoder.{bid}.ffn_norm",                            # neobert
         ),
 
         # Post feed-forward norm
@@ -305,7 +310,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_EXP_PROBS_B: (
-            "model.layers.{bid}.mlp.gate.e_score_correction", # deepseek-v3
+            "model.layers.{bid}.mlp.gate.e_score_correction", # deepseek-v3 dots1
         ),
 
         # Feed-forward up
@@ -340,6 +345,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4
+            "transformer_encoder.{bid}.ffn.w12",                      # neobert
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -422,6 +428,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4
+            "transformer_encoder.{bid}.ffn.w3",                       # neobert
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -832,12 +839,14 @@ class TensorNameMap:
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
         MODEL_TENSOR.ENC_OUTPUT_NORM: (
             "encoder.final_layer_norm", # t5
+            "layer_norm",               # neobert
         ),
 
         MODEL_TENSOR.CLS: (
             "classifier",       # jina
             "classifier.dense", # roberta
             "pre_classifier",   # distillbert
+            "dense",            # neobert
         ),
 
         MODEL_TENSOR.CLS_OUT: (
