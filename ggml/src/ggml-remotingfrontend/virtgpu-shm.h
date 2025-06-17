@@ -3,7 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstddef>
-#include <stdatomic.h>
+#include <atomic>
 #include <sys/mman.h>
 
 #include "virtgpu.h"
