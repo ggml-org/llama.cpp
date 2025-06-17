@@ -36,7 +36,7 @@ ggml_add_backend_library(ggml-webgpu
 
 add_dependencies(ggml-webgpu generate_shaders)
 
-if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+if(EMSCRIPTEN)
     set(EMDAWNWEBGPU_DIR "" CACHE PATH "Path to emdawnwebgpu_pkg")
 
     target_compile_options(ggml-webgpu PRIVATE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
