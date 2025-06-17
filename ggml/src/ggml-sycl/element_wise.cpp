@@ -260,15 +260,18 @@ static void clamp(const T * x, T * dst, const float min, const float max, const 
     }
 }
 
-// Fused GLU kernels (unchanged logic)
 template<typename T>
 static void gated_op_fused_geglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
-    const T GELU_QUICK_COEF_LOCAL = static_cast<T>(-1.702f);
+    const T GELU_COEF_A = static_cast<T>(0.044715f);
+    const T SQRT_2_OVER_PI = static_cast<T>(0.79788456080286535587989211986876f);
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         const int64_t j0 = (i / n) * o0 + (i % n);
         const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
         const T x_val = x[j0];
-        const T gelu_val = x_val * (static_cast<T>(1.0f) / (static_cast<T>(1.0f) + sycl::native::exp(GELU_QUICK_COEF_LOCAL * x_val)));
+
+        const T x_cubed_term = static_cast<T>(1.0f) + GELU_COEF_A * x_val * x_val;
+        const T tanh_input = SQRT_2_OVER_PI * x_val * x_cubed_term;
+        const T gelu_val = static_cast<T>(0.5f) * x_val * (static_cast<T>(1.0f) + sycl::tanh(tanh_input));
 
         dst[i] = gelu_val * g[j1];
     }
