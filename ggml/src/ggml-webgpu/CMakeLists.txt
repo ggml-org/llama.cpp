@@ -1,6 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
 
-find_package(Dawn REQUIRED)
 find_package(Python3 REQUIRED)
 
 # Shader locations
@@ -37,9 +36,19 @@ ggml_add_backend_library(ggml-webgpu
 
 add_dependencies(ggml-webgpu generate_shaders)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    set(EMDAWNWEBGPU_DIR "" CACHE PATH "Path to emdawnwebgpu_pkg")
+
+    target_compile_options(ggml-webgpu PRIVATE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
+    target_link_options(ggml-webgpu PRIVATE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
+else()
+    find_package(Dawn REQUIRED)
+    set(DawnWebGPU_TARGET dawn::webgpu_dawn)
+endif()
+
 if (GGML_WEBGPU_DEBUG)
     target_compile_definitions(ggml-webgpu PRIVATE GGML_WEBGPU_DEBUG=1)
 endif()
 
 target_include_directories(ggml-webgpu PRIVATE ${SHADER_OUTPUT_DIR})
-target_link_libraries(ggml-webgpu PRIVATE dawn::webgpu_dawn)
+target_link_libraries(ggml-webgpu PRIVATE ${DawnWebGPU_TARGET})

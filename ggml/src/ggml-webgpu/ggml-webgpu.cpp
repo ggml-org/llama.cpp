@@ -1,7 +1,6 @@
 #include "ggml-webgpu.h"
 
 #include <webgpu/webgpu_cpp.h>
-#include <webgpu/webgpu_cpp_print.h>
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
