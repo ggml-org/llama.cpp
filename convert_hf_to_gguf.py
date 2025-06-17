@@ -556,11 +556,8 @@ class TextModel(ModelBase):
             logger.info(f"gguf: experts used count = {n_experts_used}")
 
         if (head_dim := self.hparams.get("head_dim")) is not None:
-            # Workaround for incorrect AutoConfig value for DeepSeekV3 (is set correctly in DeepSeekV2Model class)
-            # https://github.com/huggingface/transformers/blob/19224c3642705c5b6988c9f5f4251f83323d05ae/src/transformers/models/deepseek_v3/configuration_deepseek_v3.py#L210
-            if self.hparams.get("model_type") != "deepseek_v3":
-                self.gguf_writer.add_key_length(head_dim)
-                self.gguf_writer.add_value_length(head_dim)
+            self.gguf_writer.add_key_length(head_dim)
+            self.gguf_writer.add_value_length(head_dim)
 
         self.gguf_writer.add_file_type(self.ftype)
         logger.info(f"gguf: file type = {self.ftype}")
@@ -1901,9 +1898,7 @@ class LlamaModel(TextModel):
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
-        if "head_dim" in hparams:
-            rope_dim = hparams["head_dim"]
-        else:
+        if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
@@ -1985,7 +1980,8 @@ class LlamaModel(TextModel):
         if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
             if rope_scaling.get("rope_type", '').lower() == "llama3":
                 base = self.hparams.get("rope_theta", 10000.0)
-                dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+                if (dim := self.hparams.get("head_dim")) is None:
+                    dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
                 freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
 
                 factor = rope_scaling.get("factor", 8.0)
@@ -2321,9 +2317,7 @@ class DeciModel(TextModel):
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
-        if "head_dim" in hparams:
-            rope_dim = hparams["head_dim"]
-        else:
+        if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
@@ -2363,7 +2357,8 @@ class DeciModel(TextModel):
         if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
             if rope_scaling.get("rope_type", '').lower() == "llama3":
                 base = self.hparams.get("rope_theta", 10000.0)
-                dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+                if (dim := self.hparams.get("head_dim")) is None:
+                    dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
                 freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
 
                 factor = rope_scaling.get("factor", 8.0)
@@ -3681,9 +3676,7 @@ class InternLM3Model(TextModel):
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
-        if "head_dim" in hparams:
-            rope_dim = hparams["head_dim"]
-        else:
+        if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
@@ -5098,9 +5091,7 @@ class DeepseekModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        if "head_dim" in hparams:
-            rope_dim = hparams["head_dim"]
-        else:
+        if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
 
         self.gguf_writer.add_rope_dimension_count(rope_dim)
@@ -5990,7 +5981,8 @@ class ExaoneModel(TextModel):
         if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
             if rope_scaling.get("rope_type", '').lower() == "llama3":
                 base = self.hparams.get("rope_theta", 10000.0)
-                dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // self.hparams["num_attention_heads"])
+                if (dim := self.hparams.get("head_dim")) is None:
+                    dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
                 freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
 
                 factor = rope_scaling.get("factor", 8.0)
@@ -6102,7 +6094,8 @@ class BailingMoeModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        rope_dim = hparams.get("head_dim") or hparams["hidden_size"] // hparams["num_attention_heads"]
+        if (rope_dim := hparams.get("head_dim")) is None:
+            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
 
         self.gguf_writer.add_rope_dimension_count(rope_dim)
         rope_scaling = self.hparams.get("rope_scaling") or {}
@@ -6134,7 +6127,8 @@ class BailingMoeModel(TextModel):
         n_head = self.hparams["num_attention_heads"]
         n_kv_head = self.hparams.get("num_key_value_heads")
         n_embd = self.hparams["hidden_size"]
-        head_dim = self.hparams.get("head_dim") or n_embd // n_head
+        if (head_dim := self.hparams.get("head_dim")) is None:
+            head_dim = n_embd // n_head
 
         output_name = self.format_tensor_name(gguf.MODEL_TENSOR.OUTPUT)
 
