@@ -22,6 +22,9 @@ struct ggml_compute_params {
     // work buffer for all threads
     size_t wsize;
     void * wdata;
+#ifdef GGML_USE_NUMA_MIGRATE
+    void * wdata_numa[GGML_NUMA_MIGRATE_NODES];
+#endif
 
     struct ggml_threadpool * threadpool;
 };
@@ -502,6 +505,17 @@ static __m256 __lasx_xvreplfr2vr_s(const float val) {
 
 // TODO: move to ggml-threading
 void ggml_barrier(struct ggml_threadpool * tp);
+#ifdef GGML_USE_NUMA_MIGRATE
+enum ggml_barrier_node_index {
+    GGML_BARRIER_NODE_PING = 0,
+    GGML_BARRIER_NODE_PONG = 1,
+    GGML_BARRIER_NODE_LAST = 2,
+    GGML_BARRIER_NODE_CNTS = 3
+};
+void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n);
+int ggml_cores_per_numa(void);
+int ggml_get_node_from_cpu(int cpu);
+#endif
 
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
 int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);

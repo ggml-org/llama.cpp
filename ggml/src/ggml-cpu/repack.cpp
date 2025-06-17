@@ -17,6 +17,9 @@
 #include <cassert>
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
+#ifdef GGML_USE_NUMA_MIGRATE
+#include <numa.h>
+#endif
 
 #include "repack.h"
 
@@ -1232,8 +1235,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         GGML_ASSERT(ggml_n_dims(op->src[0]) == 2);
         // GGML_ASSERT(ggml_n_dims(op->src[1]) == 2);
-
+#ifdef GGML_USE_NUMA_MIGRATE
+        int node_id = ggml_get_node_from_cpu(ith);
+        char *       wdata = static_cast<char *>(params->wdata_numa[node_id]);
+#else
         char *       wdata = static_cast<char *>(params->wdata);
+#endif
         const size_t nbw1  = ggml_row_size(PARAM_TYPE, ne10);
 
         assert(params->wsize >= nbw1 * ne11);
@@ -1241,18 +1248,31 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         const ggml_from_float_t from_float = ggml_get_type_traits_cpu(PARAM_TYPE)->from_float;
 
         int64_t i11_processed = 0;
-        for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
+#ifdef GGML_USE_NUMA_MIGRATE
+        int round_cnts = ggml_cores_per_numa();
+        int start_id = ith - round_cnts * node_id;
+        if (round_cnts == 0) {
+            round_cnts = nth;
+            start_id = ith;
+        }
+#else
+        int round_cnts = nth;
+        int start_id = ith;
+#endif
+        for (int64_t i11 = start_id * 4; i11 < ne11 - ne11 % 4; i11 += round_cnts * 4) {
             ggml_quantize_mat_t<INTER_SIZE, PARAM_TYPE>((float *) ((char *) src1->data + i11 * nb11), (void *) (wdata + i11 * nbw1), 4, ne10);
         }
 
         i11_processed = ne11 - ne11 % 4;
-        for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
+        for (int64_t i11 = i11_processed + start_id; i11 < ne11; i11 += round_cnts) {
             from_float((float *) ((char *) src1->data + i11 * nb11), (void *) (wdata + i11 * nbw1), ne10);
         }
 
+#ifdef GGML_USE_NUMA_MIGRATE
+        ggml_barrier_numa_aware(params->threadpool, ith, GGML_BARRIER_NODE_LAST);
+#else
         ggml_barrier(params->threadpool);
-
-        const void * src1_wdata      = params->wdata;
+#endif
         const size_t src1_col_stride = ggml_row_size(PARAM_TYPE, ne10);
         int64_t      src0_start      = (ith * ne01) / nth;
         int64_t      src0_end        = ((ith + 1) * ne01) / nth;
@@ -1267,13 +1287,13 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
                     (float *) ((char *) dst->data) + src0_start, ne01,
                     (const char *) src0->data + src0_start * nb01,
-                    (const char *) src1_wdata, ne11 - ne11 % 4, src0_end - src0_start);
+                    (const char *) wdata, ne11 - ne11 % 4, src0_end - src0_start);
         }
         for (int iter = ne11 - ne11 % 4; iter < ne11; iter++) {
             gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
                     (float *) ((char *) dst->data + (iter * nb1)) + src0_start, ne01,
                     (const char *) src0->data + src0_start * nb01,
-                    (const char *) src1_wdata + (src1_col_stride * iter), 1,
+                    (const char *) wdata + (src1_col_stride * iter), 1,
                     src0_end - src0_start);
         }
     }
@@ -1498,7 +1518,11 @@ static ggml_backend_buffer_t ggml_backend_cpu_repack_buffer_type_alloc_buffer(gg
 }
 
 static size_t ggml_backend_cpu_repack_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    return ggml_backend_get_page_size();
+#else
     return TENSOR_ALIGNMENT;
+#endif
 
     GGML_UNUSED(buft);
 }

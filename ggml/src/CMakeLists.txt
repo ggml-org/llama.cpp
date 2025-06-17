@@ -381,3 +381,27 @@ if (BUILD_SHARED_LIBS)
         target_compile_definitions(${target} PUBLIC  GGML_SHARED)
     endforeach()
 endif()
+
+if (GGML_NUMA_MIGRATE)
+    find_path(NUMA_ROOT_DIR
+        NAMES include/numa.h
+        PATHS ENV NUMA_ROOT
+        DOC "NUMA root directory")
+
+    find_library(NUMA_LIBRARY
+        NAMES numa
+        HINTS ${NUMA_ROOT_DIR}
+        DOC "NUMA library")
+
+    if (NOT NUMA_LIBRARY)
+        message(FATAL_ERROR "Could NOT find NUMA library.")
+    endif()
+
+    if (GGML_NUMA_MIGRATE_DEBUG)
+        target_compile_definitions(ggml-base PUBLIC GGML_USE_NUMA_MIGRATE GGML_NUMA_MIGRATE_NODES=${GGML_NUMA_MIGRATE_NODES} GGML_USE_NUMA_MIGRATE_DEBUG)
+    else()
+        target_compile_definitions(ggml-base PUBLIC GGML_USE_NUMA_MIGRATE GGML_NUMA_MIGRATE_NODES=${GGML_NUMA_MIGRATE_NODES})
+    endif()
+
+    target_link_libraries(ggml-base PRIVATE ${NUMA_LIBRARY})
+endif()

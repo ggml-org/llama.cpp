@@ -312,7 +312,12 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("\n");
     printf("options:\n");
     printf("  -h, --help\n");
+#ifdef GGML_USE_NUMA_MIGRATE
+    printf("  --numa <distribute|isolate|numactl|migrate>\n");
+    printf("                                            numa mode (default: disabled)\n");
+#else
     printf("  --numa <distribute|isolate|numactl>       numa mode (default: disabled)\n");
+#endif
     printf("  -r, --repetitions <n>                     number of times to repeat each test (default: %d)\n",
            cmd_params_defaults.reps);
     printf("  --prio <-1|0|1|2|3>                          process/thread priority (default: %d)\n",
@@ -628,6 +633,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     params.numa = GGML_NUMA_STRATEGY_ISOLATE;
                 } else if (value == "numactl") {
                     params.numa = GGML_NUMA_STRATEGY_NUMACTL;
+#ifdef GGML_USE_NUMA_MIGRATE
+                } else if (value == "migrate") {
+                    params.numa = GGML_NUMA_STRATEGY_MIGRATE;
+#endif
                 } else {
                     invalid_param = true;
                     break;

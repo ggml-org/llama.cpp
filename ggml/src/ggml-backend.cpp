@@ -22,12 +22,53 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <execinfo.h>
+#include <iostream>
+#include <cstdlib>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <set>
+#include <mutex>
+
+#ifdef GGML_USE_NUMA_MIGRATE
+#include <numa.h>
+#include <numaif.h>
+#endif
 
 #ifdef __APPLE__
 #include <sys/types.h>
 #include <sys/sysctl.h>
 #endif
 
+#ifdef GGML_USE_NUMA_MIGRATE
+class numa_migrate_mapping_cache {
+public:
+    void * addr;
+    int size;
+    numa_migrate_mapping_cache(void *addr, int size): addr(addr), size(size) { }
+
+    bool operator<(const numa_migrate_mapping_cache& other) const {
+        if (addr != other.addr) {
+            return addr < other.addr;
+        } else {
+            return size < other.size;
+        }
+    }
+
+    bool operator==(const numa_migrate_mapping_cache& other) const {
+        return (addr == other.addr && size == other.size);
+    }
+
+};
+
+static std::set<numa_migrate_mapping_cache> ggml_mapping_cache;
+static size_t ggml_backend_page_size = 0;
+static std::mutex ggml_mapping_mutex;
+#endif
 
 // backend buffer type
 
@@ -1666,6 +1707,244 @@ enum ggml_status ggml_backend_view_init(struct ggml_tensor * tensor) {
     return ggml_backend_buffer_init_tensor(tensor->buffer, tensor);
 }
 
+#ifdef GGML_USE_NUMA_MIGRATE
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+static int check_numa_pages_migration(void *addr, size_t total_size) {
+    if (total_size % ggml_backend_page_size != 0) {
+        return -1;
+    }
+
+    size_t offset = 0; // Offset in bytes from the start of the allocated memory
+    int num_nodes = GGML_NUMA_MIGRATE_NODES;
+
+    for (int i = 0; i < num_nodes; ++i) {
+        int target_node = i;
+        size_t size_to_migrate = total_size / num_nodes;
+
+        if (size_to_migrate > total_size - offset) {
+            GGML_LOG_ERROR(
+                "Error: Size to migrate to node %d exceeds remaining memory, "
+                "size_to_migrate: %ld, total: %ld\n",
+                target_node, size_to_migrate, total_size);
+            return -1;
+        }
+
+        size_t num_pages_to_migrate = size_to_migrate / ggml_backend_page_size;
+        if (size_to_migrate % ggml_backend_page_size != 0) {
+            GGML_LOG_WARN("Warning: Size to migrate to node %ld is not a "
+                          "multiple of page size, total: %ld size_to_migrate: "
+                          "%ld, ggml_backend_page_size: %ld.\n",
+                          target_node, total_size, size_to_migrate,
+                          ggml_backend_page_size);
+            return -1;
+        }
+
+        if (num_pages_to_migrate == 0) {
+            GGML_LOG_WARN("Warning: No pages to migrate to node %d.\n",
+                          target_node);
+            continue;
+        }
+
+        void *migrate_start_addr = (char *)addr + (i)*size_to_migrate;
+
+        int *status = (int *)malloc(num_pages_to_migrate * sizeof(int));
+        if (!status) {
+            GGML_LOG_ERROR("malloc for status failed");
+            return -1;
+        }
+        memset(status, 0, num_pages_to_migrate * sizeof(int));
+
+        int *nodes = (int *)malloc(num_pages_to_migrate * sizeof(int));
+        if (!nodes) {
+            GGML_LOG_ERROR("malloc for nodes failed");
+            return -1;
+        }
+        memset(nodes, 0, num_pages_to_migrate * sizeof(int));
+
+        void **addr_to_migrate =
+            (void **)malloc(num_pages_to_migrate * sizeof(void *));
+        for (size_t j = 0; j < num_pages_to_migrate; j++) {
+            status[j] = 0;
+            nodes[j] = i;
+            addr_to_migrate[j] = (void *)((char *)migrate_start_addr +
+                                          j * ggml_backend_page_size);
+        }
+
+        // check if pages are migrated
+        int ret = move_pages(0, num_pages_to_migrate, addr_to_migrate, NULL,
+                             status, MPOL_MF_MOVE);
+        if (ret < 0) {
+            GGML_LOG_ERROR("check pages failed");
+            free(status);
+            free(nodes);
+            return -1;
+        }
+
+        for (size_t j = 0; j < num_pages_to_migrate; ++j) {
+            if (status[j] != target_node) {
+                GGML_LOG_WARN("Warning: Page %zu migration status to node %d: "
+                              "%d, ret: %d, addr: %p\n",
+                              j, target_node, status[j], ret,
+                              addr_to_migrate[j]);
+                if (status[j] == -ENODEV) {
+                    GGML_LOG_ERROR(
+                        "   - Error: No such device (NUMA node problem)\n");
+                } else if (status[j] == -EPERM) {
+                    GGML_LOG_ERROR(
+                        "   - Error: Operation not permitted (permissions)\n");
+                } else if (status[j] == -ENOENT) {
+                    GGML_LOG_ERROR("   - Error: ENOENT\n");
+                } else if (status[j] == -EFAULT) {
+                    GGML_LOG_ERROR("   - Error: Bad address\n");
+                } else if (status[j] == -EINVAL) {
+                    GGML_LOG_ERROR("   - Error: Invalid argument\n");
+                } else if (status[j] == -ENOMEM) {
+                    GGML_LOG_ERROR("   - Error: Out of memory\n");
+                } else if (status[j] == -EACCES) {
+                    GGML_LOG_ERROR("   - Error: access\n");
+                } else if (status[j] == -ESRCH) {
+                    GGML_LOG_ERROR("   - Error: access\n");
+                } else {
+                    GGML_LOG_ERROR("   - Error: Unknown status code at j: %ld: "
+                                   "%d, total_size: %ld\n",
+                                   j, status[j], total_size);
+                }
+
+                exit(0);
+                return -1;
+            }
+        }
+
+        free(status);
+        free(nodes);
+        free(addr_to_migrate);
+
+        offset += size_to_migrate;
+    }
+
+    GGML_LOG_INFO(
+        "page migration check passed at %p, size: %ld, num nodes: %d\n", addr,
+        total_size, num_nodes);
+    return 0;
+}
+#endif
+
+// Function to migrate pages to multiple NUMA nodes.
+static int migrate_pages_multiple_nodes(void *addr, size_t total_size) {
+
+    if (total_size % ggml_backend_page_size != 0) {
+        GGML_LOG_WARN("Warning: Total size is not a multiple of page size. "
+                      "Some memory may not be migrated.\n");
+        return -1;
+    }
+
+    size_t offset = 0; // Offset in bytes from the start of the allocated memory
+    int num_nodes = GGML_NUMA_MIGRATE_NODES;
+
+    for (int i = 0; i < num_nodes; ++i) {
+        int target_node = i;
+        size_t size_to_migrate = total_size / num_nodes;
+
+        if (size_to_migrate > total_size - offset) {
+            GGML_LOG_ERROR(
+                "Error: Size to migrate to node %d exceeds remaining memory, "
+                "size_to_migrate: %ld, total: %ld\n",
+                target_node, size_to_migrate, total_size);
+            return -1;
+        }
+
+        size_t num_pages_to_migrate = size_to_migrate / ggml_backend_page_size;
+        if (size_to_migrate % ggml_backend_page_size != 0) {
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+            GGML_LOG_WARN("Warning: Size to migrate to node %ld is not a "
+                          "multiple of page size, total: %ld size_to_migrate: "
+                          "%ld, ggml_backend_page_size: %ld.\n",
+                          target_node, total_size, size_to_migrate,
+                          ggml_backend_page_size);
+#endif
+            return -1;
+        }
+
+        if (num_pages_to_migrate == 0) {
+            GGML_LOG_WARN("Warning: No pages to migrate to node %d.\n",
+                          target_node);
+            continue;
+        }
+
+        void *migrate_start_addr = (char *)addr + (i)*size_to_migrate;
+
+        int *status = (int *)malloc(num_pages_to_migrate * sizeof(int));
+        if (!status) {
+            GGML_LOG_ERROR("malloc for status failed");
+            return -1;
+        }
+        memset(status, 0, num_pages_to_migrate * sizeof(int));
+
+        int *nodes = (int *)malloc(num_pages_to_migrate * sizeof(int));
+        if (!nodes) {
+            GGML_LOG_ERROR("malloc for nodes failed");
+            return -1;
+        }
+        memset(nodes, 0, num_pages_to_migrate * sizeof(int));
+
+        void **addr_to_migrate =
+            (void **)malloc(num_pages_to_migrate * sizeof(void *));
+        for (size_t j = 0; j < num_pages_to_migrate; j++) {
+            status[j] = 0;
+            nodes[j] = i;
+            addr_to_migrate[j] = (void *)((char *)migrate_start_addr +
+                                          j * ggml_backend_page_size);
+        }
+
+        int ret = move_pages(0, num_pages_to_migrate, addr_to_migrate, nodes,
+                             status, MPOL_MF_MOVE);
+        if (ret < 0) {
+            GGML_LOG_ERROR("move_pages failed");
+            free(status);
+            free(nodes);
+            return -1;
+        }
+
+        free(status);
+        free(nodes);
+        free(addr_to_migrate);
+
+        offset += size_to_migrate;
+    }
+
+    return 0;
+}
+
+static void migrate_pages_with_cache(void *addr, size_t size,
+                                     bool force_memset) {
+    if (size >= GGML_NUMA_MIGRATE_NODES * ggml_backend_page_size) {
+        numa_migrate_mapping_cache current_addr(addr, size);
+        std::lock_guard<std::mutex> lock(ggml_mapping_mutex);
+        auto it = ggml_mapping_cache.find(current_addr);
+        if (it == ggml_mapping_cache.end()) {
+            GGML_ASSERT(((uint64_t)(addr) & (ggml_backend_page_size - 1)) == 0);
+            int num_pages =
+                size / ggml_backend_page_size / GGML_NUMA_MIGRATE_NODES;
+            if (num_pages && ((size % ggml_backend_page_size) == 0)) {
+                if (force_memset) {
+                    memset(addr, 0, size); // force to allocate memory
+                }
+                if (migrate_pages_multiple_nodes(addr, size) != 0) {
+                    GGML_LOG_DEBUG("Migration to multiple nodes failed, addr: "
+                                   "%p, size: %ld\n",
+                                   addr, size);
+                } else {
+#ifdef GGML_USE_NUMA_MIGRATE_DEBUG
+                    check_numa_pages_migration(addr, size);
+#endif
+                }
+                ggml_mapping_cache.insert(current_addr);
+            }
+        }
+    }
+}
+#endif
+
 enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr) {
     GGML_ASSERT(tensor->buffer == NULL);
     GGML_ASSERT(tensor->data == NULL);
@@ -1676,6 +1955,11 @@ enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct 
 
     tensor->buffer = buffer;
     tensor->data = addr;
+
+#ifdef GGML_USE_NUMA_MIGRATE
+    size_t size = ggml_backend_buffer_get_alloc_size(buffer, tensor);
+    migrate_pages_with_cache(tensor->data, size, true);
+#endif
     return ggml_backend_buffer_init_tensor(buffer, tensor);
 }
 
@@ -1869,16 +2153,28 @@ bool ggml_backend_compare_graph_backend(ggml_backend_t backend1, ggml_backend_t 
 static void * ggml_backend_cpu_buffer_get_base(ggml_backend_buffer_t buffer) {
     uintptr_t data = (uintptr_t)buffer->context;
 
+#ifdef GGML_USE_NUMA_MIGRATE
+    // align the buffer
+    if (data % ggml_backend_page_size != 0) {
+        data = GGML_PAD(data, ggml_backend_page_size);
+    }
+#else
     // align the buffer
     if (data % TENSOR_ALIGNMENT != 0) {
         data = GGML_PAD(data, TENSOR_ALIGNMENT);
     }
+#endif
 
     return (void *)data;
 }
 
 static void ggml_backend_cpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    numa_free(buffer->context, buffer->size);
+#else
     ggml_aligned_free(buffer->context, buffer->size);
+#endif
+
 }
 
 static void ggml_backend_cpu_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
@@ -1947,8 +2243,22 @@ static const char * ggml_backend_cpu_buffer_type_get_name(ggml_backend_buffer_ty
     GGML_UNUSED(buft);
 }
 
+#ifdef GGML_USE_NUMA_MIGRATE
+size_t ggml_backend_get_page_size(void) {
+    if (ggml_backend_page_size == 0) {
+        ggml_backend_page_size = sysconf(_SC_PAGE_SIZE);
+    }
+    return ggml_backend_page_size;
+}
+#endif
+
 static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    ggml_backend_get_page_size();
+    void * data = numa_alloc_onnode(size, 0);
+#else
     void * data = ggml_aligned_malloc(size);
+#endif
 
     if (data == NULL) {
         GGML_LOG_ERROR("%s: failed to allocate buffer of size %zu\n", __func__, size);
@@ -1959,7 +2269,11 @@ static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_back
 }
 
 static size_t ggml_backend_cpu_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    return ggml_backend_get_page_size();
+#else
     return TENSOR_ALIGNMENT;
+#endif
 
     GGML_UNUSED(buft);
 }
