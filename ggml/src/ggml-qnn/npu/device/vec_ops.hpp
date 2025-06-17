@@ -16,6 +16,10 @@ inline size_t unaligned_bytes(const void * addr) {
     return ((size_t) addr) & kAlignMask;
 }
 
+template <typename _TyData> inline const _TyData * aligned_address(const _TyData * addr) {
+    return reinterpret_cast<const _TyData *>(reinterpret_cast<const uint8_t *>(addr) - unaligned_bytes(addr));
+}
+
 inline size_t bytes_to_vector_boundary(const void * addr) {
     return kBytesPerVector - unaligned_bytes(addr);
 }
