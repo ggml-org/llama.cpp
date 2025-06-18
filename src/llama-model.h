@@ -37,6 +37,7 @@ enum llm_type {
     LLM_TYPE_410M,
     LLM_TYPE_450M,
     LLM_TYPE_475M,
+    LLM_TYPE_558M,
     LLM_TYPE_770M,
     LLM_TYPE_780M,
     LLM_TYPE_0_5B,
