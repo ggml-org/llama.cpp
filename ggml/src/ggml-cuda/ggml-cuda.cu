@@ -11,6 +11,7 @@
 #include "ggml-cuda/clamp.cuh"
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
+#include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/convert.cuh"
 #include "ggml-cuda/count-equal.cuh"
 #include "ggml-cuda/cpy.cuh"
@@ -2352,6 +2353,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_OPT_STEP_ADAMW:
             ggml_cuda_opt_step_adamw(ctx, dst);
             break;
+        case GGML_OP_CONV_2D_DW:
+            ggml_cuda_op_conv2d_dw(ctx, dst);
+            break;
         default:
             return false;
     }
@@ -3263,6 +3267,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
         case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_CONV_2D_DW:
             return true;
         default:
             return false;
