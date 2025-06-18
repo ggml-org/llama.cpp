@@ -7,6 +7,7 @@
 #include "vec.h"
 
 #include <float.h>
+#include <unistd.h>  // for usleep
 
 // ggml_compute_forward_dup
 
@@ -7252,7 +7253,8 @@ void ggml_compute_forward_flash_attn_ext_mixed(
     //> K_vec = DK, V_vec = DV, result = OUTPUT_SIZE
     const size_t OUTPUT_SIZE    = N_Q_HEADS * SEQ_LEN * DV;
     const size_t LOCAL_MAX_SIZE = N_Q_HEADS * SEQ_LEN;
-    float * thread_workspace    = (float *) params->wdata + ith * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+    const size_t Q_Q_SIZE_FLOATS = (DK * sizeof(ggml_fp16_t) + sizeof(float) - 1) / sizeof(float);  // Round up to float units
+    float * thread_workspace    = (float *) params->wdata + ith * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + Q_Q_SIZE_FLOATS + 1 + CACHE_LINE_SIZE_F32);
 
     const int64_t rk2 = neq2 / nek2;     //> n_q_heads / n_kv_heads
     const int64_t rv2 = neq2 / nev2;     //> n_q_heads / n_kv_heads
@@ -7262,7 +7264,7 @@ void ggml_compute_forward_flash_attn_ext_mixed(
     float * local_exp_sum   = thread_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;                                  // [N_Q_HEADS * SEQ_LEN]
     float * temp_buffer     = thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE;                              // [DV]
     ggml_fp16_t * Q_q       = (ggml_fp16_t *)(thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV );   // [DK]
-    float * sync_buffer     = (float *)(thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK); // [1]
+    float * sync_buffer     = (float *)(thread_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + Q_Q_SIZE_FLOATS); // [1]
 
     // Initialize chunk outputs and log_sum_exp for all queries
     memset(chunk_output,   0,   OUTPUT_SIZE * sizeof(float));
@@ -7383,7 +7385,6 @@ void ggml_compute_forward_flash_attn_ext_mixed(
                         }
                     } else {
                         // Quantized tensor - need to get appropriate conversion function
-                        ggml_to_float_t const v_quant_to_float = ggml_get_type_traits(v_quant->type) -> to_float;
                         if (v_quant->type == GGML_TYPE_F32) {
                             ggml_vec_mad_f32(DV, (float *)output_ptr, (const float *)v_data, vs);
                         } else if (v_quant_to_float) {
@@ -7396,8 +7397,13 @@ void ggml_compute_forward_flash_attn_ext_mixed(
         }
     }
 
-    // Set sync flag
-    sync_buffer[0] = 1;
+    // Set sync flag with memory barrier
+    // Ensure all previous memory writes are completed before setting sync flag
+#if defined(__GNUC__) || defined(__clang__)
+    __sync_synchronize(); // Full memory barrier
+#endif
+    sync_buffer[0] = 1.0f;
+    __sync_synchronize();
 
     // Thread 0 waits for all other threads and performs reduction
     if (ith == 0 && nth > 1) {
@@ -7409,14 +7415,24 @@ void ggml_compute_forward_flash_attn_ext_mixed(
         while (!all_threads_ready && wait_cycles < max_wait_cycles) {
             all_threads_ready = true;
             for (int t = 1; t < nth; ++t) {
-                float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
-                volatile float * t_sync_buffer = (volatile float *)(t_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK);
-
+                float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + Q_Q_SIZE_FLOATS + 1 + CACHE_LINE_SIZE_F32);
+                volatile float * t_sync_buffer = (volatile float *)(t_workspace + OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + Q_Q_SIZE_FLOATS);
+                
+                // Add memory barrier before reading
+#if defined(__GNUC__) || defined(__clang__)
+                __sync_synchronize();
+#endif
                 if (t_sync_buffer[0] != 1.0f) {
                     all_threads_ready = false;
                     break;
                 }
             }
+            
+            // Add a small delay to avoid busy-waiting too aggressively
+            if (!all_threads_ready) {
+                usleep(1); // Sleep for 1 microsecond
+            }
+            
             wait_cycles++;
         }
 
@@ -7429,7 +7445,7 @@ void ggml_compute_forward_flash_attn_ext_mixed(
                 // Find global maximum across all threads
                 float global_max = -INFINITY;
                 for (int t = 0; t < nth; ++t) {
-                    float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + Q_Q_SIZE_FLOATS + 1 + CACHE_LINE_SIZE_F32);
                     float * t_local_max = t_workspace + OUTPUT_SIZE;
 
                     if (t_local_max[local_max_idx] > global_max) {
@@ -7446,7 +7462,7 @@ void ggml_compute_forward_flash_attn_ext_mixed(
                 // Compute global sum
                 float global_sum = 0.0f;
                 for (int t = 0; t < nth; ++t) {
-                    float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + Q_Q_SIZE_FLOATS + 1 + CACHE_LINE_SIZE_F32);
                     float * t_local_max = t_workspace + OUTPUT_SIZE;
                     float * t_local_exp_sum = t_workspace + OUTPUT_SIZE + LOCAL_MAX_SIZE;
 
@@ -7467,7 +7483,7 @@ void ggml_compute_forward_flash_attn_ext_mixed(
                 memset(final_output, 0, DV * sizeof(float));
 
                 for (int t = 0; t < nth; ++t) {
-                    float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + 1 * DK + 1 + CACHE_LINE_SIZE_F32);
+                    float * t_workspace = (float *) params->wdata + t * (OUTPUT_SIZE + 2 * LOCAL_MAX_SIZE + 1 * DV + Q_Q_SIZE_FLOATS + 1 + CACHE_LINE_SIZE_F32);
                     float * t_chunk_output = t_workspace;
                     float * t_local_max = t_workspace + OUTPUT_SIZE;
 
