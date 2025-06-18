@@ -155,6 +155,13 @@ jobs:
               -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} ;
           cmake --build build --config ${{ matrix.build_type }} -j $(nproc) --target llama-server
 
+      - name: Slow tests
+        id: server_integration_tests_slow
+        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
+        run: |
+          cd tools/server/tests
+          SLOW_TESTS=1 ./tests.sh
+
       - name: Tests
         id: server_integration_tests
         if: ${{ matrix.sanitizer == '' }}
@@ -170,13 +177,6 @@ jobs:
         run: |
           cd tools/server/tests
           LLAMA_SANITIZE=1 ./tests.sh
-
-      - name: Slow tests
-        id: server_integration_tests_slow
-        if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
-        run: |
-          cd tools/server/tests
-          SLOW_TESTS=1 ./tests.sh
 
 
   server-windows:
@@ -220,14 +220,6 @@ jobs:
         run: |
           cp $env:CURL_PATH/bin/libcurl-x64.dll ./build/bin/Release/libcurl-x64.dll
 
-      - name: Tests
-        id: server_integration_tests
-        if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
-        run: |
-          cd tools/server/tests
-          $env:PYTHONIOENCODING = ":replace"
-          pytest -v -x -m "not slow"
-
       - name: Slow tests
         id: server_integration_tests_slow
         if: ${{ (github.event.schedule || github.event.inputs.slow_tests == 'true') && matrix.build_type == 'Release' }}
@@ -235,3 +227,11 @@ jobs:
           cd tools/server/tests
           $env:SLOW_TESTS = "1"
           pytest -v -x
+
+      - name: Tests
+        id: server_integration_tests
+        if: ${{ !matrix.disabled_on_pr || !github.event.pull_request }}
+        run: |
+          cd tools/server/tests
+          $env:PYTHONIOENCODING = ":replace"
+          pytest -v -x -m "not slow"
