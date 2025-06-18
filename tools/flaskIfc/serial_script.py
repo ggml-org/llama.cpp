@@ -8,6 +8,7 @@ def send_serial_command(port, baudrate, command):
         ser.write((command + '\n').encode())  # Send command with newline
         # Wait to read the serial port
         data = '\0'
+        first_time = 1
         while True:
             try:
                 # read byte by byte to find either a new line character or a prompt marker
@@ -22,7 +23,10 @@ def send_serial_command(port, baudrate, command):
                     read_next_line = line.decode('utf-8')
                     if ("run-platform-done" in read_next_line.strip()) or ("@agilex7_dk_si_agf014ea" in read_next_line.strip()) or ("imx8mpevk" in read_next_line.strip()):
                         break
-                    data += read_next_line  # Keep the line as-is with newline
+                    if (first_time == 1) :
+                        first_time = 0
+                    else:
+                        data += read_next_line  # Keep the line as-is with newline
                 else:
                     break  # Exit loop if no data is received
             except serial.SerialException as e:
