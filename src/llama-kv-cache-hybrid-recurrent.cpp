@@ -171,35 +171,32 @@ llama_kv_cache_recurrent * llama_kv_cache_hybrid_recurrent::get_kv_recurrent() c
 
 llama_kv_cache_hybrid_recurrent_state::llama_kv_cache_hybrid_recurrent_state(llama_memory_status status) : status(status) {}
 
-llama_kv_cache_hybrid_recurrent_state::llama_kv_cache_hybrid_recurrent_state(llama_kv_cache_hybrid_recurrent * kv)
-    : status(LLAMA_MEMORY_STATUS_SUCCESS) {
-    state_attn      = kv->get_kv_attn     ()->init_full();
-    state_recurrent = kv->get_kv_recurrent()->init_full();
-
-    status = llama_memory_status_combine(state_attn->get_status(), state_recurrent->get_status());
+llama_kv_cache_hybrid_recurrent_state::llama_kv_cache_hybrid_recurrent_state(llama_kv_cache_hybrid_recurrent * kv) :
+    state_attn     (kv->get_kv_attn     ()->init_full()),
+    state_recurrent(kv->get_kv_recurrent()->init_full()),
+    status(llama_memory_status_combine(state_attn->get_status(), state_recurrent->get_status())) {
 }
 
 llama_kv_cache_hybrid_recurrent_state::llama_kv_cache_hybrid_recurrent_state(
         llama_kv_cache_hybrid_recurrent * kv,
         llama_context * lctx,
-        bool optimize) : status(LLAMA_MEMORY_STATUS_SUCCESS) {
-    state_attn      = kv->get_kv_attn     ()->init_update(lctx, optimize);
-    state_recurrent = kv->get_kv_recurrent()->init_update(lctx, optimize);
-
-    status = llama_memory_status_combine(state_attn->get_status(), state_recurrent->get_status());
+        bool optimize) :
+    state_attn     (kv->get_kv_attn     ()->init_update(lctx, optimize)),
+    state_recurrent(kv->get_kv_recurrent()->init_update(lctx, optimize)),
+    status(llama_memory_status_combine(state_attn->get_status(), state_recurrent->get_status())) {
 }
 
 llama_kv_cache_hybrid_recurrent_state::llama_kv_cache_hybrid_recurrent_state(
         llama_kv_cache_hybrid_recurrent * kv,
                            llama_sbatch   sbatch,
                   std::vector<uint32_t>   heads_attn,
-              std::vector<llama_ubatch>   ubatches)
-    : status(LLAMA_MEMORY_STATUS_SUCCESS),
+              std::vector<llama_ubatch>   ubatches) :
     sbatch(std::move(sbatch)),
-    ubatches(std::move(ubatches)) {
+    ubatches(std::move(ubatches)),
     // note: here we copy the ubatches. not sure if this is ideal
-    state_attn     .reset(new llama_kv_cache_unified_state  (kv->get_kv_attn(),      {}, std::move(heads_attn), this->ubatches));
-    state_recurrent.reset(new llama_kv_cache_recurrent_state(kv->get_kv_recurrent(), {},                        this->ubatches));
+    state_attn     (new llama_kv_cache_unified_state  (kv->get_kv_attn(),      {}, std::move(heads_attn), this->ubatches)),
+    state_recurrent(new llama_kv_cache_recurrent_state(kv->get_kv_recurrent(), {},                        this->ubatches)),
+    status(LLAMA_MEMORY_STATUS_SUCCESS) {
 }
 
 bool llama_kv_cache_hybrid_recurrent_state::next() {

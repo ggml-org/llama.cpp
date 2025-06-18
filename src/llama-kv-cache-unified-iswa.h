@@ -117,8 +117,6 @@ public:
     const llama_kv_cache_unified_state * get_swa()  const;
 
 private:
-    llama_memory_status status;
-
     //llama_kv_cache_unified_iswa * kv;
 
     llama_sbatch sbatch;
@@ -128,6 +126,8 @@ private:
 
     std::vector<llama_ubatch> ubatches;
 
-    llama_memory_state_ptr state_base;
-    llama_memory_state_ptr state_swa;
+    const llama_memory_state_ptr state_base;
+    const llama_memory_state_ptr state_swa;
+
+    const llama_memory_status status;
 };

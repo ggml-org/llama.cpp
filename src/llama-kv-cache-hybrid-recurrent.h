@@ -130,8 +130,6 @@ public:
     const llama_kv_cache_recurrent_state * get_state_recurrent() const;
 
 private:
-    llama_memory_status status;
-
     llama_sbatch sbatch;
 
     // the index of the next ubatch to process
@@ -139,6 +137,8 @@ private:
 
     std::vector<llama_ubatch> ubatches;
 
-    llama_memory_state_ptr state_attn;
-    llama_memory_state_ptr state_recurrent;
+    const llama_memory_state_ptr state_attn;
+    const llama_memory_state_ptr state_recurrent;
+
+    const llama_memory_status status;
 };
