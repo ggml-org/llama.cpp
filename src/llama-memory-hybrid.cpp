@@ -32,7 +32,7 @@ llama_memory_hybrid::llama_memory_hybrid(
     mem_attn(new llama_kv_cache_unified(
         model,
         filter_attn == nullptr ?
-            [&](int32_t il) { return !model.hparams.recurrent_layer(il); }
+            [&](int32_t il) { return !model.hparams.is_recurrent(il); }
             : filter_attn,
         type_k,
         type_v,
@@ -47,7 +47,7 @@ llama_memory_hybrid::llama_memory_hybrid(
     mem_recr(new llama_memory_recurrent(
         model,
         filter_recr == nullptr ?
-            [&](int32_t il) { return model.hparams.recurrent_layer(il); }
+            [&](int32_t il) { return model.hparams.is_recurrent(il); }
             : filter_recr,
         type_r,
         type_s,
