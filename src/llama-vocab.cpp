@@ -2060,9 +2060,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     //NOTE: Per token attributes are missing from the GGUF file.
     //TODO: Extract attributes from GGUF file.
     {
-        auto _contains_any = [] (const std::string & str, const std::vector<std::string> & substrs) -> bool {
+        auto _contains_any = [] (const std::string & str, const std::vector<std::string_view> & substrs) -> bool {
             for (const auto & substr : substrs) {
-                if (str.find(substr) < std::string::npos) {
+                if (str.find(substr) != std::string::npos) {
                     return true;
                 }
             }
