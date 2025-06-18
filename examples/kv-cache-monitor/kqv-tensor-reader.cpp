@@ -6,6 +6,7 @@
 #include "gguf.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -106,6 +107,8 @@ struct flash_attn_model {
     struct ggml_tensor * Q;
     struct ggml_tensor * K;
     struct ggml_tensor * V;
+    struct ggml_tensor * K_quant;
+    struct ggml_tensor * V_quant;
     struct ggml_tensor * mask;
     struct ggml_context * ctx;
 };
@@ -167,17 +170,32 @@ static bool init_flash_attn_model(flash_attn_model & model, ggml_tensor* q_src, 
 static struct ggml_cgraph * build_flash_attn_graph(const flash_attn_model& model, float scale = 1.0f, float max_bias = 0.0f, float logit_softcap = 0.0f) {
     struct ggml_cgraph * gf = ggml_new_graph(model.ctx);
 
-    // Perform flash attention: result = flash_attn_ext(Q, K, V, mask)
-    struct ggml_tensor * result = ggml_flash_attn_ext(
+    // // Perform flash attention: result = flash_attn_ext(Q, K, V, mask)
+    // struct ggml_tensor * result = ggml_flash_attn_ext(
+    //     model.ctx, 
+    //     model.Q, 
+    //     model.K, 
+    //     model.V, 
+    //     model.mask,
+    //     scale,
+    //     max_bias,
+    //     logit_softcap
+    // );
+    // ggml_flash_attn_ext_set_prec(result, GGML_PREC_F32);
+
+    struct ggml_tensor * result = ggml_flash_attn_mixed(
         model.ctx, 
         model.Q, 
         model.K, 
         model.V, 
-        model.mask,
-        scale,
-        max_bias,
+        NULL,
+        NULL,
+        model.mask, 
+        scale, 
+        max_bias, 
         logit_softcap
     );
+
     result = ggml_reshape_2d(model.ctx, result, result->ne[0] * result->ne[1], result->ne[2]);
 
     ggml_build_forward_expand(gf, result);
@@ -188,7 +206,7 @@ static struct ggml_cgraph * build_flash_attn_graph(const flash_attn_model& model
 static struct ggml_tensor * compute_flash_attn(const flash_attn_model & model, float scale = 1.0f) {
     struct ggml_cgraph * gf = build_flash_attn_graph(model, scale);
 
-    int n_threads = 1; // number of threads
+    int n_threads = 12; // number of threads
 
     ggml_graph_compute_with_ctx(model.ctx, gf, n_threads);
 
@@ -266,6 +284,17 @@ static void print_tensor_summary(ggml_tensor* tensor, const std::string& name) {
             ggml_type_name(tensor->type), ggml_nelements(tensor));
 }
 
+static std::string ggml_ne_string(const ggml_tensor * t) {
+    std::string str;
+    for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+        str += std::to_string(t->ne[i]);
+        if (i + 1 < GGML_MAX_DIMS) {
+            str += ", ";
+        }
+    }
+    return str;
+}
+
 static bool read_kqv_tensors(const kqv_tensor_params& params) {
     LOG_INF("Reading KQV trace file: %s\n", params.input_file.c_str());
     LOG_INF("Flash attention computation enabled for all steps\n");
@@ -296,6 +325,7 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
     std::map<int, std::vector<std::pair<ggml_tensor*, std::string>>> step_tensor_map;
     for (ggml_tensor* tensor = ggml_get_first_tensor(tensor_ctx); tensor; tensor = ggml_get_next_tensor(tensor_ctx, tensor)) {
         std::string name = tensor->name && tensor->name[0] ? tensor->name : "unnamed";
+        LOG_INF("Tensor: %s, shape: %s\n", name.c_str(), ggml_ne_string(tensor).c_str());
         int step = extract_step_from_name(name);
         step_tensor_map[step].emplace_back(tensor, name);
     }
@@ -314,6 +344,8 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
         ggml_tensor * K = tensors[2].first;
         ggml_tensor * V = tensors[3].first;
         ggml_tensor * kq_mask = tensors.size() > 4 ? tensors[4].first : nullptr;
+
+        LOG_INF("[+] Tensors count: %zu\n", tensors.size());
         
         LOG_INF("Found tensors - Q: %s, K: %s, V: %s", Q->name, K->name, V->name);
         if (kq_mask) {
@@ -322,11 +354,10 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
         LOG_INF("\n");
         
         if (tensors.size() > 5) {
-            ggml_tensor * Q_quant = tensors[5].first;
-            ggml_tensor * K_quant = tensors[6].first;
-            ggml_tensor * V_quant = tensors[7].first;
-            LOG_INF("Quantized tensors - Q_quant: %s, K_quant: %s, V_quant: %s\n", 
-                    Q_quant->name, K_quant->name, V_quant->name);
+            ggml_tensor * K_quant = tensors[5].first;
+            ggml_tensor * V_quant = tensors[6].first;
+            LOG_INF("Quantized tensors - K_quant: %s, V_quant: %s\n", 
+                    K_quant->name, V_quant->name);
         }
         
         // Run flash attention for all steps

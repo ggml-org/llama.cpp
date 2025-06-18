@@ -83,8 +83,14 @@ static bool is_kqv_out_tensor(const char* tensor_name) {
     return name.find("kqv_out") != std::string::npos;
 }
 
+static bool is_kq_mask_tensor(const char* tensor_name) {
+    if (!tensor_name) return false;
+    std::string name(tensor_name);
+    return name.find("KQ_mask") != std::string::npos;
+}
+
 static bool should_monitor_tensor(const char* tensor_name, int target_layer) {
-    if (!is_kqv_out_tensor(tensor_name)) {
+    if (!is_kqv_out_tensor(tensor_name) && !is_kq_mask_tensor(tensor_name)) {
         return false;
     }
 
@@ -294,6 +300,44 @@ static bool write_tensors_to_gguf(const kqv_trace_data* cb_data) {
 }
 
 /**
+ * Print a visualization of the KQV attention mask.
+ * Shows which tokens can attend to which other tokens.
+ * x = can attend (0 or greater)
+ * - = cannot attend (-INFINITY)
+ */
+static void print_kqv_mask(const float* mask_data, int64_t n_kv, int64_t n_tokens) {
+    LOG("\n=== KQV Attention Mask ===\n");
+    LOG("KV tokens →\n");
+    
+    // Print column numbers
+    LOG("     ");
+    for (int i = 0; i < n_kv; i++) {
+        LOG("%d", i % 10);
+    }
+    LOG("\n");
+    
+    // Print separator
+    LOG("     ");
+    for (int i = 0; i < n_kv; i++) {
+        LOG("-");
+    }
+    LOG("\n");
+    
+    // Print each row of the mask
+    for (int j = 0; j < n_tokens; j++) {
+        LOG("%3d |", j); // Row number
+        for (int i = 0; i < n_kv; i++) {
+            // LOG("%f", mask_data[j*n_kv + i]);
+            float val = mask_data[j*n_kv + i];
+            LOG("%c", (val == 0) ? 'x' : '-');
+        }
+        LOG("\n");
+    }
+    LOG("\n");
+}
+
+
+/**
  * GGML operations callback during the graph execution.
  */
 static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_data) {
@@ -313,12 +357,10 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
         return true;
     }
     cb_data->traced_tensors.insert(tensor_name);
-    
+
     //> ===================================================================================================
     //> Traced target tensor.
     //> ===================================================================================================
-    LOG("[KQV-TRACE] Tracing tensor: %s, target_layer: %d tensor->data pointer: %p\n", t->name, cb_data->target_layer, t->data);
-
     cb_data->step_count++;
     cb_data->tensor_counts[std::string(t->name)]++;
 
@@ -345,7 +387,12 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
             ggml_op_desc(tensor),
             ggml_type_name(tensor->type),
             tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
-        
+
+        if (is_kq_mask_tensor(tensor->name) && depth == 3) {
+            // LOG("[KQV-TRACE] \t\t MASK: %s\n", tensor->name);
+            print_kqv_mask((float*)tensor->data, tensor->ne[0], tensor->ne[1]);
+        }
+
         // Limit recursion depth to avoid excessive output
         if (depth < 3) {
             for (int i = 0; i < GGML_MAX_SRC; ++i) {
@@ -387,6 +434,7 @@ static bool ggml_debug_kqv_trace(struct ggml_tensor * t, bool ask, void * user_d
         // For mixed-kvcache, there can be up to 7 src tensors, so iterate until nullptr
         for (int i = 0; i < GGML_MAX_SRC; ++i) {
             if (attn_result->src[i]) {
+                LOG_INF("Saving tensor: %s, shape: %s\n", attn_result->src[i]->name, ggml_ne_string(attn_result->src[i]).c_str());
                 save_tensor_data(cb_data, attn_result->src[i]);
             } else {
                 // Stop when we encounter the first nullptr src

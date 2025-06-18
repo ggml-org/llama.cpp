@@ -460,7 +460,7 @@ static void test_multi_sequence_batch() {
     llama_sbatch sbatch_simple(batch, 64, true, false);
     print_sbatch_details(sbatch_simple, "Simple SBatch");
     
-    llama_ubatch ubatch_simple = sbatch_simple.split_simple(10);
+    llama_ubatch ubatch_simple = sbatch_simple.split_simple(3);
     print_ubatch_details(ubatch_simple, "Simple Split Result");
     
     llama_batch_free(batch);

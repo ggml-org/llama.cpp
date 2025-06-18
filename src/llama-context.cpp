@@ -459,6 +459,8 @@ void llama_context::kv_self_update() {
 
     // reserve a worst case graph if needed
     if (need_reserve) {
+        // NOTE : when exceed the max number of sequences, we need to reserve a NEW worst-case graph. (Call a lot of malloc)
+
         LLAMA_LOG_DEBUG("%s: reserving a worst case graph\n", __func__);
 
         // build worst-case graph
@@ -929,12 +931,13 @@ int llama_context::decode(llama_batch & inp_batch) {
         return -2;
     };
 
-    // handle any pending defrags/shifts
+    // NOTICE : handle any pending defrags/shifts
     kv_self_update();
 
     int64_t n_outputs_prev = 0;
 
     while (sbatch.n_tokens > 0) {
+        //> do split_simple.
         llama_ubatch ubatch = kv_self->ubatch_next(sbatch, cparams.n_ubatch, embd_pooled);
 
         // count the outputs in this u_batch
@@ -969,6 +972,7 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         ggml_backend_sched_alloc_graph(sched.get(), gf);
 
+        //> set_input will call kvcache's set_input, then call set_kq_mask.
         res->set_inputs(&ubatch);
 
         //> DO real compute.

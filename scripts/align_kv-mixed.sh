@@ -10,7 +10,7 @@ echo "✓ GGUF files cleaned"
 
 MODEL="/datasets/gguf/Llama-3.1-8B-Instruct-GGUF/Meta-Llama-3.1-8B-Instruct-Q8_0.gguf"
 PROMPT=""
-STEPS=2
+STEPS=4
 TRACE_LAYER=0
 OUTPUT_FILE="reference_f32.gguf"
 THREADS=1

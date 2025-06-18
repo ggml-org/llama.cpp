@@ -53,37 +53,153 @@ void ggml_custom_flash_attn_mixed_simple(
 );
 
 // Parameters for flash attention are defined in llama-kv-cache-mixed.h
+static void fill_random_f32(ggml_tensor * dst, size_t n_rows, size_t n_cols, float min_val = -1.0f, float max_val = 1.0f) {
+    GGML_TENSOR_LOCALS(int64_t, nedst, dst, ne)
 
-static void fill_random_f32(float* data, size_t n, float min_val = -1.0f, float max_val = 1.0f) {
+    char* data = (char*)dst->data;
+    size_t row_stride = nedst1;
+
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(min_val, max_val);
 
-    for (size_t i = 0; i < n; i++) {
-        data[i] = dis(gen);
+    for (size_t i = 0; i < n_rows; i++) {
+        for (size_t j = 0; j < n_cols; j++) {
+            data[i * row_stride + j] = dis(gen);
+        }
     }
 }
 
-static void fill_random_f16(ggml_fp16_t* data, size_t n, float min_val = -1.0f, float max_val = 1.0f) {
+static void fill_random_f16(ggml_tensor * dst, size_t n_rows, float min_val = -1.0f, float max_val = 1.0f) {
+    GGML_TENSOR_LOCALS(int64_t, nedst, dst, ne)
+
+    ggml_fp16_t* data = (ggml_fp16_t*)dst->data;
+    size_t n_cols = nedst0;
+
     static std::random_device rd;
     static std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(min_val, max_val);
 
-    for (size_t i = 0; i < n; i++) {
-        data[i] = ggml_fp32_to_fp16(dis(gen));
+    for (size_t i = 0; i < n_rows; i++) {
+        for (size_t j = 0; j < n_cols; j++) {
+            data[i * n_cols + j] = ggml_fp32_to_fp16(dis(gen));
+        }
     }
 }
 
-static void fill_causal_mask(float* mask_data, int64_t n_tokens, int64_t kv_len) {
-    for (int64_t i = 0; i < n_tokens; i++) {
-        for (int64_t j = 0; j < kv_len; j++) {
-            if (j <= i + (kv_len - n_tokens)) {
-                mask_data[i * kv_len + j] = 0.0f;
+static void fill_causal_mask(ggml_tensor* mask, int64_t pos, int64_t n_seq, int64_t n_kv) {
+    float* mask_data = (float*)mask->data;
+
+    for (int64_t i = 0; i < n_seq; i++) {
+        for (int64_t j = 0; j < n_kv; j++) {
+            if (j <= pos) {
+                mask_data[i * n_kv + j] = 0.0f;
             } else {
-                mask_data[i * kv_len + j] = -INFINITY;
+                mask_data[i * n_kv + j] = -INFINITY;
             }
         }
     }
+
+    for (int64_t i = n_seq; i < mask->ne[0]; i++) {
+        for (int64_t j = 0; j < n_kv; j++) {
+            mask_data[i * n_kv + j] = -INFINITY;
+        }
+    }
+}
+
+/**
+ * Print a visualization of the KQV attention mask.
+ * Shows which tokens can attend to which other tokens.
+ * x = can attend (0 or greater)
+ * - = cannot attend (-INFINITY)
+ * For large n_kv, only prints first and last few columns with ellipsis
+ */
+static void print_mask(const ggml_tensor* mask, int64_t n_kv, int64_t n_tokens) {
+    printf("\n=== KQV Attention Mask ===\n");
+    printf("KV tokens →\n");
+
+    const int preview_size = 8; // Number of columns to show at start/end
+    const bool truncate = n_kv > 3 * preview_size;
+    const int display_width = truncate ? 2 * preview_size + 3 : n_kv;
+
+    // Print column numbers
+    printf("     ");
+    for (int i = 0; i < display_width; i++) {
+        if (truncate && i == preview_size) {
+            printf("...");
+        } else if (truncate && i > preview_size) {
+            printf("%d", (n_kv - (2 * preview_size - i)) % 10);
+        } else {
+            printf("%d", i % 10);
+        }
+    }
+    printf("\n");
+    
+    // Print separator
+    printf("     ");
+    for (int i = 0; i < display_width; i++) {
+        if (truncate && i == preview_size) {
+            printf("...");
+        } else {
+            printf("-");
+        }
+    }
+    printf("\n");
+    
+    const int row_preview = 5; // Number of rows to show at start/end
+    const bool truncate_rows = n_tokens > 2 * row_preview + 1;
+    
+    if (mask->type == GGML_TYPE_F32) {
+        float* mask_data = (float*)mask->data;
+
+        // Print each row of the mask
+        for (int j = 0; j < n_tokens; j++) {
+            // Skip middle rows if truncating
+            if (truncate_rows && j == row_preview) {
+                printf("... |\n");
+                j = n_tokens - row_preview - 1;
+                continue;
+            }
+            
+            printf("%3d |", j); // Row number
+            for (int i = 0; i < display_width; i++) {
+                if (truncate && i == preview_size) {
+                    printf("...");
+                } else {
+                    int idx = truncate && i > preview_size ? 
+                             n_kv - (2 * preview_size - i) : i;
+                    float val = mask_data[j*n_kv + idx];
+                    printf("%c", (val == 0.0f) ? 'x' : '-');
+                }
+            }
+            printf("\n");
+        }
+    } else {
+        ggml_fp16_t* mask_data = (ggml_fp16_t*)mask->data;
+
+        for (int j = 0; j < n_tokens; j++) {
+            // Skip middle rows if truncating
+            if (truncate_rows && j == row_preview) {
+                printf("... |\n");
+                j = n_tokens - row_preview - 1;
+                continue;
+            }
+            
+            printf("%3d |", j); // Row number
+            for (int i = 0; i < display_width; i++) {
+                if (truncate && i == preview_size) {
+                    printf("...");
+                } else {
+                    int idx = truncate && i > preview_size ?
+                             n_kv - (2 * preview_size - i) : i;
+                    float val = ggml_fp16_to_fp32(mask_data[j*n_kv + idx]);
+                    printf("%c", (val == 0) ? 'x' : '-');
+                }
+            }
+            printf("\n");
+        }
+    }
+    printf("\n");
 }
 
 static void print_tensor_info(const char* name, ggml_tensor* tensor) {
@@ -96,12 +212,13 @@ int main() {
     printf("Testing Flash-Decoding Custom Operation vs Standard Flash Attention\n");
 
     // Test parameters - reduce KV length to minimize F16 accumulation errors
-    const int head_dim  = 4;
-    const int n_heads   = 4;
+    const int head_dim   = 4;
+    const int n_heads    = 4;
     const int n_kv_heads = 1;
-    const int seq_len   = 1;     // Q length
-    const int kv_len    = 48;    // K/V length - reduced for better F16 precision
-    const int n_threads = 12;
+    const int seq_len    = 1;     // Q length
+    const int kv_len     = 4096;    // K/V length - reduced for better F16 precision
+    const int n_threads  = 12;
+    const int cur_pos    = 1532;
 
     printf("Test Parameters:\n");
     printf("  head_dim=%d, n_heads=%d, n_kv_heads=%d, seq_len=%d, kv_len=%d\n",
@@ -109,7 +226,7 @@ int main() {
     printf("  GQA ratio: %d query heads per KV head\n", n_heads / n_kv_heads);
 
     // Initialize ggml context
-    const size_t ctx_size = 256*1024*1024; // 256MB for context
+    const size_t ctx_size = 1024*1024*1024; // 256MB for context
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx_size,
         /*.mem_buffer =*/ NULL,
@@ -121,64 +238,62 @@ int main() {
         fprintf(stderr, "Failed to initialize ggml context\n");
         return 1;
     }
+    
+    size_t n_pad = 32u;
 
     // Create tensors for custom flash attention (our format)
     // Format: [head_dim, seq_len, n_heads, 1] for Q, K, V
     // Based on mixed implementation: Q=F32, K=F16, V=F32, mask=F32
-    ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, seq_len, n_heads,    1);
-    ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_kv_heads, 1);
-    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len,  n_kv_heads, 1);
+    ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim, seq_len,                  n_heads,    1);
+    ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, GGML_PAD(kv_len, n_pad),  n_kv_heads, 1);
+    ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, GGML_PAD(kv_len, n_pad),  n_kv_heads, 1);
 
-    // Create mask tensor for custom flash attention
-    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, kv_len, GGML_PAD(seq_len, 256));
+    //> [n_kv, seq_len, 1, 1]
+    ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, GGML_PAD(kv_len, n_pad), GGML_PAD(seq_len, GGML_KQ_MASK_PAD));
 
     // Fill tensors with random data
-    fill_random_f32((float*)q->data, ggml_nelements(q));
+    fill_random_f32(q, seq_len, head_dim);
 
     if (k->type == GGML_TYPE_F32) {
-        fill_random_f32((float*)k->data, ggml_nelements(k));
+        fill_random_f32(k, kv_len, head_dim);
     } else {
-        fill_random_f16((ggml_fp16_t*)k->data, ggml_nelements(k));  // K is F16
+        fill_random_f16(k, kv_len);  // K is F16
     }
 
     if (v->type == GGML_TYPE_F32) {
-        fill_random_f32((float*)v->data, ggml_nelements(v));
+        fill_random_f32(v, kv_len, head_dim);
     } else {
-        fill_random_f16((ggml_fp16_t*)v->data, ggml_nelements(v));
+        fill_random_f16(v, kv_len);
     }
 
     // Fill mask - use identity mask (all positions visible)
-    float* mask_data = (float*)mask->data;
-    fill_causal_mask(mask_data, seq_len, kv_len);
-
-    for (int i = seq_len; i < GGML_PAD(seq_len, 256); i++) {
-        for (int j = 0; j < kv_len; j++) {
-            mask_data[i * kv_len + j] = -INFINITY;
-        }
-    }
+    // float* mask_data = (float*)mask->data;
+    fill_causal_mask(mask, cur_pos, seq_len, GGML_PAD(kv_len, n_pad));
 
     //> Use random data for realistic testing
     // ggml_set_f32(q, 1.0f);    // Q = [1, 1]
     // ggml_set_f32(k, 2.0f);    // K = [2, 2] for all tokens
     // ggml_set_f32(v, 3.0f);    // V = [3, 3] for all tokens
 
-    ggml_set_f32(mask, 0.0f); // No masking
+    // ggml_set_f32(mask, 0.0f); // No masking
+
+    print_mask(mask, GGML_PAD(kv_len, n_pad), GGML_PAD(seq_len, GGML_KQ_MASK_PAD));
 
     // Adjust fp16_window to fit within kv_len for this test
     size_t fp16_window  = std::min((size_t)kv_len, (size_t)32);
-    size_t quant_len = kv_len - fp16_window > 0 ? kv_len - fp16_window : 0;
-    size_t fp16_nb1          = head_dim * ggml_type_size(k->type);
-    size_t fp16_nb2          = fp16_window * fp16_nb1;
-    size_t fp16_nb3          = fp16_nb2 * n_kv_heads;
+    size_t quant_len    = kv_len - fp16_window > 0 ? kv_len - fp16_window : 0;
+    size_t fp16_nb1     = head_dim * ggml_type_size(k->type);
+    size_t fp16_nb2     = fp16_window * fp16_nb1;
+    size_t fp16_nb3     = fp16_nb2 * n_kv_heads;
 
-    size_t quant_nb1          = head_dim * ggml_type_size(k->type);
-    size_t quant_nb2          = quant_len * quant_nb1;
-    size_t quant_nb3          = quant_nb2 * n_kv_heads;
+    size_t quant_nb1    = head_dim * ggml_type_size(k->type);
+    size_t quant_nb2    = quant_len * quant_nb1;
+    size_t quant_nb3    = quant_nb2 * n_kv_heads;
     
     size_t kv_quant_offset = n_kv_heads * fp16_window * fp16_nb1;
 
-    ggml_tensor * k_fp16    = ggml_view_4d(ctx, k, head_dim, fp16_window, n_kv_heads, 1, fp16_nb1,  fp16_nb2, fp16_nb3, 0);
-    ggml_tensor * v_fp16    = ggml_view_4d(ctx, v, head_dim, fp16_window, n_kv_heads, 1, fp16_nb1,  fp16_nb2, fp16_nb3, 0);
+    ggml_tensor * k_fp16  = ggml_view_4d(ctx, k, head_dim, fp16_window, n_kv_heads, 1, fp16_nb1, fp16_nb2, fp16_nb3, 0);
+    ggml_tensor * v_fp16  = ggml_view_4d(ctx, v, head_dim, fp16_window, n_kv_heads, 1, fp16_nb1, fp16_nb2, fp16_nb3, 0);
     
     // Only create quantized views if we have quantized tokens
     // NOTICE: This quant_len can be 0;
@@ -265,16 +380,16 @@ int main() {
 
     // Create tensors for standard flash attention
     // Standard format: [head_dim, seq_len, n_heads, batch_size] for Q, K, V
-    ggml_tensor * q_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim,  seq_len,    n_heads,       1);
-    ggml_tensor * k_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,    1);
-    ggml_tensor * v_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  kv_len,     n_kv_heads,    1);
+    ggml_tensor * q_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, head_dim,  seq_len,                     n_heads,       1);
+    ggml_tensor * k_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  GGML_PAD(kv_len, n_pad),     n_kv_heads,    1);
+    ggml_tensor * v_std = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim,  GGML_PAD(kv_len, n_pad),     n_kv_heads,    1);
+
+    ggml_tensor * mask_std = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, GGML_PAD(kv_len, n_pad), GGML_PAD(seq_len, GGML_KQ_MASK_PAD));
 
     // Convert data types and rearrange dimensions for GQA
     float* q_f32_src = (float*)q->data;
     ggml_fp16_t* k_f16_src = (ggml_fp16_t*)k->data;  // K is already F16
     float* k_f32_src = (float*)v->data;
-
-    // NOTE: v is F16 in the custom implementation, but F32 in the standard implementation
     ggml_fp16_t* v_f16_src = (ggml_fp16_t*)v->data;
     float* v_f32_src = (float*)v->data;
     
@@ -320,10 +435,21 @@ int main() {
         }
     }
 
+    float* mask_data = (float*)mask->data;
+    ggml_fp16_t* mask_std_data = (ggml_fp16_t*)mask_std->data;
+
+    for(int64_t q_pos = 0; q_pos < mask_std->ne[1]; q_pos++) {
+        for(int64_t kv_pos = 0; kv_pos < mask_std->ne[0]; kv_pos++) {
+            mask_std_data[q_pos * mask_std->ne[0] + kv_pos] = (ggml_fp16_t)ggml_fp32_to_fp16(mask_data[q_pos * mask->ne[0] + kv_pos]);
+        }
+    }
+
+    print_mask(mask_std, GGML_PAD(kv_len, n_pad), GGML_PAD(seq_len, GGML_KQ_MASK_PAD));
+
     const float scale = 1.0f / sqrtf((float)head_dim);
 
     ggml_tensor * standard_result = ggml_flash_attn_ext(
-        ctx, q_std, k_std, v_std, NULL,  // Use NULL mask for comparison
+        ctx, q_std, k, v, mask_std,  // Use NULL mask for comparison
         scale,
         0.0f,  // max_bias
         0.0f   // logit_softcap
@@ -413,7 +539,7 @@ int main() {
         for (int h = 0; h < n_kv_heads; h++) {
             for (int s = 0; s < kv_len; s++) {
                 for (int d = 0; d < head_dim; d++) {
-                    int ggml_idx = d + s * head_dim + h * head_dim * kv_len;
+                    int ggml_idx = d + s * head_dim + h * head_dim * GGML_PAD(kv_len, n_pad);
                     int torch_idx = h * kv_len * head_dim + s * head_dim + d;
                     // Convert F16 to F32
                     v_torch_data[torch_idx] = ggml_fp16_to_fp32(((ggml_fp16_t*)v->data)[ggml_idx]);
@@ -421,15 +547,32 @@ int main() {
             }
         }
 
-        auto mask_torch = torch::zeros({1, n_heads, seq_len, kv_len}, torch_options);
-        float* mask_torch_data = mask_torch.data_ptr<float>();
+        // Create boolean mask for PyTorch (tensor shape: [1, n_heads, seq_len, kv_len])
+        // PyTorch attention mask: true = can attend, false = cannot attend
+        auto mask_torch = torch::ones({1, n_heads, seq_len, kv_len}, torch::TensorOptions().dtype(torch::kBool));
+        bool* mask_torch_data = mask_torch.data_ptr<bool>();
+        float* mask_data = (float*)mask->data;
 
+        // Convert ggml mask to PyTorch boolean mask format
+        // ggml mask: 0.0f = can attend, -INFINITY = cannot attend
+        // PyTorch mask: true = can attend, false = cannot attend
         for (int h = 0; h < n_heads; h++) {
             for (int s = 0; s < seq_len; s++) {
                 for (int d = 0; d < kv_len; d++) {
-                    int ggml_idx = d + s * kv_len + h * kv_len * seq_len;
+                    // Read from ggml mask (format: [kv_len, seq_len])
+                    int ggml_idx = d + s * GGML_PAD(kv_len, n_pad);
+                    float ggml_mask_val = mask_data[ggml_idx];
+                    
+                    // PyTorch index (format: [1, n_heads, seq_len, kv_len])
                     int torch_idx = h * seq_len * kv_len + s * kv_len + d;
-                    mask_torch_data[torch_idx] = 1.0f;
+                    
+                    // Convert: ggml 0.0f -> PyTorch true (can attend)
+                    //          ggml -INFINITY -> PyTorch false (cannot attend)
+                    if (ggml_mask_val == 0.0f) {
+                        mask_torch_data[torch_idx] = true;   // Can attend
+                    } else {
+                        mask_torch_data[torch_idx] = false;  // Cannot attend
+                    }
                 }
             }
         }

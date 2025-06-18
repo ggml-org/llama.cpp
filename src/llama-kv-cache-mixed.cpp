@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <stdexcept>
@@ -30,14 +31,6 @@
 #ifndef CACHE_LINE_SIZE_F32
 #define CACHE_LINE_SIZE_F32 16
 #endif
-
-/*
- * Mixed KV Cache Debug Output
- *
- * Uses llama's existing debug system. Enable with:
- * - Set log level to DEBUG or higher
- * - Look for "[mixed-kv]" prefix in debug output
- */
 
 // Helper function to format memory size
 static std::string format_memory_size(size_t bytes) {
@@ -64,50 +57,11 @@ static double get_duration_ms(const std::chrono::high_resolution_clock::time_poi
     return duration.count() / 1000.0;
 }
 
-/*
- * llama_kv_cache_mixed implementation
- *
- * Mixed precision KV cache with automatic quantization:
- *
- * Architecture Overview:
- * +-------------------------------------------------------------+
- * |                    Mixed KV Cache                           |
- * |                                                             |
- * |  Hot Data (Recent)     Cold Data (Old)                      |
- * |  +-----------------+   +-----------------+                  |
- * |  |   FP16 Buffer   |   |  Quantized      |                  |
- * |  |   [newest N]    |   |  Buffer         |                  |
- * |  |   tokens        |   |  [older tokens] |                  |
- * |  +-----------------+   +-----------------+                  |
- * |           |                      |                          |
- * |           +------+---------------+                          |
- * |                  |                                          |
- * |                  v                                          |
- * |         +-----------------+                                 |
- * |         | Merged FP16 View| <- Always returned to attention |
- * |         | (dequantized)   |                                 |
- * |         +-----------------+                                 |
- * +-------------------------------------------------------------+
- *
- * FIFO Quantization Strategy:
- *
- * Time ->  [Token 1] [Token 2] [Token 3] [Token 4] [Token 5]
- *         |         |         |         |         |
- *         v         v         v         v         v
- * Step 1: [  FP16   ] [  FP16  ] [  FP16  ]
- * Step 2: [  FP16   ] [  FP16  ] [  FP16  ] [  FP16  ]
- * Step 3: [ Quant   ] [  FP16  ] [  FP16  ] [  FP16  ] [  FP16  ]
- *         ^ oldest moved to quantized buffer when threshold exceeded
- *
- * Compatibility:
- * - Only activated when use_mixed_kv_cache = true
- * - All existing cache types continue to work unchanged
- * - Uses dynamic_cast for type-safe detection
- */
-
 uint32_t llama_kv_cache_mixed::get_padding(const llama_cparams & cparams) {
     GGML_UNUSED(cparams);
-    // TODO : the FA kernels require padding to avoid extra runtime boundary checks
+
+    return 32u;
+
     return cparams.flash_attn ? 256u : 32u;
 }
 
@@ -122,9 +76,10 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
     const llama_kv_cache_mixed_config & config)
     : model(model), hparams(model.hparams), config(config),
       v_trans(v_trans), n_seq_max(n_seq_max), n_pad(n_pad) {
+
     GGML_ASSERT(kv_size % n_pad == 0);
 
-    // create a context for each buffer type
+    // create a context for each buffer type (allocator)
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
@@ -154,36 +109,6 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
     size = kv_size;
     used = 0;
 
-    /*
-     * KV Cache Cells Architecture Overview:
-     *
-     * cells 是 Mixed KV Cache 的核心管理数据结构，用于跟踪每个缓存槽的状态
-     * 它是一个固定大小的数组，每个元素代表一个cache slot
-     *
-     * ┌─────────────────────────────────────────────────────────┐
-     * │                    KV Cache Layout                      │
-     * │                                                         │
-     * │  cells[0]  cells[1]  cells[2]  ...  cells[kv_size-1]    │
-     * │  ┌─────┐   ┌─────┐   ┌─────┐         ┌─────┐            │
-     * │  │slot │   │slot │   │slot │   ...   │slot │            │
-     * │  │  0  │   │  1  │   │  2  │         │ N-1 │            │
-     * │  └─────┘   └─────┘   └─────┘         └─────┘            │
-     * │     ↑         ↑         ↑               ↑               │
-     * │   pos=-1    pos=0     pos=1          pos=N-2            │
-     * │  (empty)   (token)   (token)        (token)             │
-     * │             seq=1     seq=1          seq=2              │
-     * └─────────────────────────────────────────────────────────┘
-     *
-     * 每个 cell 包含：
-     * - pos: token 在序列中的位置 (-1 表示空闲槽位)
-     * - seq_id: 该 token 属于哪些序列的集合 (支持多序列共享同一token)
-     * - delta: 用于位置偏移计算的累积值 (用于 RoPE、K-shift 等操作)
-     *
-     * Cache 管理状态：
-     * - head: 下一个分配的起始位置指针 (优化查找效率)
-     * - used: 当前已使用的slot数量
-     * - size: 总的cache容量 (= kv_size)
-     */
     cells.resize(kv_size);
 
     for (uint32_t il = 0; il < hparams.n_layer; il++) {
@@ -255,8 +180,8 @@ llama_kv_cache_mixed::llama_kv_cache_mixed(
     }
 
     {
-        const size_t memory_size_k = size_k_bytes();
-        const size_t memory_size_v = size_v_bytes();
+        const size_t memory_size_k = size_k_fp16_bytes();
+        const size_t memory_size_v = size_v_fp16_bytes();
 
         LLAMA_LOG_DEBUG("%s: mixed cache size = %7.2f MiB (%6u cells, %3d layers, %2u seqs)\n",
                 __func__,
@@ -324,21 +249,18 @@ llama_kv_cache_mixed::~llama_kv_cache_mixed() {
     } catch (...) {
         LLAMA_LOG_ERROR("[mixed-kv] destructor: unknown exception during cleanup\n");
     }
-
-    // Note: ctxs and bufs will be automatically cleaned up by their smart pointer destructors
-    // in the correct order (bufs first, then ctxs)
 }
 
 void llama_kv_cache_mixed::clear() {
     LLAMA_LOG_DEBUG("[mixed-kv] clearing cache (size=%u, used=%u)\n", size, used);
 
     /*
-     * cells清空操作 - 重置所有缓存槽状态到初始空闲状态：
+     * Cell clearing operation - Reset all cache slots to initial empty state:
      *
-     * cells 数组中的每个元素都代表一个 cache slot，清空操作将：
-     * 1. 将所有 pos 设为 -1 (表示空闲)
-     * 2. 清空所有 seq_id 集合
-     * 3. 重置管理计数器 (head=0, used=0)
+     * Each element in the cells array represents a cache slot. The clear operation will:
+     * 1. Set all pos values to -1 (indicating empty)
+     * 2. Clear all seq_id sets
+     * 3. Reset management counters (head=0, used=0)
      *
      * Before clear():                    After clear():
      * ┌─────┬─────┬─────┬─────┐         ┌─────┬─────┬─────┬─────┐
@@ -350,8 +272,8 @@ void llama_kv_cache_mixed::clear() {
      * used=4                            used=0, head=0
      */
     for (uint32_t i = 0; i < size; ++i) {
-        cells[i].pos = -1;        // 标记为空闲槽位
-        cells[i].seq_id.clear();  // 清空序列ID集合
+        cells[i].pos = -1;        // Mark slot as empty
+        cells[i].seq_id.clear();  // Clear sequence ID set
     }
 
     head = 0;
@@ -361,8 +283,8 @@ void llama_kv_cache_mixed::clear() {
     for (auto & layer : layers) {
         layer.quant_k_tokens = 0;
         layer.quant_v_tokens = 0;
-        layer.fp16_k_tokens = 0;
-        layer.fp16_v_tokens = 0;
+        layer.fp16_k_tokens  = 0;
+        layer.fp16_v_tokens  = 0;
     }
 
     for (auto & buf : bufs) {
@@ -383,52 +305,48 @@ bool llama_kv_cache_mixed::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p
     }
 
     /*
-     * cells序列移除操作 - 从指定位置范围移除序列tokens：
+     * Cell sequence removal operation - Remove sequence tokens from specified position range:
      *
-     * 遍历所有cells，检查每个cell的位置是否在移除范围[p0, p1)内
-     * 如果在范围内且包含目标序列，则从该cell的seq_id集合中移除该序列
-     * 如果移除后cell变为空闲（seq_id集合为空），则释放该slot
+     * Iterate through all cells, check if each cell's position is within removal range [p0, p1)
+     * If within range and contains target sequence, remove that sequence from the cell's seq_id set
+     * If cell becomes empty after removal (seq_id set empty), free that slot
      *
-     * 例如：seq_rm(seq_id=1, p0=1, p1=3) - 移除序列1在位置1-2的tokens
+     * Example: seq_rm(seq_id=1, p0=1, p1=3) - Remove sequence 1 tokens at positions 1-2
      *
      * Before seq_rm():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:1│pos:2│pos:3│pos:4│
-     * │seq:1│seq:1│seq:1│seq:2│seq:1│  <- 需要移除位置1-2的seq:1
+     * │seq:1│seq:1│seq:1│seq:2│seq:1│  <- Need to remove seq:1 at pos:1-2
      * └─────┴─────┴─────┴─────┴─────┘
      *
      * After seq_rm():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:-│pos:-│pos:3│pos:4│
-     * │seq:1│empty│empty│seq:2│seq:1│  <- pos:1,2被清空释放
+     * │seq:1│empty│empty│seq:2│seq:1│  <- pos:1,2 cleared and freed
      * └─────┴─────┴─────┴─────┴─────┘
      *         ↑     ↑
-     *      new_head 候选位置 (用于优化后续分配)
+     *      new_head candidate positions (for optimizing future allocations)
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该cell的位置是否在移除范围内
+        // Check if cell position is within removal range
         if (cells[i].pos >= p0 && cells[i].pos < p1) {
             if (seq_id < 0) {
-                // seq_id < 0 表示移除所有序列
+                // seq_id < 0 means remove all sequences
                 cells[i].seq_id.clear();
             } else if (cells[i].has_seq_id(seq_id)) {
-                // 只移除指定的序列ID
+                // Only remove specified sequence ID
                 cells[i].seq_id.erase(seq_id);
             } else {
-                // 该cell不包含目标序列，跳过
                 continue;
             }
 
-            // 如果cell变为空（没有任何序列使用），则释放该槽位
             if (cells[i].is_empty()) {
-                // 更新已使用槽位计数
                 if (cells[i].pos >= 0) {
                     used--;
                 }
 
-                cells[i].pos = -1;  // 标记为空闲
+                cells[i].pos = -1;
 
-                // 记录第一个空闲槽位，用于优化后续分配
                 if (new_head == size) {
                     new_head = i;
                 }
@@ -460,32 +378,32 @@ void llama_kv_cache_mixed::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_d
     head = 0;
 
     /*
-     * cells序列复制操作 - 将源序列的tokens复制给目标序列：
+     * Cell sequence copy operation - Copy tokens from source sequence to destination sequence:
      *
-     * 遍历所有cells，找到属于源序列且在指定位置范围内的cells
-     * 将目标序列ID添加到这些cells的seq_id集合中
-     * 这实现了多序列共享同一token的功能（例如用于beam search）
+     * Iterate through all cells, find cells belonging to source sequence within specified position range
+     * Add destination sequence ID to these cells' seq_id set
+     * This implements functionality for multiple sequences sharing the same token (e.g. for beam search)
      *
-     * 例如：seq_cp(seq_src=1, seq_dst=3, p0=1, p1=3) - 复制序列1给序列3
+     * Example: seq_cp(seq_src=1, seq_dst=3, p0=1, p1=3) - Copy sequence 1 to sequence 3
      *
      * Before seq_cp():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:1│pos:2│pos:3│pos:4│
-     * │seq:1│seq:1│seq:1│seq:2│seq:1│  <- 复制seq:1的pos:1-2给seq:3
+     * │seq:1│seq:1│seq:1│seq:2│seq:1│  <- Copy seq:1's pos:1-2 to seq:3
      * └─────┴─────┴─────┴─────┴─────┘
      *
      * After seq_cp():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:1│pos:2│pos:3│pos:4│
-     * │seq:1│{1,3}│{1,3}│seq:2│seq:1│  <- pos:1,2现在同时属于seq:1和seq:3
+     * │seq:1│{1,3}│{1,3}│seq:2│seq:1│  <- pos:1,2 now belong to both seq:1 and seq:3
      * └─────┴─────┴─────┴─────┴─────┘
      *         ↑     ↑
-     *      共享tokens (多序列引用同一cache slot)
+     *      Shared tokens (multiple sequences reference same cache slot)
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该cell是否属于源序列且在指定位置范围内
+        // Check if cell belongs to source sequence and is within specified position range
         if (cells[i].has_seq_id(seq_id_src) && cells[i].pos >= p0 && cells[i].pos < p1) {
-            // 将目标序列ID添加到该cell（多序列共享同一token）
+            // Add destination sequence ID to this cell (multiple sequences share same token)
             cells[i].seq_id.insert(seq_id_dst);
         }
     }
@@ -495,47 +413,48 @@ void llama_kv_cache_mixed::seq_keep(llama_seq_id seq_id) {
     uint32_t new_head = size;
 
     /*
-     * cells序列保留操作 - 只保留指定序列，清除其他所有序列：
+     * Cell sequence keep operation - Keep only specified sequence, clear all others:
+     * 
+     * Iterate through all cells, completely clear cells not belonging to target sequence,
+     * For cells belonging to target sequence, clean multi-sequence state to keep only target sequence
+     * This is typically used to switch current active sequence and clean up unwanted branches
      *
-     * 遍历所有cells，对于不属于目标序列的cells完全清除，
-     * 对于属于目标序列的cells，清理多序列状态只保留目标序列
-     * 这通常用于切换当前活跃序列，清理不需要的分支
-     *
-     * 例如：seq_keep(seq_id=2) - 只保留序列2，清除其他所有序列
+     * Example: seq_keep(seq_id=2) - Keep only sequence 2, clear all other sequences
      *
      * Before seq_keep():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:1│pos:2│pos:3│pos:4│
-     * │seq:1│{1,3}│seq:2│{1,2}│seq:1│  <- 只保留seq:2
+     * │seq:1│{1,3}│seq:2│{1,2}│seq:1│  <- Keep only seq:2
      * └─────┴─────┴─────┴─────┴─────┘
      *
      * After seq_keep():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:-│pos:-│pos:2│pos:3│pos:-│
-     * │empty│empty│seq:2│seq:2│empty│  <- 只有seq:2的cells被保留
+     * │empty│empty│seq:2│seq:2│empty│  <- Only cells with seq:2 are kept
      * └─────┴─────┴─────┴─────┴─────┘
      *   ↑     ↑               ↑
-     * new_head候选位置 (用于后续优化分配)
+     * new_head candidates (for subsequent allocation optimization)
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该cell是否不属于要保留的序列
+        // Check if this cell does not belong to sequence to keep
         if (!cells[i].has_seq_id(seq_id)) {
-            // 该cell不属于目标序列，清除它
+            // Cell does not belong to target sequence, clear it
             if (cells[i].pos >= 0) {
-                used--;  // 减少已使用计数
+                used--;  // Decrease used count
             }
 
-            cells[i].pos = -1;           // 标记为空闲
-            cells[i].seq_id.clear();     // 清空序列ID
+            cells[i].pos = -1;           // Mark as free
+            cells[i].seq_id.clear();     // Clear sequence IDs
 
-            // 记录第一个空闲位置
-            if (new_head == size){
+            // Record first free position
+            if (new_head == size) {
+                //> This only change once. so the new head will be the FIRST free position.
                 new_head = i;
             }
         } else {
-            // 该cell属于目标序列，清理它的多序列状态，只保留目标序列
-            cells[i].seq_id.clear();         // 清空所有序列ID
-            cells[i].seq_id.insert(seq_id);  // 只插入目标序列ID
+            // Cell belongs to target sequence, clean its multi-sequence state to keep only target sequence
+            cells[i].seq_id.clear();         // Clear all sequence IDs
+            cells[i].seq_id.insert(seq_id);  // Insert only target sequence ID
         }
     }
 
@@ -566,47 +485,47 @@ void llama_kv_cache_mixed::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos 
     }
 
     /*
-     * cells序列位置偏移操作 - 将指定序列的位置向前或向后移动：
+     * Position offset operation for cells sequence - Move positions forward or backward for specified sequence:
      *
-     * 遍历所有cells，找到属于目标序列且在指定位置范围内的cells
-     * 更新它们的pos和delta值，如果位置变为负数则清除该cell
-     * 这用于实现序列的位置偏移（如插入/删除tokens、位置编码调整等）
+     * Iterate through all cells, find cells belonging to target sequence and within specified position range
+     * Update their pos and delta values, clear cell if position becomes negative
+     * This is used to implement sequence position offsets (like inserting/deleting tokens, position encoding adjustments etc.)
      *
-     * 例如：seq_add(seq_id=1, p0=2, p1=4, delta=2) - 序列1的位置2-3向前移动2位
+     * Example: seq_add(seq_id=1, p0=2, p1=4, delta=2) - Move positions 2-3 of sequence 1 forward by 2
      *
      * Before seq_add():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:1│pos:2│pos:3│pos:4│
-     * │seq:1│seq:1│seq:1│seq:1│seq:2│  <- seq:1在pos:2-3的tokens需要+2偏移
+     * │seq:1│seq:1│seq:1│seq:1│seq:2│  <- Tokens at pos:2-3 of seq:1 need +2 offset
      * └─────┴─────┴─────┴─────┴─────┘
-     *               ↑─── 范围[2,4) ──↑
+     *               ↑─ range[2,4) ─↑
      *
      * After seq_add():
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:1│pos:4│pos:5│pos:4│
-     * │seq:1│seq:1│seq:1│seq:1│seq:2│  <- pos:2→4, pos:3→5, delta累积
+     * │seq:1│seq:1│seq:1│seq:1│seq:2│  <- pos:2→4, pos:3→5, delta accumulated
      * └─────┴─────┴─────┴─────┴─────┘
      *
-     * 特殊情况 - 如果delta为负且使pos变为负数，则清除该cell：
-     * 例如delta=-3时，pos:2-3会变成-1,0，负数位置的cell被清除释放
+     * Special case - If delta is negative and makes pos negative, clear that cell:
+     * For example with delta=-3, pos:2-3 would become -1,0, cells with negative positions are cleared and freed
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该cell是否属于目标序列且在指定位置范围内
+        // Check if cell belongs to target sequence and is within specified position range
         if (cells[i].has_seq_id(seq_id) && cells[i].pos >= p0 && cells[i].pos < p1) {
-            has_shift = true;  // 标记发生了位置偏移
+            has_shift = true;  // Mark that position shift occurred
 
-            cells[i].pos   += delta;  // 更新token位置
-            cells[i].delta += delta;  // 累积偏移量（用于RoPE等）
+            cells[i].pos   += delta;  // Update token position
+            cells[i].delta += delta;  // Accumulate offset (used for RoPE etc)
 
-            // 如果位置变为负数，说明token被移出有效范围，需要清除
+            // If position becomes negative, token is moved out of valid range and needs to be cleared
             if (cells[i].pos < 0) {
                 if (!cells[i].is_empty()) {
-                    used--;  // 减少已使用计数
+                    used--;  // Decrease used count
                 }
-                cells[i].pos = -1;           // 标记为空闲
-                cells[i].seq_id.clear();     // 清空序列ID
+                cells[i].pos = -1;           // Mark as free
+                cells[i].seq_id.clear();     // Clear sequence IDs
                 if (new_head == size) {
-                    new_head = i;            // 记录空闲位置
+                    new_head = i;            // Record free position
                 }
             }
         }
@@ -633,20 +552,20 @@ void llama_kv_cache_mixed::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos 
     }
 
     /*
-     * cells序列位置除法操作 - 将指定序列的位置按比例缩小：
+     * Position division operation for cells sequence - Scale down positions proportionally:
+     * 
+     * Iterate through all cells, find cells belonging to target sequence and within specified position range
+     * Divide their positions by divisor d and update accumulated delta offset
+     * This is used to implement position scaling (like attention window scaling, position compression etc.)
      *
-     * 遍历所有cells，找到属于目标序列且在指定位置范围内的cells
-     * 将它们的位置除以除数d，并更新delta累积偏移量
-     * 这用于实现位置的比例缩放（如attention window缩放、位置压缩等）
-     *
-     * 例如：seq_div(seq_id=1, p0=4, p1=8, d=2) - 序列1位置4-7除以2
+     * Example: seq_div(seq_id=1, p0=4, p1=8, d=2) - Divide positions 4-7 of sequence 1 by 2
      *
      * Before seq_div():
      * ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
      * │pos:0│pos:1│pos:4│pos:5│pos:6│pos:7│pos:8│pos:9│
      * │seq:1│seq:1│seq:1│seq:1│seq:1│seq:1│seq:2│seq:2│
      * └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
-     *               ↑─ 范围[4,8) ─↑   <- 这些位置需要除以2
+     *               ↑─ range[4,8) ─↑   <- These positions need division by 2
      *
      * After seq_div():
      * ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
@@ -654,17 +573,17 @@ void llama_kv_cache_mixed::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos 
      * │seq:1│seq:1│seq:1│seq:1│seq:1│seq:1│seq:2│seq:2│
      * └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
      *               ↑─ 4/2=2  5/2=2  6/2=3  7/2=3 ─↑
-     *                  (delta同时记录位置变化量)
+     *                  (delta also records position change)
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该cell是否属于目标序列且在指定位置范围内
+        // Check if cell belongs to target sequence and is within specified position range
         if (cells[i].has_seq_id(seq_id) && cells[i].pos >= p0 && cells[i].pos < p1) {
-            has_shift = true;  // 标记发生了位置变化
+            has_shift = true;  // Mark that position change occurred
 
             {
-                llama_pos p_old = cells[i].pos;    // 保存原始位置
-                cells[i].pos   /= d;               // 位置除法缩放
-                cells[i].delta += cells[i].pos - p_old;  // 计算并累积偏移量
+                llama_pos p_old = cells[i].pos;    // Save original position
+                cells[i].pos   /= d;               // Scale position by division
+                cells[i].delta += cells[i].pos - p_old;  // Calculate and accumulate offset
             }
         }
     }
@@ -674,20 +593,20 @@ llama_pos llama_kv_cache_mixed::seq_pos_min(llama_seq_id seq_id) const {
     llama_pos result = std::numeric_limits<llama_pos>::max();
 
     /*
-     * 查找指定序列的最小位置：
+     * Find minimum position for specified sequence:
      *
-     * 例如：查找seq_id=1的最小位置
+     * Example: Find min position for seq_id=1
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:5│pos:1│pos:3│pos:7│pos:2│
-     * │seq:2│seq:1│seq:1│seq:2│seq:1│  <- seq:1的位置有1,3,2
+     * │seq:2│seq:1│seq:1│seq:2│seq:1│  <- seq:1 has positions 1,3,2
      * └─────┴─────┴─────┴─────┴─────┘
      *
-     * 返回 min(1,3,2) = 1
+     * Returns min(1,3,2) = 1
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该cell是否属于目标序列
+        // Check if cell belongs to target sequence
         if (cells[i].has_seq_id(seq_id)) {
-            result = std::min(result, cells[i].pos);  // 更新最小位置
+            result = std::min(result, cells[i].pos);  // Update minimum position
         }
     }
 
@@ -702,20 +621,20 @@ llama_pos llama_kv_cache_mixed::seq_pos_max(llama_seq_id seq_id) const {
     llama_pos result = -1;
 
     /*
-     * 查找指定序列的最大位置：
+     * Find maximum position for specified sequence:
      *
-     * 例如：查找seq_id=1的最大位置
+     * Example: Find max position for seq_id=1
      * ┌─────┬─────┬─────┬─────┬─────┐
      * │pos:5│pos:1│pos:3│pos:7│pos:2│
-     * │seq:2│seq:1│seq:1│seq:2│seq:1│  <- seq:1的位置有1,3,2
+     * │seq:2│seq:1│seq:1│seq:2│seq:1│  <- seq:1 has positions 1,3,2
      * └─────┴─────┴─────┴─────┴─────┘
      *
-     * 返回 max(1,3,2) = 3
+     * Returns max(1,3,2) = 3
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该cell是否属于目标序列
+        // Check if cell belongs to target sequence
         if (cells[i].has_seq_id(seq_id)) {
-            result = std::max(result, cells[i].pos);  // 更新最大位置
+            result = std::max(result, cells[i].pos);  // Update maximum position
         }
     }
 
@@ -734,29 +653,29 @@ void llama_kv_cache_mixed::restore() {
             }
 
             /*
-             * 恢复单个cell的状态，并正确维护used计数：
+             * Restore single cell state and maintain used count correctly:
              *
              * Before restore:     After restore:
              * ┌─────┐             ┌─────┐
-             * │pos:2│   <---      │pos:5│  (从recovery中恢复)
+             * │pos:2│   <---      │pos:5│  (restore from recovery)
              * │seq:1│             │seq:2│
              * └─────┘             └─────┘
-             * used++/used--根据cell状态变化进行调整
+             * used++/used-- adjusted based on cell state changes
              */
-            const bool is_empty0 = cells[id].is_empty();  // 当前cell是否为空
-            const bool is_empty1 = cell.is_empty();       // 恢复后cell是否为空
+            const bool is_empty0 = cells[id].is_empty();  // Whether current cell is empty
+            const bool is_empty1 = cell.is_empty();       // Whether restored cell will be empty
 
-            // 根据状态变化调整used计数
+            // Adjust used count based on state changes
             if (!is_empty0 && is_empty1) {
-                used--;  // 从占用变为空闲
+                used--;  // RESTORE : occupied -> empty
             } else if (is_empty0 && !is_empty1) {
-                used++;  // 从空闲变为占用
+                used++;  // RESTORE : empty -> occupied
             }
 
-            // 安全地恢复cell状态
-            cells[id].pos = cell.pos;         // 恢复位置
-            cells[id].delta = cell.delta;     // 恢复偏移量
-            cells[id].seq_id = cell.seq_id;   // 恢复序列ID集合
+            // Safely restore cell state
+            cells[id].pos       = cell.pos;         // Restore position
+            cells[id].delta     = cell.delta;       // Restore offset
+            cells[id].seq_id    = cell.seq_id;      // Restore sequence ID set
 
             LLAMA_LOG_DEBUG("[mixed-kv] restored cell %u (pos=%d, seq_ids=%zu)\n",
                            id, cell.pos, cell.seq_id.size());
@@ -861,25 +780,25 @@ bool llama_kv_cache_mixed::update(llama_context & lctx) {
         }
 
         {
-            has_shift = false;  // 重置偏移标志
+            has_shift = false;  // Reset shift flag
 
             /*
-             * 清除所有cells的delta偏移量：
+             * Clear all cell deltas:
              *
              * After K-shift operation:
              * ┌─────┬─────┬─────┬─────┐
              * │pos:2│pos:3│pos:4│pos:5│
-             * │Δ:+2 │Δ:+2 │Δ:+2 │Δ:+2 │  <- 清除这些累积偏移
+             * │Δ:+2 │Δ:+2 │Δ:+2 │Δ:+2 │  <- Clear these accumulated deltas
              * └─────┴─────┴─────┴─────┘
              *
              * After delta reset:
              * ┌─────┬─────┬─────┬─────┐
              * │pos:2│pos:3│pos:4│pos:5│
-             * │Δ: 0 │Δ: 0 │Δ: 0 │Δ: 0 │  <- 偏移量被重置
+             * │Δ: 0 │Δ: 0 │Δ: 0 │Δ: 0 │  <- Deltas reset to 0
              * └─────┴─────┴─────┴─────┘
              */
             for (uint32_t i = 0; i < size; ++i) {
-                cells[i].delta = 0;  // 重置偏移量累积
+                cells[i].delta = 0;  // Reset accumulated delta
             }
         }
     }
@@ -907,12 +826,24 @@ bool llama_kv_cache_mixed::update(llama_context & lctx) {
         do_defrag = false;
     }
 
+    do_quant = config.enable_quantization && ( head != 0 && head - cell_max_quantized() >= config.quantization_threshold + config.fp16_window_size );
+
+    if (do_quant) {
+        for (int i = head_quant; i < head - config.fp16_window_size; i++) {
+            cells[i].set_quantized(true);
+        }
+
+        LLAMA_LOG_DEBUG("%s: quantizing KV cache\n", __func__);
+    }
+
     LLAMA_LOG_DEBUG("[mixed-kv] update completed (quantization disabled for alignment testing)\n");
 
+    //> IF need reserve, then llama-context will call reserve() to reserve the memory.
     return need_reserve;
 }
 
 void llama_kv_cache_mixed::defrag_sched(float thold) {
+    // TODO : need adapt to mixed kv cache.
     const float fragmentation = n >= 2048 ? std::max(0.0f, 1.0f - (float(used + n_pad)/n)) : 0.0f;
 
     if (fragmentation > thold) {
@@ -922,15 +853,8 @@ void llama_kv_cache_mixed::defrag_sched(float thold) {
 }
 
 void llama_kv_cache_mixed::set_full() {
-    used  = size;   //> used is the end of the cache (loop buffer)
     head  = 0;      //> head is the start of the cache (loop buffer)
     n     = size;   //> n is the size of the cache (loop buffer)
-
-    for (auto & layer : layers) {
-        layer.mixed_k_head = std::max(0u, size > config.fp16_window_size ?
-                                           size - config.fp16_window_size : 0u);
-        layer.mixed_v_head = layer.mixed_k_head;
-    }
 }
 
 llama_sbatch llama_kv_cache_mixed::sbatch_init(const llama_batch & batch, bool logits_all) {
@@ -973,34 +897,13 @@ bool llama_kv_cache_mixed::find_slot(const llama_ubatch & ubatch) {
             continue;
         }
 
-        /*
-         * 检查从head开始的连续n_tokens个槽位是否都空闲：
-         *
-         * 例如：需要分配3个连续槽位
-         *
-         * Case 1 - 成功找到：
-         *     head=2, n_tokens=3
-         * ┌─────┬─────┬─────┬─────┬─────┬─────┐
-         * │pos:0│pos:1│pos:-│pos:-│pos:-│pos:5│
-         * │seq:1│seq:1│empty│empty│empty│seq:2│
-         * └─────┴─────┴─────┴─────┴─────┴─────┘
-         *               ↑─── 连续3个空闲槽位 ─↑
-         *
-         * Case 2 - 需要继续查找：
-         *     head=2, n_tokens=3
-         * ┌─────┬─────┬─────┬─────┬─────┬─────┐
-         * │pos:0│pos:1│pos:-│pos:3│pos:-│pos:5│
-         * │seq:1│seq:1│empty│seq:1│empty│seq:2│
-         * └─────┴─────┴─────┴─────┴─────┴─────┘
-         *               ↑     ↑ <- 第2个槽位被占用，从pos:4重新开始
-         */
         bool found = true;
         for (uint32_t i = 0; i < n_tokens; i++) {
-            // 检查第i个槽位是否被占用
+            //> Some cell may be empty, but the position is not reset to -1.
             if (cells[head + i].pos >= 0) {
-                found = false;        // 找到占用的槽位，当前位置不可用
-                head += i + 1;        // 移动head到下一个可能的位置
-                n_tested += i + 1;    // 更新已测试的槽位数
+                found = false;        // Found occupied slot, current position not usable
+                head += i + 1;        // Move head to next possible position
+                n_tested += i + 1;    // Update tested slot count
                 break;
             }
         }
@@ -1009,54 +912,31 @@ bool llama_kv_cache_mixed::find_slot(const llama_ubatch & ubatch) {
             break;
         }
 
+        // NOTICE: Loop termination condition - n_tested >= size means entire cache searched with no free slots
         if (n_tested >= size) {
-            return false;
+            return false;   //> Returning false will cause failure
         }
     }
 
-    /*
-     * 分配连续的n_tokens个槽位并设置它们的状态：
-     *
-     * 例如：分配3个tokens，从head=5开始
-     *
-     * Before allocation:
-     * ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
-     * │pos:0│pos:1│pos:2│pos:3│pos:4│pos:-│pos:-│pos:-│
-     * │seq:1│seq:1│seq:1│seq:1│seq:1│empty│empty│empty│
-     * └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
-     *                                   ↑head=5
-     *
-     * Recovery backup: 先备份原始状态到recovery
-     * ┌─recovery.cells[5]─┐ ┌─recovery.cells[6]─┐ ┌─recovery.cells[7]─┐
-     * │ pos: -1, seq: {}  │ │ pos: -1, seq: {}  │ │ pos: -1, seq: {}  │
-     * └───────────────────┘ └───────────────────┘ └───────────────────┘
-     *
-     * After allocation:
-     * ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┬─────┐
-     * │pos:0│pos:1│pos:2│pos:3│pos:4│pos:5│pos:6│pos:7│
-     * │seq:1│seq:1│seq:1│seq:1│seq:1│seq:2│seq:2│seq:2│  <- 新分配的tokens
-     * └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘
-     *                                   ↑─── 新tokens ─↑
-     */
     for (uint32_t i = 0; i < n_tokens; ++i) {
-        // 计算当前token对应的cell索引
+        // Calculate current token's cell index
         const uint32_t cell_idx = head + i;
 
-        // 边界检查：确保cell索引在有效范围内
+        // Boundary check: Ensure cell index is within valid range
         if (cell_idx >= size) {
             LLAMA_LOG_ERROR("[mixed-kv] ERROR: cell index %u out of bounds (size=%u)\n", cell_idx, size);
             return false;
         }
 
-        // 检查是否已经为该cell保存了恢复信息
-        // 如果没有，需要保存当前状态以便后续可能的回滚操作
+        // Check if recovery info already exists for this cell
+        // If not, save current state for potential rollback
         if (recovery.cells.find(cell_idx) == recovery.cells.end()) {
             try {
-                // 创建cell状态的安全备份
+                // Create safe backup of cell state
                 kv_cell backup_cell;
-                backup_cell.pos = cells[cell_idx].pos;         // 备份位置
-                backup_cell.delta = cells[cell_idx].delta;     // 备份偏移量
-                backup_cell.seq_id = cells[cell_idx].seq_id;   // 安全复制序列ID集合
+                backup_cell.pos = cells[cell_idx].pos;         // Backup position
+                backup_cell.delta = cells[cell_idx].delta;     // Backup delta
+                backup_cell.seq_id = cells[cell_idx].seq_id;   // Safely copy sequence ID set
 
                 recovery.cells[cell_idx] = std::move(backup_cell);
 
@@ -1068,10 +948,10 @@ bool llama_kv_cache_mixed::find_slot(const llama_ubatch & ubatch) {
             }
         }
 
-        // 设置新token的位置
+        // Set new token's position
         cells[cell_idx].pos = ubatch.pos[i];
 
-        // 将该token关联到相应的序列
+        // Associate token with corresponding sequences
         for (int32_t j = 0; j < ubatch.n_seq_id[i]; j++) {
             cells[cell_idx].seq_id.insert(ubatch.seq_id[i][j]);
         }
@@ -1082,9 +962,12 @@ bool llama_kv_cache_mixed::find_slot(const llama_ubatch & ubatch) {
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // after enough generations, the benefit from this heuristic disappears
     // if we start defragmenting the cache, the benefit from this will be more important
-    n = std::min(size, std::max(n_pad, GGML_PAD(cell_max(), n_pad)));
 
-    LLAMA_LOG_DEBUG("[mixed-kv] successfully allocated slot: head=%u, used=%u, n=%u\n", head, used, n);
+    // NOTE: cell_max() return the last empty cell index.
+    n = std::min(size, std::max(n_pad, GGML_PAD(cell_max(), n_pad)));                       //> Virtual head of kv cache.
+    n_quantized = std::min(size, std::max(n_pad, GGML_PAD(cell_max_quantized(), n_pad)));   //> Virtual head of quantized kv cache.
+    
+    LLAMA_LOG_INFO("\n[mixed-kv] successfully allocated slot: head=%u, used=%u, n=%u, n_quantized=%u, cell_max=%u, cell_max_quantized=%u\n", head, used, n, n_quantized, cell_max(), cell_max_quantized());
 
     return true;
 }
@@ -1101,46 +984,6 @@ uint32_t llama_kv_cache_mixed::get_size() const {
     return size;
 }
 
-/*
- * KQ Mask (Attention Mask) 构建函数
- *
- * 目的:
- *   为每个查询（query）token 构建一个 mask，决定它可以与哪些键（key）token 进行交互。
- *   这个 mask 是 attention 机制的核心，用于防止 token "看到" 不该看的信息。
- *
- * Mask 构建规则:
- * 1. 序列隔离 (Sequence Isolation):
- *    一个 token 只能 attend 到属于同一个序列的 key-value pairs。
- *    例如，序列A的token不能 attend 到序列B的token。
- *
- * 2. 因果关系 (Causality):
- *    在自回归生成中，一个 token 只能 attend 到它自己以及它之前的 tokens。
- *    这可以防止模型 "看到未来"，保证生成过程的正确性。
- *
- * 3. ALiBi (Attention with Linear Biases):
- *    如果使用 ALiBi，mask 的值会根据 query 和 key 的相对距离进行惩罚，
- *    距离越远，惩罚越大。
- *
- * 4. 填充处理 (Padding):
- *    对于批处理中因填充而产生的无效 token，其 attention score 会被完全屏蔽。
- *
- * Mask Tensor 示意图 (causal_attn = true):
- *
- *          k_pos=0  k_pos=1  k_pos=2  k_pos=3 (KV Cache)
- *          (seq=1)  (seq=1)  (seq=2)  (seq=1)
- *         +--------+--------+--------+--------+
- * q_pos=1 │   0    │   0    │  -inf  │  -inf  │  <- Query token (pos=1, seq=1)
- * (seq=1) │        │        │ (异构)  │ (未来) │
- *         +--------+--------+--------+--------+
- * q_pos=2 │  -inf  │  -inf  │   0    │  -inf  │  <- Query token (pos=2, seq=2)
- * (seq=2) │ (异构)  │ (异构) │         │ (未来) │
- *         +--------+--------+--------+--------+
- *
- * -  0:      允许 attention
- * - -inf:   禁止 attention (在 softmax 后会变为0)
- * - (异构):  key-value pair 属于不同序列，被 mask
- * - (未来):  key-value pair 在 query token 之后，在因果模型中被 mask
- */
 void llama_kv_cache_mixed::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     const int64_t n_tokens     = ubatch->n_tokens;
     const int64_t n_seq_tokens = ubatch->n_seq_tokens;
@@ -1168,42 +1011,40 @@ void llama_kv_cache_mixed::set_input_kq_mask(ggml_tensor * dst, const llama_ubat
             const llama_seq_id seq_id = ubatch->seq_id[s][0];
 
             for (int j = 0; j < n_seq_tokens; ++j) {
-                // 当前查询 token 在序列中的位置
+                // Current query token's position
                 const llama_pos p1 = ubatch->pos[s*n_seq_tokens + j];
 
-                // 遍历所有 KV cache 中的 token
+                // Loop through all tokens in KV cache
                 for (int i = 0; i < n_kv; ++i) {
-                    // 当前键 token 在序列中的位置
-                    const llama_pos p0 = cells[i].pos;
+                    // Current key token's position
+                    const llama_pos p0 = cells[i].pos;  //> kv_cache idx.
 
                     bool masked = false;
 
-                    // 规则 1: 如果 key token 不属于当前 query token 的序列，则屏蔽
-                    masked = masked || (!cells[i].has_seq_id(seq_id));
+                    // Rule 1: If key token not in current query token's sequence, mask.
+                    masked = masked || (!cells[i].has_seq_id(seq_id));  //> This cell is not in the current query token's sequence.
 
-                    // 规则 2: 如果是因果 attention，且 key token 在 query token 之后（未来），则屏蔽
-                    masked = masked || (causal_attn && p0 > p1);
-
-                    // 注意：SWA (Sliding Window Attention) 的 masking 在此混合缓存中尚未实现
-                    // masked = masked || (is_masked_swa(p0, p1));
+                    // Rule 2: If causal attention and key token after query token (future), mask.
+                    masked = masked || (causal_attn && p0 > p1);            //> p0 in SEQ_LEN > p1 in KV_LEN.
 
                     float f = 0.0f;
 
                     if (masked) {
-                        // 对于被屏蔽的 token，将其 attention score 设置为负无穷
+                        // For masked tokens, set attention score to negative infinity
                         f = -INFINITY;
                     } else if (hparams.use_alibi) {
-                        // 规则 3: 如果使用 ALiBi，根据 query 和 key 的距离计算惩罚项
+                        // Rule 3: If using ALiBi, compute penalty based on query-key distance
                         f = -std::abs(p0 - p1);
                     }
 
-                    // 将计算出的 mask 值写入目标张量
+                    // Write computed mask value to destination tensor
                     data[h*(n_kv*n_tokens) + s*(n_kv*n_seq_tokens) + j*n_kv + i] = f;
                 }
             }
         }
 
-        // 规则 4: 屏蔽批处理中的填充 token
+        // TODO : Adapt to mixed kv cache.
+        // Rule 4: Mask padding tokens in batch
         if (data) {
             for (int i = n_tokens; i < GGML_PAD(n_tokens, GGML_KQ_MASK_PAD); ++i) {
                 for (int j = 0; j < n_kv; ++j) {
@@ -1254,29 +1095,67 @@ uint32_t llama_kv_cache_mixed::cell_max() const {
     return 0;
 }
 
-size_t llama_kv_cache_mixed::total_size() const {
-    size_t size_k = size_k_bytes();
-    size_t size_v = size_v_bytes();
-    return size_k + size_v;
+uint32_t llama_kv_cache_mixed::cell_max_quantized() const {
+    for (uint32_t i = size; i > 0; --i) {
+        const kv_cell & cell = cells[i - 1];
+        if (cell.pos >= 0 && cell.is_quantized()) {
+            return i;
+        }
+    }
+
+    return 0;
 }
 
-size_t llama_kv_cache_mixed::size_k_bytes() const {
+//> ===================================================================================================
+//> Memory Size Calculation
+//> ===================================================================================================
+
+size_t llama_kv_cache_mixed::total_size() const {
+    size_t size_k = size_k_fp16_bytes();
+    size_t size_v = size_v_fp16_bytes();
+    size_t size_k_quant = size_k_quant_bytes();
+    size_t size_v_quant = size_v_quant_bytes();
+
+    return size_k + size_v + size_k_quant + size_v_quant;
+}
+
+size_t llama_kv_cache_mixed::size_k_fp16_bytes() const {
     size_t total = 0;
     for (const auto & layer : layers) {
         total += ggml_nbytes(layer.k_fp16);
+        // total += ggml_nbytes(layer.k_quant);
+    }
+    return total;
+}
+
+size_t llama_kv_cache_mixed::size_v_fp16_bytes() const {
+    size_t total = 0;
+    for (const auto & layer : layers) {
+        total += ggml_nbytes(layer.v_fp16);
+        // total += ggml_nbytes(layer.v_quant);
+    }
+    return total;
+}
+
+size_t llama_kv_cache_mixed::size_k_quant_bytes() const {
+    size_t total = 0;
+    for (const auto & layer : layers) {
         total += ggml_nbytes(layer.k_quant);
     }
     return total;
 }
 
-size_t llama_kv_cache_mixed::size_v_bytes() const {
+size_t llama_kv_cache_mixed::size_v_quant_bytes() const {
     size_t total = 0;
     for (const auto & layer : layers) {
-        total += ggml_nbytes(layer.v_fp16);
         total += ggml_nbytes(layer.v_quant);
     }
     return total;
 }
+
+//> ===================================================================================================
+//> Graph Building Functions
+//> ===================================================================================================
 
 // Graph building functions - placeholder implementations
 llm_graph_result_ptr llama_kv_cache_mixed::build_graph_shift(
@@ -1336,33 +1215,8 @@ bool llama_kv_cache_mixed::state_read_data(llama_io_read_i & io, uint32_t cell_c
 }
 
 //> ===================================================================================================
-//> Following are the original get_k and get_v functions from llama.cpp
+//> Following are the get_k/get_v/get_k_quant/get_v_quant/get_k_quant_ref/get_v_quant_ref functions for mixed kv cache.
 //> ===================================================================================================
-
-bool llama_kv_cache_mixed::do_quant(int32_t il) const {
-    auto it = map_layer_ids.find(il);
-    if (it == map_layer_ids.end()) {
-        return false;
-    }
-    const auto & layer = layers[it->second];
-
-    // Check if we have enough FP16 tokens to trigger quantization
-    // NOTE: used != 0 can be when the graph is prebuilt.
-    bool should_quantize = config.enable_quantization &&
-                        ( used != 0 && head - layer.mixed_k_head >= config.quantization_threshold + config.fp16_window_size );
-
-    LLAMA_LOG_DEBUG("[llama-kv] do_quant: head (%d) - mixed_k_head (%d) > threshold (%d) + fp16_window_size (%d): accumlate %d tokens. \n",
-                   head, layer.mixed_k_head, config.quantization_threshold, config.fp16_window_size,
-                   head - layer.mixed_k_head - config.fp16_window_size);
-
-    return should_quantize;
-}
-
-/*
- * Public API methods for getting K and V tensors
- *
- * Simple implementation like unified cache - just return FP16 views
- */
 ggml_tensor * llama_kv_cache_mixed::get_k(ggml_context * ctx, int32_t il) const {
     auto it = map_layer_ids.find(il);
     if (it == map_layer_ids.end()) {
@@ -1372,12 +1226,9 @@ ggml_tensor * llama_kv_cache_mixed::get_k(ggml_context * ctx, int32_t il) const 
     const auto & layer = layers[it->second];
     auto * k = layer.k_fp16;
 
-    //> Calculate total FP16 tokens available. (> 0 check is for pre-built graph.)
-    const int64_t fp16_tokens = (int64_t)used - layer.mixed_k_head > 0 ? (int64_t)used - layer.mixed_k_head : 0;
-
     // Create view exactly like unified cache, but limit to actual available tokens
     return ggml_view_3d(ctx, k,
-            hparams.n_embd_head_k, hparams.n_head_kv(il), fp16_tokens,
+            hparams.n_embd_head_k, hparams.n_head_kv(il), n,
             ggml_row_size(k->type, hparams.n_embd_head_k),
             ggml_row_size(k->type, hparams.n_embd_k_gqa(il)),
             0
@@ -1393,13 +1244,10 @@ ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const 
     const auto & layer = layers[it->second];
     auto * v = layer.v_fp16;
 
-    //> Calculate total FP16 tokens available. (> 0 check is for pre-built graph.)
-    const int64_t fp16_tokens = (int64_t)used - layer.mixed_v_head > 0 ? (int64_t)used - layer.mixed_v_head : 0;
-
     // Create view exactly like unified cache, but limit to actual available tokens
     if (!v_trans) {
         return ggml_view_3d(ctx, v,
-                hparams.n_embd_head_v, hparams.n_head_kv(il), fp16_tokens,
+                hparams.n_embd_head_v, hparams.n_head_kv(il), n,
                 ggml_row_size(v->type, hparams.n_embd_head_v),
                 ggml_row_size(v->type, hparams.n_embd_v_gqa(il)),
                 0
@@ -1408,18 +1256,13 @@ ggml_tensor * llama_kv_cache_mixed::get_v(ggml_context * ctx, int32_t il) const 
 
     // For transposed V tensor
     return ggml_view_3d(ctx, v,
-            fp16_tokens, hparams.n_head_kv(il), hparams.n_embd_head_v,
+            n, hparams.n_head_kv(il), hparams.n_embd_head_v,
             ggml_row_size(v->type, v->ne[1]*hparams.n_embd_head_v),
             ggml_row_size(v->type, v->ne[1]),
             0
         );
 }
 
-/*
- * Methods for getting quantized K and V tensors
- *
- * Following same pattern as get_k/get_v but for quantized tensors
- */
 ggml_tensor * llama_kv_cache_mixed::get_k_quant(ggml_context * ctx, int32_t il) const {
     auto it = map_layer_ids.find(il);
 
@@ -1434,7 +1277,7 @@ ggml_tensor * llama_kv_cache_mixed::get_k_quant(ggml_context * ctx, int32_t il) 
     if (layer.quant_k_tokens == 0) {
         // NOTICE: This can only happen when the graph is pre-built.
         return ggml_view_3d(ctx, k_quant,
-                hparams.n_embd_head_k, hparams.n_head_kv(il), layer.mixed_k_head,
+                hparams.n_embd_head_k, hparams.n_head_kv(il), n_quantized,
                 ggml_row_size(k_quant->type, hparams.n_embd_head_k),
                 ggml_row_size(k_quant->type, hparams.n_embd_k_gqa(il)),
                 0
@@ -1443,7 +1286,7 @@ ggml_tensor * llama_kv_cache_mixed::get_k_quant(ggml_context * ctx, int32_t il) 
 
     // Create view similar to get_k but for quantized tensor
     return ggml_view_3d(ctx, k_quant,
-                hparams.n_embd_head_k, hparams.n_head_kv(il), layer.mixed_k_head,
+                hparams.n_embd_head_k, hparams.n_head_kv(il), n_quantized,
                 ggml_row_size(k_quant->type, hparams.n_embd_head_k),
                 ggml_row_size(k_quant->type, hparams.n_embd_k_gqa(il)),
                 0
@@ -1463,7 +1306,7 @@ ggml_tensor * llama_kv_cache_mixed::get_v_quant(ggml_context * ctx, int32_t il) 
     if (layer.quant_v_tokens == 0) {
         // NOTICE: This can only happen when the graph is pre-built
         return ggml_view_3d(ctx, v_quant,
-                hparams.n_embd_head_v, hparams.n_head_kv(il), layer.mixed_v_head,
+                hparams.n_embd_head_v, hparams.n_head_kv(il), n_quantized,
                 ggml_row_size(v_quant->type, hparams.n_embd_head_v),
                 ggml_row_size(v_quant->type, hparams.n_embd_v_gqa(il)),
                 0
@@ -1473,7 +1316,7 @@ ggml_tensor * llama_kv_cache_mixed::get_v_quant(ggml_context * ctx, int32_t il) 
     // Create view similar to get_v but for quantized tensor
     if (!v_trans) {
         return ggml_view_3d(ctx, v_quant,
-                hparams.n_embd_head_v, hparams.n_head_kv(il), layer.mixed_v_head,
+                hparams.n_embd_head_v, hparams.n_head_kv(il), n_quantized,
                 ggml_row_size(v_quant->type, hparams.n_embd_head_v),
                 ggml_row_size(v_quant->type, hparams.n_embd_v_gqa(il)),
                 0
@@ -1482,12 +1325,14 @@ ggml_tensor * llama_kv_cache_mixed::get_v_quant(ggml_context * ctx, int32_t il) 
 
     // For transposed V tensor
     return ggml_view_3d(ctx, v_quant,
-            layer.mixed_v_head, hparams.n_head_kv(il), hparams.n_embd_head_v,
+            n_quantized, hparams.n_head_kv(il), hparams.n_embd_head_v,
             ggml_row_size(v_quant->type, v_quant->ne[1]*hparams.n_embd_head_v),
             ggml_row_size(v_quant->type, v_quant->ne[1]),
             0
         );
 }
+
+//> ===================================================================================================
 
 ggml_tensor * llama_kv_cache_mixed::get_k_quant_ref(ggml_context * ctx, int32_t il) const {
     auto it = map_layer_ids.find(il);
@@ -1577,13 +1422,16 @@ ggml_tensor * llama_kv_cache_mixed::cpy_v(ggml_context * ctx, ggml_tensor * v_cu
         // note: the V cache is transposed when not using flash attention
         v_view = ggml_view_2d(ctx, v, n_tokens, hparams.n_embd_v_gqa(il),
                 (v->ne[1])*ggml_element_size(v),
-                (head)*ggml_element_size(v));
+                head * ggml_element_size(v));
         v_cur = ggml_transpose(ctx, v_cur);
     }
 
     return ggml_cpy(ctx, v_cur, v_view);
 }
 
+//> ===================================================================================================
+//> Following are the k_quant/v_quant functions for mixed kv cache.
+//> ===================================================================================================
 ggml_tensor * llama_kv_cache_mixed::k_quant(ggml_context * ctx, int32_t il) const {
     // CRITICAL FIX: Use proper layer mapping instead of direct indexing
     auto it = map_layer_ids.find(il);
@@ -1690,9 +1538,9 @@ ggml_tensor * llama_kv_cache_mixed::v_quant(ggml_context * ctx, int32_t il) cons
     return ggml_cpy(ctx, v_need_quantize, v_quantized);
 }
 
-//=================================================================================================
-// Custom Flash Attention Implementation for Mixed KV Cache with Flash-Decoding
-//=================================================================================================
+//> ===================================================================================================
+//> Following are the micro-kernel of flashdecoding kernel.
+//> ===================================================================================================
 
 inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, const ggml_fp16_t * GGML_RESTRICT x, const float v) {
 #if defined(GGML_SIMD)

@@ -7324,6 +7324,11 @@ void ggml_compute_forward_flash_attn_ext_mixed(
 
             for (int64_t q_head = q_head_start; q_head < q_head_end; ++ q_head) {
                 for (int64_t q_pos = 0; q_pos < SEQ_LEN; ++ q_pos) {
+                    float* mp = (float*) mask->data + q_pos * nek1;
+                    if (mp[kv_pos] == -INFINITY) {
+                        continue;
+                    }
+
                     const int64_t output_offset = q_pos * N_Q_HEADS * DV + q_head * DV;
                     const int64_t local_max_idx = q_pos * N_Q_HEADS + q_head;
                     float * output_ptr = chunk_output + output_offset;

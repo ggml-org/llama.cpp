@@ -72,16 +72,16 @@ llama_kv_cache_unified::llama_kv_cache_unified(
      * ┌─────────────────────────────────────────────────────────┐
      * │                 Unified KV Cache Layout                 │
      * │                                                         │
-     * │  cells[0]  cells[1]  cells[2]  ...  cells[kv_size-1]   │
-     * │  ┌─────┐   ┌─────┐   ┌─────┐         ┌─────┐           │
-     * │  │slot │   │slot │   │slot │   ...   │slot │           │
-     * │  │  0  │   │  1  │   │  2  │         │ N-1 │           │
-     * │  └─────┘   └─────┘   └─────┘         └─────┘           │
-     * │     ↓         ↓         ↓               ↓              │
-     * │   pos=-1    pos=-1    pos=-1          pos=-1           │
-     * │  (empty)    (empty)   (empty)        (empty)           │
-     * │  delta=0    delta=0   delta=0        delta=0           │
-     * │  seq_id={}  seq_id={} seq_id={}      seq_id={}         │
+     * │  cells[0]  cells[1]  cells[2]  ...  cells[kv_size-1]    │
+     * │  ┌─────┐   ┌─────┐   ┌─────┐         ┌─────┐            │
+     * │  │slot │   │slot │   │slot │   ...   │slot │            │
+     * │  │  0  │   │  1  │   │  2  │         │ N-1 │            │
+     * │  └─────┘   └─────┘   └─────┘         └─────┘            │
+     * │     ↓         ↓         ↓               ↓               │
+     * │   pos=-1    pos=-1    pos=-1          pos=-1            │
+     * │  (empty)    (empty)   (empty)        (empty)            │
+     * │  delta=0    delta=0   delta=0        delta=0            │
+     * │  seq_id={}  seq_id={} seq_id={}      seq_id={}          │
      * └─────────────────────────────────────────────────────────┘
      * 
      * 每个 cell 包含：
@@ -235,27 +235,24 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
      *       可能在后续的 K-shift 操作中使用
      */
     for (uint32_t i = 0; i < size; ++i) {
-        // 检查该 cell 的位置是否在移除范围内
         if (cells[i].pos >= p0 && cells[i].pos < p1) {
             if (seq_id < 0) {
-                // seq_id < 0 表示移除所有序列
                 cells[i].seq_id.clear();
             } else if (cells[i].has_seq_id(seq_id)) {
-                // 只移除指定的序列 ID
                 cells[i].seq_id.erase(seq_id);
             } else {
                 continue;
             }
 
             if (cells[i].is_empty()) {
-                // 如果 cell 变空，则标记为空闲
+                //> cell[i].is_empty() == cell[i].seq_ids.empty()
+
                 // keep count of the number of used cells
                 if (cells[i].pos >= 0) {
                     used--;
                 }
 
                 cells[i].pos = -1;
-                // 注意：delta 不被重置，保留位置偏移历史
 
                 if (new_head == size) {
                     new_head = i;
@@ -657,20 +654,17 @@ void llama_kv_cache_unified::restore() {
      */
     for (const auto & [id, cell] : recovery.cells) {
         // TODO: move to new `struct kv_cells`
-        
-        // 正确维护 used 计数器
+
         const bool is_empty0 = cells[id].is_empty();
         const bool is_empty1 = cell.is_empty();
 
         if (!is_empty0 && is_empty1) {
-            used--;  // 当前占用 -> 恢复为空闲
+            used--;
         } else if (is_empty0 && !is_empty1) {
-            used++;  // 当前空闲 -> 恢复为占用
+            used++;
         }
 
-        // 恢复完整的 cell 状态（包括 pos, seq_id, delta）
         cells[id] = cell;
-        // 注意：delta 也被恢复，保持位置偏移历史的一致性
     }
 
     recovery.clear();  // 清空恢复信息
@@ -737,10 +731,10 @@ bool llama_kv_cache_unified::update(llama_context & lctx) {
          * └─────┴─────┴─────┴─────┴─────┘
          * 
          * 重要说明：
-         * 1. K-shift 操作通过 RoPE 将 delta 偏移"烧入"到 K 张量中
-         * 2. 清零 delta 后，pos 仍保持当前值，但偏移历史被清除
-         * 3. 后续的 seq_add/seq_div 操作将从 delta=0 开始重新累积
-         * 4. 这确保了 RoPE 计算的正确性和一致性
+         *      1. K-shift 操作通过 RoPE 将 delta 偏移"烧入"到 K 张量中
+         *      2. 清零 delta 后，pos 仍保持当前值，但偏移历史被清除
+         *      3. 后续的 seq_add/seq_div 操作将从 delta=0 开始重新累积
+         *      4. 这确保了 RoPE 计算的正确性和一致性
          */
         {
             has_shift = false;
@@ -931,14 +925,6 @@ bool llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch) {
     // after enough generations, the benefit from this heuristic disappears
     // if we start defragmenting the cache, the benefit from this will be more important
     n = std::min(size, std::max(n_pad, GGML_PAD(cell_max(), n_pad)));
-
-#ifdef FIND_SLOT_DEBUG
-    // 🐛 调试信息：显示unified缓存的详细状态
-    // 🛡️ 这不会影响mixed缓存的运行，因为mixed缓存有自己的find_slot实现
-    // Debug info: show detailed status of unified cache
-    // This won't affect mixed cache operation as mixed cache has its own find_slot implementation
-    LLAMA_LOG_WARN("end:   n = %5d, used = %5d, head = %5d, n_swa = %5d, n_pad = %5d, cell_max = %5d, size = %5d\n", n, used, head, n_swa, n_pad, cell_max(), size);
-#endif
 
     return true;
 }

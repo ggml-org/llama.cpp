@@ -1286,6 +1286,7 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     const auto & kq_mask = inp->get_kq_mask();
+    cb(kq_mask, "KQ_mask", il);
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = kv_self->get_k(ctx0, il);
@@ -1646,14 +1647,19 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     const auto & kq_mask = inp->get_kq_mask();
+    cb(kq_mask, "KQ_mask", il);
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = kv_self->get_k(ctx0, il);
     ggml_tensor * v = kv_self->get_v(ctx0, il);
+    ggml_tensor * k_quant = kv_self->get_k_quant(ctx0, il);
+    ggml_tensor * v_quant = kv_self->get_v_quant(ctx0, il);
 
-    q = ggml_permute(ctx0, q, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
-    k = ggml_permute(ctx0, k, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
-    v = ggml_permute(ctx0, v, 0, 2, 1, 3); //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    q = ggml_permute(ctx0, q, 0, 2, 1, 3);              //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    k = ggml_permute(ctx0, k, 0, 2, 1, 3);              //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    v = ggml_permute(ctx0, v, 0, 2, 1, 3);              //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    k_quant = ggml_permute(ctx0, k_quant, 0, 2, 1, 3);  //> permute with [head_dim, n_tokens, n_heads, n_batch]
+    v_quant = ggml_permute(ctx0, v_quant, 0, 2, 1, 3);  //> permute with [head_dim, n_tokens, n_heads, n_batch]
 
     if (k->type == GGML_TYPE_F32) {
         k = ggml_cast(ctx0, k, GGML_TYPE_F16);
@@ -1662,8 +1668,12 @@ ggml_tensor * llm_graph_context::build_attn(
         v = ggml_cast(ctx0, v, GGML_TYPE_F16);
     }
 
-    ggml_tensor * cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
-                                hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
+    ggml_tensor * cur = ggml_flash_attn_mixed(
+        ctx0, q, k, v, 
+        k_quant, v_quant, kq_mask, 
+        kq_scale, hparams.f_max_alibi_bias,
+        hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f
+    );
 
     ggml_flash_attn_ext_set_prec(cur, GGML_PREC_MIXED);
 

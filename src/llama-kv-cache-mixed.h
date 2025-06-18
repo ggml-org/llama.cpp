@@ -177,8 +177,6 @@ public:
     uint32_t get_n() const;
     uint32_t get_size() const;
 
-    // NOTE: Do quantization judgement.
-    bool do_quant(int32_t il) const;
 
     // get views of the current state of the cache (always returns FP16 view)
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
@@ -310,6 +308,7 @@ private:
     struct kv_cell {
         llama_pos pos   = -1;
         llama_pos delta =  0;
+        bool quantized = false;
 
         std::set<llama_seq_id> seq_id;
 
@@ -324,18 +323,29 @@ private:
         bool is_same_seq(const kv_cell & other) const {
             return seq_id == other.seq_id;
         }
+
+        bool is_quantized() const {
+            return quantized;
+        }
+
+        void set_quantized(bool quantized) {
+            this->quantized = quantized;
+        }
     };
 
-    bool has_shift = false;
-    bool do_defrag = false;
-    bool v_trans   = true;  // the value tensor is transposed
+    bool has_shift  = false;
+    bool do_defrag  = false;
+    bool do_quant   = false;
+    bool v_trans    = true;  // the value tensor is transposed
 
-    uint32_t head = 0; // the location where the batch will be placed in the cache
-    uint32_t size = 0; // total number of cells
-    uint32_t used = 0; // used cells
+    uint32_t head = 0;          // the location where the batch will be placed in the cache
+    uint32_t head_quant = 0;    // the location where the quantized batch will be placed in the cache
+    uint32_t size = 0;          // total number of cells
+    uint32_t used = 0;          // used cells
 
     // computed before each graph build
     uint32_t n = 0;
+    uint32_t n_quantized = 0;
 
     const uint32_t n_seq_max = 1;
 
@@ -375,10 +385,14 @@ private:
 
     // Helper functions from unified cache
     bool defrag_prepare(int32_t n_max_nodes);
-    uint32_t cell_max() const;
+    uint32_t cell_max() const;              //> Find the next pos of empty cell.
+    uint32_t cell_max_quantized() const;    //> Find the next pos of quantized cell.
+
     size_t total_size() const;
-    size_t size_k_bytes() const;
-    size_t size_v_bytes() const;
+    size_t size_k_fp16_bytes() const;
+    size_t size_v_fp16_bytes() const;
+    size_t size_k_quant_bytes() const;
+    size_t size_v_quant_bytes() const;
 
     // Build graph functions
     llm_graph_result_ptr build_graph_shift(
