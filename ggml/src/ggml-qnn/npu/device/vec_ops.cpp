@@ -174,7 +174,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     bool src0_low_vec_consumed = false;
     if (src1_vec_ptr_end - src1_vec_ptr > 0) {
         const bool should_fetch_src0 =
-            reinterpret_cast<const _TElem0 *>(hexagon::aligned_address(src0_vec_ptr)) < src0_ptr_end &&
+            reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end &&
             hexagon::bytes_to_vector_boundary(src0) < sizeof(_TElem0) * kElementsPerVector1;
         HVX_Vector curr0 = should_fetch_src0 ? *src0_vec_ptr : prev0;
         HVX_Vector curr1 = *src1_vec_ptr++;
@@ -197,7 +197,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
         //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
         const bool should_fetch_src0 =
-            reinterpret_cast<const _TElem0 *>(hexagon::aligned_address(src0_vec_ptr)) < src0_ptr_end;
+            reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
         bool       should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
         HVX_Vector curr0             = should_fetch_src0 ? *src0_vec_ptr : prev0;
         HVX_Vector curr1             = should_fetch_src1 ? *src1_vec_ptr : prev1;
@@ -215,9 +215,8 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     const size_t leftover_bytes1 = leftover1 * sizeof(_TElem1);
     if (leftover1 > 0) {
         // handle the leftover elements
-        HVX_Vector curr0 = reinterpret_cast<const _TElem0 *>(hexagon::aligned_address(src0_vec_ptr)) < src0_ptr_end ?
-                               *src0_vec_ptr :
-                               prev0;
+        HVX_Vector curr0 =
+            reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end ? *src0_vec_ptr : prev0;
         HVX_Vector curr1 = (leftover_bytes1 + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
                                *src1_vec_ptr :
                                prev1;
