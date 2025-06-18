@@ -100,7 +100,9 @@ static void fill_causal_mask(ggml_tensor* mask, int64_t pos, int64_t n_seq, int6
         }
     }
 
-    for (int64_t i = n_seq; i < mask->ne[0]; i++) {
+    // Remaining rows (if any) after the valid sequence should be fully masked
+    // mask->ne[1] stores the padded sequence length, so iterate up to that
+    for (int64_t i = n_seq; i < mask->ne[1]; i++) {
         for (int64_t j = 0; j < n_kv; j++) {
             mask_data[i * n_kv + j] = -INFINITY;
         }
