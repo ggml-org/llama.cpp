@@ -6,8 +6,8 @@
 
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
-#include "llama-kv-cache-recurrent.h"
-#include "llama-kv-cache-hybrid-recurrent.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-recurrent.h"
 
 #include <cassert>
 #include <cmath>
@@ -1050,7 +1050,7 @@ ggml_tensor * llm_graph_context::build_pos_bias(ggml_tensor * pos_bucket, ggml_t
 }
 
 llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate);
+    const auto * kv_state = static_cast<const llama_memory_hybrid_state *>(mstate);
 
     auto inp = std::make_unique<llm_graph_input_mem_hybrid>(hparams, cparams, kv_state);
 
@@ -1447,7 +1447,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const auto * kv_state = static_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate)->get_state_attn();
+    const auto * kv_state = static_cast<const llama_memory_hybrid_state *>(mstate)->get_state_attn();
 
     // store to KV cache
     {
@@ -1553,7 +1553,7 @@ ggml_tensor * llm_graph_context::build_rs(
 }
 
 llm_graph_input_rs * llm_graph_context::build_rs_inp() const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = static_cast<const llama_memory_recurrent_state *>(mstate);
 
     auto inp = std::make_unique<llm_graph_input_rs>(kv_state);
 
@@ -1572,7 +1572,7 @@ ggml_tensor * llm_graph_context::build_rs(
             int32_t   state_size,
             int32_t   n_seqs,
                bool   avoid_copies) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = static_cast<const llama_memory_recurrent_state *>(mstate);
 
     return build_rs(gf, s, inp->s_copy, state_size, n_seqs, kv_state->get_n_kv(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(), avoid_copies);
 }
@@ -1584,7 +1584,7 @@ ggml_tensor * llm_graph_context::build_rs(
             int32_t   state_size,
             int32_t   n_seqs,
                bool   avoid_copies) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_hybrid_recurrent_state *>(mstate)->get_state_recurrent();
+    const auto * kv_state = static_cast<const llama_memory_hybrid_state *>(mstate)->get_state_recurrent();
 
     return build_rs(gf, s, inp->s_copy, state_size, n_seqs, kv_state->get_n_kv(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(), avoid_copies);
 }
@@ -1594,7 +1594,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_load(
            ggml_cgraph * gf,
     const llama_ubatch & ubatch,
                  int   il) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = static_cast<const llama_memory_recurrent_state *>(mstate);
 
     const auto token_shift_count = hparams.token_shift_count;
 
@@ -1615,7 +1615,7 @@ ggml_tensor * llm_graph_context::build_rwkv_token_shift_store(
          ggml_tensor * token_shift,
   const llama_ubatch & ubatch,
                  int   il) const {
-    const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+    const auto * kv_state = static_cast<const llama_memory_recurrent_state *>(mstate);
 
     const auto token_shift_count = hparams.token_shift_count;
     const auto n_embd = hparams.n_embd;

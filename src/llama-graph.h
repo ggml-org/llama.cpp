@@ -21,8 +21,8 @@ struct llama_memory_state_i;
 
 class llama_kv_cache_unified_state;
 class llama_kv_cache_unified_iswa_state;
-class llama_kv_cache_recurrent_state;
-class llama_kv_cache_hybrid_recurrent_state;
+class llama_memory_recurrent_state;
+class llama_memory_hybrid_state;
 
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
@@ -191,14 +191,14 @@ public:
 
 class llm_graph_input_rs : public llm_graph_input_i {
 public:
-    llm_graph_input_rs(const llama_kv_cache_recurrent_state * kv_state) : kv_state(kv_state) {}
+    llm_graph_input_rs(const llama_memory_recurrent_state * kv_state) : kv_state(kv_state) {}
     virtual ~llm_graph_input_rs() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * s_copy; // I32 [kv_size]
 
-    const llama_kv_cache_recurrent_state * kv_state;
+    const llama_memory_recurrent_state * kv_state;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -306,7 +306,7 @@ public:
     llm_graph_input_mem_hybrid(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_kv_cache_hybrid_recurrent_state * kv_state) :
+            const llama_memory_hybrid_state * kv_state) :
         hparams(hparams),
         cparams(cparams),
         kv_state(kv_state) {
@@ -325,7 +325,7 @@ public:
     const llama_hparams & hparams;
     const llama_cparams & cparams;
 
-    const llama_kv_cache_hybrid_recurrent_state * kv_state;
+    const llama_memory_hybrid_state * kv_state;
 };
 
 //
@@ -635,11 +635,11 @@ struct llm_graph_context {
     //
 
     // TODO: avoid notion of "kv"
-    // TODO: move this implementation to llama_kv_cache_recurrent.
+    // TODO: move this implementation to llama_memory_recurrent.
     //       this is analogous to llama_kv_cache_unified::cpy_k / cpy_v
     //       when moving, avoid passing `ggml_cgraph` - only pass `ggml_context`. would likely need to split the
     //         implementation in 2 separate methods. the goal is to avoid calling `ggml_build_forward_expand` in
-    //         `llama_kv_cache_recurrent`
+    //         `llama_memory_recurrent`
     ggml_tensor * build_rs(
             ggml_cgraph * gf,
             ggml_tensor * s,

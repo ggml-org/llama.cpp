@@ -8,8 +8,8 @@
 
 #include "llama-kv-cache-unified.h"
 #include "llama-kv-cache-unified-iswa.h"
-#include "llama-kv-cache-recurrent.h"
-#include "llama-kv-cache-hybrid-recurrent.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-recurrent.h"
 
 #include "ggml-cpp.h"
 
@@ -9168,7 +9168,7 @@ struct llm_build_mamba : public llm_graph_context {
                ggml_tensor * cur,
         const llama_ubatch & ubatch,
                        int   il) const {
-        const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+        const auto * kv_state = static_cast<const llama_memory_recurrent_state *>(mstate);
 
         const auto kv_head = kv_state->get_head();
 
@@ -11915,7 +11915,7 @@ struct llm_build_rwkv6_base : public llm_graph_context {
             ggml_tensor * x_prev,
             const llama_ubatch & ubatch,
             int   il) const {
-        const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+        const auto * kv_state = static_cast<const llama_memory_recurrent_state *>(mstate);
 
         const auto n_tokens = ubatch.n_tokens;
         const auto n_seqs = ubatch.n_seqs;
@@ -12304,7 +12304,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
             ggml_tensor *& first_layer_value,
             const llama_ubatch & ubatch,
             int   il) const {
-        const auto * kv_state = static_cast<const llama_kv_cache_recurrent_state *>(mstate);
+        const auto * kv_state = static_cast<const llama_memory_recurrent_state *>(mstate);
 
         const auto n_tokens = ubatch.n_tokens;
         const auto n_seqs = ubatch.n_seqs;
@@ -13751,7 +13751,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
         default:
             {
                 if (llm_arch_is_recurrent(arch)) {
-                    res = new llama_kv_cache_recurrent(
+                    res = new llama_memory_recurrent(
                             *this,
                             nullptr,
                             GGML_TYPE_F32,
@@ -13759,12 +13759,12 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             cparams.offload_kqv,
                             std::max((uint32_t) 1, cparams.n_seq_max),
                             cparams.n_seq_max);
-                } else if (llm_arch_is_hybrid_recurrent(arch)) {
+                } else if (llm_arch_is_hybrid(arch)) {
                     const auto padding = llama_kv_cache_unified::get_padding(cparams);
 
                     cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
 
-                    res = new llama_kv_cache_hybrid_recurrent(
+                    res = new llama_memory_hybrid(
                         /* model             */ *this,
                         /* attn_type_k       */ params.type_k,
                         /* attn_type_v       */ params.type_v,

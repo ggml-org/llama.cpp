@@ -8,20 +8,19 @@
 #include <vector>
 
 //
-// llama_kv_cache_recurrent
+// llama_memory_recurrent
 //
 
-// TODO: extract the cache state used for graph computation into llama_kv_cache_recurrent_state_i
+// TODO: extract the cache state used for graph computation into llama_memory_recurrent_state_i
 //       see the implementation of llama_kv_cache_unified_state_i for an example how to do it
 // TODO: avoid the notion of "KV cache" / "KV cells", etc.
-// TODO: rename to llama_recurrent_state / llama_recurrent_cache
-class llama_kv_cache_recurrent : public llama_memory_i {
+class llama_memory_recurrent : public llama_memory_i {
 public:
 
     // this callback is used to filter out layers that should not be included in the cache
     using layer_filter_cb = std::function<bool(int32_t il)>;
 
-    llama_kv_cache_recurrent(
+    llama_memory_recurrent(
             const llama_model &  model,
               layer_filter_cb && filter,
                     ggml_type    type_k,
@@ -30,7 +29,7 @@ public:
                      uint32_t    kv_size,
                      uint32_t    n_seq_max);
 
-    ~llama_kv_cache_recurrent() = default;
+    ~llama_memory_recurrent() = default;
 
     //
     // llama_memory_i
@@ -126,22 +125,22 @@ private:
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
 };
 
-class llama_kv_cache_recurrent_state : public llama_memory_state_i {
+class llama_memory_recurrent_state : public llama_memory_state_i {
 public:
     // used for errors
-    llama_kv_cache_recurrent_state(llama_memory_status status);
+    llama_memory_recurrent_state(llama_memory_status status);
 
     // used to create a full-cache state
-    llama_kv_cache_recurrent_state(
-            llama_kv_cache_recurrent * kv);
+    llama_memory_recurrent_state(
+            llama_memory_recurrent * kv);
 
     // used to create a state from a batch
-    llama_kv_cache_recurrent_state(
-            llama_kv_cache_recurrent * kv,
+    llama_memory_recurrent_state(
+            llama_memory_recurrent * kv,
             llama_sbatch sbatch,
             std::vector<llama_ubatch> ubatches);
 
-    virtual ~llama_kv_cache_recurrent_state();
+    virtual ~llama_memory_recurrent_state();
 
     //
     // llama_memory_state_i
@@ -156,7 +155,7 @@ public:
     const llama_ubatch & get_ubatch() const override;
 
     //
-    // llama_kv_cache_recurrent_state specific API
+    // llama_memory_recurrent_state specific API
     //
 
     uint32_t get_n_kv() const;
@@ -172,7 +171,7 @@ public:
 private:
     const llama_memory_status status;
 
-    llama_kv_cache_recurrent * kv;
+    llama_memory_recurrent * kv;
 
     llama_sbatch sbatch;
 

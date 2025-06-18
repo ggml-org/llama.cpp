@@ -1,4 +1,4 @@
-#include "llama-kv-cache-recurrent.h"
+#include "llama-memory-recurrent.h"
 
 #include "llama-impl.h"
 #include "llama-io.h"
@@ -12,10 +12,10 @@
 #include <stdexcept>
 
 //
-// llama_kv_cache_recurrent
+// llama_memory_recurrent
 //
 
-llama_kv_cache_recurrent::llama_kv_cache_recurrent(
+llama_memory_recurrent::llama_memory_recurrent(
         const llama_model &  model,
           layer_filter_cb && filter,
                 ggml_type    type_k,
@@ -120,7 +120,7 @@ llama_kv_cache_recurrent::llama_kv_cache_recurrent(
     }
 }
 
-void llama_kv_cache_recurrent::clear(bool data) {
+void llama_memory_recurrent::clear(bool data) {
     for (int32_t i = 0; i < (int32_t) size; ++i) {
         cells[i].pos = -1;
         cells[i].seq_id.clear();
@@ -138,7 +138,7 @@ void llama_kv_cache_recurrent::clear(bool data) {
     }
 }
 
-bool llama_kv_cache_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     uint32_t new_head = size;
 
     if (p0 < 0) {
@@ -205,7 +205,7 @@ bool llama_kv_cache_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_p
     return true;
 }
 
-void llama_kv_cache_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     if (seq_id_src == seq_id_dst) {
         return;
     }
@@ -242,7 +242,7 @@ void llama_kv_cache_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_
     }
 }
 
-void llama_kv_cache_recurrent::seq_keep(llama_seq_id seq_id) {
+void llama_memory_recurrent::seq_keep(llama_seq_id seq_id) {
     uint32_t new_head = size;
 
     for (uint32_t i = 0; i < size; ++i) {
@@ -274,7 +274,7 @@ void llama_kv_cache_recurrent::seq_keep(llama_seq_id seq_id) {
     }
 }
 
-void llama_kv_cache_recurrent::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
+void llama_memory_recurrent::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
     if (shift == 0) {
         return;
     }
@@ -304,7 +304,7 @@ void llama_kv_cache_recurrent::seq_add(llama_seq_id seq_id, llama_pos p0, llama_
     }
 }
 
-void llama_kv_cache_recurrent::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
+void llama_memory_recurrent::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
     if (d == 1) {
         return;
     }
@@ -334,7 +334,7 @@ void llama_kv_cache_recurrent::seq_div(llama_seq_id seq_id, llama_pos p0, llama_
     }
 }
 
-llama_pos llama_kv_cache_recurrent::seq_pos_min(llama_seq_id seq_id) const {
+llama_pos llama_memory_recurrent::seq_pos_min(llama_seq_id seq_id) const {
     llama_pos result = std::numeric_limits<llama_pos>::max();
 
     for (uint32_t i = 0; i < size; ++i) {
@@ -350,7 +350,7 @@ llama_pos llama_kv_cache_recurrent::seq_pos_min(llama_seq_id seq_id) const {
     return result;
 }
 
-llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
+llama_pos llama_memory_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     llama_pos result = -1;
 
     for (uint32_t i = 0; i < size; ++i) {
@@ -362,7 +362,7 @@ llama_pos llama_kv_cache_recurrent::seq_pos_max(llama_seq_id seq_id) const {
     return result;
 }
 
-llama_memory_state_ptr llama_kv_cache_recurrent::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_all) {
+llama_memory_state_ptr llama_memory_recurrent::init_batch(const llama_batch & batch, uint32_t n_ubatch, bool embd_all) {
     auto sbatch = llama_sbatch(batch, hparams.n_embd, false);
 
     std::vector<llama_ubatch> ubatches;
@@ -381,24 +381,24 @@ llama_memory_state_ptr llama_kv_cache_recurrent::init_batch(const llama_batch & 
     }
 
     if (!prepare(ubatches)) {
-        return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        return std::make_unique<llama_memory_recurrent_state>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
-    return std::make_unique<llama_kv_cache_recurrent_state>(this, std::move(sbatch), std::move(ubatches));
+    return std::make_unique<llama_memory_recurrent_state>(this, std::move(sbatch), std::move(ubatches));
 }
 
-llama_memory_state_ptr llama_kv_cache_recurrent::init_full() {
-    return std::make_unique<llama_kv_cache_recurrent_state>(this);
+llama_memory_state_ptr llama_memory_recurrent::init_full() {
+    return std::make_unique<llama_memory_recurrent_state>(this);
 }
 
-llama_memory_state_ptr llama_kv_cache_recurrent::init_update(llama_context * lctx, bool optimize) {
+llama_memory_state_ptr llama_memory_recurrent::init_update(llama_context * lctx, bool optimize) {
     GGML_UNUSED(lctx);
     GGML_UNUSED(optimize);
 
-    return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_NO_UPDATE);
+    return std::make_unique<llama_memory_recurrent_state>(LLAMA_MEMORY_STATUS_NO_UPDATE);
 }
 
-bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {
+bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches) {
     // simply remember the full state because it is very small for this type of cache
     // TODO: optimize
     auto org_cells = cells;
@@ -422,7 +422,7 @@ bool llama_kv_cache_recurrent::prepare(const std::vector<llama_ubatch> & ubatche
     return success;
 }
 
-bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {
+bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     const uint32_t n_seqs = ubatch.n_seqs;
 
     const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
@@ -629,12 +629,12 @@ bool llama_kv_cache_recurrent::find_slot(const llama_ubatch & ubatch) {
     return n >= n_seqs;
 }
 
-bool llama_kv_cache_recurrent::get_can_shift() const {
+bool llama_memory_recurrent::get_can_shift() const {
     // shifting the pos is trivial for recurrent models
     return true;
 }
 
-size_t llama_kv_cache_recurrent::total_size() const {
+size_t llama_memory_recurrent::total_size() const {
     size_t size = 0;
     for (const auto & buf : bufs) {
         size += ggml_backend_buffer_get_size(buf.get());
@@ -643,7 +643,7 @@ size_t llama_kv_cache_recurrent::total_size() const {
     return size;
 }
 
-size_t llama_kv_cache_recurrent::size_k_bytes() const {
+size_t llama_memory_recurrent::size_k_bytes() const {
     size_t size_k_bytes = 0;
 
     for (const auto & k : k_l) {
@@ -655,7 +655,7 @@ size_t llama_kv_cache_recurrent::size_k_bytes() const {
     return size_k_bytes;
 }
 
-size_t llama_kv_cache_recurrent::size_v_bytes() const {
+size_t llama_memory_recurrent::size_v_bytes() const {
     size_t size_v_bytes = 0;
 
     for (const auto & v : v_l) {
@@ -667,7 +667,7 @@ size_t llama_kv_cache_recurrent::size_v_bytes() const {
     return size_v_bytes;
 }
 
-void llama_kv_cache_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
     uint32_t cell_count = 0;
 
@@ -705,7 +705,7 @@ void llama_kv_cache_recurrent::state_write(llama_io_write_i & io, llama_seq_id s
     state_write_data(io, cell_ranges);
 }
 
-void llama_kv_cache_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
     uint32_t cell_count;
     io.read_to(&cell_count, sizeof(cell_count));
 
@@ -724,7 +724,7 @@ void llama_kv_cache_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq
     }
 }
 
-void llama_kv_cache_recurrent::state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id) const {
+void llama_memory_recurrent::state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id) const {
     for (const auto & range : cell_ranges) {
         for (uint32_t i = range.first; i < range.second; ++i) {
             const auto & cell = cells[i];
@@ -743,7 +743,7 @@ void llama_kv_cache_recurrent::state_write_meta(llama_io_write_i & io, const std
     }
 }
 
-void llama_kv_cache_recurrent::state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const {
+void llama_memory_recurrent::state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const {
     const uint32_t v_trans = 0;
     const uint32_t n_layer = hparams.n_layer;
 
@@ -821,7 +821,7 @@ void llama_kv_cache_recurrent::state_write_data(llama_io_write_i & io, const std
     }
 }
 
-bool llama_kv_cache_recurrent::state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id) {
+bool llama_memory_recurrent::state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id) {
     if (dest_seq_id != -1) {
         // single sequence
 
@@ -888,7 +888,7 @@ bool llama_kv_cache_recurrent::state_read_meta(llama_io_read_i & io, uint32_t ce
                 llama_seq_id seq_id;
                 io.read_to(&seq_id, sizeof(seq_id));
 
-                // TODO: llama_kv_cache_recurrent should have a notion of max sequences
+                // TODO: llama_memory_recurrent should have a notion of max sequences
                 //if (seq_id < 0 || (uint32_t) seq_id >= llama_n_seq_max(ctx)) {
                 if (seq_id < 0) {
                     //LLAMA_LOG_ERROR("%s: invalid seq_id, %d is out of range [0, %u)\n", __func__, seq_id, llama_n_seq_max(ctx));
@@ -920,7 +920,7 @@ bool llama_kv_cache_recurrent::state_read_meta(llama_io_read_i & io, uint32_t ce
     return true;
 }
 
-bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell_count) {
+bool llama_memory_recurrent::state_read_data(llama_io_read_i & io, uint32_t cell_count) {
     uint32_t v_trans;
     uint32_t n_layer;
     io.read_to(&v_trans, sizeof(v_trans));
@@ -1037,23 +1037,23 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
 }
 
 //
-// llama_kv_cache_recurrent_state
+// llama_memory_recurrent_state
 //
 
-llama_kv_cache_recurrent_state::llama_kv_cache_recurrent_state(llama_memory_status status) : status(status) {}
+llama_memory_recurrent_state::llama_memory_recurrent_state(llama_memory_status status) : status(status) {}
 
-llama_kv_cache_recurrent_state::llama_kv_cache_recurrent_state(
-        llama_kv_cache_recurrent * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), is_full(true) {
+llama_memory_recurrent_state::llama_memory_recurrent_state(
+        llama_memory_recurrent * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), is_full(true) {
 }
 
-llama_kv_cache_recurrent_state::llama_kv_cache_recurrent_state(
-        llama_kv_cache_recurrent * kv,
+llama_memory_recurrent_state::llama_memory_recurrent_state(
+        llama_memory_recurrent * kv,
         llama_sbatch sbatch,
         std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sbatch(std::move(sbatch)), ubatches(std::move(ubatches)) {}
 
-llama_kv_cache_recurrent_state::~llama_kv_cache_recurrent_state() = default;
+llama_memory_recurrent_state::~llama_memory_recurrent_state() = default;
 
-bool llama_kv_cache_recurrent_state::next() {
+bool llama_memory_recurrent_state::next() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     if (++i_next >= ubatches.size()) {
@@ -1063,7 +1063,7 @@ bool llama_kv_cache_recurrent_state::next() {
     return true;
 }
 
-bool llama_kv_cache_recurrent_state::apply() {
+bool llama_memory_recurrent_state::apply() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     kv->find_slot(ubatches[i_next]);
@@ -1071,46 +1071,46 @@ bool llama_kv_cache_recurrent_state::apply() {
     return true;
 }
 
-std::vector<int64_t> & llama_kv_cache_recurrent_state::out_ids() {
+std::vector<int64_t> & llama_memory_recurrent_state::out_ids() {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     return sbatch.out_ids;
 }
 
-llama_memory_status llama_kv_cache_recurrent_state::get_status() const {
+llama_memory_status llama_memory_recurrent_state::get_status() const {
     return status;
 }
 
-const llama_ubatch & llama_kv_cache_recurrent_state::get_ubatch() const {
+const llama_ubatch & llama_memory_recurrent_state::get_ubatch() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     return ubatches[i_next];
 }
 
-uint32_t llama_kv_cache_recurrent_state::get_n_kv() const {
+uint32_t llama_memory_recurrent_state::get_n_kv() const {
     return is_full ? kv->size : kv->n;
 }
 
-uint32_t llama_kv_cache_recurrent_state::get_head() const {
+uint32_t llama_memory_recurrent_state::get_head() const {
     return is_full ? 0 : kv->head;
 }
 
-int32_t llama_kv_cache_recurrent_state::get_rs_z() const {
+int32_t llama_memory_recurrent_state::get_rs_z() const {
     return is_full ? 0 : kv->rs_z;
 }
 
-uint32_t llama_kv_cache_recurrent_state::get_size() const {
+uint32_t llama_memory_recurrent_state::get_size() const {
     return kv->size;
 }
 
-ggml_tensor * llama_kv_cache_recurrent_state::get_k_l(int32_t il) const {
+ggml_tensor * llama_memory_recurrent_state::get_k_l(int32_t il) const {
     return kv->k_l[il];
 }
 
-ggml_tensor * llama_kv_cache_recurrent_state::get_v_l(int32_t il) const {
+ggml_tensor * llama_memory_recurrent_state::get_v_l(int32_t il) const {
     return kv->v_l[il];
 }
 
-int32_t llama_kv_cache_recurrent_state::s_copy(int i) const {
+int32_t llama_memory_recurrent_state::s_copy(int i) const {
     return  kv->cells[i + kv->head].src0;
 }
