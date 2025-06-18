@@ -9188,17 +9188,17 @@ struct llm_build_mamba : public llm_graph_context {
         GGML_ASSERT(ubatch.equal_seqs);
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
-        ggml_tensor * conv_states_all = kv_state->get_k_l(il);
-        ggml_tensor * ssm_states_all  = kv_state->get_v_l(il);
+        ggml_tensor * conv_states_all = kv_state->get_r_l(il);
+        ggml_tensor * ssm_states_all  = kv_state->get_s_l(il);
 
         // (ab)using the KV cache to store the states
         ggml_tensor * conv = build_rs(
                 inp, gf, conv_states_all,
-                hparams.n_embd_k_s(), n_seqs);
+                hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
         ggml_tensor * ssm = build_rs(
                 inp, gf, ssm_states_all,
-                hparams.n_embd_v_s(), n_seqs);
+                hparams.n_embd_s(), n_seqs);
         ssm = ggml_reshape_3d(ctx0, ssm, d_state, d_inner, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -12037,8 +12037,8 @@ struct llm_build_rwkv6_base : public llm_graph_context {
         }
 
         ggml_tensor * wkv_state = build_rs(
-                inp, gf, kv_state->get_v_l(il),
-                hparams.n_embd_v_s(), n_seqs);
+                inp, gf, kv_state->get_s_l(il),
+                hparams.n_embd_s(), n_seqs);
 
         ggml_tensor * wkv_output;
         if (is_qrwkv) {
@@ -12056,9 +12056,9 @@ struct llm_build_rwkv6_base : public llm_graph_context {
                     wkv_state,
                     ggml_view_1d(
                         ctx0,
-                        kv_state->get_v_l(il),
-                        hparams.n_embd_v_s() * n_seqs,
-                        hparams.n_embd_v_s() * kv_head * ggml_element_size(kv_state->get_v_l(il))
+                        kv_state->get_s_l(il),
+                        hparams.n_embd_s() * n_seqs,
+                        hparams.n_embd_s() * kv_head * ggml_element_size(kv_state->get_s_l(il))
                         )
                     )
                 );
@@ -12180,7 +12180,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
 // ref: https://huggingface.co/recursal/QRWKV6-32B-Instruct-Preview-v0.1/blob/main/modeling_rwkv6qwen2.py
 struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
     llm_build_rwkv6qwen2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_build_rwkv6_base(model, params) {
-        GGML_ASSERT(n_embd == hparams.n_embd_k_s());
+        GGML_ASSERT(n_embd == hparams.n_embd_r());
 
         ggml_tensor * cur;
         ggml_tensor * inpL;
@@ -12384,8 +12384,8 @@ struct llm_build_rwkv7_base : public llm_graph_context {
         a = ggml_reshape_3d(ctx0, a, head_size, head_count, n_tokens);
 
         ggml_tensor * wkv_state = build_rs(
-                inp, gf, kv_state->get_v_l(il),
-                hparams.n_embd_v_s(), n_seqs);
+                inp, gf, kv_state->get_s_l(il),
+                hparams.n_embd_s(), n_seqs);
 
         ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, ggml_neg(ctx0, kk), ggml_mul(ctx0, kk, a), wkv_state);
         cur = ggml_view_1d(ctx0, wkv_output, n_embd * n_tokens, 0);
@@ -12398,9 +12398,9 @@ struct llm_build_rwkv7_base : public llm_graph_context {
                     wkv_state,
                     ggml_view_1d(
                         ctx0,
-                        kv_state->get_v_l(il),
-                        hparams.n_embd_v_s() * n_seqs,
-                        hparams.n_embd_v_s() * kv_head * ggml_element_size(kv_state->get_v_l(il))
+                        kv_state->get_s_l(il),
+                        hparams.n_embd_s() * n_seqs,
+                        hparams.n_embd_s() * kv_head * ggml_element_size(kv_state->get_s_l(il))
                         )
                     )
                 );
@@ -12524,7 +12524,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
 
 struct llm_build_arwkv7 : public llm_build_rwkv7_base {
     llm_build_arwkv7(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_build_rwkv7_base(model, params) {
-        GGML_ASSERT(n_embd == hparams.n_embd_k_s());
+        GGML_ASSERT(n_embd == hparams.n_embd_r());
 
         ggml_tensor * cur;
         ggml_tensor * inpL;

@@ -13,7 +13,6 @@
 
 // TODO: extract the cache state used for graph computation into llama_memory_recurrent_state_i
 //       see the implementation of llama_kv_cache_unified_state_i for an example how to do it
-// TODO: avoid the notion of "KV cache" / "KV cells", etc.
 class llama_memory_recurrent : public llama_memory_i {
 public:
 
@@ -23,10 +22,10 @@ public:
     llama_memory_recurrent(
             const llama_model &  model,
               layer_filter_cb && filter,
-                    ggml_type    type_k,
-                    ggml_type    type_v,
+                    ggml_type    type_r,
+                    ggml_type    type_s,
                          bool    offload,
-                     uint32_t    kv_size,
+                     uint32_t    mem_size,
                      uint32_t    n_seq_max);
 
     ~llama_memory_recurrent() = default;
@@ -57,7 +56,7 @@ public:
 
     bool prepare(const std::vector<llama_ubatch> & ubatches);
 
-    // find a contiguous slot of kv cells and emplace the ubatch there
+    // find a contiguous slot of memory cells and emplace the ubatch there
     bool find_slot(const llama_ubatch & ubatch);
 
     bool get_can_shift() const override;
@@ -78,7 +77,7 @@ public:
     int32_t rs_z = -1;
 
     // TODO: optimize for recurrent state needs
-    struct kv_cell {
+    struct mem_cell {
         llama_pos pos  = -1;
         int32_t   src  = -1; // used to know where states should be copied from
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
@@ -94,15 +93,16 @@ public:
             return seq_id.empty();
         }
 
-        bool is_same_seq(const kv_cell & other) const {
+        bool is_same_seq(const mem_cell & other) const {
             return seq_id == other.seq_id;
         }
     };
 
-    std::vector<kv_cell> cells;
+    std::vector<mem_cell> cells;
 
-    std::vector<ggml_tensor *> k_l; // per layer
-    std::vector<ggml_tensor *> v_l;
+    // per layer
+    std::vector<ggml_tensor *> r_l;
+    std::vector<ggml_tensor *> s_l;
 
 private:
     //const llama_model & model;
@@ -115,8 +115,8 @@ private:
 
     size_t total_size() const;
 
-    size_t size_k_bytes() const;
-    size_t size_v_bytes() const;
+    size_t size_r_bytes() const;
+    size_t size_s_bytes () const;
 
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
@@ -132,11 +132,11 @@ public:
 
     // used to create a full-cache state
     llama_memory_recurrent_state(
-            llama_memory_recurrent * kv);
+            llama_memory_recurrent * mem);
 
     // used to create a state from a batch
     llama_memory_recurrent_state(
-            llama_memory_recurrent * kv,
+            llama_memory_recurrent * mem,
             llama_sbatch sbatch,
             std::vector<llama_ubatch> ubatches);
 
@@ -158,20 +158,20 @@ public:
     // llama_memory_recurrent_state specific API
     //
 
-    uint32_t get_n_kv() const;
+    uint32_t get_n_rs() const;
     uint32_t get_head() const;
     int32_t  get_rs_z() const;
     uint32_t get_size() const;
 
-    ggml_tensor * get_k_l(int32_t il) const;
-    ggml_tensor * get_v_l(int32_t il) const;
+    ggml_tensor * get_r_l(int32_t il) const;
+    ggml_tensor * get_s_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
 
 private:
     const llama_memory_status status;
 
-    llama_memory_recurrent * kv;
+    llama_memory_recurrent * mem;
 
     llama_sbatch sbatch;
 

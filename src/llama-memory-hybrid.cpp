@@ -11,48 +11,48 @@
 llama_memory_hybrid::llama_memory_hybrid(
     const llama_model & model,
                          /* attn */
-            ggml_type    attn_type_k,
-            ggml_type    attn_type_v,
-                 bool    attn_v_trans,
-             uint32_t    attn_kv_size,
-             uint32_t    attn_n_pad,
-             uint32_t    attn_n_swa,
-       llama_swa_type    attn_swa_type,
+            ggml_type    type_k,
+            ggml_type    type_v,
+                 bool    v_trans,
+             uint32_t    kv_size,
+             uint32_t    n_pad,
+             uint32_t    n_swa,
+       llama_swa_type    swa_type,
                          /* recurrent */
-            ggml_type    recurrent_type_k,
-            ggml_type    recurrent_type_v,
-             uint32_t    recurrent_kv_size,
+            ggml_type    type_r,
+            ggml_type    type_s,
+             uint32_t    rs_size,
                          /* common */
              uint32_t    n_seq_max,
                  bool    offload,
                          /* layer filters */
-      layer_filter_cb && attn_filter,
-      layer_filter_cb && recurrent_filter) :
+      layer_filter_cb && filter_attn,
+      layer_filter_cb && filter_recurrent) :
     hparams(model.hparams),
     mem_attn(new llama_kv_cache_unified(
         model,
-        attn_filter == nullptr ?
+        filter_attn == nullptr ?
             [&](int32_t il) { return !model.hparams.recurrent_layer(il); }
-            : attn_filter,
-        attn_type_k,
-        attn_type_v,
-        attn_v_trans,
+            : filter_attn,
+        type_k,
+        type_v,
+        v_trans,
         offload,
-        attn_kv_size,
+        kv_size,
         n_seq_max,
-        attn_n_pad,
-        attn_n_swa,
-        attn_swa_type
+        n_pad,
+        n_swa,
+        swa_type
     )),
     mem_recurrent(new llama_memory_recurrent(
         model,
-        recurrent_filter == nullptr ?
+        filter_recurrent == nullptr ?
             [&](int32_t il) { return model.hparams.recurrent_layer(il); }
-            : recurrent_filter,
-        recurrent_type_k,
-        recurrent_type_v,
+            : filter_recurrent,
+        type_r,
+        type_s,
         offload,
-        recurrent_kv_size,
+        rs_size,
         n_seq_max
     )) {}
 

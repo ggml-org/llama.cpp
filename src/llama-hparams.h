@@ -184,10 +184,10 @@ struct llama_hparams {
 
     // dimension of the rolling state embeddings
     // corresponds to Mamba's conv_states size or RWKV's token_shift states size
-    uint32_t n_embd_k_s() const;
+    uint32_t n_embd_r() const;
 
     // dimension of the recurrent state embeddings
-    uint32_t n_embd_v_s() const;
+    uint32_t n_embd_s() const;
 
     // whether or not the given layer is recurrent (for hybrid models)
     bool recurrent_layer(uint32_t il) const;

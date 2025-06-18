@@ -191,14 +191,14 @@ public:
 
 class llm_graph_input_rs : public llm_graph_input_i {
 public:
-    llm_graph_input_rs(const llama_memory_recurrent_state * kv_state) : kv_state(kv_state) {}
+    llm_graph_input_rs(const llama_memory_recurrent_state * mem_state) : mem_state(mem_state) {}
     virtual ~llm_graph_input_rs() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * s_copy; // I32 [kv_size]
 
-    const llama_memory_recurrent_state * kv_state;
+    const llama_memory_recurrent_state * mem_state;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -306,10 +306,10 @@ public:
     llm_graph_input_mem_hybrid(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_memory_hybrid_state * kv_state) :
+            const llama_memory_hybrid_state * mem_state) :
         hparams(hparams),
         cparams(cparams),
-        kv_state(kv_state) {
+        mem_state(mem_state) {
     }
     virtual ~llm_graph_input_mem_hybrid() = default;
 
@@ -325,7 +325,7 @@ public:
     const llama_hparams & hparams;
     const llama_cparams & cparams;
 
-    const llama_memory_hybrid_state * kv_state;
+    const llama_memory_hybrid_state * mem_state;
 };
 
 //
