@@ -267,6 +267,7 @@ struct cmd_params {
     int                              delay;
     bool                             verbose;
     bool                             progress;
+    bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -303,6 +304,7 @@ static const cmd_params cmd_params_defaults = {
     /* delay                */ 0,
     /* verbose              */ false,
     /* progress             */ false,
+    /* no_warmup            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -325,6 +327,7 @@ static void print_usage(int /* argc */, char ** argv) {
            output_format_str(cmd_params_defaults.output_format_stderr));
     printf("  -v, --verbose                             verbose output\n");
     printf("  --progress                                print test progress indicators\n");
+    printf("  --no-warmup                               skip warmup runs before benchmarking\n");
     printf("\n");
     printf("test parameters:\n");
     printf("  -m, --model <filename>                    (default: %s)\n", join(cmd_params_defaults.model, ",").c_str());
@@ -425,6 +428,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.prio                 = cmd_params_defaults.prio;
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
+    params.no_warmup            = cmd_params_defaults.no_warmup;
 
     for (int i = 1; i < argc; i++) {
         arg = argv[i];
@@ -798,6 +802,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.verbose = true;
             } else if (arg == "--progress") {
                 params.progress = true;
+            } else if (arg == "--no-warmup") {
+                params.no_warmup = true;
             } else {
                 invalid_param = true;
                 break;
@@ -1925,25 +1931,27 @@ int main(int argc, char ** argv) {
         llama_attach_threadpool(ctx, threadpool, NULL);
 
         // warmup run
-        if (t.n_prompt > 0) {
-            if (params.progress) {
-                fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
+        if (!params.no_warmup) {
+            if (t.n_prompt > 0) {
+                if (params.progress) {
+                    fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
+                }
+                //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                if (!res) {
+                    fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
+                    exit(1);
+                }
             }
-            //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-            bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
-            if (!res) {
-                fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
-                exit(1);
-            }
-        }
-        if (t.n_gen > 0) {
-            if (params.progress) {
-                fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
-            }
-            bool res = test_gen(ctx, 1, t.n_threads);
-            if (!res) {
-                fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
-                exit(1);
+            if (t.n_gen > 0) {
+                if (params.progress) {
+                    fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
+                }
+                bool res = test_gen(ctx, 1, t.n_threads);
+                if (!res) {
+                    fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
+                    exit(1);
+                }
             }
         }
 
