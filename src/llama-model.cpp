@@ -9224,9 +9224,9 @@ struct llm_build_mamba : public llm_graph_context {
             cb(cur, "attn_norm", il);
 
             if (use_mamba2) {
-                cur = build_mamba2_layer(rs_inp, gf, cur, ubatch, il);
+                cur = build_mamba2_layer(this, rs_inp, gf, cur, model, ubatch, il);
             } else {
-                cur = build_mamba_layer(rs_inp, gf, cur, ubatch, il);
+                cur = build_mamba_layer(this, rs_inp, gf, cur, model, ubatch, il);
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
@@ -9262,26 +9262,29 @@ struct llm_build_mamba : public llm_graph_context {
     }
 
     ggml_tensor * build_mamba_layer(
-        llm_graph_input_rs * inp,
-               ggml_cgraph * gf,
-               ggml_tensor * cur,
-        const llama_ubatch & ubatch,
-                       int   il) const {
-        const auto * mctx_cur = static_cast<const llama_memory_recurrent_context *>(mctx);
+        const llm_graph_context * self,
+             llm_graph_input_rs * inp,
+                    ggml_cgraph * gf,
+                    ggml_tensor * cur,
+              const llama_model & model,
+             const llama_ubatch & ubatch,
+                            int   il) const {
+        const auto * mctx_cur = static_cast<const llama_memory_recurrent_context *>(self->mctx);
 
         const auto kv_head = mctx_cur->get_head();
+        auto * ctx0 = self->ctx0;
 
-        const int64_t d_conv  = hparams.ssm_d_conv;
-        const int64_t d_inner = hparams.ssm_d_inner;
-        const int64_t d_state = hparams.ssm_d_state;
-        const int64_t dt_rank = hparams.ssm_dt_rank;
+        const int64_t d_conv  = self->hparams.ssm_d_conv;
+        const int64_t d_inner = self->hparams.ssm_d_inner;
+        const int64_t d_state = self->hparams.ssm_d_state;
+        const int64_t dt_rank = self->hparams.ssm_dt_rank;
         const int64_t n_head  = d_inner;
         const int64_t head_dim = 1;
         const int64_t n_seqs  = ubatch.n_seqs;
         // Some variants of Mamba arch (e.g. FalconMamba do apply layer norm on B and Dt layers)
-        const bool ssm_dt_b_c_rms = hparams.ssm_dt_b_c_rms;
+        const bool ssm_dt_b_c_rms = self->hparams.ssm_dt_b_c_rms;
         // Use the same RMS norm as the final layer norm
-        const float norm_rms_eps = hparams.f_norm_rms_eps;
+        const float norm_rms_eps = self->hparams.f_norm_rms_eps;
 
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
@@ -9292,14 +9295,14 @@ struct llm_build_mamba : public llm_graph_context {
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
         ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-        ggml_tensor * conv = build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = self->build_rs(inp, gf, conv_states_all, self->hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
         cur = ggml_reshape_3d(ctx0, cur, cur->ne[0], n_seq_tokens, n_seqs);
 
         // {n_embd, 2*d_inner} @ {n_embd, n_seq_tokens, n_seqs} => {2*d_inner, n_seq_tokens, n_seqs}
-        ggml_tensor * xz = build_lora_mm(model.layers[il].ssm_in, cur);
+        ggml_tensor * xz = self->build_lora_mm(model.layers[il].ssm_in, cur);
         // split the above in two
         // => {d_inner, n_seq_tokens, n_seqs}
         ggml_tensor * x = ggml_view_3d(ctx0, xz, d_inner, xz->ne[1], xz->ne[2], xz->nb[1], xz->nb[2], 0);
@@ -9339,7 +9342,7 @@ struct llm_build_mamba : public llm_graph_context {
         // ssm
         {
             // {d_inner, dt_rank + 2*d_state} @ {d_inner, n_seq_tokens, n_seqs} => {dt_rank + 2*d_state, n_seq_tokens, n_seqs}
-            ggml_tensor * x_db = build_lora_mm(model.layers[il].ssm_x, x);
+            ggml_tensor * x_db = self->build_lora_mm(model.layers[il].ssm_x, x);
             // split
             ggml_tensor * dt = ggml_view_3d(ctx0, x_db, dt_rank, n_seq_tokens, n_seqs, x_db->nb[1], x_db->nb[2], 0);
             ggml_tensor * B  = ggml_view_4d(ctx0, x_db, d_state, /* n_group */ 1, n_seq_tokens, n_seqs, d_state*x_db->nb[0], x_db->nb[1], x_db->nb[2], ggml_element_size(x_db)*dt_rank);
@@ -9353,7 +9356,7 @@ struct llm_build_mamba : public llm_graph_context {
             }
 
             // {dt_rank, d_inner} @ {dt_rank, n_seq_tokens, n_seqs} => {d_inner, n_seq_tokens, n_seqs}
-            dt = build_lora_mm(model.layers[il].ssm_dt, dt);
+            dt = self->build_lora_mm(model.layers[il].ssm_dt, dt);
             dt = ggml_add(ctx0, dt, model.layers[il].ssm_dt_b);
 
             cur = x;
@@ -9373,7 +9376,7 @@ struct llm_build_mamba : public llm_graph_context {
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = self->build_rs(inp, gf, ssm_states_all, self->hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
 
             // store last states
             ggml_build_forward_expand(gf,
@@ -9389,7 +9392,7 @@ struct llm_build_mamba : public llm_graph_context {
             y = ggml_mul(ctx0, y, ggml_silu(ctx0, ggml_cont(ctx0, z)));
 
             // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
-            cur = build_lora_mm(model.layers[il].ssm_out, y);
+            cur = self->build_lora_mm(model.layers[il].ssm_out, y);
         }
 
         // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
@@ -9400,21 +9403,24 @@ struct llm_build_mamba : public llm_graph_context {
     }
 
     ggml_tensor * build_mamba2_layer(
-        llm_graph_input_rs * inp,
-             ggml_cgraph * gf,
-             ggml_tensor * cur,
-      const llama_ubatch & ubatch,
-                     int   il) const {
-        const auto * mctx_cur = static_cast<const llama_memory_recurrent_context *>(mctx);
+        const llm_graph_context * self,
+             llm_graph_input_rs * inp,
+                    ggml_cgraph * gf,
+                    ggml_tensor * cur,
+              const llama_model & model,
+             const llama_ubatch & ubatch,
+                            int   il) const {
+        const auto * mctx_cur = static_cast<const llama_memory_recurrent_context *>(self->mctx);
 
         const auto kv_head = mctx_cur->get_head();
+        auto * ctx0 = self->ctx0;
 
-        const int64_t d_conv  = hparams.ssm_d_conv;
-        const int64_t d_inner = hparams.ssm_d_inner;
-        const int64_t d_state = hparams.ssm_d_state;
-        const int64_t n_head  = hparams.ssm_dt_rank;
+        const int64_t d_conv  = self->hparams.ssm_d_conv;
+        const int64_t d_inner = self->hparams.ssm_d_inner;
+        const int64_t d_state = self->hparams.ssm_d_state;
+        const int64_t n_head  = self->hparams.ssm_dt_rank;
         const int64_t head_dim = d_inner / n_head;
-        const int64_t n_group = hparams.ssm_n_group;
+        const int64_t n_group = self->hparams.ssm_n_group;
         const int64_t n_seqs  = ubatch.n_seqs;
 
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
@@ -9426,7 +9432,7 @@ struct llm_build_mamba : public llm_graph_context {
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
         ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-        ggml_tensor * conv = build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = self->build_rs(inp, gf, conv_states_all, self->hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2*n_group*d_state, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -9435,7 +9441,7 @@ struct llm_build_mamba : public llm_graph_context {
         // d_in_proj = 2 * self.d_inner + 2 * self.ngroups * self.d_state + self.nheads
 
         // {n_embd, d_in_proj} @ {n_embd, n_seq_tokens, n_seqs} => {d_in_proj, n_seq_tokens, n_seqs}
-        ggml_tensor * zxBCdt = build_lora_mm(model.layers[il].ssm_in, cur);
+        ggml_tensor * zxBCdt = self->build_lora_mm(model.layers[il].ssm_in, cur);
 
         // split the above in three
         ggml_tensor * z = ggml_view_4d(ctx0, zxBCdt, head_dim, n_head, n_seq_tokens, n_seqs, head_dim*zxBCdt->nb[0], zxBCdt->nb[1], zxBCdt->nb[2], 0);
@@ -9496,7 +9502,7 @@ struct llm_build_mamba : public llm_graph_context {
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = self->build_rs(inp, gf, ssm_states_all, self->hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
 
             // store last states
             ggml_build_forward_expand(gf,
@@ -9513,11 +9519,11 @@ struct llm_build_mamba : public llm_graph_context {
 
             // grouped RMS norm
             y = ggml_reshape_4d(ctx0, y, d_inner / n_group, n_group, n_seq_tokens, n_seqs);
-            y = build_norm(y, model.layers[il].ssm_norm, NULL, LLM_NORM_RMS, il);
+            y = self->build_norm(y, model.layers[il].ssm_norm, NULL, LLM_NORM_RMS, il);
             y = ggml_reshape_3d(ctx0, y, d_inner, n_seq_tokens, n_seqs);
 
             // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
-            cur = build_lora_mm(model.layers[il].ssm_out, y);
+            cur = self->build_lora_mm(model.layers[il].ssm_out, y);
         }
 
         // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
@@ -12855,8 +12861,8 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
     }
 };
 
-
 struct llm_build_granite : public llm_graph_context {
+
     llm_build_granite(
         const llama_model & model,
         const llm_graph_params & params,
@@ -12882,8 +12888,6 @@ struct llm_build_granite : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
@@ -12896,57 +12900,9 @@ struct llm_build_granite : public llm_graph_context {
             cb(cur, "attn_norm", il);
 
             // self-attention
-            {
-                // compute Q and K and (optionally) RoPE them
-                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
-                cb(Qcur, "Qcur", il);
-                if (model.layers[il].bq) {
-                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
-                    cb(Qcur, "Qcur", il);
-                }
-
-                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
-                cb(Kcur, "Kcur", il);
-                if (model.layers[il].bk) {
-                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
-                    cb(Kcur, "Kcur", il);
-                }
-
-                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
-                cb(Vcur, "Vcur", il);
-                if (model.layers[il].bv) {
-                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-                    cb(Vcur, "Vcur", il);
-                }
-
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
-
-                if (use_rope) {
-                    ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-                    Qcur = ggml_rope_ext(
-                            ctx0, Qcur, inp_pos, rope_factors,
-                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow
-                            );
-
-                    Kcur = ggml_rope_ext(
-                            ctx0, Kcur, inp_pos, rope_factors,
-                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                            ext_factor, attn_factor, beta_fast, beta_slow
-                            );
-                }
-
-                cb(Qcur, "Qcur", il);
-                cb(Kcur, "Kcur", il);
-                cb(Vcur, "Vcur", il);
-
-                cur = build_attn(inp_attn, gf,
-                        model.layers[il].wo, model.layers[il].bo,
-                        Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
-                cb(cur, "attn_out", il);
-            }
+            cur = build_attention_layer(
+                this, gf, cur, inp_pos, inp_attn,
+                model, n_embd_head, use_rope, il);
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
@@ -13041,6 +12997,74 @@ struct llm_build_granite : public llm_graph_context {
         res->t_logits = cur;
 
         ggml_build_forward_expand(gf, cur);
+    }
+
+    // static layer build function that enables other models to borrow this
+    // layer logic
+    static ggml_tensor * build_attention_layer(
+        const llm_graph_context               * self,
+              ggml_cgraph                     * gf,
+              ggml_tensor                     * cur,
+              ggml_tensor                     * inp_pos,
+              llm_graph_input_attn_kv_unified * inp_attn,
+        const llama_model                     & model,
+        const int64_t                           n_embd_head,
+        const bool                              use_rope,
+        const int                               il) {
+
+        auto * ctx0 = self->ctx0;
+
+        // compute Q and K and (optionally) RoPE them
+        ggml_tensor * Qcur = self->build_lora_mm(model.layers[il].wq, cur);
+        self->cb(Qcur, "Qcur", il);
+        if (model.layers[il].bq) {
+            Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+            self->cb(Qcur, "Qcur", il);
+        }
+
+        ggml_tensor * Kcur = self->build_lora_mm(model.layers[il].wk, cur);
+        self->cb(Kcur, "Kcur", il);
+        if (model.layers[il].bk) {
+            Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+            self->cb(Kcur, "Kcur", il);
+        }
+
+        ggml_tensor * Vcur = self->build_lora_mm(model.layers[il].wv, cur);
+        self->cb(Vcur, "Vcur", il);
+        if (model.layers[il].bv) {
+            Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+            self->cb(Vcur, "Vcur", il);
+        }
+
+        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, self->n_head,    self->n_tokens);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, self->n_head_kv, self->n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, self->n_head_kv, self->n_tokens);
+
+        if (use_rope) {
+            ggml_tensor * rope_factors = model.get_rope_factors(self->cparams, il);
+            Qcur = ggml_rope_ext(
+                    ctx0, Qcur, inp_pos, rope_factors,
+                    self->n_rot, self->rope_type, self->n_ctx_orig, self->freq_base, self->freq_scale,
+                    self->ext_factor, self->attn_factor, self->beta_fast, self->beta_slow
+                    );
+
+            Kcur = ggml_rope_ext(
+                    ctx0, Kcur, inp_pos, rope_factors,
+                    self->n_rot, self->rope_type, self->n_ctx_orig, self->freq_base, self->freq_scale,
+                    self->ext_factor, self->attn_factor, self->beta_fast, self->beta_slow
+                    );
+        }
+
+        self->cb(Qcur, "Qcur", il);
+        self->cb(Kcur, "Kcur", il);
+        self->cb(Vcur, "Vcur", il);
+
+        const float kq_scale = self->hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : self->hparams.f_attention_scale;
+        cur = self->build_attn(inp_attn, gf,
+                model.layers[il].wo, model.layers[il].bo,
+                Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                self->cb(cur, "attn_out", il);
+        return cur;
     }
 };
 
