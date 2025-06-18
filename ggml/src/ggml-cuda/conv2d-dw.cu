@@ -32,8 +32,6 @@ __device__ inline int calculate_input_coord(int out_coord, int kern_coord, int s
     return out_coord * stride + kern_coord * dilation - padding;
 }
 
-// ───────────── Memory layout abstractions ─────────────
-
 struct whcn_layout {
     __device__ static int input_index(int n, int c, int y, int x, const conv_params & params) {
         return n * (params.channels * params.in_w * params.in_h) + c * params.in_w * params.in_h + y * params.in_w + x;
@@ -80,21 +78,33 @@ struct cwhn_layout {
     }
 };
 
-// ───────────── Generic convolution computation ─────────────
-
 template <typename T, typename Layout>
-const __device__ inline T compute_conv2d_dw_pixel(const T * __restrict__ input, const T * __restrict__ kernel,
-                                                  const conv_params & params, int batch_idx, int channel_idx,
-                                                  int out_y_idx, int out_x_idx) {
-    T             accumulator = 0;
-    kernel_bounds bounds      = calculate_kernel_bounds(out_x_idx, out_y_idx, params);
+__global__ void conv2d_dw_kernel(const T * __restrict__ input, const T * __restrict__ kernel, T * __restrict__ output,
+                                 const int in_w, const int in_h, const int out_w, const int out_h,
+                                 const int kernel_w, const int kernel_h, const int stride_x, const int stride_y,
+                                 const int padding_x, const int padding_y, const int dilation_x, const int dilation_y,
+                                 const int channels, const int batches) {
+    int global_idx     = blockIdx.x * blockDim.x + threadIdx.x;
+    int total_elements = batches * channels * out_h * out_w;
+
+    if (global_idx >= total_elements) {
+        return;
+    }
+
+    conv_params params = { in_w,     in_h,      out_w,     out_h,      kernel_w,   kernel_h, stride_x,
+                           stride_y, padding_x, padding_y, dilation_x, dilation_y, channels, batches };
+
+    int batch_idx, channel_idx, out_y_idx, out_x_idx;
+    Layout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
+
+    T accumulator = 0;
+    kernel_bounds bounds = calculate_kernel_bounds(out_x_idx, out_y_idx, params);
 
     for (int kern_y = bounds.y_min; kern_y < bounds.y_max; ++kern_y) {
         int in_y_idx = calculate_input_coord(out_y_idx, kern_y, params.stride_y, params.dilation_y, params.padding_y);
 
         for (int kern_x = bounds.x_min; kern_x < bounds.x_max; ++kern_x) {
-            int in_x_idx =
-                calculate_input_coord(out_x_idx, kern_x, params.stride_x, params.dilation_x, params.padding_x);
+            int in_x_idx = calculate_input_coord(out_x_idx, kern_x, params.stride_x, params.dilation_x, params.padding_x);
 
             const T input_val  = input[Layout::input_index(batch_idx, channel_idx, in_y_idx, in_x_idx, params)];
             const T kernel_val = kernel[Layout::kernel_index(channel_idx, kern_y, kern_x, params)];
@@ -103,64 +113,13 @@ const __device__ inline T compute_conv2d_dw_pixel(const T * __restrict__ input, 
         }
     }
 
-    return accumulator;
+    output[Layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = accumulator;
 }
 
-// ───────────── Kernel instantiations ─────────────
-
-template <typename T>
-__global__ void conv2d_dw_whcn_kernel(const T * __restrict__ in, const T * __restrict__ kern, T * __restrict__ out,
-                                      const int in_w, const int in_h, const int out_w, const int out_h,
-                                      const int kernel_w, const int kernel_h, const int stride_x, const int stride_y,
-                                      const int padding_x, const int padding_y, const int dilation_x,
-                                      const int dilation_y, const int channels, const int batches) {
-    int global_idx     = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_elements = batches * channels * out_h * out_w;
-
-    if (global_idx >= total_elements) {
-        return;
-    }
-
-    conv_params params = { in_w,     in_h,      out_w,     out_h,      kernel_w,   kernel_h, stride_x,
-                           stride_y, padding_x, padding_y, dilation_x, dilation_y, channels, batches };
-
-    int batch_idx, channel_idx, out_y_idx, out_x_idx;
-    whcn_layout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
-
-    T result = compute_conv2d_dw_pixel<T, whcn_layout>(in, kern, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
-    out[whcn_layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = result;
-}
-
-template <typename T>
-__global__ void conv_2d_dw_cwhn_kernel(const T * __restrict__ in, const T * __restrict__ kern, T * __restrict__ out,
-                                       const int in_w, const int in_h, const int out_w, const int out_h,
-                                       const int kernel_w, const int kernel_h, const int stride_x, const int stride_y,
-                                       const int padding_x, const int padding_y, const int dilation_x,
-                                       const int dilation_y, const int channels, const int batches) {
-    int global_idx     = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_elements = batches * channels * out_h * out_w;
-
-    if (global_idx >= total_elements) {
-        return;
-    }
-
-    conv_params params = { in_w,     in_h,      out_w,     out_h,      kernel_w,   kernel_h, stride_x,
-                           stride_y, padding_x, padding_y, dilation_x, dilation_y, channels, batches };
-
-    int batch_idx, channel_idx, out_y_idx, out_x_idx;
-    cwhn_layout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
-
-    const T result =
-        compute_conv2d_dw_pixel<T, cwhn_layout>(in, kern, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
-    out[cwhn_layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = result;
-}
-
-// ───────────── dispatcher ─────────────
 void ggml_cuda_op_conv2d_dw(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * kernel = dst->src[0];
     const ggml_tensor * input  = dst->src[1];
 
-    // Only F32→F32 for now
     GGML_ASSERT(kernel->type == GGML_TYPE_F32 && input->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
     const float * w_d = (const float *) kernel->data;
     const float * x_d = (const float *) input->data;
@@ -189,11 +148,11 @@ void ggml_cuda_op_conv2d_dw(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const int blocks = (total + CUDA_CONV2D_DW_BLOCK_SIZE - 1) / CUDA_CONV2D_DW_BLOCK_SIZE;
 
     if (ggml_is_contiguous(input)) {
-        conv2d_dw_whcn_kernel<<<blocks, CUDA_CONV2D_DW_BLOCK_SIZE, 0, st>>>(
+        conv2d_dw_kernel<float, whcn_layout><<<blocks, CUDA_CONV2D_DW_BLOCK_SIZE, 0, st>>>(
             x_d, w_d, y_d, in_w, in_h, out_w, out_h, kernel_w, kernel_h, stride_x, stride_y, padding_x, padding_y,
             dilation_x, dilation_y, channels, batches);
     } else if (ggml_is_contiguous_channels(input)) {
-        conv_2d_dw_cwhn_kernel<<<blocks, CUDA_CONV2D_DW_BLOCK_SIZE, 0, st>>>(
+        conv2d_dw_kernel<float, cwhn_layout><<<blocks, CUDA_CONV2D_DW_BLOCK_SIZE, 0, st>>>(
             x_d, w_d, y_d, in_w, in_h, out_w, out_h, kernel_w, kernel_h, stride_x, stride_y, padding_x, padding_y,
             dilation_x, dilation_y, channels, batches);
     } else {
