@@ -3,6 +3,8 @@
 #include <HAP_mem.h>
 #include <qurt.h>
 
+#include <atomic>
+
 #include "hexagon_npu.h"
 #include "util.hpp"
 
@@ -23,7 +25,7 @@ class tensor {
         }
 
         _data = static_cast<uint8_t *>(mmap_address);
-        DEVICE_LOG_INFO("tensor(%p[%ldx%ldx%ldx%ld]), fd: %d, offset: %zu, mmap_address: %p, phy_address: 0x%lx\n",
+        DEVICE_LOG_INFO("tensor(%p[%ldx%ldx%ldx%ld]), fd: %d, offset: %zu, mmap_addr: %p, phy_addr: 0x%lx\n",
                         (void *) this, (long) _info.ne[0], (long) _info.ne[1], (long) _info.ne[2], (long) _info.ne[3],
                         _info.buffer_fd, _info.offset, (void *) mmap_address, phy_address);
     }
@@ -47,14 +49,14 @@ class tensor {
     void invalidate() const {
         if (_data) {
             qurt_mem_cache_clean((qurt_addr_t) (_data + _info.offset), (qurt_size_t) _info.size,
-                                 QURT_MEM_CACHE_INVALIDATE, QURT_MEM_DCACHE);
+                                 QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
         }
     }
 
     void update_config(const npu_device_tensor_update_config & config) {
         static_assert(sizeof(_op_params) == sizeof(config.params), "op params size mismatch");
 
-        _info.op = config.op;
+        _op_type = config.op;
         memcpy(_op_params, config.params, sizeof(_op_params));
         for (size_t i = 0; i < DEVICE_TENSOR_MAX_SRC; ++i) {
             auto src_handle = config.src_handles[i];
@@ -76,7 +78,12 @@ class tensor {
 
     const size_t get_nb(size_t index) const { return _info.nb[index]; }
 
-    npu_device_tensor_op get_op() const { return _info.op; }
+    const bool is_permuted() const {
+        // Check if the tensor is permuted by comparing the nb values
+        return is_transposed_or_permuted(_info.nb);
+    }
+
+    npu_device_tensor_op get_op() const { return _op_type; }
 
     template <typename _TyParam> const _TyParam get_op_param(size_t index) const {
         static_assert(sizeof(_TyParam) <= sizeof(_op_params), "_op_param type size exceeds op params size");
@@ -95,19 +102,34 @@ class tensor {
     npu_device_tensor_data_type get_type() const { return _info.type; }
 
     const uint8_t * get_read_buffer() const {
-        invalidate();
+        if (!_info.is_constant && _has_modified) {
+            invalidate();
+            const_cast<tensor *>(this)->_has_modified = false;  // TODO: avoid const_cast
+        }
+
         return _data + _info.offset;
     }
 
-    uint8_t * get_write_buffer() const { return _data + _info.offset; }
+    uint8_t * get_write_buffer() const {
+        if (_info.is_constant) {
+            DEVICE_LOG_ERROR("Attempt to write to a constant tensor: %p", (void *) this);
+            return nullptr;  // Do not allow writing to constant tensors
+        }
+
+        return _data + _info.offset;
+    }
+
+    void release_write_buffer() { _has_modified = true; }
 
     bool is_valid() const { return _data != nullptr; }
 
   private:
     npu_device_tensor_config _info                       = {};
+    npu_device_tensor_op     _op_type                    = NPU_OP_COUNT;
     int32_t                  _op_params[kMaxParamsCount] = {};
     tensor *                 _src[kMaxTensorSrc]         = {};
     uint8_t *                _data                       = nullptr;
+    std::atomic_bool         _has_modified               = false;
 
     DISABLE_COPY_AND_MOVE(tensor);
 };

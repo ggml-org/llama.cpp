@@ -52,9 +52,16 @@ inline constexpr const char * op_get_name(npu_device_tensor_op op) {
             return "MUL";
         case NPU_OP_RMS_NORM:
             return "RMS_NORM";
+        case NPU_OP_FLASH_ATTN:
+            return "FLASH_ATTN_EXT";
         default:
             return "UNKNOWN";
     }
+}
+
+inline bool is_transposed_or_permuted(const npu_device_nb_type & nb) {
+    // Check if the tensor is transposed or permuted
+    return (nb[0] > nb[1]) || (nb[1] > nb[2]) || (nb[2] > nb[3]);
 }
 
 class power_utils {
@@ -160,16 +167,22 @@ class power_utils {
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
 
+struct sub_process_data {
+    char     log_prefix[32] = {};
+    uint64_t proc_cycles    = 0;
+    uint64_t proc_pcycles   = 0;
+    uint64_t proc_count     = 0;
+};
+
 template <size_t _buffer_count> class npu_scoped_timer {
   public:
-    enum { kBufferCount = _buffer_count };
+    enum {
+        kBufferCount  = _buffer_count,
+        kSubProcCount = 4,
+    };
 
-    explicit npu_scoped_timer(const char * log_prefix, const char * sub_proc_log_prefix) {
+    explicit npu_scoped_timer(const char * log_prefix) {
         strncpy(_log_prefix, log_prefix, kBufferCount - 1);
-        if (sub_proc_log_prefix != nullptr) {
-            strncpy(_sub_proc_log_prefix, sub_proc_log_prefix, kBufferCount - 1);
-        }
-
         _begin_cycles  = HAP_perf_get_qtimer_count();
         _begin_pcycles = HAP_perf_get_pcycles();
     }
@@ -180,61 +193,121 @@ template <size_t _buffer_count> class npu_scoped_timer {
 
     void operator=(npu_scoped_timer && other) {
         strncpy(_log_prefix, other._log_prefix, kBufferCount - 1);
-        strncpy(_sub_proc_log_prefix, other._sub_proc_log_prefix, kBufferCount - 1);
-        _begin_cycles    = other._begin_cycles;
-        _sub_proc_cycles = other._sub_proc_cycles;
-        _sub_proc_count  = other._sub_proc_count;
+        _begin_cycles  = other._begin_cycles;
+        _begin_pcycles = other._begin_pcycles;
+        memcpy(&_sub_proc_data, &other._sub_proc_data, sizeof(_sub_proc_data));
     }
 
-    void add_sub_proc_cycles(uint64_t cycles, uint64_t pcycles) {
-        _sub_proc_cycles += cycles;
-        _sub_proc_pcycles += pcycles;
-        _sub_proc_count++;
+    void add_sub_proc_cycles(size_t sub_proc_idx, const char * sub_proc_prefix, uint64_t cycles, uint64_t pcycles) {
+        auto & sub_proc_data = _sub_proc_data[sub_proc_idx];
+        sub_proc_data.proc_cycles += cycles;
+        sub_proc_data.proc_pcycles += pcycles;
+
+        if (!sub_proc_data.proc_count) {
+            strncpy(sub_proc_data.log_prefix, sub_proc_prefix, sizeof(sub_proc_data.log_prefix) - 1);
+        }
+
+        sub_proc_data.proc_count++;
     }
 
     void print() const {
+        static_assert(kSubProcCount == 4, "Sub process count must be 4 for logging format");
+
         auto total_cycles  = HAP_perf_get_qtimer_count() - _begin_cycles;
         auto total_pcycles = HAP_perf_get_pcycles() - _begin_pcycles;
         auto duration      = HAP_perf_qtimer_count_to_us(total_cycles);
 
-        if (_sub_proc_count > 0) {
-            auto sub_proc_duration = HAP_perf_qtimer_count_to_us(_sub_proc_cycles);
-            DEVICE_LOG_WARN("[profiler]%s, pcyc: %llu, dur: %lluus, [%s]cnt: %llu, pcyc: %llu, dur: %lluus\n",
-                            _log_prefix, total_pcycles, duration, _sub_proc_log_prefix, _sub_proc_count,
-                            _sub_proc_pcycles, sub_proc_duration);
-        } else {
-            DEVICE_LOG_WARN("[profiler]%s, pcyc: %llu, dur: %lluus\n", _log_prefix, total_pcycles, duration);
+        int sub_proc_count = 0;
+        for (int i = kSubProcCount; i > 0; --i) {
+            if (_sub_proc_data[i - 1].proc_count > 0) {
+                sub_proc_count = i;
+                break;
+            }
+        }
+
+        auto sub_proc0_duration = HAP_perf_qtimer_count_to_us(_sub_proc_data[0].proc_cycles);
+        auto sub_proc1_duration = HAP_perf_qtimer_count_to_us(_sub_proc_data[1].proc_cycles);
+        auto sub_proc2_duration = HAP_perf_qtimer_count_to_us(_sub_proc_data[2].proc_cycles);
+        auto sub_proc3_duration = HAP_perf_qtimer_count_to_us(_sub_proc_data[3].proc_cycles);
+
+        switch (sub_proc_count) {
+            case 4:
+                DEVICE_LOG_WARN(
+                    "[profiler]%s, pcyc: %llu, dur: %lluus, [%s]cnt: %llu, dur: %lluus, "
+                    "[%s]cnt: %llu, dur: %lluus, [%s]cnt: %llu, dur: %lluus, "
+                    "[%s]cnt: %llu, dur: %lluus\n",
+                    _log_prefix, (unsigned long long) total_pcycles, (unsigned long long) duration,
+                    _sub_proc_data[0].log_prefix, (unsigned long long) _sub_proc_data[0].proc_count,
+                    (unsigned long long) sub_proc0_duration, _sub_proc_data[1].log_prefix,
+                    (unsigned long long) _sub_proc_data[1].proc_count, (unsigned long long) sub_proc1_duration,
+                    _sub_proc_data[2].log_prefix, (unsigned long long) _sub_proc_data[2].proc_count,
+                    (unsigned long long) sub_proc2_duration, _sub_proc_data[3].log_prefix,
+                    (unsigned long long) _sub_proc_data[3].proc_count, (unsigned long long) sub_proc3_duration);
+                break;
+            case 3:
+                DEVICE_LOG_WARN(
+                    "[profiler]%s, pcyc: %llu, dur: %lluus, [%s]cnt: %llu, dur: %lluus, "
+                    "[%s]cnt: %llu, dur: %lluus, [%s]cnt: %llu, dur: %lluus\n",
+                    _log_prefix, (unsigned long long) total_pcycles, (unsigned long long) duration,
+                    _sub_proc_data[0].log_prefix, (unsigned long long) _sub_proc_data[0].proc_count,
+                    (unsigned long long) sub_proc0_duration, _sub_proc_data[1].log_prefix,
+                    (unsigned long long) _sub_proc_data[1].proc_count, (unsigned long long) sub_proc1_duration,
+                    _sub_proc_data[2].log_prefix, (unsigned long long) _sub_proc_data[2].proc_count,
+                    (unsigned long long) sub_proc2_duration);
+                break;
+            case 2:
+                DEVICE_LOG_WARN(
+                    "[profiler]%s, pcyc: %llu, dur: %lluus, [%s]cnt: %llu, dur: %lluus, "
+                    "[%s]cnt: %llu, dur: %lluus\n",
+                    _log_prefix, (unsigned long long) total_pcycles, (unsigned long long) duration,
+                    _sub_proc_data[0].log_prefix, (unsigned long long) _sub_proc_data[0].proc_count,
+                    (unsigned long long) sub_proc0_duration, _sub_proc_data[1].log_prefix,
+                    (unsigned long long) _sub_proc_data[1].proc_count, (unsigned long long) sub_proc1_duration);
+                break;
+            case 1:
+                DEVICE_LOG_WARN("[profiler]%s, pcyc: %llu, dur: %lluus, [%s]cnt: %llu, dur: %lluus\n", _log_prefix,
+                                (unsigned long long) total_pcycles, (unsigned long long) duration,
+                                _sub_proc_data[0].log_prefix, (unsigned long long) _sub_proc_data[0].proc_count,
+                                (unsigned long long) sub_proc0_duration);
+                break;
+            default:
+            case 0:
+                DEVICE_LOG_WARN("[profiler]%s, pcyc: %llu, dur: %lluus\n", _log_prefix,
+                                (unsigned long long) total_pcycles, (unsigned long long) duration);
+                break;
         }
     }
 
   private:
-    char     _log_prefix[kBufferCount]          = {};
-    char     _sub_proc_log_prefix[kBufferCount] = {};
-    uint64_t _begin_cycles                      = 0;
-    uint64_t _begin_pcycles                     = 0;
-    uint64_t _sub_proc_cycles                   = 0;
-    uint64_t _sub_proc_pcycles                  = 0;
-    uint64_t _sub_proc_count                    = 0;
+    char             _log_prefix[kBufferCount]     = {};
+    uint64_t         _begin_cycles                 = 0;
+    uint64_t         _begin_pcycles                = 0;
+    sub_process_data _sub_proc_data[kSubProcCount] = {};
 
     DISABLE_COPY(npu_scoped_timer);
 };
 
-template <size_t _buffer_count> class npu_sub_process_scoped_timer {
+template <size_t _buffer_count, size_t _sub_idx> class npu_sub_process_scoped_timer {
   public:
+    static_assert(_sub_idx < npu_scoped_timer<_buffer_count>::kSubProcCount,
+                  "Sub process index must be less than kSubProcCount");
     using npu_scoped_timer = npu_scoped_timer<_buffer_count>;
 
-    explicit npu_sub_process_scoped_timer(npu_scoped_timer & timer) : _timer(timer) {
+    explicit npu_sub_process_scoped_timer(npu_scoped_timer & timer, const char * prefix) :
+        _timer(timer),
+        _prefix(prefix) {
         _begin_cycles  = HAP_perf_get_qtimer_count();
         _begin_pcycles = HAP_perf_get_pcycles();
     }
 
     ~npu_sub_process_scoped_timer() {
-        _timer.add_sub_proc_cycles(HAP_perf_get_qtimer_count() - _begin_cycles,
+        _timer.add_sub_proc_cycles(_sub_idx, _prefix, HAP_perf_get_qtimer_count() - _begin_cycles,
                                    HAP_perf_get_pcycles() - _begin_pcycles);
     }
 
   private:
     npu_scoped_timer & _timer;
+    const char *       _prefix        = nullptr;
     uint64_t           _begin_cycles  = 0;
     uint64_t           _begin_pcycles = 0;
 
@@ -244,10 +317,10 @@ template <size_t _buffer_count> class npu_sub_process_scoped_timer {
 inline auto make_scoped_perf_timer(const char * format, ...) {
     va_list args;
     va_start(args, format);
-    char buffer[512];
+    char buffer[1024];
     vsnprintf(buffer, sizeof(buffer), format, args);
     va_end(args);
-    return npu_scoped_timer<512>(buffer, nullptr);
+    return npu_scoped_timer<1024>(buffer);
 }
 
 #endif

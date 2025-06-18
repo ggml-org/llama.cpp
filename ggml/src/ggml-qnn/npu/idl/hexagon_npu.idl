@@ -3,7 +3,7 @@
 #include "remote.idl"
 
 const uint32_t DEVICE_TENSOR_MAX_DIMS = 4;
-const uint32_t DEVICE_TENSOR_MAX_SRC = 2;
+const uint32_t DEVICE_TENSOR_MAX_SRC = 4;
 const uint32_t DEVICE_TENSOR_MAX_OP_PARAMS = 4;
 const uint32_t QUANT_BLOCK_SIZE = 32;
 const uint32_t QUANT_K_BLOCK_SIZE = 256;
@@ -12,6 +12,7 @@ const uint32_t QUANT_K_SCALE_SIZE = 12;
 interface npu_device : remote_handle64{
 
     typedef int64_t ne_type[DEVICE_TENSOR_MAX_DIMS];
+    typedef uint64_t nb_type[DEVICE_TENSOR_MAX_DIMS];
     typedef uint64_t tensor_handle_t;
     typedef uint64_t graph_handle_t;
 
@@ -22,7 +23,7 @@ interface npu_device : remote_handle64{
         uint8_t qs[QUANT_BLOCK_SIZE / 2];
     };
 
-    struct block_q4_K {
+    struct block_q4_k {
         fp16_t d;
         fp16_t dmin;
         uint8_t scales[QUANT_K_SCALE_SIZE];
@@ -40,6 +41,7 @@ interface npu_device : remote_handle64{
         NPU_OP_SUB,
         NPU_OP_MUL,
         NPU_OP_RMS_NORM,
+        NPU_OP_FLASH_ATTN,
         NPU_OP_COUNT
     };
 
@@ -54,6 +56,7 @@ interface npu_device : remote_handle64{
 
     struct tensor_spec {
         ne_type ne;
+        nb_type nb;
         tensor_data_type type;
     };
 
@@ -65,12 +68,12 @@ interface npu_device : remote_handle64{
 
     struct tensor_config {
         ne_type ne;
-        uint64_t nb[DEVICE_TENSOR_MAX_DIMS];
+        nb_type nb;
         long buffer_fd;
         uint64_t offset;
         uint64_t size;
         tensor_data_type type;
-        tensor_op op;
+        boolean is_constant;
     };
 
     AEEResult device_get_alignment(
@@ -78,10 +81,9 @@ interface npu_device : remote_handle64{
     );
 
     AEEResult device_support_op(
-        in tensor_spec src0,
-        in tensor_spec src1,
-        in tensor_spec dst,
         in tensor_op op,
+        in tensor_spec dst,
+        in sequence<tensor_spec> srcs,
         rout boolean is_supported
     );
 

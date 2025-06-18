@@ -20,12 +20,12 @@ class graph {
     bool compute(default_thread_pool * thread_pool, const float * f16_to_f32_table);
 
   private:
-    static void thread_pool_task(default_thread_pool * pool, size_t thread_idx, size_t thread_count, graph * graph);
-    void        compute_impl(default_thread_pool * pool, size_t thread_idx, size_t thread_count);
+    static void thread_pool_task(default_thread_pool * pool, default_thread_pool::thread_params * thread_params,
+                                 void * graph);
+    void        compute_impl(default_thread_pool * pool, default_thread_pool::thread_params * thread_params);
 
     std::unique_ptr<tensor *[]> _tensors;
     size_t                      _tensor_count     = 0;
-    size_t                      _vtcm_quota_size  = 0;
     const float *               _f16_to_f32_table = nullptr;
 
     DISABLE_COPY_AND_MOVE(graph);

@@ -1,166 +1,11 @@
 #include "op_mul_mat.hpp"
 
-#include <HTP/core/intrinsics.h>
-
-#include "quants.hpp"
 #include "thread_pool.hpp"  // TODO: remove this dependency
+#include "type_traits.hpp"
+#include "vec_ops.hpp"
 #include "vtcm_mem.hpp"
 
 namespace {
-
-inline float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count) {
-    constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(float);
-
-    HVX_Vector * src0_vec_ptr     = ((HVX_Vector *) src0);
-    HVX_Vector * src0_vec_ptr_end = ((HVX_Vector *) src0) + count / kElementsPerVector;
-    HVX_Vector * src1_vec_ptr     = ((HVX_Vector *) src1);
-    HVX_Vector   prev0            = *src0_vec_ptr++;
-    HVX_Vector   prev1            = *src1_vec_ptr++;
-    HVX_Vector   sum              = Q6_V_vzero();
-
-    while (src0_vec_ptr_end - src0_vec_ptr > 1) {
-        HVX_Vector curr0_lo = src0_vec_ptr[0];
-        HVX_Vector curr0_hi = src0_vec_ptr[1];
-        HVX_Vector curr1_lo = src1_vec_ptr[0];
-        HVX_Vector curr1_hi = src1_vec_ptr[1];
-
-        HVX_Vector l0 = Q6_V_valign_VVR(curr0_lo, prev0, (size_t) src0);
-        HVX_Vector l1 = Q6_V_valign_VVR(curr1_lo, prev1, (size_t) src1);
-        HVX_Vector h0 = Q6_V_valign_VVR(curr0_hi, curr0_lo, (size_t) src0);
-        HVX_Vector h1 = Q6_V_valign_VVR(curr1_hi, curr1_lo, (size_t) src1);
-        sum           = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(l0, l1), sum);
-        sum           = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(h0, h1), sum);
-
-        prev0 = curr0_hi;
-        prev1 = curr1_hi;
-        src0_vec_ptr += 2;
-        src1_vec_ptr += 2;
-    }
-
-    if (src0_vec_ptr_end - src0_vec_ptr > 0) {
-        HVX_Vector curr0 = *src0_vec_ptr++;
-        HVX_Vector curr1 = *src1_vec_ptr++;
-        HVX_Vector s0    = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-        HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-        sum              = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0, s1), sum);
-        prev0            = curr0;
-        prev1            = curr1;
-    }
-
-    if ((src0_vec_ptr_end - ((HVX_Vector *) src0)) > 0) {
-        // handle the last vector
-        // see also:
-        //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
-        //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        bool       iptr0_aligned = hexagon::is_addr_aligned(src0_vec_ptr);
-        HVX_Vector curr0         = iptr0_aligned ? prev0 : *src0_vec_ptr;
-        src0_vec_ptr             = iptr0_aligned ? src0_vec_ptr : src0_vec_ptr + 1;
-        bool       iptr1_aligned = hexagon::is_addr_aligned(src1_vec_ptr);
-        HVX_Vector curr1         = iptr1_aligned ? prev1 : *src1_vec_ptr;
-        src1_vec_ptr             = iptr1_aligned ? src1_vec_ptr : src1_vec_ptr + 1;
-        HVX_Vector s0            = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-        HVX_Vector s1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-        sum                      = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_Vqf32_vmpy_VsfVsf(s0, s1), sum);
-        prev0                    = curr0;
-        prev1                    = curr1;
-    }
-
-    const size_t leftover       = count % kElementsPerVector;
-    const size_t leftover_bytes = leftover * sizeof(float);
-    if (leftover > 0) {
-        // handle the leftover elements
-        HVX_Vector curr0 = (leftover_bytes + hexagon::unaligned_bytes(src0_vec_ptr) > hexagon::kBytesPerVector) ?
-                               *src0_vec_ptr :
-                               prev0;
-        curr0            = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-
-        HVX_Vector curr1 = (leftover_bytes + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
-                               *src1_vec_ptr :
-                               prev1;
-        curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-
-        sum = Q6_Vqf32_vadd_Vqf32Vqf32(
-            Q6_V_valign_VVR(Q6_Vqf32_vmpy_VsfVsf(curr0, curr1), Q6_V_vzero(), leftover_bytes), sum);
-    }
-
-    return hexagon::vec_reduction_f32(sum);
-}
-
-// TODO: merge with vec_dot_product_f32_f32?
-inline float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count) {
-    constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(npu_device_fp16_t);
-    constexpr const size_t kFloatsPerVector   = hexagon::kBytesPerVector / sizeof(float);
-
-    HVX_Vector * src0_vec_ptr     = ((HVX_Vector *) src0);
-    HVX_Vector * src0_vec_ptr_end = ((HVX_Vector *) src0) + (count / kElementsPerVector);
-    HVX_Vector * src1_vec_ptr     = ((HVX_Vector *) src1);
-    HVX_Vector   prev0            = *src0_vec_ptr++;
-    HVX_Vector   prev1            = *src1_vec_ptr++;
-    HVX_Vector   sum_hi           = Q6_V_vzero();
-    HVX_Vector   sum_lo           = Q6_V_vzero();
-
-    while (src0_vec_ptr < src0_vec_ptr_end) {
-        HVX_Vector     curr0  = *src0_vec_ptr++;
-        HVX_Vector     curr1  = *src1_vec_ptr++;
-        HVX_Vector     s0     = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-        HVX_Vector     s1     = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-        HVX_VectorPair result = Q6_Wqf32_vmpy_VhfVhf(s0, s1);
-        sum_hi                = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_hi_W(result), sum_hi);
-        sum_lo                = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(result), sum_lo);
-        prev0                 = curr0;
-        prev1                 = curr1;
-    }
-
-    if ((src0_vec_ptr_end - ((HVX_Vector *) src0)) > 0) {
-        // handle the last vector
-        // see also:
-        //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
-        //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        bool       iptr0_aligned = hexagon::is_addr_aligned(src0_vec_ptr);
-        HVX_Vector curr0         = iptr0_aligned ? prev0 : *src0_vec_ptr;
-        src0_vec_ptr             = iptr0_aligned ? src0_vec_ptr : src0_vec_ptr + 1;
-        bool       iptr1_aligned = hexagon::is_addr_aligned(src1_vec_ptr);
-        HVX_Vector curr1         = iptr1_aligned ? prev1 : *src1_vec_ptr;
-        src1_vec_ptr             = iptr1_aligned ? src1_vec_ptr : src1_vec_ptr + 1;
-        HVX_Vector     s0        = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-        HVX_Vector     s1        = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-        HVX_VectorPair result    = Q6_Wqf32_vmpy_VhfVhf(s0, s1);
-        sum_hi                   = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_hi_W(result), sum_hi);
-        sum_lo                   = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(result), sum_lo);
-        prev0                    = curr0;
-        prev1                    = curr1;
-    }
-
-    const size_t leftover       = count % kElementsPerVector;
-    const size_t leftover_bytes = leftover * sizeof(npu_device_fp16_t);
-    if (leftover > 0) {
-        // handle the leftover elements
-        HVX_Vector curr0 = (leftover_bytes + hexagon::unaligned_bytes(src0_vec_ptr) > hexagon::kBytesPerVector) ?
-                               *src0_vec_ptr :
-                               prev0;
-        curr0            = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-
-        HVX_Vector curr1 = (leftover_bytes + hexagon::unaligned_bytes(src1_vec_ptr) > hexagon::kBytesPerVector) ?
-                               *src1_vec_ptr :
-                               prev1;
-        curr1            = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-
-        HVX_VectorPair result = Q6_Wqf32_vmpy_VhfVhf(curr0, curr1);
-
-        // TODO: can we do this better?
-        if (leftover > kFloatsPerVector) {
-            sum_hi = Q6_Vqf32_vadd_Vqf32Vqf32(
-                Q6_V_valign_VVR(Q6_V_hi_W(result), Q6_V_vzero(), (leftover % kFloatsPerVector) * sizeof(float)),
-                sum_hi);
-            sum_lo = Q6_Vqf32_vadd_Vqf32Vqf32(Q6_V_lo_W(result), sum_lo);
-        } else {
-            sum_lo = Q6_Vqf32_vadd_Vqf32Vqf32(
-                Q6_V_valign_VVR(Q6_V_lo_W(result), Q6_V_vzero(), leftover * sizeof(float)), sum_lo);
-        }
-    }
-
-    return hexagon::vec_reduction_f32(Q6_Vqf32_vadd_Vqf32Vqf32(sum_hi, sum_lo));
-}
 
 template <typename T> struct get_data_type {};
 
@@ -175,29 +20,26 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
 
     const bool is_quantized         = hexagon::is_quantized_type(src0->get_type());
     const auto src0_actual_row_size = hexagon::get_dequantized_row_size(src0);
-    auto *     dequantize_row_func  = hexagon::get_type_traits(src0->get_type()).dequantize_row;
+    auto *     dequantize_row_func  = hexagon::get_type_traits(src0->get_type()).to_float;
     if (is_quantized && dequantize_row_func == nullptr) {
         DEVICE_LOG_ERROR("Unsupported quantized src0 type: %d, dequantize_row_func is null\n", src0->get_type());
         return;
     }
 
-    const auto   r02          = src1->get_ne(2) / src0->get_ne(2);
-    const auto   r03          = src1->get_ne(3) / src0->get_ne(3);
-    const auto * src0_ptr     = reinterpret_cast<const uint8_t *>(src0->get_read_buffer());
-    const auto * src1_ptr     = reinterpret_cast<const uint8_t *>(src1->get_read_buffer());
-    auto *       dst_ptr      = reinterpret_cast<uint8_t *>(dst->get_write_buffer());
-    const auto   total_planes = dst->get_ne(3) * dst->get_ne(2);
+    const auto r02          = src1->get_ne(2) / src0->get_ne(2);
+    const auto r03          = src1->get_ne(3) / src0->get_ne(3);
+    const auto total_planes = dst->get_ne(3) * dst->get_ne(2);
 
     auto start_end_plane   = std::pair<int64_t, int64_t>{ 0, total_planes };
     auto start_end_row     = std::pair<int64_t, int64_t>{ 0, dst->get_ne(1) };
     auto start_end_element = std::pair<int64_t, int64_t>{ 0, dst->get_ne(0) };
 
-    if (total_planes >= params->tcnt) {
-        start_end_plane = hexagon::get_thread_work_slice(total_planes, params->tidx, params->tcnt);
-    } else if (dst->get_ne(1) >= params->tcnt) {
-        start_end_row = hexagon::get_thread_work_slice(dst->get_ne(1), params->tidx, params->tcnt);
+    if (total_planes >= params->get_thread_count()) {
+        start_end_plane = params->get_work_slice(total_planes);
+    } else if (dst->get_ne(1) >= params->get_thread_count()) {
+        start_end_row = params->get_work_slice(dst->get_ne(1));
     } else {
-        start_end_element = hexagon::get_thread_work_slice(dst->get_ne(0), params->tidx, params->tcnt);
+        start_end_element = params->get_work_slice(dst->get_ne(0));
     }
 
     if (start_end_plane.second <= start_end_plane.first || start_end_row.second <= start_end_row.first ||
@@ -218,7 +60,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
     bool            is_mem_cache               = false;
     if (is_quantized) {
         src0_plane_slice_row_count =
-            std::min(params->vtcm_quota_size / src0_actual_row_size, src0_plane_slice_row_count);
+            std::min(params->get_vtcm_quota_size() / src0_actual_row_size, src0_plane_slice_row_count);
         src0_plane_cache_size = src0_actual_row_size * src0_plane_slice_row_count;
         src0_plane_cache_ptr  = params->get_vtcm_cache(src0_plane_cache_size);
         if (src0_plane_cache_ptr == nullptr) {
@@ -238,7 +80,17 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         src0_plane_cache_size);
 
     const size_t valid_row_bytes = src1->get_ne(0) * sizeof(data_type);
-    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_SUB_PROC(dst, params->tidx, dequant);
+    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_SUB_PROC(dst, params->get_thread_index(), dequant);
+
+    uint8_t * dst_ptr = dst->get_write_buffer();
+    if (!dst_ptr) {
+        DEVICE_LOG_ERROR("mul_mat_impl: dst_ptr is not writable, tensor: %p, type: %s\n", (void *) dst,
+                         hexagon::get_type_name(dst->get_type()));
+        return;
+    }
+
+    const uint8_t * src0_ptr = src0->get_read_buffer();
+    const uint8_t * src1_ptr = src1->get_read_buffer();
     for (int64_t ip = start_end_plane.first; ip < start_end_plane.second; ip++) {
         const auto   i3         = ip / dst->get_ne(2);
         const auto   i2         = ip - i3 * dst->get_ne(2);
@@ -289,6 +141,8 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
             }
         }
     }
+
+    dst->release_write_buffer();  // mark the output tensor as modified
 }
 
 bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1) {
@@ -299,7 +153,7 @@ bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const n
     }
 
     const auto type_traits = hexagon::get_type_traits(src0.type);
-    if (!type_traits.is_quantized || type_traits.dequantize_row == nullptr) {
+    if (!type_traits.is_quantized || type_traits.to_float == nullptr) {
         DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) and src1.type(%s) mismatch and src0 is not quantized\n",
                          hexagon::get_type_name(src0.type), hexagon::get_type_name(src1.type));
         return false;
@@ -311,7 +165,7 @@ bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const n
         return false;
     }
 
-    const auto vtcm_thread_quota_size = hexagon::vtcm_mem::get_total_size() / hexagon::kMaxThreadCount;
+    const auto vtcm_thread_quota_size = hexagon::default_thread_pool::get_per_thread_vtcm_quota();
     if (src0.ne[0] * sizeof(hexagon::dequantized_element_type) > vtcm_thread_quota_size) {
         DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) ne[0] is too large: %ld, vtcm_thread_quota_size: %zu\n",
                          hexagon::get_type_name(src0.type), (long) src0.ne[0], vtcm_thread_quota_size);
@@ -339,14 +193,13 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
         return true;  // skip if no src
     }
 
-    // TODO: array?
     switch (src1->get_type()) {
         case NPU_DATA_TYPE_F32:
-            mul_mat_impl<vec_dot_product_f32_f32>(src0, src1, out, params);
+            mul_mat_impl<hexagon::vec_dot_product_f32_f32>(src0, src1, out, params);
             return true;
 
         case NPU_DATA_TYPE_F16:
-            mul_mat_impl<vec_dot_product_f16_f16>(src0, src1, out, params);
+            mul_mat_impl<hexagon::vec_dot_product_f16_f16>(src0, src1, out, params);
             return true;
         default:
             break;
@@ -356,18 +209,25 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
     return false;
 }
 
-bool is_mul_mat_supported(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1,
-                          const npu_device_tensor_spec & dst, npu_device_tensor_op op) {
+bool is_mul_mat_supported(npu_device_tensor_op op, const npu_device_tensor_spec * dst,
+                          const npu_device_tensor_spec * srcs, size_t src_len) {
     if (op != NPU_OP_MUL_MAT) {
         DEVICE_LOG_DEBUG("op is not MUL_MAT: %d\n", op);
         return false;
     }
 
-    if (dst.type != NPU_DATA_TYPE_F32) {
-        DEVICE_LOG_DEBUG("[%s]dst type is not F32: %s\n", op_get_name(op), get_type_name(dst.type));
+    if (!dst || !srcs || src_len < 2) {
+        DEVICE_LOG_DEBUG("[%s]invalid dst or srcs\n", hexagon::op_get_name(op));
         return false;
     }
 
+    if (dst->type != NPU_DATA_TYPE_F32) {
+        DEVICE_LOG_DEBUG("[%s]dst type is not F32: %s\n", op_get_name(op), get_type_name(dst->type));
+        return false;
+    }
+
+    const auto & src0 = srcs[0];
+    const auto & src1 = srcs[1];
     if (src0.type != src1.type) {
 #ifdef GGML_HEXAGON_ENABLE_QUANTIZED_TENSORS
         if (!is_quantized_mul_mat_supported(src0, src1)) {
@@ -380,15 +240,15 @@ bool is_mul_mat_supported(const npu_device_tensor_spec & src0, const npu_device_
 #endif
     }
 
-    if (src0.ne[0] != src1.ne[0] || src0.ne[1] != dst.ne[0]) {
+    if (src0.ne[0] != src1.ne[0] || src0.ne[1] != dst->ne[0]) {
         DEVICE_LOG_DEBUG("[%s]src0 and src1 cannot multiply: %ldx%ld vs %ldx%ld\n", op_get_name(op), (long) src0.ne[0],
                          (long) src0.ne[1], (long) src1.ne[0], (long) src1.ne[1]);
         return false;
     }
 
-    if (src1.ne[1] != dst.ne[1] || src1.ne[2] != dst.ne[2] || src1.ne[3] != dst.ne[3]) {
+    if (src1.ne[1] != dst->ne[1] || src1.ne[2] != dst->ne[2] || src1.ne[3] != dst->ne[3]) {
         DEVICE_LOG_DEBUG("[%s]src1 and dst dimensions not match: %ldx%ld vs %ldx%ld\n", op_get_name(op),
-                         (long) src1.ne[2], (long) src1.ne[3], (long) dst.ne[2], (long) dst.ne[3]);
+                         (long) src1.ne[2], (long) src1.ne[3], (long) dst->ne[2], (long) dst->ne[3]);
         return false;
     }
 

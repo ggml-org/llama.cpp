@@ -21,15 +21,17 @@ class host_tensor {
 
     explicit host_tensor(ggml_tensor * tensor, int buffer_fd, uint64_t offset, remote_handle64 device_handle) :
         _device_handle(device_handle) {
-
         // TODO: figure out why the npu_device_tensor_config can't be larger than 100 bytes
-        static_assert(sizeof(npu_device_tensor_config) < 100, "npu_device_tensor_config size too large");
+        static_assert(sizeof(npu_device_tensor_config) < kMaxNpuRpcStructSize,
+                      "npu_device_tensor_config size too large");
 
-        _info.buffer_fd = buffer_fd;
-        _info.offset    = offset;
-        _info.type      = type_to_npu_type(tensor->type);
-        _info.size      = ggml_nbytes(tensor);
+        _info.buffer_fd   = buffer_fd;
+        _info.offset      = offset;
+        _info.type        = type_to_npu_type(tensor->type);
+        _info.size        = ggml_nbytes(tensor);
+        _info.is_constant = false;  // TODO: support constant tensors in the future
         // _info.op will be updated in update_params()
+        _info_update.op   = NPU_OP_COUNT;
 
         static_assert(DEVICE_TENSOR_MAX_DIMS == GGML_MAX_DIMS, "tensor dimensions mismatch");
         static_assert(sizeof(_info.ne) == sizeof(tensor->ne), "tensor ne size mismatch");
@@ -46,10 +48,10 @@ class host_tensor {
 
         tensor->extra = this;
         _ggml_tensor  = tensor;
-        LOG_DEBUG("host_tensor(%p), ggml_tensor(%p[%ldx%ldx%ldx%ld], nb[%ld][%ld][%ld][%ld], %s), handle(%p)\n",
-                  (void *) this, (void *) tensor, (long) tensor->ne[0], (long) tensor->ne[1], (long) tensor->ne[2],
+        LOG_DEBUG("host_tensor(%p), ggml_tensor(%s[%ldx%ldx%ldx%ld], nb[%ld][%ld][%ld][%ld], %s, %p), handle(%p)\n",
+                  (void *) this, tensor->name, (long) tensor->ne[0], (long) tensor->ne[1], (long) tensor->ne[2],
                   (long) tensor->ne[3], (long) tensor->nb[0], (long) tensor->nb[1], (long) tensor->nb[2],
-                  (long) tensor->nb[3], ggml_type_name(tensor->type), (void *) _device_tensor_handle);
+                  (long) tensor->nb[3], ggml_type_name(tensor->type), (void *) tensor, (void *) _device_tensor_handle);
     }
 
     ~host_tensor() {
@@ -76,11 +78,9 @@ class host_tensor {
         auto new_op         = op_to_npu_op(_ggml_tensor->op);
         bool params_changed = new_op != _info_update.op;
         if (params_changed) {
-            LOG_DEBUG("host_tensor(%p) op changed: %s -> %s\n", (void *) this, get_npu_op_desc(_info.op),
-                      get_npu_op_desc(new_op));
+            LOG_DEBUG("host_tensor(%p) op changed: %s\n", (void *) this, get_npu_op_desc(new_op));
         }
 
-        _info.op        = new_op;
         _info_update.op = new_op;
 
         if (memcmp(_info_update.params, _ggml_tensor->op_params, sizeof(_info_update.params)) != 0) {
@@ -92,14 +92,15 @@ class host_tensor {
         }
 
         npu_device_tensor_handle_t src_tensor_handles[DEVICE_TENSOR_MAX_SRC] = {};
-        for (size_t j = 0; j < DEVICE_TENSOR_MAX_SRC && _ggml_tensor->src[j]; ++j) {
-            auto * src            = host_tensor::from_ggml_tensor(_ggml_tensor->src[j]);
-            src_tensor_handles[j] = src->get_device_tensor_handle();
-            LOG_DEBUG("host_tensor(%p) set_src[%zu]: %p\n", (void *) this, j, (void *) src);
-        }
-
         static_assert(std::is_same<decltype(_info_update.src_handles), decltype(src_tensor_handles)>::value,
                       "src tensor handles type mismatch");
+
+        for (size_t j = 0; j < DEVICE_TENSOR_MAX_SRC && _ggml_tensor->src[j]; ++j) {
+            auto * ggml_src       = _ggml_tensor->src[j];
+            auto * src            = host_tensor::from_ggml_tensor(ggml_src);
+            src_tensor_handles[j] = src->get_device_tensor_handle();
+            LOG_DEBUG("host_tensor(%p) set_src[%zu]: %p(%s)\n", (void *) this, j, (void *) src, ggml_src->name);
+        }
 
         if (memcmp(_info_update.src_handles, src_tensor_handles, sizeof(_info_update.src_handles)) != 0) {
             params_changed = true;
@@ -128,14 +129,14 @@ class host_tensor {
         GGML_ASSERT(ggml_tensor == _ggml_tensor);
 
         auto new_op     = op_to_npu_op(_ggml_tensor->op);
-        _info.op        = new_op;
         _info_update.op = new_op;
         memcpy(_info_update.params, _ggml_tensor->op_params, sizeof(_info_update.params));
 
         for (size_t j = 0; j < DEVICE_TENSOR_MAX_SRC && _ggml_tensor->src[j]; ++j) {
-            auto * src                  = host_tensor::from_ggml_tensor(_ggml_tensor->src[j]);
+            auto * ggml_src             = _ggml_tensor->src[j];
+            auto * src                  = host_tensor::from_ggml_tensor(ggml_src);
             _info_update.src_handles[j] = src->get_device_tensor_handle();
-            LOG_DEBUG("host_tensor(%p) set_src[%zu]: %p\n", (void *) this, j, (void *) src);
+            LOG_DEBUG("host_tensor(%p) set_src[%zu]: %p(%s)\n", (void *) this, j, (void *) src, ggml_src->name);
         }
 
         LOG_DEBUG("host_tensor(%p) update_params, op: %s, params: [%x, %x, %x, %x]\n", (void *) this,
@@ -145,6 +146,15 @@ class host_tensor {
     }
 
     bool is_valid() const { return _device_tensor_handle != 0; }
+
+    int64_t get_ne(size_t index) const {
+        if (index >= DEVICE_TENSOR_MAX_DIMS) {
+            LOG_ERROR("host_tensor(%p) get_ne: index out of bounds: %zu\n", (void *) this, index);
+            return 0;
+        }
+
+        return _info.ne[index];
+    }
 
   private:
     remote_handle64                 _device_handle        = 0;

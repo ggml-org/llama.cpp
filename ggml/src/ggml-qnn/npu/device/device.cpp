@@ -9,10 +9,10 @@
 #include "graph.hpp"
 #include "hexagon_npu.h"
 #include "op_impl.hpp"
-#include "quants.hpp"
 #include "remote.h"
 #include "tensor.hpp"
 #include "thread_pool.hpp"
+#include "type_traits.hpp"
 #include "util.hpp"
 
 namespace {
@@ -124,21 +124,20 @@ int npu_device_close(remote_handle64 h) {
 
 AEEResult npu_device_device_get_alignment(remote_handle64 _h, uint32_t * alignment) {
     NPU_UNUSED(_h);
-    *alignment = sizeof(HVX_Vector);
+    *alignment = sizeof(HVX_VectorPair);
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_device_support_op(remote_handle64 _h, const npu_device_tensor_spec * src0,
-                                       const npu_device_tensor_spec * src1, const npu_device_tensor_spec * dst,
-                                       npu_device_tensor_op op, boolean * is_supported) {
+AEEResult npu_device_device_support_op(remote_handle64 _h, npu_device_tensor_op op, const npu_device_tensor_spec * dst,
+                                       const npu_device_tensor_spec * srcs, int srcsLen, boolean * is_supported) {
     NPU_UNUSED(_h);
 
-    if (!src0 || !src1 || !dst || !is_supported) {
+    if (!srcs || srcsLen <= 0 || !dst || !is_supported) {
         DEVICE_LOG_ERROR("npu_device_device_support_op: Invalid arguments");
         return AEE_EINVARGS;
     }
 
-    *is_supported = hexagon::support_op(*src0, *src1, *dst, op);
+    *is_supported = hexagon::support_op(op, dst, srcs, srcsLen);
     return AEE_SUCCESS;
 }
 
@@ -208,19 +207,20 @@ AEEResult npu_device_graph_set_tensor_with_param(remote_handle64 _h, npu_device_
                                                  int                                     tensor_paramsLen) {
     NPU_UNUSED(_h);
     auto * graph = graph_from_handle(graph_handle);
-    if (!graph || !tensor_handles || tensor_handlesLen <= 0 || !tensor_params ||
-        tensor_handlesLen != tensor_paramsLen) {
+    if (!graph || tensor_handlesLen != tensor_paramsLen || tensor_handlesLen < 0) {
         return AEE_EINVHANDLE;
     }
 
-    graph->set_tensor(tensor_handles, tensor_handlesLen);
-    for (int i = 0; i < tensor_handlesLen; ++i) {
-        auto * tensor = tensor_from_handle(tensor_handles[i]);
-        if (tensor) {
-            tensor->update_config(tensor_params[i]);
+    if (tensor_params && tensor_handles) {
+        for (int i = 0; i < tensor_handlesLen; ++i) {
+            auto * tensor = tensor_from_handle(tensor_handles[i]);
+            if (tensor) {
+                tensor->update_config(tensor_params[i]);
+            }
         }
     }
 
+    graph->set_tensor(tensor_handles, tensor_handlesLen);
     return AEE_SUCCESS;
 }
 

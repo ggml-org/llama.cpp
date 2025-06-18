@@ -3,6 +3,8 @@ cmake_policy(SET CMP0115 OLD)
 
 if(DEFINED ENV{HEXAGON_SDK_ROOT})
     set(HEXAGON_SDK_ROOT $ENV{HEXAGON_SDK_ROOT})
+    message("HEXAGON_SDK_ROOT (from environment): ${HEXAGON_SDK_ROOT}")
+elseif(DEFINED HEXAGON_SDK_ROOT)
     message("HEXAGON_SDK_ROOT: ${HEXAGON_SDK_ROOT}")
 else()
     message(FATAL_ERROR "HEXAGON_SDK_ROOT not defined")

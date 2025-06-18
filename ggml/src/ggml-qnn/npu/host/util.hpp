@@ -26,4 +26,6 @@ void enable_unsigned_dsp_module(common::rpc_interface_ptr rpc_interface, uint32_
 
 void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len);
 
+constexpr const size_t kMaxNpuRpcStructSize = 100;  // TODO: figure out the actual size
+
 }  // namespace hexagon

@@ -6,7 +6,7 @@
 #include "ggml-common.h"
 #undef GGML_COMMON_DECL_CPP
 
-static_assert(sizeof(npu_device_block_q4_K) == sizeof(block_q4_K), "npu_device_block_q4_K size mismatch");
+static_assert(sizeof(npu_device_block_q4_k) == sizeof(block_q4_K), "npu_device_block_q4_k size mismatch");
 static_assert(sizeof(npu_device_block_q4_0) == sizeof(block_q4_0), "npu_device_block_q4_0 size mismatch");
 static_assert(sizeof(npu_device_block_q8_0) == sizeof(block_q8_0), "npu_device_block_q8_0 size mismatch");
 static_assert(QUANT_K_SCALE_SIZE == K_SCALE_SIZE, "QUANT_K_SCALE_SIZE size mismatch");
@@ -27,6 +27,8 @@ enum npu_device_tensor_op op_to_npu_op(ggml_op op) {
             return NPU_OP_MUL;
         case GGML_OP_RMS_NORM:
             return NPU_OP_RMS_NORM;
+        case GGML_OP_FLASH_ATTN_EXT:
+            return NPU_OP_FLASH_ATTN;
         default:
             return NPU_OP_COUNT;
     }
@@ -44,6 +46,8 @@ const char * get_npu_op_desc(enum npu_device_tensor_op op) {
             return ggml_op_name(GGML_OP_MUL);
         case NPU_OP_RMS_NORM:
             return ggml_op_name(GGML_OP_RMS_NORM);
+        case NPU_OP_FLASH_ATTN:
+            return ggml_op_name(GGML_OP_FLASH_ATTN_EXT);
         default:
             return "UNKNOWN";
     }
@@ -160,27 +164,65 @@ void get_op_tensor_desc(const ggml_tensor * dst, char * out, size_t max_len) {
         }
     };
 
-    auto * src0 = dst->src[0];
-    if (src0 == nullptr) {
-        print_tensor(dst, out, max_len);
-        return;
-    }
+    constexpr const auto get_src_tensor_count = [](const ggml_tensor * tensor) -> size_t {
+        for (size_t i = 0; i < GGML_MAX_SRC; ++i) {
+            if (!tensor->src[i]) {
+                return i;
+            }
+        }
+
+        return GGML_MAX_SRC;
+    };
 
     char dst_desc[256];
     print_tensor(dst, dst_desc, sizeof(dst_desc));
-
-    char src0_desc[256];
-    print_tensor(src0, src0_desc, sizeof(src0_desc));
-
-    auto * src1 = dst->src[1];
-    if (src1 == nullptr) {
-        snprintf(out, max_len, "dst: %s, src0: %s", dst_desc, src0_desc);
-        return;
+    switch (get_src_tensor_count(dst)) {
+        case 4:
+            {
+                char src0_desc[256];
+                print_tensor(dst->src[0], src0_desc, sizeof(src0_desc));
+                char src1_desc[256];
+                print_tensor(dst->src[1], src1_desc, sizeof(src1_desc));
+                char src2_desc[256];
+                print_tensor(dst->src[2], src2_desc, sizeof(src2_desc));
+                char src3_desc[256];
+                print_tensor(dst->src[3], src3_desc, sizeof(src3_desc));
+                snprintf(out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s, src3: %s", dst_desc, src0_desc,
+                         src1_desc, src2_desc, src3_desc);
+                return;
+            }
+        case 3:
+            {
+                char src0_desc[256];
+                print_tensor(dst->src[0], src0_desc, sizeof(src0_desc));
+                char src1_desc[256];
+                print_tensor(dst->src[1], src1_desc, sizeof(src1_desc));
+                char src2_desc[256];
+                print_tensor(dst->src[2], src2_desc, sizeof(src2_desc));
+                snprintf(out, max_len, "dst: %s, src0: %s, src1: %s, src2: %s", dst_desc, src0_desc, src1_desc,
+                         src2_desc);
+                return;
+            }
+        case 2:
+            {
+                char src0_desc[256];
+                print_tensor(dst->src[0], src0_desc, sizeof(src0_desc));
+                char src1_desc[256];
+                print_tensor(dst->src[1], src1_desc, sizeof(src1_desc));
+                snprintf(out, max_len, "dst: %s, src0: %s, src1: %s", dst_desc, src0_desc, src1_desc);
+                return;
+            }
+        case 1:
+            {
+                char src0_desc[256];
+                print_tensor(dst->src[0], src0_desc, sizeof(src0_desc));
+                snprintf(out, max_len, "dst: %s, src0: %s", dst_desc, src0_desc);
+                return;
+            }
+        default:
+            snprintf(out, max_len, "dst: %s", dst_desc);
+            return;
     }
-
-    char src1_desc[256];
-    print_tensor(src1, src1_desc, sizeof(src1_desc));
-    snprintf(out, max_len, "dst: %s, src0: %s, src1: %s", dst_desc, src0_desc, src1_desc);
 }
 
 }  // namespace hexagon

@@ -114,7 +114,9 @@ size_t backend_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
 size_t backend_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     auto * buffer_type_obj = get_buffer_type_object(buft);
     GGML_ASSERT(buffer_type_obj != nullptr);
-    return buffer_type_obj->get_max_buffer_size();
+    auto size = buffer_type_obj->get_max_buffer_size();
+    LOG_DEBUG("[hexagon-npu][%s]max_buffer_size: %zu\n", buffer_type_obj->get_name(), size);
+    return size;
 }
 
 bool backend_buffer_is_host(ggml_backend_buffer_type_t buft) {

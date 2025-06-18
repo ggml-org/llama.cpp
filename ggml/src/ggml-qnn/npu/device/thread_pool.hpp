@@ -8,6 +8,7 @@
 #include <string>
 
 #include "util.hpp"
+#include "vtcm_mem.hpp"
 
 namespace hexagon {
 
@@ -78,28 +79,65 @@ template <size_t _stack_size> class qurt_thread {
 
 using qurt_thread_ptr = std::unique_ptr<qurt_thread<kDefaultStackSize>>;
 
-template <size_t _thread_count> class thread_pool {
-    static_assert(_thread_count > 1, "Thread count must be greater than 1");
-    constexpr const static size_t kMaxSubThreadCount = _thread_count - 1;
+template <size_t _ThreadCount> class thread_pool {
+    static_assert(_ThreadCount > 1, "Thread count must be greater than 1");
+    constexpr const static size_t kMaxThreadCount    = _ThreadCount;
+    constexpr const static size_t kMaxSubThreadCount = _ThreadCount - 1;
 
   public:
     typedef qurt_thread<kDefaultStackSize> thread_type;
-    typedef void (*task_type)(thread_pool * pool, size_t thread_idx, size_t thread_count, void * arg);
+
+    struct thread_params {
+        size_t                         tidx;
+        const size_t                   tcnt = kMaxThreadCount;
+        thread_pool<kMaxThreadCount> * pool = nullptr;
+        size_t                         vtcm_quota_size;
+
+        std::unique_ptr<vtcm_mem>  vtcm_cache;
+        std::unique_ptr<uint8_t[]> mem_cache;
+        size_t                     mem_cache_size = 0;
+
+        uint8_t * get_vtcm_cache(size_t size) {
+            if (!vtcm_cache || vtcm_cache->get_size() < size) {
+                DEVICE_SCOPED_PERFORMANCE_TRACKER("[thread_params]get_vtcm_cache, size: %zu, tidx: %zu", size, tidx);
+                vtcm_cache.reset();  // reset the cache to create a new one
+                vtcm_cache = std::make_unique<vtcm_mem>(size, false);
+            }
+
+            if (!vtcm_cache->is_valid()) {
+                return nullptr;
+            }
+
+            return vtcm_cache->get_mem();
+        }
+
+        uint8_t * get_mem_cache(size_t size) {
+            if (!mem_cache || mem_cache_size < size) {
+                mem_cache.reset();  // reset the cache to create a new one
+                mem_cache      = std::make_unique<uint8_t[]>(size + 256);
+                mem_cache_size = mem_cache ? size : 0;
+            }
+
+            return mem_cache.get();
+        }
+    };
+
+    typedef void (*task_type)(thread_pool * pool, thread_params * param, void * arg);
 
     thread_pool() {
-        std::string thread_name_base = "thread_pool_";
+        for (size_t i = 0; i < kMaxThreadCount; ++i) {
+            _thread_params[i].tidx            = i;
+            _thread_params[i].vtcm_quota_size = hexagon::vtcm_mem::get_avail_block_size() / kMaxThreadCount;
+            _thread_params[i].pool            = this;
+        }
+
         qurt_barrier_init(&_pending, kMaxSubThreadCount + 1);
         qurt_barrier_init(&_completed, kMaxSubThreadCount + 1);
-        const auto priority = qurt_thread_get_priority(qurt_thread_get_id());
+        const auto  priority         = qurt_thread_get_priority(qurt_thread_get_id());
+        std::string thread_name_base = "thread_pool_";
         for (size_t i = 0; i < kMaxSubThreadCount; ++i) {
-            auto & thread_arg     = _thread_args[i];
-            thread_arg.pool       = this;
-            thread_arg.thread_idx = i + 1;
-
             auto thread = std::make_unique<thread_type>(
-                thread_name_base + std::to_string(i),
-                reinterpret_cast<thread_type::qurt_thread_func_type>(&thread_pool::thread_func_impl), &thread_arg,
-                priority);
+                thread_name_base + std::to_string(i), &thread_pool::thread_func_impl, &_thread_params[i + 1], priority);
             if (!thread->is_valid()) {
                 DEVICE_LOG_ERROR("Failed to create thread: %zu", i);
                 // destroy all barriers and threads at destructor
@@ -108,6 +146,7 @@ template <size_t _thread_count> class thread_pool {
 
             _threads[i] = std::move(thread);
         }
+
         DEVICE_LOG_DEBUG("thread_pool.created: %zu", kMaxSubThreadCount);
     }
 
@@ -130,60 +169,85 @@ template <size_t _thread_count> class thread_pool {
             return false;
         }
 
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
+        _task_begin_cycles = HAP_perf_get_qtimer_count();
+#endif
+
         _task = task;
         _arg  = arg;
         qurt_barrier_wait(&_pending);
 
-        task(this, 0, kMaxSubThreadCount + 1, arg);
+        task(this, &_thread_params[0], arg);
         DEVICE_LOG_DEBUG("main_thread.task_completed: 0");
 
         qurt_barrier_wait(&_completed);
 
         _task = nullptr;
         _arg  = nullptr;
+
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
+        _task_begin_cycles = 0;
+#endif
+
         return true;
     }
 
     void sync_thread() { qurt_barrier_wait(&_completed); }
 
-  private:
-    struct thread_pool_arg {
-        thread_pool * pool       = nullptr;
-        size_t        thread_idx = 0;
-    };
+    static size_t get_per_thread_vtcm_quota() { return vtcm_mem::get_total_size() / kMaxThreadCount; }
 
-    static void thread_func_impl(thread_type * thread, thread_pool_arg * arg) {
+  private:
+    static void thread_func_impl(thread_type * thread, void * arg) {
         NPU_UNUSED(thread);
 
-        DEVICE_LOG_DEBUG("thread_func_impl.start: %zu", arg->thread_idx);
+        auto * param = reinterpret_cast<thread_params *>(arg);
 
-        auto & pool = *arg->pool;
+        DEVICE_LOG_DEBUG("thread_func_impl.start: %zu", param->tidx);
+
+        auto & pool = *(param->pool);
         for (;;) {
             qurt_barrier_wait(&pool._pending);
             if (pool._thread_exit) {
-                DEVICE_LOG_DEBUG("thread_func_impl.exit: %zu", arg->thread_idx);
+                DEVICE_LOG_DEBUG("thread_func_impl.exit: %zu", param->tidx);
                 break;
             }
 
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
+            auto task_begin_cycles = pool._task_begin_cycles.load();
+            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, prepare: %lluus", param->tidx,
+                            static_cast<unsigned long long>(
+                                HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - task_begin_cycles)));
+#endif
+
             auto task = pool._task;
             if (task) {
-                task(arg->pool, arg->thread_idx, kMaxSubThreadCount + 1, pool._arg);
+                task(param->pool, param, pool._arg);
             }
 
-            DEVICE_LOG_DEBUG("thread_func_impl.task_completed: %zu", arg->thread_idx);
+            DEVICE_LOG_DEBUG("thread_func_impl.task_completed: %zu", param->tidx);
             qurt_barrier_wait(&pool._completed);
+
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
+            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, task_end: %lluus", param->tidx,
+                            static_cast<unsigned long long>(
+                                HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - task_begin_cycles)));
+#endif
         }
 
-        DEVICE_LOG_DEBUG("thread_func_impl.end: %zu", arg->thread_idx);
+        DEVICE_LOG_DEBUG("thread_func_impl.end: %zu", param->tidx);
     }
 
     std::atomic_bool                                _thread_exit = false;
     std::array<qurt_thread_ptr, kMaxSubThreadCount> _threads;
-    thread_pool_arg                                 _thread_args[kMaxSubThreadCount] = {};
-    qurt_barrier_t                                  _pending                         = {};
-    qurt_barrier_t                                  _completed                       = {};
-    task_type                                       _task                            = nullptr;
-    void *                                          _arg                             = nullptr;
+    qurt_barrier_t                                  _pending                        = {};
+    qurt_barrier_t                                  _completed                      = {};
+    thread_params                                   _thread_params[kMaxThreadCount] = {};
+    task_type                                       _task                           = nullptr;
+    void *                                          _arg                            = nullptr;
+
+#ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
+    std::atomic<uint64_t> _task_begin_cycles = 0;
+#endif
 
     DISABLE_COPY_AND_MOVE(thread_pool);
 };

@@ -29,6 +29,8 @@ bool host_graph::update(ggml_cgraph * cgraph) {
         return false;
     }
 
+    LOG_DEBUG("[%p]host_graph::update started\n", (void *) this);
+
     SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]update, handle(%p)", (void *) this, (void *) _graph_handle);
 
     _tensor_handles.clear();
@@ -40,8 +42,9 @@ bool host_graph::update(ggml_cgraph * cgraph) {
         if (node->op == GGML_OP_NONE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE ||
             node->op == GGML_OP_RESHAPE) {
             // skip view liked ops
-            LOG_DEBUG("node[%d]%s(%s), addr: %p, type: %s, skipped\n", i, ggml_get_name(node), ggml_op_desc(node),
-                      (void *) node, ggml_type_name(node->type));
+            LOG_DEBUG("node[%d]%s(%s), addr: %p, type: %s, dims: %ldx%ldx%ldx%ld, skipped\n", i, ggml_get_name(node),
+                      ggml_op_desc(node), (void *) node, ggml_type_name(node->type), (long) node->ne[0],
+                      (long) node->ne[1], (long) node->ne[2], (long) node->ne[3]);
             continue;
         }
 
@@ -54,9 +57,10 @@ bool host_graph::update(ggml_cgraph * cgraph) {
 
         _tensor_handles.push_back(tensor_obj->get_device_tensor_handle());
         _tensor_update_configs.push_back(tensor_obj->update_hosts_params_only(node));
-        LOG_DEBUG("[%p]node[%d]%s(%s), addr: %p, type: %s, tensor_handle: %p\n", (void *) this, i, ggml_get_name(node),
-                  ggml_op_desc(node), (void *) node, ggml_type_name(node->type),
-                  (void *) tensor_obj->get_device_tensor_handle());
+        LOG_DEBUG("node[%d]%s(%s), addr: %p, type: %s, dims: %ldx%ldx%ldx%ld, tensor_handle: %p\n", i,
+                  ggml_get_name(node), ggml_op_desc(node), (void *) node, ggml_type_name(node->type),
+                  (long) tensor_obj->get_ne(0), (long) tensor_obj->get_ne(1), (long) tensor_obj->get_ne(2),
+                  (long) tensor_obj->get_ne(3), (void *) tensor_obj->get_device_tensor_handle());
     }
 
     GGML_ASSERT(_tensor_handles.size() == _tensor_update_configs.size());
@@ -71,7 +75,7 @@ bool host_graph::update(ggml_cgraph * cgraph) {
         (int) _tensor_update_configs.size());
 
     if (ret != AEE_SUCCESS) {
-        LOG_ERROR("Failed to set tensors in host_graph: 0x%x\n", (int) ret);
+        LOG_ERROR("[%p]failed to set tensors in host_graph: 0x%x\n", (void *) this, (int) ret);
         return false;
     }
 
