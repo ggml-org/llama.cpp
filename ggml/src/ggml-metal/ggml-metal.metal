@@ -993,6 +993,64 @@ kernel void kernel_neg(
     dst[tpig] = -src0[tpig];
 }
 
+kernel void kernel_reglu(
+        device const char * src0,
+        device       char * dst,
+        constant ggml_metal_kargs_glu & args,
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    device const float * src_row = (device const float *) ((device const char *) src0 + tgpig*args.nb01);
+    device       float * dst_row = (device       float *) ((device       char *) dst  + tgpig*args.nb1);
+
+    for (int i00 = tpitg; i00 < args.ne00/2; i00 += ntg) {
+        const float x0 = src_row[i00];
+        const float x1 = src_row[i00 + args.ne00/2];
+
+        dst_row[i00] = x0*x1*(x0 > 0.0f);
+    }
+}
+
+kernel void kernel_geglu(
+        device const char * src0,
+        device       char * dst,
+        constant ggml_metal_kargs_glu & args,
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    device const float * src_row = (device const float *) ((device const char *) src0 + tgpig*args.nb01);
+    device       float * dst_row = (device       float *) ((device       char *) dst  + tgpig*args.nb1);
+
+    for (int i00 = tpitg; i00 < args.ne00/2; i00 += ntg) {
+        const float x0 = src_row[i00];
+        const float x1 = src_row[i00 + args.ne00/2];
+
+        const float gelu = 0.5f*x0*(1.0f + precise::tanh(SQRT_2_OVER_PI*x0*(1.0f + GELU_COEF_A*x0*x0)));
+
+        dst_row[i00] = gelu*x1;
+    }
+}
+
+kernel void kernel_swiglu(
+        device const char * src0,
+        device       char * dst,
+        constant ggml_metal_kargs_glu & args,
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    device const float * src_row = (device const float *) ((device const char *) src0 + tgpig*args.nb01);
+    device       float * dst_row = (device       float *) ((device       char *) dst  + tgpig*args.nb1);
+
+    for (int i00 = tpitg; i00 < args.ne00/2; i00 += ntg) {
+        const float x0 = src_row[i00];
+        const float x1 = src_row[i00 + args.ne00/2];
+
+        const float silu = x0 / (1.0f + exp(-x0));
+
+        dst_row[i00] = silu*x1;
+    }
+}
+
 kernel void kernel_sum_rows(
         device const float * src0,
         device       float * dst,
