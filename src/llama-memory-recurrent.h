@@ -116,7 +116,7 @@ private:
     size_t total_size() const;
 
     size_t size_r_bytes() const;
-    size_t size_s_bytes () const;
+    size_t size_s_bytes() const;
 
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
     void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
