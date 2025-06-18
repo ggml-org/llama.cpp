@@ -7322,9 +7322,9 @@ void ggml_compute_forward_flash_attn_ext_mixed(
             const int64_t q_head_start = kv_head * rk2;
             const int64_t q_head_end   = q_head_start + rk2;
 
-            for (int64_t q_head = q_head_start; q_head < q_head_end; ++ q_head) {
+                for (int64_t q_head = q_head_start; q_head < q_head_end; ++ q_head) {
                 for (int64_t q_pos = 0; q_pos < SEQ_LEN; ++ q_pos) {
-                    float* mp = (float*) mask->data + q_pos * nek1;
+                    float* mp = (float*) ((char *) mask->data + q_pos * mask->nb[1]);
                     if (mp[kv_pos] == -INFINITY) {
                         continue;
                     }
