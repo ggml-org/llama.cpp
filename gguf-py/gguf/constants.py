@@ -164,7 +164,9 @@ class Keys:
         INNER_SIZE     = "{arch}.ssm.inner_size"
         STATE_SIZE     = "{arch}.ssm.state_size"
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
+        GROUP_COUNT    = "{arch}.ssm.group_count"
         DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
+        HEAD_DIM       = "{arch}.ssm.head_dim"
 
     class WKV:
         HEAD_SIZE = "{arch}.wkv.head_size"
@@ -319,6 +321,7 @@ class MODEL_ARCH(IntEnum):
     RWKV7            = auto()
     ARWKV7           = auto()
     MAMBA            = auto()
+    MAMBA2           = auto()
     XVERSE           = auto()
     COMMAND_R        = auto()
     COHERE2          = auto()
@@ -346,6 +349,7 @@ class MODEL_ARCH(IntEnum):
     BAILINGMOE       = auto()
     DOTS1            = auto()
     ARCEE            = auto()
+    FALCON_H1        = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -404,7 +408,9 @@ class MODEL_TENSOR(IntEnum):
     SSM_DT               = auto()
     SSM_A                = auto()
     SSM_D                = auto()
+    SSM_NORM             = auto()
     SSM_OUT              = auto()
+    SSM_MUP_VEC          = auto()
     TIME_MIX_W0          = auto()
     TIME_MIX_W1          = auto()
     TIME_MIX_W2          = auto()
@@ -602,6 +608,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.RWKV7:            "rwkv7",
     MODEL_ARCH.ARWKV7:           "arwkv7",
     MODEL_ARCH.MAMBA:            "mamba",
+    MODEL_ARCH.MAMBA2:           "mamba2",
     MODEL_ARCH.XVERSE:           "xverse",
     MODEL_ARCH.COMMAND_R:        "command-r",
     MODEL_ARCH.COHERE2:          "cohere2",
@@ -629,6 +636,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.BAILINGMOE:       "bailingmoe",
     MODEL_ARCH.DOTS1:            "dots1",
     MODEL_ARCH.ARCEE:            "arcee",
+    MODEL_ARCH.FALCON_H1:        "falcon-h1",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -666,7 +674,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_INP:              "blk.{bid}.ffn_gate_inp",
     MODEL_TENSOR.FFN_GATE_INP_SHEXP:        "blk.{bid}.ffn_gate_inp_shexp",
     MODEL_TENSOR.FFN_NORM:                  "blk.{bid}.ffn_norm",
-    MODEL_TENSOR.FFN_PRE_NORM:              "blk.{bid}.ffn_norm",
+    MODEL_TENSOR.FFN_PRE_NORM:              "blk.{bid}.ffn_pre_norm",
     MODEL_TENSOR.FFN_POST_NORM:             "blk.{bid}.post_ffw_norm",
     MODEL_TENSOR.FFN_GATE:                  "blk.{bid}.ffn_gate",
     MODEL_TENSOR.FFN_DOWN:                  "blk.{bid}.ffn_down",
@@ -687,7 +695,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_DT:                    "blk.{bid}.ssm_dt",
     MODEL_TENSOR.SSM_A:                     "blk.{bid}.ssm_a",
     MODEL_TENSOR.SSM_D:                     "blk.{bid}.ssm_d",
+    MODEL_TENSOR.SSM_NORM:                  "blk.{bid}.ssm_norm",
     MODEL_TENSOR.SSM_OUT:                   "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_MUP_VEC:               "blk.{bid}.ssm_mup_vec",
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -1636,6 +1646,19 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_D,
         MODEL_TENSOR.SSM_OUT,
     ],
+    MODEL_ARCH.MAMBA2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.SSM_IN,
+        MODEL_TENSOR.SSM_CONV1D,
+        MODEL_TENSOR.SSM_DT,
+        MODEL_TENSOR.SSM_A,
+        MODEL_TENSOR.SSM_D,
+        MODEL_TENSOR.SSM_NORM,
+        MODEL_TENSOR.SSM_OUT,
+    ],
     MODEL_ARCH.XVERSE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -2156,6 +2179,41 @@ MODEL_TENSOR_SKIP: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
     MODEL_ARCH.BAILINGMOE: [
         MODEL_TENSOR.ROPE_FREQS,
     ],
+    MODEL_ARCH.FALCON_H1: [
+        # Token embedding
+        MODEL_TENSOR.TOKEN_EMBD,
+
+        # Input layernorm
+        MODEL_TENSOR.ATTN_NORM,
+
+        # Attention components
+        MODEL_TENSOR.ATTN_Q,         # Query projection
+        MODEL_TENSOR.ATTN_K,         # Key projection
+        MODEL_TENSOR.ATTN_V,         # Value projection
+        MODEL_TENSOR.ATTN_OUT,       # Output projection
+
+        # SSM components (Mamba2 specific)
+        MODEL_TENSOR.SSM_MUP_VEC,    # Mup vector
+        MODEL_TENSOR.SSM_IN,         # Input projection for SSM
+        MODEL_TENSOR.SSM_CONV1D,     # Convolution layer
+        MODEL_TENSOR.SSM_DT,         # Delta time projection
+        MODEL_TENSOR.SSM_A,          # A parameter (log form)
+        MODEL_TENSOR.SSM_D,          # D parameter
+        MODEL_TENSOR.SSM_NORM,       # Normalization in SSM
+        MODEL_TENSOR.SSM_OUT,        # Output projection
+
+        # Pre-feedforward layernorm
+        MODEL_TENSOR.FFN_PRE_NORM,
+
+        # Feed-forward network components
+        MODEL_TENSOR.FFN_GATE,       # Gate projection (SwiGLU)
+        MODEL_TENSOR.FFN_DOWN,       # Down projection
+        MODEL_TENSOR.FFN_UP,         # Up projection
+
+        # Post-feedforward layernorm
+        MODEL_TENSOR.OUTPUT_NORM,    # Final layer norm
+        MODEL_TENSOR.OUTPUT,         # Output projection (lm_head)
+    ],
 }
 
 #
@@ -2405,6 +2463,7 @@ KEY_SSM_CONV_KERNEL    = Keys.SSM.CONV_KERNEL
 KEY_SSM_INNER_SIZE     = Keys.SSM.INNER_SIZE
 KEY_SSM_STATE_SIZE     = Keys.SSM.STATE_SIZE
 KEY_SSM_TIME_STEP_RANK = Keys.SSM.TIME_STEP_RANK
+KEY_SSM_GROUP_COUNT    = Keys.SSM.GROUP_COUNT
 KEY_SSM_DT_B_C_RMS     = Keys.SSM.DT_B_C_RMS
 
 # tokenization

@@ -1157,12 +1157,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
+        // set to total number of outputs in the batch, for use in llama_get_logits_ith
+        n_outputs = n_outputs_all;
+
         // make the outputs have the same order they had in the user-provided batch
         // note: this is mostly relevant for recurrent models atm
         if (!sorted_output) {
-            const uint32_t n_vocab = model.vocab.n_tokens();
-            const uint64_t n_embd  = model.hparams.n_embd;
-
             GGML_ASSERT((size_t) n_outputs == out_ids.size());
 
             // TODO: is there something more efficient which also minimizes swaps?
@@ -1179,12 +1179,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 }
                 std::swap(out_ids[i], out_ids[j_min]);
                 if (logits_size > 0) {
-                    for (uint32_t k = 0; k < n_vocab; k++) {
+                    for (int32_t k = 0; k < n_vocab; k++) {
                         std::swap(logits[i*n_vocab + k], logits[j_min*n_vocab + k]);
                     }
                 }
                 if (embd_size > 0) {
-                    for (uint32_t k = 0; k < n_embd; k++) {
+                    for (int64_t k = 0; k < n_embd; k++) {
                         std::swap(embd[i*n_embd + k], embd[j_min*n_embd + k]);
                     }
                 }
@@ -1196,6 +1196,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 output_ids[out_ids[i]] = i;
             }
         }
+        // sorted, so no need for the indices anymore
+        out_ids.clear();
     }
 
     // wait for the computation to finish (automatically done when obtaining the model output)

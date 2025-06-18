@@ -163,49 +163,49 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
 
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
-            ay1 = GGML_F32_VEC_FMA(ax1, vx, ay1);
+            ay1 = GGML_F32_VEC_FMA(ay1, ax1, vx);
 
             GGML_F32_VEC_STORE(y + i, ay1);
 
             ax2 = GGML_F32_VEC_LOAD(x + i + 1*ggml_f32_epr);
             ay2 = GGML_F32_VEC_LOAD(y + i + 1*ggml_f32_epr);
-            ay2 = GGML_F32_VEC_FMA(ax2, vx, ay2);
+            ay2 = GGML_F32_VEC_FMA(ay2, ax2, vx);
 
             GGML_F32_VEC_STORE(y + i + 1*ggml_f32_epr, ay2);
 
             ax3 = GGML_F32_VEC_LOAD(x + i + 2*ggml_f32_epr);
             ay3 = GGML_F32_VEC_LOAD(y + i + 2*ggml_f32_epr);
-            ay3 = GGML_F32_VEC_FMA(ax3, vx, ay3);
+            ay3 = GGML_F32_VEC_FMA(ay3, ax3, vx);
 
             GGML_F32_VEC_STORE(y + i + 2*ggml_f32_epr, ay3);
 
             ax4 = GGML_F32_VEC_LOAD(x + i + 3*ggml_f32_epr);
             ay4 = GGML_F32_VEC_LOAD(y + i + 3*ggml_f32_epr);
-            ay4 = GGML_F32_VEC_FMA(ax4, vx, ay4);
+            ay4 = GGML_F32_VEC_FMA(ay4, ax4, vx);
 
             GGML_F32_VEC_STORE(y + i + 3*ggml_f32_epr, ay4);
 
             ax5 = GGML_F32_VEC_LOAD(x + i + 4*ggml_f32_epr);
             ay5 = GGML_F32_VEC_LOAD(y + i + 4*ggml_f32_epr);
-            ay5 = GGML_F32_VEC_FMA(ax5, vx, ay5);
+            ay5 = GGML_F32_VEC_FMA(ay5, ax5, vx);
 
             GGML_F32_VEC_STORE(y + i + 4*ggml_f32_epr, ay5);
 
             ax6 = GGML_F32_VEC_LOAD(x + i + 5*ggml_f32_epr);
             ay6 = GGML_F32_VEC_LOAD(y + i + 5*ggml_f32_epr);
-            ay6 = GGML_F32_VEC_FMA(ax6, vx, ay6);
+            ay6 = GGML_F32_VEC_FMA(ay6, ax6, vx);
 
             GGML_F32_VEC_STORE(y + i + 5*ggml_f32_epr, ay6);
 
             ax7 = GGML_F32_VEC_LOAD(x + i + 6*ggml_f32_epr);
             ay7 = GGML_F32_VEC_LOAD(y + i + 6*ggml_f32_epr);
-            ay7 = GGML_F32_VEC_FMA(ax7, vx, ay7);
+            ay7 = GGML_F32_VEC_FMA(ay7, ax7, vx);
 
             GGML_F32_VEC_STORE(y + i + 6*ggml_f32_epr, ay7);
 
             ax8 = GGML_F32_VEC_LOAD(x + i + 7*ggml_f32_epr);
             ay8 = GGML_F32_VEC_LOAD(y + i + 7*ggml_f32_epr);
-            ay8 = GGML_F32_VEC_FMA(ax8, vx, ay8);
+            ay8 = GGML_F32_VEC_FMA(ay8, ax8, vx);
 
             GGML_F32_VEC_STORE(y + i + 7*ggml_f32_epr, ay8);
         }
@@ -215,7 +215,7 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
         for (int i = np; i < np2; i += ggml_f32_epr) {
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
-            ay1 = GGML_F32_VEC_FMA(ax1, vx, ay1);
+            ay1 = GGML_F32_VEC_FMA(ay1, ax1, vx);
 
             GGML_F32_VEC_STORE(y + i, ay1);
         }

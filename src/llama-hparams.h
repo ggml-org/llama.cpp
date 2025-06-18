@@ -110,12 +110,41 @@ struct llama_hparams {
     std::array<bool, LLAMA_MAX_LAYERS> swa_layers;
 
     // for State Space Models
-    uint32_t ssm_d_conv  = 0;
-    uint32_t ssm_d_inner = 0;
-    uint32_t ssm_d_state = 0;
-    uint32_t ssm_dt_rank = 0;
+    uint32_t ssm_d_conv     = 0;
+    uint32_t ssm_d_inner    = 0;
+    uint32_t ssm_d_state    = 0;
+    uint32_t ssm_dt_rank    = 0;
+    uint32_t ssm_n_group    = 0;
+    bool     ssm_dt_b_c_rms = false;
+    uint32_t ssm_head_dim   = 0;
+    uint32_t ssm_mamba_d_ssm = 0;
 
-    bool ssm_dt_b_c_rms = false;
+    // Falcon-H1 specific parameters
+    uint32_t attn_head_dim            = 0;
+    bool     mamba_use_mlp            = false;
+    bool     mamba_norm_before_gate   = false;
+    bool     mamba_rms_norm           = false;
+    float    attention_in_multiplier  = 1.0f;
+    float    attention_out_multiplier = 1.0f;
+    float    ssm_in_multiplier        = 1.0f;
+    float    ssm_out_multiplier       = 1.0f;
+    float    mlp_gate_multiplier      = 1.0f;
+    float    mlp_down_multiplier      = 1.0f;
+    float    key_multiplier           = 1.0f;
+    float    lm_head_multiplier       = 1.0f;
+    float    rope_theta               = 10000.0f;
+    bool     ssm_has_mup              = false;
+    float    embedding_multiplier     = 1.0f;
+    uint32_t vocab_size               = 0;
+    uint32_t intermediate_size        = 0;
+    float    mamba_expand             = 0.0f;
+    bool     ssm_rms_norm   = false;
+    bool     ssm_conv_bias  = false;
+    bool     ssm_proj_bias  = false;
+    uint32_t chunk_size     = 0;
+
+    // for hybrid state space models
+    std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
     float f_clamp_kqv      = 0.0f;
     float f_max_alibi_bias = 0.0f;
@@ -185,6 +214,9 @@ struct llama_hparams {
 
     // dimension of the recurrent state embeddings
     uint32_t n_embd_v_s() const;
+
+    // whether or not the given layer is recurrent (for hybrid models)
+    bool recurrent_layer(uint32_t il) const;
 
     bool is_swa(uint32_t il) const;
 };

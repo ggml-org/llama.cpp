@@ -843,8 +843,21 @@ class GGUFWriter:
     def add_ssm_time_step_rank(self, value: int) -> None:
         self.add_uint32(Keys.SSM.TIME_STEP_RANK.format(arch=self.arch), value)
 
+    def add_ssm_group_count(self, value: int) -> None:
+        self.add_uint32(Keys.SSM.GROUP_COUNT.format(arch=self.arch), value)
+
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
+
+    def add_ssm_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.SSM.HEAD_DIM.format(arch=self.arch), value)
+
+    def add_attn_head_count(self, count: int) -> None:
+        self.add_uint32(Keys.Attention.HEAD_COUNT.format(arch=self.arch), count)
+
+    def add_key_value_head_count(self, count: int) -> None:
+        self.add_uint32(Keys.Attention.HEAD_COUNT_KV.format(arch=self.arch), count)
+
 
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)

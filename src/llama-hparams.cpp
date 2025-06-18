@@ -73,7 +73,8 @@ uint32_t llama_hparams::n_embd_k_s() const {
 
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
-    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * ssm_d_inner;
+    // Corresponds to Mamba's conv_states size
+    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_mamba_d_ssm + 2*ssm_n_group*ssm_d_state);
 }
 
 uint32_t llama_hparams::n_embd_v_s() const {
@@ -83,7 +84,11 @@ uint32_t llama_hparams::n_embd_v_s() const {
     }
 
     // corresponds to Mamba's ssm_states size
-    return ssm_d_state * ssm_d_inner;
+    return ssm_d_state * ssm_mamba_d_ssm;
+}
+
+bool llama_hparams::recurrent_layer(uint32_t il) const {
+    return recurrent_layer_arr[il];
 }
 
 bool llama_hparams::is_swa(uint32_t il) const {
