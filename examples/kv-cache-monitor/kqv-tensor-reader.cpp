@@ -114,7 +114,15 @@ struct flash_attn_model {
 };
 
 // Initialize flash attention model with Q, K, V tensors
-static bool init_flash_attn_model(flash_attn_model & model, ggml_tensor* q_src, ggml_tensor* k_src, ggml_tensor* v_src, ggml_tensor* mask_src = nullptr) {
+static bool init_flash_attn_model(
+    flash_attn_model & model, 
+    ggml_tensor* q_src, 
+    ggml_tensor* k_src, 
+    ggml_tensor* v_src, 
+    ggml_tensor* mask_src = nullptr,
+    ggml_tensor* k_quant_src = nullptr,
+    ggml_tensor* v_quant_src = nullptr
+) {
     // Calculate context size needed
     size_t ctx_size = 0;
     ctx_size += ggml_nbytes(q_src);
@@ -149,6 +157,8 @@ static bool init_flash_attn_model(flash_attn_model & model, ggml_tensor* q_src, 
     model.Q = ggml_new_tensor_4d(model.ctx, q_src->type, q_src->ne[0], q_src->ne[1], q_src->ne[2], q_src->ne[3]);
     model.K = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, k_src->ne[0], k_src->ne[1], k_src->ne[2], k_src->ne[3]);
     model.V = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, v_src->ne[0], v_src->ne[1], v_src->ne[2], v_src->ne[3]);
+    model.K_quant = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, k_quant_src->ne[0], k_quant_src->ne[1], k_quant_src->ne[2], k_quant_src->ne[3]);
+    model.V_quant = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, v_quant_src->ne[0], v_quant_src->ne[1], v_quant_src->ne[2], v_quant_src->ne[3]);
     
     if (mask_src) {
         model.mask = ggml_new_tensor_4d(model.ctx, mask_src->type, mask_src->ne[0], mask_src->ne[1], mask_src->ne[2], mask_src->ne[3]);
@@ -160,55 +170,75 @@ static bool init_flash_attn_model(flash_attn_model & model, ggml_tensor* q_src, 
     // Copy data
     memcpy(model.Q->data, q_src->data, ggml_nbytes(q_src));
 
-    ggml_fp32_to_fp16_row((const float*)k_src->data, (ggml_fp16_t*)model.K->data, ggml_nelements(k_src));
-    ggml_fp32_to_fp16_row((const float*)v_src->data, (ggml_fp16_t*)model.V->data, ggml_nelements(v_src));
+    // ggml_fp32_to_fp16_row((const float*)k_src->data, (ggml_fp16_t*)model.K->data, ggml_nelements(k_src));
+    // ggml_fp32_to_fp16_row((const float*)v_src->data, (ggml_fp16_t*)model.V->data, ggml_nelements(v_src));
 
     return true;
 }
 
 // Build computation graph for flash attention
-static struct ggml_cgraph * build_flash_attn_graph(const flash_attn_model& model, float scale = 1.0f, float max_bias = 0.0f, float logit_softcap = 0.0f) {
-    struct ggml_cgraph * gf = ggml_new_graph(model.ctx);
+static struct ggml_cgraph * build_flash_attn_graph(
+    ggml_context* ctx,
+    ggml_tensor* Q, 
+    ggml_tensor* K, 
+    ggml_tensor* V, 
+    ggml_tensor* mask,
+    ggml_tensor* K_quant,
+    ggml_tensor* V_quant,
+    float scale = 1.0f, 
+    float max_bias = 0.0f, 
+    float logit_softcap = 0.0f
+) {
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
 
-    // // Perform flash attention: result = flash_attn_ext(Q, K, V, mask)
-    // struct ggml_tensor * result = ggml_flash_attn_ext(
+    // Perform flash attention: result = flash_attn_ext(Q, K, V, mask)
+    struct ggml_tensor * result = ggml_flash_attn_ext(
+        ctx, 
+        Q, 
+        K, 
+        V, 
+        mask,
+        scale,
+        max_bias,
+        logit_softcap
+    );
+    ggml_flash_attn_ext_set_prec(result, GGML_PREC_F32);
+
+    // struct ggml_tensor * result = ggml_flash_attn_mixed(
     //     model.ctx, 
     //     model.Q, 
     //     model.K, 
     //     model.V, 
-    //     model.mask,
-    //     scale,
-    //     max_bias,
+    //     NULL,
+    //     NULL,
+    //     model.mask, 
+    //     scale, 
+    //     max_bias, 
     //     logit_softcap
     // );
-    // ggml_flash_attn_ext_set_prec(result, GGML_PREC_F32);
 
-    struct ggml_tensor * result = ggml_flash_attn_mixed(
-        model.ctx, 
-        model.Q, 
-        model.K, 
-        model.V, 
-        NULL,
-        NULL,
-        model.mask, 
-        scale, 
-        max_bias, 
-        logit_softcap
-    );
-
-    result = ggml_reshape_2d(model.ctx, result, result->ne[0] * result->ne[1], result->ne[2]);
+    result = ggml_reshape_2d(ctx, result, result->ne[0] * result->ne[1], result->ne[2]);
 
     ggml_build_forward_expand(gf, result);
     return gf;
 }
 
 // Compute flash attention
-static struct ggml_tensor * compute_flash_attn(const flash_attn_model & model, float scale = 1.0f) {
-    struct ggml_cgraph * gf = build_flash_attn_graph(model, scale);
+static struct ggml_tensor * compute_flash_attn(
+    ggml_context* ctx,
+    ggml_tensor* Q, 
+    ggml_tensor* K, 
+    ggml_tensor* V, 
+    ggml_tensor* mask,
+    ggml_tensor* K_quant,
+    ggml_tensor* V_quant,
+    float scale = 1.0f
+) {
+    struct ggml_cgraph * gf = build_flash_attn_graph(ctx, Q, K, V, mask, K_quant, V_quant, scale);
 
     int n_threads = 12; // number of threads
 
-    ggml_graph_compute_with_ctx(model.ctx, gf, n_threads);
+    ggml_graph_compute_with_ctx(ctx, gf, n_threads);
 
     // return the result tensor (last node in graph)
     return ggml_graph_node(gf, -1);
@@ -330,6 +360,16 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
         step_tensor_map[step].emplace_back(tensor, name);
     }
 
+    // Add space for result tensor (estimated)
+    struct ggml_init_params ctx_params {
+        /*.mem_size   =*/ 256 * 1024 * 1024,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ false,
+    };
+
+    // create context
+    ggml_context* compute_ctx = ggml_init(ctx_params);
+
     // Output by step
     for (const auto& [step, tensors] : step_tensor_map) {
         LOG_INF("\n==== Step %d ====%s\n", step, (step == -1 ? " (unknown)" : ""));
@@ -353,9 +393,11 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
         }
         LOG_INF("\n");
         
+        ggml_tensor * K_quant = nullptr;
+        ggml_tensor * V_quant = nullptr;
         if (tensors.size() > 5) {
-            ggml_tensor * K_quant = tensors[5].first;
-            ggml_tensor * V_quant = tensors[6].first;
+            K_quant = tensors[5].first;
+            V_quant = tensors[6].first;
             LOG_INF("Quantized tensors - K_quant: %s, V_quant: %s\n", 
                     K_quant->name, V_quant->name);
         }
@@ -370,19 +412,21 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
         if (kq_mask) {
             print_tensor_summary(kq_mask, "Mask");
         }
+        print_tensor_summary(K_quant, "K_quant");
+        print_tensor_summary(V_quant, "V_quant");
         
-        // Initialize flash attention model
-        flash_attn_model flash_model;
-        if (!init_flash_attn_model(flash_model, Q, K, V, kq_mask)) {
-            LOG_ERR("Failed to initialize flash attention model\n");
-            continue;
-        }
+        // // Initialize flash attention model
+        // flash_attn_model flash_model;
+        // if (!init_flash_attn_model(flash_model, Q, K, V, kq_mask, K_quant, V_quant)) {
+        //     LOG_ERR("Failed to initialize flash attention model\n");
+        //     continue;
+        // }
         
         // Compute flash attention
         float scale = 1.0f / sqrtf((float)Q->ne[0]); // Standard attention scaling
         LOG_INF("Computing flash attention with scale: %.6f\n", scale);
         
-        struct ggml_tensor * flash_result = compute_flash_attn(flash_model, scale);
+        struct ggml_tensor * flash_result = compute_flash_attn(compute_ctx, Q, K, V, kq_mask, K_quant, V_quant, scale);
         
         if (flash_result) {
             LOG_INF("✅ Flash Attention computation successful!\n");
@@ -422,9 +466,9 @@ static bool read_kqv_tensors(const kqv_tensor_params& params) {
             LOG_ERR("❌ Flash Attention computation failed!\n");
         }
         
-        // Free flash attention model
-        ggml_free(flash_model.ctx);
     }
+    // Free flash attention model
+    ggml_free(compute_ctx);
 
     // Cleanup
     gguf_free(ctx);

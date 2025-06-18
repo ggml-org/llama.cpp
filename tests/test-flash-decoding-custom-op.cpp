@@ -56,7 +56,7 @@ void ggml_custom_flash_attn_mixed_simple(
 static void fill_random_f32(ggml_tensor * dst, size_t n_rows, size_t n_cols, float min_val = -1.0f, float max_val = 1.0f) {
     GGML_TENSOR_LOCALS(int64_t, nedst, dst, ne)
 
-    char* data = (char*)dst->data;
+    float* data = (float*)dst->data;
     size_t row_stride = nedst1;
 
     static std::random_device rd;
@@ -212,13 +212,13 @@ int main() {
     printf("Testing Flash-Decoding Custom Operation vs Standard Flash Attention\n");
 
     // Test parameters - reduce KV length to minimize F16 accumulation errors
-    const int head_dim   = 4;
+    const int head_dim   = 16;
     const int n_heads    = 4;
     const int n_kv_heads = 1;
-    const int seq_len    = 1;     // Q length
-    const int kv_len     = 4096;    // K/V length - reduced for better F16 precision
+    const int seq_len    = 6;     // Q length
+    const int kv_len     = 48;    // K/V length - reduced for better F16 precision
     const int n_threads  = 12;
-    const int cur_pos    = 1532;
+    const int cur_pos    = 32;
 
     printf("Test Parameters:\n");
     printf("  head_dim=%d, n_heads=%d, n_kv_heads=%d, seq_len=%d, kv_len=%d\n",
@@ -252,18 +252,18 @@ int main() {
     ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, GGML_PAD(kv_len, n_pad), GGML_PAD(seq_len, GGML_KQ_MASK_PAD));
 
     // Fill tensors with random data
-    fill_random_f32(q, seq_len, head_dim);
+    fill_random_f32(q, seq_len * n_heads, head_dim);
 
     if (k->type == GGML_TYPE_F32) {
-        fill_random_f32(k, kv_len, head_dim);
-    } else {
-        fill_random_f16(k, kv_len);  // K is F16
+        fill_random_f32(k, GGML_PAD(kv_len, n_pad) * n_kv_heads, head_dim);
+    } else {    
+        fill_random_f16(k, GGML_PAD(kv_len, n_pad) * n_kv_heads);  // K is F16
     }
 
     if (v->type == GGML_TYPE_F32) {
-        fill_random_f32(v, kv_len, head_dim);
+        fill_random_f32(v, GGML_PAD(kv_len, n_pad) * n_kv_heads, head_dim);
     } else {
-        fill_random_f16(v, kv_len);
+        fill_random_f16(v, GGML_PAD(kv_len, n_pad) * n_kv_heads);
     }
 
     // Fill mask - use identity mask (all positions visible)
