@@ -40,8 +40,8 @@ public:
                  uint32_t    n_seq_max,
                      bool    offload,
                              /* layer filters */
-          layer_filter_cb && filter_attn      = nullptr,
-          layer_filter_cb && filter_recurrent = nullptr);
+          layer_filter_cb && filter_attn = nullptr,
+          layer_filter_cb && filter_recr = nullptr);
 
     ~llama_memory_hybrid() = default;
 
@@ -80,14 +80,14 @@ public:
     // llama_memory_hybrid specific API
     //
 
-    llama_kv_cache_unified * get_mem_attn     () const;
-    llama_memory_recurrent * get_mem_recurrent() const;
+    llama_kv_cache_unified * get_mem_attn() const;
+    llama_memory_recurrent * get_mem_recr() const;
 
 private:
     const llama_hparams & hparams;
 
-    const std::unique_ptr<llama_kv_cache_unified>   mem_attn;
-    const std::unique_ptr<llama_memory_recurrent> mem_recurrent;
+    const std::unique_ptr<llama_kv_cache_unified> mem_attn;
+    const std::unique_ptr<llama_memory_recurrent> mem_recr;
 };
 
 class llama_memory_hybrid_state : public llama_memory_state_i {
@@ -125,8 +125,8 @@ public:
     // llama_memory_hybrid_state
     //
 
-    const llama_kv_cache_unified_state * get_state_attn     () const;
-    const llama_memory_recurrent_state * get_state_recurrent() const;
+    const llama_kv_cache_unified_state * get_state_attn() const;
+    const llama_memory_recurrent_state * get_state_recr() const;
 
 private:
     llama_sbatch sbatch;
@@ -137,7 +137,7 @@ private:
     std::vector<llama_ubatch> ubatches;
 
     const llama_memory_state_ptr state_attn;
-    const llama_memory_state_ptr state_recurrent;
+    const llama_memory_state_ptr state_recr;
 
     const llama_memory_status status;
 };

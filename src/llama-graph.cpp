@@ -409,7 +409,7 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
         mem_state->get_state_attn()->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
 
-    const int64_t n_rs = mem_state->get_state_recurrent()->get_n_rs();
+    const int64_t n_rs = mem_state->get_state_recr()->get_n_rs();
 
     if (s_copy) {
         GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
@@ -417,7 +417,7 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 
         // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
         for (uint32_t i = 0; i < n_rs; ++i) {
-            data[i] = mem_state->get_state_recurrent()->s_copy(i);
+            data[i] = mem_state->get_state_recr()->s_copy(i);
         }
     }
 }
@@ -1067,7 +1067,7 @@ llm_graph_input_mem_hybrid * llm_graph_context::build_inp_mem_hybrid() const {
     }
 
     {
-        const auto n_rs = mem_state->get_state_recurrent()->get_n_rs();
+        const auto n_rs = mem_state->get_state_recr()->get_n_rs();
 
         inp->s_copy = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rs);
         ggml_set_input(inp->s_copy);
@@ -1584,7 +1584,7 @@ ggml_tensor * llm_graph_context::build_rs(
             int32_t   state_size,
             int32_t   n_seqs,
                bool   avoid_copies) const {
-    const auto * kv_state = static_cast<const llama_memory_hybrid_state *>(mstate)->get_state_recurrent();
+    const auto * kv_state = static_cast<const llama_memory_hybrid_state *>(mstate)->get_state_recr();
 
     return build_rs(gf, s, inp->s_copy, state_size, n_seqs, kv_state->get_n_rs(), kv_state->get_head(), kv_state->get_size(), kv_state->get_rs_z(), avoid_copies);
 }
