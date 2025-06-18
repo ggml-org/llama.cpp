@@ -34,7 +34,7 @@ __device__ inline int calculate_input_coord(int out_coord, int kern_coord, int s
 
 // ───────────── Memory layout abstractions ─────────────
 
-struct WHCNLayout {
+struct whcn_layout {
     __device__ static int input_index(int n, int c, int y, int x, const conv_params & params) {
         return n * (params.channels * params.in_w * params.in_h) + c * params.in_w * params.in_h + y * params.in_w + x;
     }
@@ -57,7 +57,7 @@ struct WHCNLayout {
     }
 };
 
-struct CWHNLayout {
+struct cwhn_layout {
     __device__ static int input_index(int n, int c, int y, int x, const conv_params & params) {
         return n * (params.channels * params.in_w * params.in_h) + (y * params.in_w + x) * params.channels + c;
     }
@@ -125,10 +125,10 @@ __global__ void conv2d_dw_whcn_kernel(const T * __restrict__ in, const T * __res
                            stride_y, padding_x, padding_y, dilation_x, dilation_y, channels, batches };
 
     int batch_idx, channel_idx, out_y_idx, out_x_idx;
-    WHCNLayout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
+    whcn_layout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
 
-    T result = compute_conv2d_dw_pixel<T, WHCNLayout>(in, kern, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
-    out[WHCNLayout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = result;
+    T result = compute_conv2d_dw_pixel<T, whcn_layout>(in, kern, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
+    out[whcn_layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = result;
 }
 
 template <typename T>
@@ -148,11 +148,11 @@ __global__ void conv_2d_dw_cwhn_kernel(const T * __restrict__ in, const T * __re
                            stride_y, padding_x, padding_y, dilation_x, dilation_y, channels, batches };
 
     int batch_idx, channel_idx, out_y_idx, out_x_idx;
-    CWHNLayout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
+    cwhn_layout::unpack_indices(global_idx, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
 
     const T result =
-        compute_conv2d_dw_pixel<T, CWHNLayout>(in, kern, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
-    out[CWHNLayout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = result;
+        compute_conv2d_dw_pixel<T, cwhn_layout>(in, kern, params, batch_idx, channel_idx, out_y_idx, out_x_idx);
+    out[cwhn_layout::output_index(batch_idx, channel_idx, out_y_idx, out_x_idx, params)] = result;
 }
 
 // ───────────── dispatcher ─────────────
@@ -197,7 +197,6 @@ void ggml_cuda_op_conv2d_dw(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
             x_d, w_d, y_d, in_w, in_h, out_w, out_h, kernel_w, kernel_h, stride_x, stride_y, padding_x, padding_y,
             dilation_x, dilation_y, channels, batches);
     } else {
-        // Unsupported memory layout
         GGML_ABORT("Unsupported memory layout for conv_2d_dw");
     }
 }
