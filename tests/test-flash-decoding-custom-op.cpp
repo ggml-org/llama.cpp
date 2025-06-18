@@ -57,7 +57,7 @@ static void fill_random_f32(ggml_tensor * dst, size_t n_rows, size_t n_cols, flo
     GGML_TENSOR_LOCALS(int64_t, nedst, dst, ne)
 
     float* data = (float*)dst->data;
-    size_t row_stride = nedst1;
+    size_t row_stride = nedst0;
 
     static std::random_device rd;
     static std::mt19937 gen(rd());
