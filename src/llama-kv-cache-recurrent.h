@@ -11,8 +11,10 @@
 // llama_kv_cache_recurrent
 //
 
-// TODO: extract the KV cache state used for graph computation into llama_kv_cache_recurrent_state_i
+// TODO: extract the cache state used for graph computation into llama_kv_cache_recurrent_state_i
 //       see the implementation of llama_kv_cache_unified_state_i for an example how to do it
+// TODO: avoid the notion of "KV cache" / "KV cells", etc.
+// TODO: rename to llama_recurrent_state / llama_recurrent_cache
 class llama_kv_cache_recurrent : public llama_memory_i {
 public:
 
@@ -131,12 +133,10 @@ public:
 
     // used to create a full-cache state
     llama_kv_cache_recurrent_state(
-            llama_memory_status status,
             llama_kv_cache_recurrent * kv);
 
     // used to create a state from a batch
     llama_kv_cache_recurrent_state(
-            llama_memory_status status,
             llama_kv_cache_recurrent * kv,
             llama_sbatch sbatch,
             std::vector<llama_ubatch> ubatches);

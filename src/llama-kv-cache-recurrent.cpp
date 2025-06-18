@@ -384,11 +384,11 @@ llama_memory_state_ptr llama_kv_cache_recurrent::init_batch(const llama_batch & 
         return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
     }
 
-    return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_SUCCESS, this, std::move(sbatch), std::move(ubatches));
+    return std::make_unique<llama_kv_cache_recurrent_state>(this, std::move(sbatch), std::move(ubatches));
 }
 
 llama_memory_state_ptr llama_kv_cache_recurrent::init_full() {
-    return std::make_unique<llama_kv_cache_recurrent_state>(LLAMA_MEMORY_STATUS_SUCCESS, this);
+    return std::make_unique<llama_kv_cache_recurrent_state>(this);
 }
 
 llama_memory_state_ptr llama_kv_cache_recurrent::init_update(llama_context * lctx, bool optimize) {
@@ -1043,15 +1043,13 @@ bool llama_kv_cache_recurrent::state_read_data(llama_io_read_i & io, uint32_t ce
 llama_kv_cache_recurrent_state::llama_kv_cache_recurrent_state(llama_memory_status status) : status(status) {}
 
 llama_kv_cache_recurrent_state::llama_kv_cache_recurrent_state(
-        llama_memory_status status,
-        llama_kv_cache_recurrent * kv) : status(status), kv(kv), is_full(true) {
+        llama_kv_cache_recurrent * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), is_full(true) {
 }
 
 llama_kv_cache_recurrent_state::llama_kv_cache_recurrent_state(
-        llama_memory_status status,
         llama_kv_cache_recurrent * kv,
         llama_sbatch sbatch,
-        std::vector<llama_ubatch> ubatches) : status(status), kv(kv), sbatch(std::move(sbatch)), ubatches(std::move(ubatches)) {}
+        std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sbatch(std::move(sbatch)), ubatches(std::move(ubatches)) {}
 
 llama_kv_cache_recurrent_state::~llama_kv_cache_recurrent_state() = default;
 

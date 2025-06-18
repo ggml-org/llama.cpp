@@ -9116,7 +9116,7 @@ struct llm_build_mamba : public llm_graph_context {
         // {n_embd, n_tokens}
         inpL = build_inp_embd(model.tok_embd);
 
-        auto * rs_inp = build_rs_inp_recurrent();
+        auto * rs_inp = build_rs_inp();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -12092,7 +12092,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
         inpL = build_inp_embd(model.tok_embd);
         inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, -1);
 
-        auto * rs_inp = build_rs_inp_recurrent();
+        auto * rs_inp = build_rs_inp();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
@@ -12187,7 +12187,7 @@ struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
 
         inpL = build_inp_embd(model.tok_embd);
 
-        auto * rs_inp = build_rs_inp_recurrent();
+        auto * rs_inp = build_rs_inp();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
@@ -12441,7 +12441,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
         inpL = build_inp_embd(model.tok_embd);
         inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, -1);
 
-        auto * rs_inp = build_rs_inp_recurrent();
+        auto * rs_inp = build_rs_inp();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;
@@ -12532,7 +12532,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
 
         inpL = build_inp_embd(model.tok_embd);
 
-        auto * rs_inp = build_rs_inp_recurrent();
+        auto * rs_inp = build_rs_inp();
 
         const auto n_embd = hparams.n_embd;
         const auto n_seq_tokens = ubatch.n_seq_tokens;

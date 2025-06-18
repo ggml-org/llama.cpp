@@ -4,7 +4,6 @@
 #include "llama-graph.h"
 #include "llama-kv-cache-recurrent.h"
 #include "llama-kv-cache-unified.h"
-#include "llama-kv-cells.h"
 #include "llama-memory.h"
 
 #include <memory>
@@ -12,6 +11,7 @@
 
 //
 // llama_kv_cache_hybrid_recurrent
+// TODO: rename to llama_memory_hybrid
 //
 
 // utilizes instances of llama_kv_cache_recurrent and llama_kv_cache_unified to
@@ -93,9 +93,6 @@ private:
 
 class llama_kv_cache_hybrid_recurrent_state : public llama_memory_state_i {
 public:
-    using llama_kv_cache_unified_state_ptr   = std::unique_ptr<llama_kv_cache_unified_state>;
-    using llama_kv_cache_recurrent_state_ptr = std::unique_ptr<llama_kv_cache_recurrent_state>;
-
     // init failure
     explicit llama_kv_cache_hybrid_recurrent_state(llama_memory_status status);
 
@@ -104,8 +101,9 @@ public:
 
     // init update
     explicit llama_kv_cache_hybrid_recurrent_state(
-           llama_kv_cache_unified_state * state_unified,
-         llama_kv_cache_recurrent_state * state_recurrent);
+        llama_kv_cache_hybrid_recurrent * kv,
+                          llama_context * lctx,
+                                   bool   optimize);
 
     // init success
     llama_kv_cache_hybrid_recurrent_state(
@@ -132,7 +130,7 @@ public:
     const llama_kv_cache_recurrent_state * get_state_recurrent() const;
 
 private:
-    const llama_memory_status status;
+    llama_memory_status status;
 
     llama_sbatch sbatch;
 
@@ -141,6 +139,6 @@ private:
 
     std::vector<llama_ubatch> ubatches;
 
-    const llama_memory_state_ptr state_attn;
-    const llama_memory_state_ptr state_recurrent;
+    llama_memory_state_ptr state_attn;
+    llama_memory_state_ptr state_recurrent;
 };
