@@ -706,11 +706,17 @@ bool fs_validate_filename(const std::string & filename) {
         // disable C++17 deprecation warning for std::codecvt_utf8
 #    pragma clang diagnostic push
 #    pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#elif defined(__GNUC__)
+#    pragma GCC diagnostic push
+#    pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
+
         std::wstring_convert<std::codecvt_utf8<char32_t>, char32_t> converter;
 
 #if defined(__clang__)
 #    pragma clang diagnostic pop
+#elif defined(__GNUC__)
+#    pragma GCC diagnostic pop
 #endif
 
         filename_utf32 = converter.from_bytes(filename);
