@@ -15,7 +15,7 @@ struct kernel_bounds {
     int x_min, x_max;
 };
 
-__device__ inline kernel_bounds calculate_kernel_bounds(int out_x, int out_y, const conv_params & params) {
+__device__ __forceinline__ kernel_bounds calculate_kernel_bounds(int out_x, int out_y, const conv_params & params) {
     kernel_bounds bounds;
     bounds.y_min = max(0, (params.padding_y - out_y * params.stride_y + params.dilation_y - 1) / params.dilation_y);
     bounds.y_max =
@@ -28,7 +28,7 @@ __device__ inline kernel_bounds calculate_kernel_bounds(int out_x, int out_y, co
     return bounds;
 }
 
-__device__ inline int calculate_input_coord(int out_coord, int kern_coord, int stride, int dilation, int padding) {
+__device__ __forceinline__ int calculate_input_coord(int out_coord, int kern_coord, int stride, int dilation, int padding) {
     return out_coord * stride + kern_coord * dilation - padding;
 }
 
@@ -84,8 +84,8 @@ __global__ void conv2d_dw_kernel(const T * __restrict__ input, const T * __restr
                                  const int kernel_w, const int kernel_h, const int stride_x, const int stride_y,
                                  const int padding_x, const int padding_y, const int dilation_x, const int dilation_y,
                                  const int channels, const int batches) {
-    int global_idx     = blockIdx.x * blockDim.x + threadIdx.x;
-    int total_elements = batches * channels * out_h * out_w;
+    const int global_idx     = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total_elements = batches * channels * out_h * out_w;
 
     if (global_idx >= total_elements) {
         return;
