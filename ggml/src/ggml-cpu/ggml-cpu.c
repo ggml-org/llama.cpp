@@ -707,7 +707,7 @@ static void ggml_init_arm_arch_features(void) {
 #elif defined(__APPLE__)
     int oldp = 0;
     size_t size = sizeof(oldp);
-    if (sysctlbyname("hw.optional.AdvSIMD", &oldp, &size, NULL, 0) != 0) {
+    if (sysctlbyname("hw.optional.arm.AdvSIMD", &oldp, &size, NULL, 0) != 0) {
         oldp = 0;
     }
     ggml_arm_arch_features.has_neon = oldp;
