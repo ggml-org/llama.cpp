@@ -247,6 +247,7 @@ struct cmd_params {
     std::vector<ggml_type>           type_v;
     std::vector<float>               defrag_thold;
     std::vector<int>                 n_threads;
+    std::vector<int>                 n_threads_batch;
     std::vector<std::string>         cpu_mask;
     std::vector<bool>                cpu_strict;
     std::vector<int>                 poll;
@@ -283,6 +284,7 @@ static const cmd_params cmd_params_defaults = {
     /* type_v               */ { GGML_TYPE_F16 },
     /* defrag_thold         */ { -1.0f },
     /* n_threads            */ { cpu_get_num_math() },
+    /* n_threads_batch      */ { cpu_get_num_math() },
     /* cpu_mask             */ { "0x0" },
     /* cpu_strict           */ { false },
     /* poll                 */ { 50 },
@@ -347,6 +349,8 @@ static void print_usage(int /* argc */, char ** argv) {
            join(cmd_params_defaults.defrag_thold, ",").c_str());
     printf("  -t, --threads <n>                         (default: %s)\n",
            join(cmd_params_defaults.n_threads, ",").c_str());
+    printf("  --n-threads-batch <n>                     (default: %s)\n",
+           join(cmd_params_defaults.n_threads_batch, ",").c_str());
     printf("  -C, --cpu-mask <hex,hex>                  (default: %s)\n",
            join(cmd_params_defaults.cpu_mask, ",").c_str());
     printf("  --cpu-strict <0|1>                        (default: %s)\n",
@@ -543,6 +547,13 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = parse_int_range(argv[i]);
                 params.n_threads.insert(params.n_threads.end(), p.begin(), p.end());
+            } else if (arg == "--n-threads-batch") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_threads_batch.insert(params.n_threads_batch.end(), p.begin(), p.end());
             } else if (arg == "-C" || arg == "--cpu-mask") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -882,6 +893,9 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
     }
+    if (params.n_threads_batch.empty()) {
+        params.n_threads_batch = cmd_params_defaults.n_threads_batch;
+    }
     if (params.cpu_mask.empty()) {
         params.cpu_mask = cmd_params_defaults.cpu_mask;
     }
@@ -906,6 +920,7 @@ struct cmd_params_instance {
     ggml_type          type_v;
     float              defrag_thold;
     int                n_threads;
+    int                n_threads_batch;
     std::string        cpu_mask;
     bool               cpu_strict;
     int                poll;
@@ -1020,6 +1035,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & nkvo : params.no_kv_offload)
     for (const auto & fa : params.flash_attn)
     for (const auto & nt : params.n_threads)
+    for (const auto & ntb : params.n_threads_batch)
     for (const auto & cm : params.cpu_mask)
     for (const auto & cs : params.cpu_strict)
     for (const auto & nd : params.n_depth)
@@ -1039,6 +1055,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_v       = */ tv,
                 /* .defrag_thold = */ defrag_thold,
                 /* .n_threads    = */ nt,
+                /* .n_threads_batch = */ ntb,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
@@ -1072,6 +1089,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_v       = */ tv,
                 /* .defrag_thold = */ defrag_thold,
                 /* .n_threads    = */ nt,
+                /* .n_threads_batch = */ ntb,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
@@ -1105,6 +1123,7 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .type_v       = */ tv,
                 /* .defrag_thold = */ defrag_thold,
                 /* .n_threads    = */ nt,
+                /* .n_threads_batch = */ ntb,
                 /* .cpu_mask     = */ cm,
                 /* .cpu_strict   = */ cs,
                 /* .poll         = */ pl,
@@ -1140,6 +1159,7 @@ struct test {
     int                      n_batch;
     int                      n_ubatch;
     int                      n_threads;
+    int                      n_threads_batch;
     std::string              cpu_mask;
     bool                     cpu_strict;
     int                      poll;
@@ -1161,6 +1181,8 @@ struct test {
     int                      n_depth;
     std::string              test_time;
     std::vector<uint64_t>    samples_ns;
+    std::vector<uint64_t>    samples_prompt_ns;
+    std::vector<uint64_t>    samples_gen_ns;
 
     test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
         cpu_info(get_cpu_info()),
@@ -1175,6 +1197,7 @@ struct test {
         n_batch        = inst.n_batch;
         n_ubatch       = inst.n_ubatch;
         n_threads      = inst.n_threads;
+        n_threads_batch = inst.n_threads_batch;
         cpu_mask       = inst.cpu_mask;
         cpu_strict     = inst.cpu_strict;
         poll           = inst.poll;
@@ -1206,6 +1229,14 @@ struct test {
 
     uint64_t stdev_ns() const { return ::stdev(samples_ns); }
 
+    uint64_t avg_prompt_ns() const { return samples_prompt_ns.empty() ? 0 : ::avg(samples_prompt_ns); }
+
+    uint64_t stdev_prompt_ns() const { return samples_prompt_ns.empty() ? 0 : ::stdev(samples_prompt_ns); }
+
+    uint64_t avg_gen_ns() const { return samples_gen_ns.empty() ? 0 : ::avg(samples_gen_ns); }
+
+    uint64_t stdev_gen_ns() const { return samples_gen_ns.empty() ? 0 : ::stdev(samples_gen_ns); }
+
     std::vector<double> get_ts() const {
         int                 n_tokens = n_prompt + n_gen;
         std::vector<double> ts;
@@ -1214,9 +1245,45 @@ struct test {
         return ts;
     }
 
+    std::vector<double> get_prompt_ts() const {
+        if (samples_prompt_ns.empty() || n_prompt == 0) return {};
+        std::vector<double> ts;
+        std::transform(samples_prompt_ns.begin(), samples_prompt_ns.end(), std::back_inserter(ts),
+                       [this](uint64_t t) { return 1e9 * n_prompt / t; });
+        return ts;
+    }
+
+    std::vector<double> get_gen_ts() const {
+        if (samples_gen_ns.empty() || n_gen == 0) return {};
+        std::vector<double> ts;
+        std::transform(samples_gen_ns.begin(), samples_gen_ns.end(), std::back_inserter(ts),
+                       [this](uint64_t t) { return 1e9 * n_gen / t; });
+        return ts;
+    }
+
     double avg_ts() const { return ::avg(get_ts()); }
 
     double stdev_ts() const { return ::stdev(get_ts()); }
+
+    double avg_prompt_ts() const {
+        auto ts = get_prompt_ts();
+        return ts.empty() ? 0.0 : ::avg(ts);
+    }
+
+    double stdev_prompt_ts() const {
+        auto ts = get_prompt_ts();
+        return ts.empty() ? 0.0 : ::stdev(ts);
+    }
+
+    double avg_gen_ts() const {
+        auto ts = get_gen_ts();
+        return ts.empty() ? 0.0 : ::avg(ts);
+    }
+
+    double stdev_gen_ts() const {
+        auto ts = get_gen_ts();
+        return ts.empty() ? 0.0 : ::stdev(ts);
+    }
 
     static std::string get_backend() {
         std::vector<std::string> backends;
@@ -1234,11 +1301,13 @@ struct test {
         static const std::vector<std::string> fields = {
             "build_commit", "build_number", "cpu_info",       "gpu_info",   "backends",     "model_filename",
             "model_type",   "model_size",   "model_n_params", "n_batch",    "n_ubatch",     "n_threads",
-            "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
+            "n_threads_batch", "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
             "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
             "defrag_thold",
             "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
             "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
+            "avg_prompt_ns", "stddev_prompt_ns", "avg_prompt_ts", "stddev_prompt_ts",
+            "avg_gen_ns",    "stddev_gen_ns",    "avg_gen_ts",    "stddev_gen_ts",
         };
         return fields;
     }
@@ -1247,16 +1316,18 @@ struct test {
 
     static field_type get_field_type(const std::string & field) {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
-            field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
+            field == "n_threads_batch" || field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" ||
-            field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload") {
+            field == "avg_ns" || field == "stddev_ns" || field == "no_op_offload" ||
+            field == "avg_prompt_ns" || field == "stddev_prompt_ns" || field == "avg_gen_ns" || field == "stddev_gen_ns") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
             field == "use_mmap" || field == "embeddings") {
             return BOOL;
         }
-        if (field == "avg_ts" || field == "stddev_ts" || field == "defrag_thold") {
+        if (field == "avg_ts" || field == "stddev_ts" || field == "defrag_thold" ||
+            field == "avg_prompt_ts" || field == "stddev_prompt_ts" || field == "avg_gen_ts" || field == "stddev_gen_ts") {
             return FLOAT;
         }
         return STRING;
@@ -1311,6 +1382,7 @@ struct test {
                                             std::to_string(n_batch),
                                             std::to_string(n_ubatch),
                                             std::to_string(n_threads),
+                                            std::to_string(n_threads_batch),
                                             cpu_mask,
                                             std::to_string(cpu_strict),
                                             std::to_string(poll),
@@ -1334,7 +1406,15 @@ struct test {
                                             std::to_string(avg_ns()),
                                             std::to_string(stdev_ns()),
                                             std::to_string(avg_ts()),
-                                            std::to_string(stdev_ts()) };
+                                            std::to_string(stdev_ts()),
+                                            std::to_string(avg_prompt_ns()),
+                                            std::to_string(stdev_prompt_ns()),
+                                            std::to_string(avg_prompt_ts()),
+                                            std::to_string(stdev_prompt_ts()),
+                                            std::to_string(avg_gen_ns()),
+                                            std::to_string(stdev_gen_ns()),
+                                            std::to_string(avg_gen_ts()),
+                                            std::to_string(stdev_gen_ts()) };
         return values;
     }
 
@@ -1476,7 +1556,7 @@ struct markdown_printer : public printer {
         if (field == "model") {
             return -30;
         }
-        if (field == "t/s") {
+        if (field == "t/s" || field == "pp t/s" || field == "tg t/s") {
             return 20;
         }
         if (field == "size" || field == "params") {
@@ -1487,6 +1567,9 @@ struct markdown_printer : public printer {
         }
         if (field == "n_threads") {
             return 7;
+        }
+        if (field == "n_threads_batch") {
+            return 8;
         }
         if (field == "n_batch") {
             return 7;
@@ -1531,6 +1614,9 @@ struct markdown_printer : public printer {
         if (field == "n_threads") {
             return "threads";
         }
+        if (field == "n_threads_batch") {
+            return "th_batch";
+        }
         if (field == "no_kv_offload") {
             return "nkvo";
         }
@@ -1568,6 +1654,9 @@ struct markdown_printer : public printer {
         }
         if (params.n_threads.size() > 1 || params.n_threads != cmd_params_defaults.n_threads || is_cpu_backend) {
             fields.emplace_back("n_threads");
+        }
+        if (params.n_threads_batch.size() > 1 || params.n_threads_batch != cmd_params_defaults.n_threads_batch || is_cpu_backend) {
+            fields.emplace_back("n_threads_batch");
         }
         if (params.cpu_mask.size() > 1 || params.cpu_mask != cmd_params_defaults.cpu_mask) {
             fields.emplace_back("cpu_mask");
@@ -1622,6 +1711,8 @@ struct markdown_printer : public printer {
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
+        fields.emplace_back("pp t/s");
+        fields.emplace_back("tg t/s");
 
         fprintf(fout, "|");
         for (const auto & field : fields) {
@@ -1677,6 +1768,20 @@ struct markdown_printer : public printer {
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
                 value = buf;
+            } else if (field == "pp t/s") {
+                if (t.n_prompt > 0) {
+                    snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_prompt_ts(), t.stdev_prompt_ts());
+                } else {
+                    snprintf(buf, sizeof(buf), "N/A");
+                }
+                value = buf;
+            } else if (field == "tg t/s") {
+                if (t.n_gen > 0) {
+                    snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_gen_ts(), t.stdev_gen_ts());
+                } else {
+                    snprintf(buf, sizeof(buf), "N/A");
+                }
+                value = buf;
             } else if (vmap.find(field) != vmap.end()) {
                 value = vmap.at(field);
             } else {
@@ -1685,7 +1790,7 @@ struct markdown_printer : public printer {
             }
 
             int width = get_field_width(field);
-            if (field == "t/s") {
+            if (field == "t/s" || field == "pp t/s" || field == "tg t/s") {
                 // HACK: the utf-8 character is 2 bytes
                 width += 1;
             }
@@ -1738,8 +1843,8 @@ struct sql_printer : public printer {
     }
 };
 
-static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
-    llama_set_n_threads(ctx, n_threads, n_threads);
+static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, int n_threads_batch) {
+    llama_set_n_threads(ctx, n_threads, n_threads_batch);
 
     const llama_model * model   = llama_get_model(ctx);
     const llama_vocab * vocab   = llama_model_get_vocab(model);
@@ -1767,8 +1872,8 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     return true;
 }
 
-static bool test_gen(llama_context * ctx, int n_gen, int n_threads) {
-    llama_set_n_threads(ctx, n_threads, n_threads);
+static bool test_gen(llama_context * ctx, int n_gen, int n_threads, int n_threads_batch) {
+    llama_set_n_threads(ctx, n_threads, n_threads_batch);
 
     const llama_model * model   = llama_get_model(ctx);
     const llama_vocab * vocab   = llama_model_get_vocab(model);
@@ -1930,7 +2035,7 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
             }
             //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-            bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+            bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, t.n_threads_batch);
             if (!res) {
                 fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
                 exit(1);
@@ -1940,7 +2045,7 @@ int main(int argc, char ** argv) {
             if (params.progress) {
                 fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup generation run\n", params_idx, params_count);
             }
-            bool res = test_gen(ctx, 1, t.n_threads);
+            bool res = test_gen(ctx, 1, t.n_threads, t.n_threads_batch);
             if (!res) {
                 fprintf(stderr, "%s: error: failed to run gen warmup\n", __func__);
                 exit(1);
@@ -1955,7 +2060,7 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads, t.n_threads_batch);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run depth\n", __func__);
                     exit(1);
@@ -1963,32 +2068,46 @@ int main(int argc, char ** argv) {
             }
 
             uint64_t t_start = get_time_ns();
+            uint64_t t_prompt_ns = 0;
+            uint64_t t_gen_ns = 0;
 
             if (t.n_prompt > 0) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                uint64_t t_prompt_start = get_time_ns();
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, t.n_threads_batch);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     exit(1);
                 }
+                t_prompt_ns = get_time_ns() - t_prompt_start;
             }
             if (t.n_gen > 0) {
                 if (params.progress) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: generation run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_gen(ctx, t.n_gen, t.n_threads);
+                uint64_t t_gen_start = get_time_ns();
+                bool res = test_gen(ctx, t.n_gen, t.n_threads, t.n_threads_batch);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run gen\n", __func__);
                     exit(1);
                 }
+                t_gen_ns = get_time_ns() - t_gen_start;
             }
 
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
+
+            // Store separate timings
+            if (t.n_prompt > 0) {
+                t.samples_prompt_ns.push_back(t_prompt_ns);
+            }
+            if (t.n_gen > 0) {
+                t.samples_gen_ns.push_back(t_gen_ns);
+            }
         }
 
         if (p) {
@@ -2022,3 +2141,4 @@ int main(int argc, char ** argv) {
 
     return 0;
 }
+
