@@ -92,36 +92,28 @@ void llm_graph_input_pos_bucket_kv::set_input(const llama_ubatch * ubatch) {
 }
 
 void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
-    if (hparams.causal_attn || cparams.pooling_type == LLAMA_POOLING_TYPE_NONE) {
-        //GGML_ASSERT(out_ids && "every model that can must skip unused outputs");
+    GGML_ASSERT(out_ids);
 
-        if (!out_ids) {
-            LLAMA_LOG_WARN("%s: 'out_ids' is not created\n", __func__);
-        } else {
-            const int64_t n_tokens = ubatch->n_tokens;
+    const int64_t n_tokens = ubatch->n_tokens;
 
-            GGML_ASSERT(ggml_backend_buffer_is_host(out_ids->buffer));
-            int32_t * data = (int32_t *) out_ids->data;
+    GGML_ASSERT(ggml_backend_buffer_is_host(out_ids->buffer));
+    int32_t * data = (int32_t *) out_ids->data;
 
-            if (n_outputs == n_tokens) {
-                for (int i = 0; i < n_tokens; ++i) {
-                    data[i] = i;
-                }
-            } else if (ubatch->output) {
-                int32_t n_outputs = 0;
-                for (int i = 0; i < n_tokens; ++i) {
-                    if (ubatch->output[i]) {
-                        data[n_outputs++] = i;
-                    }
-                }
-                // the graph needs to have been passed the correct number of outputs
-                GGML_ASSERT(n_outputs == n_outputs);
-            } else if (n_outputs == 1) {
-                // only keep last output
-                data[0] = n_tokens - 1;
-            } else {
-                GGML_ASSERT(n_outputs == 0);
-            }
+    if (n_outputs == n_tokens) {
+        for (int i = 0; i < n_tokens; ++i) {
+            data[i] = i;
+        }
+
+        return;
+    }
+
+    GGML_ASSERT(ubatch->output);
+
+    int n_outputs = 0;
+
+    for (int i = 0; i < n_tokens; ++i) {
+        if (ubatch->output[i]) {
+            data[n_outputs++] = i;
         }
     }
 }
