@@ -13,29 +13,26 @@
 #include <algorithm>
 #include <iostream>
 
-static void fill_random_f32(ggml_tensor * dst, float min_val = -1.0f, float max_val = 1.0f) {
+// Use fixed seed for reproducible results
+static std::mt19937 g_rng(42);
+
+static void fill_tensor_f32(ggml_tensor * dst, float min_val = -1.0f, float max_val = 1.0f) {
     float* data = (float*)dst->data;
     size_t n_elements = ggml_nelements(dst);
-
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(min_val, max_val);
 
     for (size_t i = 0; i < n_elements; i++) {
-        data[i] = dis(gen);
+        data[i] = dis(g_rng);
     }
 }
 
-static void fill_random_f16(ggml_tensor * dst, float min_val = -1.0f, float max_val = 1.0f) {
+static void fill_tensor_f16(ggml_tensor * dst, float min_val = -1.0f, float max_val = 1.0f) {
     ggml_fp16_t* data = (ggml_fp16_t*)dst->data;
     size_t n_elements = ggml_nelements(dst);
-
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
     std::uniform_real_distribution<float> dis(min_val, max_val);
 
     for (size_t i = 0; i < n_elements; i++) {
-        data[i] = ggml_fp32_to_fp16(dis(gen));
+        data[i] = ggml_fp32_to_fp16(dis(g_rng));
     }
 }
 
@@ -47,17 +44,17 @@ static void print_tensor_info(const char* name, ggml_tensor* tensor) {
 
 static void print_f32_sample(const char* name, ggml_tensor* tensor, int max_elements = 10) {
     if (tensor->type != GGML_TYPE_F32) {
-        printf("%s: Not F32 tensor\n", name);
+        printf("%s: Not F32 tensor (type=%s)\n", name, ggml_type_name(tensor->type));
         return;
     }
     
     float* data = (float*)tensor->data;
     size_t n_elements = ggml_nelements(tensor);
-    int elements_to_print = std::min((size_t)max_elements, n_elements);
+    size_t elements_to_print = std::min((size_t)max_elements, n_elements);
     
     printf("%s sample values: ", name);
-    for (int i = 0; i < elements_to_print; i++) {
-        printf("%.3f ", data[i]);
+    for (size_t i = 0; i < elements_to_print; i++) {
+        printf("%.6f ", data[i]);
     }
     if (elements_to_print < n_elements) {
         printf("... (total %ld elements)", n_elements);
@@ -65,23 +62,60 @@ static void print_f32_sample(const char* name, ggml_tensor* tensor, int max_elem
     printf("\n");
 }
 
+static float tensor_max_diff(ggml_tensor* a, ggml_tensor* b) {
+    if (ggml_nelements(a) != ggml_nelements(b) || a->type != b->type) {
+        printf("ERROR: Tensors have different sizes or types\n");
+        return -1.0f;
+    }
+    
+    if (a->type != GGML_TYPE_F32) {
+        printf("ERROR: Only F32 tensors supported for comparison\n");
+        return -1.0f;
+    }
+    
+    float* data_a = (float*)a->data;
+    float* data_b = (float*)b->data;
+    size_t n_elements = ggml_nelements(a);
+    
+    float max_diff = 0.0f;
+    for (size_t i = 0; i < n_elements; i++) {
+        float diff = std::abs(data_a[i] - data_b[i]);
+        max_diff = std::max(max_diff, diff);
+    }
+    
+    return max_diff;
+}
+
+static void reset_state_tensor(ggml_tensor* state) {
+    float* state_data = (float*)state->data;
+    size_t n_pairs = ggml_nelements(state) / 2;
+    
+    for (size_t i = 0; i < n_pairs; i++) {
+        state_data[i * 2 + 0] = -INFINITY;  // M (max KQ value)
+        state_data[i * 2 + 1] = 0.0f;       // S (sum)
+    }
+}
+
 int main() {
-    printf("Testing Flash Attention with State Tensor\n");
+    printf("=== Flash Attention State Tensor - Comprehensive Test ===\n");
 
     // Test parameters
-    const int head_dim   = 16;
-    const int n_heads    = 4;
-    const int n_kv_heads = 2;
-    const int seq_len    = 8;
-    const int kv_len     = 32;
+    const int head_dim   = 32;
+    const int n_heads    = 8;
+    const int n_kv_heads = 4;
+    const int seq_len    = 2;
+    const int kv_len     = 4;  // Will be split into segments
     const int n_threads  = 4;
+    const int kv_segments = 2;  // Split KV into 2 segments
+    const int kv_segment_len = kv_len / kv_segments;
 
     printf("Test Parameters:\n");
-    printf("  head_dim=%d, n_heads=%d, n_kv_heads=%d, seq_len=%d, kv_len=%d\n",
-           head_dim, n_heads, n_kv_heads, seq_len, kv_len);
+    printf("  head_dim=%d, n_heads=%d, n_kv_heads=%d\n", head_dim, n_heads, n_kv_heads);
+    printf("  seq_len=%d, kv_len=%d\n", seq_len, kv_len);
+    printf("  kv_segments=%d, kv_segment_len=%d\n", kv_segments, kv_segment_len);
 
     // Initialize ggml context
-    const size_t ctx_size = 512*1024*1024; // 512MB
+    const size_t ctx_size = 1024*1024*1024; // 1GB
     struct ggml_init_params params = {
         /*.mem_size   =*/ ctx_size,
         /*.mem_buffer =*/ NULL,
@@ -94,6 +128,11 @@ int main() {
         return 1;
     }
 
+    // ============================================================================
+    // Create and initialize tensors with FIXED data
+    // ============================================================================
+    printf("\n--- Creating Fixed Test Data ---\n");
+
     // Create tensors for flash attention
     // Format: [head_dim, seq_len, n_heads, 1] for Q
     // Format: [head_dim, kv_len, n_kv_heads, 1] for K, V
@@ -101,7 +140,7 @@ int main() {
     ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len, n_kv_heads, 1);
     ggml_tensor * v = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, head_dim, kv_len, n_kv_heads, 1);
 
-    // Create mask tensor: [n_kv, n_seq, 1, 1] - padded to requirements
+    // Create mask tensor with proper padding
     const int padded_kv_len = GGML_PAD(kv_len, 64);
     const int padded_seq_len = GGML_PAD(seq_len, GGML_KQ_MASK_PAD);
     ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, padded_kv_len, padded_seq_len);
@@ -115,39 +154,28 @@ int main() {
     print_tensor_info("Mask", mask);
     print_tensor_info("State", state);
 
-    // Fill tensors with test data
-    fill_random_f32(q, -0.5f, 0.5f);
-    fill_random_f16(k, -0.5f, 0.5f);
-    fill_random_f16(v, -0.5f, 0.5f);
+    // Fill with FIXED reproducible data
+    printf("\nGenerating fixed test data (seed=42)...\n");
+    fill_tensor_f32(q, -0.8f, 0.8f);
+    fill_tensor_f16(k, -0.6f, 0.6f);
+    fill_tensor_f16(v, -0.7f, 0.7f);
 
-    // Initialize mask (simple causal mask)
+    // Initialize mask (no causal mask - all positions can see all KV)
     ggml_fp16_t* mask_data = (ggml_fp16_t*)mask->data;
     memset(mask_data, 0, ggml_nbytes(mask));
     for (int i = 0; i < seq_len; i++) {
         for (int j = 0; j < kv_len; j++) {
-            if (j <= i + 10) {  // Allow seeing up to 10 positions ahead for this test
-                mask_data[i * padded_kv_len + j] = ggml_fp32_to_fp16(0.0f);
-            } else {
-                mask_data[i * padded_kv_len + j] = ggml_fp32_to_fp16(-INFINITY);
-            }
+            // No masking - all positions can see all KV tokens
+            mask_data[i * padded_kv_len + j] = ggml_fp32_to_fp16(0.0f);
         }
     }
 
-    // Initialize state tensor with starting values
-    // Format: [M, S] for each head/position
-    float* state_data = (float*)state->data;
-    for (int i = 0; i < n_heads * seq_len; i++) {
-        state_data[i * 2 + 0] = -INFINITY;  // M (max KQ value)
-        state_data[i * 2 + 1] = 0.0f;       // S (sum)
-    }
-
-    printf("\nInitial state values:\n");
-    print_f32_sample("State", state, 20);
+    printf("Fixed test data generated successfully\n");
 
     // ============================================================================
-    // Test 1: Standard Flash Attention (baseline)
+    // Test 1: Standard Flash Attention (Reference Result)
     // ============================================================================
-    printf("\n--- Testing Standard Flash Attention (baseline) ---\n");
+    printf("\n--- Test 1: Standard Flash Attention (Reference) ---\n");
 
     ggml_tensor * result_standard = ggml_flash_attn_ext(
         ctx, q, k, v, mask,
@@ -163,7 +191,6 @@ int main() {
         return 1;
     }
 
-    // Build and execute computation graph for standard implementation
     struct ggml_cgraph * graph_standard = ggml_new_graph(ctx);
     ggml_build_forward_expand(graph_standard, result_standard);
 
@@ -171,124 +198,214 @@ int main() {
     enum ggml_status status_standard = ggml_graph_compute_with_ctx(ctx, graph_standard, n_threads);
 
     if (status_standard != GGML_STATUS_SUCCESS) {
-        printf("ERROR: Standard flash attention computation failed with status: %d\n", status_standard);
+        printf("ERROR: Standard flash attention failed with status: %d\n", status_standard);
         ggml_free(ctx);
         return 1;
     }
 
     printf("Standard flash attention computation successful\n");
-    print_f32_sample("Standard result", result_standard, 20);
+    print_f32_sample("Standard result", result_standard, 8);
 
     // ============================================================================
-    // Test 2: Flash Attention with State Tensor  
+    // Test 2: Segmented Flash Attention with State Accumulation
     // ============================================================================
-    printf("\n--- Testing Flash Attention with State Tensor ---\n");
+    printf("\n--- Test 2: Segmented Flash Attention with State ---\n");
 
-    ggml_tensor * result_with_state = ggml_flash_attn_ext_with_state(
-        ctx, q, k, v, mask, state,
-        1.0f / std::sqrt(head_dim),  // scale
-        0.0f,  // max_bias
-        0.0f   // logit_softcap
-    );
-    ggml_flash_attn_ext_set_prec(result_with_state, GGML_PREC_F32);
+    // Reset state tensor
+    reset_state_tensor(state);
+    
+    // Create result tensor for accumulation (same shape as standard result)
+    ggml_tensor * result_segmented = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 
+        head_dim, seq_len, n_heads, 1);
 
-    if (!result_with_state) {
-        printf("ERROR: Failed to create flash attention with state operation\n");
-        ggml_free(ctx);
-        return 1;
-    }
+    // Initialize segmented result to zero
+    memset(result_segmented->data, 0, ggml_nbytes(result_segmented));
 
-    // Build and execute computation graph for state implementation
-    struct ggml_cgraph * graph_with_state = ggml_new_graph(ctx);
-    ggml_build_forward_expand(graph_with_state, result_with_state);
+    printf("Processing %d segments of KV cache (segment_len=%d)...\n", kv_segments, kv_segment_len);
 
-    printf("Computing flash attention with state...\n");
-    enum ggml_status status_with_state = ggml_graph_compute_with_ctx(ctx, graph_with_state, n_threads);
+    for (int seg = 0; seg < kv_segments; seg++) {
+        printf("\n  Segment %d/%d (kv_pos %d-%d):\n", 
+               seg + 1, kv_segments, seg * kv_segment_len, (seg + 1) * kv_segment_len - 1);
 
-    if (status_with_state != GGML_STATUS_SUCCESS) {
-        printf("ERROR: Flash attention with state computation failed with status: %d\n", status_with_state);
-        ggml_free(ctx);
-        return 1;
-    }
-
-    printf("Flash attention with state computation successful\n");
-    print_f32_sample("Result with state", result_with_state, 20);
-
-    printf("\nFinal state values:\n");
-    print_f32_sample("Final state", state, 20);
-
-    // ============================================================================
-    // Test 3: Compare Results
-    // ============================================================================
-    printf("\n--- Comparing Results ---\n");
-
-    float* data_standard = (float*)result_standard->data;
-    float* data_with_state = (float*)result_with_state->data;
-    size_t n_elements = ggml_nelements(result_standard);
-
-    float max_diff = 0.0f;
-    float avg_diff = 0.0f;
-    int different_elements = 0;
-
-    for (size_t i = 0; i < n_elements; i++) {
-        float diff = std::abs(data_standard[i] - data_with_state[i]);
-        if (diff > 1e-6) {
-            different_elements++;
-        }
-        max_diff = std::max(max_diff, diff);
-        avg_diff += diff;
-    }
-    avg_diff /= n_elements;
-
-    printf("Comparison statistics:\n");
-    printf("  Total elements: %ld\n", n_elements);
-    printf("  Elements with significant differences (>1e-6): %d\n", different_elements);
-    printf("  Maximum difference: %.2e\n", max_diff);
-    printf("  Average difference: %.2e\n", avg_diff);
-
-    // ============================================================================
-    // Test 4: Multiple Calls (State Accumulation)
-    // ============================================================================
-    printf("\n--- Testing Multiple Calls (State Accumulation) ---\n");
-
-    // Reset state for accumulation test
-    for (int i = 0; i < n_heads * seq_len; i++) {
-        state_data[i * 2 + 0] = -INFINITY;  // M (max KQ value)
-        state_data[i * 2 + 1] = 0.0f;       // S (sum)
-    }
-
-    // Call flash attention with state multiple times to test accumulation
-    for (int call = 0; call < 3; call++) {
-        printf("Call %d:\n", call + 1);
-        
-        ggml_tensor * result_accumulate = ggml_flash_attn_ext_with_state(
-            ctx, q, k, v, mask, state,
-            1.0f / std::sqrt(head_dim),
-            0.0f, 0.0f
-        );
-        ggml_flash_attn_ext_set_prec(result_accumulate, GGML_PREC_F32);
-
-        struct ggml_cgraph * graph_accumulate = ggml_new_graph(ctx);
-        ggml_build_forward_expand(graph_accumulate, result_accumulate);
-
-        enum ggml_status status_accumulate = ggml_graph_compute_with_ctx(ctx, graph_accumulate, n_threads);
-
-        if (status_accumulate != GGML_STATUS_SUCCESS) {
-            printf("ERROR: Accumulation call %d failed with status: %d\n", call + 1, status_accumulate);
-            ggml_free(ctx);
-            return 1;
-        }
-
-        printf("  State after call %d: ", call + 1);
+        // Print state before this segment
+        printf("    State before segment %d: ", seg + 1);
+        float* state_data = (float*)state->data;
         for (int i = 0; i < std::min(4, n_heads * seq_len); i++) {
             printf("[M=%.3f,S=%.3f] ", state_data[i * 2 + 0], state_data[i * 2 + 1]);
         }
         printf("...\n");
+
+        // Create views of K and V for this segment using ggml_view_4d
+        ggml_tensor * k_segment = ggml_view_4d(ctx, k, 
+            head_dim, kv_segment_len, n_kv_heads, 1,  // ne
+            k->nb[1], k->nb[2], k->nb[3],             // nb (strides)
+            seg * kv_segment_len * k->nb[1]);         // offset
+
+        ggml_tensor * v_segment = ggml_view_4d(ctx, v,
+            head_dim, kv_segment_len, n_kv_heads, 1,  // ne
+            v->nb[1], v->nb[2], v->nb[3],             // nb (strides)
+            seg * kv_segment_len * v->nb[1]);         // offset
+
+        // Create mask for this segment
+        const int padded_segment_len = GGML_PAD(kv_segment_len, 64);
+        ggml_tensor * mask_segment = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 
+            padded_segment_len, padded_seq_len);
+
+        // Fill segment mask
+        ggml_fp16_t* mask_seg_data = (ggml_fp16_t*)mask_segment->data;
+        memset(mask_seg_data, 0, ggml_nbytes(mask_segment));
+        
+        for (int i = 0; i < seq_len; i++) {
+            for (int j = 0; j < kv_segment_len; j++) {
+                int global_j = seg * kv_segment_len + j;
+                // No masking for segment - all positions can see all KV tokens in this segment
+                mask_seg_data[i * padded_segment_len + j] = ggml_fp32_to_fp16(0.0f);
+            }
+        }
+
+        // Debug: Print mask information for first segment
+        if (seg == 0) {
+            printf("    Debug - Global mask (first 4 seq positions, first 20 kv positions):\n");
+            for (int i = 0; i < std::min(4, seq_len); i++) {
+                printf("      seq[%d]: ", i);
+                for (int j = 0; j < std::min(20, kv_len); j++) {
+                    float mask_val = GGML_FP16_TO_FP32(mask_data[i * padded_kv_len + j]);
+                    printf("%.0f ", mask_val == -INFINITY ? -1.0f : mask_val);
+                }
+                printf("...\n");
+            }
+            
+            printf("    Debug - Segment mask (first 4 seq positions, all segment positions):\n");
+            for (int i = 0; i < std::min(4, seq_len); i++) {
+                printf("      seq[%d]: ", i);
+                for (int j = 0; j < kv_segment_len; j++) {
+                    float mask_val = GGML_FP16_TO_FP32(mask_seg_data[i * padded_segment_len + j]);
+                    printf("%.0f ", mask_val == -INFINITY ? -1.0f : mask_val);
+                }
+                printf("\n");
+            }
+        }
+
+        print_tensor_info("    K segment", k_segment);
+        print_tensor_info("    V segment", v_segment);
+
+        // Compute flash attention with state for this segment
+        ggml_tensor * result_seg = ggml_flash_attn_ext_with_state(
+            ctx, q, k_segment, v_segment, mask_segment, state,
+            1.0f / std::sqrt(head_dim),  // scale
+            0.0f,  // max_bias
+            0.0f   // logit_softcap
+        );
+        ggml_flash_attn_ext_set_prec(result_seg, GGML_PREC_F32);
+
+        if (!result_seg) {
+            printf("ERROR: Failed to create segmented flash attention for segment %d\n", seg);
+            ggml_free(ctx);
+            return 1;
+        }
+
+        struct ggml_cgraph * graph_seg = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph_seg, result_seg);
+
+        enum ggml_status status_seg = ggml_graph_compute_with_ctx(ctx, graph_seg, n_threads);
+
+        if (status_seg != GGML_STATUS_SUCCESS) {
+            printf("ERROR: Segmented flash attention failed for segment %d with status: %d\n", seg, status_seg);
+            ggml_free(ctx);
+            return 1;
+        }
+
+        printf("    Segment %d computed successfully\n", seg + 1);
+        print_f32_sample("    Segment result", result_seg, 6);
+
+        // Print state after this segment
+        printf("    State after segment %d: ", seg + 1);
+        for (int i = 0; i < std::min(4, n_heads * seq_len); i++) {
+            printf("[M=%.3f,S=%.3f] ", state_data[i * 2 + 0], state_data[i * 2 + 1]);
+        }
+        printf("...\n");
+
+        // For the final segment, copy the result (this contains the accumulated result of all segments)
+        if (seg == kv_segments - 1) {
+            memcpy(result_segmented->data, result_seg->data, ggml_nbytes(result_seg));
+            printf("    Final accumulated result copied from segment %d\n", seg + 1);
+        }
     }
 
-    printf("\n=== All Tests Completed Successfully! ===\n");
+    printf("\nSegmented computation completed\n");
+    print_f32_sample("Final segmented result", result_segmented, 8);
+
+    // ============================================================================
+    // Test 3: Compare Results
+    // ============================================================================
+    printf("\n--- Test 3: Comparing Results ---\n");
+
+    float max_diff = tensor_max_diff(result_standard, result_segmented);
+    
+    printf("Comparison between standard and segmented results:\n");
+    printf("  Maximum absolute difference: %.2e\n", max_diff);
+    
+    const float tolerance = 1e-4;  // Reasonable tolerance for F16/F32 precision
+    
+    if (max_diff < tolerance) {
+        printf("  ✅ PASS: Results match within tolerance (%.2e)\n", tolerance);
+    } else {
+        printf("  ❌ FAIL: Results differ beyond tolerance (%.2e)\n", tolerance);
+        
+        // Print detailed comparison for debugging
+        printf("\nDetailed comparison:\n");
+        print_f32_sample("Standard", result_standard, 20);
+        print_f32_sample("Segmented", result_segmented, 20);
+    }
+
+    // ============================================================================
+    // Test 4: State Tensor Analysis
+    // ============================================================================
+    printf("\n--- Test 4: State Tensor Analysis ---\n");
+
+    printf("Final state tensor values:\n");
+    print_f32_sample("Final state", state, 16);
+
+    float* state_data = (float*)state->data;
+    float min_m = INFINITY, max_m = -INFINITY;
+    float min_s = INFINITY, max_s = -INFINITY;
+    
+    for (int i = 0; i < n_heads * seq_len; i++) {
+        float m_val = state_data[i * 2 + 0];
+        float s_val = state_data[i * 2 + 1];
+        
+        if (m_val != -INFINITY) {
+            min_m = std::min(min_m, m_val);
+            max_m = std::max(max_m, m_val);
+        }
+        
+        min_s = std::min(min_s, s_val);
+        max_s = std::max(max_s, s_val);
+    }
+
+    printf("State tensor statistics:\n");
+    printf("  M values: min=%.6f, max=%.6f\n", min_m, max_m);
+    printf("  S values: min=%.6f, max=%.6f\n", min_s, max_s);
+
+    // ============================================================================
+    // Final Results
+    // ============================================================================
+    printf("\n=== Final Test Results ===\n");
+    
+    if (max_diff < tolerance) {
+        printf("🎉 ALL TESTS PASSED!\n");
+        printf("✅ Segmented flash attention with state produces identical results\n");
+        printf("✅ State tensor correctly accumulates across segments\n");
+        printf("✅ Implementation is working correctly\n");
+    } else {
+        printf("❌ TESTS FAILED!\n");
+        printf("❌ Results differ beyond acceptable tolerance\n");
+        printf("❌ Implementation needs debugging\n");
+    }
+
+    printf("\nMax difference: %.2e (tolerance: %.2e)\n", max_diff, tolerance);
 
     // Cleanup
     ggml_free(ctx);
-    return 0;
+    return (max_diff < tolerance) ? 0 : 1;
 }
