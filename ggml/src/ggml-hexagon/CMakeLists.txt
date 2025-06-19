@@ -113,7 +113,7 @@ function(ggml_hexagon_build_kernel KNAME)
         COMMAND make -C ${CMAKE_CURRENT_LIST_DIR}/kernels/ clean
         COMMAND make -C ${CMAKE_CURRENT_LIST_DIR}/kernels/ HEXAGON_SDK_PATH=${HEXAGON_SDK_PATH} HTP_ARCH_VERSION=${HTP_ARCH_VERSION} DEBUG_FLAG=${DEBUG_FLAG}
         COMMAND echo "current working path:`pwd`\n"
-        COMMAND ls -l  ../../../bin/libggmlop-skel.so
+        COMMAND ls -l  ../../../bin/libggmldsp-skel.so
         COMMENT "build hexagon-kernel"
     )
 endfunction()

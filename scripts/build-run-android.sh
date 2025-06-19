@@ -30,6 +30,7 @@ QNN_SDK_INSTALL_PATH=/opt/qcom/aistack/qairt
 QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_VERSION=2.33.0.250327
 QNN_SDK_VERSION=2.34.0.250424
+#QNN_SDK_VERSION=2.35.0.250530
 QNN_SDK_PATH=${QNN_SDK_INSTALL_PATH}/${QNN_SDK_VERSION}
 
 #Hexagon SDK can be found at:
@@ -49,7 +50,7 @@ HTP_ARCH_VERSION=v79
 HTP_ARCH_VERSION_a=V79
 
 #running_params=" -mg 2 -ngl 99 -t 8 -fa 1 "
-running_params=" -mg 2 -ngl 99 -t 8 "
+running_params=" -mg 3 -ngl 99 -t 8 -n 256 --no-warmup "
 
 function dump_vars()
 {
