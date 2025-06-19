@@ -1261,7 +1261,6 @@ size_t ggml_nbytes(const struct ggml_tensor * tensor) {
             nbytes += (tensor->ne[i] - 1)*tensor->nb[i];
         }
     }
-
 #ifdef GGML_USE_TMAC
     if (tensor->type == GGML_TYPE_TMAC_BN_0) {
         // One scale will not exceed one alignment boundary, so we can just add one alignment to the size.
@@ -1903,7 +1902,6 @@ struct ggml_tensor * ggml_get_next_tensor(const struct ggml_context * ctx, struc
 
     return NULL;
 }
-
 struct ggml_tensor * ggml_get_tensor(struct ggml_context * ctx, const char * name) {
     struct ggml_object * obj = ctx->objects_begin;
 
@@ -2549,7 +2547,6 @@ struct ggml_tensor * ggml_elu_inplace(
     struct ggml_tensor  * a) {
     return ggml_unary_inplace(ctx, a, GGML_UNARY_OP_ELU);
 }
-
 // ggml_relu
 
 struct ggml_tensor * ggml_relu(
@@ -3189,7 +3186,6 @@ struct ggml_tensor * ggml_reshape(
 
     return result;
 }
-
 struct ggml_tensor * ggml_reshape_1d(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -3832,7 +3828,6 @@ struct ggml_tensor * ggml_rope_custom(
         ext_factor, attn_factor, beta_fast, beta_slow, false
     );
 }
-
 struct ggml_tensor * ggml_rope_custom_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
@@ -4472,7 +4467,6 @@ struct ggml_tensor * ggml_timestep_embedding(
 
     return result;
 }
-
 // ggml_argsort
 
 struct ggml_tensor * ggml_argsort(
@@ -4592,6 +4586,57 @@ struct ggml_tensor * ggml_flash_attn_mixed(
     result->src[3] = mask;
     result->src[4] = k_quant;
     result->src[5] = v_quant;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_flash_attn_ext_with_state(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * mask,
+        struct ggml_tensor  * s_m_state,
+        float                 scale,
+        float                 max_bias,
+        float                 logit_softcap) {
+    GGML_ASSERT(ggml_can_mul_mat(k, q));
+    // TODO: check if vT can be multiplied by (k*qT)
+
+    if (mask) {
+        GGML_ASSERT(ggml_is_contiguous(mask));
+        GGML_ASSERT(mask->ne[2] == 1);
+        GGML_ASSERT(mask->ne[3] == 1);
+        GGML_ASSERT(mask->ne[1] >= GGML_PAD(q->ne[1], GGML_KQ_MASK_PAD) &&
+                "the Flash-Attention kernel requires the mask to be padded to GGML_KQ_MASK_PAD and at least n_queries big");
+        //GGML_ASSERT(ggml_can_repeat_rows(mask, qk));
+    }
+
+    if (max_bias > 0.0f) {
+        GGML_ASSERT(mask);
+    }
+
+    // Validate state tensor format: [2, n_heads * q_len]
+    GGML_ASSERT(s_m_state != NULL);
+    GGML_ASSERT(s_m_state->ne[0] == 2);  // [M, S] pairs
+    GGML_ASSERT(s_m_state->ne[1] == q->ne[2] * q->ne[1]);  // n_heads * q_len
+    GGML_ASSERT(s_m_state->type == GGML_TYPE_F32);
+
+    // permute(0, 2, 1, 3)
+    int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    float params[] = { scale, max_bias, logit_softcap };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_FLASH_ATTN_EXT;
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = mask;
+    result->src[4] = NULL;  // k_quant not used in this variant
+    result->src[5] = NULL;  // v_quant not used in this variant
+    result->src[6] = s_m_state;  // State tensor for S and M values
 
     return result;
 }
@@ -5119,7 +5164,6 @@ static struct ggml_tensor * ggml_map_custom2_impl(
 
     return result;
 }
-
 struct ggml_tensor * ggml_map_custom2(
         struct ggml_context      * ctx,
         struct ggml_tensor       * a,
@@ -5456,7 +5500,6 @@ static void ggml_sub_or_set(
     ggml_format_name(cgraph->grads[isrc], "grad for %s", src->name);
     ggml_build_forward_expand(cgraph, cgraph->grads[isrc]);
 }
-
 static void ggml_compute_backward(
         struct ggml_context * ctx, struct ggml_cgraph * cgraph, int i, const bool * grads_needed) {
     struct ggml_tensor * tensor = cgraph->nodes[i];
@@ -6108,7 +6151,6 @@ size_t ggml_graph_overhead_custom(size_t size, bool grads) {
 size_t ggml_graph_overhead(void) {
     return ggml_graph_overhead_custom(GGML_DEFAULT_GRAPH_SIZE, false);
 }
-
 struct ggml_cgraph * ggml_new_graph_custom(struct ggml_context * ctx, size_t size, bool grads) {
     const size_t obj_size = ggml_graph_nbytes(size, grads);
     struct ggml_object * obj = ggml_new_object(ctx, GGML_OBJECT_TYPE_GRAPH, obj_size);

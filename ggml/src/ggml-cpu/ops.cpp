@@ -656,7 +656,6 @@ static void ggml_compute_forward_dup_bf16(
         GGML_ABORT("fatal error"); // TODO: implement
     }
 }
-
 static void ggml_compute_forward_dup_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -1216,7 +1215,7 @@ static void ggml_compute_forward_add_q_f32(
 
     GGML_ASSERT(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
 
-    const int nr  = ggml_nrows(src0);
+    const int nr  = ggml_nrows(src1);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -1426,7 +1425,6 @@ static void ggml_compute_forward_add1_f16_f32(
         }
     }
 }
-
 static void ggml_compute_forward_add1_f16_f16(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -2191,9 +2189,7 @@ void ggml_compute_forward_count_equal(
             }
     }
 }
-
 // ggml_compute_forward_repeat
-
 static void ggml_compute_forward_repeat_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -2980,7 +2976,6 @@ static void ggml_compute_forward_silu_f16(
 #endif
     }
 }
-
 static void ggml_compute_forward_silu(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3002,7 +2997,6 @@ static void ggml_compute_forward_silu(
             }
     }
 }
-// ggml_compute_forward_leaky_relu
 
 static void ggml_compute_forward_leaky_relu_f32(
         const ggml_compute_params * params,
@@ -3085,8 +3079,6 @@ void ggml_compute_forward_leaky_relu(
             }
     }
 }
-
-// ggml_compute_forward_silu_back
 
 static void ggml_compute_forward_silu_back_f32(
         const ggml_compute_params * params,
@@ -3197,8 +3189,6 @@ void ggml_compute_forward_silu_back(
     }
 }
 
-// ggml_compute_forward_norm
-
 static void ggml_compute_forward_norm_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -3267,8 +3257,6 @@ void ggml_compute_forward_norm(
             }
     }
 }
-
-// ggml_compute_forward_group_rms_norm
 
 static void ggml_compute_forward_rms_norm_f32(
         const ggml_compute_params * params,
@@ -3441,13 +3429,12 @@ static void ggml_compute_forward_rms_norm_back_f32(
                     // grad[#02] = repeat(scale(grad[#07],#04), #02)
                     // grad[#02] = repeat(scale(mul(grad[#08], div(0.5, #08)),#04), #02)
                     // grad[#02] = repeat(scale(mul(neg(mul(grad[#09], div(#09,#08))), div(0.5, #08)),#04), #02)
-                    // grad[#02] = repeat(scale(mul(neg(mul(sum(mul(grad[#10],#00)), div(#09,#08))), div(0.5, #08)),#04), #02)
+                    // grad[#02] = repeat(scale(mul(neg(mul(sum(mul(grad[#10],#00))), div(#09,#08)), div(0.5, #08)),#04), #02)
                     // grad[#02] = repeat(-(sum(mul(grad[#10],#00)) * div(#09,#08) * div(0.5, #08) * (1/N)), #02)
                     // grad[#02] = repeat(-(sum(mul(grad[#10],#00)) * div(div(#01,#08),#08) * div(0.5, #08) * (1/N)), #02)
                     // grad[#02] = repeat(-(sum(mul(grad[#10],#00)) * div(1,#08*#08) * div(0.5, #08) * (1/N)), #02)
                     // grad[#02] = repeat(-(sum(mul(grad[#10],#00)) * div(1,#07) * div(0.5, #08) * (1/N)), #02)
                     // grad[#00] = scale(grad(#10), #09) + scale(mul(#00, grad[#02]), 2.0)
-                    // grad[#00] = scale(grad(#10), #09) + scale(mul(#00, repeat(-(sum(mul(grad[#10],#00)) * div(1,#07) * div(0.5, #08) * (1/N)), #02)), 2.0)
                     // grad[#00] = scale(grad(#10), #09) + scale(scale(#00, -(sum(mul(grad[#10],#00)) * div(1,#07) * div(0.5, #08) * (1/N))), 2.0)
                     // grad[#00] = scale(grad(#10), #09) + scale(#00, -(sum(mul(grad[#10],#00)) * div(1,#07) * div(1,#08) * (1/N)))
                     // grad[#00] = scale(grad(#10), #09) + scale(#00, sum(mul(grad[#10],#00)) * div(1,#07*#08) * (-1/N))
@@ -3510,8 +3497,6 @@ void ggml_compute_forward_rms_norm_back(
             }
     }
 }
-
-// ggml_compute_forward_group_norm
 
 static void ggml_compute_forward_group_norm_f32(
     const ggml_compute_params * params,
@@ -3606,8 +3591,6 @@ void ggml_compute_forward_group_norm(
     }
 }
 
-// ggml_compute_forward_l2_norm
-
 static void ggml_compute_forward_l2_norm_f32(
     const ggml_compute_params * params,
     ggml_tensor * dst) {
@@ -3668,8 +3651,6 @@ void ggml_compute_forward_l2_norm(
             }
     }
 }
-
-// ggml_compute_forward_out_prod
 
 static void ggml_compute_forward_out_prod_f32(
         const ggml_compute_params * params,
@@ -4540,7 +4521,6 @@ static void ggml_compute_forward_get_rows_back_f32(
                 (float *) ((char *) src0->data + i*src0->nb[1]));
     }
 }
-
 void ggml_compute_forward_get_rows_back(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -4908,8 +4888,6 @@ static void ggml_compute_forward_soft_max_ext_back_f32(
         // dxk = sum_i(-yk*yi * dyi) + yk*dyk
         // dxk = -yk * sum_i(yi * dyi) + yk*dyk
         // dxk = -yk * dot(y, dy) + yk*dyk
-        // dxk = yk * (- dot(y, dy) + dyk)
-        // dxk = yk * (dyk - dot(y, dy))
         //
         // post-order:
         // dot_y_dy := dot(y, dy)
@@ -5188,7 +5166,6 @@ static void ggml_mrope_cache_init(
         theta_e *= theta_scale;
     }
 }
-
 static void ggml_compute_forward_rope_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst,
@@ -5976,9 +5953,7 @@ void ggml_compute_forward_im2col(
             }
     }
 }
-
 // ggml_compute_forward_im2col_back_f32
-
 void ggml_compute_forward_im2col_back_f32(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -6771,9 +6746,7 @@ void ggml_compute_forward_pad(
             }
     }
 }
-
 // ggml_compute_forward_pad_reflect_1d
-
 void ggml_compute_forward_pad_reflect_1d(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -7183,6 +7156,251 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     }
 }
 
+static void ggml_compute_forward_flash_attn_ext_f16_with_state(
+        const ggml_compute_params * params,
+        const ggml_tensor * q,
+        const ggml_tensor * k,
+        const ggml_tensor * v,
+        const ggml_tensor * mask,
+        const ggml_tensor * state,
+        ggml_tensor * dst) {
+
+    GGML_TENSOR_LOCALS(int64_t, neq, q,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbq, q,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nek, k,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbk, k,   nb)
+    GGML_TENSOR_LOCALS(int64_t, nev, v,   ne)
+    GGML_TENSOR_LOCALS(size_t,  nbv, v,   nb)
+    GGML_TENSOR_LOCALS(int64_t, ne,  dst, ne)
+    GGML_TENSOR_LOCALS(size_t,  nb,  dst, nb)
+
+    // Validate state tensor format: [2, n_heads * q_len]
+    GGML_ASSERT(state != NULL);
+    GGML_ASSERT(state->ne[0] == 2);  // [M, S] pairs
+    GGML_ASSERT(state->ne[1] == neq2 * neq1);  // n_heads * q_len
+    GGML_ASSERT(state->type == GGML_TYPE_F32);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t DK = nek0;     //> head_dim
+    const int64_t DV = nev0;     //> head_dim
+    const int64_t N  = neq1;     //> q_len
+
+    GGML_ASSERT(ne0 == DV);      //> dst -> ne[0] == head_dim
+    GGML_ASSERT(ne2 == N);       //> dst -> ne[2] == q_len
+
+    // input tensor rows must be contiguous
+    //> QKV cannot do transpose.
+    GGML_ASSERT(nbq0 == ggml_type_size(q->type));
+    GGML_ASSERT(nbk0 == ggml_type_size(k->type));
+    GGML_ASSERT(nbv0 == ggml_type_size(v->type));
+
+    //> V donot transpose before.
+    GGML_ASSERT(neq0 == DK);     //> q -> ne[0] == head_dim
+    GGML_ASSERT(nek0 == DK);     //> k -> ne[0] == head_dim
+    GGML_ASSERT(nev0 == DV);     //> v -> ne[0] == head_dim
+
+    GGML_ASSERT(neq1 == N);      //> q -> ne[1] == q_len
+
+    // dst cannot be transposed or permuted
+    GGML_ASSERT(nb0 == sizeof(float));
+    GGML_ASSERT(nb0 <= nb1);
+    GGML_ASSERT(nb1 <= nb2);
+    GGML_ASSERT(nb2 <= nb3);
+
+    // broadcast factors
+    const int64_t rk2 = neq2/nek2;     //> n_q_head / n_kv_head
+    const int64_t rk3 = neq3/nek3;     //> n_q_batch / n_kv_batch
+
+    const int64_t rv2 = neq2/nev2;     //> n_q_head / n_v_head
+    const int64_t rv3 = neq3/nev3;     //> n_q_batch / n_v_batch
+
+    // parallelize by q rows using ggml_vec_dot_f32
+
+    // total rows in q
+    const int nr = neq1*neq2*neq3;     //> number of rows, one row is one head_dim.
+
+    // NOTE: Parallelize by q rows.
+    // rows per thread
+    const int dr = (nr + nth - 1)/nth;
+
+    // row range for this thread
+    const int ir0 = dr*ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    float scale         = 1.0f;
+    float max_bias      = 0.0f;
+    float logit_softcap = 0.0f;
+
+    memcpy(&scale,         (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias,      (float *) dst->op_params + 1, sizeof(float));
+    memcpy(&logit_softcap, (float *) dst->op_params + 2, sizeof(float));
+
+    if (logit_softcap != 0) {
+        scale /= logit_softcap;
+    }
+
+    const uint32_t n_head      = neq2;
+    const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
+
+    const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
+    const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    ggml_type    const k_vec_dot_type      = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
+    ggml_from_float_t const q_to_vec_dot   = ggml_get_type_traits_cpu(k_vec_dot_type)->from_float;
+    ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
+    ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
+
+    GGML_ASSERT((                            q_to_vec_dot) && "fattn: unsupported K-type");
+    GGML_ASSERT((v->type == GGML_TYPE_F32 || v_to_float  ) && "fattn: unsupported V-type");
+
+    // loop over n_batch and n_head
+    for (int ir = ir0; ir < ir1; ++ir) {
+        // q indices
+        const int iq3 = ir/(neq2*neq1);
+        const int iq2 = (ir - iq3*neq2*neq1)/neq1;
+        const int iq1 = (ir - iq3*neq2*neq1 - iq2*neq1);
+
+        const uint32_t h = iq2; // head index
+        const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+
+        // Calculate state tensor offset for this head/position
+        const int64_t state_idx = iq2 * neq1 + iq1;  // head * q_len + position
+        float * state_data = (float *)state->data;
+        
+        // Read initial S and M values from state tensor 
+        // State format: [M, S] for each head/position
+        float S = state_data[state_idx * 2 + 1];     // sum (index 1)
+        float M = state_data[state_idx * 2 + 0];     // maximum KQ value (index 0)
+
+        // If this is the first call (indicated by M == -INFINITY), initialize properly
+        if (M == -INFINITY) {
+            S = 0.0f;
+        }
+
+        float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
+        float       * V32   =                 (VKQ32 + 1*DV); // (temporary) FP32 V buffer
+        ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
+        ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
+
+        if (v->type == GGML_TYPE_F16) {
+            memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+        } else {
+            memset(VKQ32, 0, DV*sizeof(float));
+        }
+
+        const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
+
+        // k indices
+        const int ik3 = iq3 / rk3;
+        const int ik2 = iq2 / rk2;
+
+        // v indices
+        const int iv3 = iq3 / rv3;
+        const int iv2 = iq2 / rv2;
+
+        const float * pq = (const float *) ((char *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3));
+        q_to_vec_dot(pq, Q_q, DK);
+
+        // online softmax / attention
+        // loop over n_kv and n_head_kv
+        // ref: https://arxiv.org/pdf/2112.05682.pdf
+        for (int64_t ic = 0; ic < nek1; ++ic) {
+            const float mv = mp ? slope*GGML_FP16_TO_FP32(mp[ic]) : 0.0f;
+            if (mv == -INFINITY) {
+                continue;
+            }
+
+            float s; // KQ value
+
+            //> k_data: [head_dim, kv_len, n_kv_head, n_kv_batch]
+            const char * k_data = (const char *) k->data + ( ic*nbk1 + ik2*nbk2 + ik3*nbk3);
+            kq_vec_dot(DK, &s, 0, k_data, 0, Q_q, 0, 1);
+
+            s = s*scale; // scale KQ value
+
+            if (logit_softcap != 0.0f) {
+                s = logit_softcap*tanhf(s);
+            }
+
+            s += mv; // apply mask
+
+            const float Mold = M;
+
+            float ms = 1.0f; // upon new higher max val, scale VKQ and KQ sum with this value
+            float vs = 1.0f; // post-softmax KQ value, expf(s - M)
+
+            const char * v_data = ((const char *) v->data + (ic*nbv1 + iv2*nbv2 + iv3*nbv3));
+
+            if (v->type == GGML_TYPE_F16) {
+                if (s > M) {
+                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                    M = s;
+                    ms = expf(Mold - M);
+
+                    // V = V*expf(Mold - M)
+                    ggml_vec_scale_f16(DV, VKQ16, ms);
+                } else {
+                    // no new maximum, ms == 1.0f, vs != 1.0f
+                    vs = expf(s - M);
+                }
+
+                // V += v*expf(s - M)
+                //> VKQ16 = VKQ16 + v_data * expf(s - M)
+                ggml_vec_mad_f16(DV, VKQ16, (const ggml_fp16_t *) v_data, vs);
+            } else {
+                if (s > M) {
+                    // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
+                    M = s;
+                    ms = expf(Mold - M);
+
+                    // V = V*expf(Mold - M)
+                    ggml_vec_scale_f32(DV, VKQ32, ms);
+                } else {
+                    // no new maximum, ms == 1.0f, vs != 1.0f
+                    vs = expf(s - M);
+                }
+
+                // V += v*expf(s - M)
+                if (v_to_float) {
+                    v_to_float(v_data, V32, DV);
+                    ggml_vec_mad_f32(DV, VKQ32, V32, vs);
+                } else {
+                    // V is F32
+                    ggml_vec_mad_f32(DV, VKQ32, (const float *) v_data, vs);
+                }
+            }
+
+            S = S*ms + vs; // scale and increment sum with partial sum
+        }
+
+        // Write updated S and M values back to state tensor
+        state_data[state_idx * 2 + 0] = M; // maximum KQ value (index 0)
+        state_data[state_idx * 2 + 1] = S; // sum (index 1)
+
+        if (v->type == GGML_TYPE_F16) {
+            for (int64_t d = 0; d < DV; ++d) {
+                VKQ32[d] = GGML_FP16_TO_FP32(VKQ16[d]);
+            }
+        }
+
+        // V /= S
+        const float S_inv = 1.0f / S;
+        ggml_vec_scale_f32(DV, VKQ32, S_inv);
+
+        // dst indices
+        const int i1 = iq1;
+        const int i2 = iq2;
+        const int i3 = iq3;
+
+        // original
+        // memcpy((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3), V, nev0*sizeof(float));
+
+        // permute(0, 2, 1, 3)
+        memcpy((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1, VKQ32, nb1);
+    }
+}
 void ggml_compute_forward_flash_attn_ext_mixed(
         const ggml_compute_params * params,
         const ggml_tensor * q,
@@ -7536,7 +7754,14 @@ void ggml_compute_forward_flash_attn_ext(
         case GGML_PREC_F32:
             {
                 // uses F32 accumulators
-                ggml_compute_forward_flash_attn_ext_f16(params, q, k, v, mask, dst);
+                // Check if we have additional sources beyond the required ones for state tensor
+                if (dst->src[6] != nullptr) {
+                    // State tensor is provided as src[6] - use enhanced function with S/M state
+                    ggml_compute_forward_flash_attn_ext_f16_with_state(params, q, k, v, mask, dst->src[6], dst);
+                } else {
+                    // Standard function without state tensor
+                    ggml_compute_forward_flash_attn_ext_f16(params, q, k, v, mask, dst);
+                }
             } break;
         case GGML_PREC_MIXED:
             {
@@ -7548,7 +7773,6 @@ void ggml_compute_forward_flash_attn_ext(
             }
     }
 }
-
 // ggml_compute_forward_flash_attn_back
 
 static void ggml_compute_forward_flash_attn_back_f32(
@@ -7954,9 +8178,7 @@ void ggml_compute_forward_ssm_conv(
             }
     }
 }
-
 // ggml_compute_forward_ssm_scan
-
 static void ggml_compute_forward_ssm_scan_f32(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -8293,7 +8515,6 @@ void ggml_compute_forward_get_rel_pos(
             }
     }
 }
-
 // ggml_compute_forward_add_rel_pos
 
 static void ggml_compute_forward_add_rel_pos_f32(
@@ -8748,8 +8969,6 @@ static void ggml_compute_forward_gla_f32(
         }
     #endif
 }
-
-
 void ggml_compute_forward_gla(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -9092,7 +9311,6 @@ static void ggml_compute_forward_cross_entropy_loss_f32(
         dp[0] *= -1.0f / (float) nr;
     }
 }
-
 void ggml_compute_forward_cross_entropy_loss(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
