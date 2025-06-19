@@ -20,8 +20,14 @@ if [[ "$FLAVOR" == "-prod" ]]; then
 EOF
 fi
 
-WHAT="llama-run llama-bench"
-cmake --build ../build.remoting-backend$FLAVOR --parallel 8 --target $WHAT "$@"
+TARGETS="llama-run"
+if [[ "${BENCH_MODE:-}" == "bench" ]]; then
+    TARGETS="$TARGETS llama-bench"
+elif [[ "${BENCH_MODE:-}" == "perf" ]]; then
+    TARGETS="$TARGETS test-backend-ops"
+fi
+
+cmake --build ../build.remoting-backend$FLAVOR --parallel 8 --target $TARGETS "$@"
 
 if [[ $? == 0 ]]; then
     touch READY_backend
