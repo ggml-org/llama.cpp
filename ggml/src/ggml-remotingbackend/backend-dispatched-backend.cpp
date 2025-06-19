@@ -32,6 +32,21 @@ backend_graph_compute(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, stru
   ggml_cgraph *cgraph = vn_decode_ggml_cgraph(&secondary_dec, cgraph_size);
 
   ggml_status status;
+#if APIR_BACKEND_CHECK_SUPPORTS_OP == 1
+  for (int idx = 0; idx < cgraph->n_nodes; idx++) {
+    ggml_tensor *op = ggml_graph_node(cgraph, idx);
+    if (dev->iface.supports_op(dev, op)) {
+      continue;
+    }
+    ERROR("Graph node %d (%s) not supported by the backend :/", idx, ggml_op_desc(op));
+
+    status = GGML_STATUS_ABORTED;
+    vn_encode_ggml_status(enc, &status);
+
+    stop_timer(&graph_compute_timer);
+    return 0;
+  }
+#endif
   status = bck->iface.graph_compute(bck, cgraph);
 
   vn_encode_ggml_status(enc, &status);
