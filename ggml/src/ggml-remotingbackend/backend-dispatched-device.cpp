@@ -73,7 +73,7 @@ uint32_t
 backend_device_supports_op(struct vn_cs_encoder *enc, struct vn_cs_decoder *dec, struct virgl_apir_context *ctx) {
   UNUSED(ctx);
 
-  const ggml_tensor *op = vn_decode_ggml_tensor(dec);
+  const ggml_tensor *op = vn_decode_ggml_tensor_inplace(dec);
 
   bool supports_op = dev->iface.supports_op(dev, op);
 

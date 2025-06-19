@@ -126,3 +126,7 @@ struct remoting_context_struct {
 };
 typedef std::shared_ptr<remoting_context_struct> remoting_context;
 typedef std::weak_ptr<remoting_context_struct> remoting_context_ref;
+
+static inline apir_buffer_host_handle_t ggml_buffer_to_apir_handle(ggml_backend_buffer_t buffer) {
+  return BUFFER_TO_HOST_HANDLE(buffer);
+}

@@ -135,7 +135,7 @@ apir_device_get_memory(struct virtgpu *gpu, size_t *free, size_t *total) {
 
 bool
 apir_device_supports_op(struct virtgpu *gpu, const ggml_tensor *op) {
-#if 1
+#if APIR_DEVICE_SUPPORTS_OP_ALWAYS_TRUE
   /* ggml-rpc cheats it like this */
   /* with the current implementation of serialize_tensor, the src/view aren't properly passed */
   UNUSED(gpu);
@@ -147,7 +147,7 @@ apir_device_supports_op(struct virtgpu *gpu, const ggml_tensor *op) {
   struct vn_cs_decoder *decoder;
   REMOTE_CALL_PREPARE(gpu, encoder, APIR_COMMAND_TYPE_DEVICE_SUPPORTS_OP);
 
-  vn_encode_ggml_tensor(encoder, op);
+  vn_encode_ggml_tensor_inline(encoder, op);
 
   REMOTE_CALL(gpu, encoder, decoder);
 
