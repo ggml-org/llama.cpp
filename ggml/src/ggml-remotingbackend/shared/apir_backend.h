@@ -10,7 +10,7 @@
 #define APIR_BACKEND_FORWARD_INDEX_INVALID 6
 
 // 1 is fast, 0 avoid micro-benchmark crashes
-#define APIR_DEVICE_SUPPORTS_OP_ALWAYS_TRUE 0
+#define APIR_DEVICE_SUPPORTS_OP_ALWAYS_TRUE 1
 
 // 0 is fast, 1 avoids the backend to crash if an unsupported tensor is received
 #define APIR_BACKEND_CHECK_SUPPORTS_OP 0
