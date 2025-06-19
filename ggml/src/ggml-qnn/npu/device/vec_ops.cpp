@@ -143,15 +143,15 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     constexpr const size_t kElementsPerVector0 = hexagon::kBytesPerVector / sizeof(_TElem0);
     constexpr const size_t kElementsPerVector1 = hexagon::kBytesPerVector / sizeof(_TElem1);
 
-    const auto * const src0_ptr_end     = src0 + count;
-    HVX_Vector *       src0_vec_ptr     = ((HVX_Vector *) src0);
-    HVX_Vector *       src1_vec_ptr     = ((HVX_Vector *) src1);
-    HVX_Vector * const src1_vec_ptr_end = ((HVX_Vector *) src1) + count / kElementsPerVector1;
-    HVX_Vector         prev0            = *src0_vec_ptr++;
-    HVX_Vector         prev1            = *src1_vec_ptr++;
-    HVX_Vector         sum              = Q6_V_vzero();
-    HVX_Vector         sum0             = Q6_V_vzero();
-    HVX_Vector         sum1             = Q6_V_vzero();
+    const _TElem0 * const src0_ptr_end     = src0 + count;
+    HVX_Vector *          src0_vec_ptr     = ((HVX_Vector *) src0);
+    HVX_Vector *          src1_vec_ptr     = ((HVX_Vector *) src1);
+    HVX_Vector * const    src1_vec_ptr_end = ((HVX_Vector *) src1) + count / kElementsPerVector1;
+    HVX_Vector            prev0            = *src0_vec_ptr++;
+    HVX_Vector            prev1            = *src1_vec_ptr++;
+    HVX_Vector            sum              = Q6_V_vzero();
+    HVX_Vector            sum0             = Q6_V_vzero();
+    HVX_Vector            sum1             = Q6_V_vzero();
 
     while (src1_vec_ptr_end - src1_vec_ptr > 1) {
         HVX_Vector     curr0 = src0_vec_ptr[0];
@@ -174,15 +174,13 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     bool src0_low_vec_consumed = false;
     if (src1_vec_ptr_end - src1_vec_ptr > 0) {
         const bool should_fetch_src0 =
-            reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end &&
-            hexagon::bytes_to_vector_boundary(src0) < sizeof(_TElem0) * kElementsPerVector1;
+            reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
         HVX_Vector curr0 = should_fetch_src0 ? *src0_vec_ptr : prev0;
         HVX_Vector curr1 = *src1_vec_ptr++;
         src0_vec_ptr += should_fetch_src0 ? 1 : 0;
         HVX_Vector     s0      = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
         HVX_Vector     s1      = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
         HVX_VectorPair s0_pair = _ExpandFunc(s0);
-        prev0                  = curr0;
         prev1                  = curr1;
 
         sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);  // TODO: figure out how to handle the high part
@@ -193,11 +191,8 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     const size_t leftover1 = count % kElementsPerVector1;
     if ((src1_vec_ptr_end - ((HVX_Vector *) src1)) > 0) {
         // handle the last vector
-        // see also:
-        //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
-        //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        const bool should_fetch_src0 =
-            reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
+        const bool should_fetch_src0 = !src0_low_vec_consumed && reinterpret_cast<const _TElem0 *>(
+                                                                     hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
         bool       should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
         HVX_Vector curr0             = should_fetch_src0 ? *src0_vec_ptr : prev0;
         HVX_Vector curr1             = should_fetch_src1 ? *src1_vec_ptr : prev1;
