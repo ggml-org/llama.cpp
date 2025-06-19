@@ -9,10 +9,10 @@ Adding a model requires few steps:
 After following these steps, you can open PR.
 
 Also, it is important to check that the examples and main ggml backends (CUDA, METAL, CPU) are working with the new architecture, especially:
-- [main](/examples/main/)
-- [imatrix](/examples/imatrix/)
-- [quantize](/examples/quantize/)
-- [server](/examples/server/)
+- [main](/tools/main/)
+- [imatrix](/tools/imatrix/)
+- [quantize](/tools/quantize/)
+- [server](/tools/server/)
 
 ### 1. Convert the model to GGUF
 

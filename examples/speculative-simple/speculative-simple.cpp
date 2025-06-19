@@ -217,7 +217,7 @@ int main(int argc, char ** argv) {
         {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
-            llama_kv_self_seq_rm(ctx_tgt, 0, n_past, -1);
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0, n_past, -1);
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {

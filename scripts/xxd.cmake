@@ -1,5 +1,5 @@
 # CMake equivalent of `xxd -i ${INPUT} ${OUTPUT}`
-# Usage: cmake -DINPUT=examples/server/public/index.html -DOUTPUT=examples/server/index.html.hpp -P scripts/xxd.cmake
+# Usage: cmake -DINPUT=tools/server/public/index.html -DOUTPUT=tools/server/index.html.hpp -P scripts/xxd.cmake
 
 SET(INPUT "" CACHE STRING "Input File")
 SET(OUTPUT "" CACHE STRING "Output File")

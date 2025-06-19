@@ -1,5 +1,9 @@
 # Build llama.cpp locally
 
+The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](include/llama.h).
+
+The project also includes many example programs and tools using the `llama` library. The examples range from simple, minimal code snippets to sophisticated sub-projects such as an OpenAI-compatible HTTP server.
+
 **To get the Code:**
 
 ```bash
@@ -63,6 +67,7 @@ cmake --build build --config Release
       cmake --preset x64-windows-llvm-release
       cmake --build build-x64-windows-llvm-release
       ```
+- Curl usage is enabled by default and can be turned off with `-DLLAMA_CURL=OFF`. Otherwise you need to install development libraries for libcurl.
 
 ## BLAS Build
 
@@ -259,8 +264,6 @@ You can download it from your Linux distro's package manager or from here: [ROCm
       cmake -S . -B build -DGGML_HIP=ON -DAMDGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
       && cmake --build build --config Release -- -j 16
   ```
-  On Linux it is also possible to use unified memory architecture (UMA) to share main memory between the CPU and integrated GPU by setting `-DGGML_HIP_UMA=ON`.
-  However, this hurts performance for non-integrated GPUs (but enables working with integrated GPUs).
 
   To enhance flash attention performance on RDNA3+ or CDNA architectures, you can utilize the rocWMMA library by enabling the `-DGGML_HIP_ROCWMMA_FATTN=ON` option. This requires rocWMMA headers to be installed on the build system.
 
@@ -295,6 +298,10 @@ You can download it from your Linux distro's package manager or from here: [ROCm
 
 The environment variable [`HIP_VISIBLE_DEVICES`](https://rocm.docs.amd.com/en/latest/understand/gpu_isolation.html#hip-visible-devices) can be used to specify which GPU(s) will be used.
 If your GPU is not officially supported you can use the environment variable [`HSA_OVERRIDE_GFX_VERSION`] set to a similar GPU, for example 10.3.0 on RDNA2 (e.g. gfx1030, gfx1031, or gfx1035) or 11.0.0 on RDNA3.
+
+### Unified Memory
+
+On Linux it is possible to use unified memory architecture (UMA) to share main memory between the CPU and integrated GPU by setting environment variable `GGML_CUDA_ENABLE_UNIFIED_MEMORY=1`. However, this hurts performance for non-integrated GPUs (but enables working with integrated GPUs).
 
 ## Vulkan
 

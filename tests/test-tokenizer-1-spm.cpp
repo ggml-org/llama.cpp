@@ -1,7 +1,8 @@
 #include "llama.h"
 #include "common.h"
-#include "unicode.h"
 #include "console.h"
+
+#include "../src/unicode.h"
 
 #include <cassert>
 #include <codecvt>

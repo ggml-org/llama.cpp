@@ -1,10 +1,4 @@
-if [[ "${PERF_MODE:-}" ]]; then
-    FLAVOR="-prod"
-else
-    FLAVOR=""
-fi
-
-cmake -S . -B ../build.remoting-backend$FLAVOR \
+cmake -S . -B ../build.remoting-backend \
       -DGGML_REMOTINGBACKEND=ON \
       -DGGML_NATIVE=OFF \
       -DGGML_METAL=ON \

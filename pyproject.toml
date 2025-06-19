@@ -40,5 +40,6 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 llama-convert-hf-to-gguf = "convert_hf_to_gguf:main"
+llama-convert-lora-to-gguf = "convert_lora_to_gguf:main"
 llama-convert-llama-ggml-to-gguf = "convert_llama_ggml_to_gguf:main"
 llama-ggml-vk-generate-shaders = "ggml_vk_generate_shaders:main"

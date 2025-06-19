@@ -77,6 +77,7 @@ option(LLAMA_BUILD_COMMON "llama: build common utils library" ${LLAMA_STANDALONE
 
 # extra artifacts
 option(LLAMA_BUILD_TESTS    "llama: build tests"          ${LLAMA_STANDALONE})
+option(LLAMA_BUILD_TOOLS    "llama: build tools"          ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_EXAMPLES "llama: build examples"       ${LLAMA_STANDALONE})
 option(LLAMA_BUILD_SERVER   "llama: build server example" ${LLAMA_STANDALONE})
 
@@ -87,6 +88,14 @@ option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/common.cmake)
+
+if (NOT DEFINED LLAMA_BUILD_NUMBER)
+    set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})
+endif()
+if (NOT DEFINED LLAMA_BUILD_COMMIT)
+    set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
+endif()
+set(LLAMA_INSTALL_VERSION 0.0.${BUILD_NUMBER})
 
 # override ggml options
 set(GGML_ALL_WARNINGS   ${LLAMA_ALL_WARNINGS})
@@ -154,8 +163,15 @@ if (LLAMA_USE_SYSTEM_GGML)
 endif()
 
 if (NOT TARGET ggml AND NOT LLAMA_USE_SYSTEM_GGML)
+    set(GGML_BUILD_NUMBER ${LLAMA_BUILD_NUMBER})
+    set(GGML_BUILD_COMMIT ${LLAMA_BUILD_COMMIT})
     add_subdirectory(ggml)
     # ... otherwise assume ggml is added by a parent CMakeLists.txt
+endif()
+
+if (MINGW)
+    # Target Windows 8 for PrefetchVirtualMemory
+    add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
 #
@@ -187,16 +203,16 @@ if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_EXAMPLES)
     add_subdirectory(pocs)
 endif()
 
+if (LLAMA_BUILD_COMMON AND LLAMA_BUILD_TOOLS)
+    add_subdirectory(tools)
+endif()
+
 #
 # install
 #
 
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
-
-set(LLAMA_BUILD_NUMBER        ${BUILD_NUMBER})
-set(LLAMA_BUILD_COMMIT        ${BUILD_COMMIT})
-set(LLAMA_INSTALL_VERSION 0.0.${BUILD_NUMBER})
 
 set(LLAMA_INCLUDE_INSTALL_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE PATH "Location of header  files")
 set(LLAMA_LIB_INSTALL_DIR     ${CMAKE_INSTALL_LIBDIR}     CACHE PATH "Location of library files")
@@ -247,20 +263,3 @@ configure_file(cmake/llama.pc.in
 
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/llama.pc"
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
-
-#
-# copy the license files
-#
-
-# Check if running in GitHub Actions
-if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
-    message(STATUS "Running inside GitHub Actions - copying license files")
-
-    # Copy all files from licenses/ to build/bin/
-    file(GLOB LICENSE_FILES "${CMAKE_SOURCE_DIR}/licenses/*")
-    foreach(LICENSE_FILE ${LICENSE_FILES})
-        get_filename_component(FILENAME ${LICENSE_FILE} NAME)
-        configure_file(${LICENSE_FILE} "${CMAKE_BINARY_DIR}/bin/${FILENAME}" COPYONLY)
-    endforeach()
-endif()
-

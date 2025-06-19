@@ -89,10 +89,6 @@ endif()
 
 add_compile_definitions(GGML_USE_HIP)
 
-if (GGML_HIP_UMA)
-    add_compile_definitions(GGML_HIP_UMA)
-endif()
-
 if (GGML_CUDA_FORCE_MMQ)
     add_compile_definitions(GGML_CUDA_FORCE_MMQ)
 endif()
@@ -115,6 +111,10 @@ endif()
 
 if (GGML_HIP_ROCWMMA_FATTN)
     add_compile_definitions(GGML_HIP_ROCWMMA_FATTN)
+endif()
+
+if (GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12 OR ${hip_VERSION} VERSION_GREATER_EQUAL 7.0)
+    add_compile_definitions(GGML_HIP_ROCWMMA_FATTN_GFX12)
 endif()
 
 if (NOT GGML_CUDA_FA)
