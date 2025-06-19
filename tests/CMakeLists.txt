@@ -229,6 +229,7 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-mul-mat.cpp)
     llama_build_and_test(test-flash-attn.cpp)
     llama_build_and_test(test-flash-decoding-custom-op.cpp)
+    llama_build_and_test(test-flash-attn-state.cpp)
     llama_build_and_test(test_ggml_mul_mat.cpp)
 endif()
 
