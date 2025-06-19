@@ -10,7 +10,7 @@ opts=""
 opts="$opts --device /dev/dri "
 echo "Running with the GPU passthrough"
 
-image=localhost/pytorch:remoting
+IMAGE=quay.io/ramalama/remoting:latest
 
 what=${1:-}
 if [[ -z "$what" ]]; then
@@ -30,9 +30,10 @@ podman run \
 --security-opt label=disable \
 --env HOME="$HOME" \
 --env PERF_MODE="${PERF_MODE:-}" \
+--env BENCH_MODE="${BENCH_MODE:-}" \
 -v "$HOME":"$HOME":Z \
 -w "$PWD" \
 -it --rm \
 $opts \
-$image \
+$IMAGE \
 $cmd
