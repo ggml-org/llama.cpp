@@ -19,10 +19,10 @@
 #endif
 #include "ggml-common.h"
 
-#include <cstdio>
 #include <array>
 #include <cassert>
 #include <cfloat>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -767,21 +767,7 @@ struct ggml_backend_cuda_context {
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
 
-    ~ggml_backend_cuda_context() {
-        if (copy_event != nullptr) {
-            CUDA_CHECK(cudaEventDestroy(copy_event));
-        }
-        for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
-                if (streams[i][j] != nullptr) {
-                    CUDA_CHECK(cudaStreamDestroy(streams[i][j]));
-                }
-            }
-            if (cublas_handles[i] != nullptr) {
-                CUBLAS_CHECK(cublasDestroy(cublas_handles[i]));
-            }
-        }
-    }
+    ~ggml_backend_cuda_context();
 
     cudaStream_t stream(int device, int stream) {
         if (streams[device][stream] == nullptr) {
