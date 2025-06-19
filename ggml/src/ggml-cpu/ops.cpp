@@ -3772,7 +3772,6 @@ static void ggml_compute_forward_out_prod_f32(
         }
     }
 }
-
 static void ggml_compute_forward_out_prod_q_f32(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4560,7 +4559,6 @@ void ggml_compute_forward_get_rows_back(
     //    exit(0);
     //}
 }
-
 // ggml_compute_forward_diag
 
 static void ggml_compute_forward_diag_f32(
@@ -5350,7 +5348,6 @@ static void ggml_compute_forward_rope_f32(
         }
     }
 }
-
 // TODO: deduplicate f16/f32 code
 static void ggml_compute_forward_rope_f16(
         const ggml_compute_params * params,
@@ -6142,7 +6139,6 @@ void ggml_compute_forward_conv_transpose_2d(
         }
     }
 }
-
 // ggml_compute_forward_conv_2d_dw
 
 struct ggml_conv_2d_dw_params {
@@ -6929,7 +6925,6 @@ void ggml_compute_forward_argsort(
             }
     }
 }
-
 // ggml_compute_forward_flash_attn_ext
 
 static void ggml_compute_forward_flash_attn_ext_f16(
@@ -7274,20 +7269,49 @@ static void ggml_compute_forward_flash_attn_ext_f16_with_state(
         float S = state_data[state_idx * 2 + 1];     // sum (index 1)
         float M = state_data[state_idx * 2 + 0];     // maximum KQ value (index 0)
 
-        // If this is the first call (indicated by M == -INFINITY), initialize properly
-        if (M == -INFINITY) {
-            S = 0.0f;
-        }
+        // Check if this is a continuation of previous segments
+        bool is_continuation = (M != -INFINITY && S > 0.0f);
 
         float       * VKQ32 = (float       *) params->wdata + ith*(1*DK + 2*DV + CACHE_LINE_SIZE_F32); // FP32 VKQ accumulator
         float       * V32   =                 (VKQ32 + 1*DV); // (temporary) FP32 V buffer
         ggml_fp16_t * VKQ16 = (ggml_fp16_t *) (VKQ32 + 1*DV); // (temporary) FP16 VKQ accumulator
         ggml_fp16_t * Q_q   = (ggml_fp16_t *) (VKQ32 + 2*DV); // (temporary) buffer for Q converted to quantized/FP16
 
+        // Initialize VKQ accumulator - CRITICAL FIX: restore previous accumulated results
         if (v->type == GGML_TYPE_F16) {
-            memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+            if (is_continuation) {
+                // Load previous accumulated result from dst tensor and scale by previous sum S
+                const int i1 = iq1;
+                const int i2 = iq2;
+                const int i3 = iq3;
+                float * prev_result = (float *) ((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1);
+                
+                // Scale previous result by S and convert to FP16
+                for (int64_t d = 0; d < DV; ++d) {
+                    VKQ16[d] = GGML_FP32_TO_FP16(prev_result[d] * S);
+                }
+            } else {
+                memset(VKQ16, 0, DV*sizeof(ggml_fp16_t));
+                S = 0.0f;
+                M = -INFINITY;
+            }
         } else {
-            memset(VKQ32, 0, DV*sizeof(float));
+            if (is_continuation) {
+                // Load previous accumulated result from dst tensor and scale by previous sum S
+                const int i1 = iq1;
+                const int i2 = iq2;
+                const int i3 = iq3;
+                float * prev_result = (float *) ((char *) dst->data + (i3*ne2*ne1 + i2 + i1*ne1)*nb1);
+                
+                // Scale previous result by S
+                for (int64_t d = 0; d < DV; ++d) {
+                    VKQ32[d] = prev_result[d] * S;
+                }
+            } else {
+                memset(VKQ32, 0, DV*sizeof(float));
+                S = 0.0f;
+                M = -INFINITY;
+            }
         }
 
         const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
@@ -8392,7 +8416,6 @@ void ggml_compute_forward_win_unpart(
             }
     }
 }
-
 //gmml_compute_forward_unary
 
 void ggml_compute_forward_unary(
@@ -9193,7 +9216,6 @@ void ggml_compute_forward_map_custom2(
 
     p.fun(dst, a, b, params->ith, params->nth, p.userdata);
 }
-
 // ggml_compute_forward_map_custom3
 
 void ggml_compute_forward_map_custom3(

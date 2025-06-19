@@ -14,7 +14,7 @@
 #include <iostream>
 
 // Use fixed seed for reproducible results
-static std::mt19937 g_rng(42);
+static std::mt19937 g_rng(std::random_device{}());
 
 static void fill_tensor_f32(ggml_tensor * dst, float min_val = -1.0f, float max_val = 1.0f) {
     float* data = (float*)dst->data;
@@ -290,6 +290,7 @@ int main() {
         print_tensor_info("    V segment", v_segment);
 
         // Compute flash attention with state for this segment
+        // CRITICAL: Create the operation but redirect its output to our accumulation tensor
         ggml_tensor * result_seg = ggml_flash_attn_ext_with_state(
             ctx, q, k_segment, v_segment, mask_segment, state,
             1.0f / std::sqrt(head_dim),  // scale
@@ -304,6 +305,14 @@ int main() {
             return 1;
         }
 
+        // CRITICAL FIX: Redirect the operation's output to our accumulation tensor
+        // This ensures that each segment reads from and writes to the same tensor
+        result_seg->data = result_segmented->data;
+        result_seg->nb[0] = result_segmented->nb[0];
+        result_seg->nb[1] = result_segmented->nb[1];
+        result_seg->nb[2] = result_segmented->nb[2];
+        result_seg->nb[3] = result_segmented->nb[3];
+
         struct ggml_cgraph * graph_seg = ggml_new_graph(ctx);
         ggml_build_forward_expand(graph_seg, result_seg);
 
@@ -316,7 +325,7 @@ int main() {
         }
 
         printf("    Segment %d computed successfully\n", seg + 1);
-        print_f32_sample("    Segment result", result_seg, 6);
+        print_f32_sample("    Segment result", result_segmented, 6);
 
         // Print state after this segment
         printf("    State after segment %d: ", seg + 1);
@@ -325,11 +334,7 @@ int main() {
         }
         printf("...\n");
 
-        // For the final segment, copy the result (this contains the accumulated result of all segments)
-        if (seg == kv_segments - 1) {
-            memcpy(result_segmented->data, result_seg->data, ggml_nbytes(result_seg));
-            printf("    Final accumulated result copied from segment %d\n", seg + 1);
-        }
+        // No need to copy result since we're already writing to result_segmented
     }
 
     printf("\nSegmented computation completed\n");
