@@ -18,6 +18,72 @@
 #ifdef LLAMA_TORCH_AVAILABLE
 #include <torch/torch.h>
 
+// Convert ggml tensor to torch tensor using type traits
+torch::Tensor ggml_to_torch(ggml_tensor* tensor) {
+    auto type_traits = ggml_get_type_traits(tensor->type);
+    size_t n_elements = ggml_nelements(tensor);
+    
+    // Create temporary buffer for float conversion
+    std::vector<float> float_buffer(n_elements);
+    
+    if (type_traits->to_float && tensor->type != GGML_TYPE_F32) {
+        // Use type traits to convert to float
+        type_traits->to_float(tensor->data, float_buffer.data(), n_elements);
+    } else if (tensor->type == GGML_TYPE_F32) {
+        // Direct copy for F32
+        memcpy(float_buffer.data(), tensor->data, n_elements * sizeof(float));
+    } else {
+        printf("ERROR: Unsupported tensor type for conversion: %s\n", ggml_type_name(tensor->type));
+        return torch::Tensor();
+    }
+    
+    // Create torch tensor with same shape
+    std::vector<int64_t> sizes;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (tensor->ne[i] > 1 || i == 0) {  // Include dimensions > 1 and always include first dimension
+            sizes.push_back(tensor->ne[i]);
+        }
+    }
+    
+    return torch::from_blob(float_buffer.data(), sizes, torch::kFloat32).clone();
+}
+
+// Perform torch flash attention for comparison
+torch::Tensor torch_flash_attention(
+    torch::Tensor Q, 
+    torch::Tensor K, 
+    torch::Tensor V, 
+    torch::Tensor mask = torch::Tensor(),
+    float scale = 1.0f
+) {
+    // Q shape: [batch, n_heads, seq_len, head_dim]
+    // K, V shape: [batch, n_kv_heads, kv_len, head_dim]
+    
+    std::cout << "Torch Flash Attention Input Shapes:" << std::endl;
+    std::cout << "Q: " << Q.sizes() << std::endl;
+    std::cout << "K: " << K.sizes() << std::endl;
+    std::cout << "V: " << V.sizes() << std::endl;
+    if (mask.defined()) {
+        std::cout << "Mask: " << mask.sizes() << std::endl;
+    }
+    
+    // Compute attention scores: Q @ K^T
+    auto scores = torch::matmul(Q, K.transpose(-2, -1)) * scale;
+    
+    if (mask.defined()) {
+        // Apply mask by adding it (mask contains 0s and -inf)
+        scores = scores + mask;
+    }
+    
+    // Apply softmax
+    auto attn_weights = torch::softmax(scores, -1);
+    
+    // Apply to values: attn_weights @ V
+    auto output = torch::matmul(attn_weights, V);
+    
+    return output;
+}
+
 void test_torch_integration() {
     std::cout << "Testing PyTorch C++ integration..." << std::endl;
     
@@ -41,6 +107,27 @@ void test_torch_integration() {
     std::cout << "PyTorch integration test completed successfully!" << std::endl;
 }
 #endif // LLAMA_TORCH_AVAILABLE
+
+// Enhanced dequantization function using type traits
+void dequantize_tensor_with_traits(ggml_tensor* src, ggml_tensor* dst) {
+    printf("Dequantizing tensor from %s to %s\n", 
+           ggml_type_name(src->type), ggml_type_name(dst->type));
+    
+    auto type_traits = ggml_get_type_traits(src->type);
+    if (!type_traits->to_float) {
+        printf("ERROR: No to_float function available for type %s\n", ggml_type_name(src->type));
+        return;
+    }
+    
+    size_t n_elements = ggml_nelements(src);
+    if (dst->type == GGML_TYPE_F32) {
+        type_traits->to_float(src->data, (float*)dst->data, n_elements);
+    } else {
+        printf("ERROR: Destination type must be F32, got %s\n", ggml_type_name(dst->type));
+    }
+    
+    printf("Dequantization completed: %zu elements\n", n_elements);
+}
 
 // Forward declaration of the flash decoding function
 void ggml_custom_flash_attn_mixed_simple(
