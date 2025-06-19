@@ -38,16 +38,9 @@ ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size_t * free, s
 
 static bool
 ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-#if 1
-  UNUSED(dev);
-  UNUSED(op);
-
-  return true; // same as ggml-rpc
-#else
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return apir_device_supports_op(gpu, op);
-#endif
 }
 
 static bool
