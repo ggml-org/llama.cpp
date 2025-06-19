@@ -20,8 +20,7 @@ ggml_backend_remoting_device_get_description(ggml_backend_dev_t dev) {
 
 static enum ggml_backend_dev_type
 ggml_backend_remoting_device_get_type(ggml_backend_dev_t dev) {
-  IMPLEMENTED;
-
+  IMPLEMENTED_ONCE;
   struct virtgpu *gpu = DEV_TO_GPU(dev);
 
   return (enum ggml_backend_dev_type) apir_device_get_type(gpu);

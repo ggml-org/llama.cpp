@@ -18,10 +18,6 @@ serialize_tensor(const ggml_tensor * tensor) {
     ggml_backend_buffer_t buffer = tensor->buffer;
 
     result.buffer = BUFFER_TO_HOST_HANDLE(buffer);
-    if (result.buffer < 0x600000000000 || result.buffer > 0x700000000000) {
-      INFO("pass buffer handle %p", result.buffer);
-      BREAKPOINT;
-    }
   } else {
     result.buffer = 0;
   }
