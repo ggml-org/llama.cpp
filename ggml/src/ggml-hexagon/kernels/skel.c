@@ -289,8 +289,8 @@ extern int adsp_mmap_fd_getinfo(int, uint32_t *);
 #ifdef __cplusplus
 extern "C" {
 #endif
-_ATTRIBUTE_VISIBILITY uint32_t ggmlop_skel_handle_invoke_qaic_version = 10048;
-_ATTRIBUTE_VISIBILITY char ggmlop_skel_handle_invoke_uri[77+1]="file:///libggmlop-skel.so?ggmlop_skel_handle_invoke&_modver=1.0&_idlver=0.0.1";
+_ATTRIBUTE_VISIBILITY uint32_t ggmldsp_skel_handle_invoke_qaic_version = 10048;
+_ATTRIBUTE_VISIBILITY char ggmldsp_skel_handle_invoke_uri[79+1]="file:///libggmldsp-skel.so?ggmldsp_skel_handle_invoke&_modver=1.0&_idlver=0.0.1";
 static __inline int _skel_pack(_ATTRIBUTE_UNUSED remote_arg* _praROutPost, _ATTRIBUTE_UNUSED remote_arg* _ppraROutPost[1], _ATTRIBUTE_UNUSED void* _primROut, _ATTRIBUTE_UNUSED uint32_t _rout0[1], _ATTRIBUTE_UNUSED uint32_t _rout1[4], _ATTRIBUTE_UNUSED uint32_t _rout2[4], _ATTRIBUTE_UNUSED uint32_t _rout3[1], _ATTRIBUTE_UNUSED uint32_t _rout4[16], _ATTRIBUTE_UNUSED uint32_t _rout5[1], _ATTRIBUTE_UNUSED char* _rout6[1], _ATTRIBUTE_UNUSED uint32_t _rout6Len[1]) {
    int _nErr = 0;
    remote_arg* _praROutPostStart = _praROutPost;
@@ -598,7 +598,7 @@ static __inline int _skel_method_3(int (*_pfn)(const char*, remote_handle64*), u
    _QAIC_CATCH(_nErr) {}
    return _nErr;
 }
-__QAIC_SKEL_EXPORT int __QAIC_SKEL(ggmlop_skel_handle_invoke)(remote_handle64 _h, uint32_t _sc, remote_arg* _pra) __QAIC_SKEL_ATTRIBUTE {
+__QAIC_SKEL_EXPORT int __QAIC_SKEL(ggmldsp_skel_handle_invoke)(remote_handle64 _h, uint32_t _sc, remote_arg* _pra) __QAIC_SKEL_ATTRIBUTE {
    switch(REMOTE_SCALARS_METHOD(_sc)){
       case 0:
       return _skel_method_3(__QAIC_IMPL(ggmlop_dsp_open), _sc, _pra);

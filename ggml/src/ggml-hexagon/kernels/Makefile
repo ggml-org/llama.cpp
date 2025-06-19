@@ -7,7 +7,7 @@ HEXAGON_COMPUTE=compute${HTP_ARCH_VERSION}
 HEXAGON_CC=${HEXAGON_SDK_PATH}/tools/HEXAGON_Tools/8.8.06/Tools/bin/hexagon-clang
 HEXAGON_CXX=${HEXAGON_SDK_PATH}/tools/HEXAGON_Tools/8.8.06/Tools/bin/hexagon-clang
 
-TARGET=libggmlop-skel.so
+TARGET=libggmldsp-skel.so
 
 $(info HEXAGON_SDK_PATH:${HEXAGON_SDK_PATH})
 $(info HTP_ARCH_VERSION:${HTP_ARCH_VERSION})
@@ -28,7 +28,7 @@ ALL:$(OBJS)
 		${HEXAGON_CC} ${LDFLAGS} -o ${TARGET} -Wl,--start-group ${OBJS} -Wl,--end-group
 		@ls -l ${TARGET}
 		/bin/cp -fv ${TARGET} ../../../../out/android/bin/
-		/bin/cp -fv ${TARGET} ../../../../out/android/bin/libggmlop-skel${HTP_ARCH_VERSION}.so
+		/bin/cp -fv ${TARGET} ../../../../out/android/bin/libggmldsp-skel${HTP_ARCH_VERSION}.so
 		/bin/rm -f *.so
 
 %.o:%.c
@@ -36,5 +36,16 @@ ALL:$(OBJS)
 		${HEXAGON_CC} ${CFLAGS} ${DEBUG_FLAG} -D__FILENAME__=\"$<\" -o $@ -c $<
 		@echo "\n"
 
+%.o:%.S
+		@echo "${HEXAGON_CC} ${CFLAGS} ${DEBUG_FLAG} -D__FILENAME__=\"$<\" -o $@ -c $<"
+		${HEXAGON_CC} ${CFLAGS} ${DEBUG_FLAG} -D__FILENAME__=\"$<\" -o $@ -c $<
+		@echo "\n"
+
+%.o:%.cpp
+		@echo "${HEXAGON_CC} ${CFLAGS} ${DEBUG_FLAG} -D__FILENAME__=\"$<\" -o $@ -c $<"
+		${HEXAGON_CC} ${CFLAGS} ${DEBUG_FLAG} -D__FILENAME__=\"$<\" -o $@ -c $<
+		@echo "\n"
+
 clean:
 	rm -f *.o
+	/bin/rm -f *.so
