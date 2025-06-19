@@ -4707,7 +4707,7 @@ struct llm_build_llama : public llm_graph_context {
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -4867,7 +4867,7 @@ struct llm_build_llama_iswa : public llm_graph_context {
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -5046,7 +5046,7 @@ struct llm_build_deci : public llm_graph_context {
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -5200,7 +5200,7 @@ struct llm_build_baichuan : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -5322,7 +5322,7 @@ struct llm_build_xverse : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -5436,7 +5436,7 @@ struct llm_build_falcon : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * attn_norm;
@@ -5562,7 +5562,7 @@ struct llm_build_grok : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -5722,7 +5722,7 @@ struct llm_build_dbrx : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -5854,7 +5854,7 @@ struct llm_build_starcoder : public llm_graph_context {
         inpL = ggml_add(ctx0, inpL, pos);
         cb(inpL, "inpL", -1);
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             cur = build_norm(inpL,
@@ -5953,7 +5953,7 @@ struct llm_build_refact : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -6073,7 +6073,7 @@ struct llm_build_bert : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_no_cache();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * cur = inpL;
@@ -6242,7 +6242,7 @@ struct llm_build_neo_bert : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_no_cache();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * cur = inpL;
@@ -6357,7 +6357,7 @@ struct llm_build_bloom : public llm_graph_context {
                 LLM_NORM, -1);
         cb(inpL, "inp_norm", -1);
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             cur = build_norm(inpL,
@@ -6468,7 +6468,7 @@ struct llm_build_mpt : public llm_graph_context {
             cb(inpL, "inpL", -1);
         }
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * attn_norm;
@@ -6601,7 +6601,7 @@ struct llm_build_stablelm : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -6753,7 +6753,7 @@ struct llm_build_qwen : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -6870,7 +6870,7 @@ struct llm_build_qwen2 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -6991,7 +6991,7 @@ struct llm_build_qwen2vl : public llm_graph_context {
         int sections[4];
         std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -7109,7 +7109,7 @@ struct llm_build_qwen2moe : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -7268,7 +7268,7 @@ struct llm_build_qwen3 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -7389,7 +7389,7 @@ struct llm_build_qwen3moe : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -7519,7 +7519,7 @@ struct llm_build_phi2 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             attn_norm_output = build_norm(inpL,
@@ -7655,7 +7655,7 @@ struct llm_build_phi3 : public llm_graph_context {
             inp_attn = build_attn_inp_kv_unified();
         }
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             auto * residual = inpL;
@@ -7806,7 +7806,7 @@ struct llm_build_plamo : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -7928,7 +7928,7 @@ struct llm_build_gpt2 : public llm_graph_context {
         inpL = ggml_add(ctx0, inpL, pos);
         cb(inpL, "inpL", -1);
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             cur = build_norm(inpL,
@@ -8032,7 +8032,7 @@ struct llm_build_codeshell : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             cur = build_norm(inpL,
@@ -8147,7 +8147,7 @@ struct llm_build_orion : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -8274,7 +8274,7 @@ struct llm_build_internlm2 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -8410,7 +8410,7 @@ struct llm_build_minicpm3 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -8614,7 +8614,7 @@ struct llm_build_gemma : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -8730,7 +8730,7 @@ struct llm_build_gemma2_iswa : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified_iswa();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -8864,7 +8864,7 @@ struct llm_build_gemma3_iswa : public llm_graph_context {
         // TODO: is causal == true correct? might need some changes
         auto * inp_attn = build_attn_inp_kv_unified_iswa();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             const float freq_base_l  = model.get_rope_freq_base (cparams, il);
@@ -8998,7 +8998,7 @@ struct llm_build_starcoder2 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -9121,7 +9121,7 @@ struct llm_build_mamba : public llm_graph_context {
 
         auto * rs_inp = build_rs_inp();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -9314,7 +9314,7 @@ struct llm_build_command_r : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -9461,7 +9461,7 @@ struct llm_build_cohere2_iswa : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified_iswa();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             const bool is_swa = hparams.is_swa(il);
@@ -9596,7 +9596,7 @@ struct llm_build_olmo : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -9724,7 +9724,7 @@ struct llm_build_olmo2 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -9853,7 +9853,7 @@ struct llm_build_olmoe : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -9979,7 +9979,7 @@ struct llm_build_openelm : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             const int64_t n_head    = hparams.n_head(il);
@@ -10110,7 +10110,7 @@ struct llm_build_gptneox : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             cur = build_norm(inpL,
@@ -10258,7 +10258,7 @@ struct llm_build_arctic : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -10398,7 +10398,7 @@ struct llm_build_deepseek : public llm_graph_context {
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -10573,7 +10573,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -10820,7 +10820,7 @@ struct llm_build_bitnet : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -10979,7 +10979,7 @@ struct llm_build_t5_enc : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_no_cache();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -11085,7 +11085,7 @@ struct llm_build_t5_dec : public llm_graph_context {
         auto * inp_attn_self  = build_attn_inp_kv_unified();
         auto * inp_attn_cross = build_attn_inp_cross();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -11249,7 +11249,7 @@ struct llm_build_jais : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             cur = build_norm(inpL,
@@ -11347,7 +11347,7 @@ struct llm_build_chatglm : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -11480,7 +11480,7 @@ struct llm_build_glm4 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -11631,7 +11631,7 @@ struct llm_build_nemotron : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -11760,7 +11760,7 @@ struct llm_build_exaone : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -12099,7 +12099,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
         const auto n_seq_tokens = ubatch.n_seq_tokens;
         const auto n_seqs = ubatch.n_seqs;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             const llama_layer * layer = &model.layers[il];
@@ -12199,7 +12199,7 @@ struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
         const auto n_seq_tokens = ubatch.n_seq_tokens;
         const auto n_seqs = ubatch.n_seqs;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             const llama_layer * layer = &model.layers[il];
@@ -12456,7 +12456,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
         const auto n_seq_tokens = ubatch.n_seq_tokens;
         const auto n_seqs = ubatch.n_seqs;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             const llama_layer * layer = &model.layers[il];
@@ -12551,7 +12551,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
         const auto n_seq_tokens = ubatch.n_seq_tokens;
         const auto n_seqs = ubatch.n_seqs;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             const llama_layer * layer = &model.layers[il];
@@ -12652,7 +12652,7 @@ struct llm_build_granite : public llm_graph_context {
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -12835,7 +12835,7 @@ struct llm_build_chameleon : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -13166,7 +13166,7 @@ struct llm_build_plm : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -13331,7 +13331,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -13480,7 +13480,7 @@ struct llm_build_dots1 : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified();
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -13632,7 +13632,7 @@ struct llm_build_arcee : public llm_graph_context {
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
-        ggml_tensor * inp_out_ids = n_outputs < n_tokens ? build_inp_out_ids() : nullptr;
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;

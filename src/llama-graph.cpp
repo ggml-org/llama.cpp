@@ -874,6 +874,14 @@ ggml_tensor * llm_graph_context::build_inp_attn_scale() const {
 }
 
 ggml_tensor * llm_graph_context::build_inp_out_ids() const {
+    // note: when all tokens are output, we could skip this optimization to spare the ggml_get_rows() calls,
+    //       but this would make the graph topology depend on the number of output tokens, which can interere with
+    //       features that require constant topology such as pipline parallelism
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/14275#issuecomment-2987424471
+    //if (n_outputs < n_tokens) {
+    //    return nullptr;
+    //}
+
     auto inp = std::make_unique<llm_graph_input_out_ids>(hparams, cparams, n_outputs);
 
     auto & cur = inp->out_ids;
