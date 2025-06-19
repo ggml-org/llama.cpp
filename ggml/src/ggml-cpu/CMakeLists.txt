@@ -388,6 +388,27 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             else()
                 list(APPEND ARCH_FLAGS -mcpu=native -mtune=native -mpowerpc64)
             endif()
+        elseif(GGML_CPU_ALL_VARIANTS)
+            # Begin with the lowest baseline
+            set(ARCH_DEFINITIONS "")
+
+            # When a feature is selected, bump the MCPU to the first
+            # version that supported it
+            foreach(PVER RANGE 7 11)
+                if(DEFINED GGML_INTERNAL_POWER${PVER})
+                    set(POWERPC_MCPU "power${PVER}")
+                    list(APPEND ARCH_DEFINITIONS GGML_USE_POWER${PVER})
+                endif()
+            endforeach()
+            if (GGML_INTERNAL_VSX)
+                list(APPEND ARCH_DEFINITIONS GGML_USE_VSX)
+                list(APPEND ARCH_FLAGS -mvsx)
+            endif()
+
+            if (DEFINED POWERPC_MCPU)
+                list(APPEND ARCH_FLAGS -mcpu=${POWERPC_MCPU})
+            endif()
+            ggml_add_cpu_backend_features(${GGML_CPU_NAME} powerpc ${ARCH_DEFINITIONS})
         else()
             if (GGML_CPU_POWERPC_CPUTYPE)
                 list(APPEND ARCH_FLAGS -mcpu=${GGML_CPU_POWERPC_CPUTYPE})
