@@ -3772,7 +3772,6 @@ static void ggml_compute_forward_out_prod_f32(
         }
     }
 }
-
 static void ggml_compute_forward_out_prod_q_f32(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4560,7 +4559,6 @@ void ggml_compute_forward_get_rows_back(
     //    exit(0);
     //}
 }
-
 // ggml_compute_forward_diag
 
 static void ggml_compute_forward_diag_f32(
@@ -5350,7 +5348,6 @@ static void ggml_compute_forward_rope_f32(
         }
     }
 }
-
 // TODO: deduplicate f16/f32 code
 static void ggml_compute_forward_rope_f16(
         const ggml_compute_params * params,
@@ -6142,7 +6139,6 @@ void ggml_compute_forward_conv_transpose_2d(
         }
     }
 }
-
 // ggml_compute_forward_conv_2d_dw
 
 struct ggml_conv_2d_dw_params {
@@ -6929,7 +6925,6 @@ void ggml_compute_forward_argsort(
             }
     }
 }
-
 // ggml_compute_forward_flash_attn_ext
 
 static void ggml_compute_forward_flash_attn_ext_f16(
@@ -8392,7 +8387,6 @@ void ggml_compute_forward_win_unpart(
             }
     }
 }
-
 //gmml_compute_forward_unary
 
 void ggml_compute_forward_unary(
@@ -9193,7 +9187,6 @@ void ggml_compute_forward_map_custom2(
 
     p.fun(dst, a, b, params->ith, params->nth, p.userdata);
 }
-
 // ggml_compute_forward_map_custom3
 
 void ggml_compute_forward_map_custom3(
