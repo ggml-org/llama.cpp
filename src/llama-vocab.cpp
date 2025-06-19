@@ -3061,7 +3061,8 @@ int32_t llama_vocab::tokenize(
                         bool   parse_special) const {
     auto res = tokenize(std::string(text, text_len), add_special, parse_special);
     if (res.size() >= static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
-        GGML_ABORT("tokenization result size %zu exceeds int32_t limit", res.size());
+        LLAMA_LOG_ERROR("%s: tokenization result size %zu exceeds int32_t limit\n", __func__, res.size());
+        return -1;
     }
     
     if (n_tokens_max < (int) res.size()) {
