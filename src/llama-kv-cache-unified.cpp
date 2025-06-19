@@ -746,12 +746,16 @@ ggml_tensor * llama_kv_cache_unified::get_v(ggml_context * ctx, int32_t il, uint
             0);
 }
 
-ggml_tensor * llama_kv_cache_unified::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il, uint32_t head_cur) const {
+ggml_tensor * llama_kv_cache_unified::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * kv_idxs, int32_t il, uint32_t head_cur) const {
     const int32_t ikv = map_layer_ids.at(il);
 
     auto * k = layers[ikv].k;
 
     const int64_t n_tokens = k_cur->ne[2];
+
+    if (kv_idxs) {
+        return ggml_set_rows(ctx, k, ggml_reshape_2d(ctx, k_cur, k->ne[0], n_tokens), kv_idxs);
+    }
 
     ggml_tensor * k_view = ggml_view_1d(ctx, k,
             n_tokens*hparams.n_embd_k_gqa(il),
@@ -760,7 +764,7 @@ ggml_tensor * llama_kv_cache_unified::cpy_k(ggml_context * ctx, ggml_tensor * k_
     return ggml_cpy(ctx, k_cur, k_view);
 }
 
-ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il, uint32_t head_cur) const {
+ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * kv_idxs, int32_t il, uint32_t head_cur) const {
     const int32_t ikv = map_layer_ids.at(il);
 
     auto * v = layers[ikv].v;
@@ -772,19 +776,46 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
     ggml_tensor * v_view = nullptr;
 
     if (!v_trans) {
+        if (kv_idxs) {
+            return ggml_set_rows(ctx, v, v_cur, kv_idxs);
+        }
+
         v_view = ggml_view_1d(ctx, v,
                 n_tokens*hparams.n_embd_v_gqa(il),
                 ggml_row_size(v->type, hparams.n_embd_v_gqa(il))*head_cur);
     } else {
+        v_cur = ggml_transpose(ctx, v_cur);
+
         // note: the V cache is transposed when not using flash attention
+        if (kv_idxs) {
+            // the row becomes a single element and we repeat the KV indices d_head times
+            // TODO: this seems not very optimal - can we do something better?
+            v_view = ggml_reshape_3d(ctx, v, 1, v->ne[1], v->ne[0]);
+
+            v_cur = ggml_cont_3d(ctx, v_cur, 1, v_cur->ne[0], v_cur->ne[1]);
+
+            kv_idxs = ggml_repeat_4d(ctx, kv_idxs, v_cur->ne[1], v_cur->ne[2], 1, 1);
+
+            return ggml_set_rows(ctx, v_view, v_cur, kv_idxs);
+        }
+
         v_view = ggml_view_2d(ctx, v, n_tokens, hparams.n_embd_v_gqa(il),
                 (v->ne[1])*ggml_element_size(v),
                 (head_cur)*ggml_element_size(v));
-
-        v_cur = ggml_transpose(ctx, v_cur);
     }
 
     return ggml_cpy(ctx, v_cur, v_view);
+}
+
+void llama_kv_cache_unified::set_input_kv_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t head_cur) const {
+    const uint32_t n_tokens = ubatch->n_tokens;
+
+    GGML_ASSERT(ggml_backend_buffer_is_host(dst->buffer));
+    int64_t * data = (int64_t *) dst->data;
+
+    for (int64_t i = 0; i < n_tokens; ++i) {
+        data[i] = head_cur + i;
+    }
 }
 
 void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
@@ -1789,16 +1820,20 @@ ggml_tensor * llama_kv_cache_unified_context::get_v(ggml_context * ctx, int32_t 
     return kv->get_v(ctx, il, n_kv);
 }
 
-ggml_tensor * llama_kv_cache_unified_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const {
-    return kv->cpy_k(ctx, k_cur, il, head);
+ggml_tensor * llama_kv_cache_unified_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * kv_idxs, int32_t il) const {
+    return kv->cpy_k(ctx, k_cur, kv_idxs, il, head);
 }
 
-ggml_tensor * llama_kv_cache_unified_context::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const {
-    return kv->cpy_v(ctx, v_cur, il, head);
+ggml_tensor * llama_kv_cache_unified_context::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * kv_idxs, int32_t il) const {
+    return kv->cpy_v(ctx, v_cur, kv_idxs, il, head);
 }
 
 void llama_kv_cache_unified_context::set_input_k_shift(ggml_tensor * dst) const {
     kv->set_input_k_shift(dst);
+}
+
+void llama_kv_cache_unified_context::set_input_kv_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const {
+    kv->set_input_kv_idxs(dst, ubatch, head);
 }
 
 void llama_kv_cache_unified_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
