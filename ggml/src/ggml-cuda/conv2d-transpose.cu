@@ -1,5 +1,3 @@
-#include <cuda_fp16.h>
-
 #include <algorithm>
 
 #include "conv2d-transpose.cuh"
