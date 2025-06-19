@@ -5,7 +5,7 @@
 
 static ggml_backend_buffer_t
 ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
   struct ggml_backend_remoting_buffer_context *context = (struct ggml_backend_remoting_buffer_context *) malloc(sizeof(*context));
@@ -29,9 +29,6 @@ ggml_backend_remoting_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, 
   context->is_host_buffer = false;
 
   ggml_backend_buffer_t buffer = ggml_backend_buffer_init(buft, ggml_backend_remoting_buffer_interface, (void *) context, size);
-  INFO("##");
-  INFO("## %s(%llx) --> %p <---------------", __func__, size, buffer);
-  INFO("##\n");
 
   return buffer;
 }
@@ -47,19 +44,29 @@ ggml_backend_remoting_buffer_type_get_name(ggml_backend_buffer_type_t buft) {
 
 static size_t
 ggml_backend_remoting_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
-  IMPLEMENTED;
-
+  IMPLEMENTED_ONCE;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  return apir_buffer_type_get_alignment(gpu, buft);
+  static size_t align = 0;
+
+  if (align == 0) {
+    align = apir_buffer_type_get_alignment(gpu, buft);
+  }
+
+  return align;
 }
 
 static size_t
 ggml_backend_remoting_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
-  IMPLEMENTED;
+  IMPLEMENTED_ONCE;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  return apir_buffer_type_get_max_size(gpu, buft);
+  static size_t max_size = 0;
+  if (max_size == 0) {
+    max_size = apir_buffer_type_get_max_size(gpu, buft);
+  }
+
+  return max_size;
 }
 
 static bool
