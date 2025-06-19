@@ -299,8 +299,47 @@ int main() {
     
     // Only create quantized views if we have quantized tokens
     // NOTICE: This quant_len can be 0;
-    ggml_tensor * k_quant = ggml_view_4d(ctx, k, head_dim, quant_len, n_kv_heads, 1, quant_nb1, quant_nb2, quant_nb3, kv_quant_offset);
-    ggml_tensor * v_quant = ggml_view_4d(ctx, v, head_dim, quant_len, n_kv_heads, 1, quant_nb1, quant_nb2, quant_nb3, kv_quant_offset);
+    ggml_tensor * k_quant = nullptr;
+    ggml_tensor * v_quant = nullptr;
+    
+    // Create Q4_0 quantized tensors for k_quant and v_quant if we have quantized tokens
+    if (quant_len > 0) {
+        // Create Q4_0 tensors for quantized KV cache
+        k_quant = ggml_new_tensor_4d(ctx, GGML_TYPE_Q4_0, head_dim, quant_len, n_kv_heads, 1);
+        v_quant = ggml_new_tensor_4d(ctx, GGML_TYPE_Q4_0, head_dim, quant_len, n_kv_heads, 1);
+        
+        // Create source views for the quantized part of the original data
+        ggml_tensor * k_quant_src = ggml_view_4d(ctx, k, head_dim, quant_len, n_kv_heads, 1, quant_nb1, quant_nb2, quant_nb3, kv_quant_offset);
+        ggml_tensor * v_quant_src = ggml_view_4d(ctx, v, head_dim, quant_len, n_kv_heads, 1, quant_nb1, quant_nb2, quant_nb3, kv_quant_offset);
+        
+        // Use ggml_cpy to quantize the data from F16 to Q4_0
+        ggml_tensor * k_quantize_op = ggml_cpy(ctx, k_quant_src, k_quant);
+        ggml_tensor * v_quantize_op = ggml_cpy(ctx, v_quant_src, v_quant);
+        
+        printf("Created Q4_0 quantized tensors for %zu tokens\n", quant_len);
+        printf("K_quant shape: [%ld, %ld, %ld, %ld], type: %s\n", 
+               k_quant->ne[0], k_quant->ne[1], k_quant->ne[2], k_quant->ne[3], ggml_type_name(k_quant->type));
+        printf("V_quant shape: [%ld, %ld, %ld, %ld], type: %s\n", 
+               v_quant->ne[0], v_quant->ne[1], v_quant->ne[2], v_quant->ne[3], ggml_type_name(v_quant->type));
+        
+        // Build quantization graph and execute it
+        struct ggml_cgraph * graph_quantize = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph_quantize, k_quantize_op);
+        ggml_build_forward_expand(graph_quantize, v_quantize_op);
+        
+        printf("Computing quantization (F16 -> Q4_0)...\n");
+        enum ggml_status status_quantize = ggml_graph_compute_with_ctx(ctx, graph_quantize, n_threads);
+        
+        if (status_quantize != GGML_STATUS_SUCCESS) {
+            printf("ERROR: Quantization failed with status: %d\n", status_quantize);
+            ggml_free(ctx);
+            return 1;
+        }
+        
+        printf("Quantization completed successfully\n");
+    } else {
+        printf("No quantized tokens to create (quant_len = 0)\n");
+    }
 
     // ============================================================================
     // Test 1: Custom F32 Flash-attention Implementation
