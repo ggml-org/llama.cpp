@@ -6453,7 +6453,6 @@ def main() -> None:
     else:
         logging.basicConfig(level=logging.INFO)
 
-
     if args.remote:
         hf_repo_id = args.model
         from huggingface_hub import snapshot_download
