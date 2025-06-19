@@ -47,7 +47,13 @@ ggml_backend_remoting_buffer_type_get_alignment(ggml_backend_buffer_type_t buft)
   IMPLEMENTED_ONCE;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  return apir_buffer_type_get_alignment(gpu, buft);
+  static size_t align = 0;
+
+  if (align == 0) {
+    align = apir_buffer_type_get_alignment(gpu, buft);
+  }
+
+  return align;
 }
 
 static size_t
@@ -55,7 +61,12 @@ ggml_backend_remoting_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) 
   IMPLEMENTED_ONCE;
   struct virtgpu *gpu = BUFT_TO_GPU(buft);
 
-  return apir_buffer_type_get_max_size(gpu, buft);
+  static size_t max_size = 0;
+  if (max_size == 0) {
+    max_size = apir_buffer_type_get_max_size(gpu, buft);
+  }
+
+  return max_size;
 }
 
 static bool
