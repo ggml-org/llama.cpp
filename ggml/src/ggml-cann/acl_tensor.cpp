@@ -31,6 +31,8 @@ aclDataType ggml_cann_type_mapping(ggml_type type) {
             return ACL_FLOAT;
         case GGML_TYPE_F16:
             return ACL_FLOAT16;
+        case GGML_TYPE_BF16:
+            return ACL_BF16;
         case GGML_TYPE_I8:
             return ACL_INT8;
         case GGML_TYPE_I16:
@@ -41,6 +43,8 @@ aclDataType ggml_cann_type_mapping(ggml_type type) {
             return ACL_INT4;
         case GGML_TYPE_Q8_0:
             return ACL_INT8;
+        case GGML_TYPE_I64:
+            return ACL_INT64;
         default:
             return ACL_DT_UNDEFINED;
     }

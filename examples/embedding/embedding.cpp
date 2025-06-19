@@ -35,23 +35,14 @@ static void batch_add_seq(llama_batch & batch, const std::vector<int32_t> & toke
 
 static void batch_decode(llama_context * ctx, llama_batch & batch, float * output, int n_seq, int n_embd, int embd_norm) {
     const enum llama_pooling_type pooling_type = llama_pooling_type(ctx);
-    const struct llama_model * model = llama_get_model(ctx);
 
     // clear previous kv_cache values (irrelevant for embeddings)
-    llama_kv_self_clear(ctx);
+    llama_memory_clear(llama_get_memory(ctx), true);
 
     // run model
     LOG_INF("%s: n_tokens = %d, n_seq = %d\n", __func__, batch.n_tokens, n_seq);
-    if (llama_model_has_encoder(model) && !llama_model_has_decoder(model)) {
-        // encoder-only model
-        if (llama_encode(ctx, batch) < 0) {
-            LOG_ERR("%s : failed to encode\n", __func__);
-        }
-    } else if (!llama_model_has_encoder(model) && llama_model_has_decoder(model)) {
-        // decoder-only model
-        if (llama_decode(ctx, batch) < 0) {
-            LOG_ERR("%s : failed to decode\n", __func__);
-        }
+    if (llama_decode(ctx, batch) < 0) {
+        LOG_ERR("%s : failed to process\n", __func__);
     }
 
     for (int i = 0; i < batch.n_tokens; i++) {
@@ -89,6 +80,13 @@ int main(int argc, char ** argv) {
     common_init();
 
     params.embedding = true;
+
+    // utilize the full context
+    if (params.n_batch < params.n_ctx) {
+        LOG_WRN("%s: setting batch size to %d\n", __func__, params.n_ctx);
+        params.n_batch = params.n_ctx;
+    }
+
     // For non-causal models, batch size must be equal to ubatch size
     params.n_ubatch = params.n_batch;
 
@@ -134,7 +132,6 @@ int main(int argc, char ** argv) {
 
     // max batch size
     const uint64_t n_batch = params.n_batch;
-    GGML_ASSERT(params.n_batch >= params.n_ctx);
 
     // tokenize the prompts and trim
     std::vector<std::vector<int32_t>> inputs;
@@ -239,9 +236,24 @@ int main(int argc, char ** argv) {
                 LOG("\n");
             }
         } else if (pooling_type == LLAMA_POOLING_TYPE_RANK) {
+            const uint32_t n_cls_out = llama_model_n_cls_out(model);
+            std::vector<std::string> cls_out_labels;
+
+            for (uint32_t i = 0; i < n_cls_out; i++) {
+                const char * label = llama_model_cls_label(model, i);
+                const std::string label_i(label == nullptr ? "" : label);
+                cls_out_labels.emplace_back(label_i.empty() ? std::to_string(i) : label_i);
+            }
+
             for (int j = 0; j < n_embd_count; j++) {
-                // NOTE: if you change this log - update the tests in ci/run.sh
-                LOG("rerank score %d: %8.3f\n", j, emb[j * n_embd]);
+                for (uint32_t i = 0; i < n_cls_out; i++) {
+                    // NOTE: if you change this log - update the tests in ci/run.sh
+                    if (n_cls_out == 1) {
+                        LOG("rerank score %d: %8.3f\n", j, emb[j * n_embd]);
+                    } else {
+                        LOG("rerank score %d: %8.3f [%s]\n", j, emb[j * n_embd + i], cls_out_labels[i].c_str());
+                    }
+                }
             }
         } else {
             // print the first part of the embeddings or for a single prompt, the full embedding

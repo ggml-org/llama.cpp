@@ -8,7 +8,7 @@
 #include "mmq.h"
 #include "ggml-impl.h"
 #include "ggml-cpu-impl.h"
-#include "ggml-cpu-quants.h"
+#include "quants.h"
 #include "ggml-quants.h"
 #include <algorithm>
 #include <type_traits>

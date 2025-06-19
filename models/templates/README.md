@@ -19,4 +19,6 @@ These templates can be updated with the following commands:
 ./scripts/get_chat_template.py NousResearch/Hermes-2-Pro-Llama-3-8B tool_use > models/templates/NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja
 ./scripts/get_chat_template.py NousResearch/Hermes-3-Llama-3.1-8B tool_use   > models/templates/NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja
 ./scripts/get_chat_template.py Qwen/Qwen2.5-7B-Instruct                      > models/templates/Qwen-Qwen2.5-7B-Instruct.jinja
+./scripts/get_chat_template.py Qwen/QwQ-32B                                  > models/templates/Qwen-QwQ-32B.jinja
+./scripts/get_chat_template.py Qwen/Qwen3-0.6B                               > models/templates/Qwen-Qwen3-0.6B.jinja
 ```

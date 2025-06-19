@@ -25,7 +25,8 @@ EOF
     $prefix \
         $LLAMA_BUILD_DIR/bin/llama-bench \
         --model "$MODEL_HOME/$MODEL" \
-        --n-gpu-layers 99
+        --n-gpu-layers 99 \
+        --threads 1
 elif [[ "${BENCH_MODE:-}" == "perf" ]]; then
     cat <<EOF
 ###
@@ -37,8 +38,8 @@ EOF
         $LLAMA_BUILD_DIR/bin/test-backend-ops perf
 
 else
-    PROMPT="say nothing"
-    #PROMPT="tell what's Apple metal API"
+    #PROMPT="say nothing"
+    PROMPT="tell what's Apple metal API"
     $prefix \
         $LLAMA_BUILD_DIR/bin/llama-run \
         --ngl 99 \

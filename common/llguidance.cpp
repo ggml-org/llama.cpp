@@ -189,6 +189,7 @@ static LlgTokenizer * llama_sampler_llg_new_tokenizer(const llama_vocab * vocab)
         /* .tokenize_fn                        = */ llama_sampler_llg_tokenize_fn,
         /* .use_approximate_greedy_tokenize_fn = */ false,
         /* .tokenize_user_data                 = */ vocab,
+        /* .slices                             = */ nullptr,
     };
 
     char           error_buffer[1024];

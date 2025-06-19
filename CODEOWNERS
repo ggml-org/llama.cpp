@@ -2,7 +2,7 @@
 
 /ci/ @ggerganov
 /.devops/*.Dockerfile @ngxson
-/examples/server/ @ngxson
+/tools/server/ @ngxson
 /ggml/src/ggml-cuda/fattn* @JohannesGaessler
 /ggml/src/ggml-cuda/mmq.* @JohannesGaessler
 /ggml/src/ggml-cuda/mmv.* @JohannesGaessler
