@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../node_context.hpp"
+#include "../op_table.hpp"
 #include "../utils.hpp"
 
 namespace ov {

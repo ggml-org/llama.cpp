@@ -8,7 +8,9 @@ namespace ov {
 namespace frontend {
 namespace ggml {
 
-void dump_ov_model(const std::shared_ptr<ov::Model> model);
+std::string getCurrentTime();
+
+void dump_ov_model(std::shared_ptr<ov::Model> model);
 
 void num_inputs_check(const NodeContext& context, size_t min_inputs, size_t max_inputs);
 
@@ -52,7 +54,8 @@ std::vector<T> permute(const std::vector<T>& x, const std::vector<int>& perm) {
     return result;
 }
 
-std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<op::v3::ShapeOf>& shape, const std::vector<int>& dims);
+std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::ShapeOf>& shape,
+                                         const std::vector<int>& dims);
 std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::Node>& node, const std::vector<int>& dims);
 
 OutputVector rename_outputs_with_suffix(const OutputVector& outputs, const std::string& suffix);
@@ -61,7 +64,8 @@ namespace op {
 template <typename T>
 OutputVector translate_1to1_match_2_inputs(const NodeContext& context) {
     num_inputs_check(context, 2, 2);
-    return {std::make_shared<T>(context.get_input(0), context.get_input(1))};
+    auto res = std::make_shared<T>(context.get_input(0), context.get_input(1));
+    return rename_outputs_with_suffix({ res }, context.get_name());
 }
 }  // namespace op
 

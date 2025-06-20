@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "../node_context.hpp"
+#include "../op_table.hpp"
 #include "../utils.hpp"
 
 #ifndef M_PI
@@ -36,21 +37,19 @@ namespace frontend {
 namespace ggml {
 namespace op {
 
-static float ggml_rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float n_rot, float base) {
-    return n_dims * logf(n_ctx_orig / (n_rot * 2 * (float)M_PI)) / (2 * logf(base));
+namespace {
+float ggml_rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float n_rot, float base) {
+    return n_dims * logf(n_ctx_orig / (n_rot * 2 * (float) M_PI)) / (2 * logf(base));
 }
 
-void ggml_rope_yarn_corr_dims(int n_dims,
-                              int n_ctx_orig,
-                              float freq_base,
-                              float beta_fast,
-                              float beta_slow,
+void ggml_rope_yarn_corr_dims(int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow,
                               float dims[2]) {
     float start = floorf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
     float end = ceilf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
     dims[0] = MAX(0, start);
     dims[1] = MIN(n_dims - 1, end);
 }
+}  // namespace
 
 OutputVector translate_rope(const NodeContext& context) {
     num_inputs_check(context, 2, 3);
@@ -67,7 +66,12 @@ OutputVector translate_rope(const NodeContext& context) {
 
     auto output_shape = context.get_output_shape(0);
 
-    float freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow;
+    float freq_base;
+    float freq_scale;
+    float ext_factor;
+    float attn_factor;
+    float beta_fast;
+    float beta_slow;
     int32_t* op_params = context.get_output_op_params(0);
     const int n_dims = op_params[1];
     const int mode = op_params[2];
