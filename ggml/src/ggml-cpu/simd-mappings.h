@@ -988,6 +988,7 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
     x[1] = vec_extract(v_x, 1);
     x[2] = vec_extract(v_x, 2);
     x[3] = vec_extract(v_x, 3);
+    raise(SIGINT);
 #else
     float arr[4];
 
