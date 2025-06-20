@@ -982,8 +982,8 @@ static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
 
 static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #ifdef __NNPA__
-    float32x4_t zero = vec_splats(0.0f);
-    uint16x8_t v_x = vec_round_from_fp32(v_y, zero, 0);
+    float32x4_t v_zero = vec_splats(0.0f);
+    uint16x8_t v_x = vec_round_from_fp32(v_y, v_zero, 0);
     x[0] = vec_extract(v_x, 0);
     x[1] = vec_extract(v_x, 1);
     x[2] = vec_extract(v_x, 2);

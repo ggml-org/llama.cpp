@@ -322,6 +322,7 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
 // 16-bit float
 // on Arm, we use __fp16
 // on x86, we use uint16_t
+// on s390x, we use ZDNN_DLFLOAT16 with NNPA
 //
 // for old CUDA compilers (<= 11), we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/10616
 // for     MUSA compilers        , we use uint16_t: ref https://github.com/ggml-org/llama.cpp/pull/11843
@@ -416,6 +417,29 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
     #define GGML_COMPUTE_FP32_TO_FP16(x) ggml_compute_fp32_to_fp16(x)
     #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
     #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
+
+#elif defined(__NNPA__)
+
+    #define GGML_COMPUTE_FP16_TO_FP32(x) ggml_compute_fp16_to_fp32(x)
+    #define GGML_COMPUTE_FP32_TO_FP16(x) ggml_compute_fp32_to_fp16(x)
+
+    #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
+    #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
+
+    // TODO: Determine if inline assembly is faster
+    static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
+        uint16x8_t v_h = vec_splats(h);
+        uint16x8_t nnpa_dlf16 = vec_convert_from_fp16(v_h, 0);
+        return vec_extend_to_fp32_hi(nnpa_dlf16, 0)[0];
+    }
+
+    // TODO: Determine if inline assembly is faster
+    static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
+        float32x4_t v_f = vec_splats(f);
+        float32x4_t v_zero = vec_splats(0.0f);
+        uint16x8_t v_h = vec_round_from_fp32(v_f, v_zero, 0);
+        return vec_extract(v_h, 0);
+    }
 
 #else
 
