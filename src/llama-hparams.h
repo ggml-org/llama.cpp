@@ -193,6 +193,8 @@ struct llama_hparams {
     // whether or not the given layer is recurrent (for hybrid models)
     bool is_recurrent(uint32_t il) const;
 
+    uint32_t n_pos_per_embd() const;
+
     bool is_swa(uint32_t il) const;
 };
 

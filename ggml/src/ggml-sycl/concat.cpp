@@ -89,33 +89,24 @@ static void concat_f32_sycl(const float *x, const float *y, float *dst,
   sycl::range<3> gridDim(ne2, ne1, num_blocks);
   switch (dim) {
   case 0:
-    stream->parallel_for(
-        sycl::nd_range<3>(gridDim *
-                              sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-          concat_f32_dim0(x, y, dst, ne0, ne00, item_ct1);
-        });
-    break;
+      sycl_parallel_for(stream,
+                        sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+                                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
+                        [=](sycl::nd_item<3> item_ct1) { concat_f32_dim0(x, y, dst, ne0, ne00, item_ct1); });
+      break;
   case 1:
-    stream->parallel_for(
-        sycl::nd_range<3>(gridDim *
-                              sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-          concat_f32_dim1(x, y, dst, ne0, ne01, item_ct1);
-        });
-    break;
+      sycl_parallel_for(stream,
+                        sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+                                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
+                        [=](sycl::nd_item<3> item_ct1) { concat_f32_dim1(x, y, dst, ne0, ne01, item_ct1); });
+      break;
   // dim >=2 will be dispatched to the default path
   default:
-    stream->parallel_for(
-        sycl::nd_range<3>(gridDim *
-                              sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-          concat_f32_dim2(x, y, dst, ne0, ne02, item_ct1);
-        });
-    break;
+      sycl_parallel_for(stream,
+                        sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+                                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
+                        [=](sycl::nd_item<3> item_ct1) { concat_f32_dim2(x, y, dst, ne0, ne02, item_ct1); });
+      break;
   }
 }
 
@@ -129,33 +120,29 @@ static void concat_f32_sycl_non_cont(
     int64_t ne2, int64_t ne3, uint64_t nb0, uint64_t nb1, uint64_t nb2,
     uint64_t nb3, int32_t dim) {
   sycl::range<3> gridDim(ne3, ne2, ne1);
-  stream->parallel_for(
-      sycl::nd_range<3>(gridDim, sycl::range<3>(1, 1, 1)),
-      [=](sycl::nd_item<3> item_ct1) {
-        int64_t i3 = item_ct1.get_group(0);
-        int64_t i2 = item_ct1.get_group(1);
-        int64_t i1 = item_ct1.get_group(2);
+  sycl_parallel_for(stream, sycl::nd_range<3>(gridDim, sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
+      int64_t i3 = item_ct1.get_group(0);
+      int64_t i2 = item_ct1.get_group(1);
+      int64_t i1 = item_ct1.get_group(2);
 
-        int64_t o[4] = {0, 0, 0, 0};
-        o[dim] = dim == 0 ? ne00 : (dim == 1 ? ne01 : (dim == 2 ? ne02 : ne03));
+      int64_t o[4] = { 0, 0, 0, 0 };
+      o[dim]       = dim == 0 ? ne00 : (dim == 1 ? ne01 : (dim == 2 ? ne02 : ne03));
 
-        const float *x;
+      const float * x;
 
-        for (int i0 = item_ct1.get_local_id(2); i0 < ne0;
-             i0 += item_ct1.get_local_range(2)) {
+      for (int i0 = item_ct1.get_local_id(2); i0 < ne0; i0 += item_ct1.get_local_range(2)) {
           if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
-            x = (const float *)(src0 + (i3)*nb03 + (i2)*nb02 + (i1)*nb01 +
-                                (i0)*nb00);
+              x = (const float *) (src0 + (i3) *nb03 + (i2) *nb02 + (i1) *nb01 + (i0) *nb00);
           } else {
-            x = (const float *)(src1 + (i3 - o[3]) * nb13 + (i2 - o[2]) * nb12 +
-                                (i1 - o[1]) * nb11 + (i0 - o[0]) * nb10);
+              x = (const float *) (src1 + (i3 - o[3]) * nb13 + (i2 - o[2]) * nb12 + (i1 - o[1]) * nb11 +
+                                   (i0 - o[0]) * nb10);
           }
 
           float *y = (float *)(dst + i3 * nb3 + i2 * nb2 + i1 * nb1 + i0 * nb0);
 
           *y = *x;
-        }
-      });
+      }
+  });
 }
 
 void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {

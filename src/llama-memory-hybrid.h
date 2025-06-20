@@ -50,9 +50,9 @@ public:
     //
 
     llama_memory_state_ptr init_batch(
-            const llama_batch & batch,
+            llama_batch_allocr & balloc,
             uint32_t n_ubatch,
-            bool embd_pooled) override;
+            bool embd_all) override;
 
     llama_memory_state_ptr init_full() override;
 
@@ -107,7 +107,6 @@ public:
     // init success
     llama_memory_hybrid_state(
               llama_memory_hybrid * mem,
-                     llama_sbatch   sbatch,
             std::vector<uint32_t>   heads_attn,
         std::vector<llama_ubatch>   ubatches);
 
@@ -115,8 +114,6 @@ public:
 
     bool next()  override;
     bool apply() override;
-
-    std::vector<int64_t> & out_ids() override;
 
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
@@ -129,8 +126,6 @@ public:
     const llama_memory_recurrent_state * get_state_recr() const;
 
 private:
-    llama_sbatch sbatch;
-
     // the index of the next ubatch to process
     size_t i_next = 0;
 

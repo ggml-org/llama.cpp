@@ -247,7 +247,7 @@ private:
     std::map<llama_seq_id, std::vector<float>> embd_seq;
 
     // reuse the batch_allocr to avoid unnecessary memory allocations
-    std::unique_ptr<llama_batch_allocr> batch_allocr;
+    std::unique_ptr<llama_batch_allocr> balloc;
 
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 

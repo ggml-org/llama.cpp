@@ -329,60 +329,51 @@ static void acc_f32_sycl(const float *x, const float *y, float *dst,
                          const int ne12, const int nb1, const int nb2,
                          const int offset, queue_ptr stream) {
     int num_blocks = (n_elements + SYCL_ACC_BLOCK_SIZE - 1) / SYCL_ACC_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            acc_f32(x, y, dst, n_elements, ne10, ne11, ne12, nb1, nb2, offset,
-                    item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_ACC_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) {
+                          acc_f32(x, y, dst, n_elements, ne10, ne11, ne12, nb1, nb2, offset, item_ct1);
+                      });
 }
 
 template<typename T>
 static void gelu_sycl(const T *x, T *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_GELU_BLOCK_SIZE - 1) / SYCL_GELU_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            gelu(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { gelu(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void silu_sycl(const T *x, T *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_SILU_BLOCK_SIZE - 1) / SYCL_SILU_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_SILU_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_SILU_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            silu(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_SILU_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_SILU_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { silu(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void sgn_sycl(const T * x, T * dst, const int k, queue_ptr stream) {
     // hard code for now
     const int num_blocks = ceil_div(k, 256);
-    stream->parallel_for(
-            sycl::nd_range<3>((sycl::range<3>(1, 1, num_blocks) * sycl::range(1, 1, 256)), sycl::range(1, 1, 256)), [=](sycl::nd_item<3> item_ct1) {
-            sgn(x, dst, k, item_ct1);
-            });
+    sycl_parallel_for(
+        stream, sycl::nd_range<3>((sycl::range<3>(1, 1, num_blocks) * sycl::range(1, 1, 256)), sycl::range(1, 1, 256)),
+        [=](sycl::nd_item<3> item_ct1) { sgn(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void abs_sycl(const T * x, T * dst, const int k, queue_ptr stream) {
     // hard code for now
     const int num_blocks = ceil_div(k, 256);
-    stream->parallel_for(
-            sycl::nd_range<3>((sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, 256)), sycl::range<3>(1, 1, 256)), [=](sycl::nd_item<3> item_ct1) {
-            abs_op(x, dst, k, item_ct1);
-            });
+    sycl_parallel_for(
+        stream,
+        sycl::nd_range<3>((sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, 256)), sycl::range<3>(1, 1, 256)),
+        [=](sycl::nd_item<3> item_ct1) { abs_op(x, dst, k, item_ct1); });
 }
 
 
@@ -390,23 +381,20 @@ template<typename T>
 static void elu_sycl(const T * x, T * dst, const int k, queue_ptr stream) {
     // hard code for now
     const int num_blocks = ceil_div(k, 256);
-    stream->parallel_for(
-            sycl::nd_range<3>((sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, 256)), sycl::range<3>(1, 1, 256)), [=](sycl::nd_item<3> item_ct1) {
-            elu_op(x, dst, k, item_ct1);
-            });
+    sycl_parallel_for(
+        stream,
+        sycl::nd_range<3>((sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, 256)), sycl::range<3>(1, 1, 256)),
+        [=](sycl::nd_item<3> item_ct1) { elu_op(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void gelu_quick_sycl(const T *x, T *dst, const int k,
                                 queue_ptr stream) {
     const int num_blocks = (k + SYCL_GELU_BLOCK_SIZE - 1) / SYCL_GELU_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            gelu_quick(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { gelu_quick(x, dst, k, item_ct1); });
 }
 
 
@@ -414,169 +402,133 @@ template<typename T>
 static void gelu_erf_sycl(const T *x, T *dst, const int k,
                                 queue_ptr stream) {
     const int num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            gelu_erf(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_GELU_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { gelu_erf(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void tanh_sycl(const T *x, T *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_TANH_BLOCK_SIZE - 1) / SYCL_TANH_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_TANH_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_TANH_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            tanh(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_TANH_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_TANH_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { tanh(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void relu_sycl(const T *x, T *dst, const int k,
                           queue_ptr stream) {
     const int num_blocks = (k + SYCL_RELU_BLOCK_SIZE - 1) / SYCL_RELU_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            relu(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { relu(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void hardsigmoid_sycl(const T *x, T *dst, const int k,
                                  queue_ptr stream) {
     const int num_blocks = (k + SYCL_HARDSIGMOID_BLOCK_SIZE - 1) / SYCL_HARDSIGMOID_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_HARDSIGMOID_BLOCK_SIZE),
+    sycl_parallel_for(
+        stream,
+        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_HARDSIGMOID_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_HARDSIGMOID_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            hardsigmoid(x, dst, k, item_ct1);
-        });
+        [=](sycl::nd_item<3> item_ct1) { hardsigmoid(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void hardswish_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_HARDSWISH_BLOCK_SIZE - 1) / SYCL_HARDSWISH_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_HARDSWISH_BLOCK_SIZE),
+    sycl_parallel_for(
+        stream,
+        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_HARDSWISH_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_HARDSWISH_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            hardswish(x, dst, k, item_ct1);
-        });
+        [=](sycl::nd_item<3> item_ct1) { hardswish(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void exp_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_EXP_BLOCK_SIZE - 1) / SYCL_EXP_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            exp(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { exp(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void log_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_EXP_BLOCK_SIZE - 1) / SYCL_EXP_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            log(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_EXP_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { log(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void neg_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_NEG_BLOCK_SIZE - 1) / SYCL_NEG_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            neg(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { neg(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void step_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_NEG_BLOCK_SIZE - 1) / SYCL_NEG_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            step(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_NEG_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { step(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void sigmoid_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SIGMOID_BLOCK_SIZE - 1) / SYCL_SIGMOID_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_SIGMOID_BLOCK_SIZE),
+    sycl_parallel_for(
+        stream,
+        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_SIGMOID_BLOCK_SIZE),
                           sycl::range<3>(1, 1, SYCL_SIGMOID_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            sigmoid(x, dst, k, item_ct1);
-        });
+        [=](sycl::nd_item<3> item_ct1) { sigmoid(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void sqrt_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SQRT_BLOCK_SIZE - 1) / SYCL_SQRT_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_SQRT_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_SQRT_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            sqrt(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_SQRT_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_SQRT_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { sqrt(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void sin_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SIN_BLOCK_SIZE - 1) / SYCL_SIN_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            sin(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { sin(x, dst, k, item_ct1); });
 }
 
 template<typename T>
 static void cos_sycl(const T *x, T *dst, const int k,
                                queue_ptr stream) {
     const int num_blocks = (k + SYCL_SIN_BLOCK_SIZE - 1) / SYCL_SIN_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            cos(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_SIN_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { cos(x, dst, k, item_ct1); });
 }
 
 template<typename T>
@@ -584,26 +536,20 @@ static void leaky_relu_sycl(const T *x, T *dst, const int k,
                                 const float negative_slope,
                                 queue_ptr stream) {
     const int num_blocks = (k + SYCL_RELU_BLOCK_SIZE - 1) / SYCL_RELU_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            leaky_relu(x, dst, k, negative_slope, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_RELU_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { leaky_relu(x, dst, k, negative_slope, item_ct1); });
 }
 
 template<typename T>
 static void sqr_sycl(const T *x, T *dst, const int k,
                          queue_ptr stream) {
     const int num_blocks = (k + SYCL_SQR_BLOCK_SIZE - 1) / SYCL_SQR_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_SQR_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_SQR_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            sqr(x, dst, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_SQR_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_SQR_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { sqr(x, dst, k, item_ct1); });
 }
 
 template<typename T>
@@ -614,9 +560,8 @@ static void upscale_sycl(const T *x, T *dst, const int nb00, const int nb01,
     int dst_size = ne10 * ne11 * ne12 * ne13;
     int num_blocks = (dst_size + SYCL_UPSCALE_BLOCK_SIZE - 1) / SYCL_UPSCALE_BLOCK_SIZE;
     sycl::range<1> gridDim(num_blocks * SYCL_UPSCALE_BLOCK_SIZE);
-    stream->parallel_for(
-        sycl::nd_range<1>(gridDim, sycl::range<1>(SYCL_UPSCALE_BLOCK_SIZE)),
-        [=](sycl::nd_item<1> item_ct1) {
+    sycl_parallel_for<1>(
+        stream, sycl::nd_range<1>(gridDim, sycl::range<1>(SYCL_UPSCALE_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
             upscale(x, dst, nb00, nb01, nb02, nb03, ne10, ne11, ne12, ne13, sf0, sf1, sf2, sf3, item_ct1);
         });
 }
@@ -627,12 +572,10 @@ static void pad_sycl(const T *x, T *dst, const int ne00,
                          const int ne1, const int ne2, queue_ptr stream) {
     int num_blocks = (ne0 + SYCL_PAD_BLOCK_SIZE - 1) / SYCL_PAD_BLOCK_SIZE;
     sycl::range<3> gridDim(ne2, ne1, num_blocks);
-    stream->parallel_for(
-        sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            pad(x, dst, ne0, ne00, ne01, ne02, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_PAD_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { pad(x, dst, ne0, ne00, ne01, ne02, item_ct1); });
 }
 
 template<typename T>
@@ -640,13 +583,10 @@ static void clamp_sycl(const T *x, T *dst, const float min,
                            const float max, const int k,
                            queue_ptr stream) {
     const int num_blocks = (k + SYCL_CLAMP_BLOCK_SIZE - 1) / SYCL_CLAMP_BLOCK_SIZE;
-    stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) *
-                              sycl::range<3>(1, 1, SYCL_CLAMP_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_CLAMP_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-            clamp(x, dst, min, max, k, item_ct1);
-        });
+    sycl_parallel_for(stream,
+                      sycl::nd_range<3>(sycl::range<3>(1, 1, num_blocks) * sycl::range<3>(1, 1, SYCL_CLAMP_BLOCK_SIZE),
+                                        sycl::range<3>(1, 1, SYCL_CLAMP_BLOCK_SIZE)),
+                      [=](sycl::nd_item<3> item_ct1) { clamp(x, dst, min, max, k, item_ct1); });
 }
 
 inline void ggml_sycl_op_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {

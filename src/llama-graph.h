@@ -95,14 +95,14 @@ public:
 
 class llm_graph_input_pos : public llm_graph_input_i {
 public:
-    llm_graph_input_pos(int64_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
+    llm_graph_input_pos(uint32_t n_pos_per_embd) : n_pos_per_embd(n_pos_per_embd) {}
     virtual ~llm_graph_input_pos() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * pos = nullptr; // I32 [n_batch]
 
-    const int64_t n_pos_per_embd = 1;
+    const uint32_t n_pos_per_embd = 1;
 };
 
 // temperature tuning, used by llama4
@@ -466,8 +466,6 @@ struct llm_graph_context {
     std::unique_ptr<llm_graph_result> res;
 
     llm_graph_context(const llm_graph_params & params);
-
-    int64_t n_pos_per_embd() const;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 

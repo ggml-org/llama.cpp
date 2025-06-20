@@ -32,7 +32,7 @@ public:
     //
 
     llama_memory_state_ptr init_batch(
-            const llama_batch & batch,
+            llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
 
@@ -90,7 +90,6 @@ public:
     // used to create a state from a batch
     llama_kv_cache_unified_iswa_state(
             llama_kv_cache_unified_iswa * kv,
-            llama_sbatch sbatch,
             std::vector<uint32_t> heads_base,
             std::vector<uint32_t> heads_swa,
             std::vector<llama_ubatch> ubatches);
@@ -104,8 +103,6 @@ public:
     bool next()  override;
     bool apply() override;
 
-    std::vector<int64_t> & out_ids() override;
-
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
 
@@ -118,8 +115,6 @@ public:
 
 private:
     //llama_kv_cache_unified_iswa * kv;
-
-    llama_sbatch sbatch;
 
     // the index of the next ubatch to process
     size_t i_next = 0;

@@ -35,7 +35,7 @@ public:
     //
 
     llama_memory_state_ptr init_batch(
-            const llama_batch & batch,
+            llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
 
@@ -137,7 +137,6 @@ public:
     // used to create a state from a batch
     llama_memory_recurrent_state(
             llama_memory_recurrent * mem,
-            llama_sbatch sbatch,
             std::vector<llama_ubatch> ubatches);
 
     virtual ~llama_memory_recurrent_state();
@@ -148,8 +147,6 @@ public:
 
     bool next()  override;
     bool apply() override;
-
-    std::vector<int64_t> & out_ids() override;
 
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
@@ -172,8 +169,6 @@ private:
     const llama_memory_status status;
 
     llama_memory_recurrent * mem;
-
-    llama_sbatch sbatch;
 
     size_t i_next = 0;
 

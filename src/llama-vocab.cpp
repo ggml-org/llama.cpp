@@ -1269,6 +1269,7 @@ struct llama_vocab::impl {
     bool add_space_prefix           = false;
     bool add_bos                    = false;
     bool add_eos                    = false;
+    bool add_sep                    = false;
     bool ignore_merges              = false;
     bool clean_spaces               = false;  // clean_up_tokenization_spaces
     bool remove_extra_whitespaces   = false;
@@ -1421,6 +1422,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_sep_id  = 102;
             special_pad_id  = 0;
             special_mask_id = 103;
+
+            add_sep = true;
         } else if (tokenizer_model == "gpt2") {
             type = LLAMA_VOCAB_TYPE_BPE;
 
@@ -1550,12 +1553,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "jina-es" ||
                     tokenizer_pre == "jina-de" ||
                     tokenizer_pre == "gigachat"   ||
-                    tokenizer_pre == "jina-v1-en" ||
                     tokenizer_pre == "jina-v2-es" ||
-                    tokenizer_pre == "jina-v2-de" ||
+                    tokenizer_pre == "jina-v2-de") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_GPT2;
+            } else if (
+                    tokenizer_pre == "jina-v1-en" ||
                     tokenizer_pre == "jina-v2-code" ||
                     tokenizer_pre == "roberta-bpe") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT2;
+                add_sep = true;
             } else if (
                     tokenizer_pre == "refact") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_REFACT;
@@ -1665,6 +1671,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             clean_spaces = true;
             add_bos = true;
             add_eos = false;
+            add_sep = true;
         } else if (type == LLAMA_VOCAB_TYPE_UGM) {
             pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             add_bos = false;
@@ -1801,7 +1808,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // Handle add_bos and add_eos
+        // Handle add_bos, add_eos and add_sep
         {
             bool temp = true;
 
@@ -1810,6 +1817,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
             if (ml.get_key(LLM_KV_TOKENIZER_ADD_EOS, temp, false)) {
                 add_eos = temp;
+            }
+            if (ml.get_key(LLM_KV_TOKENIZER_ADD_SEP, temp, false)) {
+                add_sep = temp;
             }
         }
 
@@ -2060,9 +2070,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     //NOTE: Per token attributes are missing from the GGUF file.
     //TODO: Extract attributes from GGUF file.
     {
-        auto _contains_any = [] (const std::string & str, const std::vector<std::string> & substrs) -> bool {
+        auto _contains_any = [] (const std::string & str, const std::vector<std::string_view> & substrs) -> bool {
             for (const auto & substr : substrs) {
-                if (str.find(substr) < std::string::npos) {
+                if (str.find(substr) != std::string::npos) {
                     return true;
                 }
             }
@@ -3000,6 +3010,10 @@ bool llama_vocab::get_add_eos() const {
     return pimpl->add_eos;
 }
 
+bool llama_vocab::get_add_sep() const {
+    return pimpl->add_sep;
+}
+
 bool llama_vocab::get_ignore_merges() const {
     return pimpl->ignore_merges;
 }
@@ -3060,6 +3074,11 @@ int32_t llama_vocab::tokenize(
                         bool   add_special,
                         bool   parse_special) const {
     auto res = tokenize(std::string(text, text_len), add_special, parse_special);
+    if (res.size() >= static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+        LLAMA_LOG_ERROR("%s: tokenization result size %zu exceeds int32_t limit\n", __func__, res.size());
+        return std::numeric_limits<int32_t>::min();
+    }
+
     if (n_tokens_max < (int) res.size()) {
         // LLAMA_LOG_ERROR("%s: too many tokens\n", __func__);
         return -((int) res.size());
@@ -3189,6 +3208,10 @@ bool llama_vocab_get_add_bos(const struct llama_vocab * vocab) {
 
 bool llama_vocab_get_add_eos(const struct llama_vocab * vocab) {
     return vocab->get_add_eos();
+}
+
+bool llama_vocab_get_add_sep(const struct llama_vocab * vocab) {
+    return vocab->get_add_sep();
 }
 
 llama_token llama_vocab_fim_pre(const struct llama_vocab * vocab) {

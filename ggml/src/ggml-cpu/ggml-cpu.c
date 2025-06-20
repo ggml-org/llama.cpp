@@ -74,13 +74,8 @@
 
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
-    int has_neon;
-    int has_dotprod;
-    int has_i8mm;
-    int has_sve;
     int sve_cnt;
-    int has_sme;
-} ggml_arm_arch_features = {-1, -1, -1, -1, 0, -1};
+} ggml_arm_arch_features = { 0 };
 #endif
 
 
@@ -678,87 +673,15 @@ bool ggml_is_numa(void) {
 
 #if defined(__linux__) && defined(__aarch64__)
 #include <sys/auxv.h>
-#elif defined(__APPLE__)
-#include <sys/sysctl.h>
-#endif
-
-#if !defined(HWCAP2_I8MM)
-#define HWCAP2_I8MM (1 << 13)
-#endif
-
-#if !defined(HWCAP2_SME)
-#define HWCAP2_SME (1 << 23)
 #endif
 
 static void ggml_init_arm_arch_features(void) {
-#if defined(__linux__) && defined(__aarch64__)
-    uint32_t hwcap = getauxval(AT_HWCAP);
-    uint32_t hwcap2 = getauxval(AT_HWCAP2);
-
-    ggml_arm_arch_features.has_neon    = !!(hwcap & HWCAP_ASIMD);
-    ggml_arm_arch_features.has_dotprod = !!(hwcap & HWCAP_ASIMDDP);
-    ggml_arm_arch_features.has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
-    ggml_arm_arch_features.has_sve     = !!(hwcap & HWCAP_SVE);
-    ggml_arm_arch_features.has_sme     = !!(hwcap2 & HWCAP2_SME);
-
-#if defined(__ARM_FEATURE_SVE)
+#if defined(__linux__) && defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
     ggml_arm_arch_features.sve_cnt = PR_SVE_VL_LEN_MASK & prctl(PR_SVE_GET_VL);
 #endif
-#elif defined(__APPLE__)
-    int oldp = 0;
-    size_t size = sizeof(oldp);
-    if (sysctlbyname("hw.optional.AdvSIMD", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_neon = oldp;
-
-    if (sysctlbyname("hw.optional.arm.FEAT_DotProd", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_dotprod = oldp;
-
-    if (sysctlbyname("hw.optional.arm.FEAT_I8MM", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_i8mm = oldp;
-
-    if (sysctlbyname("hw.optional.arm.FEAT_SME", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_sme = oldp;
-
-    ggml_arm_arch_features.has_sve = 0;
-    ggml_arm_arch_features.sve_cnt = 0;
-#else
-// Run-time CPU feature detection not implemented for this platform, fallback to compile time
-#if defined(__ARM_NEON)
-    ggml_arm_arch_features.has_neon = 1;
-#else
-    ggml_arm_arch_features.has_neon = 0;
-#endif
-
-#if defined(__ARM_FEATURE_MATMUL_INT8)
-    ggml_arm_arch_features.has_i8mm = 1;
-#else
-    ggml_arm_arch_features.has_i8mm = 0;
-#endif
-
-#if defined(__ARM_FEATURE_SVE)
-    ggml_arm_arch_features.has_sve = 1;
-    ggml_arm_arch_features.sve_cnt = 16;
-#else
-    ggml_arm_arch_features.has_sve = 0;
-    ggml_arm_arch_features.sve_cnt = 0;
-#endif
-
-#if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_SME2)
-    ggml_arm_arch_features.has_sme = 1;
-#else
-    ggml_arm_arch_features.has_sme = 0;
-#endif
-#endif
 }
-#endif
+
+#endif // __ARM_ARCH
 
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
     GGML_ASSERT(!ggml_get_no_alloc(ctx));
@@ -1967,6 +1890,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_pad_reflect_1d(params, tensor);
             } break;
+        case GGML_OP_ROLL:
+            {
+                ggml_compute_forward_roll(params, tensor);
+            } break;
         case GGML_OP_ARANGE:
             {
                 ggml_compute_forward_arange(params, tensor);
@@ -2291,6 +2218,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_UPSCALE:
         case GGML_OP_PAD:
         case GGML_OP_PAD_REFLECT_1D:
+        case GGML_OP_ROLL:
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_ARGSORT:
@@ -3443,7 +3371,7 @@ int ggml_cpu_has_vxe(void) {
 
 int ggml_cpu_has_neon(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_NEON)
-    return ggml_arm_arch_features.has_neon;
+    return 1;
 #else
     return 0;
 #endif
@@ -3451,7 +3379,7 @@ int ggml_cpu_has_neon(void) {
 
 int ggml_cpu_has_dotprod(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_DOTPROD)
-    return ggml_arm_arch_features.has_dotprod;
+    return 1;
 #else
     return 0;
 #endif
@@ -3459,7 +3387,7 @@ int ggml_cpu_has_dotprod(void) {
 
 int ggml_cpu_has_sve(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE)
-    return ggml_arm_arch_features.has_sve;
+    return 1;
 #else
     return 0;
 #endif
@@ -3467,7 +3395,7 @@ int ggml_cpu_has_sve(void) {
 
 int ggml_cpu_has_matmul_int8(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_MATMUL_INT8)
-    return ggml_arm_arch_features.has_i8mm;
+    return 1;
 #else
     return 0;
 #endif
@@ -3483,7 +3411,7 @@ int ggml_cpu_get_sve_cnt(void) {
 
 int ggml_cpu_has_sme(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SME)
-    return ggml_arm_arch_features.has_sme;
+    return 1;
 #else
     return 0;
 #endif

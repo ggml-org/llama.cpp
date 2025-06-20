@@ -388,6 +388,27 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             else()
                 list(APPEND ARCH_FLAGS -mcpu=native -mtune=native -mpowerpc64)
             endif()
+        elseif(GGML_CPU_ALL_VARIANTS)
+            # Begin with the lowest baseline
+            set(ARCH_DEFINITIONS "")
+
+            # When a feature is selected, bump the MCPU to the first
+            # version that supported it
+            foreach(PVER RANGE 7 11)
+                if(DEFINED GGML_INTERNAL_POWER${PVER})
+                    set(POWERPC_MCPU "power${PVER}")
+                    list(APPEND ARCH_DEFINITIONS GGML_USE_POWER${PVER})
+                endif()
+            endforeach()
+            if (GGML_INTERNAL_VSX)
+                list(APPEND ARCH_DEFINITIONS GGML_USE_VSX)
+                list(APPEND ARCH_FLAGS -mvsx)
+            endif()
+
+            if (DEFINED POWERPC_MCPU)
+                list(APPEND ARCH_FLAGS -mcpu=${POWERPC_MCPU})
+            endif()
+            ggml_add_cpu_backend_features(${GGML_CPU_NAME} powerpc ${ARCH_DEFINITIONS})
         else()
             if (GGML_CPU_POWERPC_CPUTYPE)
                 list(APPEND ARCH_FLAGS -mcpu=${GGML_CPU_POWERPC_CPUTYPE})
@@ -465,9 +486,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.6.0")
+        set(KLEIDIAI_COMMIT_TAG "v1.9.0")
         set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/archive/refs/tags/${KLEIDIAI_COMMIT_TAG}.tar.gz")
-        set(KLEIDIAI_ARCHIVE_MD5  "75b4ad68f25ab673dcc01065e5a0b05f")
+        set(KLEIDIAI_ARCHIVE_MD5  "2a8e1bb55d201557553545536489a017")
 
         if (POLICY CMP0135)
             cmake_policy(SET CMP0135 NEW)

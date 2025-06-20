@@ -91,6 +91,10 @@ bool llama_hparams::is_recurrent(uint32_t il) const {
     return recurrent_layer_arr[il];
 }
 
+uint32_t llama_hparams::n_pos_per_embd() const {
+    return rope_type == LLAMA_ROPE_TYPE_MROPE ? 4 : 1;
+}
+
 bool llama_hparams::is_swa(uint32_t il) const {
     if (il < n_layer) {
         return swa_layers[il];
