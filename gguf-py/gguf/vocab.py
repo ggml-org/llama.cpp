@@ -160,6 +160,8 @@ class SpecialVocab:
             special_cls = (tokenizer_config or {}).get('cls_token')
             special_eos = (tokenizer_config or {}).get('eos_token')
             special_sep = (tokenizer_config or {}).get('sep_token')
+            if not special_eos and special_sep and tokenizer_config:
+                tokenizer_config['eos_token'] = special_eos = special_sep
             post_processor = tokenizer.get('post_processor', {})
             for processor in post_processor.get('processors', [post_processor]):
                 if processor.get('type') == 'RobertaProcessing':
@@ -192,12 +194,12 @@ class SpecialVocab:
                                 special_eos = special_last
                             self.add_special_token['eos'] = True if special_last == special_eos else False
                             if special_last != special_eos:
-                                logger.warning(f'Unknown trailing special token {special_first!r} in TemplateProcessing<single>')
+                                logger.warning(f'Unknown trailing special token {special_last!r} in TemplateProcessing<single>')
                     if tmpl_pair:
                         seq_start = 1 if tmpl_pair[0].get('SpecialToken', {}).get('id') == special_first else 0
                         seq_stop = -1 if tmpl_pair[-1].get('SpecialToken', {}).get('id') == special_last else None
-                        if seq_start == 0 or seq_stop == None:
-                            logger.warning(f'TemplateProcessing<single> leading/trailing special tokens do not match TemplateProcessing<pair>')
+                        if seq_start == 0 or seq_stop is None:
+                            logger.warning('TemplateProcessing<single> leading/trailing special tokens do not match TemplateProcessing<pair>')
                         if tmpl_pair := tmpl_pair[slice(seq_start, seq_stop)]:
                             tmpl_a = tmpl_pair[0].get('Sequence', {}).get('id')
                             tmpl_b = tmpl_pair[-1].get('Sequence', {}).get('id')
