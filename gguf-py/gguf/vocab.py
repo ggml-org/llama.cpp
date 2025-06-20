@@ -160,6 +160,8 @@ class SpecialVocab:
             special_cls = (tokenizer_config or {}).get('cls_token')
             special_eos = (tokenizer_config or {}).get('eos_token')
             special_sep = (tokenizer_config or {}).get('sep_token')
+            if not special_bos and special_cls and tokenizer_config:
+                tokenizer_config['bos_token'] = special_bos = special_cls
             if not special_eos and special_sep and tokenizer_config:
                 tokenizer_config['eos_token'] = special_eos = special_sep
             post_processor = tokenizer.get('post_processor', {})
