@@ -1,3 +1,4 @@
+#include "../op_table.hpp"
 #include "../utils.hpp"
 
 namespace ov {
