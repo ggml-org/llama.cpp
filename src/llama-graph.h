@@ -144,6 +144,7 @@ public:
     ggml_tensor * pos_bucket = nullptr; // I32 [n_kv, n_batch]
 
     const llama_hparams & hparams;
+
     const llama_kv_cache_unified_context * kv_ctx;
 };
 

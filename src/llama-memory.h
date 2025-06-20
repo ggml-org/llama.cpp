@@ -38,8 +38,6 @@ llama_memory_status llama_memory_status_combine(llama_memory_status s0, llama_me
 //   ...
 //
 // the only method that should mutate the memory and the memory context is llama_memory_i::apply()
-//
-// TODO: rename to llama_memory_context_i ?
 struct llama_memory_context_i {
     virtual ~llama_memory_context_i() = default;
 
@@ -66,7 +64,7 @@ struct llama_memory_i {
     virtual ~llama_memory_i() = default;
 
     // split the input batch into a set of ubatches and verify that they can fit into the cache
-    // return a context object containing the ubatches and KV cache state required to process them
+    // return a context object containing the ubatches and memory state required to process them
     // check the llama_memory_context_i::get_status() for the result
     virtual llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
