@@ -16,7 +16,6 @@ port = '/dev/ttyUSB3'
 #port = '/dev/ttyUSB2'
 baudrate = '921600'
 #baudrate = '115200'
-#exe_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/"
 exe_path = "/usr/bin/tsi/v0.1.1*/bin/"
 
 DEFAULT_REPEAT_PENALTY = 1.5
@@ -80,7 +79,8 @@ def llama_cli_serial_command():
     except subprocess.CalledProcessError as e:
         return f"Error executing script: {e.stderr}", 500
 
-UPLOAD_FOLDER = '/tsi/proj/model-cache/gguf' # Directory where uploaded files will be stored
+UPLOAD_FOLDER = './' # Directory where recvFromHost is loaded 
+destn_path='/tsi/proj/model-cache/gguf/' # Destination Directory in FPGA where uploaded files will be stored
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True) # Create the upload folder if it doesn't exist
 
@@ -132,7 +132,7 @@ def upload_file():
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
             script_path = "./recvFromHost " 
-            command = f"cd {exe_path}; {script_path} {filename}"
+            command = f"cd {exe_path}; {script_path} {destn_path}{filename}"
             def scriptRecvFromHost():
                  try:
                      result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True,     check=True)
