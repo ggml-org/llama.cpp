@@ -4,6 +4,9 @@ import threading
 import time
 from werkzeug.utils import secure_filename
 import os
+import subprocess
+import mmap
+
 
 job_status = {"running": False, "result": "", "thread": None}
 
@@ -13,7 +16,8 @@ port = '/dev/ttyUSB3'
 #port = '/dev/ttyUSB2'
 baudrate = '921600'
 #baudrate = '115200'
-exe_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/"
+#exe_path = "/usr/bin/tsi/v0.1.1.tsv31_06_06_2025/bin/"
+exe_path = "/usr/bin/tsi/v0.1.1*/bin/"
 
 DEFAULT_REPEAT_PENALTY = 1.5
 DEFAULT_BATCH_SIZE = 1024
@@ -108,6 +112,7 @@ def upload_serial_command():
 
 @app.route('/upload-file', methods=['GET', 'POST'])
 def upload_file():
+
     if request.method == 'POST':
         # Check if a file was submitted
         if 'file' not in request.files:
@@ -121,8 +126,29 @@ def upload_file():
         # Save the file if it exists
         if file:
             filename = secure_filename(file.filename)
+            process = subprocess.Popen(["./copy2fpga-x86.sh", filename], text=True)
+            copy2fpgax86prints = "Starting copy2fpga-x86 and sending file..."
+            print (copy2fpgax86prints)
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            return "File uploaded successfully"
+
+            script_path = "./recvFromHost " 
+            command = f"cd {exe_path}; {script_path} {filename}"
+            def scriptRecvFromHost():
+                 try:
+                     result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True,     check=True)
+                     job_status["result"] = result.stdout
+                     print(result.stdout)
+                     recv_output = result.stdout
+                 except subprocess.CalledProcessError as e:
+                     job_status["result"] = f"Error: {e.stderr}"
+                 finally:
+                     job_status["running"] = False
+            thread = threading.Thread(target=scriptRecvFromHost)
+            job_status = {"running": True, "result": "", "thread": thread}
+            thread.start()
+ 
+            stdout, stderr = process.communicate()
+        return render_template('uploadtofpga.html', apple = process, recvoutput=f"On FPGA Target, recvFromHost completed ; transf    ered file:{filename} received")
     return render_template('upload.html') # Display the upload form
 
 @app.route('/restart-txe', methods=['GET'])
