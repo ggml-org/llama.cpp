@@ -283,8 +283,11 @@ ggml_backend_t ggml_backend_qnn_init_with_device_context(ggml_backend_dev_t dev,
                  qnn::get_backend_desc(dev_ctx->device));
         dev_ctx->description = buffer;
     }
+
+#ifdef GGML_HEXAGON_ENABLE_QUANTIZED_TENSORS
     // TODO: remove npu from here if hardware quantization is supported
     dev_ctx->enable_cpu_dequantize = device == QNN_BACKEND_CPU;
+#endif
 
     ggml_backend_t qnn_backend = new ggml_backend{
         /* .guid      = */ ggml_backend_qnn_guid(),
