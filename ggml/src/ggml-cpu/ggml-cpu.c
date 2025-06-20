@@ -3364,6 +3364,14 @@ int ggml_cpu_has_vxe(void) {
 #endif
 }
 
+int ggml_cpu_has_nnpa(void) {
+#if defined(GGML_NNPA)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 int ggml_cpu_has_neon(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_NEON)
     return 1;

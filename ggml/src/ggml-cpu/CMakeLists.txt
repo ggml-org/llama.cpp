@@ -427,6 +427,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # TODO: Separation to determine activation of VX/VXE/VXE2
         if (${S390X_M} MATCHES "8561|8562")
+            set(GGML_NNPA OFF)
             message(STATUS "z15 target")
             list(APPEND ARCH_FLAGS -march=z15)
         elseif (${S390X_M} MATCHES "3931")
@@ -443,7 +444,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
 
         if (GGML_VXE)
+            message(STATUS "VX/VXE/VXE2 enabled")
             list(APPEND ARCH_FLAGS -mvx -mzvector)
+        endif()
+
+        if (GGML_NNPA)
+            target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_NNPA)
+            message(STATUS "NNPA enabled")
         endif()
     elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "wasm")
         message(STATUS "Wasm detected")
