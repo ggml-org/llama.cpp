@@ -110,8 +110,8 @@ def upload_serial_command():
 #    except subprocess.CalledProcessError as e:
 #        return f"Error executing script: {e.stderr}", 500
 
-@app.route('/uploadtofpga-file', methods=['GET', 'POST'])
-def uploadtofpga_file():
+@app.route('/upload-file', methods=['GET', 'POST'])
+def upload_file():
     setupprints = "Before:Copy2fpga-setup.sh"
     print(setupprints)
 
@@ -152,25 +152,6 @@ def uploadtofpga_file():
  
             stdout, stderr = process.communicate()
         return render_template('uploadtofpga.html', apple = process, recvoutput=f"On FPGA Target, recvFromHost completed ; transf    ered file:{filename} received")
-    return render_template('upload.html') # Display the upload form
-
-@app.route('/upload-file', methods=['GET', 'POST'])
-def upload_file():
-    if request.method == 'POST':
-        # Check if a file was submitted
-        if 'file' not in request.files:
-            return "No file part"
-        file = request.files['file']
-
-        # Check if the file is empty
-        if file.filename == '':
-            return "No file selected"
-
-        # Save the file if it exists
-        if file:
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            return "File uploaded successfully"
     return render_template('upload.html') # Display the upload form
 
 @app.route('/restart-txe', methods=['GET'])
