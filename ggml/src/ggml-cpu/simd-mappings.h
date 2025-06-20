@@ -964,9 +964,9 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 
 static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
 #ifdef __NNPA__
-    uint16x8_t tmp = vec_xl(0, (const ggml_fp16_t *)x);
-    uint16x8_t nnpa = vec_convert_from_fp16(tmp, 0);
-    return vec_extend_to_fp32_hi(nnpa, 0);
+    uint16x8_t v_x = vec_xl(0, (const ggml_fp16_t *)x);
+    uint16x8_t nnpa_dlf16 = vec_convert_from_fp16(v_x, 0);
+    return vec_extend_to_fp32_hi(nnpa_dlf16, 0);
 #else
     float tmp[4];
 
@@ -980,20 +980,20 @@ static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
 #endif
 }
 
-static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t y) {
+static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t v_y) {
 #ifdef __NNPA__
     float32x4_t zero = vec_splats(0.0f);
-    uint16x8_t nnpa = vec_round_from_fp32(y, zero, 0);
-    x[0] = nnpa[0];
-    x[1] = nnpa[1];
-    x[2] = nnpa[2];
-    x[3] = nnpa[3];
+    uint16x8_t v_x = vec_round_from_fp32(v_y, zero, 0);
+    x[0] = vec_extract(v_x, 0);
+    x[1] = vec_extract(v_x, 1);
+    x[2] = vec_extract(v_x, 2);
+    x[3] = vec_extract(v_x, 3);
 #else
     float arr[4];
 
     // note: keep type-cast here to prevent compiler bugs
     // see: https://github.com/ggml-org/llama.cpp/issues/12846
-    vec_xst(y, 0, (float *)(arr));
+    vec_xst(v_y, 0, (float *)(arr));
 
     for (int i = 0; i < 4; i++) {
         x[i] = GGML_FP32_TO_FP16(arr[i]);
