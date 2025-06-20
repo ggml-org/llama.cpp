@@ -9,6 +9,7 @@
 #include <openvino/op/transpose.hpp>
 
 #include "../node_context.hpp"
+#include "../op_table.hpp"
 #include "../utils.hpp"
 
 namespace ov {
@@ -25,9 +26,8 @@ OutputVector translate_permute(const NodeContext& context) {
 
     if (op_case == 1) {
         auto perm = argsort_descend(context.get_output_stride(0));
-        auto res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
-                                                           ov::op::v0::Constant::create(ov::element::i64, {3}, perm));
-        return rename_outputs_with_suffix({res}, context.get_name());
+        res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
+                                                      ov::op::v0::Constant::create(ov::element::i64, { 3 }, perm));
     } else {
         auto src = context.get_input(0);
         auto attention_size = context.get_input("attention_size");
@@ -70,8 +70,8 @@ OutputVector translate_permute(const NodeContext& context) {
         } else {
             res = src_slice;
         }
-        return rename_outputs_with_suffix({res}, context.get_name());
     }
+    return rename_outputs_with_suffix({ res }, context.get_name());
 }
 
 }  // namespace op
