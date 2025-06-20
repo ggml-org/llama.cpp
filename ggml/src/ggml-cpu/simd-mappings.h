@@ -962,7 +962,12 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 #define GGML_F16_STEP GGML_F32_STEP
 #define GGML_F16_EPR  GGML_F32_EPR
 
-static inline __vector float __lzs_f16cx4_load(const ggml_fp16_t * x) {
+static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
+#ifdef __NNPA__
+    uint16x8_t tmp = vec_xl(0, (const ggml_fp16_t *)x);
+    uint16x8_t nnpa = vec_convert_from_fp16(tmp, 0);
+    return vec_extend_to_fp32_hi(nnpa, 0);
+#else
     float tmp[4];
 
     for (int i = 0; i < 4; i++) {
@@ -972,6 +977,7 @@ static inline __vector float __lzs_f16cx4_load(const ggml_fp16_t * x) {
     // note: keep type-cast here to prevent compiler bugs
     // see: https://github.com/ggml-org/llama.cpp/issues/12846
     return vec_xl(0, (const float *)(tmp));
+#endif
 }
 
 static inline void __lzs_f16cx4_store(ggml_fp16_t * x, __vector float y) {
