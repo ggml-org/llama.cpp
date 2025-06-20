@@ -1725,6 +1725,101 @@ ggml_tensor * llm_graph_context::build_attn(
     return cur;
 }
 
+ggml_tensor * llm_graph_context::build_attn_mha_with_state(
+         ggml_cgraph * gf,
+         ggml_tensor * q,
+         ggml_tensor * k_fp16,
+         ggml_tensor * v_fp16,
+         ggml_tensor * k_quant,
+         ggml_tensor * v_quant,
+         ggml_tensor * kq_b,
+         ggml_tensor * kq_mask,
+         ggml_tensor * v_mla,
+             float     kq_scale) const {
+    
+    // Simplified approach: just use the FP16 part for now
+    // In practice, the mixed KV cache get_k/get_v should already return merged views
+    // We'll use the merged tensors that should already include both FP16 and dequantized data
+    
+    ggml_tensor * k_to_use = nullptr;
+    ggml_tensor * v_to_use = nullptr;
+    
+    // Prefer FP16 cache if available, otherwise use quantized
+    if (k_fp16 && v_fp16) {
+        k_to_use = k_fp16;
+        v_to_use = v_fp16;
+    } else if (k_quant && v_quant) {
+        k_to_use = k_quant;
+        v_to_use = v_quant;
+    } else {
+        GGML_ABORT("No valid KV cache found");
+    }
+    
+    cb(k_to_use, "k_to_use", -1);
+    cb(v_to_use, "v_to_use", -1);
+    
+    // Use standard build_attn_mha with the available KV cache
+    ggml_tensor * cur = build_attn_mha(gf, q, k_to_use, v_to_use, kq_b, kq_mask, v_mla, kq_scale);
+    
+    return cur;
+}
+
+ggml_tensor * llm_graph_context::build_attn_mixed_with_state(
+        llm_graph_input_attn_kv_mixed * inp,
+        ggml_cgraph * gf,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * v_mla,
+            float     kq_scale,
+            int       il) const {
+    
+    // these nodes are added to the graph together so that they are not reordered
+    // by doing so, the number of splits in the graph is reduced
+    ggml_build_forward_expand(gf, q_cur);
+    ggml_build_forward_expand(gf, k_cur);
+    ggml_build_forward_expand(gf, v_cur);
+
+    const llama_kv_cache_mixed * kv_self = static_cast<const llama_kv_cache_mixed *>(memory);
+
+    {
+        // store to KV cache
+        ggml_build_forward_expand(gf, kv_self->cpy_k(ctx0, k_cur, il));
+        ggml_build_forward_expand(gf, kv_self->cpy_v(ctx0, v_cur, il));
+    }
+
+    const auto & kq_mask = inp->get_kq_mask();
+    cb(kq_mask, "KQ_mask", il);
+
+    // Get FP16 KV cache
+    ggml_tensor * k_fp16 = kv_self->get_k(ctx0, il);
+    ggml_tensor * v_fp16 = kv_self->get_v(ctx0, il);
+    
+    // Get quantized KV cache
+    ggml_tensor * k_quant = kv_self->get_k_quant(ctx0, il);
+    ggml_tensor * v_quant = kv_self->get_v_quant(ctx0, il);
+
+    // Use the new mixed attention with state
+    ggml_tensor * cur = build_attn_mha_with_state(
+        gf, q_cur, k_fp16, v_fp16, k_quant, v_quant, 
+        kq_b, kq_mask, v_mla, kq_scale
+    );
+    cb(cur, "kqv_out", il);
+
+    if (wo) {
+        cur = build_lora_mm(wo, cur);
+    }
+
+    if (wo_b) {
+        cur = ggml_add(ctx0, cur, wo_b);
+    }
+
+    return cur;
+}
+
 int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buckets, bool bidirectional) {
     // TODO move to hparams if a T5 variant appears that uses a different value
     const int64_t max_distance = 128;

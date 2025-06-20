@@ -1003,7 +1003,7 @@ bool llama_kv_cache_mixed::find_slot(const llama_ubatch & ubatch) {
     n = std::min(size, std::max(n_pad, GGML_PAD(cell_max(), n_pad)));                       //> Virtual head of kv cache.
     n_quantized = std::min(size, std::max(n_pad, GGML_PAD(cell_max_quantized(), n_pad)));   //> Virtual head of quantized kv cache.
     
-    LLAMA_LOG_INFO("\n[mixed-kv] successfully allocated slot: head=%u, used=%u, n=%u, n_quantized=%u, cell_max=%u, cell_max_quantized=%u\n", head, used, n, n_quantized, cell_max(), cell_max_quantized());
+    // LLAMA_LOG_INFO("\n[mixed-kv] successfully allocated slot: head=%u, used=%u, n=%u, n_quantized=%u, cell_max=%u, cell_max_quantized=%u\n", head, used, n, n_quantized, cell_max(), cell_max_quantized());
 
     return true;
 }

@@ -4622,7 +4622,7 @@ struct llm_build_llama : public llm_graph_context {
                 cb(Vcur, "Vcur", il);
 
                 if (dynamic_cast<const llama_kv_cache_mixed*>(memory)) {
-                    cur = build_attn(static_cast<llm_graph_input_attn_kv_mixed*>(inp_attn), gf,
+                    cur = build_attn_mixed_with_state(static_cast<llm_graph_input_attn_kv_mixed*>(inp_attn), gf,
                             model.layers[il].wo, model.layers[il].bo,
                             Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 } else {

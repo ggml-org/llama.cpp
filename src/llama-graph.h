@@ -627,6 +627,31 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
+    ggml_tensor * build_attn_mixed_with_state(
+            llm_graph_input_attn_kv_mixed * inp,
+            ggml_cgraph * gf,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
+            ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+                  float   kq_scale,
+                    int   il) const;
+
+    ggml_tensor * build_attn_mha_with_state(
+         ggml_cgraph * gf,
+         ggml_tensor * q,
+         ggml_tensor * k_fp16,
+         ggml_tensor * v_fp16,
+         ggml_tensor * k_quant,
+         ggml_tensor * v_quant,
+         ggml_tensor * kq_b,
+         ggml_tensor * kq_mask,
+         ggml_tensor * v_mla,
+             float     kq_scale) const;
+
     llm_graph_input_attn_cross * build_attn_inp_cross() const;
 
     ggml_tensor * build_attn(
