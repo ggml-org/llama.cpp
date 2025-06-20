@@ -984,10 +984,7 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t y) {
 #ifdef __NNPA__
     float32x4_t zero = vec_splats(0.0f);
     uint16x8_t nnpa = vec_round_from_fp32(y, zero, 0);
-    x[0] = nnpa[0];
-    x[1] = nnpa[1];
-    x[2] = nnpa[2];
-    x[3] = nnpa[3];
+    x = nnpa;
 #else
     float arr[4];
 
