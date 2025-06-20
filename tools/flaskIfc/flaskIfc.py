@@ -112,8 +112,6 @@ def upload_serial_command():
 
 @app.route('/upload-file', methods=['GET', 'POST'])
 def upload_file():
-    setupprints = "Before:Copy2fpga-setup.sh"
-    print(setupprints)
 
     if request.method == 'POST':
         # Check if a file was submitted
@@ -129,7 +127,7 @@ def upload_file():
         if file:
             filename = secure_filename(file.filename)
             process = subprocess.Popen(["./copy2fpga-x86.sh", filename], text=True)
-            copy2fpgax86prints = "Starting copy2fpga-x86 sending file..."
+            copy2fpgax86prints = "Starting copy2fpga-x86 and sending file..."
             print (copy2fpgax86prints)
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
@@ -139,7 +137,6 @@ def upload_file():
                  try:
                      result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True,     check=True)
                      job_status["result"] = result.stdout
-                     print("FPGA Target ready to receive file: recvFromHost started..\n")
                      print(result.stdout)
                      recv_output = result.stdout
                  except subprocess.CalledProcessError as e:
