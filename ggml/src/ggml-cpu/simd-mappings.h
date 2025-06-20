@@ -922,7 +922,7 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
 #define GGML_F32_STEP 32
 #define GGML_F32_EPR  4
 
-#define GGML_F32x4              __vector float
+#define GGML_F32x4              float32x4_t
 #define GGML_F32x4_ZERO         vec_splats(0.0f)
 #define GGML_F32x4_SET1         vec_splats
 #define GGML_F32x4_LOAD(p)      vec_xl(0, p)
@@ -980,7 +980,15 @@ static inline float32x4_t __lzs_f16cx4_load(const ggml_fp16_t * x) {
 #endif
 }
 
-static inline void __lzs_f16cx4_store(ggml_fp16_t * x, __vector float y) {
+static inline void __lzs_f16cx4_store(ggml_fp16_t * x, float32x4_t y) {
+#ifdef __NNPA__
+    float32x4_t zero = vec_splats(0.0f);
+    uint16x8_t nnpa = vec_round_from_fp32(y, zero, 0);
+    x[0] = nnpa[0];
+    x[1] = nnpa[1];
+    x[2] = nnpa[2];
+    x[3] = nnpa[3];
+#else
     float arr[4];
 
     // note: keep type-cast here to prevent compiler bugs
@@ -990,6 +998,7 @@ static inline void __lzs_f16cx4_store(ggml_fp16_t * x, __vector float y) {
     for (int i = 0; i < 4; i++) {
         x[i] = GGML_FP32_TO_FP16(arr[i]);
     }
+#endif
 }
 
 #define GGML_F16_VEC                GGML_F32x4
