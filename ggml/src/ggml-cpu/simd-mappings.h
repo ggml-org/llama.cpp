@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml-cpu-impl.h"
+#include <signal.h>
 
 //
 // simd mappings
