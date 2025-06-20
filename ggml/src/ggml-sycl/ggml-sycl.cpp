@@ -1235,14 +1235,9 @@ struct ggml_sycl_pool_leg : public ggml_sycl_pool {
             b.size = 0;
             return ptr;
         }
-        void * ptr;
-        size_t look_ahead_size = (size_t) (1.05 * size);
-
-        SYCL_CHECK(
-            CHECK_TRY_ERROR(ptr = (void *)sycl::malloc_device(
-                                look_ahead_size, *qptr)));
+        void * ptr = sycl::malloc_device(look_ahead_size, *qptr);
         if (!ptr) {
-            GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on device/GPU\n", __func__, look_ahead_size);
+            GGML_LOG_ERROR("%s: failed to allocate %zu bytes on device %d\n", __func__, look_ahead_size, id);
             return nullptr;
         }
 
