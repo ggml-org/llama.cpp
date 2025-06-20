@@ -154,7 +154,7 @@ def upload_file():
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
             script_path = "./recvFromHost "
-            temporary_destination_path = "./" #This is a temporary destination file path, but Ashish says that this method will need to be parameterized
+            temporary_destination_path = request.form.get("destination_file_path") # I've tested this on fpga4 and it correctly gets the user-inputted file path
             command = f"cd {exe_path}; {script_path} {temporary_destination_path}{filename}"
             def scriptRecvFromHost():
                  try:
