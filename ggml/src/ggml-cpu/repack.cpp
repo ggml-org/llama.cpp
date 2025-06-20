@@ -1249,7 +1249,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         int64_t i11_processed = 0;
 #ifdef GGML_USE_NUMA_MIGRATE
-        int round_cnts = ggml_cores_per_numa();
+        int round_cnts = ggml_cores_per_numa(ith);
         int start_id = ith - round_cnts * node_id;
         if (round_cnts == 0) {
             round_cnts = nth;

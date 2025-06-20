@@ -522,7 +522,9 @@ struct ggml_numa_nodes {
 #endif
 
 #ifdef GGML_USE_NUMA_MIGRATE
-    bool even_distributed;
+    int *node_num_of_cpu;
+    int *cpu_core_mapping; // x logic core, y physical core
+    int cores_per_numa[GGML_NUMA_MIGRATE_NODES];
 #endif
 };
 
@@ -583,16 +585,18 @@ int ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value) {
 }
 
 #ifdef GGML_USE_NUMA_MIGRATE
-int ggml_get_node_from_cpu(int cpu) {
-    return cpu / g_state.numa.nodes[0].n_cpus;
+int ggml_get_node_from_cpu(int ith) {
+    int cpu = g_state.numa.cpu_core_mapping[ith];
+    return g_state.numa.node_num_of_cpu[cpu];
 }
 
-int ggml_cores_per_numa(void) {
-    return g_state.numa.nodes[0].n_cpus;
+int ggml_cores_per_numa(int ith) {
+    int node = ggml_get_node_from_cpu(ith);
+    return g_state.numa.cores_per_numa[node];
 }
 
 void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
-    if ((g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_MIGRATE) || !g_state.numa.even_distributed) {
+    if (g_state.numa.numa_strategy != GGML_NUMA_STRATEGY_MIGRATE) {
         ggml_barrier(tp);
         return;
     }
@@ -602,13 +606,8 @@ void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
         return;
     }
 
-    int cores_per_numa = ggml_cores_per_numa();
-    int numa_nodes = n_threads / cores_per_numa;
-    int remaining_cores = n_threads % cores_per_numa;
-    if ((numa_nodes != GGML_NUMA_MIGRATE_NODES) || remaining_cores) {
-        ggml_barrier(tp);
-        return;
-    }
+    int cores_per_numa = ggml_cores_per_numa(ith);
+    int numa_nodes = GGML_NUMA_MIGRATE_NODES;
 
     int node = ggml_get_node_from_cpu(ith);
 
@@ -720,9 +719,6 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
         GGML_PRINT_DEBUG("CPUs on node %u:", n);
         node->n_cpus = 0;
 
-#ifdef GGML_USE_NUMA_MIGRATE
-        g_state.numa.even_distributed = true;
-#endif
         for (uint32_t c = 0; c < g_state.numa.total_cpus; ++c) {
             rv = snprintf(path, sizeof(path), "/sys/devices/system/node/node%u/cpu%u", n, c);
             GGML_ASSERT(rv > 0 && (unsigned)rv < sizeof(path));
@@ -732,12 +728,40 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
             }
         }
         GGML_PRINT_DEBUG("\n");
-#ifdef GGML_USE_NUMA_MIGRATE
-        if ((n != 0) && (g_state.numa.nodes[n].n_cpus != g_state.numa.nodes[0].n_cpus)) {
-            g_state.numa.even_distributed = false;
-        }
-#endif
     }
+
+#ifdef GGML_USE_NUMA_MIGRATE
+    g_state.numa.node_num_of_cpu = (int *)malloc(g_state.numa.total_cpus * sizeof(int));
+    g_state.numa.cpu_core_mapping = (int *)malloc(g_state.numa.total_cpus * sizeof(int));
+    for (uint32_t i = 0; i < g_state.numa.total_cpus; i++) {
+        g_state.numa.node_num_of_cpu[i] = numa_node_of_cpu(i);
+    }
+
+    FILE *fp = fopen("/sys/devices/system/cpu/online", "r");
+    if (fp == NULL) {
+        perror("fopen");
+        exit(EXIT_FAILURE);
+    }
+
+    int cpu0, cpu1;
+    int logic_core_index = 0;
+    while (fscanf(fp, "%d", &cpu0) != EOF) {
+        cpu1 = cpu0;
+        while (fgetc(fp) == '-') {
+            fscanf(fp, "%d", &cpu1);
+        }
+
+        for (int cpu_index = cpu0; cpu_index <= cpu1; cpu_index++) {
+            g_state.numa.cpu_core_mapping[logic_core_index++] = cpu_index;
+            int node = g_state.numa.node_num_of_cpu[cpu_index];
+            if (node < GGML_NUMA_MIGRATE_NODES) {
+                g_state.numa.cores_per_numa[node]++;
+            }
+        }
+    }
+
+    fclose(fp);
+#endif
 
     if (ggml_is_numa()) {
         FILE *fptr = fopen("/proc/sys/kernel/numa_balancing", "r");
@@ -2169,7 +2193,8 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 #if defined(__gnu_linux__)
 
 #ifdef GGML_USE_NUMA_MIGRATE
-static void set_numa_migrate_affinity(int core_no) {
+static void set_numa_migrate_affinity(int thread_no) {
+    int core_no = g_state.numa.cpu_core_mapping[thread_no];
     // Check if the core number is valid
     if (core_no < 0 || core_no >= (int)g_state.numa.total_cpus) {
         printf("%s, Warn: core_no not between 0 and %d, failback.\n", __func__, g_state.numa.total_cpus);
