@@ -31,14 +31,14 @@ public:
     // llama_memory_i
     //
 
-    llama_memory_state_ptr init_batch(
+    llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
 
-    llama_memory_state_ptr init_full() override;
+    llama_memory_context_ptr init_full() override;
 
-    llama_memory_state_ptr init_update(llama_context * lctx, bool optimize) override;
+    llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;
 
@@ -72,32 +72,32 @@ private:
     std::unique_ptr<llama_kv_cache_unified> kv_swa;
 };
 
-class llama_kv_cache_unified_iswa_state : public llama_memory_state_i {
+class llama_kv_cache_unified_iswa_context : public llama_memory_context_i {
 public:
     // used for errors
-    llama_kv_cache_unified_iswa_state(llama_memory_status status);
+    llama_kv_cache_unified_iswa_context(llama_memory_status status);
 
-    // used to create a full-cache state
-    llama_kv_cache_unified_iswa_state(
+    // used to create a full-cache context
+    llama_kv_cache_unified_iswa_context(
             llama_kv_cache_unified_iswa * kv);
 
-    // used to create an update state
-    llama_kv_cache_unified_iswa_state(
+    // used to create an update context
+    llama_kv_cache_unified_iswa_context(
             llama_kv_cache_unified_iswa * kv,
             llama_context * lctx,
             bool optimize);
 
-    // used to create a state from a batch
-    llama_kv_cache_unified_iswa_state(
+    // used to create a batch processing context from a batch
+    llama_kv_cache_unified_iswa_context(
             llama_kv_cache_unified_iswa * kv,
             std::vector<uint32_t> heads_base,
             std::vector<uint32_t> heads_swa,
             std::vector<llama_ubatch> ubatches);
 
-    virtual ~llama_kv_cache_unified_iswa_state();
+    virtual ~llama_kv_cache_unified_iswa_context();
 
     //
-    // llama_memory_state_i
+    // llama_memory_context_i
     //
 
     bool next()  override;
@@ -107,11 +107,11 @@ public:
     const llama_ubatch & get_ubatch() const override;
 
     //
-    // llama_kv_cache_unified_iswa_state specific API
+    // llama_kv_cache_unified_iswa_context specific API
     //
 
-    const llama_kv_cache_unified_state * get_base() const;
-    const llama_kv_cache_unified_state * get_swa()  const;
+    const llama_kv_cache_unified_context * get_base() const;
+    const llama_kv_cache_unified_context * get_swa()  const;
 
 private:
     //llama_kv_cache_unified_iswa * kv;
@@ -121,8 +121,8 @@ private:
 
     std::vector<llama_ubatch> ubatches;
 
-    const llama_memory_state_ptr state_base;
-    const llama_memory_state_ptr state_swa;
+    const llama_memory_context_ptr ctx_base;
+    const llama_memory_context_ptr ctx_swa;
 
     const llama_memory_status status;
 };
