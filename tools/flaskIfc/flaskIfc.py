@@ -96,12 +96,34 @@ def upload_serial_command():
         if file.filename == '':
             return "No file selected"
 
-       # Save the file if it exists
+        # Save the file if it exists
         if file:
             filename = secure_filename(file.filename)
+            process = subprocess.Popen(["./copy2fpga-x86.sh", filename], text=True)
+            copy2fpgax86prints = "Starting copy2fpga-x86 and sending file..."
+            print (copy2fpgax86prints)
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            return "File uploaded successfully"
+
+            script_path = "./recvFromHost "
+            command = f"cd {exe_path}; {script_path} {destn_path}{filename}"
+            def scriptRecvFromHost():
+                 try:
+                     result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True,     check=True)
+                     job_status["result"] = result.stdout
+                     print(result.stdout)
+                     recv_output = result.stdout
+                 except subprocess.CalledProcessError as e:
+                     job_status["result"] = f"Error: {e.stderr}"
+                 finally:
+                     job_status["running"] = False
+            thread = threading.Thread(target=scriptRecvFromHost)
+            job_status = {"running": True, "result": "", "thread": thread}
+            thread.start()
+
+            stdout, stderr = process.communicate()
+        return render_template('uploadtofpga.html', apple = process, recvoutput=f"On FPGA Target, recvFromHost completed ; transf    ered file:{filename} received")
     return render_template('upload.html') # Display the upload form
+
 
 #    command = f"upload file"
 #    try:
@@ -131,8 +153,9 @@ def upload_file():
             print (copy2fpgax86prints)
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
-            script_path = "./recvFromHost " 
-            command = f"cd {exe_path}; {script_path} {destn_path}{filename}"
+            script_path = "./recvFromHost "
+            temporary_destination_path = "./" #This is a temporary destination file path, but Ashish says that this method will need to be parameterized
+            command = f"cd {exe_path}; {script_path} {temporary_destination_path}{filename}"
             def scriptRecvFromHost():
                  try:
                      result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True,     check=True)
