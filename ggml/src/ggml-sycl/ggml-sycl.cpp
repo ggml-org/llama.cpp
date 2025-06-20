@@ -399,6 +399,10 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
     free(host_buf);
 #else
+    // 修复Windows平台空指针漏洞：添加与Linux平台一致的空指针检查
+    if (tensor->data == nullptr) {
+        GGML_ABORT("Error: Tensor data pointer is null.\n");
+    }
     SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
 #endif
 }
@@ -426,6 +430,10 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
+            << ", line:" << __LINE__ << std::endl;
+  std::exit(1);
+}
+
             << ", line:" << __LINE__ << std::endl;
   std::exit(1);
 }
@@ -511,10 +519,10 @@ static void ggml_backend_sycl_buffer_clear(ggml_backend_buffer_t buffer,
     queue_ptr stream = ctx->stream;
     SYCL_CHECK(
         CHECK_TRY_ERROR(dpct::get_current_device().queues_wait_and_throw()));
-
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream)
-                                    .memset(ctx->dev_ptr, value, buffer->size)
-                                    .wait()));
+    
+    // FIX: 添加memset操作清除缓冲区
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        (*stream).memset(ctx->dev_ptr, value, buffer->size).wait()));
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -525,6 +533,8 @@ catch (sycl::exception const &exc) {
 static void ggml_backend_sycl_buffer_memset_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, uint8_t value,
                                                    size_t offset, size_t size) {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
+
+
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu value=%u\n", size, offset, value);
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *) buffer->context;
@@ -3879,6 +3889,34 @@ static void ggml_backend_sycl_get_tensor_async(ggml_backend_t backend,
                                                void *data, size_t offset,
                                                size_t size) try {
     GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
+}
+
+static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
+                                                const ggml_tensor *tensor,
+                                                void *data, size_t offset,
+                                                size_t size) try {
+    GGML_SYCL_DEBUG("[SYCL] call %s", __func__);
+    GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
+    GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
+    ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
+
+    ggml_sycl_set_device(ctx->device);
+    auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
+
+    // 修复空指针漏洞：添加与set_tensor一致的空指针检查
+    if (tensor->data == nullptr) {
+        GGML_ABORT("Error: Tensor data pointer is null in get_tensor.\n");
+    }
+
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        stream.memcpy(data, (const char *)tensor->data + offset, size)
+            .wait()));
+}
+catch (sycl::exception const &exc) {
+    std::cerr << exc.what() << "Exception caught at file:" << __FILE__
+            << ", line:" << __LINE__ << std::endl;
+    std::exit(1);
+
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor).c_str());
     GGML_SYCL_DEBUG(" size=%zu offset=%zu\n", size, offset);
     ggml_backend_sycl_context * sycl_ctx = (ggml_backend_sycl_context *)backend->context;
