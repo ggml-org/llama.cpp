@@ -428,17 +428,9 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
 
     // TODO: Determine if inline assembly is faster
     static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
-        float f;
-        __asm__ (
-            "vlvgp  %%v0, %1, %1\n"
-            "vreph  %%v0, %%v0, 3\n"
-            "vcnf   %%v0, %%v0, 0, 1\n"
-            "vclfnh %%v0, %%v0, 2, 0\n"
-            "ler    %0, %%f0\n" :
-            /* out */   "=f"(f) :
-            /* in */     "r"(h) :
-            /* clobber */ "v0", "f0");
-        return f;
+        uint16x8_t v_h = vec_splats(h);
+        uint16x8_t nnpa_dlf16 = vec_convert_from_fp16(v_h, 0);
+        return vec_extend_to_fp32_hi(nnpa_dlf16, 0)[0];
     }
 
     // TODO: Determine if inline assembly is faster
