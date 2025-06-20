@@ -1,0 +1,4 @@
+---
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
+ReferenceAlignment: Left
