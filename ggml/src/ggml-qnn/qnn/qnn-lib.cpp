@@ -38,7 +38,7 @@ constexpr const qnn::device_caps kDeviceCaps[] = {
      // all quantized types can be offload to CPU, at current implementation, those types will be dequantized into float32 on cpu
         0xFFFFFE,
 #else
-        0,
+        (1L << GGML_TYPE_F32),
 #endif
 
      0,                                                                     // 0 for no limitation
@@ -50,7 +50,7 @@ constexpr const qnn::device_caps kDeviceCaps[] = {
      // all quantized types can be offload to GPU, at current implementation, those types will be dequantized into float32 on cpu
         0xFFFFFE,
 #else
-        0,
+        (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16),
 #endif
      (128256L * 4096 *
          sizeof(float)), // tested on 8 gen 2, failed to allocate tensor with size 128256x4096 and float32
@@ -62,7 +62,7 @@ constexpr const qnn::device_caps kDeviceCaps[] = {
      (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16) | (1L << GGML_TYPE_I16),
      (1L << GGML_TYPE_Q2_K) | (1L << GGML_TYPE_Q3_K) | (1L << GGML_TYPE_Q4_K) | (1L << GGML_TYPE_Q8_K),
 #else
-        0,
+        (1L << GGML_TYPE_F32) | (1L << GGML_TYPE_F16),
 #endif
      (8192L * 2048 + 8192 * 512 + 2048 * 512) * sizeof(float),  // TODO: should have a better way to get this value
     },
