@@ -3143,7 +3143,7 @@ void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
         float32x4_t v_x1 = vec_xl(i + 0, x);
         float32x4_t v_x2 = vec_xl(i + 4, x);
         uint16x8_t v_dlf16 = vec_round_from_fp32(v_x1, v_x2, 0);
-        vec_xst(v_dlf16, i, (uint16_t *)y);
+        vec_xst(v_dlf16, 0, (uint16_t *)(y + i));
     }
     // TODO: Enable bottom code once checks are done
     // for (; i + 3 < n; i += 4) {
