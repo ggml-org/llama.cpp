@@ -4,6 +4,7 @@
 import { CONFIG_DEFAULT } from '../Config';
 import { Conversation, Message, TimingReport } from './types';
 import Dexie, { Table } from 'dexie';
+import {importDB, exportDB, importInto, peakImportFile} from "dexie-export-import";
 
 const event = new EventTarget();
 
@@ -35,6 +36,11 @@ const StorageUtils = {
   /**
    * manage conversations
    */
+  async export() {
+      return await exportDB(db);
+
+  },
+
   async getAllConversations(): Promise<Conversation[]> {
     await migrationLStoIDB().catch(console.error); // noop if already migrated
     return (await db.conversations.toArray()).sort(

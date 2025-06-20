@@ -198,6 +198,26 @@ const SETTING_SECTIONS: SettingSection[] = [
         },
       },
       {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key, won't be used
+        component: () => {
+          const eexportDB = async () => {
+            const blob = await StorageUtils.export();
+            const a = document.createElement('a');
+            document.body.appendChild(a);
+            a.href = URL.createObjectURL(blob);
+            document.body.appendChild(a);
+            a.download = `aa_dump.json`;
+            a.click();
+          };
+          return (
+            <button className="btn" onClick={eexportDB}>
+              export database
+            </button>
+          );
+        },
+      },
+      {
         type: SettingInputType.CHECKBOX,
         label: 'Show tokens per second',
         key: 'showTokensPerSecond',
