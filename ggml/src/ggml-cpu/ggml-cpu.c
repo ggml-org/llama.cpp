@@ -3137,6 +3137,23 @@ void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
         _mm_storel_epi64((__m128i *)(y + i), y_vec);
     }
 #endif
+
+#if defined(__NNPA__)
+    for (; i + 7 < n; i += 8) {
+        float32x4_t v_x1 = vec_xl(i + 0, x);
+        float32x4_t v_x2 = vec_xl(i + 4, x);
+        uint16x8_t v_dlf16 = vec_round_from_fp32(v_x1, v_x2, 0);
+        vec_xst(v_dlf16, i, (uint16_t *)y);
+    }
+    // TODO: Enable bottom code once checks are done
+    // for (; i + 3 < n; i += 4) {
+    //     float32x4_t v_x = vec_xl(i, x);
+    //     float32x4_t v_zero = vec_splats(0.0f);
+    //     uint16x4_t v_dlf16 = vec_round_from_fp32(v_x, v_zero, 0);
+    //     vec_xst(v_dlf16, i, (uint16_t *)y);
+    // }
+#endif
+
     for (; i < n; ++i) {
         y[i] = GGML_FP32_TO_FP16(x[i]);
     }
