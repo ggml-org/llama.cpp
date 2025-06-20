@@ -80,7 +80,7 @@ def llama_cli_serial_command():
     except subprocess.CalledProcessError as e:
         return f"Error executing script: {e.stderr}", 500
 
-UPLOAD_FOLDER = './' # Directory where uploaded files will be stored
+UPLOAD_FOLDER = '/tsi/proj/model-cache/gguf' # Directory where uploaded files will be stored
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True) # Create the upload folder if it doesn't exist
 
