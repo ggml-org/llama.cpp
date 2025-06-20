@@ -1,5 +1,3 @@
-
-#include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
@@ -13,6 +11,7 @@
 #include <vector>
 
 #include "../node_context.hpp"
+#include "../op_table.hpp"
 #include "../utils.hpp"
 
 namespace ov {
@@ -28,18 +27,18 @@ OutputVector translate_soft_max(const NodeContext& context) {
 
     float scale = 1.0f;
     float max_bias = 0.0f;
-    auto op_params = context.get_output_op_params(0);
+    auto * op_params = context.get_output_op_params(0);
     memcpy(&scale, (float*)op_params + 0, sizeof(float));
     memcpy(&max_bias, (float*)op_params + 1, sizeof(float));
 
-    const uint32_t n_head = context.get_input_shape(0)[0].get_length();
-    const uint32_t n_head_log2 = 1u << (uint32_t)floor(log2(n_head));
+    // const uint32_t n_head = context.get_input_shape(0)[0].get_length();
+    // const uint32_t n_head_log2 = 1u << (uint32_t)floor(log2(n_head));
 
     // const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     // const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
-    const float slope = (max_bias > 0.0f) ? 1.0f : 1.0f;
     // const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1)
     // : 1.0f;
+    const float slope = 1.0;
 
     if (scale != 1.0f) {
         auto scale_node =

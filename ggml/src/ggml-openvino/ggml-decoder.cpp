@@ -225,9 +225,9 @@ void GgmlOvDecoder::set_max_token_len() {
 }
 
 void GgmlOvDecoder::add_extra_inputs() {
-    int64_t past_token_len;
+    int64_t past_token_len = -1;
     // attention_size not used for NPU
-    int64_t attention_size;
+    int64_t attention_size = -1;
 
     for (const auto& node : m_nodes) {
         if (node->op == GGML_OP_CPY && ggml_is_contiguous(node)) {
@@ -246,6 +246,9 @@ void GgmlOvDecoder::add_extra_inputs() {
             m_model_extra_input_values[name] = tensor;
             break;
         }
+    }
+    if (past_token_len == -1) {
+        throw std::runtime_error("Failed to find input \"cache_k\" in the graph");
     }
     for (const auto& node : m_nodes) {
         if (node->src[1] && std::string(node->src[1]->name).find("inp_tokens") == 0) {

@@ -61,11 +61,11 @@ public:
 
     virtual void visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const override;
 
-    const ggml_tensor* get_input_ggml_tensor(std::string& name) const {
+    const ggml_tensor* get_input_ggml_tensor(const std::string& name) const {
         return m_inputs.at(name);
     }
 
-    const ggml_tensor* get_output_ggml_tensor(std::string& name) const {
+    const ggml_tensor* get_output_ggml_tensor(const std::string& name) const {
         return m_outputs.at(name);
     }
 
