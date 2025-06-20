@@ -3140,8 +3140,8 @@ void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
 
 #if defined(__NNPA__)
     for (; i + 7 < n; i += 8) {
-        float32x4_t v_x1 = vec_xl(i + 0, x);
-        float32x4_t v_x2 = vec_xl(i + 4, x);
+        float32x4_t v_x1 = vec_ld(0, x + i + 0);
+        float32x4_t v_x2 = vec_ld(0, x + i + 4);
         uint16x8_t v_dlf16 = vec_round_from_fp32(v_x1, v_x2, 0);
         vec_xst(v_dlf16, 0, (uint16_t *)(y + i));
     }
