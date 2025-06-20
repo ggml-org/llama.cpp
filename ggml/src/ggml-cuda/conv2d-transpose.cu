@@ -16,8 +16,8 @@ __global__ void conv2d_transpose_kernel(const float * __restrict__ input, const 
     }
 
     const int out_x_idx = global_idx % out_w;
-    const int out_y_idx = global_idx / out_w % out_h;
-    const int c_idx     = global_idx / (out_w * out_h) % c_out;
+    const int out_y_idx = (global_idx / out_w) % out_h;
+    const int c_idx     = (global_idx / (out_w * out_h)) % c_out;
     const int n_idx     = global_idx / (out_w * out_h * c_out);
 
     float accumulator = 0;
@@ -77,6 +77,10 @@ void ggml_cuda_conv_2d_transpose_p0(ggml_backend_cuda_context & ctx, ggml_tensor
     GGML_ASSERT(stride > 0);
 
     cudaStream_t st = ctx.stream();
+
+    GGML_ASSERT(ggml_is_contiguous(input));
+    GGML_ASSERT(ggml_is_contiguous(kernel));
+    GGML_ASSERT(ggml_is_contiguous(dst));
 
     const int total  = (output_w * output_h * channels_out * batches);
     const int blocks = (total + CUDA_CONV2D_TRANSPOSE_BLOCK_SIZE - 1) / CUDA_CONV2D_TRANSPOSE_BLOCK_SIZE;
