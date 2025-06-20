@@ -426,14 +426,12 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
     #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
     #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
 
-    // TODO: Determine if inline assembly is faster
     static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
         uint16x8_t v_h = vec_splats(h);
         uint16x8_t nnpa_dlf16 = vec_convert_from_fp16(v_h, 0);
         return vec_extend_to_fp32_hi(nnpa_dlf16, 0)[0];
     }
 
-    // TODO: Determine if inline assembly is faster
     static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
         float32x4_t v_f = vec_splats(f);
         float32x4_t v_zero = vec_splats(0.0f);
