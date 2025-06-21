@@ -49,6 +49,10 @@ public:
             return idxs.empty();
         }
 
+        void clear() {
+            idxs.clear();
+        }
+
         // TODO: implement
         //std::vector<idx_vec_t> seq_idxs;
     };
@@ -133,14 +137,10 @@ public:
 
     bool update(llama_context * lctx, bool do_shift, const defrag_info & dinfo);
 
-    // find a continuous slot of kv cells that can hold the ubatch
-    // return the cell position where we can insert the ubatch
-    // return -1 on failure to find a slot
-    slot_info find_slot(const llama_ubatch & ubatch) const;
-
-    // find a set of kv cells that can hold the ubatch
-    // TODO: implement
-    //slot_info find_slot_ext(const llama_ubatch & ubatch) const;
+    // find a slot of kv cells that can hold the ubatch
+    // if cont == true, then the slot must be continuous
+    // return empty slot_info on failure
+    slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
