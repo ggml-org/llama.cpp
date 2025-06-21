@@ -482,6 +482,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
     vk_pipeline pipeline_opt_step_adamw_f32;
+    vk_pipeline pipeline_conv2d_f32;
     vk_pipeline pipeline_conv2d_dw_whcn_f32;
     vk_pipeline pipeline_conv2d_dw_cwhn_f32;
 
@@ -875,6 +876,38 @@ struct vk_op_rwkv_wkv7_push_constants {
     uint32_t H;
 };
 
+struct vk_op_conv2d_push_constants {
+    uint32_t Cout;
+    uint32_t Cin;
+    uint32_t N;
+    
+    uint32_t KW;
+    uint32_t KH;
+    uint32_t W;
+    uint32_t H;
+    uint32_t OW;
+    uint32_t OH;
+
+    uint32_t s0;
+    uint32_t s1;
+    uint32_t p0;
+    uint32_t p1;
+    uint32_t d0;
+    uint32_t d1;
+
+    uint32_t nb01;
+    uint32_t nb02;
+    uint32_t nb03;
+
+    uint32_t nb11;
+    uint32_t nb12;
+    uint32_t nb13;
+
+    uint32_t nb1;
+    uint32_t nb2;
+    uint32_t nb3;
+};
+
 struct vk_op_conv2d_dw_push_constants {
     uint32_t ne;
     uint32_t batches;
@@ -976,16 +1009,33 @@ private:
 class vk_perf_logger {
 public:
     void print_timings() {
+        if(timings.empty()){
+            return;
+        }        
         std::cerr << "----------------\nVulkan Timings:" << std::endl;
         for (const auto& t : timings) {
             uint64_t total = 0;
             for (const auto& time : t.second) {
                 total += time;
             }
-            std::cerr << t.first << ": " << t.second.size() << " x " << (total / t.second.size() / 1000.0) << " us" << std::endl;
+            std::cerr << t.first << ": " << t.second.size() << " x " << (total / t.second.size() / 1000.0) << " us";
+
+            // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
+            auto it = flops.find(t.first);
+            if(it != flops.end() && (it->second).size() == t.second.size()){
+                uint64_t total_nflops = 0;
+                for(const auto& elem : it->second){
+                    total_nflops += elem;
+                }
+                std::cout << " (" << (double(total_nflops)/(1000.0*1000.0*1000.0)) / (double(total)/(1000.0*1000.0*1000.0)) << " GFLOPS/s)";
+            }
+
+
+            std::cerr << std::endl;
         }
 
         timings.clear();
+        flops.clear();        
     }
 
     void log_timing(const ggml_tensor * node, uint64_t time) {
@@ -1004,12 +1054,33 @@ public:
                 name += " m=" + std::to_string(m) + " n=" + std::to_string(n) + " k=" + std::to_string(k);
             }
             timings[name].push_back(time);
+            flops[name].push_back( m*n*(k+(k-1)) );
             return;
         }
+        if(node->op == GGML_OP_CONV_2D){
+            std::string name = ggml_op_name(node->op);
+            ggml_tensor * knl = node->src[0];
+            uint64_t OW = node->ne[0];
+            uint64_t OH = node->ne[1];
+            uint64_t N = node->ne[3];
+            uint64_t Cout = node->ne[2];
+            uint64_t KW = knl->ne[0];
+            uint64_t KH = knl->ne[1];
+            uint64_t Cin = knl->ne[2];
+            // KxCRS @ CRSxNPQ = KxNPQ -> M=K, K=CRS, N=NPQ
+            uint64_t size_M = Cout;
+            uint64_t size_K = Cin*KW*KH;
+            uint64_t size_N = N*OW*OH;
+            uint64_t n_flops = size_M*size_N*(size_K+(size_K-1));
+            flops[name].push_back(n_flops);
+            timings[name].push_back(time);
+            return;
+        }        
         timings[ggml_op_name(node->op)].push_back(time);
     }
 private:
     std::map<std::string, std::vector<uint64_t>> timings;
+    std::map<std::string, std::vector<uint64_t>> flops;
 };
 
 struct ggml_backend_vk_context {
@@ -2954,6 +3025,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_rwkv_wkv7_f32, "rwkv_wkv7_f32", rwkv_wkv7_f32_len, rwkv_wkv7_f32_data, "main", 8, sizeof(vk_op_rwkv_wkv7_push_constants), {1, 1, 1}, {device->subgroup_size}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_adamw_f32, "opt_step_adamw_f32", opt_step_adamw_f32_len, opt_step_adamw_f32_data, "main", 5, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
+
+    ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {128 /* equal to BS_K in the shader */, 128 /* equal to BS_NPQ in the shader */, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_cwhn_f32, "conv2d_dw_cwhn_f32", conv2d_dw_cwhn_f32_len, conv2d_dw_cwhn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -6803,6 +6876,16 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_leaky_relu_f32;
         }
         return nullptr;
+    case GGML_OP_CONV_2D:
+        if (src0->type == GGML_TYPE_F32 && 
+                src1->type == GGML_TYPE_F32 && 
+                dst->type == GGML_TYPE_F32 && 
+                ggml_is_contiguous(src0) && 
+                ggml_is_contiguous(src1) && 
+                ggml_is_contiguous(dst)) {
+            return ctx->device->pipeline_conv2d_f32;
+        }
+        return nullptr;
     case GGML_OP_CONV_2D_DW:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             if (ggml_is_contiguous(src1)) {
@@ -7124,6 +7207,30 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             const uint32_t OH = dst->ne[1];
             const uint32_t OW = dst->ne[0];
             elements = { N * OC * OH * OW, 1, 1};
+        } break;
+    case GGML_OP_CONV_2D:
+        {
+            // src0 - kernel:   [KW, KH, Cin, Cout]
+            // src1 - input:    [W, H, Cin, N]
+            // dst - result:    [OW, OH, Cout, N]
+            
+            // Copied from ggml.c: int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d)
+            auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+                return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+            };
+            // parallelize in {OW/BS_K, OH/BS_NPQ, 1}
+            int64_t W = src1->ne[0];
+            int64_t H = src1->ne[1];
+            int64_t KW = src0->ne[0];
+            int64_t KH = src0->ne[1];
+            int64_t Cout = src0->ne[3];
+            int64_t N = src1->ne[3];
+            int64_t OH = calc_conv_output_size(H, KH, dst->op_params[1], dst->op_params[3], dst->op_params[5]);
+            int64_t OW = calc_conv_output_size(W, KW, dst->op_params[0], dst->op_params[2], dst->op_params[4]);
+            int64_t NPQ = N*OW*OH;
+            
+            // Tile output matrix to (K/NB_K, NPQ/NB_NPQ, 1) workgroups
+            elements = {static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1}; 
         } break;
     case GGML_OP_ADD:
     case GGML_OP_SUB:
@@ -7989,6 +8096,55 @@ static void ggml_vk_pool_2d(ggml_backend_vk_context * ctx, vk_context& subctx, c
         op,
         k0, k1, s0, s1, p0, p1,
     }, dryrun);
+}
+
+static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    GGML_ASSERT(nb00 == sizeof(float));
+    GGML_ASSERT(nb10 == sizeof(float));
+    GGML_ASSERT(nb0 == sizeof(float));
+
+    vk_op_conv2d_push_constants p{};
+    p.Cout = static_cast<uint32_t>(ne03);
+    p.Cin = static_cast<uint32_t>(ne02);
+    p.N = static_cast<uint32_t>(ne13);
+    
+    p.KW = static_cast<uint32_t>(ne00);
+    p.KH = static_cast<uint32_t>(ne01);
+    p.W = static_cast<uint32_t>(ne10);
+    p.H = static_cast<uint32_t>(ne11);
+    p.OW = static_cast<uint32_t>(ne0);
+    p.OH = static_cast<uint32_t>(ne1);
+    
+    p.s0 = static_cast<uint32_t>(dst->op_params[0]);
+    p.s1 = static_cast<uint32_t>(dst->op_params[1]);
+    p.p0 = static_cast<uint32_t>(dst->op_params[2]);
+    p.p1 = static_cast<uint32_t>(dst->op_params[3]);
+    p.d0 = static_cast<uint32_t>(dst->op_params[4]);
+    p.d1 = static_cast<uint32_t>(dst->op_params[5]);
+
+    p.nb01 = static_cast<uint32_t>(nb01/nb00);
+    p.nb02 = static_cast<uint32_t>(nb02/nb00);
+    p.nb03 = static_cast<uint32_t>(nb03/nb00);
+
+    p.nb11 = static_cast<uint32_t>(nb11/nb10);
+    p.nb12 = static_cast<uint32_t>(nb12/nb10);
+    p.nb13 = static_cast<uint32_t>(nb13/nb10);
+
+    p.nb1 = static_cast<uint32_t>(nb1 / nb0);
+    p.nb2 = static_cast<uint32_t>(nb2 / nb0);
+    p.nb3 = static_cast<uint32_t>(nb3 / nb0);
+
+    GGML_ASSERT(ne03 == ne2);
+    GGML_ASSERT(ne02 == ne12);
+
+    ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_CONV_2D, std::move(p), dryrun);
+    
 }
 
 static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -9053,6 +9209,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_TIMESTEP_EMBEDDING:
     case GGML_OP_CONV_TRANSPOSE_1D:
     case GGML_OP_POOL_2D:
+    case GGML_OP_CONV_2D:
     case GGML_OP_CONV_2D_DW:
     case GGML_OP_RWKV_WKV6:
     case GGML_OP_RWKV_WKV7:
@@ -9120,6 +9277,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_POOL_2D:
+        case GGML_OP_CONV_2D:
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_LEAKY_RELU:
             {
@@ -9327,6 +9485,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_pool_2d(ctx, compute_ctx, src0, node, dryrun);
 
         break;
+    case GGML_OP_CONV_2D:
+        ggml_vk_conv_2d(ctx, compute_ctx, src0, src1, node, dryrun);
+
+        break;
     case GGML_OP_CONV_2D_DW:
         ggml_vk_conv_2d_dw(ctx, compute_ctx, src0, src1, node, dryrun);
 
@@ -9456,6 +9618,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
     case GGML_OP_TIMESTEP_EMBEDDING:
     case GGML_OP_CONV_TRANSPOSE_1D:
     case GGML_OP_POOL_2D:
+    case GGML_OP_CONV_2D:
     case GGML_OP_CONV_2D_DW:
     case GGML_OP_RWKV_WKV6:
     case GGML_OP_RWKV_WKV7:
@@ -10617,6 +10780,14 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return true;
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+        case GGML_OP_CONV_2D:
+            // Channel-contiguous format is not supported yet.
+            return (op->src[0]->type == GGML_TYPE_F32 && 
+                op->src[1]->type == GGML_TYPE_F32 && 
+                op->type == GGML_TYPE_F32 && 
+                ggml_is_contiguous(op->src[0]) && 
+                ggml_is_contiguous(op->src[1]) && 
+                ggml_is_contiguous(op));
         default:
             return false;
     }
@@ -11175,6 +11346,14 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         const int32_t p1 = tensor->op_params[6];
 
         tensor_clone = ggml_pool_2d(ggml_ctx, src_clone[0], op, k0, k1, s0, s1, p0, p1);
+    } else if (tensor->op == GGML_OP_CONV_2D) {
+        const int32_t s0 = tensor->op_params[0];
+        const int32_t s1 = tensor->op_params[1];
+        const int32_t p0 = tensor->op_params[2];
+        const int32_t p1 = tensor->op_params[3];
+        const int32_t d0 = tensor->op_params[4];
+        const int32_t d1 = tensor->op_params[5];
+        tensor_clone = ggml_conv_2d(ggml_ctx, src_clone[0], src_clone[1], s0, s1, p0, p1, d0, d1);
     } else if (tensor->op == GGML_OP_LEAKY_RELU) {
         const float * op_params = (const float *)tensor->op_params;
         tensor_clone = ggml_leaky_relu(ggml_ctx, src_clone[0], op_params[0], false);
