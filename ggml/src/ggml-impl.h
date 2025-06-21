@@ -417,6 +417,43 @@ GGML_API void ggml_aligned_free(void * ptr, size_t size);
     #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
     #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
 
+#elif defined(__NNPA__)
+    /*
+    * Note: This functionality is ready for use, but the compiler macros
+    *       defined for the s390x platform are defined in ggml-cpu while
+    *       this file is 1 step behind, in ggml-src. I currently have no
+    *       idea how to fix this, so I am leaving it as is.
+    *
+    * CMake chain: ggml -> ggml-src -> ggml-cpu
+    *                      ^^^^^^^^    ^^^^^^^^
+    *                      |           | ggml-cpu defines the macros
+    *                      |           | needed for s390x detection.
+    *                      | this file is here, where the s390x
+    *                      | detection macros are not defined.
+    *
+    * TODO: Fix s390x platform detection in this file.
+    */
+
+    #define GGML_COMPUTE_FP16_TO_FP32(x) ggml_compute_fp16_to_fp32(x)
+    #define GGML_COMPUTE_FP32_TO_FP16(x) ggml_compute_fp32_to_fp16(x)
+
+    #define GGML_FP16_TO_FP32(x) GGML_COMPUTE_FP16_TO_FP32(x)
+    #define GGML_FP32_TO_FP16(x) GGML_COMPUTE_FP32_TO_FP16(x)
+
+    static inline float ggml_compute_fp16_to_fp32(ggml_fp16_t h) {
+        uint16x8_t v_h = vec_splats(h);
+        uint16x8_t v_hd = vec_convert_from_fp16(v_h, 0);
+        return vec_extend_to_fp32_hi(v_hd, 0)[0];
+    }
+
+    static inline ggml_fp16_t ggml_compute_fp32_to_fp16(float f) {
+        float32x4_t v_f = vec_splats(f);
+        float32x4_t v_zero = vec_splats(0.0f);
+        uint16x8_t v_hd = vec_round_from_fp32(v_f, v_zero, 0);
+        uint16x8_t v_h = vec_convert_to_fp16(v_hd, 0);
+        return vec_extract(v_h, 0);
+    }
+
 #else
 
     // FP16 <-> FP32

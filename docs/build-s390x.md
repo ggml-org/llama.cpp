@@ -28,8 +28,9 @@ cmake --build build --config Release -j $(nproc)
 ```
 
 **Notes**:
-- For faster repeated compilation, install [ccache](https://ccache.dev/)
-- By default, VXE/VXE2 is enabled. To disable it (not recommended):
+
+-   For faster repeated compilation, install [ccache](https://ccache.dev/)
+-   By default, VXE/VXE2 is enabled. To disable it (not recommended):
 
     ```bash
     cmake -S . -B build             \
@@ -41,18 +42,29 @@ cmake --build build --config Release -j $(nproc)
     cmake --build build --config Release -j $(nproc)
     ```
 
-- For debug builds:
+-   By default, NNPA is enabled when available. To disable it (not recommended):
+
+    ```bash
+    cmake -S . -B build             \
+        -DCMAKE_BUILD_TYPE=Release  \
+        -DGGML_BLAS=ON              \
+        -DGGML_BLAS_VENDOR=OpenBLAS \
+        -DGGML_NNPA=OFF
+
+    cmake --build build --config Release -j $(nproc)
+    ```
+
+-   For debug builds:
 
     ```bash
     cmake -S . -B build             \
         -DCMAKE_BUILD_TYPE=Debug    \
         -DGGML_BLAS=ON              \
         -DGGML_BLAS_VENDOR=OpenBLAS
-
     cmake --build build --config Debug -j $(nproc)
     ```
 
-- For static builds, add `-DBUILD_SHARED_LIBS=OFF`:
+-   For static builds, add `-DBUILD_SHARED_LIBS=OFF`:
 
     ```bash
     cmake -S . -B build             \
@@ -101,27 +113,33 @@ All models need to be converted to Big-Endian. You can achieve this in three cas
     ```
 
     For example,
+
     ```bash
     python3 gguf-py/gguf/scripts/gguf_convert_endian.py granite-3.3-2b-instruct-le.f16.gguf BIG
     mv granite-3.3-2b-instruct-le.f16.gguf granite-3.3-2b-instruct-be.f16.gguf
     ```
 
     **Notes:**
+
     - The GGUF endian conversion script may not support all data types at the moment and may fail for some models/quantizations. When that happens, please try manually converting the safetensors model to GGUF Big-Endian via Step 2.
 
 ## IBM Accelerators
 
 ### 1. SIMD Acceleration
 
-Only available in IBM z15 or later system with the `-DGGML_VXE=ON` (turned on by default) compile flag. No hardware acceleration is possible with llama.cpp with older systems, such as IBM z14 or EC13. In such systems, the APIs can still run but will use a scalar implementation.
+Only available in IBM z15 or later system with the `-DGGML_VXE=ON` (turned on by default) compile flag. No hardware acceleration is possible with llama.cpp with older systems, such as IBM z14/arch12. In such systems, the APIs can still run but will use a scalar implementation.
 
-### 2. zDNN Accelerator
+### 2. NNPA Vector Intrinsics Acceleration
 
-*Only available in IBM z16 or later system. No direction at the moment.*
+Only available in IBM z16 or later system with the `-DGGML_NNPA=ON` (turned on when available) compile flag. No hardware acceleration is possible with llama.cpp with older systems, such as IBM z15/arch13. In such systems, the APIs can still run but will use a scalar implementation.
 
-### 3. Spyre Accelerator
+### 3. zDNN Accelerator
 
-*No direction at the moment.*
+_Only available in IBM z16 or later system. No direction at the moment._
+
+### 4. Spyre Accelerator
+
+_No direction at the moment._
 
 ## Performance Tuning
 
@@ -154,4 +172,3 @@ IBM VXE/VXE2 SIMD acceleration depends on the BLAS implementation. It is strongl
 2. **Other Questions**
 
     Please reach out directly to [aionz@us.ibm.com](mailto:aionz@us.ibm.com).
-
