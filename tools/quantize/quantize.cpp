@@ -293,17 +293,13 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
     }
 
     const auto block_ids = string_split<std::string>(data, ',');
-
-    for ( const auto & block_id : block_ids) {
-
+    for (const auto & block_id : block_ids) {
+        int id;
         try {
-            std::stoi(block_id);
+            id = std::stoi(block_id);
         } catch (...) {
-            printf("%s: invalid layer id '%s'\n\n", __func__, block_id.c_str());
-            return false;
+            id = -1;
         }
-
-        int id = std::stoi(block_id);
         if (id < 0) {
             printf("\n%s: invalid layer id '%s'\n\n", __func__, block_id.c_str());
             return false;
@@ -311,6 +307,8 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
         prune_layers.emplace_back(id);
     }
 
+    sort(prune_layers.begin(), prune_layers.end());
+    prune_layers.erase(std::unique(prune_layers.begin(), prune_layers.end()), prune_layers.end());
     return true;
 }
 

@@ -26,7 +26,7 @@ static void zeros(std::ofstream & file, size_t n) {
     }
 }
 
-static std::string remap_layer(const std::string & orig_name, const std::vector<int>& prune, std::map<int, std::string>& mapped, int& next_id) {
+static std::string remap_layer(const std::string & orig_name, const std::vector<int> & prune, std::map<int, std::string> & mapped, int & next_id) {
     if (prune.empty()) {
         return orig_name;
     }
@@ -39,7 +39,7 @@ static std::string remap_layer(const std::string & orig_name, const std::vector<
         if (mapped.count(blk)) {
             // Already mapped, do nothing
         } else if (std::find(prune.begin(), prune.end(), blk) != prune.end()) {
-            mapped[blk] = "X";
+            mapped[blk] = "";
         } else if (blk < prune.front()) {
             mapped[blk] = std::to_string(blk);
             next_id = blk + 1;
@@ -48,13 +48,13 @@ static std::string remap_layer(const std::string & orig_name, const std::vector<
             ++next_id;
         }
 
-        return mapped[blk] == "X" ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
+        return mapped[blk].empty() ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
     }
 
     return orig_name;
 }
 
-static std::string remap_imatrix (const std::string & orig_name, const std::map<int, std::string>& mapped) {
+static std::string remap_imatrix (const std::string & orig_name, const std::map<int, std::string> & mapped) {
     if (mapped.empty()) {
         return orig_name;
     }
@@ -628,7 +628,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
 
     if (!prune_list.empty()) {
-        gguf_set_val_bool(ctx_out.get(), "general.pruned", true);
         uint32_t block_count = 0;
         ml.get_key(LLM_KV_BLOCK_COUNT, block_count);
         gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count - prune_list.size());
@@ -667,10 +666,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     tensors.reserve(ml.weights_map.size());
     for (const auto & it : ml.weights_map) {
         const std::string remapped_name(remap_layer(it.first, prune_list, mapped, next_blk_id));
-        if (remapped_name == "X") {
-            if (it.first.find("attn_v.weight") != std::string::npos ||
-                it.first.find("attn_qkv.weight") != std::string::npos ||
-                it.first.find("attn_kv_b.weight")!= std::string::npos) {
+        if (remapped_name.empty()) {
+            if (false
+                || it.first.find("attn_v.weight") != std::string::npos
+                || it.first.find("attn_qkv.weight") != std::string::npos
+                || it.first.find("attn_kv_b.weight")!= std::string::npos) {
                 pruned_attention_w++;
                 }
             LLAMA_LOG_DEBUG("%s: prunning tensor %s\n", __func__, it.first.c_str());
