@@ -633,7 +633,7 @@ llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_
 
                 // (disabled) causal mask
                 // note: it's better to purge any "future" tokens beforehand
-                //if (cells.seq_has(idx)) {
+                //if (cells.seq_has(idx, seq_id)) {
                 //    can_use = pos_cell >= pos;
                 //}
 
