@@ -199,10 +199,10 @@ class SpecialVocab:
                                 special_eos = special_last
                             elif special_last != special_eos:
                                 if 'eot' not in self.special_token_types:
-                                    self.special_token_types = self.special_token_types + ('eot', )
+                                    self.special_token_types = tuple(self.special_token_types) + ('eot', )
                                     tokenizer_config['eot_token'] = special_eos
                                 elif 'eom' not in self.special_token_types:
-                                    self.special_token_types = self.special_token_types + ('eom', )
+                                    self.special_token_types = tuple(self.special_token_types) + ('eom', )
                                     tokenizer_config['eom_token'] = special_eos
                                 else:
                                     logger.warning(f'Overriding special token {special_eos!r} with {special_last!r} without EOT/EOM fallback!')
