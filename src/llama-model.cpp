@@ -1,5 +1,6 @@
 #include "llama-model.h"
 
+#include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
 #include "llama-batch.h"
@@ -24,6 +25,7 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <iostream>
 
 const char * llm_type_name(llm_type type) {
     switch (type) {
@@ -919,6 +921,37 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 switch (hparams.n_layer) {
                     case 40: type = LLM_TYPE_13B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+               }
+            } break;
+        case LLM_ARCH_PLAMO2:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // Load Mamba SSM parameters
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_NUM_HEADS,      hparams.ssm_num_heads);
+                ml.get_key(LLM_KV_SSM_HEAD_DIM,       hparams.ssm_head_dim);
+                ml.get_key(LLM_KV_SSM_DT_MIN,         hparams.ssm_dt_min, false);
+                ml.get_key(LLM_KV_SSM_DT_MAX,         hparams.ssm_dt_max, false);
+                ml.get_key(LLM_KV_HYBRID_MAMBA_STEP,  hparams.mamba_step, true);
+
+                // Load which layers are Mamba layers
+                std::vector<uint32_t> mamba_layer_indices;
+                if (ml.get_arr(LLM_KV_HYBRID_MAMBA_LAYERS, mamba_layer_indices, false)) {
+                    // Mark specified layers as Mamba
+                    for (uint32_t idx : mamba_layer_indices) {
+                        if (idx % hparams.mamba_step == 0) {
+                            hparams.mamba_layers[idx] = true;
+                        }
+                    }
+                }
+
+                switch (hparams.n_layer) {
+                    case 32: type = LLM_TYPE_8B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                }
             } break;
@@ -2740,6 +2773,72 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
+            case LLM_ARCH_PLAMO2:
+                {
+                    const uint32_t d_conv               = hparams.ssm_d_conv;
+                    const uint32_t d_state              = hparams.ssm_d_state;
+                    const uint32_t num_heads            = hparams.ssm_num_heads;
+                    const uint32_t intermediate_size    = num_heads * hparams.ssm_head_dim;
+                    const uint32_t head_dim             = hparams.ssm_head_dim;
+                    const uint32_t qk_dim               = head_dim;
+                    const uint32_t v_dim                = head_dim;
+                    const int64_t num_attention_heads   = hparams.n_head();
+                    const int64_t q_num_heads           = num_attention_heads;
+                    const int64_t num_key_value_heads   = hparams.n_head_kv();
+                    const int64_t k_num_heads           = num_key_value_heads;
+                    const int64_t v_num_heads           = num_key_value_heads;
+                    const int64_t q_proj_dim            = q_num_heads * qk_dim;
+                    const int64_t k_proj_dim            = k_num_heads * qk_dim;
+                    const int64_t v_proj_dim            = v_num_heads * v_dim;
+
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+                        bool is_mamba_layer = hparams.mamba_layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        if (is_mamba_layer) {
+                            // Mamba layer tensors
+                            layer.ssm_in       = create_tensor(tn(LLM_TENSOR_SSM_IN,     "weight", i), {n_embd, 2 * intermediate_size}, 0);
+                            layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv, intermediate_size}, 0);
+
+                            const int64_t dt_dim = std::max(64, int(hparams.n_embd / 16));
+                            layer.ssm_x  = create_tensor(tn(LLM_TENSOR_SSM_X,  "weight", i), {intermediate_size, dt_dim + 2*d_state}, 0);
+                            layer.ssm_dt = create_tensor(tn(LLM_TENSOR_SSM_DT, "weight", i), {dt_dim, num_heads}, 0);
+                            layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {num_heads}, 0);
+
+                            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {num_heads}, 0);
+                            layer.ssm_d = create_tensor(tn(LLM_TENSOR_SSM_D, i), {num_heads}, 0);
+
+                            layer.ssm_out = create_tensor(tn(LLM_TENSOR_SSM_OUT, "weight", i), {intermediate_size, n_embd}, 0);
+
+                            // PLaMo-2 SSM norm tensors
+                            layer.ssm_dt_norm = create_tensor(tn(LLM_TENSOR_SSM_DT_NORM, i), {dt_dim}, 0);
+                            layer.ssm_b_norm = create_tensor(tn(LLM_TENSOR_SSM_B_NORM, i), {d_state}, 0);
+                            layer.ssm_c_norm = create_tensor(tn(LLM_TENSOR_SSM_C_NORM, i), {d_state}, 0);
+                        } else {
+                            // Attention layer tensors
+                            layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, q_proj_dim + k_proj_dim + v_proj_dim}, 0);
+                            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {head_dim, num_attention_heads}, 0);
+                            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {head_dim, k_num_heads}, 0);
+                            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {q_num_heads * v_dim, n_embd}, 0);
+                        }
+
+                        // All layers have post-attention norm, FFN norm, and FFN tensors
+                        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, i), {n_embd}, 0);
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, i), {n_embd}, 0);
                     }
                 } break;
             case LLM_ARCH_GPT2:
@@ -13942,6 +14041,10 @@ llm_graph_result_ptr llama_model::build_graph(
             {
                 llm = std::make_unique<llm_build_plamo>(*this, params, gf);
             } break;
+        case LLM_ARCH_PLAMO2:
+            {
+                llm = std::make_unique<llm_build_plamo2>(*this, params, gf);
+            } break;
         case LLM_ARCH_GPT2:
             {
                 llm = std::make_unique<llm_build_gpt2>(*this, params, gf);
@@ -14252,6 +14355,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_DECI:
         case LLM_ARCH_BAICHUAN:
         case LLM_ARCH_STARCODER:
+        case LLM_ARCH_PLAMO2:
         case LLM_ARCH_INTERNLM2:
         case LLM_ARCH_MINICPM:
         case LLM_ARCH_XVERSE:
