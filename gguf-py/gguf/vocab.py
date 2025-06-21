@@ -201,9 +201,9 @@ class SpecialVocab:
                             if special_last != special_eos:
                                 logger.warning(f'Unknown trailing special token {special_last!r} in TemplateProcessing<single>')
                     if tmpl_pair:
-                        seq_start = 1 if tmpl_pair[0].get('SpecialToken', {}).get('id') == special_first else 0
-                        seq_stop = -1 if tmpl_pair[-1].get('SpecialToken', {}).get('id') == special_last else None
-                        if seq_start == 0 or seq_stop is None:
+                        seq_start = 1 if special_first and tmpl_pair[0].get('SpecialToken', {}).get('id') == special_first else 0
+                        seq_stop = -1 if special_last and tmpl_pair[-1].get('SpecialToken', {}).get('id') == special_last else None
+                        if (special_first and seq_start == 0) or (special_last and seq_stop is None):
                             logger.warning('TemplateProcessing<single> leading/trailing special tokens do not match TemplateProcessing<pair>')
                         if tmpl_pair := tmpl_pair[slice(seq_start, seq_stop)]:
                             tmpl_a = tmpl_pair[0].get('Sequence', {}).get('id')
