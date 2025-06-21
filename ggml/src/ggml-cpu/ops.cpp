@@ -6058,6 +6058,163 @@ void ggml_compute_forward_im2col_back_f32(
     }
 }
 
+// ggml_compute_forward_conv_2d
+
+static void ggml_compute_forward_conv_2d_f32(
+        const ggml_compute_params * params,
+        const ggml_tensor * kernel,  // [KW, KH, IC, OC]
+        const ggml_tensor * src,     // [W, H, C, N]
+        ggml_tensor * dst) {         // [OW, OH, OC, N]
+
+    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
+    const int32_t s1 = ggml_get_op_params_i32(dst, 1);
+    const int32_t p0 = ggml_get_op_params_i32(dst, 2);
+    const int32_t p1 = ggml_get_op_params_i32(dst, 3);
+    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
+    const int32_t d1 = ggml_get_op_params_i32(dst, 5);
+
+    const int64_t OW = dst->ne[0];
+    const int64_t OH = dst->ne[1];
+    const int64_t OC = dst->ne[2];
+    const int64_t N  = dst->ne[3];
+
+    const int64_t IW = src->ne[0];
+    const int64_t IH = src->ne[1];
+    const int64_t IC = src->ne[2];
+
+    const int64_t KW = kernel->ne[0];
+    const int64_t KH = kernel->ne[1];
+
+    const float * kernel_data = (const float *)kernel->data;
+    const float * src_data    = (const float *)src->data;
+    float       * dst_data    = (float       *)dst->data;
+
+    const int64_t rows_total = OH * N;
+    const int64_t rows_per_thread = (rows_total + params->nth - 1) / params->nth;
+    const int64_t row_start = params->ith * rows_per_thread;
+    const int64_t row_end = MIN(row_start + rows_per_thread, rows_total);
+
+    for (int64_t row = row_start; row < row_end; ++row) {
+        const int64_t oh = row % OH;
+        const int64_t n  = row / OH;
+        const float * src_batch = src_data + n * IW * IH * IC;
+
+        for (int64_t ow = 0; ow < OW; ++ow) {
+            for (int64_t oc = 0; oc < OC; ++oc) {
+                float sum = 0.0f;
+                const float * kernel_channel = kernel_data + oc * KW * KH * IC;
+
+                for (int64_t kh = 0; kh < KH; ++kh) {
+                    const int64_t ih = oh * s1 - p1 + kh * d1;
+                    if (ih < 0 || ih >= IH) continue;
+
+                    for (int64_t kw = 0; kw < KW; ++kw) {
+                        const int64_t iw = ow * s0 - p0 + kw * d0;
+                        if (iw < 0 || iw >= IW) continue;
+
+                        #pragma omp simd
+                        for (int64_t ic = 0; ic < IC; ++ic) {
+                            const float * kernel_ptr = kernel_channel + (kh * KW + kw) + ic * KW * KH;
+                            const float * src_ptr = src_batch + (ih * IW + iw) + ic * IW * IH;
+                            sum += (*kernel_ptr) * (*src_ptr);
+                        }
+                    }
+                }
+
+                dst_data[((n * OC + oc) * OH + oh) * OW + ow] = sum;
+            }
+        }
+    }
+}
+
+static void ggml_compute_forward_conv_2d_f16(
+        const ggml_compute_params * params,
+        const ggml_tensor * kernel,  // [KW, KH, IC, OC]
+        const ggml_tensor * src,     // [W, H, C, N]
+        ggml_tensor * dst) {         // [OW, OH, OC, N]
+
+    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
+    const int32_t s1 = ggml_get_op_params_i32(dst, 1);
+    const int32_t p0 = ggml_get_op_params_i32(dst, 2);
+    const int32_t p1 = ggml_get_op_params_i32(dst, 3);
+    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
+    const int32_t d1 = ggml_get_op_params_i32(dst, 5);
+
+    const int64_t OW = dst->ne[0];
+    const int64_t OH = dst->ne[1];
+    const int64_t OC = dst->ne[2];
+    const int64_t N  = dst->ne[3];
+
+    const int64_t IW = src->ne[0];
+    const int64_t IH = src->ne[1];
+    const int64_t IC = src->ne[2];
+
+    const int64_t KW = kernel->ne[0];
+    const int64_t KH = kernel->ne[1];
+
+    const ggml_fp16_t * kernel_data = (const ggml_fp16_t *)kernel->data;
+    const ggml_fp16_t * src_data    = (const ggml_fp16_t *)src->data;
+    ggml_fp16_t       * dst_data    = (ggml_fp16_t       *)dst->data;
+
+    const int64_t rows_total = OH * N;
+    const int64_t rows_per_thread = (rows_total + params->nth - 1) / params->nth;
+    const int64_t row_start = params->ith * rows_per_thread;
+    const int64_t row_end = MIN(row_start + rows_per_thread, rows_total);
+
+    for (int64_t row = row_start; row < row_end; ++row) {
+        const int64_t oh = row % OH;
+        const int64_t n  = row / OH;
+        const ggml_fp16_t * src_batch = src_data + n * IW * IH * IC;
+
+        for (int64_t ow = 0; ow < OW; ++ow) {
+            for (int64_t oc = 0; oc < OC; ++oc) {
+                float sum = 0.0f;
+                const ggml_fp16_t * kernel_channel = kernel_data + oc * KW * KH * IC;
+                for (int64_t kh = 0; kh < KH; ++kh) {
+                    const int64_t ih = oh * s1 - p1 + kh * d1;
+                    if (ih < 0 || ih >= IH) continue;
+
+                    for (int64_t kw = 0; kw < KW; ++kw) {
+                        const int64_t iw = ow * s0 - p0 + kw * d0;
+                        if (iw < 0 || iw >= IW) continue;
+
+                        for (int64_t ic = 0; ic < IC; ++ic) {
+                            const ggml_fp16_t * kernel_ptr = kernel_channel + (kh * KW + kw) + ic * KW * KH;
+                            const ggml_fp16_t * src_ptr = src_batch + (ih * IW + iw) + ic * IW * IH;
+                            sum += GGML_FP16_TO_FP32(*kernel_ptr) * GGML_FP16_TO_FP32(*src_ptr);
+                        }
+                    }
+                }
+
+                dst_data[((n * OC + oc) * OH + oh) * OW + ow] = GGML_FP32_TO_FP16(sum);
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_conv_2d(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    switch (src0->type) {
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_conv_2d_f16(params, src0, src1, dst);
+            } break;
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_conv_2d_f32(params, src0, src1, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 // ggml_compute_forward_conv_transpose_2d
 
 void ggml_compute_forward_conv_transpose_2d(
