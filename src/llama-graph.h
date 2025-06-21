@@ -248,7 +248,11 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
+    ggml_tensor * get_kv_idxs() const { return self_kv_idxs; }
     ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
+
+    // TODO: should this be I64?
+    ggml_tensor * self_kv_idxs = nullptr; // I32 [n_batch]
 
     ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch]
     ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch]
@@ -273,8 +277,13 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
+    ggml_tensor * get_kv_idxs()     const { return self_kv_idxs; }
+    ggml_tensor * get_kv_idxs_swa() const { return self_kv_idxs_swa; }
     ggml_tensor * get_kq_mask()     const { return self_kq_mask_cnv; }
     ggml_tensor * get_kq_mask_swa() const { return self_kq_mask_swa_cnv; }
+
+    ggml_tensor * self_kv_idxs     = nullptr; // I32 [n_batch]
+    ggml_tensor * self_kv_idxs_swa = nullptr; // I32 [n_batch]
 
     ggml_tensor * self_kq_mask         = nullptr; // F32 [n_kv, n_batch]
     ggml_tensor * self_kq_mask_cnv     = nullptr; //     [n_kv, n_batch]
