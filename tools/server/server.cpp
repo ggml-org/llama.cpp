@@ -2110,6 +2110,7 @@ struct server_context {
             /* use_jinja             */ params_base.use_jinja,
             /* prefill_assistant     */ params_base.prefill_assistant,
             /* reasoning_format      */ params_base.reasoning_format,
+            /* chat_template_kwargs  */ params_base.default_template_kwargs,
             /* common_chat_templates */ chat_templates.get(),
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
