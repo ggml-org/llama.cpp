@@ -75,6 +75,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_BAILINGMOE,       "bailingmoe"       },
     { LLM_ARCH_DOTS1,            "dots1"            },
     { LLM_ARCH_ARCEE,            "arcee"            },
+    { LLM_ARCH_SMOLLM3,          "smollm3"          },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -1625,6 +1626,24 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+        },
+    },
+    {
+        LLM_ARCH_SMOLLM3,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,     "token_embd.weight"            },
+            { LLM_TENSOR_OUTPUT_NORM,    "output_norm.weight"           },
+            { LLM_TENSOR_OUTPUT,         "output.weight"                },
+            { LLM_TENSOR_ROPE_FREQS,     "rope_freqs"                   },
+            { LLM_TENSOR_ATTN_NORM,      "blk.%d.attn_norm.weight"      },
+            { LLM_TENSOR_ATTN_Q,         "blk.%d.attn_q.weight"         },
+            { LLM_TENSOR_ATTN_K,         "blk.%d.attn_k.weight"         },
+            { LLM_TENSOR_ATTN_V,         "blk.%d.attn_v.weight"         },
+            { LLM_TENSOR_ATTN_OUT,       "blk.%d.attn_output.weight"    },
+            { LLM_TENSOR_ATTN_ROT_EMBD,  "blk.%d.attn_rot_embd"         },
+            { LLM_TENSOR_FFN_GATE,       "blk.%d.ffn_gate.weight"       },
+            { LLM_TENSOR_FFN_DOWN,       "blk.%d.ffn_down.weight"       },
+            { LLM_TENSOR_FFN_UP,         "blk.%d.ffn_up.weight"         },
         },
     },
 };
