@@ -158,7 +158,12 @@ private:
     // SWA
     const uint32_t n_swa = 0;
 
+    // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
+
+    // env: LLAMA_SET_ROWS (temporary)
+    // ref: https://github.com/ggml-org/llama.cpp/pull/14285
+    int supports_set_rows = false;
 
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
