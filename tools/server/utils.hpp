@@ -271,12 +271,20 @@ static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_
     }
 
     result.reserve(doc.size() + query.size() + 4);
-    result.push_back(llama_vocab_bos(vocab));
+    if (llama_vocab_get_add_bos(vocab)) {
+        result.push_back(llama_vocab_bos(vocab));
+    }
     result.insert(result.end(), query.begin(), query.end());
-    result.push_back(eos_token);
-    result.push_back(llama_vocab_sep(vocab));
+    if (llama_vocab_get_add_eos(vocab)) {
+        result.push_back(eos_token);
+    }
+    if (llama_vocab_get_add_sep(vocab)) {
+        result.push_back(llama_vocab_sep(vocab));
+    }
     result.insert(result.end(), doc.begin(), doc.end());
-    result.push_back(eos_token);
+    if (llama_vocab_get_add_eos(vocab)) {
+        result.push_back(eos_token);
+    }
 
     return result;
 }

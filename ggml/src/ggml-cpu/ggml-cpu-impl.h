@@ -371,7 +371,7 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 #define vec_xor(a, b) ((a) ^ (b)) // Vector XOR
 #endif
 
-typedef signed char char8x16_t __attribute__((vector_size(16)));
+typedef signed   char char8x16_t  __attribute__((vector_size(16)));
 typedef unsigned char uchar8x16_t __attribute__((vector_size(16)));
 
 typedef int8_t  int8x16_t __attribute__((vector_size(16)));
@@ -382,10 +382,10 @@ typedef uint8_t  uint8x16_t __attribute__((vector_size(16)));
 typedef uint16_t uint16x8_t __attribute__((vector_size(16)));
 typedef uint32_t uint32x4_t __attribute__((vector_size(16)));
 
-typedef float float32x4_t __attribute__((vector_size(16)));
-typedef double double64x2_t __attribute((vector_size(16)));
+typedef float  float32x4_t  __attribute__((vector_size(16)));
+typedef double double64x2_t __attribute__((vector_size(16)));
 
-typedef signed long long long64x2_t __attribute((vector_size(16)));
+typedef signed   long long long64x2_t  __attribute__((vector_size(16)));
 typedef unsigned long long ulong64x2_t __attribute__((vector_size(16)));
 
 typedef struct ggml_uint8x16x2_t {
@@ -503,31 +503,9 @@ static __m256 __lasx_xvreplfr2vr_s(const float val) {
 // TODO: move to ggml-threading
 void ggml_barrier(struct ggml_threadpool * tp);
 
+void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
+int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
+
 #ifdef __cplusplus
 }
 #endif
-
-#define GGML_DO_PRAGMA_(x) _Pragma (#x)
-#define GGML_DO_PRAGMA(x) GGML_DO_PRAGMA_(x)
-#if defined(GGML_CPU_GENERIC) || defined(__HIPCC__)
-// Note for Apple targets:
-// - clang: aliases are not supported on darwin
-// - all native kernels need to be implemented in both x86 and arm files
-// - on iOS, tvOS, and visionOS, if cmake cannot determine the target architecture, all `_generic` names are replaced by defines
-# define GGML_WEAK_ALIAS(name, alias)
-#elif defined(__GNUC__)
-// GCC/Clang on *nix
-# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(weak name = alias) // NOLINT
-#elif defined(_MSC_VER) && defined(_WIN64)
-// MSVC
-// Note: C name mangling varies across different calling conventions
-// see https://learn.microsoft.com/en-us/cpp/build/reference/decorated-names?view=msvc-170
-# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:" #name "=" #alias))
-#elif defined(_MSC_VER) && defined(WIN32)
-// ref: https://github.com/ggml-org/whisper.cpp/pull/3239#issuecomment-2958224591
-# define GGML_WEAK_ALIAS(name, alias) GGML_DO_PRAGMA(comment(linker, "/alternatename:_" #name "=_" #alias))
-#else
-# error "Unsupported compiler for GGML_WEAK_ALIAS"
-#endif
-
-#define GGML_CPU_NATIVE_IMPL(name) GGML_WEAK_ALIAS(name, name ## _generic)
