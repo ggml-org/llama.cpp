@@ -1,8 +1,10 @@
 import { useMemo, useState } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { Message, PendingMessage } from '../utils/types';
-import { classNames } from '../utils/misc';
+import { classNames, parseThoughtContent } from '../utils/misc';
 import MarkdownDisplay, { CopyButton } from './MarkdownDisplay';
+import { ToolCallArgsDisplay } from './tool_calling/ToolCallArgsDisplay';
+import { ToolCallResultDisplay } from './tool_calling/ToolCallResultDisplay';
 import {
   ArrowPathIcon,
   ChevronLeftIcon,
@@ -18,8 +20,87 @@ interface SplitMessage {
   isThinking?: boolean;
 }
 
+// Helper function to extract thoughts using shared parseThoughtContent
+function extractThoughts(content: string | null, role: string): SplitMessage {
+  if (content === null || (role !== 'assistant' && role !== 'tool')) {
+    return { content };
+  }
+
+  const { filteredContent, thoughtContent, isThinking } =
+    parseThoughtContent(content);
+
+  return {
+    content: filteredContent,
+    thought: thoughtContent,
+    isThinking,
+  };
+}
+
+// Helper component to render a single message part
+function MessagePart({
+  message,
+  isPending,
+  showThoughts = true,
+  className = '',
+  baseClassName = '',
+  isMainMessage = false,
+}: {
+  message: Message | PendingMessage;
+  isPending?: boolean;
+  showThoughts?: boolean;
+  className?: string;
+  baseClassName?: string;
+  isMainMessage?: boolean;
+}) {
+  const { config } = useAppContext();
+  const { content, thought, isThinking } = extractThoughts(
+    message.content,
+    message.role
+  );
+
+  if (message.role === 'tool' && baseClassName) {
+    return (
+      <ToolCallResultDisplay
+        content={content || ''}
+        baseClassName={baseClassName}
+      />
+    );
+  }
+
+  return (
+    <div className={className}>
+      {showThoughts && thought && (
+        <ThoughtProcess
+          isThinking={!!isThinking && !!isPending}
+          content={thought}
+          open={config.showThoughtInProgress}
+        />
+      )}
+
+      {message.role === 'tool' && content ? (
+        <ToolCallResultDisplay content={content} />
+      ) : (
+        content &&
+        content.trim() !== '' && (
+          <MarkdownDisplay content={content} isGenerating={isPending} />
+        )
+      )}
+
+      {message.tool_calls &&
+        message.tool_calls.map((toolCall) => (
+          <ToolCallArgsDisplay
+            key={toolCall.id}
+            toolCall={toolCall}
+            {...(!isMainMessage && baseClassName ? { baseClassName } : {})}
+          />
+        ))}
+    </div>
+  );
+}
+
 export default function ChatMessage({
   msg,
+  chainedParts,
   siblingLeafNodeIds,
   siblingCurrIdx,
   id,
@@ -29,6 +110,7 @@ export default function ChatMessage({
   isPending,
 }: {
   msg: Message | PendingMessage;
+  chainedParts?: (Message | PendingMessage)[];
   siblingLeafNodeIds: Message['id'][];
   siblingCurrIdx: number;
   id?: string;
@@ -55,34 +137,23 @@ export default function ChatMessage({
   const nextSibling = siblingLeafNodeIds[siblingCurrIdx + 1];
   const prevSibling = siblingLeafNodeIds[siblingCurrIdx - 1];
 
-  // for reasoning model, we split the message into content and thought
-  // TODO: implement this as remark/rehype plugin in the future
-  const { content, thought, isThinking }: SplitMessage = useMemo(() => {
-    if (msg.content === null || msg.role !== 'assistant') {
-      return { content: msg.content };
-    }
-    let actualContent = '';
-    let thought = '';
-    let isThinking = false;
-    let thinkSplit = msg.content.split('<think>', 2);
-    actualContent += thinkSplit[0];
-    while (thinkSplit[1] !== undefined) {
-      // <think> tag found
-      thinkSplit = thinkSplit[1].split('</think>', 2);
-      thought += thinkSplit[0];
-      isThinking = true;
-      if (thinkSplit[1] !== undefined) {
-        // </think> closing tag found
-        isThinking = false;
-        thinkSplit = thinkSplit[1].split('<think>', 2);
-        actualContent += thinkSplit[0];
-      }
-    }
-    return { content: actualContent, thought, isThinking };
-  }, [msg]);
+  const mainSplitMessage = useMemo(
+    () => extractThoughts(msg.content, msg.role),
+    [msg.content, msg.role]
+  );
 
   if (!viewingChat) return null;
 
+  const toolCalls = msg.tool_calls ?? null;
+
+  const hasContentInMainMsg =
+    mainSplitMessage.content && mainSplitMessage.content.trim() !== '';
+  const hasContentInChainedParts = chainedParts?.some((part) => {
+    const splitPart = extractThoughts(part.content, part.role);
+    return splitPart.content && splitPart.content.trim() !== '';
+  });
+  const entireTurnHasSomeDisplayableContent =
+    hasContentInMainMsg || hasContentInChainedParts;
   const isUser = msg.role === 'user';
 
   return (
@@ -141,28 +212,40 @@ export default function ChatMessage({
           {/* not editing content, render message */}
           {editingContent === null && (
             <>
-              {content === null ? (
+              {mainSplitMessage.content === null &&
+              !toolCalls &&
+              !chainedParts?.length ? (
                 <>
                   {/* show loading dots for pending message */}
                   <span className="loading loading-dots loading-md"></span>
                 </>
               ) : (
                 <>
-                  {/* render message as markdown */}
+                  {/* render main message */}
                   <div dir="auto" tabIndex={0}>
-                    {thought && (
-                      <ThoughtProcess
-                        isThinking={!!isThinking && !!isPending}
-                        content={thought}
-                        open={config.showThoughtInProgress}
-                      />
-                    )}
-
-                    <MarkdownDisplay
-                      content={content}
-                      isGenerating={isPending}
+                    <MessagePart
+                      message={msg}
+                      isPending={isPending}
+                      showThoughts={true}
+                      isMainMessage={true}
                     />
                   </div>
+
+                  {/* render chained parts */}
+                  {chainedParts?.map((part) => (
+                    <MessagePart
+                      key={part.id}
+                      message={part}
+                      isPending={isPending}
+                      showThoughts={true}
+                      className={part.role === 'assistant' ? 'mt-2' : ''}
+                      baseClassName={
+                        part.role === 'tool'
+                          ? 'collapse bg-base-200 collapse-arrow mb-4 mt-2'
+                          : ''
+                      }
+                    />
+                  ))}
                 </>
               )}
               {/* render timings if enabled */}
@@ -195,7 +278,7 @@ export default function ChatMessage({
       </div>
 
       {/* actions for each message */}
-      {msg.content !== null && (
+      {(entireTurnHasSomeDisplayableContent || msg.role === 'user') && (
         <div
           className={classNames({
             'flex items-center gap-2 mx-4 mt-2 mb-2': true,
@@ -251,11 +334,11 @@ export default function ChatMessage({
                 <BtnWithTooltips
                   className="btn-mini w-8 h-8"
                   onClick={() => {
-                    if (msg.content !== null) {
+                    if (entireTurnHasSomeDisplayableContent) {
                       onRegenerateMessage(msg as Message);
                     }
                   }}
-                  disabled={msg.content === null}
+                  disabled={!entireTurnHasSomeDisplayableContent}
                   tooltipsContent="Regenerate response"
                 >
                   <ArrowPathIcon className="h-4 w-4" />
@@ -263,7 +346,23 @@ export default function ChatMessage({
               )}
             </>
           )}
-          <CopyButton className="btn-mini w-8 h-8" content={msg.content} />
+          {entireTurnHasSomeDisplayableContent && (
+            <CopyButton
+              className="badge btn-mini show-on-hover mr-2"
+              content={
+                [msg, ...(chainedParts || [])]
+                  .filter((p) => p.content)
+                  .map((p) => {
+                    if (p.role === 'user') {
+                      return p.content;
+                    } else {
+                      return extractThoughts(p.content, p.role).content;
+                    }
+                  })
+                  .join('\n\n') || ''
+              }
+            />
+          )}
         </div>
       )}
     </div>
