@@ -1044,6 +1044,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "conv_transpose_1d(x)",
     "im2col(x)",
     "im2col_back(x)",
+    "conv_2d(x)",
     "conv_2d_dw(x)",
     "conv_transpose_2d(x)",
     "pool_1d(x)",
@@ -4288,6 +4289,44 @@ struct ggml_tensor * ggml_conv_2d_dw_direct(
     result->op     = GGML_OP_CONV_2D_DW;
     result->src[0] = a;
     result->src[1] = b;
+    return result;
+}
+
+// ggml_conv_2d_direct
+
+struct ggml_tensor * ggml_conv_2d_direct(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,   // convolution kernel [KW, KH, IC, OC]
+        struct ggml_tensor  * b,   // input data [W, H, C, N]
+        int                   s0,  // stride dimension 0
+        int                   s1,  // stride dimension 1
+        int                   p0,  // padding dimension 0
+        int                   p1,  // padding dimension 1
+        int                   d0,  // dilation dimension 0
+        int                   d1) {// dilation dimension 1
+
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(a->type == b->type);
+
+    int64_t ne[4];
+    ne[0] = ggml_calc_conv_output_size(b->ne[0], a->ne[0], s0, p0, d0);
+    ne[1] = ggml_calc_conv_output_size(b->ne[1], a->ne[1], s1, p1, d1);
+    ne[2] = a->ne[3];
+    ne[3] = b->ne[3];
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, b->type, 4, ne);
+
+    ggml_set_op_params_i32(result, 0, s0);
+    ggml_set_op_params_i32(result, 1, s1);
+    ggml_set_op_params_i32(result, 2, p0);
+    ggml_set_op_params_i32(result, 3, p1);
+    ggml_set_op_params_i32(result, 4, d0);
+    ggml_set_op_params_i32(result, 5, d1);
+
+    result->op = GGML_OP_CONV_2D;
+    result->src[0] = a;
+    result->src[1] = b;
+
     return result;
 }
 

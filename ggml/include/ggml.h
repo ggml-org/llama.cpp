@@ -482,6 +482,7 @@ extern "C" {
         GGML_OP_CONV_TRANSPOSE_1D,
         GGML_OP_IM2COL,
         GGML_OP_IM2COL_BACK,
+        GGML_OP_CONV_2D,
         GGML_OP_CONV_2D_DW,
         GGML_OP_CONV_TRANSPOSE_2D,
         GGML_OP_POOL_1D,
@@ -1812,6 +1813,17 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b,
             int                   stride);
+
+    GGML_API struct ggml_tensor * ggml_conv_2d_direct(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,   // convolution kernel [KW, KH, IC, OC]
+            struct ggml_tensor  * b,   // input data [W, H, C, N]
+            int                   s0,  // stride dimension 0
+            int                   s1,  // stride dimension 1
+            int                   p0,  // padding dimension 0
+            int                   p1,  // padding dimension 1
+            int                   d0,  // dilation dimension 0
+            int                   d1); // dilation dimension 1
 
     enum ggml_op_pool {
         GGML_OP_POOL_MAX,
