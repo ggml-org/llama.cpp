@@ -375,9 +375,11 @@ static __global__ void reduce_rows_f32(const float * x, float * dst, const int n
 
     sum = warp_reduce_sum(sum);
 
-    if (col == 0) {
-        dst[row] = norm ? sum / ncols : sum;
+    if (col != 0) {
+        return;
     }
+
+    dst[row] = norm ? sum / ncols : sum;
 }
 
 template<int width = WARP_SIZE>
