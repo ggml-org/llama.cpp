@@ -41,15 +41,15 @@ struct tensor_statistics {
     std::string tensor;
     Stats stats;
     float total_bias = 0;
-    float mean_bias = 0;
-    float max_bias = 0;
-    float min_bias = 0;
-    int elements = 0;
-    float stddev = 0;
-    float active = 0;
-    float entropy = 0;
-    float zd = 0;
-    float cossim = 0;
+    float mean_bias  = 0;
+    float max_bias   = 0;
+    float min_bias   = 0;
+    int elements     = 0;
+    float stddev     = 0;
+    float active     = 0;
+    float entropy    = 0;
+    float zd         = 0;
+    float cossim     = 0;
 };
 
 class IMatrixCollector {
@@ -778,8 +778,8 @@ int main(int argc, char ** argv) {
         }
 
         const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
-        LOG_INF("\nComputing weighted statistics per layer (%d layers)\n", layers);
-        LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "      Σ(Bias)", "       ZD", "CosSim");
+        LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
+        LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Bias)", "      μZD", "μCosSim");
         LOG_INF("===============================================\n");
 
         for (const auto & [first, second] : ws) {
