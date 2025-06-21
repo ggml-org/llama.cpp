@@ -24,8 +24,6 @@ public:
     // this callback is used to filter out layers that should not be included in the cache
     using layer_filter_cb = std::function<bool(int32_t il)>;
 
-    using ubatch_heads = std::vector<uint32_t>;
-
     struct defrag_info {
         bool empty() const {
             return ids.empty();
@@ -36,6 +34,40 @@ public:
         //  - if ids[i] == i || ids[i] == ids.size(), then cell i is not moved
         std::vector<uint32_t> ids;
     };
+
+    struct slot_info {
+        // data for ggml_set_rows
+        using idx_vec_t = std::vector<uint32_t>;
+
+        idx_vec_t idxs;
+
+        uint32_t head() const {
+            return idxs[0];
+        }
+
+        bool empty() const {
+            return idxs.empty();
+        }
+
+        // TODO: tmp until kv cells support non-cont slots
+        bool is_cont() const {
+            bool res = true;
+
+            for (uint32_t i = 1; i < idxs.size(); ++i) {
+                if (idxs[i] != idxs[i - 1] + 1) {
+                    res = false;
+                    break;
+                }
+            }
+
+            return res;
+        }
+
+        // TODO: implement
+        //std::vector<idx_vec_t> seq_idxs;
+    };
+
+    using slot_info_vec_t = std::vector<slot_info>;
 
     llama_kv_cache_unified(
             const llama_model &  model,
@@ -102,31 +134,36 @@ public:
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * kv_idxs, int32_t il, uint32_t head_cur) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * kv_idxs, int32_t il, uint32_t head_cur) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * kv_idxs, int32_t il, const slot_info & sinfo) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * kv_idxs, int32_t il, const slot_info & sinfo) const;
 
     //
     // preparation API
     //
 
-    // find places for the provided ubatches in the cache, returns the head locations
+    // find places for the provided ubatches in the cache, returns the slot infos
     // return empty vector on failure
-    ubatch_heads prepare(const std::vector<llama_ubatch> & ubatches);
+    slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches);
 
     bool update(llama_context * lctx, bool do_shift, const defrag_info & dinfo);
 
+    // find a continuous slot of kv cells that can hold the ubatch
     // return the cell position where we can insert the ubatch
-    // return -1 on failure to find a contiguous slot of kv cells
-    int32_t find_slot(const llama_ubatch & ubatch) const;
+    // return -1 on failure to find a slot
+    slot_info find_slot(const llama_ubatch & ubatch) const;
 
-    // emplace the ubatch context into slot: [head_cur, head_cur + ubatch.n_tokens)
-    void apply_ubatch(uint32_t head_cur, const llama_ubatch & ubatch);
+    // find a set of kv cells that can hold the ubatch
+    // TODO: implement
+    //slot_info find_slot_ext(const llama_ubatch & ubatch) const;
+
+    // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
     //
     // set_input API
     //
 
-    void set_input_kv_idxs   (ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t head_cur) const;
+    void set_input_kv_idxs   (ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -217,8 +254,8 @@ private:
 class llama_kv_cache_unified_context : public llama_memory_context_i {
 public:
     // some shorthands
-    using ubatch_heads = llama_kv_cache_unified::ubatch_heads;
-    using defrag_info  = llama_kv_cache_unified::defrag_info;
+    using slot_info_vec_t = llama_kv_cache_unified::slot_info_vec_t;
+    using defrag_info     = llama_kv_cache_unified::defrag_info;
 
     // used for errors
     llama_kv_cache_unified_context(llama_memory_status status);
@@ -237,7 +274,7 @@ public:
     // used to create a batch procesing context from a batch
     llama_kv_cache_unified_context(
             llama_kv_cache_unified * kv,
-            ubatch_heads heads,
+            slot_info_vec_t sinfos,
             std::vector<llama_ubatch> ubatches);
 
     virtual ~llama_kv_cache_unified_context();
@@ -290,10 +327,10 @@ private:
     // batch processing context
     //
 
-    // the index of the next ubatch to process
-    size_t i_next = 0;
+    // the index of the cur ubatch to process
+    size_t i_cur = 0;
 
-    ubatch_heads heads;
+    slot_info_vec_t sinfos;
 
     std::vector<llama_ubatch> ubatches;
 
@@ -304,7 +341,4 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
-
-    // the beginning of the current slot in which the ubatch will be inserted
-    int32_t head;
 };
