@@ -947,6 +947,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CONV_TRANSPOSE_1D",
     "IM2COL",
     "IM2COL_BACK",
+    "CONV_2D",
     "CONV_2D_DW",
     "CONV_TRANSPOSE_2D",
     "POOL_1D",
@@ -986,7 +987,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_ADAMW",
 };
 
-static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
+static_assert(GGML_OP_COUNT == 84, "GGML_OP_COUNT != 84");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1043,6 +1044,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "conv_transpose_1d(x)",
     "im2col(x)",
     "im2col_back(x)",
+    "conv_2d(x)",
     "conv_2d_dw(x)",
     "conv_transpose_2d(x)",
     "pool_1d(x)",
@@ -1082,7 +1084,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "adamw(x)",
 };
 
-static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
+static_assert(GGML_OP_COUNT == 84, "GGML_OP_COUNT != 84");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4088,6 +4090,42 @@ struct ggml_tensor * ggml_conv_2d_dw(
     struct ggml_tensor * result = ggml_mul_mat(ctx, new_a, new_b);
     result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], b->ne[2], b->ne[3]); // [N, OC, OH, OW]
 
+    return result;
+}
+
+// ggml_conv_2d_direct
+
+struct ggml_tensor * ggml_conv_2d_direct(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   stride0,
+        int                   stride1,
+        int                   pad0,
+        int                   pad1,
+        int                   dilation0,
+        int                   dilation1) {
+    int64_t ne[4];
+    int64_t OW = ggml_calc_conv_output_size(b->ne[0], a->ne[0], stride0, pad0, dilation0);
+    int64_t OH = ggml_calc_conv_output_size(b->ne[1], a->ne[1], stride1, pad1, dilation1);
+    GGML_ASSERT((OH > 0) && "b (kernel) too small compared to a (input)");
+    GGML_ASSERT((OW > 0) && "b (kernel) too small compared to a (input)");
+
+    ne[0] = OW;
+    ne[1] = OH;
+    ne[2] = a->ne[3];
+    ne[3] = b->ne[3];
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, b->type, 4, ne);
+
+    // TODO: handle channel-contiguous layout
+
+    int32_t params[] = { stride0, stride1, pad0, pad1, dilation0, dilation1 };
+    ggml_set_op_params(result, params, sizeof(params));
+
+    result->op     = GGML_OP_CONV_2D;
+    result->src[0] = a;
+    result->src[1] = b;
     return result;
 }
 

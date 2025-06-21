@@ -481,6 +481,7 @@ extern "C" {
         GGML_OP_CONV_TRANSPOSE_1D,
         GGML_OP_IM2COL,
         GGML_OP_IM2COL_BACK,
+        GGML_OP_CONV_2D,
         GGML_OP_CONV_2D_DW,
         GGML_OP_CONV_TRANSPOSE_2D,
         GGML_OP_POOL_1D,
@@ -1662,6 +1663,17 @@ extern "C" {
             int                   p1,  // padding dimension 1
             int                   d0,  // dilation dimension 0
             int                   d1); // dilation dimension 1
+
+    GGML_API struct ggml_tensor * ggml_conv_2d_direct(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,   // convolution kernel
+            struct ggml_tensor  * b,   // data
+            int                   stride0,  // stride dimension 0
+            int                   stride1,  // stride dimension 1
+            int                   padding0,  // padding dimension 0
+            int                   padding1,  // padding dimension 1
+            int                   dilation0,  // dilation dimension 0
+            int                   dilation1); // dilation dimension 1
 
     // kernel size is a->ne[0] x a->ne[1]
     // stride is equal to kernel size

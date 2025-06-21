@@ -1,0 +1,244 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+#include "types.comp"
+
+// shape notation: [dim(N), ..., dim(0)] -- stride(dim(j)) >= stride(dim(i)) if i > j
+layout (binding = 0) readonly buffer A {A_TYPE knl_data[];};    // src0 - kernel:   [KW, KH, Cin, Cout] 
+layout (binding = 1) readonly buffer B {B_TYPE src_data[];};    // src1 - input:    [W, H, Cin, N] -- channel_first format
+layout (binding = 2) writeonly buffer D {D_TYPE dst_data[];};   // dst - result:    [OW, OH, Cout, N]
+
+layout (push_constant) uniform parameter {
+    // I/O channels, batch size
+    uint32_t Cout;
+    uint32_t Cin;
+    uint32_t N;
+    
+    // Tensor spatial sizes: kernel, input, output
+    uint32_t KW;
+    uint32_t KH;
+    uint32_t W;
+    uint32_t H;
+    uint32_t OW;
+    uint32_t OH;
+
+    // Parameters: stride, padding, dilation - 0=y, 1=x
+    uint32_t s0;
+    uint32_t s1;
+    uint32_t p0;
+    uint32_t p1;
+    uint32_t d0;
+    uint32_t d1;
+
+    // Strides in elements
+    uint32_t nb01;
+    uint32_t nb02;
+    uint32_t nb03;
+
+    uint32_t nb11;
+    uint32_t nb12;
+    uint32_t nb13;
+
+    uint32_t nb1;
+    uint32_t nb2;
+    uint32_t nb3;
+} p;
+
+#define WG_SIZE 256
+
+layout(local_size_x = WG_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+uint32_t tid = gl_LocalInvocationID.x;
+const uint32_t bs = gl_WorkGroupSize.x;
+
+uint splitWork(uint work_size, uint block_size){
+    return (block_size + work_size -1) / block_size;
+}
+
+uint32_t K = p.Cout;
+uint32_t CRS = p.Cin*p.KH*p.KW;
+uint32_t NPQ = p.N*p.OH*p.OW;
+
+uint32_t n_elems_out = K*NPQ;
+
+// Blocktile sizes
+const uint32_t BS_K = 128;
+const uint32_t BS_CRS = 16;
+const uint32_t BS_NPQ = 128;
+
+// Number of blocktiles per input
+uint32_t NB_CRS = splitWork(CRS, BS_CRS);
+
+const uint32_t Ash_stride = BS_CRS+1;
+const uint32_t Bsh_stride = BS_NPQ+1;
+
+const uint32_t Ash_numel = BS_K*BS_CRS;
+const uint32_t Bsh_numel = BS_CRS*BS_NPQ;
+
+const uint32_t Ash_len = BS_K*Ash_stride;
+const uint32_t Bsh_len = BS_CRS*Bsh_stride;
+
+shared float Ash[Ash_len];  // K x CRS
+shared float Bsh[Bsh_len];  // CRS x NPQ
+
+// Threadtile sizes
+const uint32_t TS_K = 16;
+const uint32_t TS_NPQ = BS_K*BS_NPQ / WG_SIZE / TS_K;
+
+// Number of threadtiles per blocktile
+const uint32_t NT_K = BS_K / TS_K;
+const uint32_t NT_NPQ = BS_NPQ / TS_NPQ;
+
+float regA[TS_K];
+float regB[TS_NPQ];
+float regC[TS_K][TS_NPQ];
+
+/*
+Compute
+KxCRS @ CRSxNPQ = K x NPQ
+K=Cout
+C=Cin
+R,S=KH,KW
+P,Q=OH,OW
+*/
+
+uint32_t B_idx_K = gl_WorkGroupID.x;
+uint32_t B_idx_NPQ = gl_WorkGroupID.y;
+
+uint32_t T_y = tid / NT_NPQ;
+uint32_t T_x = tid % NT_NPQ;
+
+uint32_t Ar = tid / BS_CRS;
+uint32_t Ac = tid % BS_CRS;
+uint32_t ArpWg = WG_SIZE / BS_CRS;
+
+uint32_t Br = tid / BS_NPQ;
+uint32_t Bc = tid % BS_NPQ;
+uint32_t BrpWg = WG_SIZE / BS_NPQ;
+
+void initReg(){
+    for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){
+        for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){
+            regC[T_ly][T_lx] = 0.0;
+        }
+    }
+}
+
+void outProdReg(){
+    for(uint32_t CRS_lidx = 0; CRS_lidx < BS_CRS; CRS_lidx++){
+        for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){
+            regA[T_ly] = Ash[(T_y*TS_K + T_ly)*Ash_stride + CRS_lidx];
+        }
+        for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){
+            regB[T_lx] = Bsh[CRS_lidx*Bsh_stride + T_x*TS_NPQ+T_lx];
+        }
+        for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){
+            for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){
+                regC[T_ly][T_lx] += regA[T_ly] * regB[T_lx];
+            }
+        }
+    }
+}
+
+// Generate different functions for computing the sides.
+
+#define NOOP()
+
+#define DEF_BOUNDARY_CONDITION_A_IF()\
+if(K_idx < K && CRS_idx < CRS){
+
+#define DEF_BOUNDARY_CONDITION_A_ELSE()\
+}else{\
+    Ash[B_ly * Ash_stride + B_lx] = 0.0;\
+}
+
+#define DEF_BOUNDARY_CONDITION_B_IF()\
+if(CRS_idx < CRS && NPQ_idx < NPQ){
+
+#define DEF_BOUNDARY_CONDITION_B_ELSE()\
+}else{\
+    Bsh[B_ly * Bsh_stride + B_lx] = 0.0;\
+}
+
+#define MAIN_LOOP(FUNC_NAME_SUFFIX, BOUNDARY_CONDITION_A_IF, BOUNDARY_CONDITION_A_ELSE, BOUNDARY_CONDITION_B_IF, BOUNDARY_CONDITION_B_ELSE)\
+void mainLoop ## FUNC_NAME_SUFFIX(){\
+    initReg();\
+    /* Advance block in CRS dim */\
+    for(uint32_t B_idx_CRS = 0; B_idx_CRS < NB_CRS; B_idx_CRS++){\
+        /* Load kernel to A_block: (BS_K x BS_CRS)*/\
+        for(uint32_t r_offset = 0; r_offset < BS_K; r_offset += ArpWg){\
+            uint32_t B_ly = r_offset + Ar;\
+            uint32_t B_lx = Ac;\
+            uint32_t K_idx = B_idx_K*BS_K + B_ly;                /* Global K_idx (row index of A)*/\
+            uint32_t CRS_idx = B_idx_CRS*BS_CRS + B_lx;          /* Global CRS_idx (column index of A)*/\
+            BOUNDARY_CONDITION_A_IF()\
+                uint32_t Cin_idx = CRS_idx / (p.KW*p.KH);\
+                uint32_t KH_idx = (CRS_idx - Cin_idx*p.KW*p.KH) / p.KW;\
+                uint32_t KW_idx = CRS_idx - Cin_idx*p.KW*p.KH - KH_idx*p.KW;\
+                uint32_t knl_idx = KW_idx + KH_idx*p.nb01 + Cin_idx*p.nb02 + K_idx*p.nb03;\
+                Ash[B_ly * Ash_stride + B_lx] = knl_data[knl_idx];\
+            BOUNDARY_CONDITION_A_ELSE()\
+        }\
+        barrier();\
+        /* Load input to B_block: (BS_CRS x BS_NPQ) */\
+        for(uint32_t r_offset = 0; r_offset < BS_CRS; r_offset += BrpWg){\
+            uint32_t B_ly = r_offset + Br;                      /* Row index of B block */\
+            uint32_t B_lx = Bc;                                 /* Column index of B block */\
+            uint32_t CRS_idx = B_idx_CRS*BS_CRS + B_ly;         /* Global CRS index (row index of B) */\
+            uint32_t NPQ_idx = B_idx_NPQ*BS_NPQ + B_lx;         /* Global NPQ index (column index of B) */\
+            BOUNDARY_CONDITION_B_IF()\
+                uint32_t Cin_idx = CRS_idx / (p.KW*p.KH);\
+                uint32_t KH_idx = (CRS_idx - Cin_idx*p.KW*p.KH) / p.KW;\
+                uint32_t KW_idx = CRS_idx - Cin_idx*p.KW*p.KH - KH_idx*p.KW;\
+                uint32_t N_idx = NPQ_idx / (p.OH*p.OW);\
+                uint32_t OH_idx = (NPQ_idx - N_idx*p.OH*p.OW) / p.OW;\
+                uint32_t OW_idx = NPQ_idx - N_idx*p.OH*p.OW - OH_idx*p.OW;\
+                uint32_t H_idx = OH_idx*p.s1 + KH_idx*p.d1 - p.p1;\
+                uint32_t W_idx = OW_idx*p.s0 + KW_idx*p.d0 - p.p0;\
+                if(H_idx >= 0 && H_idx < p.H && W_idx >= 0 && W_idx < p.W){\
+                    uint32_t src_idx = W_idx + H_idx*p.nb11 + Cin_idx*p.nb12 + N_idx*p.nb13;\
+                    Bsh[B_ly * Bsh_stride + B_lx] = src_data[src_idx];\
+                }else{\
+                    Bsh[B_ly * Bsh_stride + B_lx] = 0.0;\
+                }\
+            BOUNDARY_CONDITION_B_ELSE()\
+        }\
+        barrier();\
+        outProdReg();\
+        barrier();\
+    }\
+    /* Save C* */\
+    for(uint32_t T_ly = 0; T_ly < TS_K; T_ly++){\
+        for(uint32_t T_lx = 0; T_lx < TS_NPQ; T_lx++){\
+            uint32_t K_idx = B_idx_K * BS_K + T_y * TS_K + T_ly;\
+            uint32_t NPQ_idx = B_idx_NPQ * BS_NPQ + T_x * TS_NPQ + T_lx;\
+            if(K_idx < K && NPQ_idx < NPQ){\
+                uint32_t N_idx = NPQ_idx / (p.OH*p.OW);\
+                uint32_t OH_idx = (NPQ_idx - N_idx*p.OH*p.OW) / p.OW;\
+                uint32_t OW_idx = NPQ_idx - N_idx*p.OH*p.OW - OH_idx*p.OW;\
+                uint32_t dst_idx = OW_idx + OH_idx*p.nb1 + K_idx*p.nb2 + N_idx*p.nb3;\
+                dst_data[dst_idx] = regC[T_ly][T_lx];\
+            }\
+        }\
+    }\
+}
+
+// Generates mainLoopBoundaryCheck
+MAIN_LOOP(BoundaryCheck, 
+    DEF_BOUNDARY_CONDITION_A_IF, 
+    DEF_BOUNDARY_CONDITION_A_ELSE, 
+    DEF_BOUNDARY_CONDITION_B_IF, 
+    DEF_BOUNDARY_CONDITION_B_ELSE)
+
+// Generates mainLoopNoBoundaryCheck
+MAIN_LOOP(NoBoundaryCheck, 
+    NOOP, NOOP, NOOP, NOOP)
+
+void main(){
+    if(gl_WorkGroupID.x == gl_NumWorkGroups.x-1 || gl_WorkGroupID.y == gl_NumWorkGroups.y-1){
+        mainLoopBoundaryCheck();
+    }else{
+        mainLoopNoBoundaryCheck();
+    }
+}

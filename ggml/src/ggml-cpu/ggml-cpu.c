@@ -1858,6 +1858,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_im2col_back_f32(params, tensor);
             } break;
+        case GGML_OP_CONV_2D:
+            {
+                GGML_ABORT("Op not supported on CPU yet.");
+            } break;
         case GGML_OP_CONV_2D_DW:
             {
                 ggml_compute_forward_conv_2d_dw(params, tensor);
