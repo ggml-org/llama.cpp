@@ -333,7 +333,7 @@ int32_t llm_chat_apply_template(
             std::string role(message->role);
             if (role == "system") {
                 // there is no system message for gemma, but we will merge it with user prompt, so nothing is broken
-                system_prompt = trim(message->content);
+                system_prompt += trim(message->content);
                 continue;
             }
             // in gemma, "assistant" is "model"
@@ -355,7 +355,7 @@ int32_t llm_chat_apply_template(
             std::string role(message->role);
             if (role == "system") {
                 // there is no system message support, we will merge it with user prompt
-                system_prompt = message->content;
+                system_prompt += message->content;
                 continue;
             } else if (role == "user") {
                 ss << "Human: ";

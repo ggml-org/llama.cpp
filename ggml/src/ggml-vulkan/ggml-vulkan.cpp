@@ -168,6 +168,11 @@ struct vk_command_pool {
     vk_queue *q;
 };
 
+// Prevent simultaneous submissions to the same queue.
+// This could be per vk_queue if we stopped having two vk_queue structures
+// sharing the same vk::Queue.
+static std::mutex queue_mutex;
+
 struct vk_queue {
     uint32_t queue_family_index;
     vk::Queue queue;
@@ -1036,6 +1041,14 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
 struct vk_instance_t {
     vk::Instance instance;
 
+    bool debug_utils_support = false;  // VK_EXT_debug_utils enabled
+    PFN_vkSetDebugUtilsObjectNameEXT pfn_vkSetDebugUtilsObjectNameEXT = {};
+    PFN_vkQueueBeginDebugUtilsLabelEXT pfn_vkQueueBeginDebugUtilsLabelEXT = {};
+    PFN_vkQueueEndDebugUtilsLabelEXT   pfn_vkQueueEndDebugUtilsLabelEXT   = {};
+    PFN_vkCmdBeginDebugUtilsLabelEXT   pfn_vkCmdBeginDebugUtilsLabelEXT   = {};
+    PFN_vkCmdEndDebugUtilsLabelEXT pfn_vkCmdEndDebugUtilsLabelEXT = {};
+    PFN_vkCmdInsertDebugUtilsLabelEXT  pfn_vkCmdInsertDebugUtilsLabelEXT  = {};
+
     std::vector<size_t> device_indices;
     vk_device devices[GGML_VK_MAX_DEVICES];
 };
@@ -1175,6 +1188,14 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
     pipeline->compiled = true;
 
+    if (vk_instance.debug_utils_support) {
+        vk::DebugUtilsObjectNameInfoEXT duoni;
+        duoni.objectType = vk::ObjectType::ePipeline;
+        duoni.pObjectName = pipeline->name.c_str();
+        duoni.objectHandle = reinterpret_cast<uint64_t>(static_cast<VkPipeline_T*>(pipeline->pipeline));
+        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT(device->device, &static_cast<VkDebugUtilsObjectNameInfoEXT &>(duoni));
+    }
+
     {
         std::lock_guard<std::mutex> guard(device->mutex);
         device->pipelines.insert({ pipeline->name, pipeline });
@@ -1266,6 +1287,7 @@ static vk::CommandBuffer ggml_vk_create_cmd_buffer(vk_device& device, vk_command
 static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     if (ctx->seqs.empty()) {
         if (fence) {
+            std::lock_guard<std::mutex> guard(queue_mutex);
             ctx->p->q->queue.submit({}, fence);
         }
         return;
@@ -1335,6 +1357,7 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
         }
     }
 
+    std::lock_guard<std::mutex> guard(queue_mutex);
     ctx->p->q->queue.submit(submit_infos, fence);
 
     ctx->seqs.clear();
@@ -3554,6 +3577,8 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 
+static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
+
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
         return;
@@ -3574,7 +3599,7 @@ static void ggml_vk_instance_init() {
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
-
+    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions) && getenv("GGML_VK_DEBUG_MARKERS") != nullptr;
     std::vector<const char*> layers;
 
     if (validation_ext) {
@@ -3589,6 +3614,9 @@ static void ggml_vk_instance_init() {
         extensions.push_back("VK_KHR_portability_enumeration");
     }
 #endif
+    if (debug_utils_ext) {
+        extensions.push_back("VK_EXT_debug_utils");
+    }
     vk::InstanceCreateInfo instance_create_info(vk::InstanceCreateFlags{}, &app_info, layers, extensions);
 #ifdef __APPLE__
     if (portability_enumeration_ext) {
@@ -3612,6 +3640,18 @@ static void ggml_vk_instance_init() {
     vk_instance.instance = vk::createInstance(instance_create_info);
     vk_instance_initialized = true;
 
+    if (debug_utils_ext) {
+        vk_instance.debug_utils_support              = true;
+        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT = (PFN_vkQueueBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueBeginDebugUtilsLabelEXT");
+        vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT = (PFN_vkQueueEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueEndDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
+
+    }
+
+    size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
     vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
@@ -9488,6 +9528,12 @@ static size_t ggml_backend_vk_host_buffer_type_get_alignment(ggml_backend_buffer
     UNUSED(buft);
 }
 
+static size_t ggml_backend_vk_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    return vk_instance.devices[0]->suballocation_block_size;
+
+    UNUSED(buft);
+}
+
 // Should be changed to return device-specific host buffer type
 // but that probably requires changes in llama.cpp
 ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type() {
@@ -9496,7 +9542,7 @@ ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type() {
             /* .get_name         = */ ggml_backend_vk_host_buffer_type_name,
             /* .alloc_buffer     = */ ggml_backend_vk_host_buffer_type_alloc_buffer,
             /* .get_alignment    = */ ggml_backend_vk_host_buffer_type_get_alignment,
-            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+            /* .get_max_size     = */ ggml_backend_vk_host_buffer_type_get_max_size,
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
         },
@@ -9642,6 +9688,13 @@ static bool ggml_vk_is_empty(ggml_tensor * node) {
 static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
+
+    if (vk_instance.debug_utils_support) {
+        vk::DebugUtilsLabelEXT dul = {};
+        dul.pLabelName = "ggml_backend_vk_graph_compute";
+        dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
+    }
 
     uint64_t total_mat_mul_bytes = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
@@ -10327,6 +10380,22 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
         std::cerr << "ggml_vulkan: WARNING: Instance extension VK_KHR_portability_enumeration not found." << std::endl;
     }
 #endif
+    return false;
+
+    UNUSED(instance_extensions);
+}
+
+// Extension availability
+static bool ggml_vk_instance_debug_utils_ext_available(
+    const std::vector<vk::ExtensionProperties> & instance_extensions) {
+    // Check for portability enumeration extension for MoltenVK support
+    for (const auto & properties : instance_extensions) {
+        if (strcmp("VK_EXT_debug_utils", properties.extensionName) == 0) {
+            return true;
+        }
+    }
+
+    std::cerr << "ggml_vulkan: WARNING: Instance extension VK_EXT_debug_utils not found." << std::endl;
     return false;
 
     UNUSED(instance_extensions);

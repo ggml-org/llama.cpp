@@ -271,7 +271,7 @@ class GGUFWriter:
 
     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
         if any(key in kv_data for kv_data in self.kv_data):
-            raise ValueError(f'Duplicated key name {key!r}')
+            logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')
 
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
 
@@ -890,6 +890,9 @@ class GGUFWriter:
 
     def add_add_eos_token(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_EOS, value)
+
+    def add_add_sep_token(self, value: bool) -> None:
+        self.add_bool(Keys.Tokenizer.ADD_SEP, value)
 
     def add_add_space_prefix(self, value: bool) -> None:
         self.add_bool(Keys.Tokenizer.ADD_PREFIX, value)

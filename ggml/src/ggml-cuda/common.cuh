@@ -19,10 +19,10 @@
 #endif
 #include "ggml-common.h"
 
-#include <cstdio>
 #include <array>
 #include <cassert>
 #include <cfloat>
+#include <cstdio>
 #include <string>
 #include <vector>
 
@@ -207,9 +207,9 @@ typedef float2 dfloat2;
 #define FP16_MMA_AVAILABLE
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
 
-#if defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || defined(RDNA4))
+#if defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || (defined(GGML_HIP_ROCWMMA_FATTN_GFX12) && defined(RDNA4)))
 #define FP16_MMA_AVAILABLE
-#endif // defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || defined(RDNA4))
+#endif // defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || (defined(GGML_HIP_ROCWMMA_FATTN_GFX12) && defined(RDNA4)))
 
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 #define NEW_MMA_AVAILABLE
@@ -767,21 +767,7 @@ struct ggml_backend_cuda_context {
         name(GGML_CUDA_NAME + std::to_string(device)) {
     }
 
-    ~ggml_backend_cuda_context() {
-        if (copy_event != nullptr) {
-            CUDA_CHECK(cudaEventDestroy(copy_event));
-        }
-        for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
-            for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
-                if (streams[i][j] != nullptr) {
-                    CUDA_CHECK(cudaStreamDestroy(streams[i][j]));
-                }
-            }
-            if (cublas_handles[i] != nullptr) {
-                CUBLAS_CHECK(cublasDestroy(cublas_handles[i]));
-            }
-        }
-    }
+    ~ggml_backend_cuda_context();
 
     cudaStream_t stream(int device, int stream) {
         if (streams[device][stream] == nullptr) {

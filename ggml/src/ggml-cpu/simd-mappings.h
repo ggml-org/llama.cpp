@@ -944,10 +944,8 @@ static inline void __lsx_f16x4_store(ggml_fp16_t * x, __m128 y) {
     for (int i = 0; i < offset; ++i) {              \
         x[i] = vec_add(x[i], x[offset + i]);        \
     }                                               \
-    res = vec_extract(x[0], 0) +                    \
-          vec_extract(x[0], 1) +                    \
-          vec_extract(x[0], 2) +                    \
-          vec_extract(x[0], 3);                     \
+    float32x4_t tmp = x[0] + vec_reve(x[0]);        \
+    res = tmp[0] + tmp[1];                          \
 }
 
 #define GGML_F32_VEC        GGML_F32x4

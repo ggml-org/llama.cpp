@@ -384,10 +384,10 @@ private:
     //
     std::vector<llama_pos> shift;
 
-    using bits_t = std::bitset<LLAMA_MAX_SEQ>;
+    using seq_set_t = std::bitset<LLAMA_MAX_SEQ>;
 
     // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
-    std::vector<bits_t> seq;
+    std::vector<seq_set_t> seq;
 
     // the set seq_pos[s] tells us which positions are currently present for sequence s
     // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
