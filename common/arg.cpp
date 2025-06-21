@@ -3406,5 +3406,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    add_opt(common_arg({ "--pidfile" }, "FILE", "path to PID file for server process",
+                       [](common_params & params, const std::string & value) { params.pidfile = value; })
+                .set_examples({ LLAMA_EXAMPLE_SERVER }));
+
     return ctx_arg;
 }

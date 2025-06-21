@@ -14,22 +14,31 @@
 // mime type for sending response
 #define MIMETYPE_JSON "application/json; charset=utf-8"
 
+#include <signal.h>
+
+#include <atomic>
+#include <chrono>
+#include <cinttypes>
+#include <condition_variable>
+#include <cstddef>
+#include <deque>
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <unordered_set>
+
 // auto generated files (see README.md for details)
 #include "index.html.gz.hpp"
 #include "loading.html.hpp"
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cstddef>
-#include <cinttypes>
-#include <deque>
-#include <memory>
-#include <mutex>
-#include <signal.h>
-#include <thread>
-#include <unordered_map>
-#include <unordered_set>
+#ifdef _WIN32
+#include <process.h>
+#define getpid _getpid
+#define pid_t int;
+#else
+#include <unistd.h>
+#endif
 
 using json = nlohmann::ordered_json;
 
@@ -3657,12 +3666,90 @@ inline void signal_handler(int signal) {
     shutdown_handler(signal);
 }
 
+static bool check_pid_alive(const pid_t pid) {
+    if (pid <= 0) {
+        return false;
+    }
+
+    // Process is alive or exists but is inaccessible
+    if (kill(pid, 0) == 0 || errno == EPERM) {
+        return true;  // Process is alive
+    }
+
+    return false;  // Process does not exist or other error
+}
+
+class PidFile {
+  public:
+    FILE *      file = nullptr;
+    std::string fname;
+    bool        rm = false;
+
+    FILE * open(const std::string & filename, const char * mode, const bool r = false) {
+        file  = ggml_fopen(filename.c_str(), mode);
+        fname = filename;
+        rm    = r;
+
+        return file;
+    }
+
+    void close() {
+        fclose(file);
+        file = nullptr;
+
+        if (rm) {
+            // Remove stale pidfile
+            unlink(fname.c_str());
+        }
+    }
+
+    ~PidFile() {
+        if (file) {
+            close();
+        }
+    }
+};
+
+static bool is_old_pid_alive(const std::string & filename) {
+    pid_t oldpid = 0;
+    PidFile  f;
+    if (f.open(filename, "r")) {
+        if (fscanf(f.file, "%d", &oldpid) == 1) {
+            if (check_pid_alive(oldpid)) {
+                LOG_ERR("Process already running with PID %d\n", oldpid);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static int create_pidfile(const std::string & pidfile, PidFile & f) {
+    if (!f.open(pidfile.c_str(), "w", true)) {
+        LOG_ERR("Unable to open pidfile %s: %s\n", pidfile.c_str(), strerror(errno));
+        return -1;
+    }
+
+    fprintf(f.file, "%d\n", getpid());
+    fflush(f.file);
+
+    return 0;
+}
+
 int main(int argc, char ** argv) {
     // own arguments required by this example
     common_params params;
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
+    }
+
+    PidFile f;
+    if (!params.pidfile.empty()) {
+        if (is_old_pid_alive(params.pidfile) || create_pidfile(params.pidfile, f)) {
+            return 1;
+        }
     }
 
     common_init();
