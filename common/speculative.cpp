@@ -238,12 +238,12 @@ llama_tokens common_speculative_gen_draft(
     llama_decode(ctx, batch);
 
     common_sampler_reset(smpl);
-
+    int n_remain = params.n_draft;
     // sample n_draft tokens from the draft model
     for (int i = 0; i < params.n_draft; ++i) {
         common_batch_clear(batch);
 
-        common_sampler_sample(smpl, ctx, 0, true);
+        common_sampler_sample(smpl, ctx, 0, true, --n_remain);
 
         const auto * cur_p = common_sampler_get_candidates(smpl);
 

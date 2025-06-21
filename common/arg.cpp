@@ -1205,6 +1205,15 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
         exit(1); // for other exceptions, we exit with status code 1
     }
 
+    float &pafter = params.sampling.start_eog_after;
+    float &premain = params.sampling.start_eog_at_remain;
+    float const premain0 = premain;
+    float remain = params.n_predict - pafter;
+    if (premain < remain)
+      premain = remain;
+    if (params.sampling.eog_bias_per_tok)
+        LOG_INF("%s: n_predict=%d (first of start_eog_at_remain=%0.3g start_eog_after=%0.3g) => (remain=%0.3g) eog-bias-per-tok=%0.3g\n", __func__, (int) params.n_predict,
+                (double) premain0, (double) pafter, (double)premain, (double) params.sampling.eog_bias_per_tok);
     return true;
 }
 
@@ -1935,6 +1944,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             } catch (const std::exception&) {
                 throw std::invalid_argument("invalid input format");
             }
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"-eog", "--eog-bias-per-tok"}, "N",
+        string_format("when fewer than -start-eog-at-remain tokens are left to generate after -n, add this bias eog for each subsequent token (default: %.1f)", (double)params.sampling.eog_bias_per_tok),
+        [](common_params & params, const std::string & value) {
+            params.sampling.eog_bias_per_tok = std::stof(value);
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"-remain", "--start-eog-at-remain"}, "N",
+        string_format("start applying -eog bias when this many tokens remain of the -n max (default: %.1f)", (double)params.sampling.start_eog_at_remain),
+        [](common_params & params, const std::string & value) {
+            params.sampling.start_eog_at_remain = std::stof(value);
+        }
+    ).set_sparam());
+    add_opt(common_arg(
+        {"-after", "--start-eog-after"}, "N",
+        string_format("start applying -eog bias after this many tokens generated (default: %.1f); whichever happens first between -remain and -after applies", (double)params.sampling.start_eog_after),
+        [](common_params & params, const std::string & value) {
+            params.sampling.start_eog_after = std::stof(value);
         }
     ).set_sparam());
     add_opt(common_arg(
