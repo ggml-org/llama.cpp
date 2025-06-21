@@ -984,6 +984,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
     "OPT_STEP_ADAMW",
+
+    "FILL",
 };
 
 static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
@@ -1080,6 +1082,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
     "adamw(x)",
+
+    "fill(x)",
 };
 
 static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
@@ -4389,6 +4393,20 @@ struct ggml_tensor * ggml_arange(
     ggml_set_op_params_f32(result, 2, step);
 
     result->op = GGML_OP_ARANGE;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_fill(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 value) {
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+
+    ggml_set_op_params(result, &value, sizeof(value));
+
+    result->op     = GGML_OP_FILL;
+    result->src[0] = a;
 
     return result;
 }
