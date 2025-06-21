@@ -388,7 +388,8 @@ llama_kv_cache_unified::slot_info_vec_t llama_kv_cache_unified::prepare(const st
 
     struct state {
         uint32_t head_old; // old position of the head, before placing the ubatch
-        uint32_t head_new; // new position of the head, after placing the ubatch
+
+        slot_info sinfo; // slot info for the ubatch
 
         llama_kv_cells_unified cells; // copy of the old cells, before placing the ubatch
     };
@@ -409,13 +410,8 @@ llama_kv_cache_unified::slot_info_vec_t llama_kv_cache_unified::prepare(const st
         // remeber the position that we found
         res.push_back(sinfo_new);
 
-        // TODO: temporary
-        if (supports_set_rows) {
-            GGML_ASSERT(sinfo_new.is_cont());
-        }
-
         // store the old state of the cells in the recovery stack
-        states.push_back({head, sinfo_new.head(), cells.cp(sinfo_new.head(), ubatch.n_tokens)});
+        states.push_back({head, sinfo_new, cells.cp(sinfo_new.idxs)});
 
         // now emplace the ubatch
         apply_ubatch(sinfo_new, ubatch);
@@ -423,7 +419,7 @@ llama_kv_cache_unified::slot_info_vec_t llama_kv_cache_unified::prepare(const st
 
     // iterate backwards and restore the cells to their original state
     for (auto it = states.rbegin(); it != states.rend(); ++it) {
-        cells.set(it->head_new, it->cells);
+        cells.set(it->sinfo.idxs, it->cells);
         head = it->head_old;
     }
 

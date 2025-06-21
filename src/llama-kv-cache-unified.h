@@ -49,20 +49,6 @@ public:
             return idxs.empty();
         }
 
-        // TODO: tmp until kv cells support non-cont slots
-        bool is_cont() const {
-            bool res = true;
-
-            for (uint32_t i = 1; i < idxs.size(); ++i) {
-                if (idxs[i] != idxs[i - 1] + 1) {
-                    res = false;
-                    break;
-                }
-            }
-
-            return res;
-        }
-
         // TODO: implement
         //std::vector<idx_vec_t> seq_idxs;
     };
