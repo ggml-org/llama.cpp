@@ -183,6 +183,7 @@ static void compute_cossim(std::vector<tensor_statistics> & tstats) {
         }
     }
 }
+
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
@@ -417,6 +418,7 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_stati
         LOG_ERR("%s: no data in file %s\n", __func__, fname);
         return false;
     }
+
     for (int i = 0; i < n_entries; ++i) {
         int len; in.read((char *)&len, sizeof(len));
         std::vector<char> name_as_vec(len+1);
@@ -699,7 +701,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
     return true;
 }
 
-static bool compute_statistics(const common_params & params) {
+static bool show_statistics(const common_params & params) {
     std::vector<tensor_statistics> ts;
     if (params.in_files.empty() || params.in_files.size() > 1) {
         LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
@@ -709,7 +711,10 @@ static bool compute_statistics(const common_params & params) {
         LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
         return false;
     }
-    if (ts.empty()) {
+
+    if (!ts.empty()) {
+        compute_cossim(ts);
+    } else {
         LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
         return false;
     }
@@ -723,7 +728,6 @@ static bool compute_statistics(const common_params & params) {
             return name_a < name_b || (name_a == name_b && a.total_bias > b.total_bias);
         }
     };
-
     std::sort(ts.begin(), ts.end(), tensor_comparer());
 
     struct weighted_stats {
@@ -732,7 +736,6 @@ static bool compute_statistics(const common_params & params) {
         float weighted_cossim = 0.0f;
         int   total_elements  = 0;
     };
-
     std::map<int, weighted_stats> ws;
 
     LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
@@ -781,7 +784,6 @@ static bool compute_statistics(const common_params & params) {
     LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
     LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Bias)", "      μZD", "μCosSim");
     LOG_INF("===============================================\n");
-
     for (const auto & [first, second] : ws) {
         const auto & layer = first;
         const auto & stats = second;
@@ -798,7 +800,6 @@ static bool compute_statistics(const common_params & params) {
             LOG_INF("%5d\t%14.2f\t%10.4f%%\t%6.4f\n", layer, bias, 100.0f * zd, cossim);
         }
     }
-
     LOG_INF("\n");
 
     return true;
@@ -806,9 +807,7 @@ static bool compute_statistics(const common_params & params) {
 
 int main(int argc, char ** argv) {
     common_params params;
-
     params.out_file = "imatrix.dat" ;
-
     params.n_ctx = 512;
     params.escape = false;
 
@@ -816,19 +815,15 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    std::vector<tensor_statistics> ts;
     if (params.show_statistics) {
-        if (!compute_statistics(params)) {
+        if (!show_statistics(params)) {
             return 1;
         }
-
         return 0;
     }
 
     common_init();
-
     params.n_batch = std::min(params.n_batch, params.n_ctx);
-
     g_collector.set_params(params);
 
     for (const auto & in_file : params.in_files) {
@@ -855,7 +850,6 @@ int main(int argc, char ** argv) {
 
     // init
     common_init_result llama_init = common_init_from_params(params);
-
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
 
@@ -888,12 +882,10 @@ int main(int argc, char ** argv) {
         }
     }
 
-
     g_collector.save_imatrix();
 
     LOG("\n");
     llama_perf_context_print(ctx);
-
     llama_backend_free();
 
     return 0;
