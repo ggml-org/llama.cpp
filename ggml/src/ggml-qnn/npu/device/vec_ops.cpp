@@ -170,10 +170,10 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), h1), sum1);
     }
 
-    sum                                    = _AddFunc(sum0, sum1);
-    const size_t leftover1                 = count % kElementsPerVector1;
-    const bool   has_remaining_src1_vector = src1_vec_ptr_end - src1_vec_ptr > 0;
+    sum                    = _AddFunc(sum0, sum1);
+    const size_t leftover1 = count % kElementsPerVector1;
     {
+        const bool     has_remaining_src1_vector = src1_vec_ptr_end - src1_vec_ptr > 0;
         const bool     should_handle_last_vector = (src1_vec_ptr_end - ((HVX_Vector *) src1)) > 0;
         HVX_Vector     curr0                     = prev0;
         HVX_VectorPair s0_pair;
@@ -238,11 +238,11 @@ inline HVX_Vector vec_mpy_qf32_qf32_sf(HVX_Vector src0, HVX_Vector src1) {
 namespace hexagon {
 
 float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count) {
-    return vec_dot_product_impl<float, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32_f32>(src0, src1, count);
+    return vec_dot_product_impl<float, vec_mpy_qf32, vec_add_qf32, vec_reduction_f32_qf32>(src0, src1, count);
 }
 
 float vec_dot_product_aligned_f32_f32(const float * src0, const float * src1, size_t count) {
-    return vec_dot_product_aligned_impl<float, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32_f32>(src0, src1, count);
+    return vec_dot_product_aligned_impl<float, vec_mpy_qf32, vec_add_qf32, vec_reduction_f32_qf32>(src0, src1, count);
 }
 
 float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count) {
@@ -257,7 +257,7 @@ float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_
 
 float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
     return vec_dot_product_mixed_impl<npu_device_fp16_t, float, hvx_vqf32_convert_vhf, vec_mpy_qf32_qf32_sf,
-                                      vec_add_qf32, vec_reduction_qf32_f32>(src0, src1, count);
+                                      vec_add_qf32, vec_reduction_f32_qf32>(src0, src1, count);
 }
 
 }  // namespace hexagon

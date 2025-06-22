@@ -271,7 +271,7 @@ void rms_norm_vec_f32(const float * src, size_t count, float eps, float * dst) {
                                         Q6_V_valign_VVR(Q6_Vqf32_vmpy_VsfVsf(curr, curr), Q6_V_vzero(), leftover_bytes));
     }
 
-    const float mean  = hexagon::vec_reduction_qf32_f32(sum) / count;  // TODO: figure out how to do division in vector
+    const float mean  = hexagon::vec_reduction_f32_qf32(sum) / count;  // TODO: figure out how to do division in vector
     const float scale = 1.0f / sqrtf(mean + eps);                      // TODO: use buildin blas sqrtf?
     hexagon::vec_scale_f32(src, scale, dst, count);
 }

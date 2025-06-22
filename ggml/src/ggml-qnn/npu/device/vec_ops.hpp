@@ -142,7 +142,7 @@ inline HVX_Vector vec_reduction_qf32(HVX_Vector sums) {
     return sums;
 }
 
-inline float vec_reduction_qf32_f32(HVX_Vector sums) {
+inline float vec_reduction_f32_qf32(HVX_Vector sums) {
     return get_flt0_from_fltv(Q6_Vsf_equals_Vqf32(vec_reduction_qf32(sums)));
 }
 
