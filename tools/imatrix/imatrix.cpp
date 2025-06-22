@@ -116,14 +116,20 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
     }
 }
 
-static void compute_statistics(std::vector<tensor_statistics> & tstats, const int & i, const std::string & name, const Stats & e, const std::vector<float> & activations) {
+static void compute_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e, const std::vector<float> & activations) {
+    if (activations.empty()) {
+        LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
+        return;
+    }
+
     const float total        = std::accumulate(activations.begin(), activations.end(), 0.0f);
     const float max          = *std::max_element(activations.begin(), activations.end());
     const float min          = *std::min_element(activations.begin(), activations.end());
     const float mean         = total / activations.size();
     const float sq_total     = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
-    const float dev          = std::sqrt((sq_total / activations.size()) - (mean * mean));
-    float threshold          = min + min * 0.5f;
+    const float variance     = (sq_total / activations.size()) - (mean * mean);
+    const float dev          = std::sqrt(std::max(0.0f, variance));
+    float threshold          = 1e-6f;
     const int inactive_count = std::count_if(activations.begin(), activations.end(),
                                                [threshold](const float v) { return fabs(v) <= threshold; });
     const float active_ratio = 1 - static_cast<float>(inactive_count) / activations.size();
@@ -138,14 +144,15 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const in
     }
 
     int z_score = 0;
-    for (const auto act : activations) {
-        if (const float p = (act - mean) / dev; p > 1) {
-            z_score++;
+    if (dev > 0.0f) {
+        for (const auto act : activations) {
+            if (const float p = (act - mean) / dev; p > 1) {
+                z_score++;
+            }
         }
     }
 
-    tstats.emplace_back();
-    auto & ts     = tstats[i];
+    auto & ts = tstats.emplace_back();
     ts.tensor     = name;
     ts.stats      = e;
     ts.total_bias = total;
@@ -464,7 +471,7 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_stati
         e.ncall += ncall;
 
         if (tstats) {
-            compute_statistics(*tstats, i, name_as_vec.data(), e, activations);
+            compute_statistics(*tstats, name_as_vec.data(), e, activations);
         }
     }
 
