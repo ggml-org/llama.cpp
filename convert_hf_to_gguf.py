@@ -3577,8 +3577,6 @@ class Plamo2Model(TextModel):
 
         new_name = self.map_tensor_name(name)
 
-        print(f"Plamo2Model: {name} -> {new_name}, shape={data_torch.shape}")
-
         return [(new_name, data_torch)]
 
 
