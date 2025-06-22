@@ -174,7 +174,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     const size_t leftover1             = count % kElementsPerVector1;
     bool         src0_low_vec_consumed = false;
     {
-        HVX_Vector curr0 = Q6_V_vzero();
+        HVX_Vector curr0 = prev0;
         if (src1_vec_ptr_end - src1_vec_ptr > 0) {
             const bool should_fetch_src0 =
                 reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
