@@ -170,12 +170,12 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), h1), sum1);
     }
 
-    sum                                = _AddFunc(sum0, sum1);
-    const size_t leftover1             = count % kElementsPerVector1;
-    bool         src0_low_vec_consumed = false;
+    sum                               = _AddFunc(sum0, sum1);
+    const size_t leftover1            = count % kElementsPerVector1;
+    const bool   src0_have_odd_vector = src1_vec_ptr_end - src1_vec_ptr > 0;
     {
         HVX_Vector curr0 = prev0;
-        if (src1_vec_ptr_end - src1_vec_ptr > 0) {
+        if (src0_have_odd_vector) {
             const bool should_fetch_src0 =
                 reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
             curr0            = should_fetch_src0 ? *src0_vec_ptr : prev0;
@@ -187,13 +187,12 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
             prev1                  = curr1;
 
             sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);  // TODO: figure out how to handle the high part
-            src0_low_vec_consumed = true;
         }
 
         if ((src1_vec_ptr_end - ((HVX_Vector *) src1)) > 0) {
             // handle the last vector
             const bool should_fetch_src0 =
-                !src0_low_vec_consumed &&
+                !src0_have_odd_vector &&
                 reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
             bool should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
             curr0                  = should_fetch_src0 ? *src0_vec_ptr : curr0;
@@ -206,7 +205,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
             prev0                  = curr0;
             prev1                  = curr1;
 
-            sum = _AddFunc(_MpyFunc(src0_low_vec_consumed ? Q6_V_hi_W(s0_pair) : Q6_V_lo_W(s0_pair), s1), sum);
+            sum = _AddFunc(_MpyFunc(src0_have_odd_vector ? Q6_V_hi_W(s0_pair) : Q6_V_lo_W(s0_pair), s1), sum);
         }
     }
 
