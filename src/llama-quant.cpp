@@ -652,14 +652,14 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
 
     std::map<int, std::string> mapped;
-    int next_blk_id = 0;
+    int blk_id = 0;
     int pruned_attention_w = 0;
 
     // make a list of weights
     std::vector<const llama_model_loader::llama_tensor_weight *> tensors;
     tensors.reserve(ml.weights_map.size());
     for (const auto & it : ml.weights_map) {
-        const std::string remapped_name(remap_layer(it.first, prune_list, mapped, next_blk_id));
+        const std::string remapped_name(remap_layer(it.first, prune_list, mapped, blk_id));
         if (remapped_name.empty()) {
             if (it.first.find("attn_v.weight") != std::string::npos ||
                 it.first.find("attn_qkv.weight") != std::string::npos ||
@@ -675,7 +675,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         tensors.push_back(&it.second);
     }
     if (!prune_list.empty()) {
-        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), stoi(mapped.rbegin()->second) + 1);
+        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), blk_id);
     }
 
     // keep_split requires that the weights are sorted by split index
