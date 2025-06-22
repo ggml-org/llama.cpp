@@ -14,6 +14,7 @@ import {
 import { BtnWithTooltips } from '../utils/common';
 import { useAppContext } from '../utils/app.context';
 import toast from 'react-hot-toast';
+import { useModals } from './ModalProvider';
 
 export default function Sidebar() {
   const params = useParams();
@@ -38,6 +39,7 @@ export default function Sidebar() {
       StorageUtils.offConversationChanged(handleConversationChange);
     };
   }, []);
+  const { showConfirm, showPrompt } = useModals();
 
   const groupedConv = useMemo(
     () => groupConversationsByDate(conversations),
@@ -50,44 +52,72 @@ export default function Sidebar() {
         id="toggle-drawer"
         type="checkbox"
         className="drawer-toggle"
+        aria-label="Toggle sidebar"
         defaultChecked
       />
 
-      <div className="drawer-side h-screen lg:h-screen z-50 lg:max-w-64">
+      <div
+        className="drawer-side h-screen lg:h-screen z-50 lg:max-w-64"
+        role="complementary"
+        aria-label="Sidebar"
+        tabIndex={0}
+      >
         <label
           htmlFor="toggle-drawer"
-          aria-label="close sidebar"
+          aria-label="Close sidebar"
           className="drawer-overlay"
         ></label>
+
+        <a
+          href="#main-scroll"
+          className="absolute -left-80 top-0 w-1 h-1 overflow-hidden"
+        >
+          Skip to main content
+        </a>
+
         <div className="flex flex-col bg-base-200 min-h-full max-w-64 py-4 px-4">
           <div className="flex flex-row items-center justify-between mb-4 mt-4">
-            <h2 className="font-bold ml-4">Conversations</h2>
+            <h2 className="font-bold ml-4" role="heading">
+              Conversations
+            </h2>
 
             {/* close sidebar button */}
-            <label htmlFor="toggle-drawer" className="btn btn-ghost lg:hidden">
+            <label
+              htmlFor="toggle-drawer"
+              className="btn btn-ghost lg:hidden"
+              aria-label="Close sidebar"
+              role="button"
+              tabIndex={0}
+            >
               <XMarkIcon className="w-5 h-5" />
             </label>
           </div>
 
           {/* new conversation button */}
-          <div
+          <button
             className={classNames({
               'btn btn-ghost justify-start px-2': true,
               'btn-soft': !currConv,
             })}
             onClick={() => navigate('/')}
+            aria-label="New conversation"
           >
             <PencilSquareIcon className="w-5 h-5" />
             New conversation
-          </div>
+          </button>
 
           {/* list of conversations */}
           {groupedConv.map((group, i) => (
-            <div key={i}>
+            <div key={i} role="group">
               {/* group name (by date) */}
               {group.title ? (
                 // we use btn class here to make sure that the padding/margin are aligned with the other items
-                <b className="btn btn-ghost btn-xs bg-none btn-disabled block text-xs text-base-content text-start px-2 mb-0 mt-6 font-bold">
+                <b
+                  className="btn btn-ghost btn-xs bg-none btn-disabled block text-xs text-base-content text-start px-2 mb-0 mt-6 font-bold"
+                  role="note"
+                  aria-description={group.title}
+                  tabIndex={0}
+                >
                   {group.title}
                 </b>
               ) : (
@@ -102,7 +132,7 @@ export default function Sidebar() {
                   onSelect={() => {
                     navigate(`/chat/${conv.id}`);
                   }}
-                  onDelete={() => {
+                  onDelete={async () => {
                     if (isGenerating(conv.id)) {
                       toast.error(
                         'Cannot delete conversation while generating'
@@ -110,7 +140,7 @@ export default function Sidebar() {
                       return;
                     }
                     if (
-                      window.confirm(
+                      await showConfirm(
                         'Are you sure to delete this conversation?'
                       )
                     ) {
@@ -139,14 +169,14 @@ export default function Sidebar() {
                     document.body.removeChild(a);
                     URL.revokeObjectURL(url);
                   }}
-                  onRename={() => {
+                  onRename={async () => {
                     if (isGenerating(conv.id)) {
                       toast.error(
                         'Cannot rename conversation while generating'
                       );
                       return;
                     }
-                    const newName = window.prompt(
+                    const newName = await showPrompt(
                       'Enter new name for the conversation',
                       conv.name
                     );
@@ -184,20 +214,23 @@ function ConversationItem({
 }) {
   return (
     <div
+      role="menuitem"
+      tabIndex={0}
+      aria-label={conv.name}
       className={classNames({
         'group flex flex-row btn btn-ghost justify-start items-center font-normal px-2 h-9':
           true,
         'btn-soft': isCurrConv,
       })}
     >
-      <div
+      <button
         key={conv.id}
         className="w-full overflow-hidden truncate text-start"
         onClick={onSelect}
         dir="auto"
       >
         {conv.name}
-      </div>
+      </button>
       <div className="dropdown dropdown-end h-5">
         <BtnWithTooltips
           // on mobile, we always show the ellipsis icon
@@ -211,22 +244,23 @@ function ConversationItem({
         </BtnWithTooltips>
         {/* dropdown menu */}
         <ul
+          aria-label="More options"
           tabIndex={0}
           className="dropdown-content menu bg-base-100 rounded-box z-[1] p-2 shadow"
         >
-          <li onClick={onRename}>
+          <li onClick={onRename} tabIndex={0}>
             <a>
               <PencilIcon className="w-4 h-4" />
               Rename
             </a>
           </li>
-          <li onClick={onDownload}>
+          <li onClick={onDownload} tabIndex={0}>
             <a>
               <ArrowDownTrayIcon className="w-4 h-4" />
               Download
             </a>
           </li>
-          <li className="text-error" onClick={onDelete}>
+          <li className="text-error" onClick={onDelete} tabIndex={0}>
             <a>
               <TrashIcon className="w-4 h-4" />
               Delete

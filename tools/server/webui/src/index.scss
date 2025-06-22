@@ -34,14 +34,15 @@ html {
   /* TODO: fix markdown table */
 }
 
-.show-on-hover {
-  @apply md:opacity-0 md:group-hover:opacity-100;
-}
 .btn-mini {
   @apply cursor-pointer;
 }
 .chat-screen {
   max-width: 900px;
+}
+
+.chat-bubble {
+  @apply break-words;
 }
 
 .chat-bubble-base-300 {

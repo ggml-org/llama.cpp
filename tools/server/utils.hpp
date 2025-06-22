@@ -6,17 +6,17 @@
 #include "arg.h" // common_remote_get_content
 #include "base64.hpp"
 #include "mtmd.h"
+#include "mtmd-helper.h"
+#include "chat.h"
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
 // disable Nagle's algorithm
 #define CPPHTTPLIB_TCP_NODELAY true
-#include "httplib.h"
+#include <cpp-httplib/httplib.h>
 
-// Change JSON_ASSERT from assert() to GGML_ASSERT:
 #define JSON_ASSERT GGML_ASSERT
-#include "json.hpp"
-#include "chat.h"
+#include <nlohmann/json.hpp>
 
 #include <random>
 #include <sstream>
@@ -264,13 +264,27 @@ static size_t validate_utf8(const std::string& text) {
 static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_tokens & query, const llama_tokens & doc) {
     llama_tokens result;
 
+    // Get EOS token - use SEP token as fallback if EOS is not available
+    llama_token eos_token = llama_vocab_eos(vocab);
+    if (eos_token == LLAMA_TOKEN_NULL) {
+        eos_token = llama_vocab_sep(vocab);
+    }
+
     result.reserve(doc.size() + query.size() + 4);
-    result.push_back(llama_vocab_bos(vocab));
+    if (llama_vocab_get_add_bos(vocab)) {
+        result.push_back(llama_vocab_bos(vocab));
+    }
     result.insert(result.end(), query.begin(), query.end());
-    result.push_back(llama_vocab_eos(vocab));
-    result.push_back(llama_vocab_sep(vocab));
+    if (llama_vocab_get_add_eos(vocab)) {
+        result.push_back(eos_token);
+    }
+    if (llama_vocab_get_add_sep(vocab)) {
+        result.push_back(llama_vocab_sep(vocab));
+    }
     result.insert(result.end(), doc.begin(), doc.end());
-    result.push_back(llama_vocab_eos(vocab));
+    if (llama_vocab_get_add_eos(vocab)) {
+        result.push_back(eos_token);
+    }
 
     return result;
 }
@@ -474,26 +488,6 @@ static std::string gen_tool_call_id() {
 // other common utils
 //
 
-static bool ends_with(const std::string & str, const std::string & suffix) {
-    return str.size() >= suffix.size() && 0 == str.compare(str.size() - suffix.size(), suffix.size(), suffix);
-}
-
-static size_t find_partial_stop_string(const std::string &stop, const std::string &text) {
-    if (!text.empty() && !stop.empty()) {
-        const char text_last_char = text.back();
-        for (int64_t char_index = stop.size() - 1; char_index >= 0; char_index--) {
-            if (stop[char_index] == text_last_char) {
-                const std::string current_partial = stop.substr(0, char_index + 1);
-                if (ends_with(text, current_partial)) {
-                    return text.size() - char_index - 1;
-                }
-            }
-        }
-    }
-
-    return std::string::npos;
-}
-
 // TODO: reuse llama_detokenize
 template <class Iter>
 static std::string tokens_to_str(llama_context * ctx, Iter begin, Iter end) {
@@ -536,6 +530,7 @@ static bool server_sent_event(httplib::DataSink & sink, const char * event, cons
 // OAI utils
 //
 
+// used by /completions endpoint
 static json oaicompat_completion_params_parse(const json & body) {
     json llama_params;
 
@@ -580,30 +575,35 @@ static json oaicompat_completion_params_parse(const json & body) {
     return llama_params;
 }
 
-static json oaicompat_completion_params_parse(
-    const json & body, /* openai api json semantics */
-    bool use_jinja,
-    common_reasoning_format reasoning_format,
-    const struct common_chat_templates * tmpls,
-    bool allow_non_text,
+struct oaicompat_parser_options {
+    bool use_jinja;
+    bool prefill_assistant;
+    common_reasoning_format reasoning_format;
+    common_chat_templates * tmpls;
+    bool allow_image;
+    bool allow_audio;
+    bool enable_thinking = true;
+};
+
+// used by /chat/completions endpoint
+static json oaicompat_chat_params_parse(
+    json & body, /* openai api json semantics */
+    const oaicompat_parser_options & opt,
     std::vector<raw_buffer> & out_files)
 {
     json llama_params;
 
     auto tools = json_value(body, "tools", json());
+    auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
+    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
 
-    if (tools.is_array() && !tools.empty()) {
-        if (stream) {
-            throw std::runtime_error("Cannot use tools with stream");
-        }
-        if (!use_jinja) {
+    if (!opt.use_jinja) {
+        if (has_tools) {
             throw std::runtime_error("tools param requires --jinja flag");
         }
-    }
-    if (!use_jinja) {
-        if (body.contains("tool_choice") && !body.at("tool_choice").is_null()) {
-            throw std::runtime_error("Unsupported param: tool_choice");
+        if (tool_choice != "auto") {
+            throw std::runtime_error("tool_choice param requires --jinja flag");
         }
     }
 
@@ -638,13 +638,25 @@ static json oaicompat_completion_params_parse(
     if (!body.contains("messages")) {
         throw std::runtime_error("'messages' is required");
     }
-    json messages = body.at("messages");
+    json & messages = body.at("messages");
     if (!messages.is_array()) {
         throw std::runtime_error("Expected 'messages' to be an array");
     }
     for (auto & msg : messages) {
+        std::string role = json_value(msg, "role", std::string());
+        if (role != "assistant" && !msg.contains("content")) {
+            throw std::runtime_error("All non-assistant messages must contain 'content'");
+        }
+        if (role == "assistant") {
+            if (!msg.contains("content") && !msg.contains("tool_calls")) {
+                throw std::runtime_error("Assistant message must contain either 'content' or 'tool_calls'!");
+            }
+            if (!msg.contains("content")) {
+                continue; // avoid errors with no content
+            }
+        }
         json & content = msg.at("content");
-        if (content.is_string()) {
+        if (content.is_string() || content.is_null()) {
             continue;
         }
 
@@ -654,12 +666,12 @@ static json oaicompat_completion_params_parse(
 
         for (auto & p : content) {
             std::string type      = json_value(p, "type", std::string());
-            json        image_url = json_value(p, "image_url", json::object());
             if (type == "image_url") {
-                if (!allow_non_text) {
-                    throw std::runtime_error("image input is not supported by this server");
+                if (!opt.allow_image) {
+                    throw std::runtime_error("image input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
                 }
 
+                json image_url  = json_value(p, "image_url", json::object());
                 std::string url = json_value(image_url, "url", std::string());
                 if (string_starts_with(url, "http")) {
                     // download remote image
@@ -697,8 +709,31 @@ static json oaicompat_completion_params_parse(
 
                 // replace this chunk with a marker
                 p["type"] = "text";
-                p["text"] = MTMD_DEFAULT_IMAGE_MARKER;
+                p["text"] = mtmd_default_marker();
                 p.erase("image_url");
+
+            } else if (type == "input_audio") {
+                if (!opt.allow_audio) {
+                    throw std::runtime_error("audio input is not supported - hint: if this is unexpected, you may need to provide the mmproj");
+                }
+
+                json input_audio   = json_value(p, "input_audio", json::object());
+                std::string data   = json_value(input_audio, "data", std::string());
+                std::string format = json_value(input_audio, "format", std::string());
+                // while we also support flac, we don't allow it here so we matches the OAI spec
+                if (format != "wav" && format != "mp3") {
+                    throw std::runtime_error("input_audio.format must be either 'wav' or 'mp3'");
+                }
+                auto decoded_data = base64_decode(data); // expected to be base64 encoded
+                out_files.push_back(decoded_data);
+
+                // replace this chunk with a marker
+                p["type"] = "text";
+                p["text"] = mtmd_default_marker();
+                p.erase("input_audio");
+
+            } else if (type != "text") {
+                throw std::runtime_error("unsupported content[].type");
             }
         }
     }
@@ -706,21 +741,24 @@ static json oaicompat_completion_params_parse(
     common_chat_templates_inputs inputs;
     inputs.messages              = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools                 = common_chat_tools_parse_oaicompat(tools);
-    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(json_value(body, "tool_choice", std::string("auto")));
+    inputs.tool_choice           = common_chat_tool_choice_parse_oaicompat(tool_choice);
     inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar               = grammar;
-    inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
-    inputs.use_jinja             = use_jinja;
+    inputs.use_jinja             = opt.use_jinja;
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
-    inputs.extract_reasoning     = reasoning_format != COMMON_REASONING_FORMAT_NONE;
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
-    if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE && body.contains("grammar")) {
-        throw std::runtime_error("Cannot use custom grammar constraints with tools.");
+    inputs.reasoning_format      = opt.reasoning_format;
+    inputs.enable_thinking       = opt.enable_thinking;
+    if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
+        if (body.contains("grammar")) {
+            throw std::runtime_error("Cannot use custom grammar constraints with tools.");
+        }
+        llama_params["parse_tool_calls"] = true;
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant";
+    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
     common_chat_msg last_message;
     if (prefill_assistant_message) {
         last_message = inputs.messages.back();
@@ -731,12 +769,13 @@ static json oaicompat_completion_params_parse(
             throw std::runtime_error("Cannot have 2 or more assistant messages at the end of the list.");
         }
 
-        inputs.extract_reasoning = false;
+        /* TODO: test this properly */
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
         inputs.add_generation_prompt = true;
     }
 
     // Apply chat template to the list of messages
-    auto chat_params = common_chat_templates_apply(tmpls, inputs);
+    auto chat_params = common_chat_templates_apply(opt.tmpls, inputs);
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {
@@ -756,6 +795,7 @@ static json oaicompat_completion_params_parse(
     }
     llama_params["grammar_triggers"] = grammar_triggers;
     llama_params["preserved_tokens"] = chat_params.preserved_tokens;
+    llama_params["thinking_forced_open"]     = chat_params.thinking_forced_open;
     for (const auto & stop : chat_params.additional_stops) {
         llama_params["stop"].push_back(stop);
     }
@@ -769,6 +809,9 @@ static json oaicompat_completion_params_parse(
     // Handle "logprobs" field
     // TODO: The response format of this option is not yet OAI-compatible, but seems like no one really using it; We may need to fix it in the future
     if (json_value(body, "logprobs", false)) {
+        if (has_tools && stream) {
+            throw std::runtime_error("logprobs is not supported with tools + stream");
+        }
         llama_params["n_probs"] = json_value(body, "top_logprobs", 20);
     } else if (body.contains("top_logprobs") && !body.at("top_logprobs").is_null()) {
         throw std::runtime_error("top_logprobs requires logprobs to be set to true");
@@ -1027,7 +1070,7 @@ struct server_tokens {
 private: // disallow accessing these members directly, risking out-of-sync
 
     // map a **start** position in tokens to the image chunk
-    std::unordered_map<llama_pos, mtmd::input_chunk_ptr> map_pos_to_image;
+    std::unordered_map<llama_pos, mtmd::input_chunk_ptr> map_pos_to_media;
 
     // list of tokens
     // it can include LLAMA_TOKEN_NULL, which is used to indicate a token that is not a text token
@@ -1038,7 +1081,7 @@ private: // disallow accessing these members directly, risking out-of-sync
     // for ex. with input of 5 text tokens and 2 images:
     //      [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1]
     // pos  0   1   2   3   4   5      6      7      8      9
-    // map_pos_to_image will contain: {5, img0}, {8, img1}
+    // map_pos_to_media will contain: {5, img0}, {8, img1}
 
 public:
     server_tokens() = default;
@@ -1077,15 +1120,15 @@ public:
         }
         oss << "\n";
         oss << "image pos: ";
-        for (const auto & it : map_pos_to_image) {
+        for (const auto & it : map_pos_to_media) {
             oss << it.first << ", ";
         }
         return oss.str();
     }
 
     const mtmd::input_chunk_ptr & find_chunk(llama_pos pos) const {
-        auto it = map_pos_to_image.find(pos);
-        if (it != map_pos_to_image.end()) {
+        auto it = map_pos_to_media.find(pos);
+        if (it != map_pos_to_media.end()) {
             return it->second;
         } else {
             throw std::runtime_error("Chunk not found");
@@ -1102,16 +1145,15 @@ public:
     // will create a copy of the chunk if it contains non-text data
     void push_back(const mtmd_input_chunk * chunk) {
         auto type = mtmd_input_chunk_get_type(chunk);
-        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+        if (type == MTMD_INPUT_CHUNK_TYPE_IMAGE || type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
             GGML_ASSERT(has_mtmd);
-            auto img_tokens = mtmd_input_chunk_get_tokens_image(chunk);
-            const int n_pos = mtmd_image_tokens_get_n_pos(img_tokens);
+            const int n_pos = mtmd_input_chunk_get_n_pos(chunk);
             llama_pos start_pos = tokens.size();
             for (int i = 0; i < n_pos; ++i) {
                 tokens.emplace_back(LLAMA_TOKEN_NULL);
             }
             mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
-            map_pos_to_image[start_pos] = std::move(new_chunk);
+            map_pos_to_media[start_pos] = std::move(new_chunk);
         } else if (type == MTMD_INPUT_CHUNK_TYPE_TEXT) {
             size_t n_tokens;
             auto text_tokens = mtmd_input_chunk_get_tokens_text(chunk, &n_tokens);
@@ -1153,9 +1195,12 @@ public:
         tokens.clear();
     }
 
-    void resize(size_t n) {
+    void keep_first(size_t n) {
         GGML_ASSERT(n <= tokens.size());
         if (has_mtmd) {
+            if (n == tokens.size()) {
+                return; // nothing to do
+            }
             // we throw an error if we try to remove a token in the middle of an image
             // for ex. with input of 5 text tokens and 2 images:
             //    [0] [1] [2] [3] [4] [img0] [img0] [img0] [img1] [img1]
@@ -1170,10 +1215,10 @@ public:
                 }
             }
             // remove all image chunks that are not used anymore
-            for (auto it = map_pos_to_image.begin(); it != map_pos_to_image.end(); ) {
+            for (auto it = map_pos_to_media.begin(); it != map_pos_to_media.end(); ) {
                 llama_pos pos = it->first;
                 if (pos >= (llama_pos)n) {
-                    it = map_pos_to_image.erase(it);
+                    it = map_pos_to_media.erase(it);
                 } else {
                     ++it;
                 }
@@ -1204,14 +1249,12 @@ public:
                 const auto & a_chunk =   find_chunk(i);
                 const auto & b_chunk = b.find_chunk(i);
                 GGML_ASSERT(a_chunk && b_chunk);
-                const auto * a_img = mtmd_input_chunk_get_tokens_image(a_chunk.get());
-                const auto * b_img = mtmd_input_chunk_get_tokens_image(b_chunk.get());
-                std::string ai_id  = mtmd_image_tokens_get_id(a_img);
-                std::string bi_id  = mtmd_image_tokens_get_id(b_img);
-                size_t a_pos       = mtmd_image_tokens_get_n_pos(a_img);
-                size_t b_pos       = mtmd_image_tokens_get_n_pos(b_img);
+                std::string ai_id  = mtmd_input_chunk_get_id(a_chunk.get());
+                std::string bi_id  = mtmd_input_chunk_get_id(b_chunk.get());
+                size_t a_pos       = mtmd_input_chunk_get_n_pos(a_chunk.get());
+                size_t b_pos       = mtmd_input_chunk_get_n_pos(b_chunk.get());
                 if (ai_id == bi_id && a_pos == b_pos) {
-                    GGML_ASSERT(a_pos > 0 && "Invalid image token"); // should never happen
+                    GGML_ASSERT(a_pos > 0 && "Invalid media chunk"); // should never happen
                     i += a_pos - 1; // will be +1 by the for loop
                     continue;
                 } else {
@@ -1237,8 +1280,7 @@ public:
             if (t == LLAMA_TOKEN_NULL) {
                 try {
                     const auto & chunk = find_chunk(i);
-                    const auto * img_tokens = mtmd_input_chunk_get_tokens_image(chunk.get());
-                    size_t n_pos = mtmd_image_tokens_get_n_pos(img_tokens);
+                    size_t n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
                     i += n_pos - 1; // will be +1 by the for loop
                 } catch (const std::exception & e) {
                     return false;
@@ -1257,22 +1299,21 @@ public:
                 llama_pos n_past,
                 int32_t seq_id,
                 llama_pos & n_pos_out) {
-        auto it = map_pos_to_image.find(n_past);
-        if (it == map_pos_to_image.end()) {
-            throw std::runtime_error("Chunk not found");
-        }
-        SRV_INF("%s\n", "processing image...");
+        auto & chunk = find_chunk(n_past);
+        const char * name = mtmd_input_chunk_get_type(chunk.get()) == MTMD_INPUT_CHUNK_TYPE_IMAGE
+                            ? "image" : "audio";
+        SRV_INF("processing %s...\n", name);
         int32_t n_batch = llama_n_batch(ctx);
         int64_t t0 = ggml_time_ms();
         llama_pos new_n_past = n_past;
         int32_t result = mtmd_helper_eval_chunk_single(mctx, ctx,
-            it->second.get(), // chunk
+            chunk.get(),
             n_past,
             seq_id,
             n_batch,
             true, // logits last
             &new_n_past);
-        SRV_INF("image processed in %" PRId64 " ms\n", ggml_time_ms() - t0);
+        SRV_INF("%s processed in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
         if (result != 0) {
             LOG_ERR("mtmd_helper_eval failed with status %d", result);
             n_pos_out = n_past;

@@ -21,70 +21,103 @@ if [ "${1:-}" = "big" ]; then
     echo "Include BIG models..."
 fi
 
+RUN_HUGE_TESTS=false
+if [ "${1:-}" = "huge" ]; then
+    RUN_HUGE_TESTS=true
+    RUN_BIG_TESTS=true
+    echo "Include BIG and HUGE models..."
+fi
+
 ###############
 
-arr_bin=()
+arr_prefix=()
 arr_hf=()
 arr_tmpl=() # chat template
+arr_file=()
 
-add_test() {
-    local bin=$1
-    local hf=$2
-    local tmpl=${3:-""} # default to empty string if not provided
-    arr_bin+=("$bin")
+add_test_vision() {
+    local hf=$1
+    local tmpl=${2:-""} # default to empty string if not provided
+    arr_prefix+=("[vision]")
     arr_hf+=("$hf")
     arr_tmpl+=("$tmpl")
+    arr_file+=("test-1.jpeg")
 }
 
-add_test "llama-mtmd-cli"  "ggml-org/SmolVLM-500M-Instruct-GGUF:Q8_0"
-add_test "llama-mtmd-cli"  "ggml-org/SmolVLM2-2.2B-Instruct-GGUF:Q4_K_M"
-add_test "llama-mtmd-cli"  "ggml-org/SmolVLM2-500M-Video-Instruct-GGUF:Q8_0"
-add_test "llama-mtmd-cli"  "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
-add_test "llama-mtmd-cli"  "THUDM/glm-edge-v-5b-gguf:Q4_K_M"
-add_test "llama-mtmd-cli"  "second-state/Llava-v1.5-7B-GGUF:Q2_K"            "vicuna"
-add_test "llama-mtmd-cli"  "cjpais/llava-1.6-mistral-7b-gguf:Q3_K"           "vicuna"
-add_test "llama-mtmd-cli"  "ibm-research/granite-vision-3.2-2b-GGUF:Q4_K_M"
-add_test "llama-mtmd-cli"  "second-state/MiniCPM-Llama3-V-2_5-GGUF:Q2_K"  # model from openbmb is corrupted
-add_test "llama-mtmd-cli"  "openbmb/MiniCPM-V-2_6-gguf:Q2_K"
-add_test "llama-mtmd-cli"  "openbmb/MiniCPM-o-2_6-gguf:Q4_0"
-add_test "llama-mtmd-cli"  "bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"
-add_test "llama-mtmd-cli"  "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M"
-add_test "llama-mtmd-cli"  "ggml-org/InternVL2_5-1B-GGUF:Q8_0"
-add_test "llama-mtmd-cli"  "ggml-org/InternVL3-1B-Instruct-GGUF:Q8_0"
+add_test_audio() {
+    local hf=$1
+    arr_prefix+=("[audio] ")
+    arr_hf+=("$hf")
+    arr_tmpl+=("") # no need for chat tmpl
+    arr_file+=("test-2.mp3")
+}
+
+add_test_vision "ggml-org/SmolVLM-500M-Instruct-GGUF:Q8_0"
+add_test_vision "ggml-org/SmolVLM2-2.2B-Instruct-GGUF:Q4_K_M"
+add_test_vision "ggml-org/SmolVLM2-500M-Video-Instruct-GGUF:Q8_0"
+add_test_vision "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
+add_test_vision "THUDM/glm-edge-v-5b-gguf:Q4_K_M"
+add_test_vision "second-state/Llava-v1.5-7B-GGUF:Q2_K"            "vicuna"
+add_test_vision "cjpais/llava-1.6-mistral-7b-gguf:Q3_K_M"         "vicuna"
+add_test_vision "ibm-research/granite-vision-3.2-2b-GGUF:Q4_K_M"
+add_test_vision "second-state/MiniCPM-Llama3-V-2_5-GGUF:Q2_K"  # model from openbmb is corrupted
+add_test_vision "openbmb/MiniCPM-V-2_6-gguf:Q2_K"
+add_test_vision "openbmb/MiniCPM-o-2_6-gguf:Q4_0"
+add_test_vision "bartowski/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"
+add_test_vision "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M"
+add_test_vision "ggml-org/InternVL2_5-1B-GGUF:Q8_0"
+add_test_vision "ggml-org/InternVL3-1B-Instruct-GGUF:Q8_0"
+add_test_vision "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
+
+add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
+add_test_audio  "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
 
 # to test the big models, run: ./tests.sh big
 if [ "$RUN_BIG_TESTS" = true ]; then
-    add_test "llama-mtmd-cli" "ggml-org/pixtral-12b-GGUF:Q4_K_M"
-    add_test "llama-mtmd-cli" "ggml-org/Mistral-Small-3.1-24B-Instruct-2503-GGUF" "mistral-v7"
-    add_test "llama-mtmd-cli" "ggml-org/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"
-    add_test "llama-mtmd-cli" "ggml-org/Qwen2-VL-7B-Instruct-GGUF:Q4_K_M"
-    add_test "llama-mtmd-cli" "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M"
-    add_test "llama-mtmd-cli" "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M"
-    add_test "llama-mtmd-cli"  "ggml-org/InternVL3-8B-Instruct-GGUF:Q4_K_M"
-    add_test "llama-mtmd-cli"  "ggml-org/InternVL3-14B-Instruct-GGUF:Q4_K_M"
-    # add_test "llama-mtmd-cli" "ggml-org/Qwen2.5-VL-32B-Instruct-GGUF:Q4_K_M" # does not work on my mac M3 Ultra
-    # add_test "llama-mtmd-cli" "ggml-org/Qwen2.5-VL-72B-Instruct-GGUF:Q4_K_M" # too big
+    add_test_vision "ggml-org/pixtral-12b-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Mistral-Small-3.1-24B-Instruct-2503-GGUF" "mistral-v7"
+    add_test_vision "ggml-org/Qwen2-VL-2B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Qwen2-VL-7B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Qwen2.5-VL-3B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Qwen2.5-VL-7B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/InternVL3-8B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/InternVL3-14B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
+    # add_test_vision "ggml-org/Qwen2.5-VL-32B-Instruct-GGUF:Q4_K_M" # does not work on my mac M3 Ultra
+
+    add_test_audio  "ggml-org/ultravox-v0_5-llama-3_1-8b-GGUF:Q4_K_M"
+    add_test_audio  "ggml-org/Qwen2.5-Omni-7B-GGUF:Q4_K_M"
+fi
+
+# to test the huge models, run: ./tests.sh huge
+# this will run both the big and huge models
+# huge models are > 32B parameters
+if [ "$RUN_HUGE_TESTS" = true ]; then
+    add_test_vision "ggml-org/Qwen2.5-VL-72B-Instruct-GGUF:Q4_K_M"
+    add_test_vision "ggml-org/Llama-4-Scout-17B-16E-Instruct-GGUF:IQ1_S"
 fi
 
 # these models always give the wrong answer, not sure why
-# add_test "llama-mtmd-cli"  "ggml-org/SmolVLM-Instruct-GGUF:Q4_K_M"
-# add_test "llama-mtmd-cli"  "ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0"
-# add_test "llama-mtmd-cli"  "ggml-org/SmolVLM2-256M-Video-Instruct-GGUF:Q8_0"
+# add_test_vision "ggml-org/SmolVLM-Instruct-GGUF:Q4_K_M"
+# add_test_vision "ggml-org/SmolVLM-256M-Instruct-GGUF:Q8_0"
+# add_test_vision "ggml-org/SmolVLM2-256M-Video-Instruct-GGUF:Q8_0"
 
 # this model has broken chat template, not usable
-# add_test "llama-mtmd-cli"  "cmp-nct/Yi-VL-6B-GGUF:Q5_K"
-# add_test "llama-mtmd-cli"  "guinmoon/MobileVLM-3B-GGUF:Q4_K_M" "deepseek"
+# add_test_vision "cmp-nct/Yi-VL-6B-GGUF:Q5_K"
+# add_test_vision "guinmoon/MobileVLM-3B-GGUF:Q4_K_M" "deepseek"
 
 ###############
 
-cmake --build build -j --target "${arr_bin[@]}"
+cmake --build build -j --target llama-mtmd-cli
 
 arr_res=()
 
-for i in "${!arr_bin[@]}"; do
-    bin="${arr_bin[$i]}"
+for i in "${!arr_hf[@]}"; do
+    bin="llama-mtmd-cli"
+    prefix="${arr_prefix[$i]}"
     hf="${arr_hf[$i]}"
     tmpl="${arr_tmpl[$i]}"
+    inp_file="${arr_file[$i]}"
 
     echo "Running test with binary: $bin and HF model: $hf"
     echo ""
@@ -93,7 +126,7 @@ for i in "${!arr_bin[@]}"; do
     output=$(\
         "$PROJ_ROOT/build/bin/$bin" \
         -hf "$hf" \
-        --image $SCRIPT_DIR/test-1.jpeg \
+        --image $SCRIPT_DIR/$inp_file \
         -p "what is the publisher name of the newspaper?" \
         --temp 0 -n 128 \
         ${tmpl:+--chat-template "$tmpl"} \
@@ -102,9 +135,9 @@ for i in "${!arr_bin[@]}"; do
     echo "$output" > $SCRIPT_DIR/output/$bin-$(echo "$hf" | tr '/' '-').log
 
     if echo "$output" | grep -iq "new york"; then
-        result="\033[32mOK\033[0m:   $bin $hf"
+        result="$prefix \033[32mOK\033[0m:   $bin $hf"
     else
-        result="\033[31mFAIL\033[0m: $bin $hf"
+        result="$prefix \033[31mFAIL\033[0m: $bin $hf"
     fi
     echo -e "$result"
     arr_res+=("$result")

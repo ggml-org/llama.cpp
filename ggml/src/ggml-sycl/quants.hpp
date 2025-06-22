@@ -14,11 +14,12 @@
 #ifndef GGML_SYCL_QUANTS_HPP
 #define GGML_SYCL_QUANTS_HPP
 
+#include <utility>
+
 #include "ggml-common.h"
 #include "ggml.h"
 
 namespace ggml_sycl_reordered {
-
 
 // The reordered block moves quants (qs) and  scales(d) to two
 // uniform regions of memory that is contiguous in the same tensor.
@@ -31,7 +32,6 @@ namespace ggml_sycl_reordered {
 // Aligment relies on the allocated size of qs
 
 template <ggml_type type> struct block_q_t;
-
 
 // qk number of weights / quants in a block
 // qr number of weights in a byte (described as 'before dequantization')
@@ -47,15 +47,65 @@ template <> struct block_q_t<GGML_TYPE_Q4_0> {
         static constexpr uint32_t vdr_mmvq = 2;
     };
 
-    static constexpr int get_block_offset(const int block_index) { return block_index * (traits::qk / traits::qr); }
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (traits::qk / traits::qr), 0 };
+    }
 
-    static constexpr int get_d_offset(int nrows, int ncols, const int block_index) {
-        return (ncols / traits::qr * nrows) + block_index * sizeof(ggml_half);
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols / traits::qr * nrows) + block_index * sizeof(ggml_half), 0 };
     }
 
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
 
+template <> struct block_q_t<GGML_TYPE_Q4_K> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QI4_K;
+        static constexpr uint32_t qr       = QR4_K;
+        static constexpr uint32_t vdr_mmvq = 2;
+    };
+
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (traits::qk / traits::qr), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        auto nblocks = (nrows * (ncols / traits::qk));
+        return { nblocks * (QK_K / 2),
+                 (nblocks * QK_K / 2) + (nblocks * K_SCALE_SIZE) + (block_index * sizeof(ggml_half2)) };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+
+    constexpr size_t get_total_qs_bytes(int nblocks) { return nblocks * QK_K / 2; }
+};
+
+template <> struct block_q_t<GGML_TYPE_Q6_K> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QI6_K;
+        static constexpr uint32_t qr       = QR6_K;
+        static constexpr uint32_t vdr_mmvq = 1;
+    };
+
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int n_blocks) {
+        auto low_bits_index  = block_index * (traits::qk / traits::qr);
+        // the index of high bits it's after all low bits
+        auto high_bits_index = n_blocks * (QK_K / 2) + (block_index * (QK_K / 4));
+        return { low_bits_index, high_bits_index };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        auto nblocks        = (nrows * (ncols / traits::qk));
+        auto total_qs_bytes = nblocks * (QK_K / 2) + nblocks * (QK_K / 4);
+        auto block_scales   = total_qs_bytes + block_index * (QK_K / 16);
+        auto sb_scale       = total_qs_bytes + nblocks * (QK_K / 16);
+        return { block_scales, sb_scale };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
 }  // namespace ggml_sycl_reordered
 
 #endif  // GGML_SYCL_QUANTS_HPP

@@ -3,11 +3,11 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
-#include "ggml-cpu-traits.h"
+#include "traits.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
-#include "ggml-cpu-quants.h"
+#include "quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
 #include "binary-ops.h"
@@ -74,13 +74,8 @@
 
 #if defined(__ARM_ARCH)
 struct ggml_arm_arch_features_type {
-    int has_neon;
-    int has_dotprod;
-    int has_i8mm;
-    int has_sve;
     int sve_cnt;
-    int has_sme;
-} ggml_arm_arch_features = {-1, -1, -1, -1, 0, -1};
+} ggml_arm_arch_features = { 0 };
 #endif
 
 
@@ -270,7 +265,11 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q4_K,
         .vec_dot                  = ggml_vec_dot_q4_K_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#if defined (__ARM_FEATURE_MATMUL_INT8)
+        .nrows                    = 2,
+#else
         .nrows                    = 1,
+#endif
     },
     [GGML_TYPE_Q5_K] = {
         .from_float               = quantize_row_q5_K,
@@ -282,7 +281,11 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q6_K,
         .vec_dot                  = ggml_vec_dot_q6_K_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
+#if defined (__ARM_FEATURE_MATMUL_INT8)
+        .nrows                    = 2,
+#else
         .nrows                    = 1,
+#endif
     },
     [GGML_TYPE_IQ2_XXS] = {
         .from_float               = NULL,
@@ -551,6 +554,14 @@ void ggml_barrier(struct ggml_threadpool * tp) {
 #endif
 }
 
+void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value) {
+    atomic_store_explicit(&tp->current_chunk, value, memory_order_relaxed);
+}
+
+int ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value) {
+    return atomic_fetch_add_explicit(&tp->current_chunk, value, memory_order_relaxed);
+}
+
 #if defined(__gnu_linux__)
 static cpu_set_t ggml_get_numa_affinity(void) {
     cpu_set_t cpuset;
@@ -662,87 +673,15 @@ bool ggml_is_numa(void) {
 
 #if defined(__linux__) && defined(__aarch64__)
 #include <sys/auxv.h>
-#elif defined(__APPLE__)
-#include <sys/sysctl.h>
-#endif
-
-#if !defined(HWCAP2_I8MM)
-#define HWCAP2_I8MM (1 << 13)
-#endif
-
-#if !defined(HWCAP2_SME)
-#define HWCAP2_SME (1 << 23)
 #endif
 
 static void ggml_init_arm_arch_features(void) {
-#if defined(__linux__) && defined(__aarch64__)
-    uint32_t hwcap = getauxval(AT_HWCAP);
-    uint32_t hwcap2 = getauxval(AT_HWCAP2);
-
-    ggml_arm_arch_features.has_neon    = !!(hwcap & HWCAP_ASIMD);
-    ggml_arm_arch_features.has_dotprod = !!(hwcap & HWCAP_ASIMDDP);
-    ggml_arm_arch_features.has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
-    ggml_arm_arch_features.has_sve     = !!(hwcap & HWCAP_SVE);
-    ggml_arm_arch_features.has_sme     = !!(hwcap2 & HWCAP2_SME);
-
-#if defined(__ARM_FEATURE_SVE)
+#if defined(__linux__) && defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
     ggml_arm_arch_features.sve_cnt = PR_SVE_VL_LEN_MASK & prctl(PR_SVE_GET_VL);
 #endif
-#elif defined(__APPLE__)
-    int oldp = 0;
-    size_t size = sizeof(oldp);
-    if (sysctlbyname("hw.optional.AdvSIMD", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_neon = oldp;
-
-    if (sysctlbyname("hw.optional.arm.FEAT_DotProd", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_dotprod = oldp;
-
-    if (sysctlbyname("hw.optional.arm.FEAT_I8MM", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_i8mm = oldp;
-
-    if (sysctlbyname("hw.optional.arm.FEAT_SME", &oldp, &size, NULL, 0) != 0) {
-        oldp = 0;
-    }
-    ggml_arm_arch_features.has_sme = oldp;
-
-    ggml_arm_arch_features.has_sve = 0;
-    ggml_arm_arch_features.sve_cnt = 0;
-#else
-// Run-time CPU feature detection not implemented for this platform, fallback to compile time
-#if defined(__ARM_NEON)
-    ggml_arm_arch_features.has_neon = 1;
-#else
-    ggml_arm_arch_features.has_neon = 0;
-#endif
-
-#if defined(__ARM_FEATURE_MATMUL_INT8)
-    ggml_arm_arch_features.has_i8mm = 1;
-#else
-    ggml_arm_arch_features.has_i8mm = 0;
-#endif
-
-#if defined(__ARM_FEATURE_SVE)
-    ggml_arm_arch_features.has_sve = 1;
-    ggml_arm_arch_features.sve_cnt = 16;
-#else
-    ggml_arm_arch_features.has_sve = 0;
-    ggml_arm_arch_features.sve_cnt = 0;
-#endif
-
-#if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_SME2)
-    ggml_arm_arch_features.has_sme = 1;
-#else
-    ggml_arm_arch_features.has_sme = 0;
-#endif
-#endif
 }
-#endif
+
+#endif // __ARM_ARCH
 
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
     GGML_ASSERT(!ggml_get_no_alloc(ctx));
@@ -1951,6 +1890,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_pad_reflect_1d(params, tensor);
             } break;
+        case GGML_OP_ROLL:
+            {
+                ggml_compute_forward_roll(params, tensor);
+            } break;
         case GGML_OP_ARANGE:
             {
                 ggml_compute_forward_arange(params, tensor);
@@ -2198,6 +2141,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                     } break;
 
                 case GGML_UNARY_OP_GELU:
+                case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_SILU:
                     {
@@ -2274,6 +2218,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_UPSCALE:
         case GGML_OP_PAD:
         case GGML_OP_PAD_REFLECT_1D:
+        case GGML_OP_ROLL:
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_ARGSORT:
@@ -2409,10 +2354,30 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     // This is up to the applications.
     DWORD p = THREAD_PRIORITY_NORMAL;
     switch (prio) {
+        case GGML_SCHED_PRIO_LOW:      p = THREAD_PRIORITY_BELOW_NORMAL;  break;
         case GGML_SCHED_PRIO_NORMAL:   p = THREAD_PRIORITY_NORMAL;        break;
         case GGML_SCHED_PRIO_MEDIUM:   p = THREAD_PRIORITY_ABOVE_NORMAL;  break;
         case GGML_SCHED_PRIO_HIGH:     p = THREAD_PRIORITY_HIGHEST;       break;
         case GGML_SCHED_PRIO_REALTIME: p = THREAD_PRIORITY_TIME_CRITICAL; break;
+    }
+
+    if (prio != GGML_SCHED_PRIO_LOW) {
+        // Tell Windows that this thread should not be throttled (needs its own CPU core).
+        // Newer Windows 11 versions aggresively park (offline) CPU cores and often place
+        // all our threads onto the first 4 cores which results in terrible performance with
+        // n_threads > 4
+        #if _WIN32_WINNT >= 0x0602
+        THREAD_POWER_THROTTLING_STATE t;
+        ZeroMemory(&t, sizeof(t));
+        t.Version     = THREAD_POWER_THROTTLING_CURRENT_VERSION;
+        t.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
+        t.StateMask   = 0;
+
+        if (!SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &t, sizeof(t))) {
+            GGML_LOG_DEBUG("failed to disable thread power throttling %d : (%d)\n", prio, (int) GetLastError());
+            return false;
+        }
+        #endif
     }
 
     if (prio == GGML_SCHED_PRIO_NORMAL) {
@@ -2442,6 +2407,8 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     struct sched_param p;
     int32_t policy = SCHED_OTHER;
     switch (prio) {
+        // TODO: there seems to be no way to set lower prio on Apple platforms
+        case GGML_SCHED_PRIO_LOW:      policy = SCHED_OTHER; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_NORMAL:   policy = SCHED_OTHER; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_MEDIUM:   policy = SCHED_FIFO;  p.sched_priority = 40; break;
         case GGML_SCHED_PRIO_HIGH:     policy = SCHED_FIFO;  p.sched_priority = 80; break;
@@ -2498,6 +2465,7 @@ static bool ggml_thread_apply_priority(int32_t prio) {
     struct sched_param p;
     int32_t policy = SCHED_OTHER;
     switch (prio) {
+        case GGML_SCHED_PRIO_LOW:      policy = SCHED_BATCH; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_NORMAL:   policy = SCHED_OTHER; p.sched_priority = 0;  break;
         case GGML_SCHED_PRIO_MEDIUM:   policy = SCHED_FIFO;  p.sched_priority = 40; break;
         case GGML_SCHED_PRIO_HIGH:     policy = SCHED_FIFO;  p.sched_priority = 80; break;
@@ -3403,7 +3371,7 @@ int ggml_cpu_has_vxe(void) {
 
 int ggml_cpu_has_neon(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_NEON)
-    return ggml_arm_arch_features.has_neon;
+    return 1;
 #else
     return 0;
 #endif
@@ -3411,7 +3379,7 @@ int ggml_cpu_has_neon(void) {
 
 int ggml_cpu_has_dotprod(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_DOTPROD)
-    return ggml_arm_arch_features.has_dotprod;
+    return 1;
 #else
     return 0;
 #endif
@@ -3419,7 +3387,7 @@ int ggml_cpu_has_dotprod(void) {
 
 int ggml_cpu_has_sve(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SVE)
-    return ggml_arm_arch_features.has_sve;
+    return 1;
 #else
     return 0;
 #endif
@@ -3427,7 +3395,7 @@ int ggml_cpu_has_sve(void) {
 
 int ggml_cpu_has_matmul_int8(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_MATMUL_INT8)
-    return ggml_arm_arch_features.has_i8mm;
+    return 1;
 #else
     return 0;
 #endif
@@ -3443,7 +3411,7 @@ int ggml_cpu_get_sve_cnt(void) {
 
 int ggml_cpu_has_sme(void) {
 #if defined(__ARM_ARCH) && defined(__ARM_FEATURE_SME)
-    return ggml_arm_arch_features.has_sme;
+    return 1;
 #else
     return 0;
 #endif
@@ -3479,6 +3447,19 @@ void ggml_cpu_init(void) {
             const uint64_t t_end = ggml_time_us(); UNUSED(t_end);
 
             GGML_PRINT_DEBUG("%s: GELU, Quick GELU, SILU and EXP tables initialized in %f ms\n", __func__, (t_end - t_start)/1000.0);
+
+#ifdef GGML_USE_OPENMP
+            //if (!getenv("OMP_WAIT_POLICY")) {
+            //    // set the wait policy to active, so that OpenMP threads don't sleep
+            //    putenv("OMP_WAIT_POLICY=active");
+            //}
+
+            if (!getenv("KMP_BLOCKTIME")) {
+                // set the time to wait before sleeping a thread
+                // this is less aggressive than setting the wait policy to active, but should achieve similar results in most cases
+                putenv("KMP_BLOCKTIME=200"); // 200ms
+            }
+#endif
         }
 
 #if defined(__ARM_ARCH)

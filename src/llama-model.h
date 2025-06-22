@@ -73,6 +73,7 @@ enum llm_type {
     LLM_TYPE_40B,
     LLM_TYPE_65B,
     LLM_TYPE_70B,
+    LLM_TYPE_142B,
     LLM_TYPE_236B,
     LLM_TYPE_290B,
     LLM_TYPE_314B,
@@ -95,6 +96,8 @@ enum llm_type {
     LLM_TYPE_30B_A3B,
     LLM_TYPE_235B_A22B,
 };
+
+std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
 
 struct llama_layer_posnet {
     // resnet
@@ -327,6 +330,9 @@ struct llama_model {
     llama_hparams hparams = {};
     llama_vocab   vocab;
 
+    // for classifier models
+    std::vector<std::string> classifier_labels;
+
     struct ggml_tensor * tok_embd   = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
     struct ggml_tensor * pos_embd   = nullptr;
@@ -396,7 +402,10 @@ struct llama_model {
 
     const struct ggml_tensor * get_tensor(const char * name) const;
 
-    ggml_tensor * get_rope_factors(uint32_t n_ctx_per_seq, int il) const;
+    float get_rope_freq_base (const llama_cparams & cparams, int il) const;
+    float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
+
+    ggml_tensor * get_rope_factors(const llama_cparams & cparams, int il) const;
 
     // note: can mutate `cparams`
     // TODO: move this to new llm_arch_model_i interface

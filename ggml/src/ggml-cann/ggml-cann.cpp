@@ -31,11 +31,14 @@
 #include <mutex>
 #include <queue>
 #include <chrono>
+#include <unordered_set>
+#include <optional>
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cann/aclnn_ops.h"
 #include "ggml-cann/common.h"
+#include "ggml.h"
 
 #define GGML_COMMON_DECL_C
 
@@ -90,6 +93,26 @@ int32_t ggml_cann_get_device() {
     int32_t id;
     ACL_CHECK(aclrtGetDevice(&id));
     return id;
+}
+
+/**
+ * @brief Get the value of the specified environment variable (name).
+ *        if not empty, return a std::string object
+ */
+std::optional<std::string> get_env(const std::string& name) {
+    const char* val = std::getenv(name.c_str());
+    if (!val) return std::nullopt;
+    std::string res = std::string(val);
+    std::transform(res.begin(), res.end(), res.begin(), ::tolower);
+    return res;
+}
+
+/**
+ * @brief Verify whether the environment variable is a valid value.
+ */
+bool parse_bool(const std::string& value) {
+    std::unordered_set<std::string> valid_values = {"on", "1", "yes", "y", "enable", "true"};
+    return valid_values.find(value) != valid_values.end();
 }
 
 /**
@@ -213,7 +236,7 @@ struct ggml_cann_pool_buf_prio : public ggml_cann_pool {
      * @param device The device ID to associate with this buffer pool.
      */
     explicit ggml_cann_pool_buf_prio(int device) : device(device) {
-        disable_clean = getenv("GGML_CANN_DISABLE_BUF_POOL_CLEAN") != nullptr;
+        disable_clean = parse_bool(get_env("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
     }
 
     /**
@@ -409,7 +432,7 @@ struct ggml_cann_pool_buf : public ggml_cann_pool {
      * @param device The device ID to associate with this buffer pool.
      */
     explicit ggml_cann_pool_buf(int device) : device(device) {
-        disable_clean = getenv("GGML_CANN_DISABLE_BUF_POOL_CLEAN") != nullptr;
+        disable_clean = parse_bool(get_env("GGML_CANN_DISABLE_BUF_POOL_CLEAN").value_or(""));
     }
 
     /**
@@ -730,16 +753,18 @@ struct ggml_cann_pool_vmm : public ggml_cann_pool {
  */
 std::unique_ptr<ggml_cann_pool> ggml_backend_cann_context::new_pool_for_device(
     int device) {
-    bool disable_vmm = (getenv("GGML_CANN_DISABLE_VMM_POOL") != nullptr);
-    if (!disable_vmm && ggml_cann_info().devices[device].vmm) {
-        GGML_LOG_INFO("%s: device %d use vmm pool\n", __func__, device);
-        return std::unique_ptr<ggml_cann_pool>(new ggml_cann_pool_vmm(device));
-    }
-    bool enable_buf_prio = (getenv("GGML_CANN_ENABLE_BUF_PRIO_POOL") != nullptr);
-    if (enable_buf_prio) {
+    std::string mem_pool_type = get_env("GGML_CANN_MEM_POOL").value_or("");
+
+    if (mem_pool_type == "prio") {
         GGML_LOG_INFO("%s: device %d use buffer pool with priority queue\n", __func__, device);
         return std::unique_ptr<ggml_cann_pool>(new ggml_cann_pool_buf_prio(device));
     }
+
+    if (ggml_cann_info().devices[device].vmm && mem_pool_type != "leg") {
+        GGML_LOG_INFO("%s: device %d use vmm pool\n", __func__, device);
+        return std::unique_ptr<ggml_cann_pool>(new ggml_cann_pool_vmm(device));
+    }
+
     GGML_LOG_INFO("%s: device %d use buffer pool\n", __func__, device);
     return std::unique_ptr<ggml_cann_pool>(new ggml_cann_pool_buf(device));
 }
@@ -1672,7 +1697,8 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_mul_mat(ctx, dst);
             break;
         case GGML_OP_MUL_MAT_ID:
-            return false;
+            ggml_cann_mul_mat_id(ctx, dst);
+            break;
         case GGML_OP_SCALE:
             ggml_cann_scale(ctx, dst);
             break;
@@ -1746,6 +1772,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             break;
         case GGML_OP_COUNT_EQUAL:
             ggml_cann_count_equal(ctx, dst);
+            break;
+        case GGML_OP_FLASH_ATTN_EXT:
+            ggml_cann_flash_attn_ext(ctx, dst);
             break;
         default:
             return false;
@@ -2030,7 +2059,22 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
         }
         case GGML_OP_MUL_MAT_ID:
-            return false;
+            switch (op->src[0]->type) {
+                case GGML_TYPE_F16:
+                case GGML_TYPE_F32:
+                    return true;
+                case GGML_TYPE_Q8_0:
+                case GGML_TYPE_Q4_0:
+#ifdef ASCEND_310P
+                    // Q4 && Q8 per group is not suppor on 310p device
+                    return false;
+#endif
+                    // only support contiguous for quantized types.
+                    return ggml_is_contiguous(op->src[0]) &&
+                            ggml_is_contiguous(op->src[1]);
+                default:
+                    return false;
+            }
         // embedding
         case GGML_OP_GET_ROWS: {
             switch (op->src[0]->type) {
@@ -2161,6 +2205,38 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_FLASH_ATTN_EXT:{
+            // derived from [ggml-cuda.cu]
+            if(op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16){
+                return false;
+            }
+            if(op->src[1]->type != GGML_TYPE_F16 && op->src[1]->type != GGML_TYPE_F32 && op->src[1]->type != GGML_TYPE_BF16){
+                return false;
+            }
+            if(op->type != GGML_TYPE_F16 && op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_BF16){
+                return false;
+            }
+            if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
+                // different head sizes of K and V are not supported yet
+                return false;
+            }
+            if (op->src[0]->ne[0] == 192) {
+                return false;
+            }
+            if (op->src[0]->ne[0] == 576) {
+                // DeepSeek MLA
+                return false;
+            }
+            if (op->src[0]->ne[3] != 1) {
+                return false;
+            }
+            float logitSoftcap = 0.0f;
+            memcpy(&logitSoftcap,  (float*)op->op_params + 2, sizeof(float));
+            if(logitSoftcap != 0.0f) {
+                return false;
+            }
+            return true;
+        }
         default:
             return false;
     }
