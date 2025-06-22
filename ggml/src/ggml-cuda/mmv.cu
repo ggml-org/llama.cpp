@@ -471,6 +471,9 @@ bool ggml_cuda_should_use_mmv(enum ggml_type type, int cc, const int64_t * src0_
                 }
                 return ne11 <= 8;
             } else if (fp16_mma_hardware_available(cc)) {
+                if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+                    return ne11 <= 5;
+                }
                 return ne11 <= 2;
             }
             return ne11 <= 8;
