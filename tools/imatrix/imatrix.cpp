@@ -116,6 +116,49 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
     }
 }
 
+static void compute_statistics(std::vector<tensor_statistics> & tstats, const int & i, const std::string & name, const Stats & e, const std::vector<float> & activations) {
+    const float total        = std::accumulate(activations.begin(), activations.end(), 0.0f);
+    const float max          = *std::max_element(activations.begin(), activations.end());
+    const float min          = *std::min_element(activations.begin(), activations.end());
+    const float mean         = total / activations.size();
+    const float sq_total     = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
+    const float dev          = std::sqrt((sq_total / activations.size()) - (mean * mean));
+    float threshold          = min + min * 0.5f;
+    const int inactive_count = std::count_if(activations.begin(), activations.end(),
+                                               [threshold](const float v) { return fabs(v) <= threshold; });
+    const float active_ratio = 1 - static_cast<float>(inactive_count) / activations.size();
+
+    float entropy = 0;
+    if (total > 0) {
+        for (const auto act : activations) {
+            if (const float p = act / total; p > 0) {
+                entropy -= p * std::log2(p);
+            }
+        }
+    }
+
+    int z_score = 0;
+    for (const auto act : activations) {
+        if (const float p = (act - mean) / dev; p > 1) {
+            z_score++;
+        }
+    }
+
+    tstats.emplace_back();
+    auto & ts     = tstats[i];
+    ts.tensor     = name;
+    ts.stats      = e;
+    ts.total_bias = total;
+    ts.mean_bias  = mean;
+    ts.max_bias   = max;
+    ts.min_bias   = min;
+    ts.elements   = static_cast<int>(activations.size());
+    ts.stddev     = dev;
+    ts.active     = active_ratio;
+    ts.entropy    = entropy;
+    ts.zd         = static_cast<float>(z_score) / ts.elements;
+}
+
 static void compute_cossim(std::vector<tensor_statistics> & tstats) {
     static const std::regex pattern(R"(blk\.(\d+)\.)");
     for (auto & ts : tstats) {
@@ -419,49 +462,7 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_stati
         e.ncall += ncall;
 
         if (tstats) {
-            float total = std::accumulate(activations.begin(), activations.end(), 0.0f);
-            float max = * std::max_element(activations.begin(), activations.end());
-            float min = * std::min_element(activations.begin(), activations.end());
-            float mean = total / activations.size();
-            float sq_total = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
-            float dev = std::sqrt((sq_total / activations.size()) - (mean * mean));
-
-            float threshold = min + min * 0.5f;
-            int inactive_count = std::count_if(activations.begin(), activations.end(), [threshold](const float v) { return fabs(v) <= threshold; });
-            float active_ratio = 1 -  static_cast<float>(inactive_count) / activations.size();
-
-            float ent = 0;
-            if (total > 0) {
-                for (auto act : activations) {
-                    if (float p = act / total; p > 0) {
-                        ent -= p* std::log2(p);
-                    }
-                }
-            }
-
-            int z_score = 0;
-            for (auto act : activations) {
-                if (float p = (act - mean) / dev; p > 1) {
-                    z_score++;
-                }
-            }
-
-            tstats->emplace_back();
-            auto & ts     = (*tstats)[i];
-            ts.tensor     = name_as_vec.data();
-            ts.stats      = e;
-            ts.total_bias = total;
-            ts.mean_bias  = mean;
-            ts.max_bias   = max;
-            ts.min_bias   = min;
-            ts.elements   = static_cast<int>(activations.size());
-            ts.stddev     = dev;
-            ts.active     = active_ratio;
-            ts.entropy    = ent;
-            ts.zd = static_cast<float>(z_score) / ts.elements;
-        }
-    }
-
+            compute_statistics(*tstats, i, name_as_vec.data(), e, activations);
         }
     }
 
