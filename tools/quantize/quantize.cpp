@@ -288,7 +288,7 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
 
 static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers) {
     if (!data) {
-        printf("\n%s: no layer prunning ids provided\n\n", __func__);
+        printf("\n%s: no layer pruning ids provided\n\n", __func__);
         return false;
     }
 
