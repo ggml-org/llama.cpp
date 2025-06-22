@@ -666,7 +666,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 it.first.find("attn_kv_b.weight") != std::string::npos) {
                     pruned_attention_w++;
             }
-            LLAMA_LOG_DEBUG("%s: prunning tensor %s\n", __func__, it.first.c_str());
+            LLAMA_LOG_DEBUG("%s: pruning tensor %s\n", __func__, it.first.c_str());
             continue;
         } else if (remapped_name != it.first) {
             ggml_set_name(it.second.tensor, remapped_name.c_str());
