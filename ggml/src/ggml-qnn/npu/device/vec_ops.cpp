@@ -170,42 +170,41 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
         sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), h1), sum1);
     }
 
-    sum                               = _AddFunc(sum0, sum1);
-    const size_t leftover1            = count % kElementsPerVector1;
-    const bool   src0_have_odd_vector = src1_vec_ptr_end - src1_vec_ptr > 0;
+    sum                                    = _AddFunc(sum0, sum1);
+    const size_t leftover1                 = count % kElementsPerVector1;
+    const bool   has_remaining_src1_vector = src1_vec_ptr_end - src1_vec_ptr > 0;
     {
-        HVX_Vector curr0 = prev0;
-        if (src0_have_odd_vector) {
+        const bool     should_handle_last_vector = (src1_vec_ptr_end - ((HVX_Vector *) src1)) > 0;
+        HVX_Vector     curr0                     = prev0;
+        HVX_VectorPair s0_pair;
+        if (should_handle_last_vector) {
             const bool should_fetch_src0 =
                 reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
-            curr0            = should_fetch_src0 ? *src0_vec_ptr : prev0;
-            HVX_Vector curr1 = *src1_vec_ptr++;
+            curr0 = should_fetch_src0 ? *src0_vec_ptr : prev0;
             src0_vec_ptr += should_fetch_src0 ? 1 : 0;
-            HVX_Vector     s0      = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-            HVX_Vector     s1      = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-            HVX_VectorPair s0_pair = _ExpandFunc(s0);
-            prev1                  = curr1;
+
+            HVX_Vector s0 = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
+            s0_pair       = _ExpandFunc(s0);
+        }
+
+        if (has_remaining_src1_vector) {
+            HVX_Vector curr1 = *src1_vec_ptr++;
+            HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
+            prev1            = curr1;
 
             sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);  // TODO: figure out how to handle the high part
         }
 
-        if ((src1_vec_ptr_end - ((HVX_Vector *) src1)) > 0) {
+        if (should_handle_last_vector) {
             // handle the last vector
-            const bool should_fetch_src0 =
-                !src0_have_odd_vector &&
-                reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
-            bool should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
-            curr0                  = should_fetch_src0 ? *src0_vec_ptr : curr0;
-            HVX_Vector curr1       = should_fetch_src1 ? *src1_vec_ptr : prev1;
-            src0_vec_ptr += should_fetch_src0 ? 1 : 0;
+            bool       should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
+            HVX_Vector curr1             = should_fetch_src1 ? *src1_vec_ptr : prev1;
             src1_vec_ptr += should_fetch_src1 ? 1 : 0;
-            HVX_Vector     s0      = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-            HVX_Vector     s1      = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-            HVX_VectorPair s0_pair = _ExpandFunc(s0);
-            prev0                  = curr0;
-            prev1                  = curr1;
+            HVX_Vector s1 = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
+            prev0         = curr0;
+            prev1         = curr1;
 
-            sum = _AddFunc(_MpyFunc(src0_have_odd_vector ? Q6_V_hi_W(s0_pair) : Q6_V_lo_W(s0_pair), s1), sum);
+            sum = _AddFunc(_MpyFunc(has_remaining_src1_vector ? Q6_V_hi_W(s0_pair) : Q6_V_lo_W(s0_pair), s1), sum);
         }
     }
 
