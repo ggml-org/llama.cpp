@@ -942,12 +942,12 @@ static int apply_chat_template(const struct common_chat_templates * tmpls, Llama
 // Function to tokenize the prompt
 static int tokenize_prompt(const llama_vocab * vocab, const std::string & prompt,
                            std::vector<llama_token> & prompt_tokens, const LlamaData & llama_data) {
-    const bool add_special = llama_memory_seq_pos_max(llama_get_memory(llama_data.context.get()), 0) == 0;
-    int n_tokens = prompt.size() + 2 * add_special;
+    const bool is_first = llama_memory_seq_pos_max(llama_get_memory(llama_data.context.get()), 0) == -1;
+    int n_tokens = prompt.size() + 2 * is_first;
     prompt_tokens.resize(n_tokens);
     n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
                               prompt_tokens.data(), prompt_tokens.size(),
-                              add_special, /*parse_special =*/true);
+                              is_first, /*parse_special =*/true);
     if (n_tokens == std::numeric_limits<int32_t>::min()) {
         printe("tokenization failed: input too large\n");
         return -1;
@@ -956,7 +956,7 @@ static int tokenize_prompt(const llama_vocab * vocab, const std::string & prompt
         prompt_tokens.resize(-n_tokens);
         int check = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
                                    prompt_tokens.data(), prompt_tokens.size(),
-                                   add_special, /*parse_special =*/true);
+                                   is_first, /*parse_special =*/true);
         if (check != -n_tokens) {
             printe("failed to tokenize the prompt (size mismatch)\n");
             return -1;
