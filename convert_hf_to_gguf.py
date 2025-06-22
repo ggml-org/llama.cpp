@@ -3518,11 +3518,15 @@ class Plamo2Model(TextModel):
                     elif token_type_str == "BYTE":
                         toktypes.append(gguf.TokenType.BYTE)
                     else:
-                        toktypes.append(gguf.TokenType.NORMAL)
+                        # Check for PLaMo-2 special tokens
+                        token_str = token_data[0]
+                        if token_str.startswith("<|plamo:") and token_str.endswith("|>"):
+                            toktypes.append(gguf.TokenType.CONTROL)
+                        else:
+                            toktypes.append(gguf.TokenType.NORMAL)
 
-        # Use "llama" (SPM) tokenizer type which doesn't require merges
-        # PLaMo 2's tokenizer is more similar to SPM than GPT2
-        self.gguf_writer.add_tokenizer_model("llama")
+        # Use "plamo2" tokenizer type for PLaMo-2's custom Aho-Corasick tokenizer
+        self.gguf_writer.add_tokenizer_model("plamo2")
         self.gguf_writer.add_tokenizer_pre("default")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)
