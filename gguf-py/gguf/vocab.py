@@ -197,6 +197,16 @@ class SpecialVocab:
                         if special_last := tmpl_single[-1].get('SpecialToken', {}).get('id'):
                             if not tokenizer_config:
                                 special_eos = special_last
+                            elif special_last != special_eos:
+                                if 'eot' not in self.special_token_types:
+                                    self.special_token_types = tuple(self.special_token_types) + ('eot', )
+                                    tokenizer_config['eot_token'] = special_eos
+                                elif 'eom' not in self.special_token_types:
+                                    self.special_token_types = tuple(self.special_token_types) + ('eom', )
+                                    tokenizer_config['eom_token'] = special_eos
+                                else:
+                                    logger.warning(f'Overriding EOS token {special_eos!r} with {special_last!r} without EOT/EOM fallback!')
+                                tokenizer_config['eos_token'] = special_eos = special_last
                             self.add_special_token['eos'] = True if special_last == special_eos else False
                             if special_last != special_eos:
                                 logger.warning(f'Unknown trailing special token {special_last!r} in TemplateProcessing<single>')
