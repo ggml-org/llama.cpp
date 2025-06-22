@@ -116,6 +116,30 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
     }
 }
 
+static void compute_cossim(std::vector<tensor_statistics> & tstats) {
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    for (auto & ts : tstats) {
+        if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
+            const int blk = std::stoi(match[1]);
+            std::string tname(ts.tensor);
+            tname.replace(match.position(1), match.length(1), std::to_string(blk-1));
+            auto prev = std::find_if(tstats.begin(), tstats.end(),
+                [tname](const tensor_statistics & t) { return t.tensor == tname; });
+            if (prev != tstats.end()) {
+                const float dp = std::inner_product(ts.stats.values.begin(), ts.stats.values.end(),
+                    prev->stats.values.begin(), 0.0f);
+                const float curr_mag = std::sqrt(std::inner_product(ts.stats.values.begin(), ts.stats.values.end(),
+                    ts.stats.values.begin(), 0.0f));
+                const float prev_mag = std::sqrt(std::inner_product(prev->stats.values.begin(), prev->stats.values.end(),
+                    prev->stats.values.begin(), 0.0f));
+                const float cs = dp / (curr_mag * prev_mag);
+                ts.cossim = cs;
+            }
+        } else {
+            ts.cossim = 0;
+        }
+    }
+}
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
     GGML_UNUSED(user_data);
 
@@ -438,24 +462,6 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_stati
         }
     }
 
-    if (tstats) {
-        static const std::regex pattern(R"(blk\.(\d+)\.)");
-        for (auto & ts : *tstats) {
-            if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
-                const int blk = std::stoi(match[1]);
-                std::string tname(ts.tensor);
-                tname.replace(match.position(1), match.length(1), std::to_string(blk-1));
-                auto prev = std::find_if(tstats->begin(), tstats->end(), [tname](const tensor_statistics & t) { return t.tensor == tname; });
-                if (prev != tstats->end()) {
-                    const float dp = std::inner_product(ts.stats.values.begin(), ts.stats.values.end(), prev->stats.values.begin(), 0.0f);
-                    const float curr_mag = std::sqrt(std::inner_product(ts.stats.values.begin(), ts.stats.values.end(), ts.stats.values.begin(), 0.0f));
-                    const float prev_mag = std::sqrt(std::inner_product(prev->stats.values.begin(), prev->stats.values.end(), prev->stats.values.begin(), 0.0f));
-                    const float cs = dp / (curr_mag * prev_mag);
-                    ts.cossim = cs;
-                }
-            } else {
-                ts.cossim = 0;
-            }
         }
     }
 
