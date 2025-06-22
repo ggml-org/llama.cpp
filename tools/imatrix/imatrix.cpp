@@ -692,6 +692,111 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params) {
     return true;
 }
 
+static bool compute_statistics(const common_params & params) {
+    std::vector<tensor_statistics> ts;
+    if (params.in_files.empty() || params.in_files.size() > 1) {
+        LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
+        return false;
+    }
+    if (!g_collector.load_imatrix(params.in_files[0].c_str(), &ts)) {
+        LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
+        return false;
+    }
+    if (ts.empty()) {
+        LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
+        return false;
+    }
+
+    struct tensor_comparer {
+        bool operator()(const tensor_statistics & a, const tensor_statistics & b) const {
+            std::string layer, name_a, name_b;
+            ;
+            process_tensor_name(a.tensor, layer, name_a);
+            process_tensor_name(b.tensor, layer, name_b);
+            return name_a < name_b || (name_a == name_b && a.total_bias > b.total_bias);
+        }
+    };
+
+    std::sort(ts.begin(), ts.end(), tensor_comparer());
+
+    struct weighted_stats {
+        float weighted_bias   = 0.0f;
+        float weighted_zd     = 0.0f;
+        float weighted_cossim = 0.0f;
+        int   total_elements  = 0;
+    };
+
+    std::map<int, weighted_stats> ws;
+
+    LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
+    LOG_INF("\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", " Layer", "       Tensor", "          Σ(Bias)",
+            "  Min", "            Max", "           μ", "   σ", " % Active", "N", "   Entropy", "E (norm)", "ZD",
+            "  CosSim");
+    LOG_INF(
+        "=============================================================================================================="
+        "===========================================================\n");
+    for (const auto & tstat : ts) {
+        std::string layer, name;
+        process_tensor_name(tstat.tensor, layer, name);
+
+        int blk;
+        try {
+            blk = std::stoi(layer);
+        } catch (const std::exception & e) {
+            blk = -1;  // not a block layer
+        }
+
+        LOG_INF("%5s\t%-20s\t%10.2f\t%8.4f\t%11.4f\t%6.2f\t%6.2f\t%8.2f%%\t%6d\t%10.4f\t%6.2f%%\t%10.2f%%\t%8.4f\n",
+                layer.c_str(), name.c_str(), tstat.total_bias, tstat.min_bias, tstat.max_bias, tstat.mean_bias,
+                tstat.stddev, tstat.active * 100.0f, tstat.elements, tstat.entropy,
+                100.0f * (tstat.entropy / std::log2(tstat.elements)), 100.0f * tstat.zd, tstat.cossim);
+
+        const float weighted_bias   = tstat.elements * tstat.total_bias;
+        const float weighted_zd     = tstat.elements * tstat.zd;
+        const float weighted_cossim = tstat.elements * tstat.cossim;
+
+        if (ws.find(blk) != ws.end()) {
+            ws[blk].weighted_bias += weighted_bias;
+            ws[blk].weighted_zd += weighted_zd;
+            ws[blk].weighted_cossim += weighted_cossim;
+            ws[blk].total_elements += tstat.elements;
+        } else {
+            weighted_stats temp_ws;
+            temp_ws.weighted_bias   = weighted_bias;
+            temp_ws.weighted_zd     = weighted_zd;
+            temp_ws.weighted_cossim = weighted_cossim;
+            temp_ws.total_elements  = tstat.elements;
+            ws[blk]                 = temp_ws;
+        }
+    }
+
+    const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
+    LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
+    LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Bias)", "      μZD", "μCosSim");
+    LOG_INF("===============================================\n");
+
+    for (const auto & [first, second] : ws) {
+        const auto & layer = first;
+        const auto & stats = second;
+
+        if (stats.total_elements == 0) {
+            continue;
+        }
+
+        if (layer >= 0) {
+            const float bias   = stats.weighted_bias / stats.total_elements;
+            const float zd     = stats.weighted_zd / stats.total_elements;
+            const float cossim = stats.weighted_cossim / stats.total_elements;
+
+            LOG_INF("%5d\t%14.2f\t%10.4f%%\t%6.4f\n", layer, bias, 100.0f * zd, cossim);
+        }
+    }
+
+    LOG_INF("\n");
+
+    return true;
+}
+
 int main(int argc, char ** argv) {
     common_params params;
 
@@ -705,99 +810,10 @@ int main(int argc, char ** argv) {
     }
 
     std::vector<tensor_statistics> ts;
-
     if (params.show_statistics) {
-        if (params.in_files.empty() || params.in_files.size() > 1) {
-            LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
+        if (!compute_statistics(params)) {
             return 1;
         }
-        if (!g_collector.load_imatrix(params.in_files[0].c_str(), & ts)) {
-            LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
-            return 1;
-        }
-        if (ts.empty()) {
-            LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
-            return 1;
-        }
-
-        struct tensor_comparer {
-            bool operator()(const tensor_statistics & a, const tensor_statistics & b) const {
-                std::string layer, name_a, name_b;;
-                process_tensor_name(a.tensor, layer, name_a);
-                process_tensor_name(b.tensor, layer, name_b);
-                return name_a < name_b || (name_a == name_b && a.total_bias > b.total_bias);
-            }
-        };
-        std::sort(ts.begin(), ts.end(), tensor_comparer());
-
-        struct weighted_stats {
-            float weighted_bias = 0.0f;
-            float weighted_zd = 0.0f;
-            float weighted_cossim = 0.0f;
-            int total_elements = 0;
-        };
-        std::map<int, weighted_stats> ws;
-
-        LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
-        LOG_INF("\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-            " Layer", "       Tensor", "          Σ(Bias)", "  Min", "            Max", "           μ", "   σ", " % Active", "N", "   Entropy", "E (norm)", "ZD", "  CosSim");
-        LOG_INF("=========================================================================================================================================================================\n");
-        for (const auto & tstat : ts) {
-            std::string layer, name;
-            process_tensor_name(tstat.tensor, layer, name);
-
-            int blk;
-            try {
-                blk = std::stoi(layer);
-            } catch (const std::exception & e) {
-                blk = -1; // not a block layer
-            }
-
-            LOG_INF("%5s\t%-20s\t%10.2f\t%8.4f\t%11.4f\t%6.2f\t%6.2f\t%8.2f%%\t%6d\t%10.4f\t%6.2f%%\t%10.2f%%\t%8.4f\n",
-                layer.c_str(), name.c_str(), tstat.total_bias, tstat.min_bias, tstat.max_bias, tstat.mean_bias, tstat.stddev,
-                tstat.active * 100.0f, tstat.elements, tstat.entropy, 100.0f * (tstat.entropy / std::log2(tstat.elements)),
-                100.0f * tstat.zd, tstat.cossim);
-
-            const float weighted_bias   = tstat.elements * tstat.total_bias;
-            const float weighted_zd     = tstat.elements * tstat.zd;
-            const float weighted_cossim = tstat.elements * tstat.cossim;
-
-            if (ws.find(blk) != ws.end()) {
-                ws[blk].weighted_bias += weighted_bias;
-                ws[blk].weighted_zd += weighted_zd;
-                ws[blk].weighted_cossim += weighted_cossim;
-                ws[blk].total_elements += tstat.elements;
-            } else {
-                weighted_stats temp_ws;
-                temp_ws.weighted_bias = weighted_bias;
-                temp_ws.weighted_zd = weighted_zd;
-                temp_ws.weighted_cossim = weighted_cossim;
-                temp_ws.total_elements = tstat.elements;
-                ws[blk] = temp_ws;
-            }
-        }
-
-        const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
-        LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
-        LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Bias)", "      μZD", "μCosSim");
-        LOG_INF("===============================================\n");
-
-        for (const auto & [first, second] : ws) {
-            const auto & layer = first;
-            const auto & stats = second;
-
-            if (stats.total_elements == 0) continue;
-
-            if (layer >= 0) {
-                const float bias = stats.weighted_bias / stats.total_elements;
-                const float zd = stats.weighted_zd / stats.total_elements;
-                const float cossim = stats.weighted_cossim / stats.total_elements;
-
-                LOG_INF("%5d\t%14.2f\t%10.4f%%\t%6.4f\n", layer, bias, 100.0f * zd, cossim);
-            }
-        }
-
-        LOG_INF("\n");
 
         return 0;
     }
