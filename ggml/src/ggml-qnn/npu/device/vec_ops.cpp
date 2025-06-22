@@ -192,7 +192,8 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
             HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
             prev1            = curr1;
 
-            sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);  // TODO: figure out how to handle the high part
+            // should_handle_last_vector will be always true here
+            sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);
         }
 
         if (should_handle_last_vector) {
