@@ -627,12 +627,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
     gguf_set_val_u32(ctx_out.get(), "general.file_type", ftype); // TODO: use LLM_KV
 
-    if (!prune_list.empty()) {
-        uint32_t block_count = 0;
-        ml.get_key(LLM_KV_BLOCK_COUNT, block_count);
-        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), block_count - prune_list.size());
-    }
-
     // Remove split metadata
     gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str());
     gguf_remove_key(ctx_out.get(), ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str());
@@ -667,12 +661,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     for (const auto & it : ml.weights_map) {
         const std::string remapped_name(remap_layer(it.first, prune_list, mapped, next_blk_id));
         if (remapped_name.empty()) {
-            if (false
-                || it.first.find("attn_v.weight") != std::string::npos
-                || it.first.find("attn_qkv.weight") != std::string::npos
-                || it.first.find("attn_kv_b.weight")!= std::string::npos) {
-                pruned_attention_w++;
-                }
+            if (it.first.find("attn_v.weight") != std::string::npos ||
+                it.first.find("attn_qkv.weight") != std::string::npos ||
+                it.first.find("attn_kv_b.weight") != std::string::npos) {
+                    pruned_attention_w++;
+            }
             LLAMA_LOG_DEBUG("%s: prunning tensor %s\n", __func__, it.first.c_str());
             continue;
         } else if (remapped_name != it.first) {
@@ -680,6 +673,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
         }
         tensors.push_back(&it.second);
+    }
+    if (!prune_list.empty()) {
+        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), stoi(mapped.rbegin()->second) + 1);
     }
 
     // keep_split requires that the weights are sorted by split index
