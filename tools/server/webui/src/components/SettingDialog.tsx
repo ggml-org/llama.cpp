@@ -202,7 +202,7 @@ const SETTING_SECTIONS: SettingSection[] = [
         key: 'custom', // dummy key, won't be used
         component: () => {
           const exportDB = async () => {
-            const blob = await StorageUtils.export();
+            const blob = await StorageUtils.exportDB();
             const a = document.createElement('a');
             document.body.appendChild(a);
             a.href = URL.createObjectURL(blob);

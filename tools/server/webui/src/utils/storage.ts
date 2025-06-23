@@ -4,7 +4,7 @@
 import { CONFIG_DEFAULT } from '../Config';
 import { Conversation, Message, TimingReport } from './types';
 import Dexie, { Table } from 'dexie';
-import { exportDB } from 'dexie-export-import';
+import { exportDB as exportDexieDB } from 'dexie-export-import';
 
 const event = new EventTarget();
 
@@ -36,21 +36,14 @@ const StorageUtils = {
   /**
    * manage conversations
    */
-  async export() {
-    return await exportDB(db);
+  async exportDB() {
+    return await exportDexieDB(db);
   },
 
   async importDB(file: File) {
     await db.delete();
     await db.open();
     return await db.import(file);
-    /*
-    return db.delete().then(() => {
-      db.open().then(() => {
-        db.import(file);
-      });
-    });
-    */
   },
 
   async getAllConversations(): Promise<Conversation[]> {
