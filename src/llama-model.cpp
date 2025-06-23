@@ -8219,8 +8219,8 @@ struct llm_build_plamo2 : public llm_graph_context {
         ggml_tensor * inpL;
 
         // key variables used in PLaMo-2 attention
-        const int64_t n_embd_head = hparams.n_embd_head_v;
-        ggml_tensor * inp_pos = build_inp_pos();
+        // const int64_t n_embd_head = hparams.n_embd_head_v;
+        // ggml_tensor * inp_pos = build_inp_pos();
 
         // {n_embd, n_tokens}
         inpL = build_inp_embd(model.tok_embd);
@@ -8272,7 +8272,7 @@ private:
         ggml_tensor * inpSA = inpL;
 
         // attention layer specific variables
-        const int64_t n_embd_head = hparams.n_embd_head_v;
+        // const int64_t n_embd_head = hparams.n_embd_head_v;
         ggml_tensor * inp_pos = build_inp_pos();
 
         // norm
@@ -8282,9 +8282,9 @@ private:
         // self-attention
         {
             // For PLaMo-2 hybrid architecture, get the correct attention context
-            const auto * mctx_hybrid = static_cast<const llama_memory_hybrid_context *>(mctx);
-            const auto * unified_ctx = mctx_hybrid->get_attn();
-            auto inp = std::make_unique<llm_graph_input_attn_kv_unified>(hparams, cparams, unified_ctx);
+            // const auto * mctx_hybrid = static_cast<const llama_memory_hybrid_context *>(mctx);
+            // const auto * unified_ctx = mctx_hybrid->get_attn();
+            auto inp = std::make_unique<llm_graph_input_attn_kv_unified>(hparams, cparams, attn_ctx);
             auto * inp_attn = inp.release();
 
             // PLaMo-2 uses combined QKV tensor
@@ -8341,7 +8341,7 @@ private:
 
             // PLaMo-2 GQA: expand K and V heads to match Q heads (equivalent to _expand_kv)
             if (n_head_kv < n_head) {
-                const int n_group = n_head / n_head_kv;
+                // const int n_group = n_head / n_head_kv;
 
                 // manually expand K and V tensors to repeat each head n_group times
                 // create expanded tensors with target dimensions
