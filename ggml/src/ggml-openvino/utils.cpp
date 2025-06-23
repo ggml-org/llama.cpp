@@ -27,15 +27,13 @@ std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph* cgraph, bool
     return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, is_static, is_first_token);
 }
 
-ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
-                                    const std::string& name) {
-  auto *input_data = ggml_decoder->get_input_ggml_tensor(name)->data;
-  ov::Tensor input_tensor;
-  ov::Shape input_shape = ggml_decoder->get_input_shape(name).to_shape();
-  std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
-  input_tensor =
-      ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
-  return input_tensor;
+ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& name) {
+    auto* input_data = ggml_decoder->get_input_ggml_tensor(name)->data;
+    ov::Tensor input_tensor;
+    ov::Shape input_shape = ggml_decoder->get_input_shape(name).to_shape();
+    std::vector<size_t> input_stride = ggml_decoder->get_input_stride(name);
+    input_tensor = ov::Tensor(ggml_decoder->get_input_type(name), input_shape, input_data);
+    return input_tensor;
 }
 
 std::map<std::string, void*> get_ggml_graph_output_dst(std::shared_ptr<GgmlOvDecoder> ggml_decoder) {
@@ -61,21 +59,20 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     static std::string device = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "";
     if (device.empty()) {
-      const std::vector<std::string> preferred_device = {"GPU", "CPU", "NPU"};
-      const auto available_devices = core.get_available_devices();
-      for (const auto& dev : preferred_device) {
-        if (std::find(available_devices.begin(), available_devices.end(),
-                      dev) != available_devices.end()) {
-          device = dev;
-          break;
+        const std::vector<std::string> preferred_device = { "GPU", "CPU", "NPU" };
+        const auto available_devices = core.get_available_devices();
+        for (const auto& dev : preferred_device) {
+            if (std::find(available_devices.begin(), available_devices.end(), dev) != available_devices.end()) {
+                device = dev;
+                break;
+            }
         }
-      }
     }
 
     bool is_static = device == "NPU" ? true : false;
     ov::AnyMap config;
     if (device == "NPU") {
-      config = get_npu_config();
+        config = get_npu_config();
     }
 
     auto start_time = ggml_time_us();
@@ -107,10 +104,10 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
         if (is_static) {
             if (is_first_token) {
-                model          = compiled_cache_prefill[cgraph].first;
+                model = compiled_cache_prefill[cgraph].first;
                 compiled_model = compiled_cache_prefill[cgraph].second;
             } else {
-                model          = compiled_cache_kvcache[cgraph].first;
+                model = compiled_cache_kvcache[cgraph].first;
                 compiled_model = compiled_cache_kvcache[cgraph].second;
             }
         } else {
@@ -141,7 +138,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
             if (getenv("GGML_OPENVINO_DUMP_IR")) {
                 char timestamped_filename[64];
-                auto timestamp = (long long)ggml_time_us();
+                auto timestamp = (long long) ggml_time_us();
                 snprintf(timestamped_filename, sizeof(timestamped_filename), "model_prefill_%lld.xml", timestamp);
                 ov::serialize(model, timestamped_filename);
                 snprintf(timestamped_filename, sizeof(timestamped_filename), "model_kvcache_%lld.xml", timestamp);
@@ -161,7 +158,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
             if (getenv("GGML_OPENVINO_DUMP_IR")) {
                 char timestamped_filename[64];
-                auto timestamp = (long long)ggml_time_us();
+                auto timestamp = (long long) ggml_time_us();
                 snprintf(timestamped_filename, sizeof(timestamped_filename), "model_%lld.xml", timestamp);
                 ov::serialize(model, timestamped_filename);
             }
@@ -227,68 +224,59 @@ ov::AnyMap get_npu_config() {
     return config;
 }
 
-ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
-                               const std::string& param_name) {
-  bool is_static = ggml_decoder->is_static();
-  bool is_first_token = ggml_decoder->is_first_token();
+ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& param_name) {
+    bool is_static = ggml_decoder->is_static();
+    bool is_first_token = ggml_decoder->is_first_token();
 
-  ov::Tensor input_tensor;
-  if (ggml_decoder->get_model_extra_inputs().find(param_name) !=
-      ggml_decoder->get_model_extra_inputs().end()) {
-    input_tensor = *ggml_decoder->get_model_extra_input_values().at(param_name);
+    ov::Tensor input_tensor;
+    if (ggml_decoder->get_model_extra_inputs().find(param_name) != ggml_decoder->get_model_extra_inputs().end()) {
+        input_tensor = *ggml_decoder->get_model_extra_input_values().at(param_name);
 
-  } else if (!is_static) {
-    input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
-
-  } else {
-    if (param_name == "inp_tokens" || param_name == "inp_pos") {
-      if (is_first_token) {
-        size_t max_token_len = ggml_decoder->get_max_token_len();
-        const auto *input_tensor_ggml =
-            ggml_decoder->get_input_ggml_tensor(param_name);
-        std::vector<int32_t> padded_data =
-            pad_input<int32_t>(input_tensor_ggml, 1, max_token_len, 0);
-        input_tensor =
-            ov::Tensor(ov::element::i32, ov::Shape{1, 1, max_token_len});
-        auto *data_ptr = input_tensor.data<int32_t>();
-        std::copy(padded_data.begin(), padded_data.end(), data_ptr);
-      } else {
+    } else if (!is_static) {
         input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
-      }
-
-    } else if (param_name == "KQ_mask") {
-      size_t max_token_len = ggml_decoder->get_max_token_len();
-      const auto *input_tensor_ggml =
-          ggml_decoder->get_input_ggml_tensor(param_name);
-      if (is_first_token) {
-        std::vector<float> padded_data = pad_input<float>(
-            input_tensor_ggml, max_token_len, max_token_len, -INFINITY);
-        set_zero_diagonal(padded_data, max_token_len);
-        input_tensor = ov::Tensor(ov::element::f32,
-                                  ov::Shape{1, max_token_len, max_token_len});
-        auto *data_ptr = input_tensor.data<float>();
-        std::copy(padded_data.begin(), padded_data.end(), data_ptr);
-      } else {
-        std::vector<float> padded_data =
-            pad_input<float>(input_tensor_ggml, 1, max_token_len, -INFINITY);
-        input_tensor =
-            ov::Tensor(ov::element::f32, ov::Shape{1, 1, max_token_len});
-        auto *data_ptr = input_tensor.data<float>();
-        std::copy(padded_data.begin(), padded_data.end(), data_ptr);
-      }
 
     } else {
-      input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
+        if (param_name == "inp_tokens" || param_name == "inp_pos") {
+            if (is_first_token) {
+                size_t max_token_len = ggml_decoder->get_max_token_len();
+                const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
+                std::vector<int32_t> padded_data = pad_input<int32_t>(input_tensor_ggml, 1, max_token_len, 0);
+                input_tensor = ov::Tensor(ov::element::i32, ov::Shape{ 1, 1, max_token_len });
+                auto* data_ptr = input_tensor.data<int32_t>();
+                std::copy(padded_data.begin(), padded_data.end(), data_ptr);
+            } else {
+                input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
+            }
+
+        } else if (param_name == "KQ_mask") {
+            size_t max_token_len = ggml_decoder->get_max_token_len();
+            const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
+            if (is_first_token) {
+                std::vector<float> padded_data =
+                    pad_input<float>(input_tensor_ggml, max_token_len, max_token_len, -INFINITY);
+                set_zero_diagonal(padded_data, max_token_len);
+                input_tensor = ov::Tensor(ov::element::f32, ov::Shape{ 1, max_token_len, max_token_len });
+                auto* data_ptr = input_tensor.data<float>();
+                std::copy(padded_data.begin(), padded_data.end(), data_ptr);
+            } else {
+                std::vector<float> padded_data = pad_input<float>(input_tensor_ggml, 1, max_token_len, -INFINITY);
+                input_tensor = ov::Tensor(ov::element::f32, ov::Shape{ 1, 1, max_token_len });
+                auto* data_ptr = input_tensor.data<float>();
+                std::copy(padded_data.begin(), padded_data.end(), data_ptr);
+            }
+
+        } else {
+            input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
+        }
     }
-  }
-  return input_tensor;
+    return input_tensor;
 }
 
 size_t checksum(const void* data, size_t size) {
     const uint8_t* bytes = static_cast<const uint8_t*>(data);
     size_t sum = 0;
     for (size_t i = 0; i < size; ++i) {
-        sum += (uint8_t)i;
+        sum += (uint8_t) i;
         sum += bytes[i];
     }
     return sum;
@@ -302,41 +290,38 @@ void print_input_tensor_info(const std::string& name, const ov::Tensor& tensor) 
     std::cout << "Input name: " << name << ", Input shape: " << tensor.get_shape() << ", Address: " << tensor.data()
               << std::endl;
     switch (tensor.get_element_type()) {
-    case ov::element::f32:
-      std::cout << *(tensor.data<float>()) << std::endl;
-      break;
-    case ov::element::f16:
-      std::cout << ov::float16::from_bits(*(tensor.data<uint16_t>()))
-                << std::endl;
-      break;
-    case ov::element::i32:
-      std::cout << *(tensor.data<int32_t>()) << std::endl;
-      break;
-    case ov::element::i64:
-      std::cout << *(tensor.data<int64_t>()) << std::endl;
-      break;
-    default:
-        break;
+        case ov::element::f32:
+            std::cout << *(tensor.data<float>()) << std::endl;
+            break;
+        case ov::element::f16:
+            std::cout << ov::float16::from_bits(*(tensor.data<uint16_t>())) << std::endl;
+            break;
+        case ov::element::i32:
+            std::cout << *(tensor.data<int32_t>()) << std::endl;
+            break;
+        case ov::element::i64:
+            std::cout << *(tensor.data<int64_t>()) << std::endl;
+            break;
+        default:
+            break;
     }
 }
 
-void print_output_tensor_info(const std::string& name,
-                              const ov::Tensor& tensor,
+void print_output_tensor_info(const std::string& name, const ov::Tensor& tensor,
                               std::map<std::string, void*>& output_dst) {
     std::cout << "Output name: " << name << ", Output shape: " << tensor.get_shape()
               << ", Address: " << output_dst[name] << std::endl;
     switch (tensor.get_element_type()) {
-    case ov::element::f32:
-      std::cout << *(tensor.data<float>()) << std::endl;
-      std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
-      break;
-    case ov::element::f16:
-      std::cout << ov::float16::from_bits(*(tensor.data<uint16_t>()))
-                << std::endl;
-      std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
-      break;
-    default:
-        break;
+        case ov::element::f32:
+            std::cout << *(tensor.data<float>()) << std::endl;
+            std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
+            break;
+        case ov::element::f16:
+            std::cout << ov::float16::from_bits(*(tensor.data<uint16_t>())) << std::endl;
+            std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
+            break;
+        default:
+            break;
     }
 }
 
@@ -348,9 +333,9 @@ void set_zero_diagonal(std::vector<float>& matrix, size_t dim) {
     }
 }
 
-bool is_prefill(struct ggml_cgraph * cgraph) {
+bool is_prefill(struct ggml_cgraph* cgraph) {
     for (int i = 0; i < cgraph->n_nodes; ++i) {
-        auto * op = cgraph->nodes[i];
+        auto* op = cgraph->nodes[i];
         for (int j = 0; j < GGML_MAX_SRC; ++j) {
             auto* src = op->src[j];
             if (src == nullptr) {
