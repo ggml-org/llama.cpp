@@ -2,9 +2,14 @@
 overall task:
 Modify the llama-quantize c++ code to read default.smarterquant.json into an internal data structure. Encode each matrix based on the scheme laid out below. Adapt the encoded blocksize in bytes. The json contains the following information for each matrix: Four compression types referring to the block encoding for the first four 256 wide blocks. Each following block is using the fourth mode as well. This is followed by a list of columns into which the original matrix is ordered before applying the block encoding. The inference code gets the same json to be able to decompress the matrices. Modify the inference code as well so that llama-cli and llama-server work with those encoded GGUFs.
 
+hint: compile using these commands:
+cmake -B build -DBUILD_SHARED_LIBS=OFF
+cmake --build build --config Release -j8 --target llama-quantize     # or llama-cli, etc.
+
 The SmarterQuant feature implementation is partially complete. The following steps are remaining to make it fully functional:
 
-1.  **Complete Custom Block Quantization Data Packing in `src/llama-quant.cpp` (Step 3 Enhancement):**
+1.  Done
+  **Complete Custom Block Quantization Data Packing in `src/llama-quant.cpp` (Step 3 Enhancement):**
     *   **Current State:** The logic identifies which `ggml_type` to use for each 256-column block of a SmarterQuant-enabled tensor and calculates an *approximate* final size. GGUF metadata for block types and permutation is correctly written. Column permutation of `f32_data` is implemented.
     *   **To Do:**
         *   Refactor the quantization part within `llama_model_quantize_impl` (or create a new helper function like `llama_tensor_quantize_smarter_blocks`).
@@ -47,17 +52,9 @@ The SmarterQuant feature implementation is partially complete. The following ste
             *   Implement small test programs that load the quantized model and:
                 *   Manually dequantize specific rows/tensors using the new logic and verify against expected F32 values (after unpermuting).
                 *   Perform a simple operation (e.g., matrix multiplication) involving a SmarterQuant tensor and verify the result against a reference computation done on the original, unquantized, unpermuted tensor.
-        *   **Performance Testing:**
-            *   Measure inference speed of models quantized with SmarterQuant vs. standard quantization methods.
-            *   Profile to identify any bottlenecks introduced by the custom dequantization/unpermutation logic.
-        *   **Model Quality Testing:**
-            *   Run perplexity tests (e.g., using `perplexity` example) on standard datasets.
-            *   Compare results between SmarterQuant models and models quantized with standard GGUF types (e.g., Q4_0, Q5_K_M).
-            *   Qualitative testing of generated text for larger models.
 
 4.  **Refinements and Optimizations:**
-    *   **Path for `default.smarterquant.json`:** Consider making the path to this file configurable via command-line arguments in `llama-quantize`, `llama-cli`, and `llama-server` instead of relying solely on the current working directory. This would involve changes in `common.h/cpp`.
-    *   **Performance of Permutation/Unpermutation:** Profile the overhead of these operations. For very performance-sensitive scenarios, explore if some computations can be done directly on permuted data (though this is much harder).
+    *   **Performance of Permutation/Unpermutation at Inference:** Perform the matrix multiplication on the permuted data and unpermute the result vector only.
     *   **Memory for Unpermutation:** The current plan (Option A for unpermutation) requires a temporary buffer for the unpermuted F32 row. Analyze its memory impact.
 
 These steps represent significant work, especially the modifications to `ggml.c` which is performance-critical and central to the library's operations.
