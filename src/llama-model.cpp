@@ -1,5 +1,6 @@
 #include "llama-model.h"
 
+#include "ggml.h"
 #include "llama-arch.h"
 #include "llama-impl.h"
 #include "llama-mmap.h"
@@ -19,7 +20,6 @@
 #include <cmath>
 #include <cfloat>
 #include <cstring>
-#include <cmath>
 #include <functional>
 #include <map>
 #include <regex>
@@ -8395,7 +8395,6 @@ private:
         const int64_t d_conv  = hparams.ssm_d_conv;
         const int64_t d_inner = hparams.ssm_d_inner;
         const int64_t d_state = hparams.ssm_d_state;
-        const int64_t dt_rank = hparams.ssm_dt_rank;
         const int64_t n_seqs  = ubatch.n_seqs;
         const float norm_rms_eps = hparams.f_norm_rms_eps;
 
@@ -8451,7 +8450,7 @@ private:
             x = ggml_ssm_conv(ctx0, conv_x, model.layers[il].ssm_conv1d);
 
             // bias
-            x = ggml_add(ctx0, x, model.layers[il].ssm_conv1d_b);
+            // x = ggml_add(ctx0, x, model.layers[il].ssm_conv1d_b);  // PLaMo-2 does not use bias here
 
             x = ggml_silu(ctx0, x);
         }
@@ -8459,25 +8458,32 @@ private:
         // SSM
         {
             // bcdt_proj: {d_inner, dt_rank + 2*d_state} @ {d_inner, n_seq_tokens, n_seqs} => {dt_rank + 2*d_state, n_seq_tokens, n_seqs}
-            ggml_tensor * x_db = build_lora_mm(model.layers[il].ssm_x, x);
+            ggml_tensor * x_bcdt = build_lora_mm(model.layers[il].ssm_x, x);
 
             // split into dt, B, C
-            ggml_tensor * dt = ggml_view_3d(ctx0, x_db, dt_rank, n_seq_tokens, n_seqs, x_db->nb[1], x_db->nb[2], 0);
-            ggml_tensor * B  = ggml_view_3d(ctx0, x_db, d_state, n_seq_tokens, n_seqs, x_db->nb[1], x_db->nb[2], ggml_element_size(x_db)*dt_rank);
-            ggml_tensor * C  = ggml_view_3d(ctx0, x_db, d_state, n_seq_tokens, n_seqs, x_db->nb[1], x_db->nb[2], ggml_element_size(x_db)*(dt_rank+d_state));
+            const int64_t dt_dim = std::max(64, int(hparams.n_embd / 16));
+            ggml_tensor * B  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], 0);
+            ggml_tensor * C  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*d_state);
+            ggml_tensor * dt = ggml_view_3d(ctx0, x_bcdt, dt_dim, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*(2*d_state));
 
             // Apply RMS norm to dt, B, C (PLaMo-2 specific)
-            dt = ggml_rms_norm(ctx0, dt, norm_rms_eps);
             B = ggml_rms_norm(ctx0, B, norm_rms_eps);
             C = ggml_rms_norm(ctx0, C, norm_rms_eps);
+            dt = ggml_rms_norm(ctx0, dt, norm_rms_eps);
 
             // dt_proj: {dt_rank, d_inner} @ {dt_rank, n_seq_tokens, n_seqs} => {d_inner, n_seq_tokens, n_seqs}
             dt = build_lora_mm(model.layers[il].ssm_dt, dt);
             dt = ggml_add(ctx0, dt, model.layers[il].ssm_dt_b);
 
+            // This is corresponding to the broadcast_to operation in ssd_update_state() of the originall code
+            ggml_tensor * dt_expanded = ggml_new_tensor_2d(ctx0, dt->type, d_inner, n_seq_tokens);
+            dt = ggml_repeat(ctx0, dt, dt_expanded);
+            ggml_tensor * A_expanded = ggml_new_tensor_2d(ctx0, model.layers[il].ssm_a->type, d_state, d_inner);
+            A_expanded = ggml_repeat(ctx0, model.layers[il].ssm_a, A_expanded);
+
             // SSM scan operation
             // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
-            ggml_tensor * y_ssm = ggml_ssm_scan(ctx0, ssm, x, dt, model.layers[il].ssm_a, B, C);
+            ggml_tensor * y_ssm = ggml_ssm_scan(ctx0, ssm, x, dt, A_expanded, B, C);
 
             // store last states
             ggml_build_forward_expand(gf,
