@@ -118,9 +118,9 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                             hexagon::l2fetch_row(src0_row + src0->get_nb(1), src0->get_nb(1));
                         }
 
-                        auto * dst_row = reinterpret_cast<hexagon::dequantized_element_type *>(
-                            src0_plane_cache_ptr + ir * src0_actual_row_size);
-                        dequantize_row_func(src0_row, reinterpret_cast<hexagon::dequantized_element_type *>(dst_row),
+                        auto * dst_row = reinterpret_cast<hexagon::dequant_target_type *>(src0_plane_cache_ptr +
+                                                                                          ir * src0_actual_row_size);
+                        dequantize_row_func(src0_row, reinterpret_cast<hexagon::dequant_target_type *>(dst_row),
                                             src0->get_ne(0), params->f16_to_f32_table);
                     }
 
@@ -192,7 +192,7 @@ bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const n
     }
 
     const auto vtcm_thread_quota_size = hexagon::default_thread_pool::get_per_thread_vtcm_quota();
-    if (src0.ne[0] * sizeof(hexagon::dequantized_element_type) > vtcm_thread_quota_size) {
+    if (src0.ne[0] * sizeof(hexagon::dequant_target_type) > vtcm_thread_quota_size) {
         DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) ne[0] is too large: %ld, vtcm_thread_quota_size: %zu\n",
                          hexagon::get_type_name(src0.type), (long) src0.ne[0], vtcm_thread_quota_size);
         return false;
@@ -209,9 +209,9 @@ namespace hexagon {
 
 bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
     static_assert(DEVICE_TENSOR_MAX_DIMS == 4, "mul_mat_f32 requires max dims 4");
-    static_assert(std::is_same<hexagon::dequantized_element_type, float>::value ||
-                      std::is_same<hexagon::dequantized_element_type, npu_device_fp16_t>::value,
-                  "dequantized_element_type must be float or npu_device_fp16_t");
+    static_assert(std::is_same<hexagon::dequant_target_type, float>::value ||
+                      std::is_same<hexagon::dequant_target_type, npu_device_fp16_t>::value,
+                  "dequant_target_type must be float or npu_device_fp16_t");
 
     if (!out) {
         return false;
@@ -226,7 +226,7 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
     switch (src1->get_type()) {
         case NPU_DATA_TYPE_F32:
             if (is_quantized_type(src0->get_type())) {
-                if (std::is_same<hexagon::dequantized_element_type, float>::value) {
+                if (std::is_same<hexagon::dequant_target_type, float>::value) {
                     mul_mat_impl<hexagon::vec_dot_product_f32_f32>(src0, src1, out, params);
                 } else {
                     mul_mat_impl<hexagon::vec_dot_product_f16_f32>(src0, src1, out, params);
