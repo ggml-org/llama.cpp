@@ -456,8 +456,11 @@ bool ggml_cuda_should_use_mmv(enum ggml_type type, int cc, const int64_t * src0_
                     return ne11 <= 4;
                 }
                 return ne11 <= 3;
-            } else if (fp32_mma_hardware_available(cc)) {
-                return ne11 <= 3;
+            } else if (GGML_CUDA_CC_IS_AMD(cc)) {
+                if (fp32_mma_hardware_available(cc)) {
+                    return ne11 <= 3;
+                }
+                return ne11 <= 8;
             }
             return ne11 <= 8;
         case GGML_TYPE_F16:
@@ -470,11 +473,14 @@ bool ggml_cuda_should_use_mmv(enum ggml_type type, int cc, const int64_t * src0_
                     return src0_small && ne11 <= 3;
                 }
                 return ne11 <= 8;
-            } else if (fp16_mma_hardware_available(cc)) {
-                if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
-                    return ne11 <= 5;
+            } else if (GGML_CUDA_CC_IS_AMD(cc)) {
+                if (fp16_mma_hardware_available(cc)) {
+                    if (GGML_CUDA_CC_IS_RDNA3(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
+                        return ne11 <= 5;
+                    }
+                    return ne11 <= 2;
                 }
-                return ne11 <= 2;
+                return ne11 <= 8;
             }
             return ne11 <= 8;
         case GGML_TYPE_BF16:
@@ -487,8 +493,11 @@ bool ggml_cuda_should_use_mmv(enum ggml_type type, int cc, const int64_t * src0_
                     return src0_small && ne11 <= 3;
                 }
                 return ne11 <= 8;
-            } else if (bf16_mma_hardware_available(cc)) {
-                return ne11 <= 3;
+            } else if (GGML_CUDA_CC_IS_AMD(cc)) {
+                if (bf16_mma_hardware_available(cc)) {
+                    return ne11 <= 3;
+                }
+                return ne11 <= 8;
             }
             return ne11 <= 8;
         default:
