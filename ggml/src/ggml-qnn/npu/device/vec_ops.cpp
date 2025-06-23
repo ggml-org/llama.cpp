@@ -173,6 +173,7 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     sum                    = _AddFunc(sum0, sum1);
     const size_t leftover1 = count % kElementsPerVector1;
     if ((src1_vec_ptr_end - ((HVX_Vector *) src1)) > 0) {
+        // handle the last vector
         const bool should_fetch_src0 =
             reinterpret_cast<const _TElem0 *>(hexagon::align_down(src0_vec_ptr)) < src0_ptr_end;
         HVX_Vector curr0 = should_fetch_src0 ? *src0_vec_ptr : prev0;
@@ -191,7 +192,6 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
             sum = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), s1), sum);
         }
 
-        // handle the last vector
         bool       should_fetch_src1 = leftover1 != 0 || !hexagon::is_addr_aligned(src1_vec_ptr);
         HVX_Vector curr1             = should_fetch_src1 ? *src1_vec_ptr : prev1;
         src1_vec_ptr += should_fetch_src1 ? 1 : 0;
