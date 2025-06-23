@@ -34,7 +34,7 @@ int ggmlop_dsp_close(remote_handle64 handle) {
     return 0;
 }
 
-AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 latency, int32 dcvs_enabled, int32 thread_counts) {
+AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 latency, int32 mulmat_algo, int32 thread_counts) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__);
     HAP_power_request_t request;
     memset(&request, 0, sizeof(HAP_power_request_t));
@@ -60,7 +60,7 @@ AEEResult ggmlop_dsp_setclocks(remote_handle64 handle, int32 power_level, int32 
     request.type = HAP_power_set_DCVS_v2;
     request.dcvs_v2.dcvs_enable = TRUE;
     request.dcvs_v2.dcvs_params.target_corner = (HAP_dcvs_voltage_corner_t)power_level;
-    if (dcvs_enabled) {
+    if (mulmat_algo) {
         request.dcvs_v2.dcvs_params.min_corner = HAP_DCVS_VCORNER_DISABLE;
         request.dcvs_v2.dcvs_params.max_corner = HAP_DCVS_VCORNER_DISABLE;
     } else {

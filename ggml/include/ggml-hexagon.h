@@ -40,7 +40,9 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_hexagon_reg(void);
 
 GGML_BACKEND_API const char *       ggml_backend_hexagon_get_devname(size_t dev_num);
 
-GGML_BACKEND_API void               ggml_backend_set_hexagon_cfg(int new_hexagon_backend, int new_hwaccel_approach);
+GGML_BACKEND_API void               ggml_backend_hexagon_set_cfg(int new_hexagon_backend, int new_hwaccel_approach);
+
+GGML_BACKEND_API int                ggml_backend_hexagon_get_mulmat_algotype(void);
 
 #ifdef __cplusplus
 }

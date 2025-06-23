@@ -342,6 +342,7 @@ struct hexagon_appcfg_t {
     int profiler_duration;      // threshold of duration in profiler, per seconds
     int profiler_counts;        // threshold of counts in profiler
     int thread_counts;          // thread_counts on cDSP side
+    int mulmat_algotype;        // algorithm type of mulmat on cDSP side
     const char * cfgfilename;
     const char * runtime_libpath;
     char ggml_hexagon_version[GGMLHEXAGON_TMPBUF_LEN];
@@ -367,6 +368,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
         .profiler_duration      = 5,    //seconds
         .profiler_counts        = 100,
         .thread_counts          = 4,
+        .mulmat_algotype        = 0,
         .cfgfilename            = "ggml-hexagon.cfg",
 #if defined(__ANDROID__)
     #if defined(STANDARD_ANDROID_APP)
@@ -379,7 +381,7 @@ static struct hexagon_appcfg_t g_hexagon_appcfg = {
 #elif defined(_WIN32)
         .qnn_runtimelib_path    = "C:\\",
 #endif
-        .ggml_hexagon_version   = {"1.11"},
+        .ggml_hexagon_version   = {"1.12"},
         .ggml_dsp_version       = {"0.63"},
 };
 
@@ -643,6 +645,7 @@ static constexpr const qnn_op_caps ggmlqnn_k_op_caps[] = {
         {false, GGML_OP_UPSCALE, 0, nullptr},
         {false, GGML_OP_PAD, 0, nullptr},
         {false, GGML_OP_PAD_REFLECT_1D, 0, nullptr},
+        {false, GGML_OP_ROLL, 0, nullptr},
         {false, GGML_OP_ARANGE, 0, nullptr},
         {false, GGML_OP_TIMESTEP_EMBEDDING, 0, nullptr},
         {false, GGML_OP_ARGSORT, 0, nullptr},
@@ -751,6 +754,7 @@ static constexpr const hexagon_op_caps ggmlhexagon_k_op_caps[] = {
         {false, GGML_OP_UPSCALE, 0, nullptr, nullptr},
         {false, GGML_OP_PAD, 0, nullptr, nullptr},
         {false, GGML_OP_PAD_REFLECT_1D, 0, nullptr, nullptr},
+        {false, GGML_OP_ROLL, 0, nullptr, nullptr},
         {false, GGML_OP_ARANGE, 0, nullptr, nullptr},
         {false, GGML_OP_TIMESTEP_EMBEDDING, 0, nullptr, nullptr},
         {false, GGML_OP_ARGSORT, 0, nullptr, nullptr},
@@ -1322,11 +1326,9 @@ public:
         // had to expose two public function in hexagon_profiler class
         if (g_hexagon_profiler.profiler_get_frame_index() <= g_hexagon_profiler.profiler_get_threshold_count()) {
             const char * devname = ggml_backend_hexagon_get_devname(g_hexagon_appcfg.hexagon_backend);
+            //the logic here is make sense because already checked in ggml_backend_hexagon_device_init_backend
             if (g_hexagon_appcfg.hexagon_backend != HEXAGON_BACKEND_GGML) {
-                //add this check for a special scenario: an invalid value passed from user's program
-                if (0 != memcmp(devname, "unknown", strlen("unknown"))) {
-                    devname += 16;
-                }
+                devname += 16;
             }
             GGMLHEXAGON_LOG_VERBOSE("inference duration of %s through %s: %lld microseconds",
                                     _perf_name.c_str(), devname, _duration);
@@ -2006,6 +2008,7 @@ static void ggmlhexagon_load_cfg() {
     hexagoncfg_instance.get_intvalue("cdsp", "enable_rpc_ion_mempool", g_hexagon_appcfg.enable_rpc_ion_mempool, 0);
     hexagoncfg_instance.get_intvalue("cdsp", "enable_all_q_mulmat", g_hexagon_appcfg.enable_all_q_mulmat, 0);
     hexagoncfg_instance.get_intvalue("cdsp", "thread_counts", g_hexagon_appcfg.thread_counts, 4);
+    hexagoncfg_instance.get_intvalue("cdsp", "mulmat_algotype", g_hexagon_appcfg.mulmat_algotype, 0);
 
     memcpy(g_hexagon_appcfg.ggml_dsp_version, ggmldsp_version.c_str(), strlen(ggmldsp_version.c_str()));
 
@@ -2053,7 +2056,7 @@ static void ggmlhexagon_load_cfg() {
     initialized = true;
 }
 
-void ggml_backend_set_hexagon_cfg(int new_hexagon_backend, int new_hwaccel_approach) {
+void ggml_backend_hexagon_set_cfg(int new_hexagon_backend, int new_hwaccel_approach) {
     std::string cfg_filename = std::string(g_hexagon_appcfg.runtime_libpath) + std::string(g_hexagon_appcfg.cfgfilename);
     GGMLHEXAGON_LOG_VERBOSE("load hexagon appcfg from %s", cfg_filename.c_str());
     hexagon_appcfg hexagoncfg_instance;
@@ -2063,12 +2066,23 @@ void ggml_backend_set_hexagon_cfg(int new_hexagon_backend, int new_hwaccel_appro
     hexagoncfg_instance.dump([](const std::string & section, const std::string & key, const std::string value) {
         std::ostringstream  tmposs;
         tmposs << "section[" << std::setw(10) << std::left << section << "],[" << std::setw(25) << std::left << key << "] = [" << value << "]";
+#if 0
         if (ggmlhexagon_is_llamabench_running()) {
             GGMLHEXAGON_LOG_VERBOSE("%s", tmposs.str().c_str());
         } else {
             GGMLHEXAGON_LOG_INFO("%s", tmposs.str().c_str());
         }
+#endif
+        GGMLHEXAGON_LOG_VERBOSE("%s", tmposs.str().c_str());
     });
+}
+
+int ggml_backend_hexagon_get_mulmat_algotype() {
+    std::string cfg_filename = std::string(g_hexagon_appcfg.runtime_libpath) + std::string(g_hexagon_appcfg.cfgfilename);
+    hexagon_appcfg hexagoncfg_instance;
+    hexagoncfg_instance.load(cfg_filename);
+    hexagoncfg_instance.get_intvalue("cdsp", "mulmat_algotype", g_hexagon_appcfg.mulmat_algotype, 0);
+    return g_hexagon_appcfg.mulmat_algotype;
 }
 
 static bool ggmlhexagon_check_valid_appcfg() {
@@ -5641,7 +5655,9 @@ static int ggmlhexagon_init_dsp(ggml_backend_hexagon_context * ctx) {
         }
         ggmlhexagon_probe_dspinfo(ctx);
         //FIXME: re-use this function to pass thread_counts info to code on cDSP side before fully understand qidl mechanism
-        ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1, g_hexagon_appcfg.thread_counts);
+        //ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, 1, g_hexagon_appcfg.thread_counts);
+        //backward compatible with previous codes on cDSP side
+        ggmlop_dsp_setclocks(ctx->ggmlop_handle, HAP_DCVS_VCORNER_TURBO_PLUS, 40, g_hexagon_appcfg.mulmat_algotype, g_hexagon_appcfg.thread_counts);
         ggmlhexagon_set_rpc_latency(ctx->ggmlop_handle, RPC_POLL_QOS, 100);
         int result = ggmlhexagon_init_rpcmempool(ctx);
         if (0 != result) {
@@ -6427,7 +6443,10 @@ static ggml_backend_t ggml_backend_hexagon_device_init_backend(ggml_backend_dev_
         if (dev_index < 0) {
             GGMLHEXAGON_LOG_VERBOSE("it shouldn't happend\n");
             //test-thread-safety might-be running at the moment or an invalid value passed from user's program
-            dev_index = 0;
+            dev_index = HEXAGON_BACKEND_QNNCPU; //0
+        }
+        if (dev_index > GGML_HEXAGON_MAX_DEVICES) {
+            dev_index = HEXAGON_BACKEND_GGML;   //4
         }
         g_hexagon_appcfg.hexagon_backend = dev_index;
         GGMLHEXAGON_LOG_VERBOSE("program specified dev_index %d\n", dev_index);
