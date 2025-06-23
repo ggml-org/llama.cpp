@@ -236,6 +236,8 @@ const SETTING_SECTIONS: SettingSection[] = [
                 } catch (error) {
                   console.error(''+error);
                 }
+
+            window.location.reload();
           };
           return (
             <div>
