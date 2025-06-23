@@ -19,6 +19,7 @@
     "autoprefixer": "^10.4.20",
     "daisyui": "^5.0.12",
     "dexie": "^4.0.11",
+    "dexie-export-import": "^4.0.11",
     "highlight.js": "^11.10.0",
     "katex": "^0.16.15",
     "pdfjs-dist": "^5.2.133",
