@@ -394,7 +394,8 @@ private:
     // the bitset seq[i] tells us which sequences are currently occupying the i-th cell
     std::vector<seq_set_t> seq;
 
-    // the set seq_pos[s] tells us which positions are currently present for sequence s
+    // the set seq_pos[s][p] tells us how many times the position p is currently present for sequence s
+    // if the position p is not present, seq_pos[s][p] is not set
     // this way seq_pos[s].begin() and seq_pos[s].rbegin() give us the min/max positions currently in the cache
     //
     // note that we cannot a use an std::set because in some cases a position can occur more than once for the same seq:
@@ -408,6 +409,7 @@ private:
     void seq_pos_dec(llama_seq_id s, llama_pos p) {
         auto it = seq_pos[s].find(p);
         assert(it != seq_pos[s].end());
+
         if (--it->second == 0) {
             seq_pos[s].erase(it);
         }
