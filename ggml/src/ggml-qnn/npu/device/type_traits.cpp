@@ -298,13 +298,14 @@ void quantize_row_q4_K(const float * src, void * dst, size_t count, const float 
     }
 }
 
-void dequantize_row_q8_0(const void * src, float * dst, size_t count, const float * f16_to_f32_table) {
+void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, size_t count,
+                         const float * f16_to_f32_table) {
     constexpr const int qk = QUANT_BLOCK_SIZE;
     static_assert(QUANT_BLOCK_SIZE == hexagon::kBytesPerVector / sizeof(float));
 
-    const int     nb      = count / qk;
-    const auto *  src_ptr = reinterpret_cast<const npu_device_block_q8_0 *>(src);
-    HVX_UVector * out     = ((HVX_UVector *) dst);  // TODO: opt for aligned access
+    const int    nb      = count / qk;
+    const auto * src_ptr = reinterpret_cast<const npu_device_block_q8_0 *>(src);
+    auto *       dst_ptr = ((hexagon::dequant_target_type *) dst);  // TODO: opt for aligned access
 
     for (int i = 0; i < nb; i++) {
         const auto & src = src_ptr[i];
@@ -315,11 +316,14 @@ void dequantize_row_q8_0(const void * src, float * dst, size_t count, const floa
         q                   = Q6_Wh_vunpack_Vb(Q6_V_lo_W(q));
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q                   = Q6_Wqf32_vmpy_VhfVhf(q_lo, d);
-        out[i]              = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(q));
+        q6op_vstu_variable_ARV(dst_ptr, hexagon::kBytesPerVector / 2,
+                               hexagon::qhmath_hvx_vhf_convert_vqf32(q));  // TODO: opt the conversion and store
+        dst_ptr += qk;
     }
 }
 
-void dequantize_row_q4_0(const void * src, float * dst, size_t count, const float * f16_to_f32_table) {
+void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count,
+                         const float * f16_to_f32_table) {
     constexpr const int qk = QUANT_BLOCK_SIZE;
     static_assert(qk % 2 == 0, "qk must be even");
     static_assert(QUANT_BLOCK_SIZE == hexagon::kBytesPerVector / sizeof(float));
@@ -329,7 +333,7 @@ void dequantize_row_q4_0(const void * src, float * dst, size_t count, const floa
     const auto *  src_ptr = reinterpret_cast<const npu_device_block_q4_0 *>(src);
     HVX_Vector    mask    = Q6_Vb_vsplat_R(0x0F);
     HVX_Vector    minus   = Q6_Vb_vsplat_R(8);
-    HVX_UVector * out     = ((HVX_UVector *) dst);  // TODO: opt for aligned access
+    HVX_UVector * dst_ptr = ((HVX_UVector *) dst);  // TODO: opt for aligned access
 
     const int loop_count = nb - (nb % 2);
     for (int i = 0; i < loop_count; i += 2) {
@@ -350,8 +354,8 @@ void dequantize_row_q4_0(const void * src, float * dst, size_t count, const floa
         q                   = Q6_Wh_vunpack_Vb(q_lo);
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q                   = Q6_Wqf32_vmpy_VhfVhf(q_lo, d);
-        out[i]              = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(q));
-        out[i + 1]          = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(q));
+        dst_ptr[0]          = hexagon::qhmath_hvx_vhf_convert_vqf32(q);  // TODO: opt the conversion
+        dst_ptr++;
     }
 
     if (loop_count < nb) {
@@ -368,20 +372,23 @@ void dequantize_row_q4_0(const void * src, float * dst, size_t count, const floa
         q                = Q6_Wh_vunpack_Vb(Q6_V_lo_W(q));
         q_lo             = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q                = Q6_Wqf32_vmpy_VhfVhf(q_lo, d);
-        out[nb - 1]      = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(q));
+        q6op_vstu_variable_ARV(dst_ptr, hexagon::kBytesPerVector / 2,
+                               hexagon::qhmath_hvx_vhf_convert_vqf32(q));  // TODO: opt the conversion
     }
 }
 
-void dequantize_row_q4_K(const void * src, float * dst, size_t count, const float * f16_to_f32_table) {
+void dequantize_row_q4_K(const void * src, hexagon::dequant_target_type * dst, size_t count,
+                         const float * f16_to_f32_table) {
     const int    nb      = count / QUANT_K_BLOCK_SIZE;
     const auto * src_ptr = reinterpret_cast<const npu_device_block_q4_k *>(src);
+    auto *       dst_ptr = reinterpret_cast<__fp16 *>(dst);
 
     // TODO: use intrinsics
     for (int i = 0; i < nb; i++) {
         const uint8_t * q = src_ptr[i].qs;
 
-        const float d   = f16_to_f32_table[src_ptr[i].d];
-        const float min = f16_to_f32_table[src_ptr[i].dmin];
+        const __fp16 d   = reinterpret_cast<const __fp16 &>(src_ptr[i].d);
+        const __fp16 min = reinterpret_cast<const __fp16 &>(src_ptr[i].dmin);
 
         int          is     = 0;
         uint8_t      sc     = 0;
@@ -389,17 +396,17 @@ void dequantize_row_q4_K(const void * src, float * dst, size_t count, const floa
         const auto * scales = src_ptr[i].scales;
         for (int j = 0; j < QUANT_K_BLOCK_SIZE; j += 64) {
             get_scale_min_k4(is + 0, scales, &sc, &m);
-            const float d1 = d * sc;
-            const float m1 = min * m;
+            const __fp16 d1 = d * sc;
+            const __fp16 m1 = min * m;
             get_scale_min_k4(is + 1, scales, &sc, &m);
-            const float d2 = d * sc;
-            const float m2 = min * m;
+            const __fp16 d2 = d * sc;
+            const __fp16 m2 = min * m;
             for (int l = 0; l < 32; ++l) {
-                dst[0]  = d1 * (q[l] & 0xF) - m1;
-                dst[32] = d2 * ((q[l] >> 4) & 0xF) - m2;
-                dst++;
+                dst_ptr[0]  = d1 * (q[l] & 0xF) - m1;
+                dst_ptr[32] = d2 * ((q[l] >> 4) & 0xF) - m2;
+                dst_ptr++;
             }
-            dst += 32;
+            dst_ptr += 32;
             q += 32;
             is += 2;
         }

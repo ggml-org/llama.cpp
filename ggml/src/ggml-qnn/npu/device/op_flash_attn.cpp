@@ -39,7 +39,6 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
 
     const auto q_to_vec_dot = hexagon::get_type_traits(k->get_type()).from_float;  // TODO: fix this
     const auto kq_vec_dot   = hexagon::get_type_traits(k->get_type()).vec_dot;
-    const auto v_to_float   = hexagon::get_type_traits(v->get_type()).to_float;
     if (!q_to_vec_dot || !kq_vec_dot) {
         DEVICE_LOG_ERROR("flash_attn_impl: unsupported data type for q, k, or v\n");
         return;
@@ -95,7 +94,6 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
         float M = -INFINITY;                                                        // maximum KQ value
 
         float * VKQ32 = reinterpret_cast<float *>(cache_ptr);                       // FP32 VKQ accumulator
-        float * V32   = VKQ32 + aligned_dv;                                         // (temporary) FP32 V buffer
         auto *  VKQ16 = reinterpret_cast<npu_device_fp16_t *>(VKQ32 + aligned_dv);  // (temporary) FP16 VKQ accumulator
         auto *  Q_q   = reinterpret_cast<npu_device_fp16_t *>(
             VKQ32 + 2 * aligned_dv);  // (temporary) buffer for Q converted to quantized/FP16
@@ -192,10 +190,7 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
 
                 // V += v*expf(s - M)
                 DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(flash_attn, 2, mad);
-                if (v_to_float) {
-                    v_to_float(v_data, V32, DV, params->f16_to_f32_table);
-                    hexagon::vec_mad_f32(V32, vs, VKQ32, DV);
-                } else {
+                {
                     // V is F32
                     hexagon::vec_mad_f32(reinterpret_cast<const float *>(v_data), vs, VKQ32, DV);
                 }
