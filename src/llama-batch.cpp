@@ -247,7 +247,8 @@ bool llama_batch_allocr::init(
         if (memory) {
             if (batch.token) {
                 if (seq_pos_min(s) != memory->seq_pos_max(s) + 1) {
-                    LLAMA_LOG_ERROR("%s: sequence %d does not start from the last position stored in the memory\n", __func__, s);
+                    LLAMA_LOG_ERROR("%s: sequence %d (min = %d) does not start from the last position (%d) stored in the memory\n",
+                            __func__, s, seq_pos_min(s), memory->seq_pos_max(s));
                     return false;
                 }
             } else {
@@ -256,7 +257,8 @@ bool llama_batch_allocr::init(
                 // for embeddings (typically used as vision input), we allow them to have repeating positions
                 // ref: https://github.com/ggml-org/llama.cpp/issues/13694#issuecomment-2983871762
                 if (seq_pos_min(s) != memory->seq_pos_max(s) && seq_pos_min(s) != memory->seq_pos_max(s) + 1) {
-                    LLAMA_LOG_ERROR("%s: sequence %d does not start from the last position stored in the memory\n", __func__, s);
+                    LLAMA_LOG_ERROR("%s: sequence %d (min = %d) does not start from the last position (%d) stored in the memory\n",
+                            __func__, s, seq_pos_min(s), memory->seq_pos_max(s));
                     return false;
                 }
             }
