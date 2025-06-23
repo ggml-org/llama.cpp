@@ -1,6 +1,8 @@
 #include "llama-model-loader.h"
 
 #include "ggml.h"
+#include "json.hpp" // For nlohmann::json
+#include "llama-quant.h" // For SmarterQuantTensorInfo, SmarterQuantConfig
 
 #include <array>
 #include <cinttypes>
@@ -487,6 +489,43 @@ llama_model_loader::llama_model_loader(
         n_elements += ggml_nelements(cur);
         n_bytes    += ggml_nbytes(cur);
         weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), 0, meta.get(), cur));
+
+        // Load SmarterQuant metadata for this tensor if present in GGUF
+        // This will augment or override what was loaded from default.smarterquant.json
+        std::string key_sq_enabled_gguf = tensor_name + ".smarterquant.enabled";
+        int key_idx_gguf = gguf_find_key(meta.get(), key_sq_enabled_gguf.c_str());
+        if (key_idx_gguf != -1 && gguf_get_kv_type(meta.get(), key_idx_gguf) == GGUF_TYPE_BOOL) {
+            bool sq_enabled_gguf_val = gguf_get_val_bool(meta.get(), key_idx_gguf);
+            if (sq_enabled_gguf_val) {
+                LLAMA_LOG_INFO("%s: Tensor '%s' has SmarterQuant GGUF metadata.\n", __func__, tensor_name.c_str());
+                SmarterQuantTensorInfo sq_info; // Local temporary holder
+                sq_info.enabled = true;
+
+                std::string key_sq_perm_gguf = tensor_name + ".smarterquant.permutation";
+                key_idx_gguf = gguf_find_key(meta.get(), key_sq_perm_gguf.c_str());
+                if (key_idx_gguf != -1 && gguf_get_kv_type(meta.get(), key_idx_gguf) == GGUF_TYPE_STRING) {
+                    const char * perm_str_c = gguf_get_val_str(meta.get(), key_idx_gguf);
+                    try {
+                        nlohmann::json perm_json = nlohmann::json::parse(perm_str_c);
+                        if (perm_json.is_array()) {
+                            sq_info.column_permutation = perm_json.get<std::vector<int>>();
+                        } else { LLAMA_LOG_WARN("%s: GGUF perm metadata for '%s' not an array.\n", __func__, tensor_name.c_str()); }
+                    } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF perm for '%s': %s\n", __func__, tensor_name.c_str(), e.what()); }
+                }
+
+                std::string key_sq_block_types_gguf = tensor_name + ".smarterquant.block_types";
+                key_idx_gguf = gguf_find_key(meta.get(), key_sq_block_types_gguf.c_str());
+                if (key_idx_gguf != -1 && gguf_get_kv_type(meta.get(), key_idx_gguf) == GGUF_TYPE_STRING) {
+                    const char * types_str_c = gguf_get_val_str(meta.get(), key_idx_gguf);
+                    try {
+                        nlohmann::json types_json = nlohmann::json::parse(types_str_c);
+                        if (types_json.is_array() && types_json.size() == 4) {
+                            sq_info.compression_types = types_json.get<std::vector<int8_t>>();
+                        } else { LLAMA_LOG_WARN("%s: GGUF block_types metadata for '%s' not an array of 4.\n", __func__, tensor_name.c_str()); }
+                    } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF block_types for '%s': %s\n", __func__, tensor_name.c_str(), e.what()); }
+                }
+            }
+        }
     }
     uint16_t n_split = 0;
     get_key(llm_kv(LLM_KV_SPLIT_COUNT), n_split, false);
@@ -553,6 +592,41 @@ llama_model_loader::llama_model_loader(
                 n_elements += ggml_nelements(cur);
                 n_bytes    += ggml_nbytes(cur);
                 weights_map.emplace(tensor_name, llama_tensor_weight(files.back().get(), idx, ctx_gguf.get(), cur));
+                // Load SmarterQuant metadata for this tensor if present in GGUF (for split tensors)
+                // Use tensor_name, as split_tensor_name was not defined and likely referred to the current tensor's name.
+                std::string key_sq_enabled_gguf_split = tensor_name + ".smarterquant.enabled";
+                int key_idx_gguf_split = gguf_find_key(ctx_gguf.get(), key_sq_enabled_gguf_split.c_str());
+                if (key_idx_gguf_split != -1 && gguf_get_kv_type(ctx_gguf.get(), key_idx_gguf_split) == GGUF_TYPE_BOOL) {
+                    bool sq_enabled_gguf_val_split = gguf_get_val_bool(ctx_gguf.get(), key_idx_gguf_split);
+                     if (sq_enabled_gguf_val_split) {
+                        LLAMA_LOG_INFO("%s: Tensor '%s' (split %d) has SmarterQuant GGUF metadata.\n", __func__, tensor_name.c_str(), idx);
+                        SmarterQuantTensorInfo sq_info; // Local temporary holder
+                        sq_info.enabled = true;
+
+                        std::string key_sq_perm_gguf_split = tensor_name + ".smarterquant.permutation";
+                        key_idx_gguf_split = gguf_find_key(ctx_gguf.get(), key_sq_perm_gguf_split.c_str());
+                        if (key_idx_gguf_split != -1 && gguf_get_kv_type(ctx_gguf.get(), key_idx_gguf_split) == GGUF_TYPE_STRING) {
+                            const char * perm_str_c = gguf_get_val_str(ctx_gguf.get(), key_idx_gguf_split);
+                            try {
+                                nlohmann::json perm_json = nlohmann::json::parse(perm_str_c);
+                                if (perm_json.is_array()) {
+                                    sq_info.column_permutation = perm_json.get<std::vector<int>>();
+                                } else { LLAMA_LOG_WARN("%s: GGUF perm metadata for '%s' (split %d) not an array.\n", __func__, tensor_name.c_str(), idx); }
+                            } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF perm for '%s' (split %d): %s\n", __func__, tensor_name.c_str(), idx, e.what()); }
+                        }
+                        std::string key_sq_block_types_gguf_split = tensor_name + ".smarterquant.block_types";
+                        key_idx_gguf_split = gguf_find_key(ctx_gguf.get(), key_sq_block_types_gguf_split.c_str());
+                        if (key_idx_gguf_split != -1 && gguf_get_kv_type(ctx_gguf.get(), key_idx_gguf_split) == GGUF_TYPE_STRING) {
+                            const char * types_str_c = gguf_get_val_str(ctx_gguf.get(), key_idx_gguf_split);
+                            try {
+                                nlohmann::json types_json = nlohmann::json::parse(types_str_c);
+                                if (types_json.is_array() && types_json.size() == 4) {
+                                    sq_info.compression_types = types_json.get<std::vector<int8_t>>();
+                                } else { LLAMA_LOG_WARN("%s: GGUF block_types for '%s' (split %d) not an array of 4.\n", __func__, tensor_name.c_str(), idx); }
+                            } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF block_types for '%s' (split %d): %s\n", __func__, tensor_name.c_str(), idx, e.what()); }
+                        }
+                    }
+                }
             }
         }
 

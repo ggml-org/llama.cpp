@@ -1,0 +1,77 @@
+
+overall task:
+Modify the llama-quantize c++ code to read default.smarterquant.json into an internal data structure. Encode each matrix based on the scheme laid out below. Adapt the encoded blocksize in bytes. The json contains the following information for each matrix: Four compression types referring to the block encoding for the first four 256 wide blocks. Each following block is using the fourth mode as well. This is followed by a list of columns into which the original matrix is ordered before applying the block encoding. The inference code gets the same json to be able to decompress the matrices. Modify the inference code as well so that llama-cli and llama-server work with those encoded GGUFs.
+
+The SmarterQuant feature implementation is partially complete. The following steps are remaining to make it fully functional:
+
+1.  **Complete Custom Block Quantization Data Packing in `src/llama-quant.cpp` (Step 3 Enhancement):**
+    *   **Current State:** The logic identifies which `ggml_type` to use for each 256-column block of a SmarterQuant-enabled tensor and calculates an *approximate* final size. GGUF metadata for block types and permutation is correctly written. Column permutation of `f32_data` is implemented.
+    *   **To Do:**
+        *   Refactor the quantization part within `llama_model_quantize_impl` (or create a new helper function like `llama_tensor_quantize_smarter_blocks`).
+        *   This function must take the (permuted) `f32_data` and the `SmarterQuantTensorInfo` (containing `compression_types`).
+        *   It needs to iterate through the tensor's data, likely row by row. For each row:
+            *   Process it in 256-element (column) segments.
+            *   For segment 0 (columns 0-255), quantize these 256 elements using `compression_types[0]`.
+            *   For segment 1 (columns 256-511), quantize using `compression_types[1]`, and so on for segments 2 and 3.
+            *   For segment 4 onwards (columns 1024+), quantize using `compression_types[3]`.
+            *   This will involve multiple calls to `ggml_quantize_chunk` (or its underlying logic) *for different portions of the same input row*, using different target quantization types.
+            *   The quantized data from each block segment must be carefully written into the correct offset in the `new_data` buffer. The `new_data` buffer will hold a mix of differently quantized blocks.
+            *   The total `new_size` must be accurately calculated as the sum of the byte sizes of these individually quantized blocks. This is crucial for GGUF correctness.
+            *   The `imatrix` (if provided) needs to be correctly indexed and passed for each segment being quantized. If permutation occurred, ensure `imatrix` aligns with the permuted data.
+
+2.  **Implement Custom Dequantization and Unpermutation in `ggml.c` (Step 4 Core Logic):**
+    *   **Current State:** Metadata is loaded into `llama_model`, but `ggml.c` compute/dequantization routines are unaware of it.
+    *   **To Do:**
+        *   **Data Access:** The `ggml_tensor` struct might need a way to easily access its `SmarterQuantTensorInfo` (e.g., via its `extra` pointer, or by passing it down through `ggml_compute_params`).
+        *   **Modify/Create Dequantization Functions:**
+            *   Identify key functions like `ggml_get_rows_XX` (e.g., `ggml_get_rows_q4_0`) or the generic `ggml_get_rows` which are called by compute operations like `ggml_mul_mat`.
+            *   These functions (or new wrappers/variants like `ggml_get_rows_smarterquant`) need to:
+                1.  Check if the tensor has `sq_info.enabled == true`.
+                2.  If so, when fetching and dequantizing a row (or part of it):
+                    *   Iterate through the row in 256-element segments (columns).
+                    *   For each segment, determine its block index (0, 1, 2, 3, or 4+).
+                    *   Use `sq_info.compression_types` (or the tensor's base GGUF type for blocks 4+) to select the correct `ggml_type` for that segment.
+                    *   Call the appropriate `dequantize_row_qX_X` function for that segment's `ggml_type` and data.
+                    *   The dequantized F32 elements for the *entire logical row* must be assembled into a temporary buffer.
+                3.  **Inverse Column Permutation:** After a full logical row is dequantized (potentially from multiple block types) into a temporary F32 buffer, apply the inverse of `sq_info.column_permutation` to this F32 data to restore the original column order. This unpermuted F32 row is then what's returned or used by the computation kernels.
+                    *   The inverse permutation `P_inv` can be computed from `P` such that if `P[new_idx] = old_idx`, then `P_inv[old_idx] = new_idx`.
+                    *   So, `unpermuted_row[old_idx] = permuted_row[P_inv[old_idx]]`. Or, more directly, `unpermuted_row[P[j]] = permuted_row[j]`. No, this is wrong. It should be: `unpermuted_row[j] = permuted_row[P_inverse[j]]`. The most straightforward is: `for j in 0..C-1: unpermuted_row[permutation[j]] = dequantized_permuted_row[j]`. This fills the unpermuted buffer correctly.
+        *   **GPU Offloading:** If GPU backends (CUDA, Metal, SYCL) are used, their respective dequantization kernels (e.g., in `ggml-cuda.cu`, `ggml-metal.m`) will also need similar modifications to handle mixed block types and potentially the unpermutation step if dequantization happens directly on the GPU. This is a more advanced step.
+
+3.  **Thorough Testing (Step 6 Enhancement):**
+    *   **Current State:** Only metadata and config loading can be tested.
+    *   **To Do (after completing 1 & 2 above):**
+        *   **Numerical Correctness:**
+            *   Create small test models and specific `default.smarterquant.json` configs that target a few tensors with known data patterns.
+            *   Quantize using the modified `llama-quantize`.
+            *   Implement small test programs that load the quantized model and:
+                *   Manually dequantize specific rows/tensors using the new logic and verify against expected F32 values (after unpermuting).
+                *   Perform a simple operation (e.g., matrix multiplication) involving a SmarterQuant tensor and verify the result against a reference computation done on the original, unquantized, unpermuted tensor.
+        *   **Performance Testing:**
+            *   Measure inference speed of models quantized with SmarterQuant vs. standard quantization methods.
+            *   Profile to identify any bottlenecks introduced by the custom dequantization/unpermutation logic.
+        *   **Model Quality Testing:**
+            *   Run perplexity tests (e.g., using `perplexity` example) on standard datasets.
+            *   Compare results between SmarterQuant models and models quantized with standard GGUF types (e.g., Q4_0, Q5_K_M).
+            *   Qualitative testing of generated text for larger models.
+
+4.  **Refinements and Optimizations:**
+    *   **Path for `default.smarterquant.json`:** Consider making the path to this file configurable via command-line arguments in `llama-quantize`, `llama-cli`, and `llama-server` instead of relying solely on the current working directory. This would involve changes in `common.h/cpp`.
+    *   **Performance of Permutation/Unpermutation:** Profile the overhead of these operations. For very performance-sensitive scenarios, explore if some computations can be done directly on permuted data (though this is much harder).
+    *   **Memory for Unpermutation:** The current plan (Option A for unpermutation) requires a temporary buffer for the unpermuted F32 row. Analyze its memory impact.
+
+These steps represent significant work, especially the modifications to `ggml.c` which is performance-critical and central to the library's operations.
+
+
+background info:
+The initial plan consistet of these steps.
+
+Plan Summary:
+Explore the codebase: Identify relevant files and current quantization/GGUF handling.
+Implement JSON parsing for llama-quantize: Add a JSON library and C++ structures to read default.smarterquant.json.
+Modify llama-quantize.cpp for custom encoding: Implement column permutation, block-specific encoding based on JSON, and add new GGUF metadata for custom-encoded tensors.
+Modify inference code (llama.cpp, ggml.c) for custom decoding: Read the custom GGUF metadata, use default.smarterquant.json to understand encoding, implement custom dequantization logic that handles per-block types, and apply inverse column permutation.
+Adapt llama-cli and llama-server: Ensure they can load and use models with the new custom quantization, making default.smarterquant.json accessible.
+Testing: Create test cases, quantize a model, verify GGUF metadata, and compare inference results.
+Documentation and Cleanup: Add comments and update documentation.
+A key challenge identified is handling potentially different ggml_types for different blocks within a single GGUF tensor, which might require careful GGUF metadata design and modifications to dequantization/computation routines in ggml.c.
