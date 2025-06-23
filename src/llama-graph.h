@@ -17,12 +17,12 @@ struct ggml_tensor;
 struct llama_ubatch;
 struct llama_cparams;
 
-struct llama_memory_state_i;
+struct llama_memory_context_i;
 
-class llama_kv_cache_unified_state;
-class llama_kv_cache_unified_iswa_state;
-class llama_memory_recurrent_state;
-class llama_memory_hybrid_state;
+class llama_kv_cache_unified_context;
+class llama_kv_cache_unified_iswa_context;
+class llama_memory_recurrent_context;
+class llama_memory_hybrid_context;
 
 // certain models (typically multi-modal) can produce different types of graphs
 enum llm_graph_type {
@@ -136,7 +136,7 @@ class llm_graph_input_pos_bucket_kv : public llm_graph_input_i {
 public:
     llm_graph_input_pos_bucket_kv(
             const llama_hparams & hparams,
-            const llama_kv_cache_unified_state * kv_state) : hparams(hparams), kv_state(kv_state) {}
+            const llama_kv_cache_unified_context * mctx) : hparams(hparams), mctx(mctx) {}
     virtual ~llm_graph_input_pos_bucket_kv() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
@@ -144,7 +144,8 @@ public:
     ggml_tensor * pos_bucket = nullptr; // I32 [n_kv, n_batch]
 
     const llama_hparams & hparams;
-    const llama_kv_cache_unified_state * kv_state;
+
+    const llama_kv_cache_unified_context * mctx;
 };
 
 class llm_graph_input_out_ids : public llm_graph_input_i {
@@ -191,14 +192,14 @@ public:
 
 class llm_graph_input_rs : public llm_graph_input_i {
 public:
-    llm_graph_input_rs(const llama_memory_recurrent_state * mem_state) : mem_state(mem_state) {}
+    llm_graph_input_rs(const llama_memory_recurrent_context * mctx) : mctx(mctx) {}
     virtual ~llm_graph_input_rs() = default;
 
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * s_copy; // I32 [kv_size]
 
-    const llama_memory_recurrent_state * mem_state;
+    const llama_memory_recurrent_context * mctx;
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -238,10 +239,10 @@ public:
     llm_graph_input_attn_kv_unified(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_kv_cache_unified_state * kv_state) :
+            const llama_kv_cache_unified_context * mctx) :
         hparams(hparams),
         cparams(cparams),
-        kv_state(kv_state) {
+        mctx(mctx) {
     }
     ~llm_graph_input_attn_kv_unified() = default;
 
@@ -255,7 +256,7 @@ public:
     const llama_hparams & hparams;
     const llama_cparams & cparams;
 
-    const llama_kv_cache_unified_state * kv_state;
+    const llama_kv_cache_unified_context * mctx;
 };
 
 class llm_graph_input_attn_kv_unified_iswa : public llm_graph_input_i {
@@ -263,10 +264,10 @@ public:
     llm_graph_input_attn_kv_unified_iswa(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_kv_cache_unified_iswa_state * kv_state) :
+            const llama_kv_cache_unified_iswa_context * mctx) :
         hparams(hparams),
         cparams(cparams),
-        kv_state(kv_state) {
+        mctx(mctx) {
     }
     ~llm_graph_input_attn_kv_unified_iswa() = default;
 
@@ -283,7 +284,7 @@ public:
     const llama_hparams & hparams;
     const llama_cparams & cparams;
 
-    const llama_kv_cache_unified_iswa_state * kv_state;
+    const llama_kv_cache_unified_iswa_context * mctx;
 };
 
 class llm_graph_input_attn_cross : public llm_graph_input_i {
@@ -306,10 +307,10 @@ public:
     llm_graph_input_mem_hybrid(
             const llama_hparams & hparams,
             const llama_cparams & cparams,
-            const llama_memory_hybrid_state * mem_state) :
+            const llama_memory_hybrid_context * mctx) :
         hparams(hparams),
         cparams(cparams),
-        mem_state(mem_state) {
+        mctx(mctx) {
     }
     virtual ~llm_graph_input_mem_hybrid() = default;
 
@@ -325,7 +326,7 @@ public:
     const llama_hparams & hparams;
     const llama_cparams & cparams;
 
-    const llama_memory_hybrid_state * mem_state;
+    const llama_memory_hybrid_context * mctx;
 };
 
 //
@@ -401,10 +402,10 @@ struct llm_graph_params {
     ggml_backend_sched_t sched;
     ggml_backend_t backend_cpu;
 
-    const llama_adapter_cvec   * cvec;
-    const llama_adapter_loras  * loras;
-    const llama_memory_state_i * mstate;
-    const llama_cross          * cross;
+    const llama_adapter_cvec     * cvec;
+    const llama_adapter_loras    * loras;
+    const llama_memory_context_i * mctx;
+    const llama_cross            * cross;
 
     uint32_t n_outputs;
 
@@ -453,10 +454,10 @@ struct llm_graph_context {
 
     ggml_backend_t backend_cpu; // TODO: needed by build_attn_mha, figure out a way to remove?
 
-    const llama_adapter_cvec   * cvec;
-    const llama_adapter_loras  * loras;
-    const llama_memory_state_i * mstate;
-    const llama_cross          * cross;
+    const llama_adapter_cvec     * cvec;
+    const llama_adapter_loras    * loras;
+    const llama_memory_context_i * mctx;
+    const llama_cross            * cross;
 
     const llm_graph_cb & cb_func;
 

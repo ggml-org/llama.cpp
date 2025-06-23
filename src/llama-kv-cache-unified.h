@@ -56,14 +56,14 @@ public:
     // llama_memory_i
     //
 
-    llama_memory_state_ptr init_batch(
+    llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
 
-    llama_memory_state_ptr init_full() override;
+    llama_memory_context_ptr init_full() override;
 
-    llama_memory_state_ptr init_update(llama_context * lctx, bool optimize) override;
+    llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;
 
@@ -208,36 +208,36 @@ private:
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
 };
 
-class llama_kv_cache_unified_state : public llama_memory_state_i {
+class llama_kv_cache_unified_context : public llama_memory_context_i {
 public:
     // some shorthands
     using ubatch_heads = llama_kv_cache_unified::ubatch_heads;
     using defrag_info  = llama_kv_cache_unified::defrag_info;
 
     // used for errors
-    llama_kv_cache_unified_state(llama_memory_status status);
+    llama_kv_cache_unified_context(llama_memory_status status);
 
-    // used to create a full-cache state
-    llama_kv_cache_unified_state(
+    // used to create a full-cache context
+    llama_kv_cache_unified_context(
             llama_kv_cache_unified * kv);
 
-    // used to create an update state
-    llama_kv_cache_unified_state(
+    // used to create an update context
+    llama_kv_cache_unified_context(
             llama_kv_cache_unified * kv,
             llama_context * lctx,
             bool do_shift,
             defrag_info dinfo);
 
-    // used to create a decode state from a batch
-    llama_kv_cache_unified_state(
+    // used to create a batch procesing context from a batch
+    llama_kv_cache_unified_context(
             llama_kv_cache_unified * kv,
             ubatch_heads heads,
             std::vector<llama_ubatch> ubatches);
 
-    virtual ~llama_kv_cache_unified_state();
+    virtual ~llama_kv_cache_unified_context();
 
     //
-    // llama_memory_state_i
+    // llama_memory_context_i
     //
 
     bool next()  override;
@@ -247,7 +247,7 @@ public:
     const llama_ubatch & get_ubatch() const override;
 
     //
-    // llama_kv_cache_unified_state specific API
+    // llama_kv_cache_unified_context specific API
     //
 
     uint32_t get_n_kv() const;
@@ -272,7 +272,7 @@ private:
     llama_context * lctx;
 
     //
-    // update state
+    // update context
     //
 
     bool do_shift = false;
@@ -280,7 +280,7 @@ private:
     defrag_info dinfo;
 
     //
-    // batch processing state
+    // batch processing context
     //
 
     // the index of the next ubatch to process

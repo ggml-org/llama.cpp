@@ -49,14 +49,14 @@ public:
     // llama_memory_i
     //
 
-    llama_memory_state_ptr init_batch(
+    llama_memory_context_ptr init_batch(
             llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
 
-    llama_memory_state_ptr init_full() override;
+    llama_memory_context_ptr init_full() override;
 
-    llama_memory_state_ptr init_update(llama_context * lctx, bool optimize) override;
+    llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;
 
@@ -90,27 +90,27 @@ private:
     const std::unique_ptr<llama_memory_recurrent> mem_recr;
 };
 
-class llama_memory_hybrid_state : public llama_memory_state_i {
+class llama_memory_hybrid_context : public llama_memory_context_i {
 public:
     // init failure
-    explicit llama_memory_hybrid_state(llama_memory_status status);
+    explicit llama_memory_hybrid_context(llama_memory_status status);
 
     // init full
-    explicit llama_memory_hybrid_state(llama_memory_hybrid * mem);
+    explicit llama_memory_hybrid_context(llama_memory_hybrid * mem);
 
     // init update
-    explicit llama_memory_hybrid_state(
+    explicit llama_memory_hybrid_context(
         llama_memory_hybrid * mem,
               llama_context * lctx,
                        bool   optimize);
 
     // init success
-    llama_memory_hybrid_state(
+    llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
             std::vector<uint32_t>   heads_attn,
         std::vector<llama_ubatch>   ubatches);
 
-    ~llama_memory_hybrid_state() = default;
+    ~llama_memory_hybrid_context() = default;
 
     bool next()  override;
     bool apply() override;
@@ -119,11 +119,11 @@ public:
     const llama_ubatch & get_ubatch() const override;
 
     //
-    // llama_memory_hybrid_state
+    // llama_memory_hybrid_context
     //
 
-    const llama_kv_cache_unified_state * get_state_attn() const;
-    const llama_memory_recurrent_state * get_state_recr() const;
+    const llama_kv_cache_unified_context * get_attn() const;
+    const llama_memory_recurrent_context * get_recr() const;
 
 private:
     // the index of the next ubatch to process
@@ -131,8 +131,8 @@ private:
 
     std::vector<llama_ubatch> ubatches;
 
-    const llama_memory_state_ptr state_attn;
-    const llama_memory_state_ptr state_recr;
+    const llama_memory_context_ptr ctx_attn;
+    const llama_memory_context_ptr ctx_recr;
 
     const llama_memory_status status;
 };

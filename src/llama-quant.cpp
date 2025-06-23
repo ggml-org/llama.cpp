@@ -1,5 +1,4 @@
 #include "llama-quant.h"
-
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-model-loader.h"
@@ -25,6 +24,56 @@ static void zeros(std::ofstream & file, size_t n) {
     for (size_t i = 0; i < n; ++i) {
         file.write(&zero, 1);
     }
+}
+
+static std::string remap_layer(const std::string & orig_name, const std::vector<int> & prune, std::map<int, std::string> & mapped, int & next_id) {
+    if (prune.empty()) {
+        return orig_name;
+    }
+
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    if (std::smatch match; std::regex_search(orig_name, match, pattern)) {
+        const int blk = std::stoi(match[1]);
+        std::string new_name = orig_name;
+
+        if (mapped.count(blk)) {
+            // Already mapped, do nothing
+        } else if (std::find(prune.begin(), prune.end(), blk) != prune.end()) {
+            mapped[blk] = "";
+        } else if (blk < prune.front()) {
+            mapped[blk] = std::to_string(blk);
+            next_id = blk + 1;
+        } else {
+            mapped[blk] = std::to_string(next_id);
+            ++next_id;
+        }
+
+        return mapped[blk].empty() ? mapped[blk] : new_name.replace(match.position(1), match.length(1), mapped[blk]);
+    }
+
+    return orig_name;
+}
+
+static std::string remap_imatrix (const std::string & orig_name, const std::map<int, std::string> & mapped) {
+    if (mapped.empty()) {
+        return orig_name;
+    }
+
+    static const std::regex pattern(R"(blk\.(\d+)\.)");
+    if (std::smatch match; std::regex_search(orig_name, match, pattern)) {
+        const std::string blk(match[1]);
+        std::string new_name = orig_name;
+
+        for (const auto & p : mapped) {
+            if (p.second == blk) {
+                LLAMA_LOG_DEBUG("(blk.%d imatrix) ", p.first);
+                return new_name.replace(match.position(1), match.length(1), std::to_string(p.first));
+            }
+        }
+        GGML_ABORT("\n%s: imatrix mapping error for %s\n", __func__, orig_name.c_str());
+    }
+
+    return orig_name;
 }
 
 struct quantize_state_impl {
@@ -568,6 +617,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     const size_t align = GGUF_DEFAULT_ALIGNMENT;
     gguf_context_ptr ctx_out { gguf_init_empty() };
 
+    std::vector<int> prune_list = {};
+    if (params->prune_layers) {
+        prune_list = *static_cast<const std::vector<int> *>(params->prune_layers);
+    }
+
     // copy the KV pairs from the input file
     gguf_set_kv     (ctx_out.get(), ml.meta.get());
     gguf_set_val_u32(ctx_out.get(), "general.quantization_version", GGML_QNT_VERSION); // TODO: use LLM_KV
@@ -597,11 +651,31 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         }
     }
 
+    std::map<int, std::string> mapped;
+    int blk_id = 0;
+    int pruned_attention_w = 0;
+
     // make a list of weights
     std::vector<const llama_model_loader::llama_tensor_weight *> tensors;
     tensors.reserve(ml.weights_map.size());
     for (const auto & it : ml.weights_map) {
+        const std::string remapped_name(remap_layer(it.first, prune_list, mapped, blk_id));
+        if (remapped_name.empty()) {
+            if (it.first.find("attn_v.weight") != std::string::npos ||
+                it.first.find("attn_qkv.weight") != std::string::npos ||
+                it.first.find("attn_kv_b.weight") != std::string::npos) {
+                    pruned_attention_w++;
+            }
+            LLAMA_LOG_DEBUG("%s: pruning tensor %s\n", __func__, it.first.c_str());
+            continue;
+        } else if (remapped_name != it.first) {
+            ggml_set_name(it.second.tensor, remapped_name.c_str());
+            LLAMA_LOG_DEBUG("%s: tensor %s remapped to %s\n", __func__, it.first.c_str(), ggml_get_name(it.second.tensor));
+        }
         tensors.push_back(&it.second);
+    }
+    if (!prune_list.empty()) {
+        gguf_set_val_u32(ctx_out.get(), ml.llm_kv(LLM_KV_BLOCK_COUNT).c_str(), blk_id);
     }
 
     // keep_split requires that the weights are sorted by split index
@@ -640,7 +714,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         if (llama_model_has_encoder(&model)) {
             n_attn_layer *= 3;
         }
-        GGML_ASSERT((qs.n_attention_wv == n_attn_layer) && "n_attention_wv is unexpected");
+        GGML_ASSERT((qs.n_attention_wv == n_attn_layer - pruned_attention_w) && "n_attention_wv is unexpected");
     }
 
     size_t total_size_org = 0;
@@ -681,7 +755,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         for (size_t i = 0; i < ctx_outs.size(); ++i) {
             gguf_set_val_u16(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_NO).c_str(), i);
             gguf_set_val_u16(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_COUNT).c_str(), n_split);
-            gguf_set_val_i32(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), ml.n_tensors);
+            gguf_set_val_i32(ctx_outs[i].get(), ml.llm_kv(LLM_KV_SPLIT_TENSORS_COUNT).c_str(), (int32_t)tensors.size());
         }
     }
 
@@ -832,7 +906,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             const float * imatrix = nullptr;
             if (imatrix_data) {
-                auto it = imatrix_data->find(tensor->name);
+                auto it = imatrix_data->find(remap_imatrix(tensor->name, mapped));
                 if (it == imatrix_data->end()) {
                     LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                 } else {
@@ -947,6 +1021,7 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.imatrix                     =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
+        /*.prune_layers                =*/ nullptr
     };
 
     return result;
