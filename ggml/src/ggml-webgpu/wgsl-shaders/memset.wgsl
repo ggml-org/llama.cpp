@@ -5,7 +5,7 @@ var<storage, read_write> output_buffer: array<u32>;
 struct Params {
     offset: u32, // in bytes
     size: u32,   // in bytes
-    value: u32,  // four identical values
+    value: u32,  // 4 8-bit values, which are either repeating (memset_tensor) or may be separate (cleaning up unaligned set_tensor operations)
 };
 
 @group(0) @binding(1)
