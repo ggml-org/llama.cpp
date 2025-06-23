@@ -25,21 +25,25 @@ jobs:
           cmake --build build --config Release
           cmake --install build --prefix "$PREFIX" --config Release
 
-          tclsh "$PREFIX"/lib/cmake/llama-config.cmake <<'EOF'
+          export LLAMA_CONFIG="$PREFIX"/lib/cmake/llama/llama-config.cmake
+          tclsh <<'EOF'
           set build(commit)  [string trim [exec git rev-parse --short HEAD]]
           set build(number)  [string trim [exec git rev-list  --count HEAD]]
           set build(version) "0.0.$build(number)"
 
-          set llamaconfig [read [open [lindex $argv 0] r]]
+          set llamaconfig [read [open "$env(LLAMA_CONFIG)" r]]
           set checks [list "set\\(LLAMA_VERSION     \\s+$build(version)\\)" \
                            "set\\(LLAMA_BUILD_COMMIT\\s+$build(commit)\\)" \
                            "set\\(LLAMA_BUILD_NUMBER\\s+$build(number)\\)"]
 
+          puts -nonewline "Checking llama-config.cmake version... "
           foreach check $checks {
               if {![regexp -expanded -- $check $llamaconfig]} {
+                  puts "\"$check\" failed!"
                   exit 1
               }
           }
+          puts "success."
           EOF
 
           cd examples/simple-cmake-pkg
