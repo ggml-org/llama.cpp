@@ -210,7 +210,6 @@ const SETTING_SECTIONS: SettingSection[] = [
             a.download = `aa_dump.json`;
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
           };
           return (
             <button className="btn" onClick={exportDB}>
@@ -223,26 +222,47 @@ const SETTING_SECTIONS: SettingSection[] = [
         type: SettingInputType.CUSTOM,
         key: 'custom', // dummy key, won't be used
         component: () => {
-          const importDB = async (e) => {
-            if (e.target.files.length != 1) throw new Error(
-                "Number of selected files for DB import must be 1 but was " + e.target.files.length + ".");
+          const importDB = async (e: React.ChangeEvent<HTMLInputElement>) => {
+            console.log(e);
+            if (!e.target.files) {
+              throw new Error('e.target.files cant be null');
+            }
+            if (e.target.files.length != 1)
+              throw new Error(
+                'Number of selected files for DB import must be 1 but was ' +
+                  e.target.files.length +
+                  '.'
+              );
             const file = e.target.files[0];
-                try {
-                  if (!file) throw new Error("No DB found to import.");
-                  console.log("Importing DB " + file.name);
-                  await StorageUtils.importDB(file, {
-                  });
-                  console.log("Import complete");
-                } catch (error) {
-                  console.error(''+error);
-                }
-
-            window.location.reload();
+            try {
+              if (!file) throw new Error('No DB found to import.');
+              console.log('Importing DB ' + file.name);
+              await StorageUtils.importDB(file);
+              console.log('Import complete');
+              window.location.reload();
+            } catch (error) {
+              console.error('' + error);
+            }
           };
           return (
             <div>
-              <label htmlFor="db-import" className="btn" role="button"  tabIndex={0} > reset and import database </label>
-              <input id="db-import" type="file" accept=".json" className="file-upload" onInput={importDB} hidden/>
+              <label
+                htmlFor="db-import"
+                className="btn"
+                role="button"
+                tabIndex={0}
+              >
+                {' '}
+                reset and import database{' '}
+              </label>
+              <input
+                id="db-import"
+                type="file"
+                accept=".json"
+                className="file-upload"
+                onInput={importDB}
+                hidden
+              />
             </div>
           );
         },
