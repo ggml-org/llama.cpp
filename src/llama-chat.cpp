@@ -531,7 +531,7 @@ int32_t llm_chat_apply_template(
         for (size_t i = 0; i < chat.size(); i++) {
             std::string role(chat[i]->role);
             if (role == "system") {
-                ss << trim(chat[i]->content) << "\n\n";
+                ss << "System: " << trim(chat[i]->content) << "\n\n";
             } else if (role == "user") {
                 ss << "User: " << trim(chat[i]->content) << "\n\n";
                 if (i == chat.size() - 1) {
