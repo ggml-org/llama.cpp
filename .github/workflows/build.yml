@@ -5,10 +5,43 @@ on:
   push:
     branches:
       - master
-    paths: ['.github/workflows/build.yml', '.github/workflows/build-linux-cross.yml', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+    paths: [
+      '.github/workflows/build.yml',
+      '.github/workflows/build-linux-cross.yml',
+      '.github/workflows/build-cmake-pkg.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.cuh',
+      '**/*.swift',
+      '**/*.m',
+      '**/*.metal',
+      '**/*.comp'
+    ]
+
   pull_request:
     types: [opened, synchronize, reopened]
-    paths: ['.github/workflows/build.yml', '.github/workflows/build-linux-cross.yml', '**/CMakeLists.txt', '**/.cmake', '**/*.h', '**/*.hpp', '**/*.c', '**/*.cpp', '**/*.cu', '**/*.cuh', '**/*.swift', '**/*.m', '**/*.metal', '**/*.comp']
+    paths: [
+      '.github/workflows/build.yml',
+      '.github/workflows/build-linux-cross.yml',
+      '.github/workflows/build-cmake-pkg.yml',
+      '**/CMakeLists.txt',
+      '**/.cmake',
+      '**/*.h',
+      '**/*.hpp',
+      '**/*.c',
+      '**/*.cpp',
+      '**/*.cu',
+      '**/*.cuh',
+      '**/*.swift',
+      '**/*.m',
+      '**/*.metal',
+      '**/*.comp'
+    ]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -478,6 +511,9 @@ jobs:
   build-linux-cross:
     uses: ./.github/workflows/build-linux-cross.yml
 
+  build-cmake-pkg:
+    uses: ./.github/workflows/build-cmake-pkg.yml
+
   macOS-latest-cmake-ios:
     runs-on: macos-latest
 
@@ -683,7 +719,7 @@ jobs:
     env:
       OPENBLAS_VERSION: 0.3.23
       SDE_VERSION: 9.33.0-2024-01-07
-      VULKAN_VERSION: 1.4.309.0
+      VULKAN_VERSION: 1.4.313.2
 
     strategy:
       matrix:
@@ -736,7 +772,7 @@ jobs:
         id: get_vulkan
         if: ${{ matrix.build == 'kompute-x64' || matrix.build == 'vulkan-x64' }}
         run: |
-          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/VulkanSDK-${env:VULKAN_VERSION}-Installer.exe"
+          curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
           & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"

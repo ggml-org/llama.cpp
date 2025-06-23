@@ -107,13 +107,11 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
     return false;
 }
 
-// usage:
-//  ./llama-quantize [--allow-requantize] [--leave-output-tensor] [--pure] models/llama/ggml-model.gguf [models/llama/ggml-model-quant.gguf] type [nthreads]
-//
 [[noreturn]]
 static void usage(const char * executable) {
-    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights] [--exclude-weights] [--output-tensor-type]\n", executable);
-    printf("       [--token-embedding-type] [--tensor-type] [--keep-split] [--override-kv] model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
+    printf("usage: %s [--help] [--allow-requantize] [--leave-output-tensor] [--pure] [--imatrix] [--include-weights]\n", executable);
+    printf("       [--exclude-weights] [--output-tensor-type] [--token-embedding-type] [--tensor-type] [--prune-layers] [--keep-split] [--override-kv]\n");
+    printf("       model-f32.gguf [model-quant.gguf] type [nthreads]\n\n");
     printf("  --allow-requantize: Allows requantizing tensors that have already been quantized. Warning: This can severely reduce quality compared to quantizing from 16bit or 32bit\n");
     printf("  --leave-output-tensor: Will leave output.weight un(re)quantized. Increases model size but may also increase quality, especially when requantizing\n");
     printf("  --pure: Disable k-quant mixtures and quantize all tensors to the same type\n");
@@ -124,6 +122,8 @@ static void usage(const char * executable) {
     printf("  --token-embedding-type ggml_type: use this ggml_type for the token embeddings tensor\n");
     printf("  --tensor-type TENSOR=TYPE: quantize this tensor to this ggml_type. example: --tensor-type attn_q=q8_0\n");
     printf("      Advanced option to selectively quantize tensors. May be specified multiple times.\n");
+    printf("  --prune-layers L0,L1,L2...comma-separated list of layer numbers to prune from the model\n");
+    printf("      Advanced option to remove all tensors from the given layers\n");
     printf("  --keep-split: will generate quantized model in the same shards as input\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
@@ -286,6 +286,32 @@ static bool parse_tensor_type(const char * data, std::vector<tensor_quantization
     return true;
 }
 
+static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers) {
+    if (!data) {
+        printf("\n%s: no layer pruning ids provided\n\n", __func__);
+        return false;
+    }
+
+    const auto block_ids = string_split<std::string>(data, ',');
+    for (const auto & block_id : block_ids) {
+        int id;
+        try {
+            id = std::stoi(block_id);
+        } catch (...) {
+            id = -1;
+        }
+        if (id < 0) {
+            printf("\n%s: invalid layer id '%s'\n\n", __func__, block_id.c_str());
+            return false;
+        }
+        prune_layers.emplace_back(id);
+    }
+
+    sort(prune_layers.begin(), prune_layers.end());
+    prune_layers.erase(std::unique(prune_layers.begin(), prune_layers.end()), prune_layers.end());
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
@@ -298,6 +324,7 @@ int main(int argc, char ** argv) {
     std::vector<std::string> included_weights, excluded_weights;
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_quantization> tensor_types;
+    std::vector<int> prune_layers;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -322,6 +349,10 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
             if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
+            if (arg_idx == argc-1 || !parse_layer_prune(argv[++arg_idx], prune_layers)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--override-kv") == 0) {
@@ -410,6 +441,9 @@ int main(int argc, char ** argv) {
     }
     if (!tensor_types.empty()) {
         params.tensor_types = &tensor_types;
+    }
+    if (!prune_layers.empty()) {
+        params.prune_layers = &prune_layers;
     }
 
     llama_backend_init();

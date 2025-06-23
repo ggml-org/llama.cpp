@@ -98,7 +98,7 @@ int main(int argc, char ** argv) {
     auto generate = [&](const std::string & prompt) {
         std::string response;
 
-        const bool is_first = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) == 0;
+        const bool is_first = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) == -1;
 
         // tokenize the prompt
         const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
