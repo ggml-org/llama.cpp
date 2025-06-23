@@ -201,7 +201,7 @@ const SETTING_SECTIONS: SettingSection[] = [
         type: SettingInputType.CUSTOM,
         key: 'custom', // dummy key, won't be used
         component: () => {
-          const eexportDB = async () => {
+          const exportDB = async () => {
             const blob = await StorageUtils.export();
             const a = document.createElement('a');
             document.body.appendChild(a);
@@ -209,11 +209,39 @@ const SETTING_SECTIONS: SettingSection[] = [
             document.body.appendChild(a);
             a.download = `aa_dump.json`;
             a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
           };
           return (
-            <button className="btn" onClick={eexportDB}>
+            <button className="btn" onClick={exportDB}>
               export database
             </button>
+          );
+        },
+      },
+      {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key, won't be used
+        component: () => {
+          const importDB = async (e) => {
+            if (e.target.files.length != 1) throw new Error(
+                "Number of selected files for DB import must be 1 but was " + e.target.files.length + ".");
+            const file = e.target.files[0];
+                try {
+                  if (!file) throw new Error("No DB found to import.");
+                  console.log("Importing DB " + file.name);
+                  await StorageUtils.importDB(file, {
+                  });
+                  console.log("Import complete");
+                } catch (error) {
+                  console.error(''+error);
+                }
+          };
+          return (
+            <div>
+              <label htmlFor="db-import" className="btn" role="button"  tabIndex={0} > reset and import database </label>
+              <input id="db-import" type="file" accept=".json" className="file-upload" onInput={importDB} hidden/>
+            </div>
           );
         },
       },

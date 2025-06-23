@@ -37,8 +37,16 @@ const StorageUtils = {
    * manage conversations
    */
   async export() {
-      return await exportDB(db);
+    return await exportDB(db);
 
+  },
+
+  async importDB(file, callback) {
+    return db.delete().then(() => {
+      db.open().then(() => {
+        db.import(file,callback);
+      })
+    });
   },
 
   async getAllConversations(): Promise<Conversation[]> {
