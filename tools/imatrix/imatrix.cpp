@@ -746,7 +746,7 @@ static bool show_statistics(const common_params & params) {
     std::map<int, weighted_stats> ws;
 
     LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
-    LOG_INF("\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", " Layer", "       Tensor", "          Σ(Bias)",
+    LOG_INF("\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", " Layer", "       Tensor", "          Σ(Act²)",
             "  Min", "            Max", "           μ", "   σ", " % Active", "N", "   Entropy", "E (norm)", "ZD",
             "  CosSim");
     LOG_INF(
@@ -789,7 +789,7 @@ static bool show_statistics(const common_params & params) {
 
     const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
-    LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Bias)", "      μZD", "μCosSim");
+    LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Act²)", "      μZD", "μCosSim");
     LOG_INF("===============================================\n");
     for (const auto & [first, second] : ws) {
         const auto & layer = first;
