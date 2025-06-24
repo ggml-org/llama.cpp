@@ -58,7 +58,8 @@ public:
     void set_params(common_params params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void save_imatrix(int ncall = -1) const;
-    bool load_imatrix(const char * fname, std::vector<tensor_statistics> * tstats = nullptr);
+    bool load_imatrix(const char * fname);
+    const std::unordered_map<std::string, Stats> & get_mstats() const { return m_stats; }
 private:
     std::unordered_map<std::string, Stats> m_stats;
     common_params                          m_params;
@@ -116,8 +117,12 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
     }
 }
 
-static void compute_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e, const std::vector<float> & activations) {
-    if (activations.empty()) {
+static void compute_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
+    if (e.values.size() != e.counts.size()) {
+        LOG_ERR("%s: activation size mismatch for tensor %s (%zu vs %zu)\n", __func__, name.c_str(), e.counts.size(), e.values.size());
+        return;
+    }
+    if (e.counts.empty()) {
         LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
         return;
     }
@@ -413,7 +418,7 @@ void IMatrixCollector::save_imatrix(int ncall) const {
     LOG_DBGV(1, "%s: stored collected data after %d chunks in %s\n", __func__, m_last_call, fname.c_str());
 }
 
-bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_statistics> * tstats) {
+bool IMatrixCollector::load_imatrix(const char * fname) {
     std::ifstream in(fname, std::ios::binary);
     if (!in) {
         LOG_ERR("%s: failed to open %s\n",__func__, fname);
@@ -461,18 +466,11 @@ bool IMatrixCollector::load_imatrix(const char * fname, std::vector<tensor_stati
         }
 
         // Recreate the state as expected by save_imatrix(), and correct for weighted sum.
-        std::vector<float> activations;
-        activations.reserve(nval);
         for (int i = 0; i < nval; i++) {
             e.values[i] += tmp[i];
             e.counts[i] += ncall;
-            activations.push_back(e.values[i] / e.counts[i]);
         }
         e.ncall += ncall;
-
-        if (tstats) {
-            compute_statistics(*tstats, name_as_vec.data(), e, activations);
-        }
     }
 
     return true;
@@ -714,11 +712,14 @@ static bool show_statistics(const common_params & params) {
         LOG_ERR("\nError: a single imatrix file is required to compute tensor statistics\n\n");
         return false;
     }
-    if (!g_collector.load_imatrix(params.in_files[0].c_str(), &ts)) {
+    if (g_collector.load_imatrix(params.in_files[0].c_str())) {
+        for (const auto & [name, stats] :g_collector.get_mstats()) {
+            compute_statistics(ts, name, stats);
+        }
+    } else {
         LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
         return false;
     }
-
     if (!ts.empty()) {
         compute_cossim(ts);
     } else {
