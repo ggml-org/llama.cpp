@@ -244,7 +244,9 @@ bool llama_batch_allocr::init(
             continue;
         }
 
-        if (memory) {
+        const llama_pos p0 = memory ? memory->seq_pos_max(s) : -1;
+
+        if (p0 >= 0) {
             bool ok = true;
 
             if (batch.token) {
