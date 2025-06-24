@@ -61,29 +61,33 @@ static int ggml_backend_cpu_aarch64_score() {
     int score = 1;
     aarch64_features af;
 
+    // Bits 2-8 are used to rank backends by architecture or core when they
+    // otherwise have identical features.
+
+    // Bits 9+: Features always trump architecture or core.
 #ifdef GGML_USE_DOTPROD
     if (!af.has_dotprod) { return 0; }
-    score += 1<<1;
+    score += 1<<8;
 #endif
 #ifdef GGML_USE_FP16_VECTOR_ARITHMETIC
     if (!af.has_fp16_va) { return 0; }
-    score += 1<<2;
+    score += 1<<9;
 #endif
 #ifdef GGML_USE_SVE
     if (!af.has_sve) { return 0; }
-    score += 1<<3;
+    score += 1<<10;
 #endif
 #ifdef GGML_USE_MATMUL_INT8
     if (!af.has_i8mm) { return 0; }
-    score += 1<<4;
+    score += 1<<11;
 #endif
 #ifdef GGML_USE_SVE2
     if (!af.has_sve2) { return 0; }
-    score += 1<<5;
+    score += 1<<12;
 #endif
 #ifdef GGML_USE_SME
     if (!af.has_sme) { return 0; }
-    score += 1<<6;
+    score += 1<<13;
 #endif
 
     return score;
