@@ -313,11 +313,10 @@ void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, s
 
         HVX_Vector     q_lo = load_block_generic(src);
         HVX_VectorPair q    = Q6_Wh_vunpack_Vb(q_lo);
-        q                   = Q6_Wh_vunpack_Vb(Q6_V_lo_W(q));
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
-        q                   = Q6_Wqf32_vmpy_VhfVhf(q_lo, d);
+        q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
         q6op_vstu_variable_ARV(dst_ptr, hexagon::kBytesPerVector / 2,
-                               hexagon::qhmath_hvx_vhf_convert_vqf32(q));  // TODO: opt the conversion and store
+                               Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
         dst_ptr += qk;
     }
 }
