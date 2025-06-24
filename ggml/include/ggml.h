@@ -602,7 +602,8 @@ extern "C" {
 
         char name[GGML_MAX_NAME];
 
-        void * extra; // extra things e.g. for ggml-cuda.cu
+        void * extra; // extra things for the backend e.g. for ggml-cuda.cu
+        void * user; // extra things for the user e.g. for python or node bindings
 
         char padding[8];
     };
