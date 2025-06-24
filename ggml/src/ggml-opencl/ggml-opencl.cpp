@@ -231,6 +231,71 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
     return { type, major, minor, patch };
 }
 
+// Profiling
+struct ProfilingInfo {
+    std::string op_name;
+    std::string kernel_name;
+
+    cl_kernel kernel;
+    cl_event evt;
+
+    cl_ulong cmd_queued;
+    cl_ulong cmd_submit;
+    cl_ulong cmd_start;
+    cl_ulong cmd_end;
+    cl_ulong overhead_start;
+    cl_ulong overhead_end;
+    // For the times below, see spec for clGetEventProfilingInfo
+    // The time kernel spent in cmd queue - SUBMIT - QUEUED
+    cl_ulong cmd_queued_duration_ns;
+    // The time kernel spent for submission - START - SUBMIT
+    cl_ulong cmd_submit_duration_ns;
+    // Kernel execution time in nanoseconds - END - START
+    cl_ulong cmd_duration_ns;
+    // The time for the kernel to complete - COMPLETE - END
+    cl_ulong cmd_complete_duration_ns;
+    // Total time to finish the kernel - COMPELTE - QUEUED
+    cl_ulong cmd_total_duration_ns;
+    // Global and local work sizes.
+    size_t global_size[3];
+    size_t local_size[3];
+    // Op output size.
+    size_t output_size[4];
+};
+
+static void populateProfilingInfo(
+        ProfilingInfo& info, cl_event evt, cl_kernel kernel, cl_uint work_dim,
+        size_t global_size[3], size_t local_size[3],
+        const ggml_tensor * tensor) {
+    info.op_name     = tensor->name;
+    info.kernel      = kernel;
+    info.evt         = evt;
+
+    // 0 means not specified, e.g., 2D workgroup, or NULL for driver to choose
+    info.local_size[0] = 0;
+    info.local_size[1] = 0;
+    info.local_size[2] = 0;
+
+    info.global_size[0] = 0;
+    info.global_size[1] = 0;
+    info.global_size[2] = 0;
+
+    if (local_size) {
+        for (cl_uint i = 0; i < work_dim; ++i) {
+            info.local_size[i] = local_size[i];
+        }
+    }
+
+    for (cl_uint i = 0; i < work_dim; ++i) {
+        info.global_size[i] = global_size[i];
+    }
+
+    info.output_size[0] = tensor->ne[0];
+    info.output_size[1] = tensor->ne[1];
+    info.output_size[2] = tensor->ne[2];
+    info.output_size[3] = tensor->ne[3];
+}
+
 struct ggml_backend_opencl_context;
 
 // backend device context
@@ -254,6 +319,8 @@ struct ggml_backend_opencl_device_context {
 
 // backend context
 struct ggml_backend_opencl_context {
+    int ref_count;
+
     cl_device_id device;
     std::string device_name;
 
@@ -369,6 +436,108 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_timestep_embedding;
     cl_kernel kernel_mul_mv_id_q4_0_f32_8x_flat;
 
+    std::vector<ProfilingInfo> profiling_info;
+
+    void write_profiling_info() {
+        FILE * fperf = fopen("cl_profiling.csv", "w");
+        if (!fperf) {
+            GGML_LOG_ERROR("Failed to open cl_profiling.csv\n");
+            return;
+        }
+
+        // Populate profiling info
+        for (ProfilingInfo & info : profiling_info) {
+            cl_ulong cmd_queued;
+            cl_ulong cmd_submit;
+            cl_ulong cmd_start;
+            cl_ulong cmd_end;
+            cl_ulong cmd_complete;
+
+            CL_CHECK(clWaitForEvents(1, &info.evt));
+            CL_CHECK(clGetEventProfilingInfo(
+                info.evt, CL_PROFILING_COMMAND_QUEUED, sizeof(cl_ulong), &cmd_queued, NULL));
+            CL_CHECK(clGetEventProfilingInfo(
+                info.evt, CL_PROFILING_COMMAND_SUBMIT, sizeof(cl_ulong), &cmd_submit, NULL));
+            CL_CHECK(clGetEventProfilingInfo(
+                info.evt, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &cmd_start, NULL));
+            CL_CHECK(clGetEventProfilingInfo(
+                info.evt, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &cmd_end, NULL));
+            CL_CHECK(clGetEventProfilingInfo(
+                info.evt, CL_PROFILING_COMMAND_COMPLETE, sizeof(cl_ulong), &cmd_complete, NULL));
+            CL_CHECK(clReleaseEvent(info.evt));
+
+            char kernel_name[512];
+            CL_CHECK(clGetKernelInfo(info.kernel, CL_KERNEL_FUNCTION_NAME,
+                sizeof(kernel_name), kernel_name, NULL));
+            info.kernel_name = kernel_name;
+
+            info.cmd_queued = cmd_queued;
+            info.cmd_submit = cmd_submit;
+            info.cmd_start  = cmd_start;
+            info.cmd_end    = cmd_end;
+
+            info.cmd_queued_duration_ns     = cmd_submit    - cmd_queued;
+            info.cmd_submit_duration_ns     = cmd_start     - cmd_submit;
+            info.cmd_duration_ns            = cmd_end       - cmd_start;
+            info.cmd_complete_duration_ns   = cmd_complete  - cmd_end;
+            info.cmd_total_duration_ns      = cmd_complete  - cmd_queued;
+        }
+
+        // Dump a csv
+        float total_kernel_time = 0;
+        fprintf(fperf, "op name, kernel name, queued duration (ms), submit duration(ms), exec duration (ms), complete duration (ms), total duration (ms), global size, local size, output size\n");
+        for (const ProfilingInfo & info : profiling_info) {
+            total_kernel_time += info.cmd_duration_ns/1.e6f;
+            fprintf(fperf, "%s,%s,%f,%f,%f,%f,%f,%zux%zux%zu,%zux%zux%zu,%zux%zux%zux%zu\n",
+                info.op_name.c_str(), info.kernel_name.c_str(),
+                info.cmd_queued_duration_ns/1.e6f,
+                info.cmd_submit_duration_ns/1.e6f,
+                info.cmd_duration_ns/1.e6f,
+                info.cmd_complete_duration_ns/1.e6f,
+                info.cmd_total_duration_ns/1.e6f,
+                info.global_size[0], info.global_size[1], info.global_size[2],
+                info.local_size[0], info.local_size[1], info.local_size[2],
+                info.output_size[0], info.output_size[1], info.output_size[2], info.output_size[3]);
+        }
+        fclose(fperf);
+
+        GGML_LOG_INFO("ggml_opencl: total kernel time: %f\n", total_kernel_time);
+
+        // Dump a simple chrome trace
+        FILE* ftrace = fopen("cl_trace.json", "w");
+        if (!ftrace) {
+            GGML_LOG_ERROR("Failed to open cl_trace.json\n");
+            return;
+        }
+
+        fprintf(ftrace, "[\n");
+        for (const ProfilingInfo & info : profiling_info) {
+            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"B\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Host\"},\n",
+                info.kernel_name.c_str(), info.cmd_queued/1000);
+            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Host\"},\n",
+                info.kernel_name.c_str(), info.cmd_submit/1000);
+
+            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"B\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Device\"},\n",
+                info.kernel_name.c_str(), info.cmd_start/1000);
+            fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Device\"},\n",
+                info.kernel_name.c_str(), info.cmd_end/1000);
+        }
+        fclose(ftrace);
+    }
+
+    void enqueue_ndrange_kernel(cl_kernel kernel, cl_uint work_dim, size_t *global_work_size, size_t *local_work_size, const ggml_tensor * tensor) {
+#ifdef GGML_OPENCL_PROFILING
+        cl_event evt;
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, &evt));
+
+        profiling_info.emplace_back();
+        populateProfilingInfo(profiling_info.back(), evt, kernel, work_dim, global_work_size, local_work_size, tensor);
+#else
+        GGML_UNUSED(tensor);
+        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, work_dim, NULL, global_work_size, local_work_size, 0, NULL, NULL));
+#endif
+    }
+
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     // Transpose kernels
     cl_program program_transpose;
@@ -395,46 +564,19 @@ struct ggml_backend_opencl_context {
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_11008_1_4096;
     cl_kernel CL_mul_mat_vec_q4_0_f32_1d_4x_flat_32000_1_4096;
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
+
+    void free() {
+        ref_count--;
+        if (ref_count == 0) {
+#ifdef GGML_OPENCL_PROFILING
+            write_profiling_info();
+#endif
+        }
+    }
 };
 
 // All registered devices with a default device in the front.
 static std::vector<ggml_backend_device> g_ggml_backend_opencl_devices;
-
-// Profiling
-#ifdef GGML_OPENCL_PROFILING
-struct ProfilingInfo {
-    std::string op_name;
-    std::string kernel_name;
-
-    cl_kernel kernel;
-    cl_event evt;
-
-    cl_ulong cmd_queued;
-    cl_ulong cmd_submit;
-    cl_ulong cmd_start;
-    cl_ulong cmd_end;
-    cl_ulong overhead_start;
-    cl_ulong overhead_end;
-    // For the times below, see spec for clGetEventProfilingInfo
-    // The time kernel spent in cmd queue - SUBMIT - QUEUED
-    cl_ulong cmd_queued_duration_ns;
-    // The time kernel spent for submission - START - SUBMIT
-    cl_ulong cmd_submit_duration_ns;
-    // Kernel execution time in nanoseconds - END - START
-    cl_ulong cmd_duration_ns;
-    // The time for the kernel to complete - COMPLETE - END
-    cl_ulong cmd_complete_duration_ns;
-    // Total time to finish the kernel - COMPELTE - QUEUED
-    cl_ulong cmd_total_duration_ns;
-    // Global and local work sizes.
-    size_t global_size[3];
-    size_t local_size[3];
-    // Op output size.
-    size_t output_size[4];
-};
-
-std::vector<ProfilingInfo> g_profiling_info;
-#endif
 
 inline std::string read_file(const std::string &path) {
   std::ifstream ifs(path);
@@ -1669,6 +1811,12 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     backend_ctx->device     = dev_ctx->device;
     backend_ctx->gpu_family = GPU_FAMILY::UNKNOWN;
 
+    // ref_count get increased in ggml_backend_opencl_device_init
+    // This function is also used to retrieve backend context, so we don't want
+    // to increase ref_count for each call. We only want to increase ref_count
+    // when the associated device is initialized
+    backend_ctx->ref_count  = 0;
+
     if (strstr(dev_ctx->device_name.c_str(), "Adreno") ||
         strstr(dev_ctx->device_name.c_str(), "Qualcomm") ||
         strstr(dev_ctx->device_version.c_str(), "Adreno")) {
@@ -1841,93 +1989,22 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
     return dev_ctx->backend_ctx;
 }
 
-static void ggml_cl2_free(void) {
-#ifdef GGML_OPENCL_PROFILING
-    FILE * fperf = fopen("cl_profiling.csv", "w");
-    if (!fperf) {
-        GGML_LOG_ERROR("Failed to open cl_profiling.csv\n");
-        return;
+static void ggml_cl2_free(ggml_backend_t backend) {
+    ggml_backend_opencl_context * ctx = (ggml_backend_opencl_context *) backend->context;
+    ctx->free();
+
+    // The CL context is shared by all backends, release it if all backends have been released
+    bool should_release_opencl = true;
+    for (auto device : g_ggml_backend_opencl_devices) {
+        ggml_backend_opencl_device_context * ctx_dev = (ggml_backend_opencl_device_context *) device.context;
+        if (ctx_dev->backend_ctx->ref_count > 0) {
+            should_release_opencl = false;
+        }
     }
 
-    // Populate profiling info
-    for (ProfilingInfo & info : g_profiling_info) {
-        cl_ulong cmd_queued;
-        cl_ulong cmd_submit;
-        cl_ulong cmd_start;
-        cl_ulong cmd_end;
-        cl_ulong cmd_complete;
-
-        CL_CHECK(clWaitForEvents(1, &info.evt));
-        CL_CHECK(clGetEventProfilingInfo(
-            info.evt, CL_PROFILING_COMMAND_QUEUED, sizeof(cl_ulong), &cmd_queued, NULL));
-        CL_CHECK(clGetEventProfilingInfo(
-            info.evt, CL_PROFILING_COMMAND_SUBMIT, sizeof(cl_ulong), &cmd_submit, NULL));
-        CL_CHECK(clGetEventProfilingInfo(
-            info.evt, CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &cmd_start, NULL));
-        CL_CHECK(clGetEventProfilingInfo(
-            info.evt, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &cmd_end, NULL));
-        CL_CHECK(clGetEventProfilingInfo(
-            info.evt, CL_PROFILING_COMMAND_COMPLETE, sizeof(cl_ulong), &cmd_complete, NULL));
-        CL_CHECK(clReleaseEvent(info.evt));
-
-        char kernel_name[512];
-        CL_CHECK(clGetKernelInfo(info.kernel, CL_KERNEL_FUNCTION_NAME,
-            sizeof(kernel_name), kernel_name, NULL));
-        info.kernel_name = kernel_name;
-
-        info.cmd_queued = cmd_queued;
-        info.cmd_submit = cmd_submit;
-        info.cmd_start  = cmd_start;
-        info.cmd_end    = cmd_end;
-
-        info.cmd_queued_duration_ns     = cmd_submit    - cmd_queued;
-        info.cmd_submit_duration_ns     = cmd_start     - cmd_submit;
-        info.cmd_duration_ns            = cmd_end       - cmd_start;
-        info.cmd_complete_duration_ns   = cmd_complete  - cmd_end;
-        info.cmd_total_duration_ns      = cmd_complete  - cmd_queued;
+    if (should_release_opencl) {
+        CL_CHECK(clReleaseContext(ctx->context));
     }
-
-    // Dump a csv
-    float total_kernel_time = 0;
-    fprintf(fperf, "op name, kernel name, queued duration (ms), submit duration(ms), exec duration (ms), complete duration (ms), total duration (ms), global size, local size, output size\n");
-    for (const ProfilingInfo & info : g_profiling_info) {
-        total_kernel_time += info.cmd_duration_ns/1.e6f;
-        fprintf(fperf, "%s,%s,%f,%f,%f,%f,%f,%zux%zux%zu,%zux%zux%zu,%zux%zux%zux%zu\n",
-            info.op_name.c_str(), info.kernel_name.c_str(),
-            info.cmd_queued_duration_ns/1.e6f,
-            info.cmd_submit_duration_ns/1.e6f,
-            info.cmd_duration_ns/1.e6f,
-            info.cmd_complete_duration_ns/1.e6f,
-            info.cmd_total_duration_ns/1.e6f,
-            info.global_size[0], info.global_size[1], info.global_size[2],
-            info.local_size[0], info.local_size[1], info.local_size[2],
-            info.output_size[0], info.output_size[1], info.output_size[2], info.output_size[3]);
-    }
-    fclose(fperf);
-
-    GGML_LOG_INFO("ggml_opencl: total kernel time: %f\n", total_kernel_time);
-
-    // Dump a simple chrome trace
-    FILE* ftrace = fopen("cl_trace.json", "w");
-    if (!ftrace) {
-        GGML_LOG_ERROR("Failed to open cl_trace.json\n");
-        return;
-    }
-
-    fprintf(ftrace, "[\n");
-    for (const ProfilingInfo & info : g_profiling_info) {
-        fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"B\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Host\"},\n",
-            info.kernel_name.c_str(), info.cmd_queued/1000);
-        fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Host\"},\n",
-            info.kernel_name.c_str(), info.cmd_submit/1000);
-
-        fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"B\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Device\"},\n",
-            info.kernel_name.c_str(), info.cmd_start/1000);
-        fprintf(ftrace, "{\"name\": \"%s\", \"cat\": \"OpenCL\", \"ph\": \"E\", \"ts\": %lu, \"pid\": \"\", \"tid\": \"Device\"},\n",
-            info.kernel_name.c_str(), info.cmd_end/1000);
-    }
-    fclose(ftrace);
-#endif
 }
 
 //------------------------------------------------------------------------------
@@ -2011,9 +2088,7 @@ static const char * ggml_backend_opencl_name(ggml_backend_t backend) {
 }
 
 static void ggml_backend_opencl_free(ggml_backend_t backend) {
-    ggml_cl2_free();
-
-    GGML_UNUSED(backend);
+    ggml_cl2_free(backend);
 }
 
 static void ggml_backend_opencl_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -2899,6 +2974,8 @@ static void ggml_backend_opencl_device_get_props(ggml_backend_dev_t dev, struct 
 
 static ggml_backend_t ggml_backend_opencl_device_init(ggml_backend_dev_t dev, const char * params) {
     ggml_backend_opencl_context * backend_ctx = ggml_cl2_init(dev);
+    // Getting a new reference to the backend, increase ref_count
+    backend_ctx->ref_count++;
 
     ggml_backend_t backend = new ggml_backend {
         /* .guid      = */ ggml_backend_opencl_guid(),
@@ -3160,31 +3237,6 @@ static void dump_tensor(ggml_backend_t backend, const struct ggml_tensor * tenso
 #endif
 
 //------------------------------------------------------------------------------
-// Profiling utility
-//------------------------------------------------------------------------------
-#ifdef GGML_OPENCL_PROFILING
-static void populateProfilingInfo(
-        ProfilingInfo& info, cl_event evt, cl_kernel kernel,
-        size_t global_size[3], size_t local_size[3],
-        const ggml_tensor * tensor) {
-    info.op_name     = tensor->name;
-    info.kernel      = kernel;
-    info.evt         = evt;
-
-    info.local_size[0]  = local_size[0];
-    info.local_size[1]  = local_size[1];
-    info.local_size[2]  = local_size[2];
-    info.global_size[0] = global_size[0];
-    info.global_size[1] = global_size[1];
-    info.global_size[2] = global_size[2];
-    info.output_size[0] = tensor->ne[0];
-    info.output_size[1] = tensor->ne[1];
-    info.output_size[2] = tensor->ne[2];
-    info.output_size[3] = tensor->ne[3];
-}
-#endif
-
-//------------------------------------------------------------------------------
 // Ops
 //------------------------------------------------------------------------------
 
@@ -3227,7 +3279,6 @@ static void ggml_cl_get_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     const cl_ulong nb2  = dst  ?  dst->nb[2] : 0;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -3271,15 +3322,7 @@ static void ggml_cl_get_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     size_t global_work_size[] = {(size_t)ne10, (size_t)ne11, 1};
     size_t local_work_size[] = {1, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -3321,7 +3364,6 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
     const cl_ulong nb3  = dst ? dst->nb[3] : 0;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -3396,29 +3438,13 @@ static void ggml_cl_add(ggml_backend_t backend, const ggml_tensor * src0, const 
             local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
         }
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
     } else {
         unsigned int nth = MIN(64, ne0);
         size_t global_work_size[] = {ne01*nth, (size_t)ne02, (size_t)ne03};
         size_t local_work_size[] = {nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     }
 }
 
@@ -3461,7 +3487,6 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
     const cl_ulong nb3  = dst ? dst->nb[3] : 0;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -3536,29 +3561,13 @@ static void ggml_cl_mul(ggml_backend_t backend, const ggml_tensor * src0, const 
             local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
         }
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
     } else {
         unsigned int nth = MIN(64, ne0);
         size_t global_work_size[] = {ne01*nth, (size_t)ne02, (size_t)ne03};
         size_t local_work_size[] = {nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     }
 }
 
@@ -3598,7 +3607,6 @@ static void ggml_cl_div(ggml_backend_t backend, const ggml_tensor * src0, const 
     const cl_ulong nb3  = dst->nb[3];
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -3661,29 +3669,13 @@ static void ggml_cl_div(ggml_backend_t backend, const ggml_tensor * src0, const 
         size_t global_work_size[] = {(size_t)n, 1, 1};
         size_t local_work_size[] = {64, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else {
         unsigned int nth = MIN(64, ne0);
         size_t global_work_size[] = {ne01*nth, (size_t)ne02, (size_t)ne03};
         size_t local_work_size[] = {nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     }
 }
 
@@ -3723,7 +3715,6 @@ static void ggml_cl_sub(ggml_backend_t backend, const ggml_tensor * src0, const 
     const cl_ulong nb3  = dst->nb[3];
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -3786,29 +3777,13 @@ static void ggml_cl_sub(ggml_backend_t backend, const ggml_tensor * src0, const 
         size_t global_work_size[] = {(size_t)n, 1, 1};
         size_t local_work_size[] = {64, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else {
         unsigned int nth = MIN(64, ne0);
         size_t global_work_size[] = {ne01*nth, (size_t)ne02, (size_t)ne03};
         size_t local_work_size[] = {nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     }
 }
 
@@ -3821,7 +3796,6 @@ static void ggml_cl_gelu(ggml_backend_t backend, const ggml_tensor * src0, const
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -3848,15 +3822,7 @@ static void ggml_cl_gelu(ggml_backend_t backend, const ggml_tensor * src0, const
     size_t global_work_size[] = {(size_t)n, 1, 1};
     size_t local_work_size[] = {64, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt);
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL);
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_gelu_quick(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -3868,7 +3834,6 @@ static void ggml_cl_gelu_quick(ggml_backend_t backend, const ggml_tensor * src0,
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -3895,15 +3860,7 @@ static void ggml_cl_gelu_quick(ggml_backend_t backend, const ggml_tensor * src0,
     size_t global_work_size[] = {(size_t)n, 1, 1};
     size_t local_work_size[] = {64, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt);
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL);
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_silu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -3915,7 +3872,6 @@ static void ggml_cl_silu(ggml_backend_t backend, const ggml_tensor * src0, const
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -3947,15 +3903,7 @@ static void ggml_cl_silu(ggml_backend_t backend, const ggml_tensor * src0, const
         local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
     }
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_relu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -3967,7 +3915,6 @@ static void ggml_cl_relu(ggml_backend_t backend, const ggml_tensor * src0, const
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -3992,15 +3939,7 @@ static void ggml_cl_relu(ggml_backend_t backend, const ggml_tensor * src0, const
         local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
     }
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4012,7 +3951,6 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -4044,15 +3982,7 @@ static void ggml_cl_sigmoid(ggml_backend_t backend, const ggml_tensor * src0, co
         local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
     }
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_clamp(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4064,7 +3994,6 @@ static void ggml_cl_clamp(ggml_backend_t backend, const ggml_tensor * src0, cons
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -4096,15 +4025,7 @@ static void ggml_cl_clamp(ggml_backend_t backend, const ggml_tensor * src0, cons
         local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
     }
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4116,7 +4037,6 @@ static void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -4157,15 +4077,7 @@ static void ggml_cl_norm(ggml_backend_t backend, const ggml_tensor * src0, const
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4177,7 +4089,6 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     //ggml_backend_opencl_device_context * dev_ctx =
     //    (ggml_backend_opencl_device_context *)backend->device->context;
@@ -4241,15 +4152,7 @@ static void ggml_cl_rms_norm(ggml_backend_t backend, const ggml_tensor * src0, c
     // This is local memory - the size depends on subgroup size.
     CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float)*nth/sgs,  NULL));
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4261,7 +4164,6 @@ static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0,
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -4300,15 +4202,7 @@ static void ggml_cl_group_norm(ggml_backend_t backend, const ggml_tensor * src0,
     size_t global_work_size[] = {(size_t)n_groups*sgs, 1, 1};
     size_t local_work_size[] = {(size_t)sgs, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_tanh(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4320,7 +4214,6 @@ static void ggml_cl_tanh(ggml_backend_t backend, const ggml_tensor * src0, const
     UNUSED(src1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -4397,16 +4290,7 @@ static void ggml_cl_tanh(ggml_backend_t backend, const ggml_tensor * src0, const
     }
     if (global_work_size[0] == 0 || global_work_size[1] == 0 || global_work_size[2] == 0) return;
 
-
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr ? local_work_size : (size_t[3]){0,0,0}, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_repeat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1_shape_def, ggml_tensor * dst) {
@@ -4419,7 +4303,6 @@ static void ggml_cl_repeat(ggml_backend_t backend, const ggml_tensor * src0, con
     UNUSED(src1_shape_def);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     if (backend_ctx->kernel_repeat == nullptr) {
         GGML_LOG_WARN("%s: repeat kernel not available, skipping OpenCL execution.\n", __func__);
@@ -4467,15 +4350,7 @@ static void ggml_cl_repeat(ggml_backend_t backend, const ggml_tensor * src0, con
 
     size_t global_work_size[] = { gws0, gws1, gws2 };
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, NULL, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, (size_t[3]){0,0,0}, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, NULL, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, NULL, dst);
 }
 
 static void ggml_cl_pad(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -4488,7 +4363,6 @@ static void ggml_cl_pad(ggml_backend_t backend, const ggml_tensor * src0, ggml_t
     GGML_ASSERT(src0->ne[3] == 1 && dst->ne[3] == 1);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     if (backend_ctx->kernel_pad == nullptr) {
         GGML_LOG_WARN("%s: pad kernel not available, skipping OpenCL execution.\n", __func__);
@@ -4533,15 +4407,7 @@ static void ggml_cl_pad(ggml_backend_t backend, const ggml_tensor * src0, ggml_t
         local_work_size_ptr = nullptr;
     }
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr ? local_work_size : (size_t[3]){0,0,0}, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, ggml_tensor * dst) {
@@ -4553,7 +4419,6 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     const ggml_scale_mode mode = (ggml_scale_mode) ggml_get_op_params_i32(dst, 0);
     cl_kernel kernel = nullptr;
@@ -4644,17 +4509,7 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
         local_work_size_ptr = nullptr;
     }
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    size_t profiling_gws[3] = {global_work_size[0], 1, 1};
-    size_t profiling_lws[3] = {local_work_size_ptr ? local_work_size[0] : 0, 1, 1};
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, profiling_gws, profiling_lws, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 1, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4732,7 +4587,7 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
                 global_work_size[1] = d_ne1;
                 global_work_size[2] = d_ne2;
 
-                CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, NULL, 0, NULL, NULL));
+                backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, NULL, dst);
             }
         }
     } else {
@@ -4782,7 +4637,7 @@ static void ggml_cl_concat(ggml_backend_t backend, const ggml_tensor * src0, con
                                          d_ne2 > 0 ? (size_t)d_ne2 : 1,
                                          d_ne3 > 0 ? (size_t)d_ne3 : 1 };
 
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size_nc, NULL, 0, NULL, NULL));
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size_nc, NULL, dst);
     }
 }
 
@@ -4795,7 +4650,6 @@ static void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     if (backend_ctx->kernel_timestep_embedding == nullptr) {
         GGML_LOG_WARN("%s: timestep_embedding kernel not available, skipping OpenCL execution.\n", __func__);
@@ -4828,17 +4682,7 @@ static void ggml_cl_timestep_embedding(ggml_backend_t backend, const ggml_tensor
 
     size_t global_work_size[] = {gws0, gws1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global_work_size, NULL, 0, NULL, &evt)); // Pass 2 for 2D problem
-
-    g_profiling_info.emplace_back();
-    size_t profiling_gws[3] = {global_work_size[0], global_work_size[1], 1};
-    size_t profiling_lws[3] = {0,0,0}; // Reflects NULL LWS
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, profiling_gws, profiling_lws, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global_work_size, NULL, 0, NULL, NULL)); // Pass 2 for 2D problem
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, NULL, dst);
 }
 
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -4853,7 +4697,6 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     const enum ggml_type src1t = src1 ? src1->type : GGML_TYPE_COUNT;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -5058,15 +4901,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 static_cast<size_t>(padded_height_B)
             };
 
-            #ifdef GGML_OPENCL_PROFILING
-                cl_event evt;
-                CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global_size_t, local_size_t, 0, NULL, &evt));
-
-                g_profiling_info.emplace_back();
-                populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_size_t, local_size_t, dst);
-            #else
-                CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 2, NULL, global_size_t, local_size_t, 0, NULL, NULL));
-            #endif
+            backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_size_t, local_size_t, dst);
         } else {
             // no need to transpose B in other cases
             // create an image for B from sub_buffer
@@ -5188,16 +5023,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 
         // enqueue kernel with profiling
         // <--------------------------------------------> //
-    #ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-        // enqueue kernel without profiling
-    #else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-    #endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
         // <--------------------------------------------> //
 
         // deallocate sub buffers and images
@@ -5277,15 +5103,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
                 global_work_size[2] = (size_t)ne12*ne13;
             }
 
-#ifdef GGML_OPENCL_PROFILING
-            cl_event evt;
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-            g_profiling_info.emplace_back();
-            populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-            CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+            backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
             return;
         }
 #else // GGML_OPENCL_SOA_Q
@@ -5515,15 +5333,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         size_t global_work_size[] = {(size_t)(ne01 + ndst-1)/ndst*nth0, (size_t)ne11*nth1, (size_t)ne12*ne13};
         size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else if (src0t == GGML_TYPE_Q4_K) {
         GGML_ASSERT(false && "not implemented");
     } else if (src0t == GGML_TYPE_Q3_K) {
@@ -5534,30 +5344,14 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         size_t global_work_size[] = {(size_t)(ne01+1)/2*nth0, (size_t)ne11*nth1, (size_t)ne12*ne13};
         size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else {
         int64_t ny = (ne11 + nrows - 1)/nrows;
 
         size_t global_work_size[] = {(size_t)ne01*nth0, (size_t)ny*nth1, (size_t)ne12*ne13};
         size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     }
 }
 
@@ -5574,7 +5368,6 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     GGML_ASSERT(src2->extra);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
     ggml_tensor_extra_cl * extra2 = (ggml_tensor_extra_cl *)src2->extra;
@@ -5680,15 +5473,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     size_t global_work_size[] = {(size_t)(ne01+ndst*nsg-1)/(ndst*nsg)*sgs, (size_t)(_ne1+nrows-1)/nrows*nsg, (size_t)ne123};
     size_t local_work_size[] = {(size_t)sgs, (size_t)nsg, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -5701,7 +5486,6 @@ static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, cons
     GGML_ASSERT(ggml_is_contiguous(src0));
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     float scale;
     memcpy(&scale, dst->op_params, sizeof(scale));
@@ -5730,15 +5514,7 @@ static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, cons
         local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
     }
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
 }
 
 static void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -5775,7 +5551,6 @@ static void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const 
     const enum ggml_type src1t = src1 ? src1->type : GGML_TYPE_COUNT;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -5840,15 +5615,7 @@ static void ggml_cl_cpy(ggml_backend_t backend, const ggml_tensor * src0, const 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, src1);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, src1);
 }
 
 static void ggml_cl_dup(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -5871,7 +5638,6 @@ static void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * sr
     const int  ne02 = src0 ? src0->ne[2] : 0;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -5895,15 +5661,7 @@ static void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * sr
         size_t global_work_size[] = {(size_t)ne00*ne01*ne02/8, 1, 1};
         size_t local_work_size[] = {64, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
     } else {
         kernel = backend_ctx->kernel_diag_mask_inf;
 
@@ -5923,15 +5681,7 @@ static void ggml_cl_diag_mask_inf(ggml_backend_t backend, const ggml_tensor * sr
             local_work_size_ptr = nullptr;  // Let driver choose the work-group sizes.
         }
 
-#ifdef GGML_OPENCL_PROFILING
-        cl_event evt;
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, &evt));
-
-        g_profiling_info.emplace_back();
-        populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size_ptr, dst);
-#else
-        CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size_ptr, 0, NULL, NULL));
-#endif
+        backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size_ptr, dst);
     }
 }
 
@@ -5951,7 +5701,6 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     }
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -6031,15 +5780,7 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -6051,7 +5792,6 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     GGML_ASSERT(dst->extra);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
@@ -6217,15 +5957,7 @@ static void ggml_cl_rope(ggml_backend_t backend, const ggml_tensor * src0, const
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_im2col(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -6240,7 +5972,6 @@ static void ggml_cl_im2col(ggml_backend_t backend, const ggml_tensor * src0, con
     GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -6309,15 +6040,7 @@ static void ggml_cl_im2col(ggml_backend_t backend, const ggml_tensor * src0, con
     size_t global_work_size[] = {(size_t)num_blocks*256, (size_t)OH, (size_t)batch*IC};
     size_t local_work_size[] = {256, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -6332,7 +6055,6 @@ static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, co
     GGML_ASSERT(ggml_is_contiguous(src0));
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -6364,15 +6086,7 @@ static void ggml_cl_argsort(ggml_backend_t backend, const ggml_tensor * src0, co
     size_t global_work_size[] = {(size_t)ne00_padded, (size_t)nrows, (size_t)1};
     size_t local_work_size[] = {(size_t)ne00_padded, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -6386,7 +6100,6 @@ static void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     GGML_ASSERT(ggml_is_contiguous(src0));
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
-    cl_command_queue queue = backend_ctx->queue;
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -6427,15 +6140,7 @@ static void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     size_t global_work_size[] = {(size_t)ne01, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)64, 1, 1};
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    g_profiling_info.emplace_back();
-    populateProfilingInfo(g_profiling_info.back(), evt, kernel, global_work_size, local_work_size, dst);
-#else
-    CL_CHECK(clEnqueueNDRangeKernel(queue, kernel, 3, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
 //------------------------------------------------------------------------------
