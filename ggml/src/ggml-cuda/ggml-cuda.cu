@@ -1748,8 +1748,9 @@ static void ggml_cuda_op_mul_mat(
     }
 }
 
+template<typename T>
 static __global__ void k_compute_batched_ptrs(
-        const half * src0_as_f16, const half * src1_as_f16, char * dst,
+        const T * src0_as_f16, const T * src1_as_f16, char * dst,
         const void ** ptrs_src, void ** ptrs_dst,
         int64_t ne12, int64_t ne13,
         int64_t ne23,
@@ -1777,7 +1778,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     GGML_ASSERT(!ggml_is_transposed(src1));
 
     GGML_ASSERT(!ggml_backend_buft_is_cuda_split(src0->buffer->buft));
-    GGML_ASSERT(src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F32);
 
     // Byte offsets and tensor dimensions are currently used in an inconsistent way for dst.
     // As long as dst is contiguous this does not matter though.
@@ -1791,64 +1792,153 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
 
     CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(), main_stream));
 
-    const half * src0_f16 = (const half *) src0->data;
-    float * dst_ddf = (float *) dst->data;
+    const ggml_type src0_type = src0->type;
+    const bool use_f32_path = src0_type == GGML_TYPE_F32;
+    const bool use_bf16_path = src0_type == GGML_TYPE_BF16;
 
-    const half * src1_f16 = (const half *) src1->data;
+    float * dst_ddf = (float *) dst->data;
     const size_t ts_src1 = ggml_type_size(src1->type);
     GGML_ASSERT(nb10 == ts_src1);
     int64_t s11 = nb11 / ts_src1;
     int64_t s12 = nb12 / ts_src1;
     int64_t s13 = nb13 / ts_src1;
+
+    const half * src0_f16 = nullptr;
+    const half * src1_f16 = nullptr;
+    const nv_bfloat16 * src0_bf16 = nullptr;
+    const nv_bfloat16 * src1_bf16 = nullptr;
+    const float * src0_f32 = nullptr;
+    const float * src1_f32 = nullptr;
+
+    ggml_cuda_pool_alloc<half> src0_f16_alloc(ctx.pool());
     ggml_cuda_pool_alloc<half> src1_f16_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<nv_bfloat16> src0_bf16_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<nv_bfloat16> src1_bf16_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<float> src0_f32_alloc(ctx.pool());
+    ggml_cuda_pool_alloc<float> src1_f32_alloc(ctx.pool());
 
-    // convert src1 to fp16
-    if (src1->type != GGML_TYPE_F16) {
-        const to_fp16_nc_cuda_t to_fp16_cuda = ggml_get_to_fp16_nc_cuda(src1->type);
-        const int64_t ne_src1 = ggml_nelements(src1);
-        src1_f16_alloc.alloc(ne_src1);
-        GGML_ASSERT(to_fp16_cuda != nullptr);
+    if (use_f32_path) {
+        // F32 path
+        src0_f32 = (const float *) src0->data;
+        if (src1->type == GGML_TYPE_F32) {
+            src1_f32 = (const float *) src1->data;
+        } else {
+            // Convert src1 to F32
+            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src1->type);
+            const int64_t ne_src1 = ggml_nelements(src1);
+            src1_f32_alloc.alloc(ne_src1);
+            GGML_ASSERT(to_fp32_cuda != nullptr);
 
-        to_fp16_cuda(src1_f16, src1_f16_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, main_stream);
+            to_fp32_cuda((const void*)((const char*)src1->data), src1_f32_alloc.get(), ne_src1, main_stream);
+            src1_f32 = src1_f32_alloc.get();
+            s11 = ne10;
+            s12 = ne11*s11;
+            s13 = ne12*s12;
+        }
+    } else if (use_bf16_path) {
+        // BF16 path
+        src0_bf16 = (const nv_bfloat16 *) src0->data;
+        if (src1->type == GGML_TYPE_BF16) {
+            src1_bf16 = (const nv_bfloat16 *) src1->data;
+        } else {
+            // Convert src1 to BF16
+            const to_bf16_nc_cuda_t to_bf16_cuda = ggml_get_to_bf16_nc_cuda(src1->type);
+            const int64_t ne_src1 = ggml_nelements(src1);
+            src1_bf16_alloc.alloc(ne_src1);
+            GGML_ASSERT(to_bf16_cuda != nullptr);
 
-        src1_f16 = src1_f16_alloc.get();
-        s11 = ne10;
-        s12 = ne11*s11;
-        s13 = ne12*s12;
+            to_bf16_cuda((const void*)((const char*)src1->data), src1_bf16_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, main_stream);
+            src1_bf16 = src1_bf16_alloc.get();
+            s11 = ne10;
+            s12 = ne11*s11;
+            s13 = ne12*s12;
+        }
+    } else {
+        // F16 path (default)
+        src0_f16 = (const half *) src0->data;
+        if (src1->type == GGML_TYPE_F16) {
+            src1_f16 = (const half *) src1->data;
+        } else {
+            // Convert src1 to F16
+            const to_fp16_nc_cuda_t to_fp16_cuda = ggml_get_to_fp16_nc_cuda(src1->type);
+            const int64_t ne_src1 = ggml_nelements(src1);
+            src1_f16_alloc.alloc(ne_src1);
+            GGML_ASSERT(to_fp16_cuda != nullptr);
+
+            to_fp16_cuda((const void*)((const char*)src1->data), src1_f16_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, main_stream);
+            src1_f16 = src1_f16_alloc.get();
+            s11 = ne10;
+            s12 = ne11*s11;
+            s13 = ne12*s12;
+        }
     }
 
     ggml_cuda_pool_alloc<half> dst_f16(ctx.pool());
+    ggml_cuda_pool_alloc<nv_bfloat16> dst_bf16(ctx.pool());
     char * dst_t;
 
-    cublasComputeType_t cu_compute_type = CUBLAS_COMPUTE_16F;
-    cudaDataType_t      cu_data_type    = CUDA_R_16F;
+    cublasComputeType_t cu_compute_type;
+    cudaDataType_t cu_data_type;
+    cudaDataType_t cu_data_type_a;
+    cudaDataType_t cu_data_type_b;
 
-    // dst strides
+    if (use_f32_path) {
+        cu_compute_type = CUBLAS_COMPUTE_32F;
+        cu_data_type = CUDA_R_32F;
+        cu_data_type_a = CUDA_R_32F;
+        cu_data_type_b = CUDA_R_32F;
+    } else if (use_bf16_path) {
+        cu_compute_type = CUBLAS_COMPUTE_32F;
+        cu_data_type = CUDA_R_16BF;
+        cu_data_type_a = CUDA_R_16BF;
+        cu_data_type_b = CUDA_R_16BF;
+    } else {
+        cu_compute_type = CUBLAS_COMPUTE_16F;
+        cu_data_type = CUDA_R_16F;
+        cu_data_type_a = CUDA_R_16F;
+        cu_data_type_b = CUDA_R_16F;
+    }
+
     size_t nbd2 = dst->nb[2];
     size_t nbd3 = dst->nb[3];
 
     const half  alpha_f16 = 1.0f;
     const half  beta_f16  = 0.0f;
-
     const float alpha_f32 = 1.0f;
     const float beta_f32  = 0.0f;
 
-    const void * alpha = &alpha_f16;
-    const void * beta  = &beta_f16;
+    const void * alpha;
+    const void * beta;
+
+    if (use_f32_path || cu_compute_type == CUBLAS_COMPUTE_32F) {
+        alpha = &alpha_f32;
+        beta = &beta_f32;
+    } else if (use_bf16_path) {
+        alpha = &alpha_f32;
+        beta = &beta_f32;
+    } else {
+        alpha = &alpha_f16;
+        beta = &beta_f16;
+    }
 
     if (dst->op_params[0] == GGML_PREC_DEFAULT) {
-        dst_t = (char *) dst_f16.alloc(ne_dst);
-
-        nbd2 /= sizeof(float) / sizeof(half);
-        nbd3 /= sizeof(float) / sizeof(half);
+        if (use_f32_path) {
+            dst_t = (char *) dst_ddf;  // Direct F32 output
+        } else if (use_bf16_path) {
+            dst_t = (char *) dst_bf16.alloc(ne_dst);
+            nbd2 /= sizeof(float) / sizeof(nv_bfloat16);
+            nbd3 /= sizeof(float) / sizeof(nv_bfloat16);
+        } else {
+            dst_t = (char *) dst_f16.alloc(ne_dst);
+            nbd2 /= sizeof(float) / sizeof(half);
+            nbd3 /= sizeof(float) / sizeof(half);
+        }
     } else {
         dst_t = (char *) dst_ddf;
-
         cu_compute_type = CUBLAS_COMPUTE_32F;
-        cu_data_type    = CUDA_R_32F;
-
+        cu_data_type = CUDA_R_32F;
         alpha = &alpha_f32;
-        beta  = &beta_f32;
+        beta = &beta_f32;
     }
 
     int id = ggml_cuda_get_device();
@@ -1889,11 +1979,16 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     if (r2 == 1 && r3 == 1 && ggml_is_contiguous_2(src0) && ggml_is_contiguous_2(src1)) {
         // there is no broadcast and src0, src1 are contiguous across dims 2, 3
         // use cublasGemmStridedBatchedEx
+        const void * src0_ptr = use_f32_path ? (const void*)src0_f32 :
+                               use_bf16_path ? (const void*)src0_bf16 : (const void*)src0_f16;
+        const void * src1_ptr = use_f32_path ? (const void*)src1_f32 :
+                               use_bf16_path ? (const void*)src1_bf16 : (const void*)src1_f16;
+
         CUBLAS_CHECK(
         cublasGemmStridedBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
                 ne01, ne11, ne10,
-                alpha, src0_f16, CUDA_R_16F,   nb01/nb00, nb02/nb00, // strideA
-                       src1_f16, CUDA_R_16F,   s11,       s12,       // strideB
+                alpha, src0_ptr, cu_data_type_a, nb01/nb00, nb02/nb00, // strideA
+                       src1_ptr, cu_data_type_b, s11,       s12,       // strideB
                 beta,     dst_t, cu_data_type, ne0,       ne1*ne0,   // strideC
                 ne12*ne13,
                 cu_compute_type,
@@ -1905,24 +2000,57 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
         ggml_cuda_pool_alloc<const void *> ptrs_src(ctx.pool(), 2*ne23);
         ggml_cuda_pool_alloc<      void *> ptrs_dst(ctx.pool(), 1*ne23);
 
+        const void * src0_ptr = use_f32_path ? (const void*)src0_f32 :
+                               use_bf16_path ? (const void*)src0_bf16 : (const void*)src0_f16;
+        const void * src1_ptr = use_f32_path ? (const void*)src1_f32 :
+                               use_bf16_path ? (const void*)src1_bf16 : (const void*)src1_f16;
+
+        size_t src1_stride_size = use_f32_path ? sizeof(float) :
+                                 use_bf16_path ? sizeof(nv_bfloat16) : sizeof(half);
+
         dim3 block_dims(ne13, ne12);
-        k_compute_batched_ptrs<<<1, block_dims, 0, main_stream>>>(
-                src0_f16, src1_f16, dst_t,
-                ptrs_src.get(), ptrs_dst.get(),
-                ne12, ne13,
-                ne23,
-                nb02, nb03,
-                src1->type == GGML_TYPE_F16 ? nb12 : s12*sizeof(half),
-                src1->type == GGML_TYPE_F16 ? nb13 : s13*sizeof(half),
-                nbd2, nbd3,
-                r2, r3);
+        if( use_f32_path ) {
+            k_compute_batched_ptrs<<<1, block_dims, 0, main_stream>>>(
+                    (const float*)src0_ptr, (const float*)src1_ptr, dst_t,
+                    ptrs_src.get(), ptrs_dst.get(),
+                    ne12, ne13,
+                    ne23,
+                    nb02, nb03,
+                    (src1->type == src0_type) ? nb12 : s12*src1_stride_size,
+                    (src1->type == src0_type) ? nb13 : s13*src1_stride_size,
+                    nbd2, nbd3,
+                    r2, r3);
+        } else if (use_bf16_path) {
+            k_compute_batched_ptrs<<<1, block_dims, 0, main_stream>>>(
+                    (const nv_bfloat16*)src0_ptr, (const nv_bfloat16*)src1_ptr, dst_t,
+                    ptrs_src.get(), ptrs_dst.get(),
+                    ne12, ne13,
+                    ne23,
+                    nb02, nb03,
+                    (src1->type == src0_type) ? nb12 : s12*src1_stride_size,
+                    (src1->type == src0_type) ? nb13 : s13*src1_stride_size,
+                    nbd2, nbd3,
+                    r2, r3);
+        } else {
+            k_compute_batched_ptrs<<<1, block_dims, 0, main_stream>>>(
+                    (const half*)src0_ptr, (const half*)src1_ptr, dst_t,
+                    ptrs_src.get(), ptrs_dst.get(),
+                    ne12, ne13,
+                    ne23,
+                    nb02, nb03,
+                    (src1->type == src0_type) ? nb12 : s12*src1_stride_size,
+                    (src1->type == src0_type) ? nb13 : s13*src1_stride_size,
+                    nbd2, nbd3,
+                    r2, r3);
+        }
+
         CUDA_CHECK(cudaGetLastError());
 
         CUBLAS_CHECK(
         cublasGemmBatchedEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
                 ne01, ne11, ne10,
-                alpha, (const void **) (ptrs_src.get() + 0*ne23), CUDA_R_16F,   nb01/nb00,
-                       (const void **) (ptrs_src.get() + 1*ne23), CUDA_R_16F,   s11,
+                alpha, (const void **) (ptrs_src.get() + 0*ne23), cu_data_type_a, nb01/nb00,
+                       (const void **) (ptrs_src.get() + 1*ne23), cu_data_type_b, s11,
                 beta,  (      void **) (ptrs_dst.get() + 0*ne23), cu_data_type, ne0,
                 ne23,
                 cu_compute_type,
@@ -1930,9 +2058,16 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     }
 #endif
 
-    if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type == CUDA_R_16F) {
-        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
-        to_fp32_cuda(dst_f16.get(), dst_ddf, ne_dst, main_stream);
+    if (dst->op_params[0] == GGML_PREC_DEFAULT) {
+        if (use_f32_path) {
+            //already in f32
+        } else if (use_bf16_path && cu_data_type == CUDA_R_16BF) {
+            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
+            to_fp32_cuda(dst_bf16.get(), dst_ddf, ne_dst, main_stream);
+        } else if (cu_data_type == CUDA_R_16F) {
+            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
+            to_fp32_cuda(dst_f16.get(), dst_ddf, ne_dst, main_stream);
+        }
     }
 }
 
@@ -1992,8 +2127,9 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
     } else if (!split && use_mul_mat_q) {
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
-    } else if (!split && src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16) &&
-            !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
+    } else if (!split && (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F32)
+        && (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16 || src1->type == GGML_TYPE_F32)
+        && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
     } else if (use_mul_mat_vec) {
