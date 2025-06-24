@@ -40,16 +40,16 @@ struct Stats {
 struct tensor_statistics {
     std::string tensor;
     Stats stats;
-    float total_bias = 0;
-    float mean_bias  = 0;
-    float max_bias   = 0;
-    float min_bias   = 0;
-    int elements     = 0;
-    float stddev     = 0;
-    float active     = 0;
-    float entropy    = 0;
-    float zd         = 0;
-    float cossim     = 0;
+    float total_sqract = 0.0f;
+    float mean_sqract  = 0.0f;
+    float max_sqract   = 0.0f;
+    float min_sqract   = 0.0f;
+    int elements       = 0;
+    float stddev       = 0.0f;
+    float active       = 0.0f;
+    float entropy      = 0.0f;
+    float zd           = 0.0f;
+    float cossim       = 0.0f;
 };
 
 class IMatrixCollector {
@@ -127,31 +127,38 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const st
         return;
     }
 
-    const float total        = std::accumulate(activations.begin(), activations.end(), 0.0f);
-    const float max          = *std::max_element(activations.begin(), activations.end());
-    const float min          = *std::min_element(activations.begin(), activations.end());
-    const float mean         = total / activations.size();
-    const float sq_total     = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
-    const float variance     = (sq_total / activations.size()) - (mean * mean);
-    const float dev          = std::sqrt(std::max(0.0f, variance));
-    float threshold          = 1e-6f;
-    const int inactive_count = std::count_if(activations.begin(), activations.end(),
+    const int size = e.counts.size();
+    std::vector<float> activations;
+    activations.reserve(size);
+    for (int i = 0; i < size; i++) {
+        activations.push_back(e.values[i] / e.counts[i]);
+    }
+
+    const float act_total     = std::accumulate(activations.begin(), activations.end(), 0.0f);
+    const float act_max       = *std::max_element(activations.begin(), activations.end());
+    const float act_min       = *std::min_element(activations.begin(), activations.end());
+    const float act_mean      = act_total / activations.size();
+    const float act_sqr_total = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
+    const float act_var       = (act_sqr_total / activations.size()) - (act_mean * act_mean);
+    const float act_dev       = std::sqrt(std::max(0.0f, act_var));
+    float threshold           = 1e-5f;
+    const int inactive_count  = std::count_if(activations.begin(), activations.end(),
                                                [threshold](const float v) { return fabs(v) <= threshold; });
-    const float active_ratio = 1 - static_cast<float>(inactive_count) / activations.size();
+    const float active_ratio  = 1 - static_cast<float>(inactive_count) / activations.size();
 
     float entropy = 0;
-    if (total > 0) {
+    if (act_total > 0) {
         for (const auto act : activations) {
-            if (const float p = act / total; p > 0) {
+            if (const float p = act / act_total; p > 0) {
                 entropy -= p * std::log2(p);
             }
         }
     }
 
     int z_score = 0;
-    if (dev > 0.0f) {
+    if (act_dev > 0.0f) {
         for (const auto act : activations) {
-            if (const float p = (act - mean) / dev; p > 1) {
+            if (const float p = (act - act_mean) / act_dev; p > 1) {
                 z_score++;
             }
         }
@@ -160,12 +167,12 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const st
     auto & ts = tstats.emplace_back();
     ts.tensor     = name;
     ts.stats      = e;
-    ts.total_bias = total;
-    ts.mean_bias  = mean;
-    ts.max_bias   = max;
-    ts.min_bias   = min;
+    ts.total_sqract = act_total;
+    ts.mean_sqract  = act_mean;
+    ts.max_sqract   = act_max;
+    ts.min_sqract   = act_min;
     ts.elements   = static_cast<int>(activations.size());
-    ts.stddev     = dev;
+    ts.stddev     = act_dev;
     ts.active     = active_ratio;
     ts.entropy    = entropy;
     ts.zd         = static_cast<float>(z_score) / ts.elements;
@@ -733,7 +740,7 @@ static bool show_statistics(const common_params & params) {
             ;
             process_tensor_name(a.tensor, layer, name_a);
             process_tensor_name(b.tensor, layer, name_b);
-            return name_a < name_b || (name_a == name_b && a.total_bias > b.total_bias);
+            return name_a < name_b || (name_a == name_b && a.total_sqract > b.total_sqract);
         }
     };
     std::sort(ts.begin(), ts.end(), tensor_comparer());
@@ -765,11 +772,11 @@ static bool show_statistics(const common_params & params) {
         }
 
         LOG_INF("%5s\t%-20s\t%10.2f\t%8.4f\t%11.4f\t%6.2f\t%6.2f\t%8.2f%%\t%6d\t%10.4f\t%6.2f%%\t%10.2f%%\t%8.4f\n",
-                layer.c_str(), name.c_str(), tstat.total_bias, tstat.min_bias, tstat.max_bias, tstat.mean_bias,
+                layer.c_str(), name.c_str(), tstat.total_sqract, tstat.min_sqract, tstat.max_sqract, tstat.mean_sqract,
                 tstat.stddev, tstat.active * 100.0f, tstat.elements, tstat.entropy,
                 100.0f * (tstat.entropy / std::log2(tstat.elements)), 100.0f * tstat.zd, tstat.cossim);
 
-        const float weighted_bias   = tstat.elements * tstat.total_bias;
+        const float weighted_bias   = tstat.elements * tstat.total_sqract;
         const float weighted_zd     = tstat.elements * tstat.zd;
         const float weighted_cossim = tstat.elements * tstat.cossim;
 
