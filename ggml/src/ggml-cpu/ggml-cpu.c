@@ -2740,7 +2740,11 @@ struct ggml_cplan ggml_graph_plan(
                         const int64_t ne10 = node->src[1]->ne[0]; // DK
                         const int64_t ne20 = node->src[2]->ne[0]; // DV
 
-                        cur = sizeof(float)*(1*ne10 + 2*ne20)*n_tasks; // 1x head size K + 2x head size V (per thread)
+                        const int64_t ne02 = node->src[0]->ne[2]; // n_head
+                        const int64_t ne12 = node->src[1]->ne[2]; // n_kv_head
+                        const int64_t n_gqa = ne02/ne12;
+
+                        cur = sizeof(float)*n_gqa*(1*ne10 + 2*ne20)*n_tasks; // ngqa * (1x head size K + 2x head size V) (per thread)
                     } break;
                 case GGML_OP_FLASH_ATTN_BACK:
                     {
