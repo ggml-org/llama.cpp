@@ -147,6 +147,7 @@ if (NOT GGML_BACKEND_DL)
     llama_target_and_test(test-quantize-fns.cpp)
     llama_target_and_test(test-quantize-perf.cpp)
     llama_target_and_test(test-rope.cpp)
+    llama_target_and_test(test-smarterquant.cpp)
 endif()
 
 

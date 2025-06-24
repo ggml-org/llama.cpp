@@ -24,34 +24,35 @@ The SmarterQuant feature implementation is partially complete. The following ste
             *   The total `new_size` must be accurately calculated as the sum of the byte sizes of these individually quantized blocks. This is crucial for GGUF correctness.
             *   The `imatrix` (if provided) needs to be correctly indexed and passed for each segment being quantized. If permutation occurred, ensure `imatrix` aligns with the permuted data.
 
-2.  **Implement Custom Dequantization and Unpermutation in `ggml.c` (Step 4 Core Logic):**
-    *   **Current State:** Metadata is loaded into `llama_model`, but `ggml.c` compute/dequantization routines are unaware of it.
-    *   **To Do:**
-        *   **Data Access:** The `ggml_tensor` struct might need a way to easily access its `SmarterQuantTensorInfo` (e.g., via its `extra` pointer, or by passing it down through `ggml_compute_params`).
-        *   **Modify/Create Dequantization Functions:**
-            *   Identify key functions like `ggml_get_rows_XX` (e.g., `ggml_get_rows_q4_0`) or the generic `ggml_get_rows` which are called by compute operations like `ggml_mul_mat`.
-            *   These functions (or new wrappers/variants like `ggml_get_rows_smarterquant`) need to:
-                1.  Check if the tensor has `sq_info.enabled == true`.
-                2.  If so, when fetching and dequantizing a row (or part of it):
-                    *   Iterate through the row in 256-element segments (columns).
-                    *   For each segment, determine its block index (0, 1, 2, 3, or 4+).
-                    *   Use `sq_info.compression_types` (or the tensor's base GGUF type for blocks 4+) to select the correct `ggml_type` for that segment.
-                    *   Call the appropriate `dequantize_row_qX_X` function for that segment's `ggml_type` and data.
-                    *   The dequantized F32 elements for the *entire logical row* must be assembled into a temporary buffer.
-                3.  **Inverse Column Permutation:** After a full logical row is dequantized (potentially from multiple block types) into a temporary F32 buffer, apply the inverse of `sq_info.column_permutation` to this F32 data to restore the original column order. This unpermuted F32 row is then what's returned or used by the computation kernels.
-                    *   The inverse permutation `P_inv` can be computed from `P` such that if `P[new_idx] = old_idx`, then `P_inv[old_idx] = new_idx`.
-                    *   So, `unpermuted_row[old_idx] = permuted_row[P_inv[old_idx]]`. Or, more directly, `unpermuted_row[P[j]] = permuted_row[j]`. No, this is wrong. It should be: `unpermuted_row[j] = permuted_row[P_inverse[j]]`. The most straightforward is: `for j in 0..C-1: unpermuted_row[permutation[j]] = dequantized_permuted_row[j]`. This fills the unpermuted buffer correctly.
-        *   **GPU Offloading:** If GPU backends (CUDA, Metal, SYCL) are used, their respective dequantization kernels (e.g., in `ggml-cuda.cu`, `ggml-metal.m`) will also need similar modifications to handle mixed block types and potentially the unpermutation step if dequantization happens directly on the GPU. This is a more advanced step.
+2.  **Done**
+  **Implement Custom Dequantization and Unpermutation in `ggml-cpu/ggml-cpu.c` (Step 4 Core Logic):**
+    *   **Modifications Made:**
+        *   Added `sq_info` pointer to `struct ggml_tensor` in `ggml.h`.
+        *   Updated model loading in `src/llama-model.cpp` to populate `ggml_tensor::sq_info`.
+        *   Implemented `ggml_get_rows_smarterquant` function in `ggml-cpu/ggml-cpu.c`. This function:
+            1.  Checks if a tensor has SmarterQuant info.
+            2.  If so, dequantizes row segments based on `sq_info.compression_types` into a temporary buffer.
+            3.  Applies inverse column permutation using `sq_info.column_permutation`.
+        *   Modified `ggml_compute_forward_get_rows_f32` and `ggml_compute_forward_get_rows_q` in `ggml-cpu/ggml-cpu.c` to call `ggml_get_rows_smarterquant` for SmarterQuant-enabled tensors.
+    *   **Remaining for GPU (Future Task):**
+        *   GPU backends (CUDA, Metal, SYCL) will need similar modifications to their dequantization kernels (e.g., in `ggml-cuda.cu`, `ggml-metal.m`) to handle mixed block types and unpermutation if dequantization happens directly on the GPU.
 
 3.  **Thorough Testing (Step 6 Enhancement):**
-    *   **Current State:** Only metadata and config loading can be tested.
+    *   **Current State:** CPU-level numerical correctness tests implemented.
     *   **To Do (after completing 1 & 2 above):**
-        *   **Numerical Correctness:**
-            *   Create small test models and specific `default.smarterquant.json` configs that target a few tensors with known data patterns.
-            *   Quantize using the modified `llama-quantize`.
-            *   Implement small test programs that load the quantized model and:
-                *   Manually dequantize specific rows/tensors using the new logic and verify against expected F32 values (after unpermuting).
-                *   Perform a simple operation (e.g., matrix multiplication) involving a SmarterQuant tensor and verify the result against a reference computation done on the original, unquantized, unpermuted tensor.
+        *   **Numerical Correctness (CPU Path):**
+            *   DONE: Created a test case in `tests/test-smarterquant.cpp` that:
+                *   Defines a sample F32 tensor and `SmarterQuantTensorInfo` with mixed quantization types and column permutation.
+                *   Quantizes using `llama_tensor_quantize_smarter_blocks`.
+                *   Dequantizes using `ggml_get_rows_smarterquant`.
+                *   Verifies numerical output against the original F32 data. Test is passing.
+            *   Consider creating small test models and specific `default.smarterquant.json` configs for more comprehensive end-to-end GGUF-based tests if needed.
+            *   Consider tests for edge cases (e.g., tensors smaller than a full block segment, different permutations).
+        *   **Numerical Correctness (GPU Path - Future Task):**
+            *   Implement similar tests for GPU backends once SmarterQuant dequantization is added there.
+        *   **GGUF Metadata Round Trip (Optional but good):**
+            *   Test writing SmarterQuant metadata to GGUF and reading it back correctly. (Currently skipped to prioritize numerical tests).
+
 
 4.  **Refinements and Optimizations:**
     *   **Performance of Permutation/Unpermutation at Inference:** Perform the matrix multiplication on the permuted data and unpermute the result vector only.

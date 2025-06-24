@@ -338,3 +338,41 @@ const char * llama_print_system_info(void) {
 
     return s.c_str();
 }
+
+//
+// model quantization
+//
+
+struct llama_model_quantize_params llama_model_quantize_default_params() {
+    struct llama_model_quantize_params result = {
+        /*.nthread                =*/ 0, // 0 = use std::thread::hardware_concurrency()
+        /*.ftype                  =*/ LLAMA_FTYPE_MOSTLY_Q8_0,
+        /*.output_tensor_type   =*/ GGML_TYPE_COUNT, // inherit from ftype
+        /*.token_embedding_type =*/ GGML_TYPE_COUNT, // inherit from ftype
+        /*.allow_requantize       =*/ false,
+        /*.quantize_output_tensor =*/ true,
+        /*.only_copy              =*/ false,
+        /*.pure                   =*/ false,
+        /*.keep_split             =*/ false,
+        /*.imatrix                =*/ nullptr,
+        /*.kv_overrides           =*/ nullptr,
+    };
+
+    return result;
+}
+
+// llama_model_quantize_impl is defined in llama-quant.cpp
+extern void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const llama_model_quantize_params * params);
+
+uint32_t llama_model_quantize(
+        const char * fname_inp,
+        const char * fname_out,
+        const llama_model_quantize_params * params) {
+    try {
+        llama_model_quantize_impl(fname_inp, fname_out, params);
+        return 0;
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("error: %s\n", err.what());
+        return 1;
+    }
+}

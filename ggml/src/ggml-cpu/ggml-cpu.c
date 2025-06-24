@@ -4,12 +4,19 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 #include "ggml-cpu-traits.h"
-#include "ggml-cpu-impl.h"
-#include "ggml-cpu.h"
-#include "ggml-impl.h"
-#include "ggml-cpu-quants.h"
-#include "ggml-threading.h"
-#include "ggml.h"
+#include "ggml-backend-impl.h" // Keep this
+#include "ggml-backend.h"      // Keep this
+#include "ggml-cpu-traits.h"   // Keep this
+#include "ggml-cpu-impl.h"     // Keep this
+#include "ggml-cpu.h"          // Keep this
+#include "ggml-impl.h"         // Keep this
+#include "ggml-cpu-quants.h"   // Keep this
+#include "ggml-threading.h"    // Keep this
+#include "ggml.h"              // Keep this, it will now include ggml-smarterquant-types.h
+// No longer need to include llama-quant.h or ../llama-quant.h here
+
+// Forward declaration for SmarterQuant dequantization function
+void ggml_get_rows_smarterquant(const struct ggml_tensor * tensor, const char * src_row_base, float * dst_row_final_target);
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -9726,6 +9733,9 @@ static void ggml_compute_forward_transpose(
 
 // ggml_compute_forward_get_rows
 
+// This is the older, likely problematic definition that will be removed by the other change.
+// The redefinition error indicates a duplicate. The one at line 13243 is the one we want to keep and fix.
+
 static void ggml_compute_forward_get_rows_q(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -9742,7 +9752,9 @@ static void ggml_compute_forward_get_rows_q(
     ggml_to_float_t const dequantize_row_q = ggml_get_type_traits(type)->to_float;
 
     assert(ne0  == nc);
-    assert(ne02 == ne11);
+    assert(ne02 == ne11); // Batch/head dimensions must match or be broadcastable if that's intended.
+    // For SmarterQuant, src0->type can be different from dst->type (which is F32)
+    // The original assertion nb00 == ggml_type_size(type) is fine as it refers to src0.
     assert(nb00 == ggml_type_size(type));
     assert(ggml_nrows(dst) == nr);
 
@@ -9757,16 +9769,23 @@ static void ggml_compute_forward_get_rows_q(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int64_t i = ir0; i < ir1; ++i) {
-        const int64_t i12 = i/(ne11*ne10);
-        const int64_t i11 = (i - i12*ne11*ne10)/ne10;
-        const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
-        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+        const int64_t i12 = i/(ne11*ne10); // dst batch index
+        const int64_t i11 = (i - i12*ne11*ne10)/ne10; // dst head index / dst row index within batch
+        const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10); // dst element index within row / this is the r in dst_data + r * ne0
+        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12); // row index in src0
 
-        GGML_ASSERT(i01 >= 0 && i01 < ne01);
+        GGML_ASSERT(i01 >= 0 && i01 < ne01); // Ensure index is valid for src0's rows
 
-        dequantize_row_q(
-                (const void *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03),
-                     (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3), nc);
+        float * const dst_current_row_ptr = (float *)((char *)dst->data + i10*nb1 + i11*nb2 + i12*nb3);
+        const char * const src_row_ptr    = (char *)src0->data + i01*nb01 + i11*nb02 + i12*nb03; // Assuming src0's higher dim strides match dst's for batch/head
+
+        if (src0->sq_info != NULL && src0->sq_info->enabled) {
+            // SmarterQuant path: dst is already F32, so ggml_get_rows_smarterquant works directly.
+            ggml_get_rows_smarterquant(src0, src_row_ptr, dst_current_row_ptr);
+        } else {
+            // Original quantized path
+            dequantize_row_q(src_row_ptr, dst_current_row_ptr, nc);
+        }
     }
 }
 
@@ -9865,8 +9884,13 @@ static void ggml_compute_forward_get_rows_f32(
     const int64_t nr = ggml_nelements(src1);
 
     assert(ne0  == nc);
-    assert(ne02 == ne11);
-    assert(nb00 == sizeof(float));
+    assert(ne02 == ne11); // Batch/head dimensions must match or be broadcastable.
+    // For SmarterQuant, src0->type might be a quantized type, but dst is F32.
+    // The original nb00 assertion is for the original F32 path.
+    // If SmarterQuant is active, src0->type is not necessarily F32.
+    if (!(src0->sq_info != NULL && src0->sq_info->enabled)) {
+        GGML_ASSERT(nb00 == sizeof(float)); // Original assertion for non-SmarterQuant F32 path
+    }
     assert(ggml_nrows(dst) == nr);
 
     const int ith = params->ith;
@@ -9880,16 +9904,23 @@ static void ggml_compute_forward_get_rows_f32(
     const int ir1 = MIN(ir0 + dr, nr);
 
     for (int64_t i = ir0; i < ir1; ++i) {
-        const int64_t i12 = i/(ne11*ne10);
-        const int64_t i11 = (i - i12*ne11*ne10)/ne10;
-        const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
-        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+        const int64_t i12 = i/(ne11*ne10); // dst batch index
+        const int64_t i11 = (i - i12*ne11*ne10)/ne10; // dst head index / dst row index within batch
+        const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10); // dst element index within row / this is the r in dst_data + r * ne0
+        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12); // row index in src0
 
-        GGML_ASSERT(i01 >= 0 && i01 < ne01);
+        GGML_ASSERT(i01 >= 0 && i01 < ne01); // Ensure index is valid for src0's rows
 
-        ggml_vec_cpy_f32(nc,
-                (float *) ((char *)  dst->data + i10*nb1  + i11*nb2  + i12*nb3),
-                (float *) ((char *) src0->data + i01*nb01 + i11*nb02 + i12*nb03));
+        float * const dst_current_row_ptr = (float *)((char *)dst->data + i10*nb1 + i11*nb2 + i12*nb3);
+        const char * const src_row_ptr    = (char *)src0->data + i01*nb01 + i11*nb02 + i12*nb03; // nb02 and nb03 should align with dst's nb2, nb3 for batch/head strides
+
+        if (src0->sq_info != NULL && src0->sq_info->enabled) {
+            ggml_get_rows_smarterquant(src0, src_row_ptr, dst_current_row_ptr);
+        } else {
+            // Original logic for non-SmarterQuant or when sq_info is null/disabled
+            GGML_ASSERT(src0->type == GGML_TYPE_F32 && "Original path expects F32 src for f32 dst in get_rows");
+            ggml_vec_cpy_f32(nc, dst_current_row_ptr, (const float *)src_row_ptr);
+        }
     }
 }
 
@@ -9899,6 +9930,15 @@ static void ggml_compute_forward_get_rows(
 
     const struct ggml_tensor * src0 = dst->src[0];
 
+    // If SmarterQuant is active for src0 and dst is F32, use the SmarterQuant path via ggml_compute_forward_get_rows_f32.
+    // This handles cases where src0 itself might be F32 but has sq_info (though less common for F32)
+    // or if src0 is quantized and has sq_info.
+    if (dst->type == GGML_TYPE_F32 && src0->sq_info != NULL && src0->sq_info->enabled) {
+        ggml_compute_forward_get_rows_f32(params, dst);
+        return;
+    }
+
+    // Original dispatch logic for non-SmarterQuant cases or when dst is not F32
     switch (src0->type) {
         case GGML_TYPE_Q4_0:
         case GGML_TYPE_Q4_1:
@@ -9923,6 +9963,8 @@ static void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
             {
+                // If we reach here, it means dst is not F32 or sq_info is not enabled,
+                // so use the standard quantized path.
                 ggml_compute_forward_get_rows_q(params, dst);
             } break;
         case GGML_TYPE_F16:
@@ -9933,7 +9975,7 @@ static void ggml_compute_forward_get_rows(
             {
                 ggml_compute_forward_get_rows_bf16(params, dst);
             } break;
-        case GGML_TYPE_F32:
+        case GGML_TYPE_F32: // This case now only handles non-SmarterQuant F32 src or when dst is not F32.
         case GGML_TYPE_I32:
             {
                 ggml_compute_forward_get_rows_f32(params, dst);
@@ -13149,6 +13191,67 @@ static void ggml_compute_forward_unary(
 }
 
 // ggml_compute_forward_get_rel_pos
+
+// SmarterQuant: Custom dequantization and unpermutation for a single row
+// Note: This function assumes src_row_base points to the beginning of the *specific row* being processed.
+// It also assumes that tensor->sq_info and tensor->sq_info->column_permutation are valid.
+void ggml_get_rows_smarterquant(const struct ggml_tensor * tensor, const char * src_row_base, float * dst_row_final_target) {
+    const int64_t ne0 = tensor->ne[0]; // Number of elements in the row (columns)
+
+    // Allocate temporary buffer for the dequantized but still permuted row on the stack
+    float * dequantized_permuted_row = (float *)alloca(ne0 * sizeof(float));
+    if (!dequantized_permuted_row) {
+        // This should ideally not happen for reasonable ne0 sizes with alloca.
+        GGML_ABORT("alloca failed for dequantized_permuted_row in SmarterQuant");
+    }
+
+    size_t current_segment_src_offset = 0; // Byte offset within the current row's data
+    for (int64_t j = 0; j < ne0; j += 256) { // Iterate through 256-element segments
+        const int64_t current_block_ne = MIN(256, ne0 - j);
+        const int block_idx_in_row = j / 256;
+        enum ggml_type segment_type;
+
+        // Determine the quantization type for the current segment
+        if (block_idx_in_row < 4) {
+            segment_type = (enum ggml_type)tensor->sq_info->compression_types[block_idx_in_row];
+        } else {
+            segment_type = (enum ggml_type)tensor->sq_info->compression_types[3];
+        }
+
+        const struct ggml_type_traits * current_qfns = ggml_get_type_traits(segment_type);
+        if (current_qfns->to_float == NULL) {
+            GGML_LOG_ERROR("missing to_float for type %s (segment %lld, block_idx %d)\n", ggml_type_name(segment_type), (long long)j, block_idx_in_row);
+            GGML_ABORT("Unsupported SmarterQuant segment type");
+        }
+
+        if (current_block_ne % current_qfns->blck_size != 0) {
+             GGML_LOG_ERROR("SmarterQuant segment ne %lld not divisible by blck_size %lld for type %s\n", (long long)current_block_ne, (long long)current_qfns->blck_size, ggml_type_name(segment_type));
+             GGML_ABORT("SmarterQuant segment size error");
+        }
+
+        current_qfns->to_float(src_row_base + current_segment_src_offset,
+                              dequantized_permuted_row + j,
+                              current_block_ne);
+
+        // DEBUG PRINT
+        // printf("DEBUG Dequant: row_seg %lld, type %s, elements %lld, first val: %f, src_offset %zu\n", (long long)j/256, ggml_type_name(segment_type), (long long)current_block_ne, dequantized_permuted_row[j], current_segment_src_offset);
+        // END DEBUG
+
+
+        current_segment_src_offset += ggml_row_size(segment_type, current_block_ne);
+    }
+
+    // DEBUG PRINT
+    // printf("DEBUG Dequant: Permuted row (first 8 vals): ");
+    // for(int k=0; k<8 && k < ne0; ++k) printf("%f ", dequantized_permuted_row[k]);
+    // printf("\n");
+    // END DEBUG
+
+    for (int64_t j_perm = 0; j_perm < ne0; ++j_perm) {
+         dst_row_final_target[tensor->sq_info->column_permutation[j_perm]] = dequantized_permuted_row[j_perm];
+    }
+}
+
 
 static void ggml_compute_forward_get_rel_pos_f16(
         const struct ggml_compute_params * params,

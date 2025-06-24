@@ -384,6 +384,9 @@ struct llama_model::impl {
     // the model memory buffers for the tensor data
     std::vector<ggml_backend_buffer_ptr> bufs;
 
+    // SmarterQuant configuration loaded from JSON and GGUF metadata
+    SmarterQuantConfig smarter_quant_config;
+
     buft_list_t cpu_buft_list;
     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
 
@@ -400,7 +403,17 @@ struct llama_model::impl {
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
 }
 
-llama_model::~llama_model() {}
+llama_model::~llama_model() {
+    // Deallocate column_permutation arrays in SmarterQuantConfig
+    if (pimpl && !pimpl->smarter_quant_config.empty()) {
+        for (auto & pair : pimpl->smarter_quant_config) {
+            if (pair.second.column_permutation != nullptr) {
+                delete[] pair.second.column_permutation;
+                pair.second.column_permutation = nullptr; // Good practice
+            }
+        }
+    }
+}
 
 void llama_model::load_stats(llama_model_loader & ml) {
     pimpl->n_elements = ml.n_elements;
@@ -1596,14 +1609,33 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
             ggml_context * ctx = ctx_for_buft(buft);
 
+            ggml_tensor * created_tensor = nullptr;
             // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
             if (flags & TENSOR_DUPLICATED) {
                 ggml_tensor * t = ggml_get_tensor(ctx, tn.str().c_str());
                 if (t) {
-                    return t;
+                    // Duplicated tensor already exists in the correct context
+                    created_tensor = t;
                 }
             }
-            return ml.create_tensor(ctx, tn, ne, flags);
+            if (created_tensor == nullptr) {
+                created_tensor = ml.create_tensor(ctx, tn, ne, flags);
+            }
+
+            if (created_tensor) {
+                // Check and assign SmarterQuant info
+                auto it_sq = sq_config.find(ggml_get_name(created_tensor)); // Corrected: remove .tensor_infos
+                if (it_sq != sq_config.end()) { // Corrected: remove .tensor_infos
+                    if (it_sq->second.enabled) {
+                        created_tensor->sq_info = &it_sq->second;
+                    } else {
+                        created_tensor->sq_info = nullptr; // Explicitly nullify if not enabled
+                    }
+                } else {
+                    created_tensor->sq_info = nullptr; // No SQ info for this tensor
+                }
+            }
+            return created_tensor;
         };
 
         layers.resize(n_layer);

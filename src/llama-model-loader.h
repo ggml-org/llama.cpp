@@ -5,6 +5,7 @@
 #include "llama-impl.h"
 #include "llama-arch.h"
 #include "llama-mmap.h"
+#include "llama-quant.h" // For SmarterQuantConfig
 
 #include "ggml-cpp.h"
 
@@ -79,6 +80,8 @@ struct llama_model_loader {
 
     std::map<std::string, struct llama_tensor_weight, weight_name_comparer> weights_map;
     std::unordered_map<std::string, struct llama_model_kv_override> kv_overrides;
+
+    SmarterQuantConfig gguf_smarter_quant_config; // For SQ info loaded from GGUF
 
     gguf_context_ptr meta;
     std::vector<ggml_context_ptr> contexts;

@@ -59,3 +59,6 @@ std::string llama_format_tensor_shape(const std::vector<int64_t> & ne);
 std::string llama_format_tensor_shape(const struct ggml_tensor * t);
 
 std::string gguf_kv_to_str(const struct gguf_context * ctx_gguf, int i);
+
+// Function from llama-quant.cpp
+void llama_model_quantize_impl(const std::string & fname_inp, const std::string & fname_out, const struct llama_model_quantize_params * params);

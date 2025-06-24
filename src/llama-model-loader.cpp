@@ -508,7 +508,17 @@ llama_model_loader::llama_model_loader(
                     try {
                         nlohmann::json perm_json = nlohmann::json::parse(perm_str_c);
                         if (perm_json.is_array()) {
-                            sq_info.column_permutation = perm_json.get<std::vector<int>>();
+                            std::vector<int32_t> temp_perm = perm_json.get<std::vector<int32_t>>();
+                            if (!temp_perm.empty()) {
+                                sq_info.n_cols_for_permutation = temp_perm.size();
+                                sq_info.column_permutation = new (std::nothrow) int32_t[sq_info.n_cols_for_permutation];
+                                if (sq_info.column_permutation) {
+                                    std::copy(temp_perm.begin(), temp_perm.end(), sq_info.column_permutation);
+                                } else {
+                                    LLAMA_LOG_ERROR("%s: Failed to allocate GGUF perm for '%s'.\n", __func__, tensor_name.c_str());
+                                    sq_info.n_cols_for_permutation = 0;
+                                }
+                            }
                         } else { LLAMA_LOG_WARN("%s: GGUF perm metadata for '%s' not an array.\n", __func__, tensor_name.c_str()); }
                     } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF perm for '%s': %s\n", __func__, tensor_name.c_str(), e.what()); }
                 }
@@ -520,9 +530,16 @@ llama_model_loader::llama_model_loader(
                     try {
                         nlohmann::json types_json = nlohmann::json::parse(types_str_c);
                         if (types_json.is_array() && types_json.size() == 4) {
-                            sq_info.compression_types = types_json.get<std::vector<int8_t>>();
+                            std::vector<int8_t> temp_types = types_json.get<std::vector<int8_t>>();
+                            for(size_t i=0; i<4; ++i) sq_info.compression_types[i] = temp_types[i];
                         } else { LLAMA_LOG_WARN("%s: GGUF block_types metadata for '%s' not an array of 4.\n", __func__, tensor_name.c_str()); }
                     } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF block_types for '%s': %s\n", __func__, tensor_name.c_str(), e.what()); }
+                }
+                // After parsing, assign to the main config map if it was enabled and valid
+                if (sq_info.enabled) {
+                    // This will copy sq_info; if column_permutation was allocated, its pointer is copied.
+                    // The llama_model destructor is responsible for freeing this.
+                    this->gguf_smarter_quant_config[tensor_name] = sq_info;
                 }
             }
         }
@@ -610,7 +627,17 @@ llama_model_loader::llama_model_loader(
                             try {
                                 nlohmann::json perm_json = nlohmann::json::parse(perm_str_c);
                                 if (perm_json.is_array()) {
-                                    sq_info.column_permutation = perm_json.get<std::vector<int>>();
+                                    std::vector<int32_t> temp_perm = perm_json.get<std::vector<int32_t>>();
+                                    if (!temp_perm.empty()) {
+                                        sq_info.n_cols_for_permutation = temp_perm.size();
+                                        sq_info.column_permutation = new (std::nothrow) int32_t[sq_info.n_cols_for_permutation];
+                                        if (sq_info.column_permutation) {
+                                            std::copy(temp_perm.begin(), temp_perm.end(), sq_info.column_permutation);
+                                        } else {
+                                            LLAMA_LOG_ERROR("%s: Failed to allocate GGUF perm for '%s' (split %d).\n", __func__, tensor_name.c_str(), idx);
+                                            sq_info.n_cols_for_permutation = 0;
+                                        }
+                                    }
                                 } else { LLAMA_LOG_WARN("%s: GGUF perm metadata for '%s' (split %d) not an array.\n", __func__, tensor_name.c_str(), idx); }
                             } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF perm for '%s' (split %d): %s\n", __func__, tensor_name.c_str(), idx, e.what()); }
                         }
@@ -621,9 +648,14 @@ llama_model_loader::llama_model_loader(
                             try {
                                 nlohmann::json types_json = nlohmann::json::parse(types_str_c);
                                 if (types_json.is_array() && types_json.size() == 4) {
-                                    sq_info.compression_types = types_json.get<std::vector<int8_t>>();
+                                    std::vector<int8_t> temp_types = types_json.get<std::vector<int8_t>>();
+                                    for(size_t i=0; i<4; ++i) sq_info.compression_types[i] = temp_types[i];
                                 } else { LLAMA_LOG_WARN("%s: GGUF block_types for '%s' (split %d) not an array of 4.\n", __func__, tensor_name.c_str(), idx); }
                             } catch (const std::exception& e) { LLAMA_LOG_WARN("%s: Failed to parse GGUF block_types for '%s' (split %d): %s\n", __func__, tensor_name.c_str(), idx, e.what()); }
+                        }
+                        // After parsing, assign to the main config map if it was enabled and valid
+                        if (sq_info.enabled) {
+                            this->gguf_smarter_quant_config[tensor_name] = sq_info;
                         }
                     }
                 }

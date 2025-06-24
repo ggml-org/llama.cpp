@@ -347,6 +347,12 @@ extern "C" {
     struct ggml_context;
     struct ggml_cgraph;
 
+    // Forward declare SmarterQuantTensorInfo
+    // Actual definition is in llama-quant.h, which is not included here to keep ggml.h independent.
+    // ggml_tensor will store a void pointer to be cast to SmarterQuantTensorInfo * when needed.
+    // #include "llama-quant.h" // No longer needed here, definition moved or forward declared
+#include "ggml-smarterquant-types.h" // Contains definition for SmarterQuantTensorInfo
+
     // NOTE: always add types at the end of the enum to keep backward compatibility
     enum ggml_type {
         GGML_TYPE_F32     = 0,
@@ -605,8 +611,9 @@ extern "C" {
         char name[GGML_MAX_NAME];
 
         void * extra; // extra things e.g. for ggml-cuda.cu
+        struct SmarterQuantTensorInfo * sq_info; // For SmarterQuant per-block quantization info
 
-        char padding[8];
+        char padding[16]; // Adjusted padding for alignment
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
