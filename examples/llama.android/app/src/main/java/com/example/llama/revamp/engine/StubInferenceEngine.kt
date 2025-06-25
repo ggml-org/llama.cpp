@@ -16,15 +16,11 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import org.jetbrains.annotations.TestOnly
-import org.jetbrains.annotations.VisibleForTesting
 import javax.inject.Singleton
 
 /**
  * A stub [InferenceEngine] for agile development & testing
  */
-@VisibleForTesting
-@TestOnly
 @Singleton
 class StubInferenceEngine : InferenceEngine {
     companion object {

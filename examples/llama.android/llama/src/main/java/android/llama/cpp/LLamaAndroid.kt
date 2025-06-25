@@ -1,7 +1,6 @@
 package android.llama.cpp
 
 import android.llama.cpp.InferenceEngine.State
-import android.llama.cpp.LLamaAndroid.Companion.instance
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +36,35 @@ import java.io.File
  *
  * @see llama-android.cpp for the native implementation details
  */
-class LLamaAndroid private constructor() : InferenceEngine {
+class LLamaAndroid private constructor(private val tier: LLamaTier) : InferenceEngine {
+
+    companion object {
+        private val TAG = LLamaAndroid::class.java.simpleName
+
+        private var initialized = false
+
+        /**
+         * Create LLamaAndroid instance with specific tier
+         */
+        internal fun createWithTier(tier: LLamaTier): LLamaAndroid? {
+            if (initialized) {
+                Log.w(TAG, "LLamaAndroid already initialized")
+                return null
+            }
+
+            try {
+                Log.i(TAG, "Instantiating LLamaAndroid w/ ${tier.libraryName}")
+                val instance = LLamaAndroid(tier)
+                initialized = true
+                return instance
+
+            } catch (e: UnsatisfiedLinkError) {
+                Log.e(TAG, "Failed to load ${tier.libraryName}", e)
+                return null
+            }
+        }
+    }
+
     /**
      * JNI methods
      * @see llama-android.cpp
@@ -74,13 +101,14 @@ class LLamaAndroid private constructor() : InferenceEngine {
                 check(_state.value is State.Uninitialized) {
                     "Cannot load native library in ${_state.value.javaClass.simpleName}!"
                 }
-
                 _state.value = State.Initializing
-                Log.i(TAG, "Loading native library $LIB_LLAMA_ANDROID")
-                System.loadLibrary(LIB_LLAMA_ANDROID)
+                Log.i(TAG, "Loading native library for $tier")
+
+                System.loadLibrary(tier.libraryName)
                 init()
                 _state.value = State.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
+
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load native library", e)
                 throw e
@@ -234,16 +262,5 @@ class LLamaAndroid private constructor() : InferenceEngine {
             is State.Initialized -> shutdown()
             else -> { unload(); shutdown() }
         }
-    }
-
-    companion object {
-        private val TAG = LLamaAndroid::class.simpleName
-
-        // TODO-han.yin: replace with dynamic loader
-        private const val LIB_LLAMA_ANDROID = "llama_android_t3"
-
-        // Enforce only one instance of Llm.
-        private val _instance: LLamaAndroid = LLamaAndroid()
-        fun instance(): LLamaAndroid = _instance
     }
 }

@@ -1,6 +1,8 @@
 package com.example.llama.legacy
 
+import android.content.Context
 import android.llama.cpp.LLamaAndroid
+import android.llama.cpp.LLamaLibraryLoader
 import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -10,15 +12,16 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 
-class LegacyViewModel(
-    private val llamaAndroid: LLamaAndroid = LLamaAndroid.instance()
-): ViewModel() {
+class LegacyViewModel(context: Context): ViewModel() {
     companion object {
+        private val tag = LegacyViewModel::class.java.simpleName
+
         @JvmStatic
         private val NanosPerSecond = 1_000_000_000.0
     }
 
-    private val tag: String? = this::class.simpleName
+    val llamaAndroid: LLamaAndroid = LLamaLibraryLoader.createInstance(context)
+        ?: throw InstantiationException("Cannot instantiate LlamaAndroid!")
 
     var messages by mutableStateOf(listOf("Initializing..."))
         private set
