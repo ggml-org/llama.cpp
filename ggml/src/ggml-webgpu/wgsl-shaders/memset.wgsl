@@ -1,4 +1,3 @@
-// memset.wgsl
 @group(0) @binding(0)
 var<storage, read_write> output_buffer: array<u32>;
 
@@ -12,15 +11,15 @@ struct Params {
 var<uniform> params: Params;
 
 override wg_size: u32;
-override elems_per_thread: u32;
+override bytes_per_thread: u32;
 
 @compute @workgroup_size(wg_size)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x * 4u;
+    let i = gid.x * bytes_per_thread;
     let start = params.offset;
     let end = params.offset + params.size;
 
-    for (var j: u32 = 0u; j < elems_per_thread; j = j + 1u) {
+    for (var j: u32 = 0u; j < bytes_per_thread; j = j + 1u) {
         let byte_index = start + i + j;
         if (byte_index + 4u <= end) {
             output_buffer[(byte_index >> 2u)] = params.value;
