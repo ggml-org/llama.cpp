@@ -8229,11 +8229,13 @@ struct llm_build_plamo2 : public llm_graph_context {
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * residual = inpL;
 
-            ggml_graph_add_node(gf, model.layers[il].attn_norm);
-            cb(model.layers[il].attn_norm, "attn_norm", il);
+            // ggml_graph_add_node(gf, model.layers[il].attn_norm);
+            // cb(model.layers[il].attn_norm, "attn_norm", il);
 
             // pre_mixer_norm
-            cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+            // cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+            cur = ggml_rms_norm(ctx0, inpL, hparams.f_norm_rms_eps);
+            cur = ggml_mul(ctx0, cur, model.layers[il].attn_norm);
             cb(cur, "attn_pre_norm", il);
 
             // check if this layer is Mamba or Attention
@@ -8408,7 +8410,6 @@ private:
         const int64_t d_inner = hparams.ssm_d_inner;
         const int64_t d_state = hparams.ssm_d_state;
         const int64_t n_seqs  = ubatch.n_seqs;
-        const float norm_rms_eps = hparams.f_norm_rms_eps;
 
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
@@ -8481,17 +8482,17 @@ private:
 
             // split into dt, B, C
             const int64_t dt_dim = std::max(64, int(hparams.n_embd / 16));
-            ggml_tensor * B  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], 0);
-            ggml_tensor * C  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*d_state);
-            ggml_tensor * dt = ggml_view_3d(ctx0, x_bcdt, dt_dim, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*(2*d_state));
+            ggml_tensor * dt = ggml_view_3d(ctx0, x_bcdt, dt_dim, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], 0);
+            ggml_tensor * C  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*dt_dim);
+            ggml_tensor * B  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*(dt_dim + d_state));
             cb(B, "mamba_B_raw", il);
             cb(C, "mamba_C_raw", il);
             cb(dt, "mamba_dt_raw", il);
 
             // Apply RMS norm to dt, B, C (PLaMo-2 specific)
-            B = ggml_rms_norm(ctx0, B, norm_rms_eps);
-            C = ggml_rms_norm(ctx0, C, norm_rms_eps);
-            dt = ggml_rms_norm(ctx0, dt, norm_rms_eps);
+            B = build_norm(B, model.layers[il].ssm_b_norm, NULL, LLM_NORM_RMS, il);
+            C = build_norm(C, model.layers[il].ssm_c_norm, NULL, LLM_NORM_RMS, il);
+            dt = build_norm(dt, model.layers[il].ssm_dt_norm, NULL, LLM_NORM_RMS, il);
             cb(B, "mamba_B_normed", il);
             cb(C, "mamba_C_normed", il);
             cb(dt, "mamba_dt_normed", il);

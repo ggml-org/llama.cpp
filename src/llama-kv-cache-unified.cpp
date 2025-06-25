@@ -1770,7 +1770,7 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t cell
 llama_kv_cache_unified_context::llama_kv_cache_unified_context(llama_memory_status status) : status(status) {}
 
 llama_kv_cache_unified_context::llama_kv_cache_unified_context(
-        llama_kv_cache_unified * kv) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv) {
+        llama_kv_cache_unified * kv) : kv(kv), status(LLAMA_MEMORY_STATUS_SUCCESS) {
     n_kv = kv->get_size();
     head = 0;
 }
@@ -1779,7 +1779,7 @@ llama_kv_cache_unified_context::llama_kv_cache_unified_context(
         llama_kv_cache_unified * kv,
         llama_context * lctx,
         bool do_shift,
-        defrag_info dinfo) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), dinfo(std::move(dinfo)) {
+        defrag_info dinfo) : kv(kv), status(LLAMA_MEMORY_STATUS_SUCCESS), lctx(lctx), do_shift(do_shift), dinfo(std::move(dinfo)) {
     if (!do_shift && this->dinfo.empty()) {
         status = LLAMA_MEMORY_STATUS_NO_UPDATE;
     }
@@ -1788,7 +1788,7 @@ llama_kv_cache_unified_context::llama_kv_cache_unified_context(
 llama_kv_cache_unified_context::llama_kv_cache_unified_context(
         llama_kv_cache_unified * kv,
         llama_kv_cache_unified::ubatch_heads heads,
-        std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), heads(std::move(heads)), ubatches(std::move(ubatches)) {
+        std::vector<llama_ubatch> ubatches) : kv(kv), status(LLAMA_MEMORY_STATUS_SUCCESS), heads(std::move(heads)), ubatches(std::move(ubatches)) {
 }
 
 llama_kv_cache_unified_context::~llama_kv_cache_unified_context() = default;
