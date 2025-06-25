@@ -909,13 +909,6 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
         tile_A A;
         load_ldmatrix(A, x_qs + i0*MMQ_MMA_TILE_X_K_Q8_1 + k0, MMQ_MMA_TILE_X_K_Q8_1);
 
-        float2 dmA[tile_C::ne];
-#pragma unroll
-        for (int l = 0; l < tile_C::ne; ++l) {
-            const int i = i0 + tile_C::get_i(l);
-            dmA[l] = __half22float2(x_dm[i*MMQ_MMA_TILE_X_K_Q8_1 + k0/QI8_1]);
-        }
-
 #pragma unroll
         for (int j0 = 0; j0 < mmq_x; j0 += tile_C::J) {
             tile_B B;
@@ -929,8 +922,9 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             mma(C, A, B);
 
             for (int l = 0; l < tile_C::ne; ++l) {
-                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA[l].x*dsB.x*C.x[l];
-                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA[l].y*dsB.y;
+                float2 dmA = __half22float2(x_dm[(i0 + tile_C::get_i(l))*MMQ_MMA_TILE_X_K_Q8_1 + k0/QI8_1]);
+                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA.x*dsB.x*C.x[l];
+                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA.y*dsB.y;
             }
         }
     }
@@ -2081,24 +2075,12 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
 
     const int i0 = threadIdx.y * tile_A::I;
 
-    int    scA[tile_C::ne][2];
-    float   dA[tile_C::ne];
-
-#pragma unroll
-    for (int l = 0; l < tile_C::ne; ++l) {
-        const int i = i0 + tile_C::get_i(l);
-        scA[l][0] = x_sc[i*MMQ_MMA_TILE_X_K_Q6_K + k00/16 + 0];
-        scA[l][1] = x_sc[i*MMQ_MMA_TILE_X_K_Q6_K + k00/16 + 1];
-         dA[l]    = x_df[i*MMQ_MMA_TILE_X_K_Q6_K];
-    }
-
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
         
         tile_A A;
         load_ldmatrix(A, x_qs + i0*MMQ_MMA_TILE_X_K_Q6_K + k0, MMQ_MMA_TILE_X_K_Q6_K);
 
-#pragma unroll
         for (int j0 = 0; j0 < mmq_x; j0 += tile_C::J) {
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
@@ -2111,8 +2093,8 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
             mma(C, A, B);
 
             for (int l = 0; l < tile_C::ne; ++l) {
-                const int8_t * sc = (const int8_t *) scA[l];
-                sum[(j0/tile_C::J)*tile_C::ne + l] += C.x[l] * sc[k01/4] * dA[l] * dB;
+                const int8_t * sc = (const int8_t *) (x_sc + (i0 + tile_C::get_i(l))*MMQ_MMA_TILE_X_K_Q6_K + k00/16);
+                sum[(j0/tile_C::J)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[(i0 + tile_C::get_i(l))*MMQ_MMA_TILE_X_K_Q6_K] * dB;
             }
         }
     }
@@ -2858,9 +2840,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             const int * by0 = y + ncols_y*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + 0*sizeof(block_q8_1_mmq)/sizeof(int));
 #pragma unroll
             for (int l0 = 0; l0 < mmq_x*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                int l = (l0 + threadIdx.y*warp_size + threadIdx.x) % (mmq_x*MMQ_TILE_Y_K);
 
-                if (l < mmq_x*MMQ_TILE_Y_K) tile_y[l] = by0[l];
+                tile_y[l] = by0[l];
             }
         }
 
@@ -2874,9 +2856,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             const int * by0 = y + ncols_y*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + 1*sizeof(block_q8_1_mmq)/sizeof(int));
 #pragma unroll
             for (int l0 = 0; l0 < mmq_x*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
-                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
+                int l = (l0 + threadIdx.y*warp_size + threadIdx.x) % (mmq_x*MMQ_TILE_Y_K);
 
-                if (l < mmq_x*MMQ_TILE_Y_K) tile_y[l] = by0[l];
+                tile_y[l] = by0[l];
             }
         }
 
@@ -2899,9 +2881,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 template <ggml_type type, int mmq_x, int warp_size, bool need_check>
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
-#if defined(AMD_MMA_AVAILABLE)
-    __launch_bounds__(warp_size*get_mmq_nwarps_device(type), 1)
-#elif defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA2) || defined(CDNA1) || defined(GCN)
+#if defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA3) || defined(CDNA2) || defined(CDNA1) || defined(GCN)
     __launch_bounds__(warp_size*get_mmq_nwarps_device(type), 2)
 #endif // defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA) || defined(GCN)
 #else
