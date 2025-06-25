@@ -1,5 +1,4 @@
 #include "llama-context.h"
-#include <arm_bf16.h>
 
 #include "llama-impl.h"
 #include "llama-batch.h"
