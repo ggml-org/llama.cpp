@@ -121,7 +121,39 @@ export default function ChatScreen() {
     scrollToBottom(false, 1);
   }, [currConvId]);
 
-  const onChunk: CallbackGeneratedChunk = (currLeafNodeId?: Message['id']) => {
+  // Enhanced onChunk callback with error handling
+  const onChunk: CallbackGeneratedChunk = (currLeafNodeId?: Message['id'], error?: Error) => {
+    if (error) {
+      // Handle streaming error - preserve partial content and show error indicator
+      console.error('Streaming error occurred:', error);
+      
+      // Find the current pending message and add error indicator
+      const currentPendingMsg = pendingMessages[currConvId ?? ''];
+      if (currentPendingMsg && currentPendingMsg.content !== null) {
+        // The partial content is already preserved in the pending message
+        // We just need to add an error indicator to the UI
+        toast.error('Connection interrupted. Partial response preserved.', {
+          duration: 4000,
+          style: {
+            background: '#fff3cd',
+            color: '#856404',
+            border: '1px solid #ffeaa7',
+          },
+        });
+      } else {
+        // No partial content was generated
+        toast.error('Connection failed. Please try again.', {
+          duration: 4000,
+          style: {
+            background: '#f8d7da',
+            color: '#721c24',
+            border: '1px solid #f5c6cb',
+          },
+        });
+      }
+      return;
+    }
+    
     if (currLeafNodeId) {
       setCurrNodeId(currLeafNodeId);
     }
@@ -139,18 +171,27 @@ export default function ChatScreen() {
     setCurrNodeId(-1);
     // get the last message node
     const lastMsgNodeId = messages.at(-1)?.msg.id ?? null;
-    if (
-      !(await sendMessage(
+    
+    try {
+      const success = await sendMessage(
         currConvId,
         lastMsgNodeId,
         lastInpMsg,
         extraContext.items,
         onChunk
-      ))
-    ) {
+      );
+      
+      if (!success) {
+        // restore the input message if failed
+        textarea.setValue(lastInpMsg);
+      }
+    } catch (error) {
+      console.error('Send message error:', error);
       // restore the input message if failed
       textarea.setValue(lastInpMsg);
+      // The onChunk callback should have already handled the error UI
     }
+    
     // OK
     extraContext.clearItems();
   };
@@ -162,13 +203,20 @@ export default function ChatScreen() {
     if (!viewingChat) return;
     setCurrNodeId(msg.id);
     scrollToBottom(false);
-    await replaceMessageAndGenerate(
-      viewingChat.conv.id,
-      msg.parent,
-      content,
-      msg.extra,
-      onChunk
-    );
+    
+    try {
+      await replaceMessageAndGenerate(
+        viewingChat.conv.id,
+        msg.parent,
+        content,
+        msg.extra,
+        onChunk
+      );
+    } catch (error) {
+      console.error('Edit message error:', error);
+      // The onChunk callback should handle the error UI
+    }
+    
     setCurrNodeId(-1);
     scrollToBottom(false);
   };
@@ -177,13 +225,20 @@ export default function ChatScreen() {
     if (!viewingChat) return;
     setCurrNodeId(msg.parent);
     scrollToBottom(false);
-    await replaceMessageAndGenerate(
-      viewingChat.conv.id,
-      msg.parent,
-      null,
-      msg.extra,
-      onChunk
-    );
+    
+    try {
+      await replaceMessageAndGenerate(
+        viewingChat.conv.id,
+        msg.parent,
+        null,
+        msg.extra,
+        onChunk
+      );
+    } catch (error) {
+      console.error('Regenerate message error:', error);
+      // The onChunk callback should handle the error UI
+    }
+    
     setCurrNodeId(-1);
     scrollToBottom(false);
   };
