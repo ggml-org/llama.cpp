@@ -8211,35 +8211,67 @@ struct llm_build_plamo : public llm_graph_context {
 };
 
 struct llm_build_plamo2 : public llm_graph_context {
-    const llama_model & model;
-    ggml_cgraph * gf;
-
-    llm_build_plamo2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params), model(model), gf(gf) {
+    llm_build_plamo2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
         ggml_tensor * cur;
-        ggml_tensor * inpL;
 
         // key variables used in PLaMo-2 attention
         // const int64_t n_embd_head = hparams.n_embd_head_v;
         // ggml_tensor * inp_pos = build_inp_pos();
 
         // {n_embd, n_tokens}
-        inpL = build_inp_embd(model.tok_embd);
+        ggml_tensor * inpL = build_inp_embd(model.tok_embd);
+        cb(inpL, "embedding_output", -1);
 
         // ensure the memory context is hybrid
-        auto * mctx_hybrid = dynamic_cast<const llama_memory_hybrid_context *>(mctx);
+        const auto * mctx_hybrid = dynamic_cast<const llama_memory_hybrid_context *>(mctx);
         GGML_ASSERT(mctx_hybrid != nullptr);
 
         for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * residual = inpL;
+
+            ggml_graph_add_node(gf, model.layers[il].attn_norm);
+            cb(model.layers[il].attn_norm, "attn_norm", il);
+
+            // pre_mixer_norm
+            cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_pre_norm", il);
+
             // check if this layer is Mamba or Attention
             bool is_mamba_layer = hparams.is_recurrent(il);
 
             if (is_mamba_layer) {
                 // PLaMo-2 Mamba layer
-                cur = build_plamo2_mamba_layer(inpL, il, mctx_hybrid->get_recr(), ubatch);
+                cur = build_plamo2_mamba_layer(model, gf, cur, il, mctx_hybrid->get_recr(), ubatch);
             } else {
                 // PLaMo-2 Attention layer
-                cur = build_plamo2_attn_layer(inpL, il, mctx_hybrid->get_attn());
+                cur = build_plamo2_attn_layer(model, gf, cur, il, mctx_hybrid->get_attn());
             }
+
+            // post_mixer_norm
+            cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_post_norm", il);
+
+            // residual connection
+            cur = ggml_add(ctx0, cur, residual);
+            cb(cur, "attn_residual", il);
+
+            // pre-ffn norm
+            cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "ffn_pre_norm", il);
+
+            // feed-forward network
+            {
+                cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
+                            model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+            }
+            cb(cur, "ffn_out", il);
+
+            // post ffn norm
+            cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "ffn_post_norm", il);
+
+            // residual connection
+            cur = ggml_add(ctx0, cur, residual);
 
             inpL = cur;
         }
@@ -8264,6 +8296,8 @@ struct llm_build_plamo2 : public llm_graph_context {
 
 private:
     ggml_tensor * build_plamo2_attn_layer(
+            const llama_model & model,
+            ggml_cgraph * gf,
             ggml_tensor * inpL,
             int il,
             const llama_kv_cache_unified_context * attn_ctx) {
@@ -8274,10 +8308,6 @@ private:
         // attention layer specific variables
         // const int64_t n_embd_head = hparams.n_embd_head_v;
         ggml_tensor * inp_pos = build_inp_pos();
-
-        // norm
-        cur = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "attn_norm", il);
 
         // self-attention
         {
@@ -8363,30 +8393,12 @@ private:
         cur = ggml_add(ctx0, cur, inpSA);
         cb(cur, "attn_out", il);
 
-        ggml_tensor * inpFF = cur;
-
-        // post attention norm
-        cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "attn_post_norm", il);
-
-        // feed-forward network
-        {
-            cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                           model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
-        }
-
-        // add the input
-        cur = ggml_add(ctx0, cur, inpFF);
-        cb(cur, "ffn_out", il);
-
-        // post ffn norm
-        cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
-        cb(cur, "ffn_post_norm", il);
-
         return cur;
     }
 
     ggml_tensor * build_plamo2_mamba_layer(
+            const llama_model & model,
+            ggml_cgraph * gf,
             ggml_tensor * inpL,
             int il,
             const llama_memory_recurrent_context * recr_ctx,
@@ -8404,10 +8416,10 @@ private:
         GGML_ASSERT(ubatch.equal_seqs);
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
+        // Get conv and ssm states
         ggml_tensor * conv_states_all = recr_ctx->get_r_l(il);
         ggml_tensor * ssm_states_all  = recr_ctx->get_s_l(il);
 
-        // Get conv and ssm states
         const auto kv_head = recr_ctx->get_head();
 
         ggml_tensor * conv = ggml_view_1d(ctx0, conv_states_all,
@@ -8422,14 +8434,18 @@ private:
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
         ggml_tensor * cur = ggml_reshape_3d(ctx0, inpL, inpL->ne[0], n_seq_tokens, n_seqs);
+        cb(cur, "mamba_input", il);
 
         // in_proj: {n_embd, 2*d_inner} @ {n_embd, n_seq_tokens, n_seqs} => {2*d_inner, n_seq_tokens, n_seqs}
         ggml_tensor * zx = build_lora_mm(model.layers[il].ssm_in, cur);
+        cb(zx, "mamba_in_proj", il);
 
         // split into z and x
         // => {d_inner, n_seq_tokens, n_seqs}
         ggml_tensor * x = ggml_view_3d(ctx0, zx, d_inner, zx->ne[1], zx->ne[2], zx->nb[1], zx->nb[2], 0);
         ggml_tensor * z = ggml_view_3d(ctx0, zx, d_inner, zx->ne[1], zx->ne[2], zx->nb[1], zx->nb[2], d_inner*ggml_element_size(zx));
+        cb(x, "mamba_x_split", il);
+        cb(z, "mamba_z_split", il);
 
         // conv1d
         {
@@ -8448,42 +8464,55 @@ private:
 
             // 1D convolution
             x = ggml_ssm_conv(ctx0, conv_x, model.layers[il].ssm_conv1d);
+            cb(x, "mamba_conv1d", il);
 
             // bias
             // x = ggml_add(ctx0, x, model.layers[il].ssm_conv1d_b);  // PLaMo-2 does not use bias here
 
             x = ggml_silu(ctx0, x);
+            cb(x, "mamba_conv1d_silu", il);
         }
 
         // SSM
         {
             // bcdt_proj: {d_inner, dt_rank + 2*d_state} @ {d_inner, n_seq_tokens, n_seqs} => {dt_rank + 2*d_state, n_seq_tokens, n_seqs}
             ggml_tensor * x_bcdt = build_lora_mm(model.layers[il].ssm_x, x);
+            cb(x_bcdt, "mamba_bcdt_proj", il);
 
             // split into dt, B, C
             const int64_t dt_dim = std::max(64, int(hparams.n_embd / 16));
             ggml_tensor * B  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], 0);
             ggml_tensor * C  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*d_state);
             ggml_tensor * dt = ggml_view_3d(ctx0, x_bcdt, dt_dim, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*(2*d_state));
+            cb(B, "mamba_B_raw", il);
+            cb(C, "mamba_C_raw", il);
+            cb(dt, "mamba_dt_raw", il);
 
             // Apply RMS norm to dt, B, C (PLaMo-2 specific)
             B = ggml_rms_norm(ctx0, B, norm_rms_eps);
             C = ggml_rms_norm(ctx0, C, norm_rms_eps);
             dt = ggml_rms_norm(ctx0, dt, norm_rms_eps);
+            cb(B, "mamba_B_normed", il);
+            cb(C, "mamba_C_normed", il);
+            cb(dt, "mamba_dt_normed", il);
 
             // dt_proj: {dt_rank, d_inner} @ {dt_rank, n_seq_tokens, n_seqs} => {d_inner, n_seq_tokens, n_seqs}
             dt = build_lora_mm(model.layers[il].ssm_dt, dt);
             dt = ggml_add(ctx0, dt, model.layers[il].ssm_dt_b);
+            cb(dt, "mamba_dt_proj", il);
 
             // This is corresponding to the broadcast_to operation in ssd_update_state() of the originall code
             ggml_tensor * dt_expanded = ggml_new_tensor_2d(ctx0, dt->type, d_inner, n_seq_tokens);
             dt = ggml_repeat(ctx0, dt, dt_expanded);
             ggml_tensor * A_expanded = ggml_new_tensor_2d(ctx0, model.layers[il].ssm_a->type, d_state, d_inner);
             A_expanded = ggml_repeat(ctx0, model.layers[il].ssm_a, A_expanded);
+            cb(dt, "mamba_dt_expanded", il);
+            cb(A_expanded, "mamba_A_expanded", il);
 
             // SSM scan operation
             // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
             ggml_tensor * y_ssm = ggml_ssm_scan(ctx0, ssm, x, dt, A_expanded, B, C);
+            cb(y_ssm, "mamba_ssm_scan", il);
 
             // store last states
             ggml_build_forward_expand(gf,
@@ -8493,14 +8522,20 @@ private:
                             kv_head*d_state*d_inner*ggml_element_size(ssm_states_all))));
 
             ggml_tensor * y = ggml_view_3d(ctx0, y_ssm, d_inner, n_seq_tokens, n_seqs, x->nb[1], x->nb[2], 0);
+            cb(y, "mamba_y_view", il);
 
             // Add D parameter and apply gating with z
             // {d_inner, n_seq_tokens, n_seqs} * {d_inner} => {d_inner, n_seq_tokens, n_seqs}
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
-            y = ggml_mul(ctx0, y, ggml_silu(ctx0, ggml_cont(ctx0, z)));
+            cb(y, "mamba_y_with_D", il);
+            ggml_tensor * z_silu = ggml_silu(ctx0, ggml_cont(ctx0, z));
+            cb(z_silu, "mamba_z_silu", il);
+            y = ggml_mul(ctx0, y, z_silu);
+            cb(y, "mamba_y_gated", il);
 
             // out_proj: {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
             cur = build_lora_mm(model.layers[il].ssm_out, y);
+            cb(cur, "mamba_out_proj", il);
         }
 
         // {n_embd, n_seq_tokens, n_seqs} => {n_embd, n_tokens}
