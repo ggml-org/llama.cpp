@@ -9,91 +9,91 @@ class TensorNameMap:
     mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
         # Token embeddings
         MODEL_TENSOR.TOKEN_EMBD: (
-            "gpt_neox.embed_in",                        # gptneox
-            "transformer.wte",                          # gpt2 gpt-j mpt refact qwen dbrx jais exaone
-            "transformer.word_embeddings",              # falcon
-            "word_embeddings",                          # bloom
-            "model.embed_tokens",                       # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 plamo2
-            "tok_embeddings",                           # llama-pth
-            "embeddings.word_embeddings",               # bert nomic-bert
-            "language_model.embedding.word_embeddings", # persimmon
-            "wte",                                      # gpt2
-            "transformer.embd.wte",                     # phi2
-            "model.tok_embeddings",                     # internlm2
-            "model.embedding",                          # mamba-qbert
-            "backbone.embedding",                       # mamba
-            "backbone.embeddings",                      # mamba-hf
-            "transformer.in_out_embed",                 # Grok
-            "embedding.word_embeddings",                # chatglm
-            "transformer.token_embeddings",             # openelm
-            "shared",                                   # t5
-            "rwkv.embeddings",                          # rwkv6
-            "model.embeddings",                         # rwkv7
-            "model.word_embeddings",                    # bailingmoe
-            "language_model.model.embed_tokens",        # llama4
-            "encoder",                                  # neobert
+            "gpt_neox.embed_in",                         # gptneox
+            "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
+            "transformer.word_embeddings",               # falcon
+            "word_embeddings",                           # bloom
+            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 plamo2
+            "tok_embeddings",                            # llama-pth
+            "embeddings.word_embeddings",                # bert nomic-bert
+            "language_model.embedding.word_embeddings",  # persimmon
+            "wte",                                       # gpt2
+            "transformer.embd.wte",                      # phi2
+            "model.tok_embeddings",                      # internlm2
+            "model.embedding",                           # mamba-qbert
+            "backbone.embedding",                        # mamba
+            "backbone.embeddings",                       # mamba-hf
+            "transformer.in_out_embed",                  # Grok
+            "embedding.word_embeddings",                 # chatglm
+            "transformer.token_embeddings",              # openelm
+            "shared",                                    # t5
+            "rwkv.embeddings",                           # rwkv6
+            "model.embeddings",                          # rwkv7
+            "model.word_embeddings",                     # bailingmoe
+            "language_model.model.embed_tokens",         # llama4
+            "encoder",                                   # neobert
         ),
 
         # Token type embeddings
         MODEL_TENSOR.TOKEN_TYPES: (
-            "embeddings.token_type_embeddings", # bert nomic-bert
+            "embeddings.token_type_embeddings",  # bert nomic-bert
         ),
 
         # Normalization of token embeddings
         MODEL_TENSOR.TOKEN_EMBD_NORM: (
-            "word_embeddings_layernorm", # bloom
-            "embeddings.LayerNorm",      # bert
-            "emb_ln",                    # nomic-bert
-            "transformer.norm",          # openelm
-            "rwkv.blocks.0.pre_ln",      # rwkv
-            "rwkv.blocks.0.pre_ln",      # rwkv6
-            "model.pre_ln",              # rwkv7
-            "model.layers.0.pre_norm",   # rwkv7
-            "backbone.norm",             # wavtokenizer
+            "word_embeddings_layernorm",  # bloom
+            "embeddings.LayerNorm",       # bert
+            "emb_ln",                     # nomic-bert
+            "transformer.norm",           # openelm
+            "rwkv.blocks.0.pre_ln",       # rwkv
+            "rwkv.blocks.0.pre_ln",       # rwkv6
+            "model.pre_ln",               # rwkv7
+            "model.layers.0.pre_norm",    # rwkv7
+            "backbone.norm",              # wavtokenizer
         ),
 
         # Position embeddings
         MODEL_TENSOR.POS_EMBD: (
-            "transformer.wpe",                # gpt2
-            "embeddings.position_embeddings", # bert
-            "wpe",                            # gpt2
+            "transformer.wpe",                 # gpt2
+            "embeddings.position_embeddings",  # bert
+            "wpe",                             # gpt2
         ),
 
         # Output
         MODEL_TENSOR.OUTPUT: (
-            "embed_out",                # gptneox
-            "lm_head",                  # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe
-            "output",                   # llama-pth bloom internlm2
-            "word_embeddings_for_head", # persimmon
-            "lm_head.linear",           # phi2
-            "lm_head",                  # plamo2
-            "output_layer",             # chatglm
-            "head",                     # rwkv
-            "head.out",                 # wavtokenizer
-            "lm_head",                  # llama4
+            "embed_out",                 # gptneox
+            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe
+            "output",                    # llama-pth bloom internlm2
+            "word_embeddings_for_head",  # persimmon
+            "lm_head.linear",            # phi2
+            "lm_head",                   # plamo2
+            "output_layer",              # chatglm
+            "head",                      # rwkv
+            "head.out",                  # wavtokenizer
+            "lm_head",                   # llama4
         ),
 
         # Output norm
         MODEL_TENSOR.OUTPUT_NORM: (
-            "gpt_neox.final_layer_norm",              # gptneox
-            "transformer.ln_f",                       # gpt2 gpt-j falcon jais exaone
-            "model.norm",                             # llama-hf baichuan internlm2 olmoe olmo2 phimoe plamo2
-            "norm",                                   # llama-pth
-            "transformer.norm_f",                     # mpt dbrx
-            "ln_f",                                   # refact bloom qwen gpt2
-            "language_model.encoder.final_layernorm", # persimmon
-            "model.final_layernorm",                  # persimmon
-            "lm_head.ln",                             # phi2
-            "model.norm_f",                           # mamba-qbert
-            "backbone.norm_f",                        # mamba
-            "transformer.rms_norm",                   # Grok
-            "encoder.final_layernorm",                # chatglm
-            "transformer.norm",                       # openelm
-            "model.norm",                             # nemotron
-            "rwkv.ln_out",                            # rwkv6
-            "model.ln_out",                           # rwkv7
-            "backbone.final_layer_norm",              # wavtokenizer
-            "model.norm",                             # llama4
+            "gpt_neox.final_layer_norm",               # gptneox
+            "transformer.ln_f",                        # gpt2 gpt-j falcon jais exaone
+            "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe plamo2
+            "norm",                                    # llama-pth
+            "transformer.norm_f",                      # mpt dbrx
+            "ln_f",                                    # refact bloom qwen gpt2
+            "language_model.encoder.final_layernorm",  # persimmon
+            "model.final_layernorm",                   # persimmon
+            "lm_head.ln",                              # phi2
+            "model.norm_f",                            # mamba-qbert
+            "backbone.norm_f",                         # mamba
+            "transformer.rms_norm",                    # Grok
+            "encoder.final_layernorm",                 # chatglm
+            "transformer.norm",                        # openelm
+            "model.norm",                              # nemotron
+            "rwkv.ln_out",                             # rwkv6
+            "model.ln_out",                            # rwkv7
+            "backbone.final_layer_norm",               # wavtokenizer
+            "model.norm",                              # llama4
         ),
 
         # Rope frequencies
@@ -113,31 +113,31 @@ class TensorNameMap:
     block_mappings_cfg: dict[MODEL_TENSOR, tuple[str, ...]] = {
         # Attention norm
         MODEL_TENSOR.ATTN_NORM: (
-            "gpt_neox.layers.{bid}.input_layernorm",               # gptneox
-            "transformer.h.{bid}.ln_1",                            # gpt2 gpt-j refact qwen jais exaone
-            "transformer.blocks.{bid}.norm_1",                     # mpt
-            "transformer.h.{bid}.input_layernorm",                 # falcon7b
-            "h.{bid}.input_layernorm",                             # bloom
-            "transformer.h.{bid}.ln_mlp",                          # falcon40b
-            "model.layers.{bid}.input_layernorm",                  # llama-hf nemotron olmoe phimoe
-            "layers.{bid}.attention_norm",                         # llama-pth
-            "language_model.encoder.layers.{bid}.input_layernorm", # persimmon
-            "model.layers.{bid}.ln1",                              # yi
-            "h.{bid}.ln_1",                                        # gpt2
-            "transformer.h.{bid}.ln",                              # phi2
-            "model.layers.layers.{bid}.norm",                      # plamo
-            "model.layers.layers.{bid}.pre_mixer_norm",            # plamo2
-            "model.layers.{bid}.attention_norm",                   # internlm2
-            "model.layers.{bid}.norm",                             # mamba-qbert
-            "backbone.layers.{bid}.norm",                          # mamba
-            "transformer.decoder_layer.{bid}.rms_norm",            # Grok
-            "transformer.blocks.{bid}.norm_attn_norm.norm_1",      # dbrx
-            "encoder.layers.{bid}.input_layernorm",                # chatglm
-            "transformer.layers.{bid}.attn_norm",                  # openelm
-            "rwkv.blocks.{bid}.ln1",                               # rwkv6
-            "model.layers.{bid}.ln1",                              # rwkv7
-            "model.layers.{bid}.input_layernorm",                  # llama4
-            "transformer_encoder.{bid}.attention_norm",            # neobert
+            "gpt_neox.layers.{bid}.input_layernorm",                # gptneox
+            "transformer.h.{bid}.ln_1",                             # gpt2 gpt-j refact qwen jais exaone
+            "transformer.blocks.{bid}.norm_1",                      # mpt
+            "transformer.h.{bid}.input_layernorm",                  # falcon7b
+            "h.{bid}.input_layernorm",                              # bloom
+            "transformer.h.{bid}.ln_mlp",                           # falcon40b
+            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe
+            "layers.{bid}.attention_norm",                          # llama-pth
+            "language_model.encoder.layers.{bid}.input_layernorm",  # persimmon
+            "model.layers.{bid}.ln1",                               # yi
+            "h.{bid}.ln_1",                                         # gpt2
+            "transformer.h.{bid}.ln",                               # phi2
+            "model.layers.layers.{bid}.norm",                       # plamo
+            "model.layers.layers.{bid}.pre_mixer_norm",             # plamo2
+            "model.layers.{bid}.attention_norm",                    # internlm2
+            "model.layers.{bid}.norm",                              # mamba-qbert
+            "backbone.layers.{bid}.norm",                           # mamba
+            "transformer.decoder_layer.{bid}.rms_norm",             # Grok
+            "transformer.blocks.{bid}.norm_attn_norm.norm_1",       # dbrx
+            "encoder.layers.{bid}.input_layernorm",                 # chatglm
+            "transformer.layers.{bid}.attn_norm",                   # openelm
+            "rwkv.blocks.{bid}.ln1",                                # rwkv6
+            "model.layers.{bid}.ln1",                               # rwkv7
+            "model.layers.{bid}.input_layernorm",                   # llama4
+            "transformer_encoder.{bid}.attention_norm",             # neobert
         ),
 
         # Attention norm 2
@@ -150,117 +150,117 @@ class TensorNameMap:
 
         # Attention query-key-value
         MODEL_TENSOR.ATTN_QKV: (
-            "gpt_neox.layers.{bid}.attention.query_key_value",                    # gptneox
-            "transformer.h.{bid}.attn.c_attn",                                    # gpt2 qwen jais
-            "transformer.blocks.{bid}.attn.Wqkv",                                 # mpt
-            "transformer.blocks.{bid}.norm_attn_norm.attn.Wqkv",                  # dbrx
-            "transformer.h.{bid}.self_attention.query_key_value",                 # falcon
-            "h.{bid}.self_attention.query_key_value",                             # bloom
-            "language_model.encoder.layers.{bid}.self_attention.query_key_value", # persimmon
-            "model.layers.{bid}.self_attn.query_key_value",                       # persimmon
-            "h.{bid}.attn.c_attn",                                                # gpt2
-            "transformer.h.{bid}.mixer.Wqkv",                                     # phi2
-            "encoder.layers.{bid}.attn.Wqkv",                                     # nomic-bert
-            "encoder.layers.{bid}.mixer.Wqkv",                                    # jina
-            "model.layers.{bid}.self_attn.qkv_proj",                              # phi3
-            "model.layers.layers.{bid}.mixer.qkv_proj",                           # plamo2
-            "encoder.layers.{bid}.self_attention.query_key_value",                # chatglm
-            "transformer.layers.{bid}.attn.qkv_proj",                             # openelm
-            "transformer_encoder.{bid}.qkv",                                      # neobert
+            "gpt_neox.layers.{bid}.attention.query_key_value",                     # gptneox
+            "transformer.h.{bid}.attn.c_attn",                                     # gpt2 qwen jais
+            "transformer.blocks.{bid}.attn.Wqkv",                                  # mpt
+            "transformer.blocks.{bid}.norm_attn_norm.attn.Wqkv",                   # dbrx
+            "transformer.h.{bid}.self_attention.query_key_value",                  # falcon
+            "h.{bid}.self_attention.query_key_value",                              # bloom
+            "language_model.encoder.layers.{bid}.self_attention.query_key_value",  # persimmon
+            "model.layers.{bid}.self_attn.query_key_value",                        # persimmon
+            "h.{bid}.attn.c_attn",                                                 # gpt2
+            "transformer.h.{bid}.mixer.Wqkv",                                      # phi2
+            "encoder.layers.{bid}.attn.Wqkv",                                      # nomic-bert
+            "encoder.layers.{bid}.mixer.Wqkv",                                     # jina
+            "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
+            "model.layers.layers.{bid}.mixer.qkv_proj",                            # plamo2
+            "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
+            "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
+            "transformer_encoder.{bid}.qkv",                                       # neobert
         ),
 
         # Attention query
         MODEL_TENSOR.ATTN_Q: (
-            "model.layers.{bid}.self_attn.q_proj",                        # llama-hf nemotron olmoe olmo2 phimoe
-            "model.layers.{bid}.self_attn.q_proj_no_perm",                # llama-custom
-            "layers.{bid}.attention.wq",                                  # llama-pth
-            "encoder.layer.{bid}.attention.self.query",                   # bert
+            "model.layers.{bid}.self_attn.q_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
+            "model.layers.{bid}.self_attn.q_proj_no_perm",               # llama-custom
+            "layers.{bid}.attention.wq",                                 # llama-pth
+            "encoder.layer.{bid}.attention.self.query",                  # bert
             "transformer.layer.{bid}.attention.q_lin",                   # distillbert
-            "transformer.h.{bid}.attn.q_proj",                            # gpt-j
-            "model.layers.layers.{bid}.self_attn.q_proj",                 # plamo
-            "model.layers.layers.{bid}.mixer.q",                          # plamo2
-            "model.layers.{bid}.attention.wq",                            # internlm2
-            "transformer.decoder_layer.{bid}.multi_head_attention.query", # Grok
-            "transformer.h.{bid}.attn.attention.q_proj",                  # exaone
-            "model.layers.{bid}.self_attn.q_proj",                        # llama4
+            "transformer.h.{bid}.attn.q_proj",                           # gpt-j
+            "model.layers.layers.{bid}.self_attn.q_proj",                # plamo
+            "model.layers.layers.{bid}.mixer.q",                         # plamo2
+            "model.layers.{bid}.attention.wq",                           # internlm2
+            "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
+            "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
+            "model.layers.{bid}.self_attn.q_proj",                       # llama4
         ),
 
         # Attention key
         MODEL_TENSOR.ATTN_K: (
-            "model.layers.{bid}.self_attn.k_proj",                      # llama-hf nemotron olmoe olmo2 phimoe
-            "model.layers.{bid}.self_attn.k_proj_no_perm",              # llama-custom
-            "layers.{bid}.attention.wk",                                # llama-pth
-            "encoder.layer.{bid}.attention.self.key",                   # bert
-            "transformer.layer.{bid}.attention.k_lin",                  # distillbert
-            "transformer.h.{bid}.attn.k_proj",                          # gpt-j
-            "transformer.h.{bid}.attn.k",                               # refact
-            "model.layers.layers.{bid}.self_attn.k_proj",               # plamo
-            "model.layers.layers.{bid}.mixer.k",                        # plamo2
-            "model.layers.{bid}.attention.wk",                          # internlm2
-            "transformer.decoder_layer.{bid}.multi_head_attention.key", # Grok
-            "transformer.h.{bid}.attn.attention.k_proj",                # exaone
-            "model.layers.{bid}.self_attn.k_proj",                      # llama4
+            "model.layers.{bid}.self_attn.k_proj",                     # llama-hf nemotron olmoe olmo2 phimoe
+            "model.layers.{bid}.self_attn.k_proj_no_perm",             # llama-custom
+            "layers.{bid}.attention.wk",                               # llama-pth
+            "encoder.layer.{bid}.attention.self.key",                  # bert
+            "transformer.layer.{bid}.attention.k_lin",                 # distillbert
+            "transformer.h.{bid}.attn.k_proj",                         # gpt-j
+            "transformer.h.{bid}.attn.k",                              # refact
+            "model.layers.layers.{bid}.self_attn.k_proj",              # plamo
+            "model.layers.layers.{bid}.mixer.k",                       # plamo2
+            "model.layers.{bid}.attention.wk",                         # internlm2
+            "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
+            "transformer.h.{bid}.attn.attention.k_proj",               # exaone
+            "model.layers.{bid}.self_attn.k_proj",                     # llama4
         ),
 
         # Attention value
         MODEL_TENSOR.ATTN_V: (
-            "model.layers.{bid}.self_attn.v_proj",                        # llama-hf nemotron olmoe olmo2 phimoe
-            "layers.{bid}.attention.wv",                                  # llama-pth
-            "encoder.layer.{bid}.attention.self.value",                   # bert
+            "model.layers.{bid}.self_attn.v_proj",                       # llama-hf nemotron olmoe olmo2 phimoe
+            "layers.{bid}.attention.wv",                                 # llama-pth
+            "encoder.layer.{bid}.attention.self.value",                  # bert
             "transformer.layer.{bid}.attention.v_lin",                   # distillbert
-            "transformer.h.{bid}.attn.v_proj",                            # gpt-j
-            "transformer.h.{bid}.attn.v",                                 # refact
-            "model.layers.layers.{bid}.self_attn.v_proj",                 # plamo
-            "model.layers.{bid}.attention.wv",                            # internlm2
-            "transformer.decoder_layer.{bid}.multi_head_attention.value", # Grok
-            "transformer.h.{bid}.attn.attention.v_proj",                  # exaone
-            "model.layers.{bid}.self_attn.v_proj",                        # llama4
+            "transformer.h.{bid}.attn.v_proj",                           # gpt-j
+            "transformer.h.{bid}.attn.v",                                # refact
+            "model.layers.layers.{bid}.self_attn.v_proj",                # plamo
+            "model.layers.{bid}.attention.wv",                           # internlm2
+            "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
+            "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
+            "model.layers.{bid}.self_attn.v_proj",                       # llama4
         ),
 
         # Attention output
         MODEL_TENSOR.ATTN_OUT: (
-            "gpt_neox.layers.{bid}.attention.dense",                       # gptneox
-            "transformer.h.{bid}.attn.c_proj",                             # gpt2 refact qwen jais
-            "transformer.blocks.{bid}.attn.out_proj",                      # mpt
-            "transformer.h.{bid}.self_attention.dense",                    # falcon
-            "h.{bid}.self_attention.dense",                                # bloom
-            "model.layers.{bid}.self_attn.o_proj",                         # llama-hf nemotron olmoe olmo2 phimoe
-            "model.layers.{bid}.self_attn.linear_attn",                    # deci
-            "layers.{bid}.attention.wo",                                   # llama-pth
-            "encoder.layer.{bid}.attention.output.dense",                  # bert
-            "transformer.layer.{bid}.attention.out_lin",                   # distillbert
-            "transformer.h.{bid}.attn.out_proj",                           # gpt-j
-            "language_model.encoder.layers.{bid}.self_attention.dense",    # persimmon
-            "model.layers.{bid}.self_attn.dense",                          # persimmon
-            "h.{bid}.attn.c_proj",                                         # gpt2
-            "transformer.h.{bid}.mixer.out_proj",                          # phi2
-            "model.layers.layers.{bid}.self_attn.o_proj",                  # plamo
-            "model.layers.layers.{bid}.mixer.o_proj",                      # plamo2
-            "model.layers.{bid}.attention.wo",                             # internlm2
-            "encoder.layers.{bid}.attn.out_proj",                          # nomic-bert
-            "encoder.layers.{bid}.mixer.out_proj",                         # jina
-            "transformer.decoder_layer.{bid}.multi_head_attention.linear", # Grok
-            "transformer.blocks.{bid}.norm_attn_norm.attn.out_proj",       # dbrx
-            "encoder.layers.{bid}.self_attention.dense",                   # chatglm
-            "transformer.layers.{bid}.attn.out_proj",                      # openelm
-            "transformer.h.{bid}.attn.attention.out_proj",                 # exaone
-            "model.layers.{bid}.self_attn.o_proj",                         # llama4
-            "transformer_encoder.{bid}.wo",                                # neobert
+            "gpt_neox.layers.{bid}.attention.dense",                        # gptneox
+            "transformer.h.{bid}.attn.c_proj",                              # gpt2 refact qwen jais
+            "transformer.blocks.{bid}.attn.out_proj",                       # mpt
+            "transformer.h.{bid}.self_attention.dense",                     # falcon
+            "h.{bid}.self_attention.dense",                                 # bloom
+            "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2 phimoe
+            "model.layers.{bid}.self_attn.linear_attn",                     # deci
+            "layers.{bid}.attention.wo",                                    # llama-pth
+            "encoder.layer.{bid}.attention.output.dense",                   # bert
+            "transformer.layer.{bid}.attention.out_lin",                    # distillbert
+            "transformer.h.{bid}.attn.out_proj",                            # gpt-j
+            "language_model.encoder.layers.{bid}.self_attention.dense",     # persimmon
+            "model.layers.{bid}.self_attn.dense",                           # persimmon
+            "h.{bid}.attn.c_proj",                                          # gpt2
+            "transformer.h.{bid}.mixer.out_proj",                           # phi2
+            "model.layers.layers.{bid}.self_attn.o_proj",                   # plamo
+            "model.layers.layers.{bid}.mixer.o_proj",                       # plamo2
+            "model.layers.{bid}.attention.wo",                              # internlm2
+            "encoder.layers.{bid}.attn.out_proj",                           # nomic-bert
+            "encoder.layers.{bid}.mixer.out_proj",                          # jina
+            "transformer.decoder_layer.{bid}.multi_head_attention.linear",  # Grok
+            "transformer.blocks.{bid}.norm_attn_norm.attn.out_proj",        # dbrx
+            "encoder.layers.{bid}.self_attention.dense",                    # chatglm
+            "transformer.layers.{bid}.attn.out_proj",                       # openelm
+            "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
+            "model.layers.{bid}.self_attn.o_proj",                          # llama4
+            "transformer_encoder.{bid}.wo",                                 # neobert
         ),
 
         # Attention output norm
         MODEL_TENSOR.ATTN_OUT_NORM: (
-            "encoder.layer.{bid}.attention.output.LayerNorm", # bert
-            "transformer.layer.{bid}.sa_layer_norm",          # distillbert
-            "encoder.layers.{bid}.norm1",                     # nomic-bert
-            "transformer.decoder_layer.{bid}.rms_norm_1",     # Grok
-            "transformer.blocks.{bid}.norm_attn_norm.norm_2", # dbrx
+            "encoder.layer.{bid}.attention.output.LayerNorm",  # bert
+            "transformer.layer.{bid}.sa_layer_norm",           # distillbert
+            "encoder.layers.{bid}.norm1",                      # nomic-bert
+            "transformer.decoder_layer.{bid}.rms_norm_1",      # Grok
+            "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",      # gemma2 olmo2    # ge
-            "model.layers.{bid}.post_self_attn_layernorm",      # glm-4-0414
-            "model.layers.layers.{bid}.post_mixer_norm.weight", # plamo2
+            "model.layers.{bid}.post_attention_layernorm",       # gemma2 olmo2    # ge
+            "model.layers.{bid}.post_self_attn_layernorm",       # glm-4-0414
+            "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
         ),
 
         # Rotary embeddings
@@ -273,22 +273,22 @@ class TensorNameMap:
 
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
-            "gpt_neox.layers.{bid}.post_attention_layernorm",               # gptneox
-            "transformer.h.{bid}.ln_2",                                     # gpt2 refact qwen jais exaone
-            "h.{bid}.post_attention_layernorm",                             # bloom
-            "transformer.blocks.{bid}.norm_2",                              # mpt
-            "model.layers.{bid}.post_attention_layernorm",                  # llama-hf nemotron olmoe phimoe
-            "layers.{bid}.ffn_norm",                                        # llama-pth
-            "language_model.encoder.layers.{bid}.post_attention_layernorm", # persimmon
-            "model.layers.{bid}.ln2",                                       # yi
-            "h.{bid}.ln_2",                                                 # gpt2
-            "model.layers.{bid}.ffn_norm",                                  # internlm2
-            "transformer.decoder_layer.{bid}.rms_norm_2",                   # Grok
-            "encoder.layers.{bid}.post_attention_layernorm",                # chatglm
-            "transformer.layers.{bid}.ffn_norm",                            # openelm
-            "model.layers.{bid}.post_attention_layernorm",                  # llama4
-            "transformer_encoder.{bid}.ffn_norm",                           # neobert
-            "model.layers.layers.{bid}.pre_mlp_norm",                       # plamo2
+            "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
+            "transformer.h.{bid}.ln_2",                                      # gpt2 refact qwen jais exaone
+            "h.{bid}.post_attention_layernorm",                              # bloom
+            "transformer.blocks.{bid}.norm_2",                               # mpt
+            "model.layers.{bid}.post_attention_layernorm",                   # llama-hf nemotron olmoe phimoe
+            "layers.{bid}.ffn_norm",                                         # llama-pth
+            "language_model.encoder.layers.{bid}.post_attention_layernorm",  # persimmon
+            "model.layers.{bid}.ln2",                                        # yi
+            "h.{bid}.ln_2",                                                  # gpt2
+            "model.layers.{bid}.ffn_norm",                                   # internlm2
+            "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
+            "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
+            "transformer.layers.{bid}.ffn_norm",                             # openelm
+            "model.layers.{bid}.post_attention_layernorm",                   # llama4
+            "transformer_encoder.{bid}.ffn_norm",                            # neobert
+            "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
         ),
 
         # Post feed-forward norm
@@ -298,8 +298,8 @@ class TensorNameMap:
 
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
-            "model.layers.{bid}.post_feedforward_layernorm",  # gemma2 olmo2
-            "model.layers.{bid}.post_mlp_layernorm",          # glm-4-0414
+            "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
+            "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
         ),
 
