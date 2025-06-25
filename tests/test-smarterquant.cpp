@@ -16,6 +16,7 @@
 #include <iostream>  // For printing detailed error messages
 #include <iomanip>   // For std::fixed, std::setprecision
 #include <stdexcept> // For std::runtime_error
+#include <cinttypes> // For PRId64
 
 // Forward declare ggml_get_rows_smarterquant as it's not in a public header
 // and we removed static from its definition for testing.
