@@ -17,18 +17,21 @@ set(CMAKE_CXX_STANDARD 17  CACHE STRING "" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # --------------------------------------------------------------------------
-# 1 CPU feature detection library
+# 1.a CPU feature detection library
 # --------------------------------------------------------------------------
 add_subdirectory(
         ${CMAKE_CURRENT_LIST_DIR}/../../../../../../include/cpu_features
         ${CMAKE_BINARY_DIR}/cpu_features_build)
-
-# CPU feature detection library (lightweight, loads first)
 add_library(llama_cpu_detector SHARED cpu_detector.cpp)
 target_link_libraries(llama_cpu_detector
         PRIVATE CpuFeatures::cpu_features
         android
         log)
+
+# --------------------------------------------------------------------------
+# 1.b Make the LLVM OpenMP runtime available
+# --------------------------------------------------------------------------
+find_package(OpenMP REQUIRED)
 
 # --------------------------------------------------------------------------
 # 2. Locate the root of the llama.cpp source tree
@@ -65,7 +68,7 @@ function(build_llama_tier tier march)
             # ---- llama / ggml feature switches ----------------------------
             -DGGML_CPU_KLEIDIAI=${kleidi}
             -DGGML_LLAMAFILE=OFF
-            -DGGML_OPENMP=OFF
+            -DGGML_OPENMP=ON
             -DLLAMA_BUILD_COMMON=ON
             -DLLAMA_CURL=OFF
             -DBUILD_SHARED_LIBS=OFF       # we want static libs to embed
@@ -135,6 +138,7 @@ function(build_llama_tier tier march)
         ggml_core_${tier}        # umbrella (brings in few weak deps)
         ggml_cpu_core_${tier}    # back-end & scheduler
         ggml_base_core_${tier}   # core math
+        OpenMP::OpenMP_CXX       # OpenMP
         android
         log)
 
