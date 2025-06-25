@@ -17,18 +17,32 @@ set(CMAKE_CXX_STANDARD 17  CACHE STRING "" FORCE)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # --------------------------------------------------------------------------
-# 1. Locate the root of the llama.cpp source tree
+# 1 CPU feature detection library
+# --------------------------------------------------------------------------
+add_subdirectory(
+        ${CMAKE_CURRENT_LIST_DIR}/../../../../../../include/cpu_features
+        ${CMAKE_BINARY_DIR}/cpu_features_build)
+
+# CPU feature detection library (lightweight, loads first)
+add_library(llama_cpu_detector SHARED cpu_detector.cpp)
+target_link_libraries(llama_cpu_detector
+        PRIVATE CpuFeatures::cpu_features
+        android
+        log)
+
+# --------------------------------------------------------------------------
+# 2. Locate the root of the llama.cpp source tree
 #    (six levels up from this CMakeLists.txt).
 # --------------------------------------------------------------------------
 set(LLAMA_SRC ${CMAKE_CURRENT_LIST_DIR}/../../../../../../)
 
 # --------------------------------------------------------------------------
-# 2. Build helper  –  one invocation = one hardware tier
+# 3. Build helper  –  one invocation = one hardware tier
 # --------------------------------------------------------------------------
 include(ExternalProject)
 
 function(build_llama_tier tier march)
-    # ---------- 2.1  configure & build core code in an external project -----
+    # ---------- 3.1  configure & build core code in an external project -----
     set(build_dir ${CMAKE_BINARY_DIR}/llama_build_${tier})
 
     # KleidiAI requires dotprod and i8mm
@@ -71,7 +85,7 @@ function(build_llama_tier tier march)
             ${build_dir}/libggml-cpu.a
     )
 
-    # ---------- 2.2  make the static libs produced above visible ------------
+    # ---------- 3.2  make the static libs produced above visible ------------
     set(llama_a   ${build_dir}/libllama.a)
     set(common_a  ${build_dir}/libcommon.a)
     set(ggml_a    ${build_dir}/libggml.a)
@@ -103,7 +117,7 @@ function(build_llama_tier tier march)
         IMPORTED_LOCATION ${ggml_cpu_a})
     add_dependencies(ggml_cpu_core_${tier} llama_build_${tier})
 
-    # ---------- 2.3  JNI wrapper DSO ---------------------------------------
+    # ---------- 3.3  JNI wrapper DSO ---------------------------------------
     add_library(llama_android_${tier} SHARED llama-android.cpp)
 
     target_compile_options(llama_android_${tier} PRIVATE "-march=${march}")
@@ -124,13 +138,13 @@ function(build_llama_tier tier march)
         android
         log)
 
-    # ---------- 2.4  nice SONAME & filename -------------------------------
+    # ---------- 3.4  nice SONAME & filename -------------------------------
     set_target_properties(llama_android_${tier} PROPERTIES
         OUTPUT_NAME "llama_android_${tier}")
 endfunction()
 
 # --------------------------------------------------------------------------
-# 3.  Build all five tiers
+# 4.  Build all five tiers
 # --------------------------------------------------------------------------
 build_llama_tier(t0 "armv8-a+simd")
 build_llama_tier(t1 "armv8.2-a+dotprod")
@@ -144,7 +158,7 @@ add_dependencies(llama_build_t3 llama_build_t2)
 #add_dependencies(llama_build_t4 llama_build_t3)
 
 # --------------------------------------------------------------------------
-# 4.  Default variant when Gradle hasn’t told us (keeps IDE happy)
+# 5.  Default variant when Gradle hasn’t told us (keeps IDE happy)
 # --------------------------------------------------------------------------
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
