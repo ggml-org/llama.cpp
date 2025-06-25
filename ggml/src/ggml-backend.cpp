@@ -1922,6 +1922,7 @@ static void migrate_pages_with_cache(void *addr, size_t size,
     if (size >= GGML_NUMA_MIGRATE_NODES * ggml_backend_page_size) {
         numa_migrate_mapping_cache current_addr(addr, size);
         std::lock_guard<std::mutex> lock(ggml_mapping_mutex);
+        ggml_backend_init_node_id();
         auto it = ggml_mapping_cache.find(current_addr);
         if (it == ggml_mapping_cache.end()) {
             GGML_ASSERT(((uint64_t)(addr) & (ggml_backend_page_size - 1)) == 0);

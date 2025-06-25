@@ -524,6 +524,7 @@ struct ggml_numa_nodes {
 #ifdef GGML_USE_NUMA_MIGRATE
     int *node_num_of_cpu;
     int *cpu_core_mapping; // x logic core, y physical core
+    int *thread_start_id;
     int logic_core_cnts;
     int cores_per_numa[GGML_NUMA_MIGRATE_NODES];
 #endif
@@ -646,18 +647,22 @@ int ggml_get_node_from_cpu(int ith) {
 }
 
 int ggml_get_start_id_in_node(int ith) {
+    return g_state.numa.thread_start_id[ith];
+}
+
+static void ggml_set_start_id_in_node(int ith) {
     int total_cpus = 0;
     int prev_total_cpus = 0;
     for (int node = 0; node < GGML_NUMA_MIGRATE_NODES; node++) {
         prev_total_cpus = total_cpus;
         total_cpus += g_state.numa.cores_per_numa[node];
         if (ith < total_cpus) {
-            return (ith - prev_total_cpus);
+            g_state.numa.thread_start_id[ith] = (ith - prev_total_cpus);
+            return;
         }
     }
 
     assert(0);
-    return -1;
 }
 
 int ggml_cores_per_numa(int ith) {
@@ -676,7 +681,8 @@ void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
         return;
     }
     if (n_threads != g_state.numa.logic_core_cnts) {
-        printf("bolt-test: n_threads: %d, g_state.numa.logic_core_cnts: %d\n", n_threads, g_state.numa.logic_core_cnts);
+        printf("WARNING: n_threads: %d not equal to core counts: %d, please check thread numbers and GGML_NUMA_CORE_IDS\n",
+                n_threads, g_state.numa.logic_core_cnts);
         ggml_barrier(tp);
         return;
     }
@@ -808,6 +814,7 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 #ifdef GGML_USE_NUMA_MIGRATE
     g_state.numa.node_num_of_cpu = (int *)malloc(g_state.numa.total_cpus * sizeof(int));
     g_state.numa.cpu_core_mapping = (int *)malloc(g_state.numa.total_cpus * sizeof(int));
+    g_state.numa.thread_start_id = (int *)malloc(g_state.numa.total_cpus * sizeof(int));
     int logic_core_index = 0;
 
     const char *env_var = getenv("GGML_NUMA_CORE_IDS");
@@ -862,6 +869,11 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 
         fclose(fp);
     }
+
+    for (int i = 0; i < g_state.numa.logic_core_cnts; i++) {
+        ggml_set_start_id_in_node(i);
+    }
+
 #endif
 
     if (ggml_is_numa()) {
