@@ -3,7 +3,6 @@
 #include "ggml.h"
 #include "llama-arch.h"
 #include "llama-impl.h"
-#include "llama-mmap.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
 #include "llama-model-loader.h"
@@ -23,9 +22,7 @@
 #include <functional>
 #include <map>
 #include <regex>
-#include <sstream>
 #include <stdexcept>
-#include <iostream>
 
 const char * llm_type_name(llm_type type) {
     switch (type) {

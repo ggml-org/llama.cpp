@@ -1059,10 +1059,6 @@ bool llama_model_loader::load_all_data(
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
-                // Check if tensor has a buffer before calling ggml_backend_tensor_set
-                if (cur->buffer == nullptr) {
-                    throw std::runtime_error(format("tensor '%s' has no buffer allocated", ggml_get_name(cur)));
-                }
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }
         } else {
