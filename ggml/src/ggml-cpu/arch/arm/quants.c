@@ -51,7 +51,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
     const svbool_t pg = svptrue_b32();
     svfloat32_t zero = svdup_f32(0.0f);
     svfloat32_t half = svdup_f32(0.5f);
-    
+
     for (int i = 0; i < nb; i+=1) {
         svfloat32_t srcv1, asrcv1;
         svfloat32_t sv_max = svdup_n_f32(0.0f);
@@ -70,7 +70,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
             srcv1  = svld1_f32(pg, x + i*32 + j);
             const svfloat32_t v1  = svmul_n_f32_m(pg, srcv1, id);
 
-             svbool_t ge_zero = svcmpge_f32(pg, v1, zero);
+            svbool_t ge_zero = svcmpge_f32(pg, v1, zero);
             svfloat32_t v_pos = svadd_f32_m(pg, v1, half);
             svfloat32_t v_neg = svsub_f32_m(pg, v1, half);
 
