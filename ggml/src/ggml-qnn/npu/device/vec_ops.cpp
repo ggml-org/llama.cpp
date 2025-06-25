@@ -222,10 +222,6 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     return _ReduceFunc(sum);
 }
 
-inline HVX_Vector vec_mpy_qf32_qf32_sf(HVX_Vector src0, HVX_Vector src1) {
-    return Q6_Vqf32_vmpy_Vqf32Vqf32(src0, hexagon::qhmath_hvx_vqf32_convert_vsf(src1));
-}
-
 }  // namespace
 
 namespace hexagon {
@@ -249,8 +245,8 @@ float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_
 }
 
 float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
-    return vec_dot_product_mixed_impl<npu_device_fp16_t, float, hvx_vqf32_convert_vhf, vec_mpy_qf32_qf32_sf,
-                                      vec_add_qf32, vec_reduction_f32_qf32>(src0, src1, count);
+    return vec_dot_product_mixed_impl<npu_device_fp16_t, float, hvx_vsf_convert_vhf, vec_mpy_qf32, vec_add_qf32,
+                                      vec_reduction_f32_qf32>(src0, src1, count);
 }
 
 }  // namespace hexagon

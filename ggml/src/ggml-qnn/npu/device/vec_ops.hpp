@@ -121,6 +121,16 @@ inline HVX_VectorPair hvx_vqf32_convert_vhf(HVX_Vector vxl) {
     return qhmath_hvx_vqf32_convert_vqf16(qhmath_hvx_vqf16_convert_vhf(vxl));
 }
 
+inline HVX_VectorPair hvx_vsf_convert_vhf(HVX_Vector vxl) {
+    constexpr const __fp16 kOne = 1.0f;
+    HVX_Vector kOneV            = Q6_Vh_vsplat_R(reinterpret_cast<const uint16_t &>(kOne));
+
+    HVX_VectorPair res   = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vxl), kOneV);
+    HVX_Vector     vxl_w = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(res));
+    HVX_Vector     vxh_w = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(res));
+    return Q6_W_vcombine_VV(vxh_w, vxl_w);
+}
+
 inline HVX_Vector vec_reduction_qf32(HVX_Vector sums) {
     constexpr const size_t kFloatsPerVector = hexagon::kBytesPerVector / sizeof(float);
     static_assert(kFloatsPerVector == 32 || kFloatsPerVector == 16, "kFloatsPerVector should be 16 or 32");
