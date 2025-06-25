@@ -79,3 +79,16 @@ Adapt llama-cli and llama-server: Ensure they can load and use models with the n
 Testing: Create test cases, quantize a model, verify GGUF metadata, and compare inference results.
 Documentation and Cleanup: Add comments and update documentation.
 A key challenge identified is handling potentially different ggml_types for different blocks within a single GGUF tensor, which might require careful GGUF metadata design and modifications to dequantization/computation routines in ggml.c.
+
+
+Clarification for "Perform the matrix multiplication on the permuted data and unpermute the result vector only.":
+Got it. That makes sense. So, the refined strategy for ggml_compute_forward_mul_mat_one_chunk when src0 is SmarterQuant would be:
+src0 (weights) is permuted and contains segments of different quantization types.
+src1 (activations) is typically F32, but for the dot product with a quantized segment of src0, src1 needs to be in a compatible format.
+Iterate through the 256-element segments of a row from src0: a. Let the current src0 segment be src0_seg with quantization type type0 (e.g., GGML_TYPE_Q4_0). b. Determine the vec_dot_type required for src1 by looking at the type_traits_cpu[type0].vec_dot function. For example, if type0 is GGML_TYPE_Q4_0, its vec_dot is ggml_vec_dot_q4_0_q8_0, meaning src1 needs to be effectively GGML_TYPE_Q8_0 for this specific dot product call. c. If src1 is F32: Quantize the corresponding 256-element segment of src1 (let's call it src1_seg_f32) into a temporary buffer src1_seg_quantized of the required vec_dot_type (e.g., GGML_TYPE_Q8_0). This quantization happens on-the-fly for each segment of src1. d. If src1 is already quantized (e.g., entirely Q8_K): Use the corresponding segment src1_seg_quantized directly, assuming its type is compatible with the vec_dot function chosen for src0_seg (e.g. if src0_seg is Q4_K and src1 is Q8_K, this works). e. Call the appropriate ggml_vec_dot_[type0]_[type1_eff] function (e.g., ggml_vec_dot_q4_0_q8_0(src0_seg, src1_seg_quantized_to_q8_0, ...)). f. Accumulate the F32 result from this segment's dot product.
+After processing all segments for the row, the accumulated F32 sum is the element for the dst tensor (which will be permuted at this stage).
+Finally, after the entire dst tensor is computed, it will be unpermuted as per the original plan.
+This approach avoids dequantizing src0 to F32 first and performs the dot products using the existing quantized routines, quantizing src1 segments as needed. This fully aligns with 'inference in quantized space should also stay permuted'.
+This is a more significant modification to ggml_compute_forward_mul_mat_one_chunk than just dequantizing src0 to a permuted F32 buffer, as it involves dynamic quantization of src1 segments if src1 is F32.
+I'll update my internal plan to reflect this more precise approach for Step 2.
+
