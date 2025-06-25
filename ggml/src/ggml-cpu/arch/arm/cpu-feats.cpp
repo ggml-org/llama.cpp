@@ -4,6 +4,9 @@
 
 #if defined(__linux__)
 #include <sys/auxv.h>
+
+#include <fstream>
+#include <string>
 #elif defined(__APPLE__)
 #include <sys/sysctl.h>
 #endif
@@ -17,6 +20,7 @@
 #endif
 
 struct aarch64_features {
+    int cpu_part         = -1;
     // has_neon not needed, aarch64 has NEON guaranteed
     bool has_dotprod     = false;
     bool has_fp16_va     = false;
@@ -36,6 +40,17 @@ struct aarch64_features {
         has_sve2    = !!(hwcap2 & HWCAP2_SVE2);
         has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
         has_sme     = !!(hwcap2 & HWCAP2_SME);
+
+        std::ifstream cpuinfo("/proc/cpuinfo");
+        std::string line;
+        while (std::getline(cpuinfo, line)) {
+            if (line.find("CPU part") == 0) {
+                // Parse the hex number after the colon
+                cpu_part = std::stoi(line.substr(line.find(':') + 1), nullptr, 16);
+                break;
+            }
+        }
+        cpuinfo.close();
 #elif defined(__APPLE__)
         int oldp = 0;
         size_t size = sizeof(oldp);
@@ -63,6 +78,11 @@ static int ggml_backend_cpu_aarch64_score() {
 
     // Bits 2-8 are used to rank backends by architecture or core when they
     // otherwise have identical features.
+#if defined(GGML_ARM_MCPU) && GGML_ARM_MCPU == NEOVERSE_V2
+    if (af.cpu_part == 0xd4f) {
+        score += 1<<5;
+    }
+#endif
 
     // Bits 9+: Features always trump architecture or core.
 #ifdef GGML_USE_DOTPROD
