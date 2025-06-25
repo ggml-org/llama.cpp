@@ -176,7 +176,7 @@ static enum ggml_status ggml_backend_cpu_graph_compute(ggml_backend_t backend, s
 
 #ifdef GGML_USE_NUMA_MIGRATE
         for (int i = 0; i < GGML_NUMA_MIGRATE_NODES; i++) {
-            cpu_ctx->work_data_numa[i] = (uint8_t *)numa_alloc_onnode(cplan.work_size, i);
+            cpu_ctx->work_data_numa[i] = (uint8_t *)numa_alloc_onnode(cplan.work_size, ggml_backend_get_node_id(i));
             if (cpu_ctx->work_data_numa[i] == NULL) {
                 cpu_ctx->work_size = 0;
                 return GGML_STATUS_ALLOC_FAILED;

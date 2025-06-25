@@ -67,6 +67,8 @@ public:
 
 static std::set<numa_migrate_mapping_cache> ggml_mapping_cache;
 static size_t ggml_backend_page_size = 0;
+static int ggml_backend_node_id[GGML_NUMA_MIGRATE_NODES];
+static bool ggml_backend_node_id_inited = false;
 static std::mutex ggml_mapping_mutex;
 #endif
 
@@ -1718,7 +1720,7 @@ static int check_numa_pages_migration(void *addr, size_t total_size) {
     int num_nodes = GGML_NUMA_MIGRATE_NODES;
 
     for (int i = 0; i < num_nodes; ++i) {
-        int target_node = i;
+        int target_node = ggml_backend_node_id[i];
         size_t size_to_migrate = total_size / num_nodes;
 
         if (size_to_migrate > total_size - offset) {
@@ -1765,7 +1767,7 @@ static int check_numa_pages_migration(void *addr, size_t total_size) {
             (void **)malloc(num_pages_to_migrate * sizeof(void *));
         for (size_t j = 0; j < num_pages_to_migrate; j++) {
             status[j] = 0;
-            nodes[j] = i;
+            nodes[j] = target_node;
             addr_to_migrate[j] = (void *)((char *)migrate_start_addr +
                                           j * ggml_backend_page_size);
         }
@@ -1842,7 +1844,7 @@ static int migrate_pages_multiple_nodes(void *addr, size_t total_size) {
     int num_nodes = GGML_NUMA_MIGRATE_NODES;
 
     for (int i = 0; i < num_nodes; ++i) {
-        int target_node = i;
+        int target_node = ggml_backend_node_id[i];
         size_t size_to_migrate = total_size / num_nodes;
 
         if (size_to_migrate > total_size - offset) {
@@ -1891,7 +1893,7 @@ static int migrate_pages_multiple_nodes(void *addr, size_t total_size) {
             (void **)malloc(num_pages_to_migrate * sizeof(void *));
         for (size_t j = 0; j < num_pages_to_migrate; j++) {
             status[j] = 0;
-            nodes[j] = i;
+            nodes[j] = target_node;
             addr_to_migrate[j] = (void *)((char *)migrate_start_addr +
                                           j * ggml_backend_page_size);
         }
@@ -2244,18 +2246,62 @@ static const char * ggml_backend_cpu_buffer_type_get_name(ggml_backend_buffer_ty
 }
 
 #ifdef GGML_USE_NUMA_MIGRATE
+int ggml_backend_get_node_id(int index) {
+    return ggml_backend_node_id[index];
+}
+
 size_t ggml_backend_get_page_size(void) {
     if (ggml_backend_page_size == 0) {
         ggml_backend_page_size = sysconf(_SC_PAGE_SIZE);
     }
     return ggml_backend_page_size;
 }
+
+static void parse_numa_node_ids(const char *input, int *count, int *node_ids) {
+    *count = 0;
+    char *input_copy = strdup(input);
+    char *range = strtok(input_copy, ",");
+
+    while (range != NULL) {
+        if (strchr(range, '-') != NULL) {
+            int start, end;
+            sscanf(range, "%d-%d", &start, &end);
+            for (int i = start; i <= end; i++) {
+                node_ids[(*count)++] = i;
+            }
+        } else {
+            int node_id = atoi(range);
+            node_ids[(*count)++] = node_id;
+        }
+        range = strtok(NULL, ",");
+    }
+
+    free(input_copy);
+}
+
+void ggml_backend_init_node_id(void) {
+    if (ggml_backend_node_id_inited) {
+        return;
+    }
+    const char *env_var = getenv("GGML_NUMA_NODE_IDS");
+
+    if (env_var) {
+        int count = 0;
+        parse_numa_node_ids(env_var, &count, ggml_backend_node_id);
+    } else {
+        for (int node = 0; node < GGML_NUMA_MIGRATE_NODES; node++) {
+            ggml_backend_node_id[node] = node;
+        }
+    }
+    ggml_backend_node_id_inited = true;
+}
 #endif
 
 static ggml_backend_buffer_t ggml_backend_cpu_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
 #ifdef GGML_USE_NUMA_MIGRATE
+    ggml_backend_init_node_id();
     ggml_backend_get_page_size();
-    void * data = numa_alloc_onnode(size, 0);
+    void * data = numa_alloc_onnode(size, ggml_backend_node_id[0]);
 #else
     void * data = ggml_aligned_malloc(size);
 #endif

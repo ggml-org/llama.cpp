@@ -350,6 +350,8 @@ extern "C" {
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
 #ifdef GGML_USE_NUMA_MIGRATE
     GGML_API size_t ggml_backend_get_page_size(void);
+    GGML_API int ggml_backend_get_node_id(int index);
+    GGML_API void ggml_backend_init_node_id(void);
 #endif
 
 #ifdef  __cplusplus

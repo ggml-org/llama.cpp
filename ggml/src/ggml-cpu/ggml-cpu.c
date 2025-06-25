@@ -524,6 +524,7 @@ struct ggml_numa_nodes {
 #ifdef GGML_USE_NUMA_MIGRATE
     int *node_num_of_cpu;
     int *cpu_core_mapping; // x logic core, y physical core
+    int logic_core_cnts;
     int cores_per_numa[GGML_NUMA_MIGRATE_NODES];
 #endif
 };
@@ -585,9 +586,78 @@ int ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value) {
 }
 
 #ifdef GGML_USE_NUMA_MIGRATE
+
+static int** ggml_allocate_core_ids(int num_nodes, int max_cores) {
+    int **core_ids = malloc(num_nodes * sizeof(int *));
+    for (int i = 0; i < num_nodes; i++) {
+        core_ids[i] = malloc(max_cores * sizeof(int));
+        for (int j = 0; j < max_cores; j++) {
+            core_ids[i][j] = -1;
+        }
+    }
+    return core_ids;
+}
+
+static void ggml_free_core_ids(int **core_ids, int num_nodes) {
+    for (int i = 0; i < num_nodes; i++) {
+        free(core_ids[i]);
+    }
+    free(core_ids);
+}
+
+static void ggml_parse_cpu_core_ids(const char *env_var, int **core_ids, int max_numa_nodes, int max_cores_per_node) {
+    char *numa_node;
+    char *node_copy = strdup(env_var);
+    char *context;
+
+    numa_node = strtok_r(node_copy, "|", &context);
+    int node_count = 0;
+
+    while (numa_node != NULL && node_count < max_numa_nodes) {
+        int core_index = 0;
+
+        char *core_range = strtok(numa_node, ",");
+        while (core_range != NULL && core_index < max_cores_per_node) {
+            if (strchr(core_range, '-') != NULL) {
+                int start, end;
+                sscanf(core_range, "%d-%d", &start, &end);
+                for (int i = start; i <= end && core_index < max_cores_per_node; i++) {
+                    core_ids[node_count][core_index++] = i;
+                }
+            } else {
+                int core_id = atoi(core_range);
+                if (core_index < max_cores_per_node) {
+                    core_ids[node_count][core_index++] = core_id;
+                }
+            }
+            core_range = strtok(NULL, ",");
+        }
+        node_count++;
+        numa_node = strtok_r(NULL, "|", &context);
+    }
+
+    free(node_copy);
+}
+
+
 int ggml_get_node_from_cpu(int ith) {
     int cpu = g_state.numa.cpu_core_mapping[ith];
     return g_state.numa.node_num_of_cpu[cpu];
+}
+
+int ggml_get_start_id_in_node(int ith) {
+    int total_cpus = 0;
+    int prev_total_cpus = 0;
+    for (int node = 0; node < GGML_NUMA_MIGRATE_NODES; node++) {
+        prev_total_cpus = total_cpus;
+        total_cpus += g_state.numa.cores_per_numa[node];
+        if (ith < total_cpus) {
+            return (ith - prev_total_cpus);
+        }
+    }
+
+    assert(0);
+    return -1;
 }
 
 int ggml_cores_per_numa(int ith) {
@@ -603,6 +673,11 @@ void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n) {
 
     int n_threads = atomic_load_explicit(&tp->n_threads_cur, memory_order_relaxed);
     if (n_threads == 1) {
+        return;
+    }
+    if (n_threads != g_state.numa.logic_core_cnts) {
+        printf("bolt-test: n_threads: %d, g_state.numa.logic_core_cnts: %d\n", n_threads, g_state.numa.logic_core_cnts);
+        ggml_barrier(tp);
         return;
     }
 
@@ -733,34 +808,60 @@ void ggml_numa_init(enum ggml_numa_strategy numa_flag) {
 #ifdef GGML_USE_NUMA_MIGRATE
     g_state.numa.node_num_of_cpu = (int *)malloc(g_state.numa.total_cpus * sizeof(int));
     g_state.numa.cpu_core_mapping = (int *)malloc(g_state.numa.total_cpus * sizeof(int));
-    for (uint32_t i = 0; i < g_state.numa.total_cpus; i++) {
-        g_state.numa.node_num_of_cpu[i] = numa_node_of_cpu(i);
-    }
-
-    FILE *fp = fopen("/sys/devices/system/cpu/online", "r");
-    if (fp == NULL) {
-        perror("fopen");
-        exit(EXIT_FAILURE);
-    }
-
-    int cpu0, cpu1;
     int logic_core_index = 0;
-    while (fscanf(fp, "%d", &cpu0) != EOF) {
-        cpu1 = cpu0;
-        while (fgetc(fp) == '-') {
-            fscanf(fp, "%d", &cpu1);
-        }
 
-        for (int cpu_index = cpu0; cpu_index <= cpu1; cpu_index++) {
-            g_state.numa.cpu_core_mapping[logic_core_index++] = cpu_index;
-            int node = g_state.numa.node_num_of_cpu[cpu_index];
-            if (node < GGML_NUMA_MIGRATE_NODES) {
-                g_state.numa.cores_per_numa[node]++;
+    const char *env_var = getenv("GGML_NUMA_CORE_IDS");
+    if (env_var) {
+        int max_numa_nodes = GGML_NUMA_MIGRATE_NODES;
+        int **core_ids = ggml_allocate_core_ids(max_numa_nodes, g_state.numa.total_cpus);
+        ggml_parse_cpu_core_ids(env_var, core_ids, max_numa_nodes, g_state.numa.total_cpus);
+
+        for (int node = 0; node < max_numa_nodes; node++) {
+            for (int core = 0; core < (int)g_state.numa.total_cpus; core++) {
+                int phy_core_id = core_ids[node][core];
+                if (phy_core_id != -1) {
+                    g_state.numa.node_num_of_cpu[phy_core_id] = node;
+                    g_state.numa.cpu_core_mapping[logic_core_index] = phy_core_id;
+                    g_state.numa.cores_per_numa[node]++;
+                    GGML_PRINT_DEBUG("setting core ids, core: %d, logic_core_index: %d, mapping: %d, cores_per_numa: %d, node_num_of_cpu: %d\n",
+                        phy_core_id,
+                        logic_core_index,
+                        g_state.numa.cpu_core_mapping[logic_core_index],
+                        g_state.numa.cores_per_numa[node],
+                        g_state.numa.node_num_of_cpu[phy_core_id]);
+                    logic_core_index++;
+                    g_state.numa.logic_core_cnts++;
+                }
             }
         }
-    }
+        ggml_free_core_ids(core_ids, max_numa_nodes);
+    } else {
+        FILE *fp = fopen("/sys/devices/system/cpu/online", "r");
+        if (fp == NULL) {
+            perror("fopen");
+            exit(EXIT_FAILURE);
+        }
 
-    fclose(fp);
+        int cpu0, cpu1;
+        while (fscanf(fp, "%d", &cpu0) != EOF) {
+            cpu1 = cpu0;
+            while (fgetc(fp) == '-') {
+                fscanf(fp, "%d", &cpu1);
+            }
+
+            for (int cpu_index = cpu0; cpu_index <= cpu1; cpu_index++) {
+                g_state.numa.cpu_core_mapping[logic_core_index++] = cpu_index;
+                g_state.numa.node_num_of_cpu[cpu_index] = numa_node_of_cpu(cpu_index);
+                int node = g_state.numa.node_num_of_cpu[cpu_index];
+                if (node < GGML_NUMA_MIGRATE_NODES) {
+                    g_state.numa.logic_core_cnts++;
+                    g_state.numa.cores_per_numa[node]++;
+                }
+            }
+        }
+
+        fclose(fp);
+    }
 #endif
 
     if (ggml_is_numa()) {
@@ -3219,10 +3320,12 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         threadpool->n_barrier_passed = 0;
 
 #ifdef GGML_USE_NUMA_MIGRATE
+        ggml_backend_init_node_id();
         for (int node = 0; node < GGML_NUMA_MIGRATE_NODES; node++) {
-            threadpool->n_barrier_node[node] = (atomic_int *)numa_alloc_onnode(sizeof(atomic_int), node);
+            int node_id = ggml_backend_get_node_id(node);
+            threadpool->n_barrier_node[node] = (atomic_int *)numa_alloc_onnode(sizeof(atomic_int), node_id);
             *threadpool->n_barrier_node[node] = 0;
-            threadpool->n_barrier_passed_node[node] = (atomic_int *)numa_alloc_onnode(sizeof(atomic_int), node);
+            threadpool->n_barrier_passed_node[node] = (atomic_int *)numa_alloc_onnode(sizeof(atomic_int), node_id);
             *threadpool->n_barrier_passed_node[node] = 0;
         }
 

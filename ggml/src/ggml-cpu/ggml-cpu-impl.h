@@ -515,6 +515,7 @@ enum ggml_barrier_node_index {
 void ggml_barrier_numa_aware(struct ggml_threadpool * tp, int ith, int node_n);
 int ggml_cores_per_numa(int ith);
 int ggml_get_node_from_cpu(int ith);
+int ggml_get_start_id_in_node(int ith);
 #endif
 
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
