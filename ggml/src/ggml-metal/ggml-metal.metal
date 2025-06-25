@@ -1263,7 +1263,7 @@ kernel void kernel_soft_max(
     const int64_t i01 = (tgpig - i03*args.ne02*args.ne01 - i02*args.ne01);
 
     device const float * psrc0 = (device const float *) src0 + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00);
-    device const     T * pmask = src1 != src0 ? (device const    T *) src1         + i01*args.ne00 : nullptr;
+    device const     T * pmask = src1 != src0 ? (device const T *) (src1 + i01*args.nb11 + i03*args.nb12) : nullptr;
     device       float * pdst  = (device       float *) dst  + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00);
 
     float slope = 1.0f;
@@ -1359,7 +1359,7 @@ kernel void kernel_soft_max_4(
     const int64_t i01 = (tgpig - i03*args.ne02*args.ne01 - i02*args.ne01);
 
     device const float4 * psrc4 = (device const float4 *) src0 + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00)/4;
-    device const      T * pmask = src1 != src0 ? (device const     T *) src1         + i01*args.ne00/4 : nullptr;
+    device const      T * pmask = src1 != src0 ? (device const T *) (src1 + i01*args.nb11 + i03*args.nb12) : nullptr;
     device       float4 * pdst4 = (device       float4 *) dst  + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00)/4;
 
     float slope = 1.0f;
@@ -3645,7 +3645,7 @@ kernel void kernel_flash_attn_ext(
                 // load the mask in shared memory
                 #pragma unroll(Q)
                 for (short j = 0; j < Q; ++j) {
-                    device const half * pm = (device const half *) ((device const char *) mask + (iq1 + j)*args.nb31);
+                    device const half * pm = (device const half *) ((device const char *) mask + (iq1 + j)*args.nb31 + iq3*args.nb32);
 
                     const float m = pm[ic + tiisg];
 
@@ -4131,7 +4131,7 @@ kernel void kernel_flash_attn_ext_vec(
         const bool has_mask = mask != q;
 
         // pointer to the mask
-        device const half * pm = (device const half *) (mask + iq1*args.nb31);
+        device const half * pm = (device const half *) (mask + iq1*args.nb31 + iq3*args.nb32);
 
         float slope = 1.0f;
 

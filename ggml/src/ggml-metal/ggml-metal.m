@@ -2562,10 +2562,7 @@ static bool ggml_metal_encode_node(
                 memcpy(&scale,    ((const int32_t *) dst->op_params) + 0, sizeof(scale));
                 memcpy(&max_bias, ((const int32_t *) dst->op_params) + 1, sizeof(max_bias));
 
-                const int64_t nrows_x = ggml_nrows(src0);
-                const int64_t nrows_y = src0->ne[1];
-
-                const uint32_t n_head      = nrows_x/nrows_y;
+                const uint32_t n_head      = src0->ne[2];
                 const uint32_t n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
 
                 const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
@@ -2625,6 +2622,8 @@ static bool ggml_metal_encode_node(
                     /*.ne00        =*/ ne00,
                     /*.ne01        =*/ ne01,
                     /*.ne02        =*/ ne02,
+                    /*.nb11        =*/ nb11,
+                    /*.nb12        =*/ nb12,
                     /*.scale       =*/ scale,
                     /*.max_bias    =*/ max_bias,
                     /*.m0          =*/ m0,
@@ -4882,6 +4881,7 @@ static bool ggml_metal_encode_node(
                     /*.nb22          =*/ nb22,
                     /*.nb23          =*/ nb23,
                     /*.nb31          =*/ nb31,
+                    /*.nb32          =*/ nb32,
                     /*.ne1           =*/ ne1,
                     /*.ne2           =*/ ne2,
                     /*.scale         =*/ scale,

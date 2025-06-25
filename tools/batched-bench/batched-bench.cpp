@@ -61,7 +61,7 @@ int main(int argc, char ** argv) {
 
     const int32_t n_kv_max = llama_n_ctx(ctx);
 
-    llama_batch batch = llama_batch_init(n_kv_max, 0, 1);
+    llama_batch batch = llama_batch_init(n_kv_max*8, 0, 1); // TODO: tmp!!!
 
     // decode in batches of ctx_params.n_batch tokens
     auto decode_helper = [](llama_context * ctx, llama_batch & batch, int32_t n_batch) {
@@ -119,9 +119,9 @@ int main(int argc, char ** argv) {
 
                 const int n_ctx_req = is_pp_shared ? pp + pl*tg : pl*(pp + tg);
 
-                if (n_ctx_req > n_kv_max) {
-                    continue;
-                }
+                //if (n_ctx_req > n_kv_max) {
+                //    continue;
+                //}
 
                 common_batch_clear(batch);
 

@@ -33,6 +33,9 @@ llama_context::llama_context(
         throw std::runtime_error("n_seq_max must be <= " + std::to_string(LLAMA_MAX_SEQ));
     }
 
+    const char * LLAMA_HT = getenv("LLAMA_HT");
+    cparams.n_seq_virt = LLAMA_HT ? cparams.n_seq_max : 1;
+
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
     cparams.yarn_ext_factor  = params.yarn_ext_factor;

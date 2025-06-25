@@ -40,6 +40,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         offload,
         kv_size,
         n_seq_max,
+        1,
         n_pad,
         n_swa,
         swa_type
@@ -70,7 +71,7 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
                 // if all tokens are output, split by sequence
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                ubatch = balloc.split_equal(n_ubatch);
+                ubatch = balloc.split_equal(n_ubatch, false);
             }
 
             if (ubatch.n_tokens == 0) {
@@ -78,6 +79,11 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
             }
 
             ubatches.push_back(std::move(ubatch)); // NOLINT
+        }
+
+        if (balloc.get_n_used() < balloc.get_n_tokens()) {
+            // failed to find a suitable split
+            break;
         }
 
         // prepare the recurrent batches first

@@ -230,6 +230,7 @@ typedef struct {
     uint64_t nb22;
     uint64_t nb23;
     uint64_t nb31;
+    uint64_t nb32;
     int32_t  ne1;
     int32_t  ne2;
     float    scale;
@@ -453,6 +454,8 @@ typedef struct {
     int64_t  ne00;
     int64_t  ne01;
     int64_t  ne02;
+    uint64_t nb11;
+    uint64_t nb12;
     float    scale;
     float    max_bias;
     float    m0;

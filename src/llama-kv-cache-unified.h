@@ -39,10 +39,31 @@ public:
         // data for ggml_set_rows
         using idx_vec_t = std::vector<uint32_t>;
 
-        idx_vec_t idxs;
+        llama_seq_id s0;
+        llama_seq_id s1;
+
+        std::vector<llama_seq_id> seq_id_virt;
+        std::vector<idx_vec_t>    idxs;
 
         uint32_t head() const {
-            return idxs[0];
+            GGML_ASSERT(idxs.size() == 1);
+
+            return idxs[0][0];
+        }
+
+        void resize(size_t n) {
+            seq_id_virt.resize(n);
+            idxs.resize(n);
+        }
+
+        size_t size() const {
+            GGML_ASSERT(idxs.size() == seq_id_virt.size());
+
+            return idxs[0].size();
+        }
+
+        size_t n_seq_virt() const {
+            return seq_id_virt.size();
         }
 
         bool empty() const {
@@ -52,9 +73,6 @@ public:
         void clear() {
             idxs.clear();
         }
-
-        // TODO: implement
-        //std::vector<idx_vec_t> seq_idxs;
     };
 
     using slot_info_vec_t = std::vector<slot_info>;
@@ -68,6 +86,7 @@ public:
                          bool    offload,
                      uint32_t    kv_size,
                      uint32_t    n_seq_max,
+                     uint32_t    n_seq_virt,
                      uint32_t    n_pad,
                      uint32_t    n_swa,
                llama_swa_type    swa_type);
@@ -120,12 +139,12 @@ public:
     uint32_t get_n_kv() const;
 
     // get views of the current state of the cache
-    ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
-    ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
+    ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+    ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * kv_idxs, int32_t il, const slot_info & sinfo) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * kv_idxs, int32_t il, const slot_info & sinfo) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
 
     //
     // preparation API
@@ -146,12 +165,18 @@ public:
     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
     //
-    // set_input API
+    // input API
     //
 
-    void set_input_kv_idxs   (ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+
+    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+
+    void set_input_k_shift(ggml_tensor * dst) const;
+
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
-    void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
 private:
@@ -165,15 +190,15 @@ private:
 
         ggml_tensor * k;
         ggml_tensor * v;
+
+        std::vector<ggml_tensor *> k_seq;
+        std::vector<ggml_tensor *> v_seq;
     };
 
     bool v_trans = true;  // the value tensor is transposed
 
-    // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
-    // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
-    uint32_t head = 0;
-
-    const uint32_t n_seq_max = 1;
+    const uint32_t n_seq_max  = 1;
+    const uint32_t n_seq_virt = 1;
 
     // required padding
     const uint32_t n_pad = 1;
@@ -193,7 +218,14 @@ private:
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
-    llama_kv_cells_unified cells;
+    // the current index from where we start searching for a free slot in the ring buffer of KV cells (see find_slot())
+    // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
+    std::vector<uint32_t> v_heads;
+
+    std::vector<llama_kv_cells_unified> v_cells;
+
+    // maps from a sequence id to a virtual sequence id
+    std::vector<uint32_t> seq_virt_idx;
 
     std::vector<kv_layer> layers;
 
@@ -286,12 +318,17 @@ public:
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * kv_idxs, int32_t il) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * kv_idxs, int32_t il) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
+
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+
+    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_shift(ggml_tensor * dst) const;
 
-    void set_input_kv_idxs   (ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
