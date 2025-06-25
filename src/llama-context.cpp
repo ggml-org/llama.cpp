@@ -9,6 +9,7 @@
 
 #include "ggml.h"
 
+#include <cmath>
 #include <cinttypes>
 #include <cstring>
 #include <limits>
