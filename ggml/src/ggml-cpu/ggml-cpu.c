@@ -2758,8 +2758,6 @@ struct ggml_cplan ggml_graph_plan(
                 case GGML_OP_CONV_2D:
                     {
                         cur = GGML_IM2COL_WORK_SIZE;
-                        //Add enough space for kernel transpose
-                        cur += sizeof(ggml_fp16_t)*node->src[1]->ne[0]*node->src[1]->ne[1]*node->src[1]->ne[2]*node->src[1]->ne[3];
                     } break;
                 case GGML_OP_CONV_TRANSPOSE_2D:
                     {
