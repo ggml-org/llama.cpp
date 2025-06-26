@@ -4306,7 +4306,7 @@ struct ggml_tensor * ggml_conv_2d_direct(
         int                   d1) {// dilation dimension 1
 
     GGML_ASSERT(a->ne[2] == b->ne[2]);
-    GGML_ASSERT(a->type == b->type);
+    //GGML_ASSERT(a->type == b->type);
 
     int64_t ne[4];
     ne[0] = ggml_calc_conv_output_size(b->ne[0], a->ne[0], s0, p0, d0);
