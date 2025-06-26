@@ -1,7 +1,6 @@
 package com.example.llama.data.model
 
-import com.example.llama.util.FileType
-import com.example.llama.util.GgufMetadata
+import android.llama.cpp.gguf.FileType
 import com.example.llama.util.formatContextLength
 import com.example.llama.util.formatFileByteSize
 

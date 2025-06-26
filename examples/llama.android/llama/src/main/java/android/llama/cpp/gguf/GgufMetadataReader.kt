@@ -1,8 +1,8 @@
-package com.example.llama.util
+package android.llama.cpp.gguf
 
 import java.io.File
-import java.io.InputStream
 import java.io.IOException
+import java.io.InputStream
 
 private val DEFAULT_SKIP_KEYS = setOf(
     "tokenizer.chat_template",
@@ -296,19 +296,19 @@ class GgufMetadataReader(
         ).takeUnless { count == null && usedCount == null }
 
         return GgufMetadata(
-            version     = version,
+            version = version,
             tensorCount = tensorCnt,
-            kvCount     = kvCnt,
-            basic       = basic,
-            author      = author,
-            additional  = additional,
+            kvCount = kvCnt,
+            basic = basic,
+            author = author,
+            additional = additional,
             architecture = architectureInfo,
-            baseModels  = baseModels,
-            tokenizer   = tokenizer,
-            dimensions  = dimensions,
-            attention   = attention,
-            rope        = rope,
-            experts     = experts
+            baseModels = baseModels,
+            tokenizer = tokenizer,
+            dimensions = dimensions,
+            attention = attention,
+            rope = rope,
+            experts = experts
         )
     }
 

@@ -1,5 +1,6 @@
 package com.example.llama.ui.screens
 
+import android.llama.cpp.gguf.FileType
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -25,7 +26,6 @@ import com.example.llama.data.model.ModelInfo
 import com.example.llama.ui.components.ModelCardContentArchitectureRow
 import com.example.llama.ui.components.ModelCardContentContextRow
 import com.example.llama.ui.components.ModelCardContentTitleRow
-import com.example.llama.util.FileType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale

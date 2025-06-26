@@ -1,18 +1,18 @@
 package com.example.llama.data.repository
 
 import android.content.Context
+import android.llama.cpp.gguf.GgufMetadataReader
 import android.net.Uri
 import android.os.StatFs
 import android.util.Log
 import com.example.llama.data.local.dao.ModelDao
 import com.example.llama.data.local.entity.ModelEntity
+import com.example.llama.data.model.GgufMetadata
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.remote.HuggingFaceModel
 import com.example.llama.data.remote.HuggingFaceRemoteDataSource
 import com.example.llama.data.repository.ModelRepository.ImportProgressTracker
 import com.example.llama.monitoring.StorageMetrics
-import com.example.llama.util.GgufMetadata
-import com.example.llama.util.GgufMetadataReader
 import com.example.llama.util.copyWithBuffer
 import com.example.llama.util.copyWithChannels
 import com.example.llama.util.formatFileByteSize
@@ -224,7 +224,7 @@ class ModelRepositoryImpl @Inject constructor(
             val metadata = try {
                 val filePath = modelFile.absolutePath
                 Log.i(TAG, "Extracting GGUF Metadata from $filePath")
-                GgufMetadataReader().readStructuredMetadata(filePath)
+                GgufMetadata.fromDomain(GgufMetadataReader().readStructuredMetadata(filePath))
             } catch (e: Exception) {
                 Log.e(TAG, "Cannot extract GGUF metadata: ${e.message}", e)
                 throw e

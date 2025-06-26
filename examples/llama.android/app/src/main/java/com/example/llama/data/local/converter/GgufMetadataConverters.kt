@@ -1,7 +1,7 @@
 package com.example.llama.data.local.converter
 
 import androidx.room.TypeConverter
-import com.example.llama.util.GgufMetadata
+import com.example.llama.data.model.GgufMetadata
 import kotlinx.serialization.json.Json
 
 class GgufMetadataConverters {

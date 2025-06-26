@@ -1,13 +1,11 @@
-package com.example.llama.util
+package android.llama.cpp.gguf
 
-import kotlinx.serialization.Serializable
 import java.io.IOException
 
 
 /**
  * Structured metadata of GGUF
  */
-@Serializable
 data class GgufMetadata(
     // Basic file info
     val version: GgufVersion,
@@ -28,46 +26,6 @@ data class GgufMetadata(
     val rope: RopeInfo? = null,
     val experts: ExpertsInfo? = null
 ) {
-    /** Human-readable full model name + size */
-    val fullModelName: String?
-        get() = when {
-            basic.nameLabel != null -> basic.nameLabel
-            basic.name != null && basic.sizeLabel != null -> "${basic.name}-${basic.sizeLabel}"
-            basic.name != null -> basic.name
-            else -> null
-        }
-
-    /** Human‑readable model name (spaces). */
-    val primaryName: String?
-        get() = basic.nameLabel
-            ?: baseModels?.firstNotNullOfOrNull { it.name }
-            ?: basic.name
-
-    /** CLI‑friendly slug (hyphens). */
-    val primaryBasename: String?
-        get() = basic.name
-            ?: baseModels?.firstNotNullOfOrNull { it.name?.replace(' ', '-') }
-
-    /** URL pointing to model homepage/repo. */
-    val primaryUrl: String?
-        get() = author?.url
-            ?: baseModels?.firstNotNullOfOrNull { it.url }
-
-    val primaryRepoUrl: String?
-        get() = author?.repoUrl
-            ?: baseModels?.firstNotNullOfOrNull { it.repoUrl }
-
-    /** Organisation string. */
-    val primaryOrganization: String?
-        get() = author?.organization
-            ?: baseModels?.firstNotNullOfOrNull { it.organization }
-
-    /** Author string. */
-    val primaryAuthor: String?
-        get() = author?.author
-            ?: baseModels?.firstNotNullOfOrNull { it.author }
-
-    @Serializable
     enum class GgufVersion(val code: Int, val label: String) {
         /** First public draft; little‑endian only, no alignment key. */
         LEGACY_V1(1, "Legacy v1"),
@@ -87,7 +45,6 @@ data class GgufMetadata(
         override fun toString(): String = "$label (code=$code)"
     }
 
-    @Serializable
     data class BasicInfo(
         val uuid: String? = null,
         val name: String? = null,
@@ -95,7 +52,6 @@ data class GgufMetadata(
         val sizeLabel: String? = null,  // Size label like "7B"
     )
 
-    @Serializable
     data class AuthorInfo(
         val organization: String? = null,
         val author: String? = null,
@@ -106,7 +62,6 @@ data class GgufMetadata(
         val licenseLink: String? = null,
     )
 
-    @Serializable
     data class AdditionalInfo(
         val type: String? = null,
         val description: String? = null,
@@ -114,7 +69,6 @@ data class GgufMetadata(
         val languages: List<String>? = null,
     )
 
-    @Serializable
     data class ArchitectureInfo(
         val architecture: String? = null,
         val fileType: Int? = null,
@@ -123,7 +77,6 @@ data class GgufMetadata(
         val quantizationVersion: Int? = null,
     )
 
-    @Serializable
     data class BaseModelInfo(
         val name: String? = null,
         val author: String? = null,
@@ -135,7 +88,6 @@ data class GgufMetadata(
         val repoUrl: String? = null,
     )
 
-    @Serializable
     data class TokenizerInfo(
         val model: String? = null,
         val bosTokenId: Int? = null,
@@ -147,7 +99,6 @@ data class GgufMetadata(
         val chatTemplate: String? = null,
     )
 
-    @Serializable
     data class DimensionsInfo(
         val contextLength: Int? = null,
         val embeddingSize: Int? = null,
@@ -155,7 +106,6 @@ data class GgufMetadata(
         val feedForwardSize: Int? = null,
     )
 
-    @Serializable
     data class AttentionInfo(
         val headCount: Int? = null,
         val headCountKv: Int? = null,
@@ -165,7 +115,6 @@ data class GgufMetadata(
         val layerNormRmsEpsilon: Float? = null,
     )
 
-    @Serializable
     data class RopeInfo(
         val frequencyBase: Float? = null,
         val dimensionCount: Int? = null,
@@ -176,7 +125,6 @@ data class GgufMetadata(
         val finetuned: Boolean? = null,
     )
 
-    @Serializable
     data class ExpertsInfo(
         val count: Int? = null,
         val usedCount: Int? = null,
