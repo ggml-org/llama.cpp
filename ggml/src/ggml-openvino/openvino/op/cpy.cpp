@@ -12,6 +12,7 @@
 #include <openvino/op/range.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/scatter_nd_update.hpp>
+#include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
 #include <openvino/op/squeeze.hpp>
 #include <openvino/op/transpose.hpp>
@@ -57,13 +58,6 @@ OutputVector translate_cpy(const NodeContext& context) {
 
     if (op_case == 1) {
         // Write K to cache_k
-        int64_t head_size = src0_shape[2];
-        int64_t num_heads = src0_shape[1];
-
-        auto reshaped_src1_shape =
-            ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, num_heads, head_size});
-        auto reshaped_src1 = std::make_shared<ov::op::v1::Reshape>(src1, reshaped_src1_shape, false);
-
         auto token_len = get_dimensions(src0.get_node_shared_ptr(), {0});
         auto token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(token_len, zero);
 
@@ -80,7 +74,8 @@ OutputVector translate_cpy(const NodeContext& context) {
         }
         indices = std::make_shared<ov::op::v0::Unsqueeze>(indices, one);
 
-        res = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshaped_src1, indices, src0);
+        auto updated = std::make_shared<ov::op::v3::ScatterNDUpdate>(src1, indices, src0);
+        res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(src1), false);
     } else {
         // Write V to cache_v
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
@@ -140,7 +135,7 @@ OutputVector translate_cpy(const NodeContext& context) {
             false);
 
         auto updated = std::make_shared<ov::op::v3::ScatterNDUpdate>(reshaped_src1, indices_final, flattend_src0);
-        res = std::make_shared<ov::op::v0::Unsqueeze>(updated, zero);
+        res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(src1), false);
     }
 
     return rename_outputs_with_suffix({res}, context.get_name());
