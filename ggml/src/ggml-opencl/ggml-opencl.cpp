@@ -5050,7 +5050,7 @@ static void ggml_cl_conv_2d(ggml_backend_t backend, const ggml_tensor * src0, co
     auto splitWork = [](uint32_t work_size, uint32_t block_size) { return (block_size + work_size - 1) / block_size; };
     const uint32_t NB_K = splitWork(Cout, BS_K);
     const uint32_t NB_NPQ = splitWork(NPQ, BS_NPQ);
-    
+
     const size_t shmem_size = (size_t)(BS_K * (BS_CRS + 1) * sizeof(cl_half) + BS_CRS * (BS_NPQ / VEC_SIZE + 1) * sizeof(cl_half4));
 
     cl_kernel kernel = backend_ctx->kernel_conv_2d;
