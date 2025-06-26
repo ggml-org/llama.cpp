@@ -5,7 +5,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
-        android:name=".revamp.KleidiLlamaApplication"
+        android:name=".KleidiLlamaApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -17,16 +17,7 @@
         >
 
         <activity
-            android:name=".legacy.LegacyActivity"
-            android:exported="true"
-            android:theme="@style/Theme.LlamaAndroid">
-            <intent-filter>
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-
-        <activity
-            android:name=".revamp.MainActivity"
+            android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"
             android:theme="@style/Theme.LlamaAndroid">

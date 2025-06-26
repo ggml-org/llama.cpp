@@ -1,0 +1,101 @@
+package com.example.llama.di
+
+import android.content.Context
+import android.llama.cpp.InferenceEngine
+import android.llama.cpp.LLamaLibraryLoader
+import com.example.llama.data.local.AppDatabase
+import com.example.llama.data.remote.HuggingFaceApiService
+import com.example.llama.data.remote.HuggingFaceRemoteDataSource
+import com.example.llama.data.remote.HuggingFaceRemoteDataSourceImpl
+import com.example.llama.data.repository.ModelRepository
+import com.example.llama.data.repository.ModelRepositoryImpl
+import com.example.llama.data.repository.SystemPromptRepository
+import com.example.llama.data.repository.SystemPromptRepositoryImpl
+import com.example.llama.engine.BenchmarkService
+import com.example.llama.engine.ConversationService
+import com.example.llama.engine.InferenceService
+import com.example.llama.engine.InferenceServiceImpl
+import com.example.llama.engine.ModelLoadingService
+import com.example.llama.engine.StubInferenceEngine
+import com.example.llama.monitoring.PerformanceMonitor
+import dagger.Binds
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import javax.inject.Singleton
+
+@Module
+@InstallIn(SingletonComponent::class)
+internal abstract class AppModule {
+
+    @Binds
+    abstract fun bindInferenceService(impl: InferenceServiceImpl) : InferenceService
+
+    @Binds
+    abstract fun bindModelLoadingService(impl: InferenceServiceImpl) : ModelLoadingService
+
+    @Binds
+    abstract fun bindBenchmarkService(impl: InferenceServiceImpl) : BenchmarkService
+
+    @Binds
+    abstract fun bindConversationService(impl: InferenceServiceImpl) : ConversationService
+
+    @Binds
+    abstract fun bindsModelsRepository(impl: ModelRepositoryImpl): ModelRepository
+
+    @Binds
+    abstract fun bindsSystemPromptRepository(impl: SystemPromptRepositoryImpl): SystemPromptRepository
+
+    @Binds
+    abstract fun bindHuggingFaceRemoteDataSource(
+        impl: HuggingFaceRemoteDataSourceImpl
+    ): HuggingFaceRemoteDataSource
+
+    companion object {
+        private const val USE_REAL_ENGINE = true
+
+        @Provides
+        fun provideInferenceEngine(@ApplicationContext context: Context): InferenceEngine {
+            return if (USE_REAL_ENGINE) {
+                LLamaLibraryLoader.createInstance(context) ?: throw InstantiationException("Cannot instantiate LlamaAndroid!")
+            } else {
+                StubInferenceEngine()
+            }
+        }
+
+        @Provides
+        fun providePerformanceMonitor(@ApplicationContext context: Context) = PerformanceMonitor(context)
+
+        @Provides
+        fun provideAppDatabase(@ApplicationContext context: Context) = AppDatabase.getDatabase(context)
+
+        @Provides
+        fun providesModelDao(appDatabase: AppDatabase) = appDatabase.modelDao()
+
+        @Provides
+        fun providesSystemPromptDao(appDatabase: AppDatabase) = appDatabase.systemPromptDao()
+
+        @Provides
+        @Singleton
+        fun provideOkhttpClient() = OkHttpClient.Builder()
+            .addInterceptor(HttpLoggingInterceptor().apply {
+                level = HttpLoggingInterceptor.Level.BODY
+            }).build()
+
+        @Provides
+        @Singleton
+        fun provideHuggingFaceApiService(okHttpClient: OkHttpClient): HuggingFaceApiService =
+            Retrofit.Builder()
+                .baseUrl("https://huggingface.co/")
+                .client(okHttpClient)
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+                .create(HuggingFaceApiService::class.java)
+    }
+}
