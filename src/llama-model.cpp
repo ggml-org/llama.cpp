@@ -3204,7 +3204,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         // norm
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-                        if (hparams.recurrent_layer(i)) {
+                        if (hparams.is_recurrent(i)) {
                             // ssm layers
                             layer.ssm_in = create_tensor(tn(LLM_TENSOR_SSM_IN, "weight", i), {n_embd, d_in_proj}, 0);
                             layer.ssm_in_b = create_tensor(tn(LLM_TENSOR_SSM_IN, "bias", i), {n_embd, d_in_proj}, llama_model_loader::TENSOR_NOT_REQUIRED);
@@ -9341,94 +9341,39 @@ struct llm_build_starcoder2 : public llm_graph_context {
     }
 };
 
-struct llm_build_mamba : public llm_graph_context {
-    const llama_model & model;
+// Mixin class to allow graph builders to use mamba layer construction
+struct llm_build_mamba_mixin {
 
-    llm_build_mamba(
-        const llama_model & model,
-        const llm_graph_params & params,
-        ggml_cgraph * gf,
-        const bool use_mamba2
-    ) : llm_graph_context(params), model(model) {
-        ggml_tensor * cur;
-        ggml_tensor * inpL;
+    llm_graph_context * self;
 
-        // {n_embd, n_tokens}
-        inpL = build_inp_embd(model.tok_embd);
+    llm_build_mamba_mixin(llm_graph_context * self) : self(self) {}
 
-        auto * rs_inp = build_rs_inp();
-
-        ggml_tensor * inp_out_ids = build_inp_out_ids();
-
-        for (int il = 0; il < n_layer; ++il) {
-            // norm
-            cur = build_norm(inpL,
-                    model.layers[il].attn_norm, NULL,
-                    LLM_NORM_RMS, il);
-            cb(cur, "attn_norm", il);
-
-            if (use_mamba2) {
-                cur = build_mamba2_layer(this, rs_inp, gf, cur, model, ubatch, il);
-            } else {
-                cur = build_mamba_layer(this, rs_inp, gf, cur, model, ubatch, il);
-            }
-
-            if (il == n_layer - 1 && inp_out_ids) {
-                cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
-            }
-
-            // residual
-            cur = ggml_add(ctx0, cur, inpL);
-
-            cur = build_cvec(cur, il);
-            cb(cur, "l_out", il);
-
-            // input for next layer
-            inpL = cur;
-        }
-
-        // final rmsnorm
-        cur = build_norm(inpL,
-                model.output_norm, NULL,
-                LLM_NORM_RMS, -1);
-
-        cb(cur, "result_norm", -1);
-        res->t_embd = cur;
-
-        // lm_head
-        cur = build_lora_mm(model.output, cur);
-
-        cb(cur, "result_output", -1);
-        res->t_logits = cur;
-
-        ggml_build_forward_expand(gf, cur);
-    }
-
+    // static layer build function that enables other models to borrow this
+    // layer logic
     ggml_tensor * build_mamba_layer(
-        const llm_graph_context * self,
              llm_graph_input_rs * inp,
                     ggml_cgraph * gf,
                     ggml_tensor * cur,
               const llama_model & model,
              const llama_ubatch & ubatch,
-                            int   il) const {
-        const auto * mctx_cur = static_cast<const llama_memory_recurrent_context *>(self->mctx);
+                            int   il) {
+        const auto * mctx_cur = inp->mctx;
 
         const auto kv_head = mctx_cur->get_head();
         auto * ctx0 = self->ctx0;
+        const auto & hparams = self->hparams;
 
-        const int64_t d_conv  = self->hparams.ssm_d_conv;
-        const int64_t d_inner = self->hparams.ssm_d_inner;
-        const int64_t d_state = self->hparams.ssm_d_state;
-        const int64_t dt_rank = self->hparams.ssm_dt_rank;
+        const int64_t d_conv  = hparams.ssm_d_conv;
+        const int64_t d_inner = hparams.ssm_d_inner;
+        const int64_t d_state = hparams.ssm_d_state;
+        const int64_t dt_rank = hparams.ssm_dt_rank;
         const int64_t n_head  = d_inner;
         const int64_t head_dim = 1;
         const int64_t n_seqs  = ubatch.n_seqs;
         // Some variants of Mamba arch (e.g. FalconMamba do apply layer norm on B and Dt layers)
-        const bool ssm_dt_b_c_rms = self->hparams.ssm_dt_b_c_rms;
+        const bool ssm_dt_b_c_rms = hparams.ssm_dt_b_c_rms;
         // Use the same RMS norm as the final layer norm
-        const float norm_rms_eps = self->hparams.f_norm_rms_eps;
+        const float norm_rms_eps = hparams.f_norm_rms_eps;
 
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
@@ -9439,7 +9384,7 @@ struct llm_build_mamba : public llm_graph_context {
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
         ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-        ggml_tensor * conv = self->build_rs(inp, gf, conv_states_all, self->hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = self->build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -9520,7 +9465,7 @@ struct llm_build_mamba : public llm_graph_context {
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = self->build_rs(inp, gf, ssm_states_all, self->hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = self->build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
 
             // store last states
             ggml_build_forward_expand(gf,
@@ -9546,25 +9491,27 @@ struct llm_build_mamba : public llm_graph_context {
         return cur;
     }
 
+    // static layer build function that enables other models to borrow this
+    // layer logic
     ggml_tensor * build_mamba2_layer(
-        const llm_graph_context * self,
              llm_graph_input_rs * inp,
                     ggml_cgraph * gf,
                     ggml_tensor * cur,
               const llama_model & model,
              const llama_ubatch & ubatch,
                             int   il) const {
-        const auto * mctx_cur = static_cast<const llama_memory_recurrent_context *>(self->mctx);
+        const auto * mctx_cur = inp->mctx;
 
         const auto kv_head = mctx_cur->get_head();
         auto * ctx0 = self->ctx0;
+        const auto & hparams = self->hparams;
 
-        const int64_t d_conv  = self->hparams.ssm_d_conv;
-        const int64_t d_inner = self->hparams.ssm_d_inner;
-        const int64_t d_state = self->hparams.ssm_d_state;
-        const int64_t n_head  = self->hparams.ssm_dt_rank;
+        const int64_t d_conv  = hparams.ssm_d_conv;
+        const int64_t d_inner = hparams.ssm_d_inner;
+        const int64_t d_state = hparams.ssm_d_state;
+        const int64_t n_head  = hparams.ssm_dt_rank;
         const int64_t head_dim = d_inner / n_head;
-        const int64_t n_group = self->hparams.ssm_n_group;
+        const int64_t n_group = hparams.ssm_n_group;
         const int64_t n_seqs  = ubatch.n_seqs;
 
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
@@ -9576,7 +9523,7 @@ struct llm_build_mamba : public llm_graph_context {
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
         ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-        ggml_tensor * conv = self->build_rs(inp, gf, conv_states_all, self->hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = self->build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2*n_group*d_state, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -9646,7 +9593,7 @@ struct llm_build_mamba : public llm_graph_context {
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = self->build_rs(inp, gf, ssm_states_all, self->hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = self->build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
 
             // store last states
             ggml_build_forward_expand(gf,
@@ -9676,6 +9623,72 @@ struct llm_build_mamba : public llm_graph_context {
 
         return cur;
     }
+};
+
+struct llm_build_mamba : public llm_graph_context, public llm_build_mamba_mixin {
+    const llama_model & model;
+
+    llm_build_mamba(
+        const llama_model & model,
+        const llm_graph_params & params,
+        ggml_cgraph * gf,
+        const bool use_mamba2
+    ) : llm_graph_context(params), llm_build_mamba_mixin(this), model(model) {
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        // {n_embd, n_tokens}
+        inpL = build_inp_embd(model.tok_embd);
+
+        auto * rs_inp = build_rs_inp();
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        for (int il = 0; il < n_layer; ++il) {
+            // norm
+            cur = build_norm(inpL,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            if (use_mamba2) {
+                cur = build_mamba2_layer(this, rs_inp, gf, cur, model, ubatch, il);
+            } else {
+                cur = build_mamba_layer(this, rs_inp, gf, cur, model, ubatch, il);
+            }
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            }
+
+            // residual
+            cur = ggml_add(ctx0, cur, inpL);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        // final rmsnorm
+        cur = build_norm(inpL,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+
 };
 
 struct llm_build_command_r : public llm_graph_context {
@@ -13005,85 +13018,16 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
     }
 };
 
-struct llm_build_granite : public llm_graph_context {
+// Mixin class to give builders access to a common granite layer builder
+struct llm_build_granite_mixin {
 
-    llm_build_granite(
-        const llama_model & model,
-        const llm_graph_params & params,
-        ggml_cgraph * gf,
-        const bool use_rope = true)
-        : llm_graph_context(params) {
+    llm_graph_context * self;
 
-        const int64_t n_embd_head = hparams.n_embd_head_v;
-
-        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
-        GGML_ASSERT(n_embd_head == hparams.n_rot);
-
-        ggml_tensor * cur;
-        ggml_tensor * inpL;
-
-        inpL = build_inp_embd(model.tok_embd);
-
-        // inp_pos - built only if rope enabled
-        ggml_tensor * inp_pos = nullptr;
-        if (use_rope) {
-            inp_pos = build_inp_pos();
-        }
-
-        auto * inp_attn = build_attn_inp_kv_unified();
-
-        ggml_tensor * inp_out_ids = build_inp_out_ids();
-
-        for (int il = 0; il < n_layer; ++il) {
-            ggml_tensor * inpSA = inpL;
-
-            // norm
-            cur = build_norm(inpL,
-                    model.layers[il].attn_norm, NULL,
-                    LLM_NORM_RMS, il);
-            cb(cur, "attn_norm", il);
-
-            // self-attention
-            cur = build_attention_layer(
-                this, gf, cur, inp_pos, inp_attn,
-                model, n_embd_head, use_rope, il);
-
-            if (il == n_layer - 1 && inp_out_ids) {
-                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-            }
-
-            // ffn
-            cur = build_layer_ffn(this, cur, inpSA, model, il);
-
-            // input for next layer
-            inpL = cur;
-        }
-
-        cur = inpL;
-
-        cur = build_norm(cur,
-                model.output_norm, NULL,
-                LLM_NORM_RMS, -1);
-
-        cb(cur, "result_norm", -1);
-        res->t_embd = cur;
-
-        // lm_head
-        cur = build_lora_mm(model.output, cur);
-
-        // For Granite architectures - scale logits
-        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
-        cb(cur, "result_output", -1);
-        res->t_logits = cur;
-
-        ggml_build_forward_expand(gf, cur);
-    }
+    llm_build_granite_mixin(llm_graph_context * self) : self(self) {}
 
     // static layer build function that enables other models to borrow this
     // layer logic
-    static ggml_tensor * build_attention_layer(
-        const llm_graph_context               * self,
+    ggml_tensor * build_granite_attention_layer(
               ggml_cgraph                     * gf,
               ggml_tensor                     * cur,
               ggml_tensor                     * inp_pos,
@@ -13094,6 +13038,8 @@ struct llm_build_granite : public llm_graph_context {
         const int                               il) {
 
         auto * ctx0 = self->ctx0;
+        const auto & hparams = self->hparams;
+        const auto & cparams = self->cparams;
 
         // compute Q and K and (optionally) RoPE them
         ggml_tensor * Qcur = self->build_lora_mm(model.layers[il].wq, cur);
@@ -13117,12 +13063,12 @@ struct llm_build_granite : public llm_graph_context {
             self->cb(Vcur, "Vcur", il);
         }
 
-        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, self->hparams.n_head(il),    self->n_tokens);
-        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, self->hparams.n_head_kv(il), self->n_tokens);
-        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, self->hparams.n_head_kv(il), self->n_tokens);
+        Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, hparams.n_head(il),    self->n_tokens);
+        Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, hparams.n_head_kv(il), self->n_tokens);
+        Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, hparams.n_head_kv(il), self->n_tokens);
 
         if (use_rope) {
-            ggml_tensor * rope_factors = model.get_rope_factors(self->cparams, il);
+            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, rope_factors,
                     self->n_rot, self->rope_type, self->n_ctx_orig, self->freq_base, self->freq_scale,
@@ -13140,7 +13086,7 @@ struct llm_build_granite : public llm_graph_context {
         self->cb(Kcur, "Kcur", il);
         self->cb(Vcur, "Vcur", il);
 
-        const float kq_scale = self->hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : self->hparams.f_attention_scale;
+        const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
         cur = self->build_attn(inp_attn, gf,
                 model.layers[il].wo, model.layers[il].bo,
                 Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
@@ -13149,15 +13095,14 @@ struct llm_build_granite : public llm_graph_context {
     }
 
     // static ffn layer builder for reuse in hybrid architectures
-    static ggml_tensor * build_layer_ffn(
-        const llm_graph_context * self,
+    ggml_tensor * build_layer_ffn(
               ggml_tensor       * cur,
               ggml_tensor       * inpSA,
         const llama_model       & model,
         const int                 il) {
 
         auto * ctx0 = self->ctx0;
-        const auto& hparams = self->hparams;
+        const auto & hparams = self->hparams;
 
         // For Granite architectures - scale residual
         if (hparams.f_residual_scale) {
@@ -13233,7 +13178,83 @@ struct llm_build_granite : public llm_graph_context {
     }
 };
 
-struct llm_build_hybrid_mamba : public llm_graph_context {
+struct llm_build_granite : public llm_graph_context, public llm_build_granite_mixin {
+
+    llm_build_granite(
+        const llama_model & model,
+        const llm_graph_params & params,
+        ggml_cgraph * gf,
+        const bool use_rope = true)
+        : llm_graph_context(params), llm_build_granite_mixin(this) {
+
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        // inp_pos - built only if rope enabled
+        ggml_tensor * inp_pos = nullptr;
+        if (use_rope) {
+            inp_pos = build_inp_pos();
+        }
+
+        auto * inp_attn = build_attn_inp_kv_unified();
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+
+            // norm
+            cur = build_norm(inpL,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            // self-attention
+            cur = build_granite_attention_layer(
+                gf, cur, inp_pos, inp_attn,
+                model, n_embd_head, use_rope, il);
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            // ffn
+            cur = build_layer_ffn(cur, inpSA, model, il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        // For Granite architectures - scale logits
+        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_logit_scale);
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
+struct llm_build_hybrid_mamba : public llm_graph_context, public llm_build_mamba_mixin, public llm_build_granite_mixin {
 
     llm_build_hybrid_mamba(
         const llama_model & model,
@@ -13241,7 +13262,7 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
         ggml_cgraph * gf,
         const bool use_mamba2 = true,
         const bool use_rope = true)
-    : llm_graph_context(params) {
+    : llm_graph_context(params), llm_build_mamba_mixin(this), llm_build_granite_mixin(this) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
@@ -13250,11 +13271,8 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
 
         inpL = build_inp_embd(model.tok_embd);
 
-        // Build the inputs in the recurrent cache
-        ggml_tensor * state_copy = build_inp_s_copy();
-
-        // Build the inputs in the attention cache
-        auto * inp_attn = build_attn_inp_kv_unified();
+        // Build the inputs in the recurrent and attention caches
+        auto * inp = build_inp_mem_hybrid();
 
         // Positional embeddings populated if rope enabled
         ggml_tensor * inp_pos = nullptr;
@@ -13271,18 +13289,21 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
                     LLM_NORM_RMS, il);
             cb(cur, "attn_norm", il);
 
-            if (hparams.recurrent_layer(il)) {
+            // NOTE: Broken during rebase!!! The structure of inp changed in the
+            //  last round, but the next commit will undo the need for this, so
+            //  not worth fixing correctly.
+            if (hparams.is_recurrent(il)) {
                 // ssm layer //
                 if (use_mamba2) {
-                    cur = llm_build_mamba::build_mamba2_layer(this, gf, cur, state_copy, model, ubatch, il);
+                    cur = build_mamba2_layer(inp, gf, cur, model, ubatch, il);
                 } else {
-                    cur = llm_build_mamba::build_mamba_layer(this, gf, cur, state_copy, model, ubatch, il);
+                    cur = build_mamba_layer(inp, gf, cur, model, ubatch, il);
                 }
             } else {
                 // attention layer //
-                cur = llm_build_granite::build_attention_layer(
-                    this, gf, cur, inp_pos, inp_attn,
-                    model, n_embd_head, use_rope, il);
+                cur = build_granite_attention_layer(
+                    gf, cur, inp_pos, inp, model,
+                    n_embd_head, use_rope, il);
             }
 
             if (il == n_layer - 1) {
@@ -13293,7 +13314,7 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
             }
 
             // ffn
-            cur = llm_build_granite::build_layer_ffn(this, cur, inpSA, model, il);
+            cur = build_layer_ffn(cur, inpSA, model, il);
 
             // input for next layer
             inpL = cur;
