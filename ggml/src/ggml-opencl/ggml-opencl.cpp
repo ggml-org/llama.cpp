@@ -6926,3 +6926,4 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
     func(backend, tensor->src[0], tensor->src[1], tensor);
     return true;
 }
+
