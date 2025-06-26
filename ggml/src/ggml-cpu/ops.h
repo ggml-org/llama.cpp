@@ -21,7 +21,7 @@
 static const size_t CACHE_LINE_SIZE_F32 = CACHE_LINE_SIZE/sizeof(float);
 
 // Work buffer size for im2col operations in CONV2D
-#define GGML_IM2COL_WORK_SIZE (16 * 1024 * 1024)  // 16MB work buffer
+#define GGML_IM2COL_WORK_SIZE (16 * 1024 * 1024)
 
 #ifdef __cplusplus
 extern "C" {
