@@ -8718,7 +8718,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                         // If src1 is already quantized, it must match vec_dot_type_for_src1
                         // This path is less common as per todo.txt and might need more robust handling
                         GGML_ASSERT(src1->type == vec_dot_type_for_src1);
-                        src1_segment_prepared_data = (void *)src1_segment_f32_ptr; // This cast is placeholder, actual pointer would be from src1 data
+                        src1_segment_prepared_data = (const void *)src1_segment_f32_ptr; // This cast is placeholder, actual pointer would be from src1 data
                     }
 
                     float segment_result = 0.0f;
@@ -8863,7 +8863,7 @@ UseGgmlGemm1:;
     } else if (src1->type != vec_dot_type) {
         char * wdata = params->wdata;
 
-        const size_t nbw0 = ggml_type_size(vec_dot_type);
+        // const size_t nbw0 = ggml_type_size(vec_dot_type); // Unused
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
         const size_t nbw3 = nbw2*ne12;
@@ -8875,7 +8875,7 @@ UseGgmlGemm1:;
         for (int64_t i13 = 0; i13 < ne13; ++i13) {
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
                 for (int64_t i11 = 0; i11 < ne11; ++i11) { // Changed loop to cover all of src1
-                    size_t bs = ggml_blck_size(vec_dot_type);
+                    // size_t bs = ggml_blck_size(vec_dot_type); // Unused
                     // Parallelize quantization of src1 rows if multiple threads are available for this part
                     // For simplicity in this change, assuming ith=0, nth=1 for src1 quantization here
                     // or that from_float is thread-safe and handles partitioning if params->ith/nth are used.

@@ -99,7 +99,7 @@ SmarterQuantConfig load_smarter_quant_config(const std::string & fname) {
                     tensor_info.n_cols_for_permutation = 0; // Reset before goto
                     goto next_tensor_label;
                 }
-                for (size_t i = 0; i < tensor_info.n_cols_for_permutation; ++i) {
+                for (size_t i = 0; i < (size_t)tensor_info.n_cols_for_permutation; ++i) {
                     if (!permutation_json[i].is_number_integer()) {
                         LLAMA_LOG_WARN("%s: Invalid type for 'column_permutation[%zu]' for tensor '%s'. Expected integer. Skipping tensor processing.\n", __func__, i, tensor_name.c_str());
                         delete[] tensor_info.column_permutation;
@@ -287,7 +287,7 @@ static size_t llama_tensor_quantize_impl(
         loc_workers.resize(nthread -1); // nthread-1 worker threads, 1 main thread
 
         int64_t rows_per_thread = (nrows + nthread - 1) / nthread;
-        size_t total_size_written = 0;
+        // size_t total_size_written = 0; // Unused
         std::mutex size_mutex;
 
         for (int t = 0; t < nthread; ++t) {
@@ -295,8 +295,8 @@ static size_t llama_tensor_quantize_impl(
             const int64_t r_end   = std::min(r_start + rows_per_thread, nrows);
             if (r_start >= r_end) continue;
 
-            const float * thread_src = src + r_start * k;
-            char * thread_dst_char = static_cast<char *>(dst);
+            // const float * thread_src = src + r_start * k; // Unused
+            // char * thread_dst_char = static_cast<char *>(dst); // Unused
             // Calculate offset into dst for this thread's rows
             // This requires knowing the size of previously quantized rows by other threads if types vary,
             // or assuming fixed output size per row if type is const for this call.
