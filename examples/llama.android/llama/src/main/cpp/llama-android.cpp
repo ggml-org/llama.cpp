@@ -72,7 +72,7 @@ static void log_callback(ggml_log_level level, const char *fmt, void *data) {
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_android_llama_cpp_LLamaAndroid_init(JNIEnv *env, jobject /*unused*/) {
+Java_android_llama_cpp_InferenceEngineImpl_init(JNIEnv *env, jobject /*unused*/) {
     // Set llama log handler to Android
     llama_log_set(log_callback, nullptr);
 
@@ -83,7 +83,7 @@ Java_android_llama_cpp_LLamaAndroid_init(JNIEnv *env, jobject /*unused*/) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_android_llama_cpp_LLamaAndroid_load(JNIEnv *env, jobject, jstring jmodel_path) {
+Java_android_llama_cpp_InferenceEngineImpl_load(JNIEnv *env, jobject, jstring jmodel_path) {
     llama_model_params model_params = llama_model_default_params();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
@@ -137,7 +137,7 @@ static common_sampler *new_sampler(float temp) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_android_llama_cpp_LLamaAndroid_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
+Java_android_llama_cpp_InferenceEngineImpl_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
     auto *context = init_context(g_model);
     if (!context) { return 1; }
     g_context = context;
@@ -161,14 +161,14 @@ static std::string get_backend() {
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_android_llama_cpp_LLamaAndroid_systemInfo(JNIEnv *env, jobject /*unused*/) {
+Java_android_llama_cpp_InferenceEngineImpl_systemInfo(JNIEnv *env, jobject /*unused*/) {
     return env->NewStringUTF(llama_print_system_info());
 }
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_android_llama_cpp_LLamaAndroid_benchModel(JNIEnv *env, jobject /*unused*/, jint pp, jint tg,
-                                               jint pl, jint nr) {
+Java_android_llama_cpp_InferenceEngineImpl_benchModel(JNIEnv *env, jobject /*unused*/, jint pp, jint tg,
+                                                      jint pl, jint nr) {
     auto *context = init_context(g_model, pp);
     if (!context) {
         const auto err_msg = "Fail to init_context! Bench aborted.";
@@ -377,7 +377,7 @@ static int decode_tokens_in_batches(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_android_llama_cpp_LLamaAndroid_processSystemPrompt(
+Java_android_llama_cpp_InferenceEngineImpl_processSystemPrompt(
         JNIEnv *env,
         jobject /*unused*/,
         jstring jsystem_prompt
@@ -426,7 +426,7 @@ Java_android_llama_cpp_LLamaAndroid_processSystemPrompt(
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_android_llama_cpp_LLamaAndroid_processUserPrompt(
+Java_android_llama_cpp_InferenceEngineImpl_processUserPrompt(
         JNIEnv *env,
         jobject /*unused*/,
         jstring juser_prompt,
@@ -510,7 +510,7 @@ static bool is_valid_utf8(const char *string) {
 
 extern "C"
 JNIEXPORT jstring JNICALL
-Java_android_llama_cpp_LLamaAndroid_generateNextToken(
+Java_android_llama_cpp_InferenceEngineImpl_generateNextToken(
         JNIEnv *env,
         jobject /*unused*/
 ) {
@@ -570,7 +570,7 @@ Java_android_llama_cpp_LLamaAndroid_generateNextToken(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_android_llama_cpp_LLamaAndroid_unload(JNIEnv * /*unused*/, jobject /*unused*/) {
+Java_android_llama_cpp_InferenceEngineImpl_unload(JNIEnv * /*unused*/, jobject /*unused*/) {
     // Reset long-term & short-term states
     reset_long_term_states();
     reset_short_term_states();
@@ -585,6 +585,6 @@ Java_android_llama_cpp_LLamaAndroid_unload(JNIEnv * /*unused*/, jobject /*unused
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_android_llama_cpp_LLamaAndroid_shutdown(JNIEnv *env, jobject /*unused*/) {
+Java_android_llama_cpp_InferenceEngineImpl_shutdown(JNIEnv *env, jobject /*unused*/) {
     llama_backend_free();
 }

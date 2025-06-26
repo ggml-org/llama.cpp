@@ -36,25 +36,27 @@ import java.io.File
  *
  * @see llama-android.cpp for the native implementation details
  */
-class LLamaAndroid private constructor(private val tier: LLamaTier) : InferenceEngine {
+internal class InferenceEngineImpl private constructor(
+    private val tier: LLamaTier
+) : InferenceEngine {
 
     companion object {
-        private val TAG = LLamaAndroid::class.java.simpleName
+        private val TAG = InferenceEngineImpl::class.java.simpleName
 
         private var initialized = false
 
         /**
-         * Create LLamaAndroid instance with specific tier
+         * Create [InferenceEngineImpl] instance with specific tier
          */
-        internal fun createWithTier(tier: LLamaTier): LLamaAndroid? {
+        internal fun createWithTier(tier: LLamaTier): InferenceEngineImpl? {
             if (initialized) {
                 Log.w(TAG, "LLamaAndroid already initialized")
                 return null
             }
 
             try {
-                Log.i(TAG, "Instantiating LLamaAndroid w/ ${tier.libraryName}")
-                val instance = LLamaAndroid(tier)
+                Log.i(TAG, "Instantiating InferenceEngineImpl w/ ${tier.libraryName}")
+                val instance = InferenceEngineImpl(tier)
                 initialized = true
                 return instance
 

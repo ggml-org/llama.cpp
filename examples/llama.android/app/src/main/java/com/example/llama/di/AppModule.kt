@@ -2,7 +2,7 @@ package com.example.llama.di
 
 import android.content.Context
 import android.llama.cpp.InferenceEngine
-import android.llama.cpp.LLamaLibraryLoader
+import android.llama.cpp.InferenceEngineLoader
 import com.example.llama.data.local.AppDatabase
 import com.example.llama.data.remote.HuggingFaceApiService
 import com.example.llama.data.remote.HuggingFaceRemoteDataSource
@@ -58,14 +58,15 @@ internal abstract class AppModule {
     ): HuggingFaceRemoteDataSource
 
     companion object {
-        private const val USE_REAL_ENGINE = true
+        private const val USE_STUB_ENGINE = false
 
         @Provides
         fun provideInferenceEngine(@ApplicationContext context: Context): InferenceEngine {
-            return if (USE_REAL_ENGINE) {
-                LLamaLibraryLoader.createInstance(context) ?: throw InstantiationException("Cannot instantiate LlamaAndroid!")
-            } else {
+            return if (USE_STUB_ENGINE) {
                 StubInferenceEngine()
+            } else {
+                InferenceEngineLoader.createInstance(context)
+                    ?: throw InstantiationException("Cannot instantiate InferenceEngine!")
             }
         }
 

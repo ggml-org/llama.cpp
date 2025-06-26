@@ -21,10 +21,10 @@ enum class LLamaTier(val rawValue: Int, val libraryName: String, val description
     }
 }
 
-class LLamaLibraryLoader private constructor() {
+class InferenceEngineLoader private constructor() {
 
     companion object {
-        private val TAG = LLamaLibraryLoader::class.simpleName
+        private val TAG = InferenceEngineLoader::class.simpleName
 
         private const val DETECTION_VERSION = 1
         private const val PREFS_NAME = "llama_cpu_detection"
@@ -37,16 +37,16 @@ class LLamaLibraryLoader private constructor() {
         @JvmStatic
         private external fun getCpuFeaturesString(): String
 
-        private var _cachedInstance: LLamaAndroid? = null
+        private var _cachedInstance: InferenceEngineImpl? = null
         private var _detectedTier: LLamaTier? = null
         val detectedTier: LLamaTier? get() = _detectedTier
 
         /**
-         * Factory method to get a configured LLamaAndroid instance.
+         * Factory method to get a configured [InferenceEngineImpl] instance.
          * Handles tier detection, caching, and library loading automatically.
          */
         @Synchronized
-        fun createInstance(context: Context): LLamaAndroid? {
+        fun createInstance(context: Context): InferenceEngine? {
             // Return cached instance if available
             _cachedInstance?.let { return it }
 
@@ -59,18 +59,18 @@ class LLamaLibraryLoader private constructor() {
                 _detectedTier = tier
                 Log.i(TAG, "Using tier: ${tier.name} (${tier.description})")
 
-                // Create and cache LLamaAndroid instance
-                val instance = LLamaAndroid.createWithTier(tier) ?: run {
-                    Log.e(TAG, "Failed to instantiate LLamaAndroid")
+                // Create and cache the inference engine instance
+                val instance = InferenceEngineImpl.createWithTier(tier) ?: run {
+                    Log.e(TAG, "Failed to instantiate InferenceEngineImpl")
                     return null
                 }
                 _cachedInstance = instance
-                Log.i(TAG, "Successfully created LLamaAndroid instance with ${tier.name}")
+                Log.i(TAG, "Successfully created InferenceEngineImpl instance with ${tier.name}")
 
                 return instance
 
             } catch (e: Exception) {
-                Log.e(TAG, "Error creating LLamaAndroid instance", e)
+                Log.e(TAG, "Error creating InferenceEngineImpl instance", e)
                 return null
             }
         }
