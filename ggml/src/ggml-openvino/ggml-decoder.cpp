@@ -26,12 +26,13 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token)
-    : m_cgraph(cgraph),
-      m_node(node),
-      m_op_name(m_node ? std::string(m_node->name) : "NONE_OP"),
-      m_is_static(is_static),
-      m_is_first_token(is_first_token) {
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* m_cgraph, bool is_static,
+                             bool is_first_token) :
+    m_cgraph(m_cgraph),
+    m_node(node),
+    m_op_name(m_node ? std::string(m_node->name) : "NONE_OP"),
+    m_is_static(is_static),
+    m_is_first_token(is_first_token) {
     static std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
 
     if (m_node) {
@@ -44,10 +45,11 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
         }
 
         if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-            dump_cgraph(m_cgraph);
+            std::string filename = "cgraph.txt";
+            dump_cgraph(m_cgraph, filename);
         }
 
-        set_max_token_len();
+        set_llm_params();
 
         static bool weight_created = false;
         if (!weight_created) {
@@ -105,33 +107,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
                 if (m_model_inputs.find(src_name) != m_model_inputs.end()) {
                     continue;
                 }
-                ov::PartialShape input_shape;
-                if (std::string(src->name) == "inp_tokens" || std::string(src->name) == "inp_pos") {
-                    if (m_is_static) {
-                        if (m_is_first_token) {
-                            input_shape = ov::PartialShape{1, 1, m_max_token_len};
-                        } else {
-                            input_shape = ov::PartialShape{1, 1, 1};
-                        }
-                    } else {
-                        input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_max_token_len)};
-                    }
-                } else if (std::string(src->name) == "KQ_mask") {
-                    if (m_is_static) {
-                        if (m_is_first_token) {
-                            input_shape = ov::PartialShape{1, m_max_token_len, m_max_token_len};
-                        } else {
-                            input_shape = ov::PartialShape{1, 1, m_max_token_len};
-                        }
-                    } else {
-                        auto max_mask_size = GGML_PAD(m_max_token_len, GGML_KQ_MASK_PAD);
-                        input_shape =
-                            ov::PartialShape{1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size)};
-                    }
-                } else {
-                    input_shape = ov::Shape{get_shape(src)};
-                }
-                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), input_shape);
+                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(src));
                 param_node->set_friendly_name(src_name);
                 m_model_inputs[src_name] = param_node;
             }
@@ -150,6 +126,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
             auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), name);
             if (it == m_model_output_names.end()) {
                 m_model_output_names.push_back(name);
+                m_kv_names.push_back(name);
             }
         }
     }
@@ -213,15 +190,52 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
     }
 }
 
-void GgmlOvDecoder::set_max_token_len() {
+void GgmlOvDecoder::set_llm_params() {
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         auto* node = m_cgraph->nodes[i];
-        if (std::string(node->name) == "cache_k_l0 (view)") {
+        if (node->op == GGML_OP_VIEW && std::string(node->name) == "cache_k_l0 (view)") {
             auto* cache_k = node->src[0];
             m_max_token_len = cache_k->ne[1];
-            break;
+        } else if (node->op == GGML_OP_ROPE && std::string(node->name) == "Qcur-0") {
+            m_head_size = node->ne[0];
+            m_num_heads = node->ne[1];
+        } else if (node->op == GGML_OP_ROPE && std::string(node->name) == "Kcur-0") {
+            m_num_heads_kv = node->ne[1];
         }
     }
+}
+
+ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) const {
+    ov::PartialShape input_shape;
+    if (std::string(src->name) == "inp_tokens" || std::string(src->name) == "inp_pos") {
+        if (m_is_static) {
+            if (m_is_first_token) {
+                input_shape = ov::PartialShape{ 1, 1, m_max_token_len };
+            } else {
+                input_shape = ov::PartialShape{ 1, 1, 1 };
+            }
+        } else {
+            input_shape = ov::PartialShape{ 1, 1, ov::Dimension(1, m_max_token_len) };
+        }
+    } else if (std::string(src->name) == "KQ_mask") {
+        if (m_is_static) {
+            if (m_is_first_token) {
+                input_shape = ov::PartialShape{ 1, m_max_token_len, m_max_token_len };
+            } else {
+                input_shape = ov::PartialShape{ 1, 1, m_max_token_len };
+            }
+        } else {
+            auto max_mask_size = GGML_PAD(m_max_token_len, GGML_KQ_MASK_PAD);
+            input_shape = ov::PartialShape{ 1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size) };
+        }
+    } else if (std::string(src->name).find("cache_k") == 0) {
+        input_shape = ov::PartialShape{ m_max_token_len, m_num_heads_kv, m_head_size };
+    } else if (std::string(src->name).find("cache_v") == 0) {
+        input_shape = ov::PartialShape{ m_num_heads_kv, m_head_size, m_max_token_len };
+    } else {
+        input_shape = ov::PartialShape{ get_shape(src) };
+    }
+    return input_shape;
 }
 
 void GgmlOvDecoder::add_extra_inputs() {
@@ -265,6 +279,16 @@ void GgmlOvDecoder::add_extra_inputs() {
             break;
         }
     }
+}
+
+std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
+    std::map<std::string, std::string> kv_param_res_names;
+    for (const auto& name : m_kv_names) {
+        if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
+            kv_param_res_names[name] = name;
+        }
+    }
+    return kv_param_res_names;
 }
 
 void GgmlOvDecoder::add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
@@ -344,8 +368,8 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
     return weight_node;
 }
 
-void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph) {
-    std::ofstream file("cgraph.txt");
+void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename) {
+    std::ofstream file(filename);
     if (!file.is_open()) {
         std::cerr << "Failed to open file" << std::endl;
         return;

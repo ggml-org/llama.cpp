@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <openvino/core/partial_shape.hpp>
 #include <vector>
 
 #include "ggml.h"
@@ -89,28 +90,34 @@ public:
         return m_model_output_names;
     }
 
-    virtual bool is_static() const override {
-        return m_is_static;
-    }
-    virtual bool is_first_token() const override {
-        return m_is_first_token;
-    }
-    virtual int get_max_token_len() const override {
-        return m_max_token_len;
-    }
+    virtual int get_max_token_len() const override { return m_max_token_len; }
+
+    virtual int get_num_heads() const override { return m_num_heads; }
+
+    virtual int get_num_heads_kv() const override { return m_num_heads_kv; }
+
+    virtual int get_head_size() const override { return m_head_size; }
+
+    virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
+
+    virtual bool is_static() const override { return m_is_static; }
+
+    virtual bool is_first_token() const override { return m_is_first_token; }
+
+    ov::PartialShape get_graph_input_shape(const ggml_tensor* src) const;
 
 private:
     void set_input_output(ggml_tensor* node);
     void add_extra_inputs();
-    static void dump_cgraph(const struct ggml_cgraph* cgraph);
+    static void dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename);
     static std::vector<size_t> get_shape(const ggml_tensor* tensor);
     static std::vector<size_t> get_stride(const ggml_tensor* tensor);
     static ov::element::Type get_ov_type(const ggml_tensor* tensor);
+
+    // set max_token_len, num_heads, etc
+    void set_llm_params();
+
     static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
-
-    void set_max_token_len();
-    int m_max_token_len;
-
     void add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
 
     struct ggml_cgraph* m_cgraph;
@@ -129,6 +136,11 @@ private:
     std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
+    int m_max_token_len;
+    int m_num_heads;
+    int m_num_heads_kv;
+    int m_head_size;
+    std::vector<std::string> m_kv_names;
     bool m_is_static;
     bool m_is_first_token;
 };
