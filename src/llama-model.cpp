@@ -14373,14 +14373,7 @@ const char * llama_model_chat_template(const llama_model * model, const char * n
         : LLM_KV(model->arch)(LLM_KV_TOKENIZER_CHAT_TEMPLATE);
     const auto & it = model->gguf_kv.find(key);
     if (it == model->gguf_kv.end()) {
-        // one-off fix for very popular models (so we are not flooded with issues)
-        // do not extend this list unless absolutely necessary
-        // Mistral-Small-2503 does not have built-in chat template
-        llama_vocab_pre_type pre_type = model->vocab.get_pre_type();
-        if (pre_type == LLAMA_VOCAB_PRE_TYPE_TEKKEN && model->layers.size() == 40) {
-            return "mistral-v7-tekken";
-        }
-
+        LLAMA_LOG_WARN("llama_model_chat_template: Couldn't find chat template (tried key: %s).\n", key.c_str());
         return nullptr;
     }
 
