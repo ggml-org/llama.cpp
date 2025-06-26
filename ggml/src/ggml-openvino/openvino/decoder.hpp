@@ -4,6 +4,7 @@
 #include <map>
 #include <openvino/core/node.hpp>
 #include <openvino/frontend/decoder.hpp>
+#include <string>
 
 namespace ov {
 namespace frontend {
@@ -56,6 +57,11 @@ public:
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_extra_inputs() const = 0;
     virtual const std::map<std::string, std::shared_ptr<ov::Node>>& get_model_weights() const = 0;
     virtual const std::vector<std::string>& get_model_output_names() const = 0;
+
+    virtual int get_num_heads() const = 0;
+    virtual int get_num_heads_kv() const = 0;
+    virtual int get_head_size() const = 0;
+    virtual std::map<std::string, std::string> get_kv_param_res_names() const = 0;
 
     virtual bool is_static() const = 0;
     virtual bool is_first_token() const = 0;

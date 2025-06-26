@@ -1,7 +1,12 @@
 #include "translate_session.hpp"
 
 #include <cstdlib>
+#include <map>
+#include <memory>
+#include <openvino/op/parameter.hpp>
+#include <openvino/op/result.hpp>
 #include <openvino/pass/constant_folding.hpp>
+#include <openvino/pass/make_stateful.hpp>
 
 #include "input_model.hpp"
 
@@ -10,6 +15,41 @@ namespace frontend {
 namespace ggml {
 
 using namespace ov::op;
+
+namespace {
+ov::pass::MakeStateful::ParamResPairs get_kv_param_res_pairs(
+    const std::shared_ptr<ov::Model>& model, const std::map<std::string, std::string>& kv_param_res_names) {
+    ov::pass::MakeStateful::ParamResPairs pairs;
+    const auto& params = model->get_parameters();
+    const auto& results = model->get_results();
+
+    for (const auto& param_res : kv_param_res_names) {
+        const auto& param_name = param_res.first;
+        const auto& res_name = param_res.second;
+
+        auto param_it = std::find_if(params.begin(), params.end(), [&](const std::shared_ptr<v0::Parameter>& node) {
+            return node->get_friendly_name() == param_name;
+        });
+
+        OPENVINO_ASSERT(param_it != params.end(), "The tensor name ", param_name,
+                        " is not associated with any of "
+                        "Parameters in the network.");
+
+        auto res_it = std::find_if(results.begin(), results.end(), [&](const std::shared_ptr<v0::Result>& node) {
+            return node->get_friendly_name() == res_name;
+        });
+
+        OPENVINO_ASSERT(res_it != results.end(), "The tensor name ", res_name,
+                        " is not associated with any of "
+                        "Results in the network.");
+
+        std::shared_ptr<ov::op::v0::Parameter> param = *param_it;
+        std::shared_ptr<ov::op::v0::Result> res = *res_it;
+        pairs.emplace_back(param, res);
+    }
+    return pairs;
+}
+}  // namespace
 
 TranslateSession::TranslateSession(const frontend::InputModel::Ptr& input_model,
                                    const std::unordered_map<std::string, CreatorFunction>& translator_map)
@@ -88,25 +128,26 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         results.push_back(result);
     }
 
-    ov::ParameterVector used_params;
-    for (const auto& param : params) {
-        if (!param->output(0).get_target_inputs().empty()) {
-            used_params.push_back(param);
-        }
-    }
-    if (getenv("GGML_OPENVINO_PROFILING")) {
-        if (auto diff = params.size() - used_params.size()) {
-            std::cout << diff << " parameters are not used in the model." << std::endl;
-        }
-    }
-    resulting_model = std::make_shared<Model>(results, used_params);
+    resulting_model = std::make_shared<Model>(results, params);
+
+    apply_transformations(resulting_model);
+    return resulting_model;
+}
+
+void TranslateSession::apply_transformations(const std::shared_ptr<Model>& model) {
+    auto ggml_model_decoder = std::dynamic_pointer_cast<InputModel>(m_input_model)->get_model_decoder();
 
     ov::pass::Manager manager;
     manager.set_per_pass_validation(true);
     manager.register_pass<ov::pass::ConstantFolding>();
-    manager.run_passes(resulting_model);
 
-    return resulting_model;
+    if (!ggml_model_decoder->is_static()) {
+        const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
+        const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
+        manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
+    }
+
+    manager.run_passes(model);
 }
 
 }  // namespace ggml
