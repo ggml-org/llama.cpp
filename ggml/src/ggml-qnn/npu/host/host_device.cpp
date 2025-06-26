@@ -199,7 +199,7 @@ bool npu_device::supports_op_impl(const ggml_tensor * op) {
 #ifndef NDEBUG
         auto * src0_type = i ? ggml_type_name(op->src[0]->type) : "null";
         auto * src1_type = (i > 1) ? ggml_type_name(op->src[1]->type) : "null";
-        LOG_DEBUG("[%s][%s]unsupported %s(%s,%s), ret: 0x%x, supported: %d\n", get_name(), ggml_op_name(op->op),
+        LOG_DEBUG("[%s][%s]unsupported %s(%s,%s), ret: 0x%x, supported: %d\n", get_name(), ggml_op_desc(op),
                   ggml_type_name(op->type), src0_type, src1_type, ret, supported);
 #endif
         return false;
@@ -275,16 +275,16 @@ bool npu_device::supports_op(const ggml_tensor * op) {
         if (op->op != GGML_OP_NONE && op->op != GGML_OP_VIEW && op->op != GGML_OP_RESHAPE &&
             op->op != GGML_OP_PERMUTE) {
             _supported_op++;
-            LOG_DEBUG("[%s][%s]supported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_name(op->op),
-                      op_desc, _supported_op.load(), _unsupported_op.load());
+            LOG_DEBUG("[%s][%s][%s]supported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_desc(op),
+                      ggml_get_name(op), op_desc, _supported_op.load(), _unsupported_op.load());
         }
 
         return true;
     }
 
     _unsupported_op++;
-    LOG_DEBUG("[%s][%s]unsupported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_name(op->op), op_desc,
-              _supported_op.load(), _unsupported_op.load());
+    LOG_DEBUG("[%s][%s][%s]unsupported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_desc(op),
+              ggml_get_name(op), op_desc, _supported_op.load(), _unsupported_op.load());
     return false;
 }
 #else
