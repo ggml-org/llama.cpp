@@ -13069,8 +13069,6 @@ struct llm_build_granite : public llm_graph_context {
         ggml_build_forward_expand(gf, cur);
     }
 
-    // static layer build function that enables other models to borrow this
-    // layer logic
     ggml_tensor * build_granite_attention_layer(
               ggml_cgraph                     * gf,
               ggml_tensor                     * cur,
@@ -13134,7 +13132,6 @@ struct llm_build_granite : public llm_graph_context {
         return cur;
     }
 
-    // static ffn layer builder for reuse in hybrid architectures
     ggml_tensor * build_layer_ffn(
               ggml_tensor       * cur,
               ggml_tensor       * inpSA,
@@ -13215,16 +13212,17 @@ struct llm_build_granite : public llm_graph_context {
     }
 };
 
-struct llm_build_hybrid_mamba : public llm_graph_context {
+struct llm_build_granite_hybrid : public llm_graph_context {
 
     const llama_model & model;
 
-    llm_build_hybrid_mamba(
-        const llama_model & model,
-        const llm_graph_params & params,
-        ggml_cgraph * gf,
-        const bool use_rope = true)
-    : llm_graph_context(params), model(model) {
+    llm_build_granite_hybrid(
+                 const llama_model & model,
+            const llm_graph_params & params,
+                       ggml_cgraph * gf,
+               const bool use_rope = true) :
+        llm_graph_context(params), model(model) {
+
         const int64_t n_embd_head = hparams.n_embd_head_v;
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
@@ -13424,8 +13422,6 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
         return cur;
     }
 
-    // static layer build function that enables other models to borrow this
-    // layer logic
     ggml_tensor * build_granite_attention_layer(
               ggml_cgraph                * gf,
               ggml_tensor                * cur,
@@ -13489,7 +13485,6 @@ struct llm_build_hybrid_mamba : public llm_graph_context {
         return cur;
     }
 
-    // static ffn layer builder for reuse in hybrid architectures
     ggml_tensor * build_layer_ffn(
               ggml_tensor       * cur,
               ggml_tensor       * inpSA,
@@ -14859,12 +14854,12 @@ llm_graph_result_ptr llama_model::build_graph(
             } break;
         case LLM_ARCH_GRANITE_MOE_HYBRID:
             {
-                llm = std::make_unique<llm_build_hybrid_mamba>(*this, params, gf,
+                llm = std::make_unique<llm_build_granite_hybrid>(*this, params, gf,
                     /* use_rope   */ false);
             } break;
         case LLM_ARCH_BAMBA:
             {
-                llm = std::make_unique<llm_build_hybrid_mamba>(*this, params, gf,
+                llm = std::make_unique<llm_build_granite_hybrid>(*this, params, gf,
                     /* use_rope   */ true);
             } break;
         case LLM_ARCH_CHAMELEON:
