@@ -321,18 +321,18 @@ void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, s
     }
 }
 
-void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count,
-                         const float * f16_to_f32_table) {
+template <bool _IsAligned>
+void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count) {
     constexpr const int qk = QUANT_BLOCK_SIZE;
     static_assert(qk % 2 == 0, "qk must be even");
     static_assert(QUANT_BLOCK_SIZE == hexagon::kBytesPerVector / sizeof(float));
     constexpr const uint32_t kSizeOfQs = sizeof(npu_device_block_q4_0::qs);
 
-    const int     nb      = count / qk;
-    const auto *  src_ptr = reinterpret_cast<const npu_device_block_q4_0 *>(src);
-    HVX_Vector    mask    = Q6_Vb_vsplat_R(0x0F);
-    HVX_Vector    minus   = Q6_Vb_vsplat_R(8);
-    HVX_UVector * dst_ptr = ((HVX_UVector *) dst);  // TODO: opt for aligned access
+    const int                      nb      = count / qk;
+    const auto *                   src_ptr = reinterpret_cast<const npu_device_block_q4_0 *>(src);
+    const HVX_Vector               mask    = Q6_Vb_vsplat_R(0x0F);
+    const HVX_Vector               minus   = Q6_Vb_vsplat_R(8);
+    hexagon::dequant_target_type * dst_ptr = dst;  // TODO: opt for aligned access
 
     const int loop_count = nb - (nb % 2);
     for (int i = 0; i < loop_count; i += 2) {
@@ -352,8 +352,14 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
         q                   = Q6_Wh_vunpack_Vb(q_lo);
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
-        dst_ptr[0]          = Q6_Vhf_equals_Vqf16(q_lo);
-        dst_ptr++;
+
+        if constexpr (_IsAligned) {
+            *reinterpret_cast<HVX_Vector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(q_lo);
+        } else {
+            *reinterpret_cast<HVX_UVector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(q_lo);
+        }
+
+        dst_ptr += hexagon::kBytesPerVector / sizeof(hexagon::dequant_target_type);
     }
 
     if (loop_count < nb) {
@@ -371,6 +377,16 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
         q_lo             = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
         q6op_vstu_variable_ARV(dst_ptr, hexagon::kBytesPerVector / 2,
                                Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
+    }
+}
+
+void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count,
+                         const float * f16_to_f32_table) {
+    const bool dst_aligned = hexagon::is_addr_aligned(dst);
+    if (dst_aligned) {
+        dequantize_row_q4_0<true>(src, dst, count);
+    } else {
+        dequantize_row_q4_0<false>(src, dst, count);
     }
 }
 

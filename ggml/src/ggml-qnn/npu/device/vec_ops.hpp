@@ -123,7 +123,7 @@ inline HVX_VectorPair hvx_vqf32_convert_vhf(HVX_Vector vxl) {
 
 inline HVX_VectorPair hvx_vsf_convert_vhf(HVX_Vector vxl) {
     constexpr const __fp16 kOne = 1.0f;
-    HVX_Vector kOneV            = Q6_Vh_vsplat_R(reinterpret_cast<const uint16_t &>(kOne));
+    const HVX_Vector kOneV      = Q6_Vh_vsplat_R(reinterpret_cast<const uint16_t &>(kOne));
 
     HVX_VectorPair res   = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vxl), kOneV);
     HVX_Vector     vxl_w = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(res));
