@@ -16,12 +16,16 @@ def send_serial_command(port, baudrate, command):
                 line = b""
                 while True:
                     byte = ser.read(1)  # Read one byte at a time
-                    if (byte == b"\n") or (byte == b"#"):  # Stop when delimiter is found
+                    if (byte == b"\n") or (byte == b"#"): # Stop when delimiter is found
                         break
                     line += byte
                 if line: # Check if line is not empty
                     read_next_line = line.decode('utf-8')
-                    if ("run-platform-done" in read_next_line.strip()) or ("@agilex7_dk_si_agf014ea" in read_next_line.strip()) or ("imx8mpevk" in read_next_line.strip()):
+                    if ("run-platform-done" in read_next_line.strip()) or \
+                            ("SOCFPGA_AGILEX7 " in read_next_line.strip()) or \
+                            ("Unknown command " in read_next_line.strip()) or \
+                            ("@agilex7_dk_si_agf014ea" in read_next_line.strip()) or \
+                            ("imx8mpevk" in read_next_line.strip()):
                         break
                     if (first_time == 1) :
                         first_time = 0
