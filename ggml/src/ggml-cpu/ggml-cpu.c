@@ -683,6 +683,10 @@ static void ggml_init_arm_arch_features(void) {
 
 #endif // __ARM_ARCH
 
+void ggml_compute_forward_mul_mat(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst);
+
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
     GGML_ASSERT(!ggml_get_no_alloc(ctx));
 
@@ -1189,7 +1193,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     }
 }
 
-static void ggml_compute_forward_mul_mat(
+void ggml_compute_forward_mul_mat(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
 
@@ -2725,6 +2729,12 @@ struct ggml_cplan ggml_graph_plan(
                         } else {
                             GGML_ABORT("fatal error");
                         }
+                    } break;
+                case GGML_OP_CONV_2D:
+                    {
+                        cur = GGML_IM2COL_WORK_SIZE;
+                        //Add enough space for kernel transpose
+                        cur += sizeof(ggml_fp16_t)*node->src[1]->ne[0]*node->src[1]->ne[1]*node->src[1]->ne[2]*node->src[1]->ne[3];
                     } break;
                 case GGML_OP_CONV_TRANSPOSE_2D:
                     {

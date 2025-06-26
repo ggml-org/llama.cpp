@@ -3,6 +3,7 @@
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "binary-ops.h"
+#include "ggml.h"
 #include "unary-ops.h"
 #include "vec.h"
 
@@ -6058,70 +6059,173 @@ void ggml_compute_forward_im2col_back_f32(
     }
 }
 
+static void ggml_call_mul_mat(
+    const ggml_compute_params * params,
+    int64_t m, int64_t n, int64_t k,
+    void * a, void * b, void * c) {
+
+    struct ggml_tensor src1 = {};
+    src1.ne[0] = k;
+    src1.ne[1] = m;
+    src1.ne[2] = 1;
+    src1.ne[3] = 1;
+    src1.nb[0] = sizeof(float);
+    src1.nb[1] = k * sizeof(float);
+    src1.nb[2] = src1.nb[1];
+    src1.nb[3] = src1.nb[2];
+    src1.data  = a;
+
+    struct ggml_tensor src0 = {};
+    src0.ne[0] = k;
+    src0.ne[1] = n;
+    src0.ne[2] = 1;
+    src0.ne[3] = 1;
+    src0.nb[0] = sizeof(float);
+    src0.nb[1] = k * sizeof(float);
+    src0.nb[2] = src0.nb[1];
+    src0.nb[3] = src0.nb[2];
+    src0.data  = b;
+
+    struct ggml_tensor dst = {};
+    dst.ne[0] = n;
+    dst.ne[1] = m;
+    dst.ne[2] = 1;
+    dst.ne[3] = 1;
+    dst.nb[0] = sizeof(float);
+    dst.nb[1] = n * sizeof(float);
+    dst.nb[2] = dst.nb[1];
+    dst.nb[3] = dst.nb[2];
+    dst.data  = c;
+    dst.src[0] = &src0;
+    dst.src[1] = &src1;
+
+    ggml_compute_forward_mul_mat(params, &dst);
+}
+
+
 // ggml_compute_forward_conv_2d
 
-static void ggml_compute_forward_conv_2d_f32(
-        const ggml_compute_params * params,
-        const ggml_tensor * kernel,  // [KW, KH, IC, OC]
-        const ggml_tensor * src,     // [W, H, C, N]
-        ggml_tensor * dst) {         // [OW, OH, OC, N]
+static void ggml_compute_forward_conv_2d_f32(const ggml_compute_params * params,
+                                       ggml_tensor        * dst) {
 
-    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
-    const int32_t s1 = ggml_get_op_params_i32(dst, 1);
-    const int32_t p0 = ggml_get_op_params_i32(dst, 2);
-    const int32_t p1 = ggml_get_op_params_i32(dst, 3);
-    const int32_t d0 = ggml_get_op_params_i32(dst, 4);
-    const int32_t d1 = ggml_get_op_params_i32(dst, 5);
+    const ggml_tensor * src    = dst->src[1];      // [W H C_in N]
+    const ggml_tensor * kernel = dst->src[0];      // [W H C_in C_out]
 
-    const int64_t OW = dst->ne[0];
-    const int64_t OH = dst->ne[1];
-    const int64_t OC = dst->ne[2];
-    const int64_t N  = dst->ne[3];
+    GGML_ASSERT(ggml_is_contiguous(kernel));
 
-    const int64_t IW = src->ne[0];
-    const int64_t IH = src->ne[1];
-    const int64_t IC = src->ne[2];
+    const int32_t stride_x = dst->op_params[0];
+    const int32_t stride_y = dst->op_params[1];
+    const int32_t pad_x    = dst->op_params[2];
+    const int32_t pad_y    = dst->op_params[3];
 
-    const int64_t KW = kernel->ne[0];
-    const int64_t KH = kernel->ne[1];
+    const int64_t c_in  = src->ne[2];
+    const int64_t c_out = kernel->ne[3];
+    GGML_ASSERT(c_in == kernel->ne[2]);
 
-    const float * kernel_data = (const float *)kernel->data;
-    const float * src_data    = (const float *)src->data;
-    float       * dst_data    = (float       *)dst->data;
+    const int64_t src_w = src->ne[0];
+    const int64_t src_h = src->ne[1];
+    const int64_t knl_w = kernel->ne[0];
+    const int64_t knl_h = kernel->ne[1];
+    const int64_t dst_w = dst->ne[0];
+    const int64_t dst_h = dst->ne[1];
 
-    const int64_t rows_total = OH * N;
-    const int64_t rows_per_thread = (rows_total + params->nth - 1) / params->nth;
-    const int64_t row_start = params->ith * rows_per_thread;
-    const int64_t row_end = MIN(row_start + rows_per_thread, rows_total);
 
-    for (int64_t row = row_start; row < row_end; ++row) {
-        const int64_t oh = row % OH;
-        const int64_t n  = row / OH;
-        const float * src_batch = src_data + n * IW * IH * IC;
+    float * src_data = (float *) src->data;
+    float * knl_data = (float *) kernel->data;
+    float * dst_data = (      float *) dst->data;
 
-        for (int64_t ow = 0; ow < OW; ++ow) {
-            for (int64_t oc = 0; oc < OC; ++oc) {
-                float sum = 0.0f;
-                const float * kernel_channel = kernel_data + oc * KW * KH * IC;
 
-                for (int64_t kh = 0; kh < KH; ++kh) {
-                    const int64_t ih = oh * s1 - p1 + kh * d1;
-                    if (ih < 0 || ih >= IH) continue;
+    const int64_t knl_n           = knl_w * knl_h * c_in;
+    const int64_t patch_total     = dst->ne[3] * dst_w * dst_h;
+    
 
-                    for (int64_t kw = 0; kw < KW; ++kw) {
-                        const int64_t iw = ow * s0 - p0 + kw * d0;
-                        if (iw < 0 || iw >= IW) continue;
+    
+    const int64_t space_per_patch = knl_n * sizeof(float) + patch_total * c_out * sizeof(float);
 
-                        #pragma omp simd
-                        for (int64_t ic = 0; ic < IC; ++ic) {
-                            const float * kernel_ptr = kernel_channel + (kh * KW + kw) + ic * KW * KH;
-                            const float * src_ptr = src_batch + (ih * IW + iw) + ic * IW * IH;
-                            sum += (*kernel_ptr) * (*src_ptr);
+    const int64_t batch_size = params->wsize / space_per_patch;
+    const int64_t patches_per_batch = batch_size > 8 ? (batch_size / 8) * 8 : batch_size;
+    const int64_t batch_n = (patch_total + patches_per_batch - 1) / patches_per_batch;
+
+
+    GGML_ASSERT(patches_per_batch > 0 && batch_size >= 1);
+
+    float * tmp = (float *) params->wdata;          // per-thread scratch
+
+    for (int64_t batch_i = 0; batch_i < batch_n; ++batch_i) {
+
+        const int64_t patch_start_batch = batch_i * patches_per_batch;
+        const int64_t patch_end_batch   = std::min(patch_start_batch + patches_per_batch,
+                                              patch_total);
+        const int64_t patch_n = patch_end_batch - patch_start_batch;
+
+        const int64_t patch_per_thread =
+            (patch_n + params->nth - 1) / params->nth;
+        const int64_t patch_start = patch_start_batch +
+                                    params->ith * patch_per_thread;
+        const int64_t patch_end   = std::min(patch_start + patch_per_thread,
+                                        patch_end_batch);
+
+        //im2col for a patch
+        for (int64_t p = patch_start; p < patch_end; ++p) {
+            const int64_t  b     =  p / (dst_w * dst_h);
+            const int64_t  dy    = (p / dst_w) % dst_h;
+            const int64_t  dx    =  p % dst_w;
+
+            const float  * src_base = (const float *)((char *)src_data + b * src->nb[3]);
+            float        * out_row = tmp + (p % patches_per_batch) * knl_n;
+
+            // Extract patch in IC,KH,KW order (same as im2col)
+            for (int64_t ic = 0; ic < c_in; ++ic) {
+                for (int64_t ky = 0; ky < knl_h; ++ky) {
+                    for (int64_t kx = 0; kx < knl_w; ++kx) {
+                        const int64_t sy = dy * stride_y + ky - pad_y;
+                        const int64_t sx = dx * stride_x + kx - pad_x;
+                        
+                        int64_t dst_idx = ic * (knl_h * knl_w) + ky * knl_w + kx;
+                        
+                        if (sy < 0 || sy >= src_h || sx < 0 || sx >= src_w) {
+                            out_row[dst_idx] = 0.0f;
+                        } else {
+                            float * src_ptr = (float *)((char *)src_base + 
+                                sx * src->nb[0] + sy * src->nb[1] + ic * src->nb[2]);
+                            out_row[dst_idx] = *src_ptr;
                         }
                     }
                 }
+            }
+        }   // patches handled by this thread
 
-                dst_data[((n * OC + oc) * OH + oh) * OW + ow] = sum;
+        ggml_barrier(params->threadpool);   // wait for all threads
+
+        //GEMM output is patch_n * cout 
+        float * gemm_output = tmp + patches_per_batch * knl_n;
+        
+        // GEMM: patches[patch_n, knl_n] × kernel[knl_n, c_out] = output[patch_n, c_out]
+        ggml_call_mul_mat(params, patch_n, c_out, knl_n,
+                            tmp, knl_data, gemm_output);
+        
+        // Barrier to ensure GEMM completes before permutation
+        ggml_barrier(params->threadpool);
+        
+        // Distribute permutation work across threads
+        const int64_t permute_per_thread = (patch_n + params->nth - 1) / params->nth;
+        const int64_t permute_start = params->ith * permute_per_thread;
+        const int64_t permute_end = std::min(permute_start + permute_per_thread, patch_n);
+        
+        // Each thread handles part of the permutation from [patch_n, c_out] to WHCN layout
+        for (int64_t i = permute_start; i < permute_end; ++i) {
+            const int64_t p = patch_start_batch + i;
+            const int64_t b  = p / (dst_w * dst_h);         // batch index
+            const int64_t dy = (p / dst_w) % dst_h;         // height index  
+            const int64_t dx = p % dst_w;                   // width index
+            
+            // Copy all channels for this spatial position
+            for (int64_t oc = 0; oc < c_out; ++oc) {
+                const float value = gemm_output[i * c_out + oc];
+                // Write to WHCN layout: dst[w, h, c, n]
+                float * dst_ptr = (float *)((char *)dst_data + 
+                    dx * dst->nb[0] + dy * dst->nb[1] + oc * dst->nb[2] + b * dst->nb[3]);
+                *dst_ptr = value;
             }
         }
     }
@@ -6206,7 +6310,7 @@ void ggml_compute_forward_conv_2d(
             } break;
         case GGML_TYPE_F32:
             {
-                ggml_compute_forward_conv_2d_f32(params, src0, src1, dst);
+                ggml_compute_forward_conv_2d_f32(params, dst);
             } break;
         default:
             {
