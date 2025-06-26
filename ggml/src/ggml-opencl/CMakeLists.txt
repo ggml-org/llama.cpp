@@ -105,6 +105,7 @@ set(GGML_OPENCL_KERNELS
     pad
     repeat
     mul_mat_f16_f32
+    conv2d
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})
