@@ -14377,7 +14377,7 @@ const char * llama_model_chat_template(const llama_model * model, const char * n
         // do not extend this list unless absolutely necessary
         // Mistral-Small-2503 does not have built-in chat template
         llama_vocab_pre_type pre_type = model->vocab.get_pre_type();
-        if (pre_type == LLAMA_VOCAB_PRE_TYPE_TEKKEN && model->layers.size() == 40) {
+        if (!name && pre_type == LLAMA_VOCAB_PRE_TYPE_TEKKEN && model->layers.size() == 40) {
             return "mistral-v7-tekken";
         }
 
