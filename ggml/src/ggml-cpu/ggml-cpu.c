@@ -687,10 +687,6 @@ static void ggml_init_arm_arch_features(void) {
 
 #endif // __ARM_ARCH
 
-void ggml_compute_forward_mul_mat(
-        const struct ggml_compute_params * params,
-              struct ggml_tensor * dst);
-
 struct ggml_tensor * ggml_new_i32(struct ggml_context * ctx, int32_t value) {
     GGML_ASSERT(!ggml_get_no_alloc(ctx));
 

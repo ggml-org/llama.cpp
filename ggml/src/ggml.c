@@ -945,6 +945,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CONV_TRANSPOSE_1D",
     "IM2COL",
     "IM2COL_BACK",
+    "CONV_2D",
     "CONV_2D_DW",
     "CONV_TRANSPOSE_2D",
     "POOL_1D",
