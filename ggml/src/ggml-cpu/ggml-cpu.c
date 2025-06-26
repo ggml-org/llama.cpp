@@ -8699,7 +8699,7 @@ static void ggml_compute_forward_mul_mat_one_chunk(
                     // Prepare corresponding segment of src1
                     const float * src1_segment_f32_ptr = (const float *)(src1_row_ptr_base + col_segment_start_in_src0 * sizeof(float)); // nb10 for src1
 
-                    void * src1_segment_prepared_data;
+                    const void * src1_segment_prepared_data; // Changed to const void *
                     char  src1_quantized_segment_buffer[GGML_MAX_BLOCK_SIZE]; // Max possible size for a block
 
                     if (src1->type == GGML_TYPE_F32) {
