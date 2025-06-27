@@ -256,6 +256,12 @@ jobs:
           variant: ccache
           evict-old-files: 1d
 
+      - name: Set up Clang
+        # Workaround for https://github.com/actions/runner-images/issues/12435
+        uses: egor-tensin/setup-clang@v1
+        with:
+          platform: ${{ matrix.arch }}
+
       - name: Install Ninja
         run: |
           choco install ninja
@@ -327,6 +333,12 @@ jobs:
           key: windows-latest-cmake-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
           evict-old-files: 1d
+
+      - name: Set up Clang
+        # Workaround for https://github.com/actions/runner-images/issues/12435
+        uses: egor-tensin/setup-clang@v1
+        with:
+          platform: ${{ matrix.arch }}
 
       - name: Install Vulkan SDK
         id: get_vulkan
