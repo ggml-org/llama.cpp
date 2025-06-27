@@ -813,6 +813,9 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
   tensor_log log_data;
 
   for (int i = 0; i < cgraph->n_nodes; i++) {
+#ifdef GGML_PERF
+    int64_t t_start = ggml_time_us();
+#endif
     node = cgraph->nodes[i];
     src0 = node->src[0];
     src1 = node->src[1];
@@ -1122,6 +1125,12 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
           device->stats.op_run_count[kernel_type].max_num_of_elem < max_num_of_elem)
         device->stats.op_run_count[kernel_type].max_num_of_elem = max_num_of_elem;
     }
+#ifdef GGML_PERF
+    int64_t t_end = ggml_time_us();
+    node->perf_runs++;
+    node->perf_time_us += (t_end - t_start);
+    node->ggml_compute_backend = GGML_COMPUTE_BACKEND_TSAVORITE;
+#endif
   }
 
   // This this need to implement correctly when we have mixture of CPU and accelerator operation

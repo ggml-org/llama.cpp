@@ -126,7 +126,7 @@ int main(int argc, char ** argv) {
         LOG_WRN("%s: warning: scaling RoPE frequency by %g.\n", __func__, params.rope_freq_scale);
     }
 
-    llama_log_set(my_logger, nullptr);
+    //llama_log_set(my_logger, nullptr);
     LOG_INF("%s: llama backend init\n", __func__);
 
     llama_backend_init();

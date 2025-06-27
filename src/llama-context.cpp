@@ -932,6 +932,9 @@ int llama_context::decode(llama_batch & inp_batch) {
     kv_self_update();
 
     int64_t n_outputs_prev = 0;
+#ifdef GGML_PERF
+    FILE *perf_fp = ggml_perf_log_open("ggml_perf.log");
+#endif /* GGML_PERF */
 
     while (sbatch.n_tokens > 0) {
         llama_ubatch ubatch = kv_self->ubatch_next(sbatch, cparams.n_ubatch, embd_pooled);
@@ -971,6 +974,12 @@ int llama_context::decode(llama_batch & inp_batch) {
         res->set_inputs(&ubatch);
 
         const auto compute_status = graph_compute(gf, ubatch.n_tokens > 1);
+#ifdef GGML_PERF
+	if (perf_fp) {
+            ggml_perf_write_detailed_csv(gf, perf_fp);
+	}
+        ggml_perf_accumulate(perf_totals, gf);
+#endif /* GGML_PERF */
         if (compute_status != GGML_STATUS_SUCCESS) {
             switch (compute_status) {
                 case GGML_STATUS_ABORTED:
@@ -1138,6 +1147,10 @@ int llama_context::decode(llama_batch & inp_batch) {
     // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
     // overlap with device computation.
     ggml_backend_sched_reset(sched.get());
+
+#ifdef GGML_PERF
+    ggml_perf_print_totals(perf_totals);
+#endif /* GGML_PERF */
 
     return 0;
 }

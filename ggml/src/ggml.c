@@ -249,7 +249,7 @@ static void ggml_log_internal_v(enum ggml_log_level level, const char * format, 
 void ggml_log_internal(enum ggml_log_level level, const char * format, ...) {
     va_list args;
     va_start(args, format);
-    if (level == GGML_LOG_LEVEL_TSAVORITE)
+    //if (level == GGML_LOG_LEVEL_TSAVORITE)
     ggml_log_internal_v(level, format, args);
     va_end(args);
 }
@@ -985,6 +985,13 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_ADAMW",
 };
 
+#ifdef GGML_PERF
+static const char * GGML_BACKEND_TYPE[GGML_COMPUTE_BACKEND_COUNT] = {
+    "CPU",
+    "TSAVORITE"
+};
+#endif /* GGML_PERF */
+
 static_assert(GGML_OP_COUNT == 82, "GGML_OP_COUNT != 82");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
@@ -1199,6 +1206,12 @@ bool ggml_is_quantized(enum ggml_type type) {
 const char * ggml_op_name(enum ggml_op op) {
     return GGML_OP_NAME[op];
 }
+
+#ifdef GGML_PERF
+static const char * ggml_backend_type(enum ggml_compute_backend_type backend) {
+    return GGML_BACKEND_TYPE[backend];
+}
+#endif /* GGML_PERF */
 
 const char * ggml_op_symbol(enum ggml_op op) {
     return GGML_OP_SYMBOL[op];
@@ -1617,6 +1630,11 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.data         =*/ obj_alloc_size > 0 ? (void *)(result + 1) : data,
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
+#ifdef GGML_PERF
+        /*.perf_runs    =*/ 0,
+        /*.perf_time_us =*/ 0,
+        /*.ggml_compute_backend =*/ GGML_COMPUTE_BACKEND_CPU,
+#endif /* GGML_PERF */
         /*.padding      =*/ { 0 },
     };
 
@@ -6549,3 +6567,79 @@ bool ggml_threadpool_params_match(const struct ggml_threadpool_params * p0, cons
     if (p0->strict_cpu     != p1->strict_cpu )    return false;
     return memcmp(p0->cpumask, p1->cpumask, GGML_MAX_N_THREADS) == 0;
 }
+
+#ifdef GGML_PERF
+void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph) {
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        struct ggml_tensor * node = cgraph->nodes[i];
+        enum ggml_op op = node->op;
+
+        if (op >= GGML_OP_COUNT) continue;
+
+        totals[op].op_name = ggml_op_name(op);
+        totals[op].total_us += node->perf_time_us;
+        totals[op].runs     += node->perf_runs;
+        totals[op].op_count++;
+    }
+}
+
+void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
+    printf("\n=== GGML Perf Summary ===\n");
+    for (int i = 0; i < GGML_OP_COUNT; ++i) {
+        if (totals[i].runs > 0) {
+            printf("  %-16s: %5ld runs, %8ld us total, avg %.2f us\n",
+                   totals[i].op_name ? totals[i].op_name : "UNKNOWN",
+                   totals[i].runs,
+                   totals[i].total_us,
+                   (double)totals[i].total_us / totals[i].runs);
+        }
+    }
+}
+
+FILE * ggml_perf_log_open(const char *filename) {
+    // Try to delete existing file, ignore error if it doesn't exist
+    remove(filename);
+
+    // Create a new file in write mode
+    FILE *fp = fopen(filename, "w");
+    if (!fp) {
+        fprintf(stderr, "Error: Could not create file %s\n", filename);
+        return NULL;
+    }
+
+    return fp;
+}
+
+void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp) {
+    if (!fp) return;
+
+    int64_t total_time_us = 0;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        if (cgraph->nodes[i]->perf_runs > 0) {
+            total_time_us += cgraph->nodes[i]->perf_time_us;
+        }
+    }
+
+    fprintf(fp, "ggml_graph_compute_perf: total compute time: %.3f ms\n", total_time_us / 1000.0);
+
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        struct ggml_tensor * node = cgraph->nodes[i];
+        if (node->perf_runs == 0) continue;
+
+        double t_ms   = node->perf_time_us / 1000.0;
+        double avg_ms = t_ms / node->perf_runs;
+
+        fprintf(fp,
+            " - BACKEND:%s OP:%s: total %.3f ms over %d runs (avg %.3f ms) [shape=%d,%d,%d]\n",
+            ggml_backend_type(node->ggml_compute_backend),
+            ggml_op_name(node->op),
+            t_ms,
+            node->perf_runs,
+            avg_ms,
+            node->ne[0], node->ne[1], node->ne[2]);
+    }
+
+    fprintf(fp, "--------------------------------------------------\n\n");
+}
+
+#endif /* GGML_PERF */

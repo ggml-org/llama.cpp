@@ -317,6 +317,14 @@ extern "C" {
     GGML_NORETURN GGML_ATTRIBUTE_FORMAT(3, 4)
     GGML_API void ggml_abort(const char * file, int line, const char * fmt, ...);
 
+#ifdef GGML_PERF
+    enum ggml_compute_backend_type {
+        GGML_COMPUTE_BACKEND_CPU=0,
+        GGML_COMPUTE_BACKEND_TSAVORITE,
+        GGML_COMPUTE_BACKEND_COUNT
+    };
+#endif /* GGML_PERF */
+
     enum ggml_status {
         GGML_STATUS_ALLOC_FAILED = -2,
         GGML_STATUS_FAILED = -1,
@@ -603,8 +611,14 @@ extern "C" {
         char name[GGML_MAX_NAME];
 
         void * extra; // extra things e.g. for ggml-cuda.cu
-
+#ifdef GGML_PERF
+	int64_t perf_runs;
+        int64_t perf_time_us;
+	enum ggml_compute_backend_type ggml_compute_backend;
+        char padding[8+12];
+#else
         char padding[8];
+#endif /* GGML_PERF */
     };
 
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
@@ -2197,6 +2211,25 @@ extern "C" {
     GGML_API struct ggml_threadpool_params ggml_threadpool_params_default(int n_threads);
     GGML_API void                          ggml_threadpool_params_init   (struct ggml_threadpool_params * p, int n_threads);
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
+ 
+#ifdef GGML_PERF
+// internal perf accumulation struct
+struct ggml_perf_totals {
+    int op_count;
+    int64_t total_us;
+    int64_t runs;
+    const char * op_name;
+};
+
+FILE * ggml_perf_log_open(const char *filename);
+void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp);
+
+// capture perf into totals
+void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph);
+
+// print final stats
+void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]);
+#endif /* GGML_PERF */
 
 #ifdef  __cplusplus
 }

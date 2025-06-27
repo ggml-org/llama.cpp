@@ -8,6 +8,7 @@
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
+#include "ggml.h"
 
 #include <map>
 #include <vector>
@@ -273,4 +274,7 @@ private:
 
     mutable int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     mutable int32_t n_eval   = 0; // number of eval calls
+#ifdef GGML_PERF
+    struct ggml_perf_totals perf_totals[GGML_OP_COUNT] = {};  // add this to llama_context
+#endif
 };
