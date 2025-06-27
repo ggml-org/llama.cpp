@@ -4,7 +4,7 @@
 
 const uint32_t DEVICE_TENSOR_MAX_DIMS = 4;
 const uint32_t DEVICE_TENSOR_MAX_SRC = 4;
-const uint32_t DEVICE_TENSOR_MAX_OP_PARAMS = 4;
+const uint32_t DEVICE_TENSOR_MAX_OP_PARAMS = 16;
 const uint32_t QUANT_BLOCK_SIZE = 32;
 const uint32_t QUANT_K_BLOCK_SIZE = 256;
 const uint32_t QUANT_K_SCALE_SIZE = 12;
@@ -42,6 +42,7 @@ interface npu_device : remote_handle64{
         NPU_OP_MUL,
         NPU_OP_RMS_NORM,
         NPU_OP_FLASH_ATTN,
+        NPU_OP_ROPE,
         NPU_OP_COUNT
     };
 

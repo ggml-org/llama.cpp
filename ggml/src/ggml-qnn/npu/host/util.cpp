@@ -29,6 +29,8 @@ enum npu_device_tensor_op op_to_npu_op(ggml_op op) {
             return NPU_OP_RMS_NORM;
         case GGML_OP_FLASH_ATTN_EXT:
             return NPU_OP_FLASH_ATTN;
+        case GGML_OP_ROPE:
+            return NPU_OP_ROPE;
         default:
             return NPU_OP_COUNT;
     }
@@ -48,6 +50,8 @@ const char * get_npu_op_desc(enum npu_device_tensor_op op) {
             return ggml_op_name(GGML_OP_RMS_NORM);
         case NPU_OP_FLASH_ATTN:
             return ggml_op_name(GGML_OP_FLASH_ATTN_EXT);
+        case NPU_OP_ROPE:
+            return ggml_op_name(GGML_OP_ROPE);
         default:
             return "UNKNOWN";
     }

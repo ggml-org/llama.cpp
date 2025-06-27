@@ -6,6 +6,7 @@
 
 #include "op_flash_attn.hpp"
 #include "op_mul_mat.hpp"
+#include "op_rope.hpp"
 #include "type_traits.hpp"
 #include "vec_ops.hpp"
 
@@ -396,7 +397,7 @@ constexpr const op_capabilities kOpCapabilities[] = {
      {
             element_wise_op<vec_op_f32_f32<vmul_f32_f32>>,  // NPU_DATA_TYPE_F32
             element_wise_op<vec_op_f16_f16<vmul_f16_f16>>,  // NPU_DATA_TYPE_F16
-        },                                                      false,                                              // requires_thread_barrier
+        },                                                      false,                                                                                                             // requires_thread_barrier
     },
     {
      NPU_OP_RMS_NORM,                                                                     is_unary_op_supported,
@@ -412,6 +413,13 @@ constexpr const op_capabilities kOpCapabilities[] = {
             nullptr,                  // NPU_DATA_TYPE_F16
         }, true,                         // requires_thread_barrier
     },
+    {
+     NPU_OP_ROPE,                                                        hexagon::is_rope_supported,
+     {
+            hexagon::rope_f32,  // NPU_DATA_TYPE_F32
+            nullptr,            // NPU_DATA_TYPE_F16
+        }, false,                  // requires_thread_barrier
+    },
 };
 
 static_assert(kOpCapabilities[NPU_OP_MUL_MAT].compute_funcs[NPU_DATA_TYPE_F32] == hexagon::mul_mat_f32,
@@ -424,6 +432,7 @@ static_assert(kOpCapabilities[NPU_OP_RMS_NORM].op == NPU_OP_RMS_NORM,
               "kOpArray[NPU_OP_RMS_NORM].op != NPU_OP_RMS_NORM");
 static_assert(kOpCapabilities[NPU_OP_FLASH_ATTN].op == NPU_OP_FLASH_ATTN,
               "kOpArray[NPU_OP_FLASH_ATTN].op != NPU_OP_FLASH_ATTN");
+static_assert(kOpCapabilities[NPU_OP_ROPE].op == NPU_OP_ROPE, "kOpArray[NPU_OP_ROPE].op != NPU_OP_ROPE");
 
 hexagon::compute_func_type get_compute_func_impl(npu_device_tensor_op op, npu_device_tensor_data_type type) {
     if (op >= NPU_OP_COUNT) {
