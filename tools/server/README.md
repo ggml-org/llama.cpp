@@ -370,6 +370,8 @@ node index.js
 
 ### GET `/health`: Returns heath check result
 
+This endpoint is public (no API key check).
+
 **Response format**
 
 - HTTP status code 503
@@ -708,7 +710,7 @@ If the tokens are missing, then the extra context is simply prefixed at the star
 
 ### **GET** `/props`: Get server global properties.
 
-This endpoint is public (no API key check). By default, it is read-only. To make POST request to change global properties, you need to start server with `--props`
+By default, it is read-only. To make POST request to change global properties, you need to start server with `--props`
 
 **Response format**
 

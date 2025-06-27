@@ -917,10 +917,19 @@ int main(int argc, char ** argv) {
                     embd_inp.insert(embd_inp.end(), line_inp.begin(), line_inp.end());
                     embd_inp.insert(embd_inp.end(), line_sfx.begin(), line_sfx.end());
 
+                    if (params.verbose_prompt) {
+                        LOG_INF("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size() - original_size);
+                    }
+
                     for (size_t i = original_size; i < embd_inp.size(); ++i) {
                         const llama_token token = embd_inp[i];
+                        const std::string token_str = common_token_to_piece(ctx, token);
                         output_tokens.push_back(token);
-                        output_ss << common_token_to_piece(ctx, token);
+                        output_ss << token_str;
+
+                        if (params.verbose_prompt) {
+                            LOG_INF("%6d -> '%s'\n", token, token_str.c_str());
+                        }
                     }
 
                     // reset assistant message

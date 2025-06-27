@@ -118,6 +118,10 @@ class Keys:
         EMBEDDING_SCALE                   = "{arch}.embedding_scale"
         TOKEN_SHIFT_COUNT                 = "{arch}.token_shift_count"
         INTERLEAVE_MOE_LAYER_STEP         = "{arch}.interleave_moe_layer_step"
+        ACTIVATION_SPARSITY_SCALE         = "{arch}.activation_sparsity_scale"
+        ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
+        ALTUP_NUM_INPUTS                  = "{arch}.altup.num_inputs"
+        EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -142,6 +146,8 @@ class Keys:
         SCALE                        = "{arch}.attention.scale"
         KEY_LENGTH_MLA               = "{arch}.attention.key_length_mla"
         VALUE_LENGTH_MLA             = "{arch}.attention.value_length_mla"
+        SHARED_KV_LAYERS             = "{arch}.attention.shared_kv_layers"
+        SLIDING_WINDOW_PATTERN       = "{arch}.attention.sliding_window_pattern"
 
     class Rope:
         DIMENSION_COUNT         = "{arch}.rope.dimension_count"
@@ -318,6 +324,7 @@ class MODEL_ARCH(IntEnum):
     GEMMA              = auto()
     GEMMA2             = auto()
     GEMMA3             = auto()
+    GEMMA3N            = auto()
     STARCODER2         = auto()
     RWKV6              = auto()
     RWKV6QWEN2         = auto()
@@ -406,6 +413,22 @@ class MODEL_TENSOR(IntEnum):
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
     LAYER_OUT_NORM       = auto()
+    PER_LAYER_TOKEN_EMBD = auto() # gemma3n
+    PER_LAYER_MODEL_PROJ = auto() # gemma3n
+    PER_LAYER_INP_GATE   = auto() # gemma3n
+    PER_LAYER_PROJ       = auto() # gemma3n
+    PER_LAYER_PROJ_NORM  = auto() # gemma3n
+    PER_LAYER_POST_NORM  = auto() # gemma3n
+    ALTUP_PROJ           = auto() # gemma3n
+    ALTUP_UNEMBD_PROJ    = auto() # gemma3n
+    ALTUP_CORRECT_COEF   = auto() # gemma3n
+    ALTUP_CORRECT_SCALE  = auto() # gemma3n
+    ALTUP_PREDICT_COEF   = auto() # gemma3n
+    ALTUP_ROUTER         = auto() # gemma3n
+    ALTUP_ROUTER_NORM    = auto() # gemma3n
+    LAUREL_L             = auto() # gemma3n
+    LAUREL_R             = auto() # gemma3n
+    LAUREL_POST_NORM     = auto() # gemma3n
     SSM_IN               = auto()
     SSM_CONV1D           = auto()
     SSM_X                = auto()
@@ -605,6 +628,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GEMMA:              "gemma",
     MODEL_ARCH.GEMMA2:             "gemma2",
     MODEL_ARCH.GEMMA3:             "gemma3",
+    MODEL_ARCH.GEMMA3N:            "gemma3n",
     MODEL_ARCH.STARCODER2:         "starcoder2",
     MODEL_ARCH.RWKV6:              "rwkv6",
     MODEL_ARCH.RWKV6QWEN2:         "rwkv6qwen2",
@@ -693,6 +717,22 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_UP_EXP:                "blk.{bid}.ffn_up_exps",
     MODEL_TENSOR.FFN_EXP_PROBS_B:           "blk.{bid}.exp_probs_b",
     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
+    MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
+    MODEL_TENSOR.PER_LAYER_MODEL_PROJ:      "per_layer_model_proj",           # gemma3n
+    MODEL_TENSOR.PER_LAYER_PROJ_NORM:       "per_layer_proj_norm",            # gemma3n
+    MODEL_TENSOR.ALTUP_UNEMBD_PROJ:         "altup_unembd_proj",              # gemma3n
+    MODEL_TENSOR.ALTUP_PROJ:                "altup_proj",                     # gemma3n
+    MODEL_TENSOR.PER_LAYER_INP_GATE:        "blk.{bid}.inp_gate",             # gemma3n
+    MODEL_TENSOR.PER_LAYER_PROJ:            "blk.{bid}.proj",                 # gemma3n
+    MODEL_TENSOR.PER_LAYER_POST_NORM:       "blk.{bid}.post_norm",            # gemma3n
+    MODEL_TENSOR.ALTUP_CORRECT_COEF:        "blk.{bid}.altup_correct_coef",   # gemma3n
+    MODEL_TENSOR.ALTUP_CORRECT_SCALE:       "blk.{bid}.altup_correct_scale",  # gemma3n
+    MODEL_TENSOR.ALTUP_PREDICT_COEF:        "blk.{bid}.altup_predict_coef",   # gemma3n
+    MODEL_TENSOR.ALTUP_ROUTER:              "blk.{bid}.altup_router",         # gemma3n
+    MODEL_TENSOR.ALTUP_ROUTER_NORM:         "blk.{bid}.altup_router_norm",    # gemma3n
+    MODEL_TENSOR.LAUREL_L:                  "blk.{bid}.laurel_l",             # gemma3n
+    MODEL_TENSOR.LAUREL_R:                  "blk.{bid}.laurel_r",             # gemma3n
+    MODEL_TENSOR.LAUREL_POST_NORM:          "blk.{bid}.laurel_post_norm",     # gemma3n
     MODEL_TENSOR.SSM_IN:                    "blk.{bid}.ssm_in",
     MODEL_TENSOR.SSM_CONV1D:                "blk.{bid}.ssm_conv1d",
     MODEL_TENSOR.SSM_X:                     "blk.{bid}.ssm_x",
@@ -1497,6 +1537,41 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_POST_NORM,
         MODEL_TENSOR.FFN_PRE_NORM,
         MODEL_TENSOR.FFN_POST_NORM,
+    ],
+    MODEL_ARCH.GEMMA3N: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_POST_NORM,
+        # altup / laurel
+        MODEL_TENSOR.PER_LAYER_TOKEN_EMBD,
+        MODEL_TENSOR.PER_LAYER_MODEL_PROJ,
+        MODEL_TENSOR.PER_LAYER_INP_GATE,
+        MODEL_TENSOR.PER_LAYER_PROJ,
+        MODEL_TENSOR.PER_LAYER_PROJ_NORM,
+        MODEL_TENSOR.PER_LAYER_POST_NORM,
+        MODEL_TENSOR.ALTUP_PROJ,
+        MODEL_TENSOR.ALTUP_UNEMBD_PROJ,
+        MODEL_TENSOR.ALTUP_CORRECT_COEF,
+        MODEL_TENSOR.ALTUP_CORRECT_SCALE,
+        MODEL_TENSOR.ALTUP_PREDICT_COEF,
+        MODEL_TENSOR.ALTUP_ROUTER,
+        MODEL_TENSOR.ALTUP_ROUTER_NORM,
+        MODEL_TENSOR.LAUREL_L,
+        MODEL_TENSOR.LAUREL_R,
+        MODEL_TENSOR.LAUREL_POST_NORM,
     ],
     MODEL_ARCH.STARCODER2: [
         MODEL_TENSOR.TOKEN_EMBD,

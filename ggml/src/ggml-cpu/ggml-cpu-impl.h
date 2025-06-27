@@ -62,11 +62,17 @@ struct ggml_compute_params {
 #if defined(__s390x__) && defined(__VEC__)
 #ifndef __VXE__
 #define __VXE__
-#endif
+#endif  // __VXE__
 #ifndef __VXE2__
 #define __VXE2__
-#endif
-#endif
+#endif  // __VXE2__
+#endif  // __s390x__ && __VEC__
+
+#if defined(__s390x__) && defined(GGML_NNPA)
+#ifndef __NNPA__
+#define __NNPA__
+#endif  // __NNPA__
+#endif  // __s390x__ && GGML_NNPA
 
 #if defined(__ARM_FEATURE_SVE)
 #include <sys/prctl.h>

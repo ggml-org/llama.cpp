@@ -416,6 +416,7 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
 
     switch (op->op) {
         case GGML_OP_CPY:
+        case GGML_OP_SET_ROWS:
             return
                 op->type != GGML_TYPE_IQ3_XXS &&
                 op->type != GGML_TYPE_IQ3_S   &&
@@ -577,6 +578,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
         }
         if (ggml_cpu_has_vxe()) {
             features.push_back({ "VXE", "1" });
+        }
+        if (ggml_cpu_has_nnpa()) {
+            features.push_back({ "NNPA", "1" });
         }
         if (ggml_cpu_has_wasm_simd()) {
             features.push_back({ "WASM_SIMD", "1" });
