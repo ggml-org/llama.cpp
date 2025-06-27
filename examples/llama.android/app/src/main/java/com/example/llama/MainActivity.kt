@@ -504,18 +504,18 @@ fun AppContent(
                     )
                 }
 
-                // Settings General Screen
-                composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
-                    SettingsGeneralScreen(
-                        viewModel = settingsViewModel
-                    )
-                }
-
                 // Models Management Screen
                 composable(AppDestinations.MODELS_MANAGEMENT_ROUTE) {
                     ModelsManagementScreen(
                         onScaffoldEvent = handleScaffoldEvent,
                         viewModel = modelsManagementViewModel
+                    )
+                }
+
+                // General Settings Screen
+                composable(AppDestinations.SETTINGS_GENERAL_ROUTE) {
+                    SettingsGeneralScreen(
+                        viewModel = settingsViewModel
                     )
                 }
             }

@@ -148,17 +148,17 @@ private fun DrawerContent(
         )
 
         DrawerNavigationItem(
-            icon = Icons.Default.Settings,
-            label = "General Settings",
-            isSelected = currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE,
-            onClick = { onNavigate { navigationActions.navigateToSettingsGeneral() } }
-        )
-
-        DrawerNavigationItem(
             icon = Icons.Default.Folder,
             label = "Models",
             isSelected = currentRoute == AppDestinations.MODELS_MANAGEMENT_ROUTE,
             onClick = { onNavigate { navigationActions.navigateToModelsManagement() } }
+        )
+
+        DrawerNavigationItem(
+            icon = Icons.Default.Settings,
+            label = "General Settings",
+            isSelected = currentRoute == AppDestinations.SETTINGS_GENERAL_ROUTE,
+            onClick = { onNavigate { navigationActions.navigateToSettingsGeneral() } }
         )
     }
 }

@@ -55,6 +55,12 @@ fun SettingsGeneralScreen(
                 onCheckedChange = { viewModel.setMonitoringEnabled(it) }
             )
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            HorizontalDivider()
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             SettingsSwitch(
                 title = "Use Fahrenheit",
                 description = "Display temperature in Fahrenheit instead of Celsius",
@@ -64,114 +70,100 @@ fun SettingsGeneralScreen(
         }
 
         SettingsCategory(title = "Theme") {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
+            Text(
+                text = "Theme Mode",
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Text(
+                text = "Follow system setting or override with your choice",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            SingleChoiceSegmentedButtonRow(
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = "Theme Mode",
-                    style = MaterialTheme.typography.titleMedium
-                )
-
-                Text(
-                    text = "Follow system setting or override with your choice",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                SingleChoiceSegmentedButtonRow(
-                    modifier = Modifier.fillMaxWidth()
+                SegmentedButton(
+                    selected = themeMode == UserPreferences.THEME_MODE_AUTO,
+                    onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_AUTO) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
                 ) {
-                    SegmentedButton(
-                        selected = themeMode == UserPreferences.THEME_MODE_AUTO,
-                        onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_AUTO) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                    ) {
-                        Text("Auto")
-                    }
+                    Text("Auto")
+                }
 
-                    SegmentedButton(
-                        selected = themeMode == UserPreferences.THEME_MODE_LIGHT,
-                        onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_LIGHT) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                    ) {
-                        Text("Light")
-                    }
+                SegmentedButton(
+                    selected = themeMode == UserPreferences.THEME_MODE_LIGHT,
+                    onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_LIGHT) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
+                ) {
+                    Text("Light")
+                }
 
-                    SegmentedButton(
-                        selected = themeMode == UserPreferences.THEME_MODE_DARK,
-                        onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_DARK) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                    ) {
-                        Text("Dark")
-                    }
+                SegmentedButton(
+                    selected = themeMode == UserPreferences.THEME_MODE_DARK,
+                    onClick = { viewModel.setThemeMode(UserPreferences.THEME_MODE_DARK) },
+                    shape = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
+                ) {
+                    Text("Dark")
                 }
             }
         }
 
         // ARM Features Visualizer with Tier Information description
         SettingsCategory(title = "About your device") {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    text = "ARM Capabilities",
-                    style = MaterialTheme.typography.titleLarge
-                )
+            Text(
+                text = "ARM Capabilities",
+                style = MaterialTheme.typography.titleMedium
+            )
 
-                Text(
-                    text = "Hardware-accelerated AI features",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+            Text(
+                text = "Hardware-accelerated AI features",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
 
-                detectedTier?.let { tier ->
-                    Spacer(modifier = Modifier.height(8.dp))
+            detectedTier?.let { tier ->
+                Spacer(modifier = Modifier.height(8.dp))
 
-                    ArmFeaturesVisualizerClickable(detectedTier = detectedTier)
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Text(
-                        text = "Optimization Tier: ${tier.name}",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-
-                    Text(
-                        text = tier.description,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-        }
-
-        SettingsCategory(title = "About this app") {
-            Column(
-                modifier = Modifier.padding(16.dp)
-            ) {
-                Text(
-                    text = APP_NAME,
-                    style = MaterialTheme.typography.titleLarge
-                )
-
-                Text(
-                    text = "Version 1.0.0",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                ArmFeaturesVisualizerClickable(detectedTier = detectedTier)
 
                 Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
-                    text = "Local inference for LLM models on your device powered by Arm® technologies.",
-                    style = MaterialTheme.typography.bodyLarge
+                    text = "Optimization Tier: ${tier.name}",
+                    style = MaterialTheme.typography.titleMedium
+                )
+
+                Text(
+                    text = tier.description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
+        }
+
+        SettingsCategory(title = "About this app") {
+            Text(
+                text = APP_NAME,
+                style = MaterialTheme.typography.titleMedium
+            )
+
+            Text(
+                text = "Version 1.0.0",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Local inference for LLM models on your device powered by Arm® technologies.",
+                style = MaterialTheme.typography.bodyMedium
+            )
         }
     }
 }
@@ -182,20 +174,16 @@ fun SettingsCategory(
     content: @Composable () -> Unit
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
+        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
     ) {
         Text(
             text = title,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(bottom = 8.dp)
         )
 
-        Card(
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Column {
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column( modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                 content()
             }
         }
@@ -211,36 +199,28 @@ fun SettingsSwitch(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(16.dp)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth()
+        Column(
+            modifier = Modifier.weight(1f)
         ) {
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleMedium
-                )
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium
+            )
 
-                Text(
-                    text = description,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-    }
 
-    HorizontalDivider()
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange
+        )
+    }
 }
