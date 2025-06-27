@@ -1,5 +1,41 @@
 import serial
 import sys
+import time
+#This is just a test to see if I can make changes on my local machine and copy them over to fpga4! Thank you!
+#It worked! Thank you!
+def abort_serial_portion(port,baudrate):
+    ser = serial.Serial(port, baudrate)
+
+    ser.write(b'\x03') # b'\x03' is Ctrl-C! 
+
+    ser.close()
+
+
+
+def restart_txe_serial_portion(port, baudrate, path):
+    ser = serial.Serial(port, baudrate)
+
+    ser.write(b'boot\n')
+
+
+    while True:
+        line = ser.readline().decode('utf-8', errors='ignore').strip()
+        #print(f"Received: {line}")
+        if line:
+            #print(f"Received: {line}")
+            if '(Yocto Project Reference Distro) 5.2.1 agilex7_dk_si_agf014ea' in line:
+                time.sleep(3)
+                ser.write(b'root\n')
+                break
+
+
+    time.sleep(3)
+
+    ser.write(('cd ' + path + '\n').encode())
+
+    time.sleep(3)
+
+    ser.close()
 
 def send_serial_command(port, baudrate, command):
     try:
@@ -16,7 +52,7 @@ def send_serial_command(port, baudrate, command):
                 line = b""
                 while True:
                     byte = ser.read(1)  # Read one byte at a time
-                    if (byte == b"\n") or (byte == b"#"): # Stop when delimiter is found
+                    if (byte == b"\n") or (byte == b"#"):  # Stop when delimiter is found
                         break
                     line += byte
                 if line: # Check if line is not empty
@@ -49,6 +85,17 @@ def send_serial_command(port, baudrate, command):
 
 # This script can be run in standalone as well
 if __name__ == "__main__":
+    if len(sys.argv) == 4 and sys.argv[3] == 'abort':
+        port = sys.argv[1]
+        baudrate = int(sys.argv[2])
+        abort_serial_portion(port,baudrate)
+        sys.exit(1)
+    if len(sys.argv) == 5 and sys.argv[3] == 'restart':
+        port = sys.argv[1]
+        baudrate = int(sys.argv[2])
+        path = sys.argv[4]
+        restart_txe_serial_portion(port, baudrate,path)
+        sys.exit(1)
     if len(sys.argv) < 4:
         print("Usage: python script.py <port> <baudrate> <command>")
         sys.exit(1)
@@ -57,3 +104,4 @@ if __name__ == "__main__":
     baudrate = int(sys.argv[2])
     command = sys.argv[3]
     response = send_serial_command(port, baudrate, command)
+    
