@@ -2743,6 +2743,11 @@ class Qwen2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Eagle2DraftForCausalLM")
+class Eagle2DraftModel(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.EAGLE2_DRAFT
+
+
 @ModelBase.register(
     "Qwen2VLModel",
     "Qwen2VLForConditionalGeneration",
