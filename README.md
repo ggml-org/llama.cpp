@@ -619,6 +619,9 @@ cd ../../
 #Compile for posix with build-posix as a target folder
 
 cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix
+to enable STatus use below command
+cmake -B build-posix   -DCMAKE_BUILD_TYPE=Debug   -DGGML_TSAVORITE=ON   -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
+
 cmake --build build-posix --config Release
 
 #Compile for fpga with build-fpga as a target folder
