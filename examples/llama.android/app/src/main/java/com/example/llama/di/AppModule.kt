@@ -3,6 +3,7 @@ package com.example.llama.di
 import android.content.Context
 import android.llama.cpp.InferenceEngine
 import android.llama.cpp.InferenceEngineLoader
+import android.llama.cpp.gguf.GgufMetadataReader
 import com.example.llama.data.local.AppDatabase
 import com.example.llama.data.remote.HuggingFaceApiService
 import com.example.llama.data.remote.HuggingFaceRemoteDataSource
@@ -81,6 +82,10 @@ internal abstract class AppModule {
 
         @Provides
         fun providesSystemPromptDao(appDatabase: AppDatabase) = appDatabase.systemPromptDao()
+
+        @Provides
+        @Singleton
+        fun providesGgufMetadataReader(): GgufMetadataReader = GgufMetadataReader.create()
 
         @Provides
         @Singleton

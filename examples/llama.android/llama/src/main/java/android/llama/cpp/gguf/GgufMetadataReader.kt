@@ -4,23 +4,62 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 
-private val DEFAULT_SKIP_KEYS = setOf(
-    "tokenizer.chat_template",
-    "tokenizer.ggml.scores",
-    "tokenizer.ggml.tokens",
-    "tokenizer.ggml.token_type"
-)
+/**
+ * Interface for reading GGUF metadata from model files.
+ * Use `GgufMetadataReader.create()` to get an instance.
+ */
+interface GgufMetadataReader {
+    /**
+     * Reads and parses GGUF metadata from the specified file path.
+     *
+     * @param path The absolute path to the GGUF file
+     * @return Structured metadata extracted from the file
+     * @throws IOException if file cannot be read
+     * @throws IllegalArgumentException if file format is invalid
+     */
+    suspend fun readStructuredMetadata(path: String): GgufMetadata
+
+    companion object {
+        private val DEFAULT_SKIP_KEYS = setOf(
+            "tokenizer.chat_template",
+            "tokenizer.ggml.scores",
+            "tokenizer.ggml.tokens",
+            "tokenizer.ggml.token_type"
+        )
+
+        /**
+         * Creates a default GgufMetadataReader instance
+         */
+        fun create(): GgufMetadataReader = GgufMetadataReaderImpl(
+            skipKeys = DEFAULT_SKIP_KEYS,
+            arraySummariseThreshold = 1_000
+        )
+
+        /**
+         * Creates a GgufMetadataReader with custom configuration
+         *
+         * @param skipKeys Keys whose value should be skipped entirely (not kept in the result map)
+         * @param arraySummariseThreshold If ≥0, arrays longer get summarised, not materialised;
+         *                                If -1, never summarise.
+         */
+        fun create(
+            skipKeys: Set<String> = DEFAULT_SKIP_KEYS,
+            arraySummariseThreshold: Int = 1_000
+        ): GgufMetadataReader = GgufMetadataReaderImpl(
+            skipKeys = skipKeys,
+            arraySummariseThreshold = arraySummariseThreshold
+        )
+    }
+}
 
 /**
  * Utility class to read GGUF model files and extract metadata key-value pairs.
  * This parser reads the header and metadata of a GGUF v3 file (little-endian) and skips tensor data.
  */
-class GgufMetadataReader(
-    /** Keys whose value should be skipped entirely (not kept in the resulting map). */
-    private val skipKeys: Set<String> = DEFAULT_SKIP_KEYS,
-    /** If ≥0, arrays longer than this get summarised instead of materialised.  -1 ⇒ never summarise. */
-    private val arraySummariseThreshold: Int = 1_000
-) {
+private class GgufMetadataReaderImpl(
+    private val skipKeys: Set<String>,
+    private val arraySummariseThreshold: Int,
+) : GgufMetadataReader {
     companion object {
         private const val ARCH_LLAMA = "llama"
     }
@@ -92,7 +131,7 @@ class GgufMetadataReader(
      * @throws IOException if the file is not GGUF, the version is unsupported,
      *         or the metadata block is truncated / corrupt.
      */
-    fun readStructuredMetadata(path: String): GgufMetadata {
+    override suspend fun readStructuredMetadata(path: String): GgufMetadata {
         File(path).inputStream().buffered().use { input ->
             // ── 1. header ──────────────────────────────────────────────────────────
                           // throws on mismatch

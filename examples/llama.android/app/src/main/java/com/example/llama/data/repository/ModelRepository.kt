@@ -107,6 +107,7 @@ class ModelRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val modelDao: ModelDao,
     private val huggingFaceRemoteDataSource: HuggingFaceRemoteDataSource,
+    private val ggufMetadataReader: GgufMetadataReader,
 ) : ModelRepository {
 
     private val modelsDir = File(context.filesDir, INTERNAL_STORAGE_PATH)
@@ -224,7 +225,7 @@ class ModelRepositoryImpl @Inject constructor(
             val metadata = try {
                 val filePath = modelFile.absolutePath
                 Log.i(TAG, "Extracting GGUF Metadata from $filePath")
-                GgufMetadata.fromDomain(GgufMetadataReader().readStructuredMetadata(filePath))
+                GgufMetadata.fromDomain(ggufMetadataReader.readStructuredMetadata(filePath))
             } catch (e: Exception) {
                 Log.e(TAG, "Cannot extract GGUF metadata: ${e.message}", e)
                 throw e
