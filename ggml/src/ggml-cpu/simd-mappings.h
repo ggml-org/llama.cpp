@@ -189,7 +189,7 @@ inline static float ggml_lookup_fp16_to_fp32(ggml_fp16_t f) {
 #define GGML_F32xt_LOAD(...)              GGML_F32xt_LOAD_IMPL(DEFAULT_PG, __VA_ARGS__)
 #define GGML_F32xt_STORE_IMPL(pg,a,b)     svst1_f32(pg, a, b)
 #define GGML_F32xt_STORE(...)             GGML_F32xt_STORE_IMPL(DEFAULT_PG, __VA_ARGS__)
-#define GGML_F32xt_FMA_IMPL(pg, a, b, c)  svmad_f32_m(pg, a, b, c)
+#define GGML_F32xt_FMA_IMPL(pg, a, b, c)  svmad_f32_m(pg, b, c, a)
 #define GGML_F32xt_FMA(...)               GGML_F32xt_FMA_IMPL(DEFAULT_PG, __VA_ARGS__)
 #define GGML_F32xt_ADD_IMPL(pg, a, b)     svadd_f32_m(pg, a, b)
 #define GGML_F32xt_ADD(...)               GGML_F32xt_ADD_IMPL(DEFAULT_PG, __VA_ARGS__)
