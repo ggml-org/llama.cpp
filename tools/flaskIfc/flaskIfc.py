@@ -212,7 +212,7 @@ def restart_txe_serial_command():
 
 @app.route('/health-check', methods=['GET'])
 def health_check_serial_command():
-    command = f"free -h"
+    command = f"free -h; df -h; top -b -n1"
 
     try:
         result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
@@ -233,7 +233,7 @@ def test_serial_command():
 @app.route('/system-info', methods=['GET'])
 def system_info_serial_command():
 
-    command = f"{exe_path}../install/tsi-version;lscpu"
+    command = f"{exe_path}../install/tsi-version;lsmod; lscpu; lsblk"
 
     try:
         result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
