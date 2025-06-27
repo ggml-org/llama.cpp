@@ -222,8 +222,12 @@ bool llama_memory_hybrid_context::apply() {
 
     bool res = true;
 
-    res = res & ctx_attn->apply();
-    res = res & ctx_recr->apply();
+    if (ctx_attn->get_status() == LLAMA_MEMORY_STATUS_SUCCESS) {
+        res = res & ctx_attn->apply();
+    }
+    if (ctx_recr->get_status() == LLAMA_MEMORY_STATUS_SUCCESS) {
+        res = res & ctx_recr->apply();
+    }
 
     return res;
 }
