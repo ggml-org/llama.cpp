@@ -3,6 +3,7 @@ import sys
 import time
 #This is just a test to see if I can make changes on my local machine and copy them over to fpga4! Thank you!
 #It worked! Thank you!
+
 def abort_serial_portion(port,baudrate):
     ser = serial.Serial(port, baudrate)
 
@@ -10,13 +11,19 @@ def abort_serial_portion(port,baudrate):
 
     ser.close()
 
+def explicit_boot_command(port,baudrate):
 
+    ser = serial.Serial(port,baudrate)
 
-def restart_txe_serial_portion(port, baudrate, path):
-    ser = serial.Serial(port, baudrate)
+    time.sleep(2)
 
     ser.write(b'boot\n')
 
+    ser.close()
+
+def explicit_root_command(port,baudrate,path):
+    
+    ser = serial.Serial(port,baudrate)
 
     while True:
         line = ser.readline().decode('utf-8', errors='ignore').strip()
@@ -28,6 +35,16 @@ def restart_txe_serial_portion(port, baudrate, path):
                 ser.write(b'root\n')
                 break
 
+    ser.close()
+
+
+def restart_txe_serial_portion(port, baudrate, path):
+
+    explicit_boot_command(port,baudrate)
+
+    explicit_root_command(port,baudrate,path)
+
+    ser = serial.Serial(port,baudrate)
 
     time.sleep(3)
 
