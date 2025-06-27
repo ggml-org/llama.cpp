@@ -1132,6 +1132,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // Debug: Dump tensor values after computation (for PLaMo-2 only)
+#define PLAMO2_DEBUG
+#ifdef PLAMO2_DEBUG
         if (model.arch == LLM_ARCH_PLAMO2) {  // Only for small inputs
             // Create debug directory if it doesn't exist
             #ifdef _WIN32
@@ -1230,6 +1232,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 }
             }
         }
+#endif // PLAMO2_DEBUG
 
         n_outputs_prev += n_outputs;
     } while (mctx->next());
