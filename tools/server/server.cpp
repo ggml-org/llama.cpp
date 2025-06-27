@@ -4392,7 +4392,6 @@ int main(int argc, char ** argv) {
                 }
             }
         }
-        
         handle_completions_impl(
             SERVER_TASK_TYPE_COMPLETION,
             data,
