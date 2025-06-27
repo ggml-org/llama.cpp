@@ -12,6 +12,10 @@ namespace hexagon {
 constexpr const size_t kBytesPerVector = sizeof(HVX_Vector);  // 128 for v73
 constexpr const size_t kAlignMask      = kBytesPerVector - 1;
 
+inline size_t get_aligned_size(size_t size) {
+    return (size + kAlignMask) & ~kAlignMask;
+}
+
 inline size_t unaligned_bytes(const void * addr) {
     return ((size_t) addr) & kAlignMask;
 }

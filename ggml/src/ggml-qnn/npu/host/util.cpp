@@ -13,6 +13,10 @@ static_assert(QUANT_K_SCALE_SIZE == K_SCALE_SIZE, "QUANT_K_SCALE_SIZE size misma
 static_assert(QUANT_K_BLOCK_SIZE == QK_K, "QUANT_K_BLOCK_SIZE size mismatch");
 static_assert(QUANT_BLOCK_SIZE == QK4_0, "QUANT_BLOCK_SIZE size mismatch");
 
+static_assert(NPU_ROPE_TYPE_NEOX == GGML_ROPE_TYPE_NEOX, "NPU_ROPE_TYPE_NEOX mismatch");
+static_assert(NPU_ROPE_TYPE_MROPE == GGML_ROPE_TYPE_MROPE, "NPU_ROPE_TYPE_MROPE mismatch");
+static_assert(NPU_ROPE_TYPE_VISION == GGML_ROPE_TYPE_VISION, "NPU_ROPE_TYPE_VISION mismatch");
+
 namespace hexagon {
 
 enum npu_device_tensor_op op_to_npu_op(ggml_op op) {

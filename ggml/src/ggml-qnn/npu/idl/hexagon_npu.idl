@@ -9,6 +9,10 @@ const uint32_t QUANT_BLOCK_SIZE = 32;
 const uint32_t QUANT_K_BLOCK_SIZE = 256;
 const uint32_t QUANT_K_SCALE_SIZE = 12;
 
+const uint32_t NPU_ROPE_TYPE_NEOX = 2;
+const uint32_t NPU_ROPE_TYPE_MROPE = 8;
+const uint32_t NPU_ROPE_TYPE_VISION = 24;
+
 interface npu_device : remote_handle64{
 
     typedef int64_t ne_type[DEVICE_TENSOR_MAX_DIMS];
