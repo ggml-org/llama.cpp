@@ -1,5 +1,7 @@
 package com.example.llama.viewmodel
 
+import android.llama.cpp.LLamaTier
+import android.llama.cpp.TierDetection
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.llama.data.preferences.UserPreferences
@@ -26,6 +28,7 @@ class SettingsViewModel @Inject constructor(
     private val userPreferences: UserPreferences,
     private val performanceMonitor: PerformanceMonitor,
     private val modelRepository: ModelRepository,
+    private val tierDetection: TierDetection,
 ) : ViewModel() {
 
     // Storage usage metrics
@@ -56,6 +59,9 @@ class SettingsViewModel @Inject constructor(
 
     private val _themeMode = MutableStateFlow(UserPreferences.THEME_MODE_AUTO)
     val themeMode: StateFlow<Int> = _themeMode.asStateFlow()
+
+    val detectedTier: LLamaTier?
+        get() = tierDetection.detectedTier
 
     init {
         viewModelScope.launch {

@@ -3,6 +3,7 @@ package com.example.llama.di
 import android.content.Context
 import android.llama.cpp.InferenceEngine
 import android.llama.cpp.KleidiLlama
+import android.llama.cpp.TierDetection
 import android.llama.cpp.gguf.GgufMetadataReader
 import com.example.llama.data.local.AppDatabase
 import com.example.llama.data.remote.HuggingFaceApiService
@@ -18,6 +19,7 @@ import com.example.llama.engine.InferenceService
 import com.example.llama.engine.InferenceServiceImpl
 import com.example.llama.engine.ModelLoadingService
 import com.example.llama.engine.StubInferenceEngine
+import com.example.llama.engine.StubTierDetection
 import com.example.llama.monitoring.PerformanceMonitor
 import dagger.Binds
 import dagger.Module
@@ -68,6 +70,15 @@ internal abstract class AppModule {
             } else {
                 KleidiLlama.createInferenceEngine(context)
                     ?: throw InstantiationException("Cannot instantiate InferenceEngine!")
+            }
+        }
+
+        @Provides
+        fun provideTierDetection(@ApplicationContext context: Context): TierDetection {
+            return if (USE_STUB_ENGINE) {
+                StubTierDetection
+            } else {
+                KleidiLlama.getTierDetection(context)
             }
         }
 
