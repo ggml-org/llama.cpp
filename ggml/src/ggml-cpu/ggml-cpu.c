@@ -2852,7 +2852,12 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #ifdef GGML_PERF
         int64_t t_end = ggml_time_us();
         node->perf_runs++;
+	if (t_end >= t_start) {
         node->perf_time_us += (t_end - t_start);
+    } else {
+        // Handle wraparound by assuming timer rolls over at max int64_t value
+        node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
+    }
 #endif
 
         if (state->ith == 0 && cplan->abort_callback &&

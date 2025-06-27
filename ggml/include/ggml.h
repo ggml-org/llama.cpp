@@ -615,7 +615,7 @@ extern "C" {
 	int64_t perf_runs;
         int64_t perf_time_us;
 	enum ggml_compute_backend_type ggml_compute_backend;
-        char padding[8+12];
+        char padding[4];
 #else
         char padding[8];
 #endif /* GGML_PERF */

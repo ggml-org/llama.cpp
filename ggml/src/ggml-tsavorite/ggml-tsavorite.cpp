@@ -1128,8 +1128,13 @@ static enum ggml_status ggml_tsavorite_graph_compute(ggml_backend_t backend,
 #ifdef GGML_PERF
     int64_t t_end = ggml_time_us();
     node->perf_runs++;
-    node->perf_time_us += (t_end - t_start);
     node->ggml_compute_backend = GGML_COMPUTE_BACKEND_TSAVORITE;
+    if (t_end >= t_start) {
+        node->perf_time_us += (t_end - t_start);
+    } else {
+        // Handle wraparound by assuming timer rolls over at max int64_t value
+        node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
+    }
 #endif
   }
 
