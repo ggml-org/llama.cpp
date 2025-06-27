@@ -10066,6 +10066,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->src[3] && op->src[3]->type != GGML_TYPE_F16) {
                     return false;
                 }
+                // TODO: support broadcast
+                // ref: https://github.com/ggml-org/llama.cpp/pull/14435
+                if (op->src[0]->ne[3] != 1) {
+                    return false;
+                }
                 // It's straightforward to support different K/V dequant, but would
                 // significantly increase the number of pipelines
                 if (op->src[1]->type != op->src[2]->type) {
@@ -10224,7 +10229,15 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SCALE:
         case GGML_OP_PAD:
         case GGML_OP_DIAG_MASK_INF:
+            return true;
         case GGML_OP_SOFT_MAX:
+            // TODO: support batching
+            if (op->src[0]->ne[3] != 1) {
+                return false;
+            }
+            // TODO: support broadcast
+            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
+            return !op->src[1] || (op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1);
         case GGML_OP_SOFT_MAX_BACK:
         case GGML_OP_ARGSORT:
         case GGML_OP_SUM:

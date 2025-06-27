@@ -1253,24 +1253,28 @@ kernel void kernel_soft_max(
         device        char * dst,
         constant ggml_metal_kargs_soft_max & args,
         threadgroup  float * buf [[threadgroup(0)]],
-        uint  tgpig[[threadgroup_position_in_grid]],
-        uint  tpitg[[thread_position_in_threadgroup]],
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
         uint  sgitg[[simdgroup_index_in_threadgroup]],
         uint  tiisg[[thread_index_in_simdgroup]],
-        uint    ntg[[threads_per_threadgroup]]) {
-    const int64_t i03 = (tgpig) / (args.ne02*args.ne01);
-    const int64_t i02 = (tgpig - i03*args.ne02*args.ne01) / args.ne01;
-    const int64_t i01 = (tgpig - i03*args.ne02*args.ne01 - i02*args.ne01);
+        uint3  tptg[[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i01 = tgpig.x;
 
-    device const float * psrc0 = (device const float *) src0 + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00);
-    device const     T * pmask = src1 != src0 ? (device const    T *) src1         + i01*args.ne00 : nullptr;
-    device       float * pdst  = (device       float *) dst  + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00);
+    const int32_t i13 = i03%args.ne13;
+    const int32_t i12 = i02%args.ne12;
+    const int32_t i11 = i01;
+
+    device const float * psrc0 =                (device const float *) (src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+    device const     T * pmask = src1 != src0 ? (device const T *    ) (src1 + i11*args.nb11 + i12*args.nb12 + i13*args.nb13) : nullptr;
+    device       float * pdst  =                (device       float *) (dst  + i01*args.nb1  + i02*args.nb2  + i03*args.nb3);
 
     float slope = 1.0f;
 
     // ALiBi
     if (args.max_bias > 0.0f) {
-        const int64_t h = i02;
+        const int32_t h = i02;
 
         const float base = h < args.n_head_log2 ? args.m0 : args.m1;
         const int   exp  = h < args.n_head_log2 ? h + 1 : 2*(h - args.n_head_log2) + 1;
@@ -1281,13 +1285,13 @@ kernel void kernel_soft_max(
     // parallel max
     float lmax = -INFINITY;
 
-    for (int i00 = tpitg; i00 < args.ne00; i00 += ntg) {
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
         lmax = MAX(lmax, psrc0[i00]*args.scale + (pmask ? slope*pmask[i00] : 0.0f));
     }
 
     // find the max value in the block
     float max_val = simd_max(lmax);
-    if (ntg > N_SIMDWIDTH) {
+    if (tptg.x > N_SIMDWIDTH) {
         if (sgitg == 0) {
             buf[tiisg] = -INFINITY;
         }
@@ -1306,7 +1310,7 @@ kernel void kernel_soft_max(
 
     // parallel sum
     float lsum = 0.0f;
-    for (int i00 = tpitg; i00 < args.ne00; i00 += ntg) {
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
         const float exp_psrc0 = exp((psrc0[i00]*args.scale + (pmask ? slope*pmask[i00] : 0.0f)) - max_val);
         lsum += exp_psrc0;
         pdst[i00] = exp_psrc0;
@@ -1318,7 +1322,7 @@ kernel void kernel_soft_max(
 
     float sum = simd_sum(lsum);
 
-    if (ntg > N_SIMDWIDTH) {
+    if (tptg.x > N_SIMDWIDTH) {
         if (sgitg == 0) {
             buf[tiisg] = 0.0f;
         }
@@ -1337,7 +1341,7 @@ kernel void kernel_soft_max(
 
     const float inv_sum = 1.0f/sum;
 
-    for (int i00 = tpitg; i00 < args.ne00; i00 += ntg) {
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
         pdst[i00] *= inv_sum;
     }
 }
@@ -1349,23 +1353,27 @@ kernel void kernel_soft_max_4(
         device        char * dst,
         constant ggml_metal_kargs_soft_max & args,
         threadgroup  float * buf [[threadgroup(0)]],
-        uint  tgpig[[threadgroup_position_in_grid]],
-        uint  tpitg[[thread_position_in_threadgroup]],
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
         uint  sgitg[[simdgroup_index_in_threadgroup]],
         uint  tiisg[[thread_index_in_simdgroup]],
-        uint    ntg[[threads_per_threadgroup]]) {
-    const int64_t i03 = (tgpig) / (args.ne02*args.ne01);
-    const int64_t i02 = (tgpig - i03*args.ne02*args.ne01) / args.ne01;
-    const int64_t i01 = (tgpig - i03*args.ne02*args.ne01 - i02*args.ne01);
+        uint3  tptg[[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+    const int32_t i01 = tgpig.x;
 
-    device const float4 * psrc4 = (device const float4 *) src0 + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00)/4;
-    device const      T * pmask = src1 != src0 ? (device const     T *) src1         + i01*args.ne00/4 : nullptr;
-    device       float4 * pdst4 = (device       float4 *) dst  + (i03*args.ne02*args.ne01*args.ne00 + i02*args.ne01*args.ne00 + i01*args.ne00)/4;
+    const int32_t i13 = i03%args.ne13;
+    const int32_t i12 = i02%args.ne12;
+    const int32_t i11 = i01;
+
+    device const float4 * psrc4 =                (device const float4 *) (src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+    device const      T * pmask = src1 != src0 ? (device const T *     ) (src1 + i11*args.nb11 + i12*args.nb12 + i13*args.nb13) : nullptr;
+    device       float4 * pdst4 =                (device       float4 *) (dst  + i01*args.nb1  + i02*args.nb2  + i03*args.nb3);
 
     float slope = 1.0f;
 
     if (args.max_bias > 0.0f) {
-        const int64_t h = i02;
+        const int32_t h = i02;
 
         const float base = h < args.n_head_log2 ? args.m0 : args.m1;
         const int   exp  = h < args.n_head_log2 ? h + 1 : 2*(h - args.n_head_log2) + 1;
@@ -1376,14 +1384,14 @@ kernel void kernel_soft_max_4(
     // parallel max
     float4 lmax4 = -INFINITY;
 
-    for (int i00 = tpitg; i00 < args.ne00/4; i00 += ntg) {
+    for (int i00 = tpitg.x; i00 < args.ne00/4; i00 += tptg.x) {
         lmax4 = fmax(lmax4, psrc4[i00]*args.scale + (float4)((pmask ? slope*pmask[i00] : 0.0f)));
     }
 
     const float lmax = MAX(MAX(lmax4[0], lmax4[1]), MAX(lmax4[2], lmax4[3]));
 
     float max_val = simd_max(lmax);
-    if (ntg > N_SIMDWIDTH) {
+    if (tptg.x > N_SIMDWIDTH) {
         if (sgitg == 0) {
             buf[tiisg] = -INFINITY;
         }
@@ -1402,7 +1410,7 @@ kernel void kernel_soft_max_4(
 
     // parallel sum
     float4 lsum4 = 0.0f;
-    for (int i00 = tpitg; i00 < args.ne00/4; i00 += ntg) {
+    for (int i00 = tpitg.x; i00 < args.ne00/4; i00 += tptg.x) {
         const float4 exp_psrc4 = exp((psrc4[i00]*args.scale + (float4)((pmask ? slope*pmask[i00] : 0.0f))) - max_val);
         lsum4 += exp_psrc4;
         pdst4[i00] = exp_psrc4;
@@ -1416,7 +1424,7 @@ kernel void kernel_soft_max_4(
 
     float sum = simd_sum(lsum);
 
-    if (ntg > N_SIMDWIDTH) {
+    if (tptg.x > N_SIMDWIDTH) {
         if (sgitg == 0) {
             buf[tiisg] = 0.0f;
         }
@@ -1435,7 +1443,7 @@ kernel void kernel_soft_max_4(
 
     const float inv_sum = 1.0f/sum;
 
-    for (int i00 = tpitg; i00 < args.ne00/4; i00 += ntg) {
+    for (int i00 = tpitg.x; i00 < args.ne00/4; i00 += tptg.x) {
         pdst4[i00] *= inv_sum;
     }
 }
@@ -3709,7 +3717,7 @@ kernel void kernel_flash_attn_ext(
                 // load the mask in shared memory
                 #pragma unroll(Q)
                 for (short j = 0; j < Q; ++j) {
-                    device const half * pm = (device const half *) ((device const char *) mask + (iq1 + j)*args.nb31);
+                    device const half * pm = (device const half *) ((device const char *) mask + (iq1 + j)*args.nb31 + (iq3%args.ne32)*args.nb32);
 
                     const float m = pm[ic + tiisg];
 
@@ -4195,7 +4203,7 @@ kernel void kernel_flash_attn_ext_vec(
         const bool has_mask = mask != q;
 
         // pointer to the mask
-        device const half * pm = (device const half *) (mask + iq1*args.nb31);
+        device const half * pm = (device const half *) (mask + iq1*args.nb31 + (iq3%args.ne32)*args.nb32);
 
         float slope = 1.0f;
 
