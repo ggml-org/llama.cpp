@@ -32,6 +32,7 @@
 .swiftpm
 .vs/
 .vscode/
+.history/
 nppBackup
 
 
@@ -146,4 +147,3 @@ poetry.toml
 # Local scripts
 /run-vim.sh
 /run-chat.sh
-.history
