@@ -11,7 +11,7 @@
 // utilizes two instances of llama_kv_cache_unified
 //   the first instance is for the non-SWA layers of the model and the second instance is for the SWA layers
 
-class llama_kv_cache_unified_iswa : public llama_kv_cache {
+class llama_kv_cache_unified_iswa : public llama_memory_i {
 public:
     llama_kv_cache_unified_iswa(
             const llama_model & model,
@@ -31,7 +31,18 @@ public:
     // llama_memory_i
     //
 
-    void clear() override;
+    llama_memory_context_ptr init_batch(
+            llama_batch_allocr & balloc,
+            uint32_t n_ubatch,
+            bool embd_all) override;
+
+    llama_memory_context_ptr init_full() override;
+
+    llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
+
+    bool get_can_shift() const override;
+
+    void clear(bool data) override;
 
     bool seq_rm  (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1) override;
     void seq_cp  (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) override;
@@ -41,24 +52,6 @@ public:
 
     llama_pos seq_pos_min(llama_seq_id seq_id) const override;
     llama_pos seq_pos_max(llama_seq_id seq_id) const override;
-
-    //
-    // llama_kv_cache
-    //
-
-    llama_memory_state_ptr init_batch(
-            const llama_batch & batch,
-            uint32_t n_ubatch,
-            bool embd_pooled,
-            bool logits_all) override;
-
-    llama_memory_state_ptr init_full() override;
-
-    bool update(llama_context & lctx) override;
-
-    void defrag_sched(float thold) override;
-
-    bool get_can_shift() const override;
 
     // state write/load
 
@@ -79,58 +72,57 @@ private:
     std::unique_ptr<llama_kv_cache_unified> kv_swa;
 };
 
-class llama_kv_cache_unified_iswa_state : public llama_memory_state_i {
+class llama_kv_cache_unified_iswa_context : public llama_memory_context_i {
 public:
     // used for errors
-    llama_kv_cache_unified_iswa_state(llama_memory_status status);
+    llama_kv_cache_unified_iswa_context(llama_memory_status status);
 
-    // used to create a full-cache state
-    llama_kv_cache_unified_iswa_state(
-            llama_memory_status status,
+    // used to create a full-cache context
+    llama_kv_cache_unified_iswa_context(
             llama_kv_cache_unified_iswa * kv);
 
-    // used to create a state from a batch
-    llama_kv_cache_unified_iswa_state(
-            llama_memory_status status,
+    // used to create an update context
+    llama_kv_cache_unified_iswa_context(
             llama_kv_cache_unified_iswa * kv,
-            llama_sbatch sbatch,
+            llama_context * lctx,
+            bool optimize);
+
+    // used to create a batch processing context from a batch
+    llama_kv_cache_unified_iswa_context(
+            llama_kv_cache_unified_iswa * kv,
             std::vector<uint32_t> heads_base,
             std::vector<uint32_t> heads_swa,
             std::vector<llama_ubatch> ubatches);
 
-    virtual ~llama_kv_cache_unified_iswa_state();
+    virtual ~llama_kv_cache_unified_iswa_context();
 
     //
-    // llama_memory_state_i
+    // llama_memory_context_i
     //
 
     bool next()  override;
     bool apply() override;
 
-    std::vector<int64_t> & out_ids() override;
-
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
 
     //
-    // llama_kv_cache_unified_iswa_state specific API
+    // llama_kv_cache_unified_iswa_context specific API
     //
 
-    const llama_kv_cache_unified_state * get_base() const;
-    const llama_kv_cache_unified_state * get_swa()  const;
+    const llama_kv_cache_unified_context * get_base() const;
+    const llama_kv_cache_unified_context * get_swa()  const;
 
 private:
-    const llama_memory_status status;
-
     //llama_kv_cache_unified_iswa * kv;
-
-    llama_sbatch sbatch;
 
     // the index of the next ubatch to process
     size_t i_next = 0;
 
     std::vector<llama_ubatch> ubatches;
 
-    std::unique_ptr<llama_kv_cache_unified_state> state_base;
-    std::unique_ptr<llama_kv_cache_unified_state> state_swa;
+    const llama_memory_context_ptr ctx_base;
+    const llama_memory_context_ptr ctx_swa;
+
+    const llama_memory_status status;
 };

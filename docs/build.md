@@ -1,6 +1,6 @@
 # Build llama.cpp locally
 
-The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](include/llama.h).
+The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](../include/llama.h).
 
 The project also includes many example programs and tools using the `llama` library. The examples range from simple, minimal code snippets to sophisticated sub-projects such as an OpenAI-compatible HTTP server.
 
@@ -556,6 +556,10 @@ ninja
 ## Android
 
 To read documentation for how to build on Android, [click here](./android.md)
+
+## IBM Z & LinuxONE
+
+To read documentation for how to build on IBM Z & LinuxONE, [click here](./build-s390x.md)
 
 ## Notes about GPU-accelerated backends
 

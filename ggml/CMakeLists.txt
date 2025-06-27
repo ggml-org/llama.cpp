@@ -105,7 +105,7 @@ message(DEBUG "GGML_NATIVE_DEFAULT : ${GGML_NATIVE_DEFAULT}")
 message(DEBUG "INS_ENB             : ${INS_ENB}")
 
 option(GGML_CPU_HBM          "ggml: use memkind for CPU HBM" OFF)
-option(GGML_CPU_AARCH64      "ggml: use runtime weight conversion of Q4_0 to Q4_X_X" ON)
+option(GGML_CPU_REPACK       "ggml: use runtime weight conversion of Q4_0 to Q4_X_X" ON)
 option(GGML_CPU_KLEIDIAI     "ggml: use KleidiAI optimized kernels if applicable" OFF)
 option(GGML_SSE42            "ggml: enable SSE 4.2"          ${INS_ENB})
 option(GGML_AVX              "ggml: enable AVX"              ${INS_ENB})
@@ -131,13 +131,14 @@ option(GGML_RVV              "ggml: enable rvv"              ON)
 option(GGML_RV_ZFH           "ggml: enable riscv zfh"        OFF)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
 option(GGML_VXE              "ggml: enable vxe"              ON)
+option(GGML_NNPA             "ggml: enable nnpa"             ON)
 
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
 set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
 set(GGML_CPU_POWERPC_CPUTYPE "" CACHE STRING "ggml: CPU type for PowerPC")
 
 
-if (WIN32)
+if (MINGW)
     set(GGML_WIN_VER "0x602" CACHE STRING   "ggml: Windows version")
 endif()
 
@@ -172,6 +173,7 @@ option(GGML_HIP                             "ggml: use HIP"                     
 option(GGML_HIP_GRAPHS                      "ggml: use HIP graph, experimental, slow"         OFF)
 option(GGML_HIP_NO_VMM                      "ggml: do not try to use HIP VMM"                 ON)
 option(GGML_HIP_ROCWMMA_FATTN               "ggml: enable rocWMMA for FlashAttention"         OFF)
+option(GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12   "ggml: enable rocWMMA FlashAttention on GFX12"    OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)
 option(GGML_VULKAN_CHECK_RESULTS            "ggml: run Vulkan op checks"                      OFF)
 option(GGML_VULKAN_DEBUG                    "ggml: enable Vulkan debug output"                OFF)
@@ -367,6 +369,8 @@ if (MSVC)
         /wd4005  # Macro redefinition
         /wd4244  # Conversion from one type to another type, possible loss of data
         /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4305  # Conversion from 'type1' to 'type2', possible loss of data
+        /wd4566  # Conversion from 'char' to 'wchar_t', possible loss of data
         /wd4996  # Disable POSIX deprecation warnings
         /wd4702  # Unreachable code warnings
     )
@@ -386,4 +390,46 @@ if (MSVC)
     disable_msvc_warnings(ggml-cpu-skylakex)
     disable_msvc_warnings(ggml-cpu-icelake)
     disable_msvc_warnings(ggml-cpu-alderlake)
+
+    if (GGML_BUILD_EXAMPLES)
+        disable_msvc_warnings(common-ggml)
+        disable_msvc_warnings(common)
+
+        disable_msvc_warnings(mnist-common)
+        disable_msvc_warnings(mnist-eval)
+        disable_msvc_warnings(mnist-train)
+
+        disable_msvc_warnings(gpt-2-ctx)
+        disable_msvc_warnings(gpt-2-alloc)
+        disable_msvc_warnings(gpt-2-backend)
+        disable_msvc_warnings(gpt-2-sched)
+        disable_msvc_warnings(gpt-2-quantize)
+        disable_msvc_warnings(gpt-2-batched)
+
+        disable_msvc_warnings(gpt-j)
+        disable_msvc_warnings(gpt-j-quantize)
+
+        disable_msvc_warnings(magika)
+        disable_msvc_warnings(yolov3-tiny)
+        disable_msvc_warnings(sam)
+
+        disable_msvc_warnings(simple-ctx)
+        disable_msvc_warnings(simple-backend)
+    endif()
+
+    if (GGML_BUILD_TESTS)
+        disable_msvc_warnings(test-mul-mat)
+        disable_msvc_warnings(test-arange)
+        disable_msvc_warnings(test-backend-ops)
+        disable_msvc_warnings(test-cont)
+        disable_msvc_warnings(test-conv-transpose)
+        disable_msvc_warnings(test-conv-transpose-1d)
+        disable_msvc_warnings(test-conv1d)
+        disable_msvc_warnings(test-conv2d)
+        disable_msvc_warnings(test-conv2d-dw)
+        disable_msvc_warnings(test-customop)
+        disable_msvc_warnings(test-dup)
+        disable_msvc_warnings(test-opt)
+        disable_msvc_warnings(test-pool)
+    endif ()
 endif()

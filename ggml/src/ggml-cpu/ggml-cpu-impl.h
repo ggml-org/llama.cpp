@@ -62,11 +62,17 @@ struct ggml_compute_params {
 #if defined(__s390x__) && defined(__VEC__)
 #ifndef __VXE__
 #define __VXE__
-#endif
+#endif  // __VXE__
 #ifndef __VXE2__
 #define __VXE2__
-#endif
-#endif
+#endif  // __VXE2__
+#endif  // __s390x__ && __VEC__
+
+#if defined(__s390x__) && defined(GGML_NNPA)
+#ifndef __NNPA__
+#define __NNPA__
+#endif  // __NNPA__
+#endif  // __s390x__ && GGML_NNPA
 
 #if defined(__ARM_FEATURE_SVE)
 #include <sys/prctl.h>
@@ -371,7 +377,7 @@ inline static int32x4_t ggml_vdotq_s32(int32x4_t acc, int8x16_t a, int8x16_t b) 
 #define vec_xor(a, b) ((a) ^ (b)) // Vector XOR
 #endif
 
-typedef signed char char8x16_t __attribute__((vector_size(16)));
+typedef signed   char char8x16_t  __attribute__((vector_size(16)));
 typedef unsigned char uchar8x16_t __attribute__((vector_size(16)));
 
 typedef int8_t  int8x16_t __attribute__((vector_size(16)));
@@ -382,10 +388,10 @@ typedef uint8_t  uint8x16_t __attribute__((vector_size(16)));
 typedef uint16_t uint16x8_t __attribute__((vector_size(16)));
 typedef uint32_t uint32x4_t __attribute__((vector_size(16)));
 
-typedef float float32x4_t __attribute__((vector_size(16)));
-typedef double double64x2_t __attribute((vector_size(16)));
+typedef float  float32x4_t  __attribute__((vector_size(16)));
+typedef double double64x2_t __attribute__((vector_size(16)));
 
-typedef signed long long long64x2_t __attribute((vector_size(16)));
+typedef signed   long long long64x2_t  __attribute__((vector_size(16)));
 typedef unsigned long long ulong64x2_t __attribute__((vector_size(16)));
 
 typedef struct ggml_uint8x16x2_t {
@@ -502,6 +508,9 @@ static __m256 __lasx_xvreplfr2vr_s(const float val) {
 
 // TODO: move to ggml-threading
 void ggml_barrier(struct ggml_threadpool * tp);
+
+void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
+int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
 
 #ifdef __cplusplus
 }

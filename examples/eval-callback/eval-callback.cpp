@@ -55,6 +55,8 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
                         v = ggml_fp16_to_fp32(*(ggml_fp16_t *) &data[i]);
                     } else if (type == GGML_TYPE_F32) {
                         v = *(float *) &data[i];
+                    } else if (type == GGML_TYPE_I64) {
+                        v = (float) *(int64_t *) &data[i];
                     } else if (type == GGML_TYPE_I32) {
                         v = (float) *(int32_t *) &data[i];
                     } else if (type == GGML_TYPE_I16) {

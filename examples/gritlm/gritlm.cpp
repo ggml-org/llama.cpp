@@ -41,12 +41,11 @@ static std::vector<std::vector<float>> encode(llama_context * ctx, const std::ve
 
         // add input to batch (this increments n_tokens)
         for (int32_t j = 0; j < n_toks; j++) {
-            common_batch_add(batch, inputs[j], j, { 0 }, j >= n_inst);
+            common_batch_add(batch, inputs[j], j, { 0 }, true);
         }
 
         // clear previous kv_cache values (irrelevant for embeddings)
-        llama_kv_self_clear(ctx);
-        llama_set_embeddings(ctx, true);
+        llama_memory_clear(llama_get_memory(ctx), true);
         llama_set_causal_attn(ctx, false);
 
         // run model
@@ -102,8 +101,7 @@ static std::string generate(llama_context * ctx, llama_sampler * smpl, const std
 
     llama_token eos_token = llama_vocab_eos(vocab);
 
-    llama_kv_self_clear(ctx);
-    llama_set_embeddings(ctx, false);
+    llama_memory_clear(llama_get_memory(ctx), true);
     llama_set_causal_attn(ctx, true);
 
     llama_batch bat = llama_batch_init(llama_n_batch(ctx), 0, 1);
@@ -166,6 +164,8 @@ int main(int argc, char * argv[]) {
     llama_model_params mparams = common_model_params_to_llama(params);
     llama_context_params cparams = common_context_params_to_llama(params);
 
+    cparams.embeddings = true;
+
     llama_backend_init();
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
@@ -212,6 +212,8 @@ int main(int argc, char * argv[]) {
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[1].c_str(), documents[0].c_str(), cosine_sim_q1_d0);
         std::printf("Cosine similarity between \"%.50s\" and \"%.50s\" is: %.3f\n", queries[1].c_str(), documents[1].c_str(), cosine_sim_q1_d1);
     }
+
+    llama_set_embeddings(ctx, false);
 
     // ### Generation ###
     // GritLM models are not finetuned with system prompts, as you can just include system-like instructions together with your user instruction
