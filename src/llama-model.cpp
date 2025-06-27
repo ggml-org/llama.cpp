@@ -22,6 +22,7 @@
 #include <functional>
 #include <map>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 
 const char * llm_type_name(llm_type type) {
@@ -8215,8 +8216,11 @@ struct llm_build_plamo2 : public llm_graph_context {
         // const int64_t n_embd_head = hparams.n_embd_head_v;
         // ggml_tensor * inp_pos = build_inp_pos();
 
+        // TODO: Cast to f32 is currently required for ggml_get_rows in build_inp_embd
+        ggml_tensor * embed_tokens = ggml_cast(ctx0, model.tok_embd, GGML_TYPE_F32);
+
         // {n_embd, n_tokens}
-        ggml_tensor * inpL = build_inp_embd(model.tok_embd);
+        ggml_tensor * inpL = build_inp_embd(embed_tokens);
         cb(inpL, "embedding_output", -1);
 
         // ensure the memory context is hybrid
@@ -8230,9 +8234,8 @@ struct llm_build_plamo2 : public llm_graph_context {
             // cb(model.layers[il].attn_norm, "attn_norm", il);
 
             // pre_mixer_norm
-            // cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-            cur = ggml_rms_norm(ctx0, inpL, hparams.f_norm_rms_eps);
-            cur = ggml_mul(ctx0, cur, model.layers[il].attn_norm);
+            cb(inpL, "attn_pre_norm_input", il);
+            cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "attn_pre_norm", il);
 
             // check if this layer is Mamba or Attention
