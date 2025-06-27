@@ -192,7 +192,7 @@ if (NOT WIN32)
     llama_build_and_test(test-arg-parser.cpp)
 endif()
 
-# llama_build_and_test(test-opt.cpp) # SLOW
+llama_build_and_test(test-opt.cpp)
 llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 
