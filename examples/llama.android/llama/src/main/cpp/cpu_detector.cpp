@@ -12,7 +12,7 @@ static const Aarch64Info info = GetAarch64Info();
 static const Aarch64Features features = info.features;
 
 extern "C" JNIEXPORT jint JNICALL
-Java_android_llama_cpp_InferenceEngineLoader_getOptimalTier(
+Java_android_llama_cpp_internal_InferenceEngineLoader_getOptimalTier(
         JNIEnv* env,
         jclass clazz) {
     int tier = 0;  // Default to T0 (baseline)
@@ -46,7 +46,7 @@ Java_android_llama_cpp_InferenceEngineLoader_getOptimalTier(
 
 // Optional: Keep a feature string function for debugging
 extern "C" JNIEXPORT jstring JNICALL
-Java_android_llama_cpp_InferenceEngineLoader_getCpuFeaturesString(
+Java_android_llama_cpp_internal_InferenceEngineLoader_getCpuFeaturesString(
         JNIEnv* env,
         jclass clazz) {
     std::string text;

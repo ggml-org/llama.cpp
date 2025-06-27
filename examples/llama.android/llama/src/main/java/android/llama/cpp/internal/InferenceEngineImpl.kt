@@ -1,6 +1,7 @@
-package android.llama.cpp
+package android.llama.cpp.internal
 
-import android.llama.cpp.InferenceEngine.State
+import android.llama.cpp.InferenceEngine
+import android.llama.cpp.LLamaTier
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -85,8 +86,9 @@ internal class InferenceEngineImpl private constructor(
     private external fun unload()
     private external fun shutdown()
 
-    private val _state = MutableStateFlow<State>(State.Uninitialized)
-    override val state: StateFlow<State> = _state
+    private val _state =
+        MutableStateFlow<InferenceEngine.State>(InferenceEngine.State.Uninitialized)
+    override val state: StateFlow<InferenceEngine.State> = _state
 
     private var _readyForSystemPrompt = false
 
@@ -100,15 +102,15 @@ internal class InferenceEngineImpl private constructor(
     init {
         llamaScope.launch {
             try {
-                check(_state.value is State.Uninitialized) {
+                check(_state.value is InferenceEngine.State.Uninitialized) {
                     "Cannot load native library in ${_state.value.javaClass.simpleName}!"
                 }
-                _state.value = State.Initializing
+                _state.value = InferenceEngine.State.Initializing
                 Log.i(TAG, "Loading native library for $tier")
 
                 System.loadLibrary(tier.libraryName)
                 init()
-                _state.value = State.Initialized
+                _state.value = InferenceEngine.State.Initialized
                 Log.i(TAG, "Native library loaded! System info: \n${systemInfo()}")
 
             } catch (e: Exception) {
@@ -123,7 +125,7 @@ internal class InferenceEngineImpl private constructor(
      */
     override suspend fun loadModel(pathToModel: String) =
         withContext(llamaDispatcher) {
-            check(_state.value is State.Initialized) {
+            check(_state.value is InferenceEngine.State.Initialized) {
                 "Cannot load model in ${_state.value.javaClass.simpleName}!"
             }
             File(pathToModel).let {
@@ -133,7 +135,7 @@ internal class InferenceEngineImpl private constructor(
 
             Log.i(TAG, "Loading model... \n$pathToModel")
             _readyForSystemPrompt = false
-            _state.value = State.LoadingModel
+            _state.value = InferenceEngine.State.LoadingModel
             load(pathToModel).let { result ->
                 if (result != 0) throw IllegalStateException("Failed to Load model: $result")
             }
@@ -142,7 +144,7 @@ internal class InferenceEngineImpl private constructor(
             }
             Log.i(TAG, "Model loaded!")
             _readyForSystemPrompt = true
-            _state.value = State.ModelReady
+            _state.value = InferenceEngine.State.ModelReady
         }
 
     /**
@@ -154,40 +156,40 @@ internal class InferenceEngineImpl private constructor(
         withContext(llamaDispatcher) {
             require(prompt.isNotBlank()) { "Cannot process empty system prompt!" }
             check(_readyForSystemPrompt) { "System prompt must be set ** RIGHT AFTER ** model loaded!" }
-            check(_state.value is State.ModelReady) {
+            check(_state.value is InferenceEngine.State.ModelReady) {
                 "Cannot process system prompt in ${_state.value.javaClass.simpleName}!"
             }
 
             Log.i(TAG, "Sending system prompt...")
             _readyForSystemPrompt = false
-            _state.value = State.ProcessingSystemPrompt
+            _state.value = InferenceEngine.State.ProcessingSystemPrompt
             processSystemPrompt(prompt).let { result ->
                 if (result != 0) {
                     val errorMessage = "Failed to process system prompt: $result"
-                    _state.value = State.Error(errorMessage)
+                    _state.value = InferenceEngine.State.Error(errorMessage)
                     throw IllegalStateException(errorMessage)
                 }
             }
             Log.i(TAG, "System prompt processed! Awaiting user prompt...")
-            _state.value = State.ModelReady
+            _state.value = InferenceEngine.State.ModelReady
         }
 
     /**
-     * Send plain text user prompt to LLM, which starts generating tokens in a [Flow]
+     * Send plain text user prompt to LLM, which starts generating tokens in a [kotlinx.coroutines.flow.Flow]
      */
     override fun sendUserPrompt(
         message: String,
         predictLength: Int,
     ): Flow<String> = flow {
         require(message.isNotEmpty()) { "User prompt discarded due to being empty!" }
-        check(_state.value is State.ModelReady) {
+        check(_state.value is InferenceEngine.State.ModelReady) {
             "User prompt discarded due to: ${_state.value.javaClass.simpleName}"
         }
 
         try {
             Log.i(TAG, "Sending user prompt...")
             _readyForSystemPrompt = false
-            _state.value = State.ProcessingUserPrompt
+            _state.value = InferenceEngine.State.ProcessingUserPrompt
 
             processUserPrompt(message, predictLength).let { result ->
                 if (result != 0) {
@@ -197,21 +199,21 @@ internal class InferenceEngineImpl private constructor(
             }
 
             Log.i(TAG, "User prompt processed. Generating assistant prompt...")
-            _state.value = State.Generating
+            _state.value = InferenceEngine.State.Generating
             while (true) {
                 generateNextToken()?.let { utf8token ->
                     if (utf8token.isNotEmpty()) emit(utf8token)
                 } ?: break
             }
             Log.i(TAG, "Assistant generation complete. Awaiting user prompt...")
-            _state.value = State.ModelReady
+            _state.value = InferenceEngine.State.ModelReady
         } catch (e: CancellationException) {
             Log.i(TAG, "Generation cancelled by user.")
-            _state.value = State.ModelReady
+            _state.value = InferenceEngine.State.ModelReady
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error during generation!", e)
-            _state.value = State.Error(e.message ?: "Unknown error")
+            _state.value = InferenceEngine.State.Error(e.message ?: "Unknown error")
             throw e
         }
     }.flowOn(llamaDispatcher)
@@ -221,14 +223,14 @@ internal class InferenceEngineImpl private constructor(
      */
     override suspend fun bench(pp: Int, tg: Int, pl: Int, nr: Int): String =
         withContext(llamaDispatcher) {
-            check(_state.value is State.ModelReady) {
+            check(_state.value is InferenceEngine.State.ModelReady) {
                 "Benchmark request discarded due to: $state"
             }
             Log.i(TAG, "Start benchmark (pp: $pp, tg: $tg, pl: $pl, nr: $nr)")
             _readyForSystemPrompt = false   // Just to be safe
-            _state.value = State.Benchmarking
+            _state.value = InferenceEngine.State.Benchmarking
             benchModel(pp, tg, pl, nr).also {
-                _state.value = State.ModelReady
+                _state.value = InferenceEngine.State.ModelReady
             }
         }
 
@@ -237,18 +239,19 @@ internal class InferenceEngineImpl private constructor(
      */
     override suspend fun unloadModel() =
         withContext(llamaDispatcher) {
-            when(val state = _state.value) {
-                is State.ModelReady, is State.Error -> {
+            when (val state = _state.value) {
+                is InferenceEngine.State.ModelReady, is InferenceEngine.State.Error -> {
                     Log.i(TAG, "Unloading model and free resources...")
                     _readyForSystemPrompt = false
-                    _state.value = State.UnloadingModel
+                    _state.value = InferenceEngine.State.UnloadingModel
 
                     unload()
 
-                    _state.value = State.Initialized
+                    _state.value = InferenceEngine.State.Initialized
                     Log.i(TAG, "Model unloaded!")
                     Unit
                 }
+
                 else -> throw IllegalStateException("Cannot unload model in ${state.javaClass.simpleName}")
             }
         }
@@ -260,8 +263,8 @@ internal class InferenceEngineImpl private constructor(
         _readyForSystemPrompt = false
         llamaScope.cancel()
         when(_state.value) {
-            is State.Uninitialized -> {}
-            is State.Initialized -> shutdown()
+            is InferenceEngine.State.Uninitialized -> {}
+            is InferenceEngine.State.Initialized -> shutdown()
             else -> { unload(); shutdown() }
         }
     }

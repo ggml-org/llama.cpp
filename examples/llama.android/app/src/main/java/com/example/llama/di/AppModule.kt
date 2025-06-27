@@ -2,7 +2,7 @@ package com.example.llama.di
 
 import android.content.Context
 import android.llama.cpp.InferenceEngine
-import android.llama.cpp.InferenceEngineLoader
+import android.llama.cpp.KleidiLlama
 import android.llama.cpp.gguf.GgufMetadataReader
 import com.example.llama.data.local.AppDatabase
 import com.example.llama.data.remote.HuggingFaceApiService
@@ -66,7 +66,7 @@ internal abstract class AppModule {
             return if (USE_STUB_ENGINE) {
                 StubInferenceEngine()
             } else {
-                InferenceEngineLoader.createInstance(context)
+                KleidiLlama.createInferenceEngine(context)
                     ?: throw InstantiationException("Cannot instantiate InferenceEngine!")
             }
         }
