@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.example.llama.APP_NAME
 import com.example.llama.data.preferences.UserPreferences
+import com.example.llama.ui.components.ArmFeaturesVisualizerClickable
 import com.example.llama.viewmodel.SettingsViewModel
 
 /**
@@ -38,6 +39,7 @@ fun SettingsGeneralScreen(
     val isMonitoringEnabled by viewModel.isMonitoringEnabled.collectAsState()
     val useFahrenheit by viewModel.useFahrenheitUnit.collectAsState()
     val themeMode by viewModel.themeMode.collectAsState()
+    val detectedTier = viewModel.detectedTier
 
     Column(
         modifier = Modifier
@@ -110,31 +112,65 @@ fun SettingsGeneralScreen(
             }
         }
 
-        SettingsCategory(title = "About") {
-            Card(
-                modifier = Modifier.fillMaxWidth()
+        // ARM Features Visualizer with Tier Information description
+        SettingsCategory(title = "About your device") {
+            Column(
+                modifier = Modifier.padding(16.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = APP_NAME,
-                        style = MaterialTheme.typography.titleLarge
-                    )
+                Text(
+                    text = "ARM Capabilities",
+                    style = MaterialTheme.typography.titleLarge
+                )
 
-                    Text(
-                        text = "Version 1.0.0",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                Text(
+                    text = "Hardware-accelerated AI features",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                detectedTier?.let { tier ->
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    ArmFeaturesVisualizerClickable(detectedTier = detectedTier)
 
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = "Local inference for LLM models on your device.",
-                        style = MaterialTheme.typography.bodyMedium
+                        text = "Optimization Tier: ${tier.name}",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+
+                    Text(
+                        text = tier.description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
                 }
+            }
+        }
+
+        SettingsCategory(title = "About this app") {
+            Column(
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    text = APP_NAME,
+                    style = MaterialTheme.typography.titleLarge
+                )
+
+                Text(
+                    text = "Version 1.0.0",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = "Local inference for LLM models on your device powered by Arm® technologies.",
+                    style = MaterialTheme.typography.bodyLarge
+                )
             }
         }
     }
