@@ -83,20 +83,22 @@ NOTE: Tensor names must end with `.weight` or `.bias` suffixes, that is the conv
 
 ### 2. Define the model architecture in `llama.cpp`
 
-The model params and tensors layout must be defined in `llama.cpp`:
-1. Define a new `llm_arch`
-2. Define the tensors layout in `LLM_TENSOR_NAMES`
-3. Add any non-standard metadata in `llm_load_hparams`
-4. Create the tensors for inference in `llm_load_tensors`
-5. If the model has a RoPE operation, add the rope type in `llama_rope_type`
+The model params and tensors layout must be defined in `llama.cpp` source files:
+1. Define a new `llm_arch` enum value in `src/llama-arch.h`.
+2. In `src/llama-arch.cpp`:
+    - Add the architecture name to the `LLM_ARCH_NAMES` map.
+    - Add the tensor mappings to the `LLM_TENSOR_NAMES` map.
+3. Add any non-standard metadata loading in the `llama_model_loader` constructor in `src/llama-model-loader.cpp`.
+4. If the model has a RoPE operation, add a case for the architecture in `llama_model_rope_type` function in `src/llama-model.cpp`.
 
 NOTE: The dimensions in `ggml` are typically in the reverse order of the `pytorch` dimensions.
 
 ### 3. Build the GGML graph implementation
 
-This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `llama_build_graph`.
-
-Have a look at existing implementations like `build_llama`, `build_dbrx` or `build_bert`.
+This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`.
+Create a new struct that inherits from `llm_graph_context` and implement the graph-building logic in its constructor.
+Have a look at existing implementations like `llm_build_llama`, `llm_build_dbrx` or `llm_build_bert`.
+Then, in the `llama_model::build_graph` method, add a case for your architecture to instantiate your new graph-building struct.
 
 Some `ggml` backends do not support all operations. Backend implementations can be added in a separate PR.
 
