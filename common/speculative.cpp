@@ -11,7 +11,7 @@
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 struct common_speculative {
-    struct llama_context * ctx_tgt;
+    struct llama_context * ctx_tgt; // only used for retokenizing from ctx_dft
     struct llama_context * ctx_dft;
     struct common_sampler * smpl;
 
@@ -149,12 +149,11 @@ llama_tokens common_speculative_gen_draft(
         const llama_tokens & prompt_tgt_main_model, // target model tokens
         llama_token id_last) {
     auto & batch  = spec->batch;
-    auto & ctx_main = spec->ctx_tgt;
+    auto & ctx_tgt = spec->ctx_tgt;
     auto & ctx_dft = spec->ctx_dft;
     auto & smpl   = spec->smpl;
     auto & prompt_dft = spec->prompt_dft;
 
-    auto * mem = llama_get_memory(ctx_main);
     auto * mem_dft = llama_get_memory(ctx_dft);
 
     int reuse_i = 0;
@@ -165,7 +164,7 @@ llama_tokens common_speculative_gen_draft(
     llama_tokens prompt_tgt_draft_model;
     if (!spec->vocab_dft_compatible) {
         // TODO: cache detokenized prompt string
-        std::string detokenized = common_detokenize(ctx_main, prompt_tgt_main_model, true);
+        std::string detokenized = common_detokenize(ctx_tgt, prompt_tgt_main_model, true);
         LOG_DBG("main->draft detokenized string: '%s'\n", detokenized.c_str());
         prompt_tgt_draft_model = common_tokenize(ctx_dft, detokenized, false, false);
         // FIXME: token healing
@@ -197,7 +196,6 @@ llama_tokens common_speculative_gen_draft(
     result.reserve(params.n_draft);
 
     if (reuse_n == 0) {
-        llama_memory_clear(mem, false);
         llama_memory_clear(mem_dft, false);
         prompt_dft.clear();
     } else {
@@ -216,16 +214,13 @@ llama_tokens common_speculative_gen_draft(
         }
 
         if (reuse_i > 0) {
-            llama_memory_seq_rm (mem, 0, 0, reuse_i);
-            llama_memory_seq_add(mem, 0, reuse_i, -1, -reuse_i);
-
             llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
             llama_memory_seq_add(mem_dft, 0, reuse_i, -1, -reuse_i);
             prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
         }
 
         if (reuse_n < (int) prompt_dft.size()) {
-            llama_memory_seq_rm (mem, 0, reuse_n, -1);
+            llama_memory_seq_rm (mem_dft, 0, reuse_n, -1);
             prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
         }
     }
@@ -302,7 +297,7 @@ llama_tokens common_speculative_gen_draft(
     if (!spec->vocab_dft_compatible) {
         std::string detokenized = common_detokenize(ctx_dft, result, true);
         LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
-        result = common_tokenize(ctx_main, detokenized, false, false);
+        result = common_tokenize(ctx_tgt, detokenized, false, false);
     }
     return result;
 }
