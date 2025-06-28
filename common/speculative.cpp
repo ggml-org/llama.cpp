@@ -11,20 +11,23 @@
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 struct common_speculative {
-    struct llama_context * ctx;
+    struct llama_context * ctx_main;
+    struct llama_context * ctx_dft;
     struct common_sampler * smpl;
 
     llama_batch batch;
-    llama_tokens prompt;
+    llama_tokens prompt_dft;
 };
 
 struct common_speculative * common_speculative_init(
+        struct llama_context * ctx_main,
         struct llama_context * ctx_dft) {
     auto * result = new common_speculative {
-        /* .ctx    = */ ctx_dft,
-        /* .smpl   = */ nullptr,
-        /* .batch  = */ llama_batch_init(llama_n_batch(ctx_dft), 0, 1),
-        /* .prompt = */ {},
+        /* .ctx_main = */ ctx_main,
+        /* .ctx_dft  = */ ctx_dft,
+        /* .smpl     = */ nullptr,
+        /* .batch    = */ llama_batch_init(llama_n_batch(ctx_dft), 0, 1),
+        /* .prompt   = */ {},
     };
 
     // TODO: optimize or pass from outside?
@@ -137,29 +140,42 @@ bool common_speculative_are_compatible(
 llama_tokens common_speculative_gen_draft(
         struct common_speculative * spec,
         struct common_speculative_params params,
-        const llama_tokens & prompt_tgt,
+        const llama_tokens & prompt_tgt_main_model, // target model tokens
         llama_token id_last) {
     auto & batch  = spec->batch;
-    auto & ctx    = spec->ctx;
+    auto & ctx_main = spec->ctx_main;
+    auto & ctx_dft = spec->ctx_dft;
     auto & smpl   = spec->smpl;
-    auto & prompt = spec->prompt;
+    auto & prompt_dft = spec->prompt_dft;
 
-    auto * mem = llama_get_memory(ctx);
+    auto * mem = llama_get_memory(ctx_main);
+    auto * mem_dft = llama_get_memory(ctx_dft);
 
     int reuse_i = 0;
     int reuse_n = 0;
 
-    const int n_ctx = llama_n_ctx(ctx) - params.n_draft;
+    const int n_ctx = llama_n_ctx(ctx_dft) - params.n_draft;
+
+    llama_tokens prompt_tgt_draft_model;
+    if (!params.vocab_dft_compatible) {
+        // TODO: cache detokenized prompt string
+        std::string detokenized = common_detokenize(ctx_main, prompt_tgt_main_model, true);
+        LOG_DBG("main->draft detokenized string: '%s'\n", detokenized.c_str());
+        prompt_tgt_draft_model = common_tokenize(ctx_dft, detokenized, false, false);
+        // FIXME: token healing
+    }
+    const llama_tokens &prompt_tgt =
+        params.vocab_dft_compatible ? prompt_tgt_main_model : prompt_tgt_draft_model;
 
     const int i_start = std::max<int>(0, (int) prompt_tgt.size() - n_ctx);
 
     // reuse as much as possible from the old draft context
     // ideally, the draft context should be as big as the target context and we will always reuse the entire prompt
-    for (int i = 0; i < (int) prompt.size(); ++i) {
+    for (int i = 0; i < (int) prompt_dft.size(); ++i) {
         int cur = 0;
         while (i_start + cur < (int) prompt_tgt.size() &&
-               i       + cur < (int) prompt.size() &&
-               prompt_tgt[i_start + cur] == prompt[i + cur]) {
+               i       + cur < (int) prompt_dft.size() &&
+               prompt_tgt[i_start + cur] == prompt_dft[i + cur]) {
             cur++;
         }
 
@@ -169,21 +185,21 @@ llama_tokens common_speculative_gen_draft(
         }
     }
 
-    LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt.size());
+    LOG_DBG("%s: reuse_i = %d, reuse_n = %d, prompt = %d\n", __func__, reuse_i, reuse_n, (int) prompt_dft.size());
 
     llama_tokens result;
     result.reserve(params.n_draft);
 
     if (reuse_n == 0) {
         llama_memory_clear(mem, false);
-
-        prompt.clear();
+        llama_memory_clear(mem_dft, false);
+        prompt_dft.clear();
     } else {
         // this happens when a previous draft has been discarded (for example, due to being too small), but the
         // target model agreed with it. in this case, we simply pass back the previous results to save compute
-        if (reuse_i + reuse_n < (int) prompt.size() && prompt[reuse_i + reuse_n] == id_last) {
-            for (int i = reuse_i + reuse_n + 1; i < (int) prompt.size(); ++i) {
-                result.push_back(prompt[i]);
+        if (reuse_i + reuse_n < (int) prompt_dft.size() && prompt_dft[reuse_i + reuse_n] == id_last) {
+            for (int i = reuse_i + reuse_n + 1; i < (int) prompt_dft.size(); ++i) {
+                result.push_back(prompt_dft[i]);
 
                 if (params.n_draft <= (int) result.size()) {
                     break;
@@ -197,14 +213,20 @@ llama_tokens common_speculative_gen_draft(
             llama_memory_seq_rm (mem, 0, 0, reuse_i);
             llama_memory_seq_add(mem, 0, reuse_i, -1, -reuse_i);
 
-            prompt.erase(prompt.begin(), prompt.begin() + reuse_i);
+            llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
+            llama_memory_seq_add(mem_dft, 0, reuse_i, -1, -reuse_i);
+            prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
         }
 
+        // FIXME
+        /*
         if (reuse_n < (int) prompt.size()) {
             llama_memory_seq_rm (mem, 0, reuse_n, -1);
-
-            prompt.erase(prompt.begin() + reuse_n, prompt.end());
         }
+        if (reuse_n < (int) prompt_dft.size()) {
+            llama_kv_self_seq_rm (ctx_dft, 0, reuse_n, -1);
+            prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
+        } */
     }
 
     // prepare a batch to evaluate any new tokens in the prompt
@@ -214,28 +236,28 @@ llama_tokens common_speculative_gen_draft(
         //LOG_DBG("i = %d, i_start = %d, reuse_n = %d, i - i_start = %d, id = %6d\n", i, i_start, reuse_n, i - i_start, prompt_tgt[i]);
         common_batch_add(batch, prompt_tgt[i], i - i_start, { 0 }, false);
 
-        prompt.push_back(prompt_tgt[i]);
+        prompt_dft.push_back(prompt_tgt[i]);
     }
 
     // we should rarely end-up here during normal decoding
     if (batch.n_tokens > 0) {
         //LOG_DBG("%s: draft prompt batch: %s\n", __func__, string_from(ctx, batch).c_str());
 
-        llama_decode(ctx, batch);
+        llama_decode(ctx_dft, batch);
     }
 
-    const llama_pos n_past = prompt.size();
+    const llama_pos n_past = prompt_dft.size();
 
     LOG_DBG("%s: n_past = %d\n", __func__, n_past);
 
     common_batch_clear(batch);
     common_batch_add  (batch, id_last, n_past, { 0 }, true);
 
-    prompt.push_back(id_last);
+    prompt_dft.push_back(id_last);
 
-    //LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx, prompt).c_str());
+    LOG_DBG("%s: draft prompt: %s\n", __func__, string_from(ctx_dft, prompt_dft).c_str());
 
-    llama_decode(ctx, batch);
+    llama_decode(ctx_dft, batch);
 
     common_sampler_reset(smpl);
 
@@ -243,13 +265,13 @@ llama_tokens common_speculative_gen_draft(
     for (int i = 0; i < params.n_draft; ++i) {
         common_batch_clear(batch);
 
-        common_sampler_sample(smpl, ctx, 0, true);
+        common_sampler_sample(smpl, ctx_dft, 0, true);
 
         const auto * cur_p = common_sampler_get_candidates(smpl);
 
         for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
             LOG_DBG(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                    k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx, cur_p->data[k].id).c_str());
+                    k, i, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
         }
 
         // add drafted token for each sequence
@@ -271,10 +293,15 @@ llama_tokens common_speculative_gen_draft(
         common_batch_add(batch, id, n_past + i + 1, { 0 }, true);
 
         // evaluate the drafted tokens on the draft model
-        llama_decode(ctx, batch);
+        llama_decode(ctx_dft, batch);
 
-        prompt.push_back(id);
+        prompt_dft.push_back(id);
     }
 
+    if (!params.vocab_dft_compatible) {
+        std::string detokenized = common_detokenize(ctx_dft, result, true);
+        LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
+        result = common_tokenize(ctx_main, detokenized, false, false);
+    }
     return result;
 }

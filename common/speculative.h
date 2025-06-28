@@ -10,9 +10,13 @@ struct common_speculative_params {
     int n_reuse = 256;
 
     float p_min = 0.75f; // min probability required to accept a token in the draft
+    bool vocab_dft_compatible = true; // whether retokenization is needed
 };
 
-struct common_speculative * common_speculative_init(struct llama_context * ctx_dft);
+struct common_speculative * common_speculative_init(
+        struct llama_context * ctx_main,
+        struct llama_context * ctx_dft
+);
 
 void common_speculative_free(struct common_speculative * spec);
 

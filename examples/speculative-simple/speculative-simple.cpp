@@ -130,7 +130,7 @@ int main(int argc, char ** argv) {
     params_spec.n_reuse = llama_n_ctx(ctx_dft) - n_draft;
     params_spec.p_min   = p_min;
 
-    struct common_speculative * spec = common_speculative_init(ctx_dft);
+    struct common_speculative * spec = common_speculative_init(ctx_tgt, ctx_dft);
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
