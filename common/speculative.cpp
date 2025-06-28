@@ -11,7 +11,7 @@
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
 struct common_speculative {
-    struct llama_context * ctx_main;
+    struct llama_context * ctx_tgt;
     struct llama_context * ctx_dft;
     struct common_sampler * smpl;
 
@@ -146,7 +146,7 @@ llama_tokens common_speculative_gen_draft(
         const llama_tokens & prompt_tgt_main_model, // target model tokens
         llama_token id_last) {
     auto & batch  = spec->batch;
-    auto & ctx_main = spec->ctx_main;
+    auto & ctx_main = spec->ctx_tgt;
     auto & ctx_dft = spec->ctx_dft;
     auto & smpl   = spec->smpl;
     auto & prompt_dft = spec->prompt_dft;
