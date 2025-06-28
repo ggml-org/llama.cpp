@@ -470,6 +470,7 @@ extern "C" {
         GGML_OP_TRANSPOSE,
         GGML_OP_GET_ROWS,
         GGML_OP_GET_ROWS_BACK,
+        GGML_OP_SET_ROWS,
         GGML_OP_DIAG,
         GGML_OP_DIAG_MASK_INF,
         GGML_OP_DIAG_MASK_ZERO,
@@ -686,6 +687,9 @@ extern "C" {
 
     // true for tensor that is stored in memory as CxWxHxN and has been permuted to WxHxCxN
     GGML_API bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor);
+
+    // true if the elements in dimension 0 are contiguous, or there is just 1 block of elements
+    GGML_API bool ggml_is_contiguous_rows(const struct ggml_tensor * tensor);
 
     GGML_API bool ggml_are_same_shape (const struct ggml_tensor * t0, const struct ggml_tensor * t1);
     GGML_API bool ggml_are_same_stride(const struct ggml_tensor * t0, const struct ggml_tensor * t1);
@@ -1374,6 +1378,23 @@ extern "C" {
             struct ggml_tensor  * a,  // gradients of ggml_get_rows result
             struct ggml_tensor  * b,  // row indices
             struct ggml_tensor  * c); // data for ggml_get_rows, only used for its shape
+
+    // a TD  [n_embd, ne1,    ne2,    ne3]
+    // b TS  [n_embd, n_rows, ne02,   ne03] | ne02 == ne2, ne03 == ne3
+    // c I64 [n_rows, ne11,   ne12,   1]    | c[i] in [0, ne1)
+    //
+    // undefined behavior if destination rows overlap
+    //
+    // broadcast:
+    //   ne2 % ne11 == 0
+    //   ne3 % ne12 == 0
+    //
+    // return view(a)
+    GGML_API struct ggml_tensor * ggml_set_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,  // destination
+            struct ggml_tensor  * b,  // source
+            struct ggml_tensor  * c); // row indices
 
     GGML_API struct ggml_tensor * ggml_diag(
         struct ggml_context     * ctx,

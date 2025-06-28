@@ -933,6 +933,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TRANSPOSE",
     "GET_ROWS",
     "GET_ROWS_BACK",
+    "SET_ROWS",
     "DIAG",
     "DIAG_MASK_INF",
     "DIAG_MASK_ZERO",
@@ -983,7 +984,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_ADAMW",
 };
 
-static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
+static_assert(GGML_OP_COUNT == 84, "GGML_OP_COUNT != 84");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1029,6 +1030,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "transpose(x)",
     "get_rows(x)",
     "get_rows_back(x)",
+    "set_rows(x)",
     "diag(x)",
     "diag_mask_inf(x)",
     "diag_mask_zero(x)",
@@ -1079,7 +1081,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "adamw(x)",
 };
 
-static_assert(GGML_OP_COUNT == 83, "GGML_OP_COUNT != 83");
+static_assert(GGML_OP_COUNT == 84, "GGML_OP_COUNT != 84");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -1346,6 +1348,12 @@ bool ggml_is_contiguous_channels(const struct ggml_tensor * tensor) {
         tensor->nb[0] > tensor->nb[2] &&
         tensor->nb[1] > tensor->nb[0] &&
         tensor->nb[2] == ggml_type_size(tensor->type);
+}
+
+bool ggml_is_contiguous_rows(const struct ggml_tensor * tensor) {
+    return
+        tensor->ne[0] == ggml_blck_size(tensor->type) ||
+        tensor->nb[0] == ggml_type_size(tensor->type);
 }
 
 static inline bool ggml_is_padded_1d(const struct ggml_tensor * tensor) {
@@ -3380,6 +3388,35 @@ struct ggml_tensor * ggml_get_rows_back(
     result->op     = GGML_OP_GET_ROWS_BACK;
     result->src[0] = a;
     result->src[1] = b;
+
+    return result;
+}
+
+// ggml_set_rows
+
+struct ggml_tensor * ggml_set_rows(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        struct ggml_tensor  * c) {
+    GGML_ASSERT(a->ne[0] == b->ne[0]);
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    GGML_ASSERT(a->ne[3] == b->ne[3]);
+    GGML_ASSERT(b->ne[1] == c->ne[0]);
+    GGML_ASSERT(b->ne[2] % c->ne[1] == 0);
+    GGML_ASSERT(b->ne[3] % c->ne[2] == 0);
+    GGML_ASSERT(c->ne[3] == 1);
+    GGML_ASSERT(b->type == GGML_TYPE_F32);
+    GGML_ASSERT(c->type == GGML_TYPE_I64);
+
+    GGML_ASSERT(ggml_is_contiguous_rows(a));
+    GGML_ASSERT(ggml_is_contiguous_rows(b));
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+
+    result->op     = GGML_OP_SET_ROWS;
+    result->src[0] = b;
+    result->src[1] = c;
 
     return result;
 }

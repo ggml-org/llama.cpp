@@ -35,6 +35,17 @@ constexpr constant static float kvalues_iq4nl_f[16] = {
     -127.f, -104.f, -83.f, -65.f, -49.f, -35.f, -22.f, -10.f, 1.f, 13.f, 25.f, 38.f, 53.f, 69.f, 89.f, 113.f
 };
 
+static inline int best_index_int8(int n, constant float * val, float x) {
+    if (x <= val[0]) return 0;
+    if (x >= val[n-1]) return n-1;
+    int ml = 0, mu = n-1;
+    while (mu-ml > 1) {
+        int mav = (ml+mu)/2;
+        if (x < val[mav]) mu = mav; else ml = mav;
+    }
+    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
+}
+
 // NOTE: this is not dequantizing - we are simply fitting the template
 template <typename type4x4>
 void dequantize_f32(device const float4x4 * src, short il, thread type4x4 & reg) {
@@ -95,6 +106,173 @@ void dequantize_q4_0_t4(device const block_q4_0 * xb, short il, thread type4 & r
         reg[2*i + 0] = d1 * (qs[2*(il%4) + i] & mask0) + md;
         reg[2*i + 1] = d2 * (qs[2*(il%4) + i] & mask1) + md;
     }
+}
+
+void quantize_q4_0(device const float * src, device block_q4_0 & dst) {
+    float amax = 0.0f; // absolute max
+    float max  = 0.0f;
+
+    for (int j = 0; j < QK4_0; j++) {
+        const float v = src[j];
+        if (amax < fabs(v)) {
+            amax = fabs(v);
+            max  = v;
+        }
+    }
+
+    const float d = max / -8;
+    const float id = d ? 1.0f/d : 0.0f;
+
+    dst.d = d;
+
+    for (int j = 0; j < QK4_0/2; ++j) {
+        const float x0 = src[0       + j]*id;
+        const float x1 = src[QK4_0/2 + j]*id;
+
+        const uint8_t xi0 = MIN(15, (int8_t)(x0 + 8.5f));
+        const uint8_t xi1 = MIN(15, (int8_t)(x1 + 8.5f));
+
+        dst.qs[j]  = xi0;
+        dst.qs[j] |= xi1 << 4;
+    }
+}
+
+void quantize_q4_1(device const float * src, device block_q4_1 & dst) {
+    float min = FLT_MAX;
+    float max = -FLT_MAX;
+
+    for (int j = 0; j < QK4_1; j++) {
+        const float v = src[j];
+        if (min > v) min = v;
+        if (max < v) max = v;
+    }
+
+    const float d = (max - min) / ((1 << 4) - 1);
+    const float id = d ? 1.0f/d : 0.0f;
+
+    dst.d = d;
+    dst.m = min;
+
+    for (int j = 0; j < QK4_1/2; ++j) {
+        const float x0 = (src[0       + j] - min)*id;
+        const float x1 = (src[QK4_1/2 + j] - min)*id;
+
+        const uint8_t xi0 = MIN(15, (int8_t)(x0 + 0.5f));
+        const uint8_t xi1 = MIN(15, (int8_t)(x1 + 0.5f));
+
+        dst.qs[j]  = xi0;
+        dst.qs[j] |= xi1 << 4;
+    }
+}
+
+void quantize_q5_0(device const float * src, device block_q5_0 & dst) {
+    float amax = 0.0f; // absolute max
+    float max  = 0.0f;
+
+    for (int j = 0; j < QK5_0; j++) {
+        const float v = src[j];
+        if (amax < fabs(v)) {
+            amax = fabs(v);
+            max  = v;
+        }
+    }
+
+    const float d = max / -16;
+    const float id = d ? 1.0f/d : 0.0f;
+
+    dst.d = d;
+
+    uint32_t qh = 0;
+    for (int j = 0; j < QK5_0/2; ++j) {
+        const float x0 = src[0       + j]*id;
+        const float x1 = src[QK5_0/2 + j]*id;
+
+        const uint8_t xi0 = MIN(31, (int8_t)(x0 + 16.5f));
+        const uint8_t xi1 = MIN(31, (int8_t)(x1 + 16.5f));
+
+        dst.qs[j] = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
+        qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
+        qh |= ((xi1 & 0x10u) >> 4) << (j + QK5_0/2);
+    }
+
+    thread const uint8_t * qh8 = (thread const uint8_t *)&qh;
+
+    for (int j = 0; j < 4; ++j) {
+        dst.qh[j] = qh8[j];
+    }
+}
+
+void quantize_q5_1(device const float * src, device block_q5_1 & dst) {
+    float max = src[0];
+    float min = src[0];
+
+    for (int j = 1; j < QK5_1; j++) {
+        const float v = src[j];
+        min = v < min ? v : min;
+        max = v > max ? v : max;
+    }
+
+    const float d = (max - min) / 31;
+    const float id = d ? 1.0f/d : 0.0f;
+
+    dst.d = d;
+    dst.m = min;
+
+    uint32_t qh = 0;
+    for (int j = 0; j < QK5_1/2; ++j) {
+        const float x0 = (src[0       + j] - min)*id;
+        const float x1 = (src[QK5_1/2 + j] - min)*id;
+
+        const uint8_t xi0 = (uint8_t)(x0 + 0.5f);
+        const uint8_t xi1 = (uint8_t)(x1 + 0.5f);
+
+        dst.qs[j] = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
+        qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
+        qh |= ((xi1 & 0x10u) >> 4) << (j + QK5_1/2);
+    }
+
+    thread const uint8_t * qh8 = (thread const uint8_t *)&qh;
+
+    for (int j = 0; j < 4; ++j) {
+        dst.qh[j] = qh8[j];
+    }
+}
+
+void quantize_iq4_nl(device const float * src, device block_iq4_nl & dst) {
+    float amax = 0.0f; // absolute max
+    float max  = 0.0f;
+
+    for (int j = 0; j < QK4_NL; j++) {
+        const float v = src[j];
+        if (amax < fabs(v)) {
+            amax = fabs(v);
+            max  = v;
+        }
+    }
+
+    const float d = max / kvalues_iq4nl_f[0];
+    const float id = d ? 1.0f/d : 0.0f;
+
+    float sumqx = 0, sumq2 = 0;
+    for (int j = 0; j < QK4_NL/2; ++j) {
+        const float x0 = src[0        + j]*id;
+        const float x1 = src[QK4_NL/2 + j]*id;
+
+        const uint8_t xi0 = best_index_int8(16, kvalues_iq4nl_f, x0);
+        const uint8_t xi1 = best_index_int8(16, kvalues_iq4nl_f, x1);
+
+        dst.qs[j] = xi0 | (xi1 << 4);
+
+        const float v0 = kvalues_iq4nl_f[xi0];
+        const float v1 = kvalues_iq4nl_f[xi1];
+        const float w0 = src[0        + j]*src[0        + j];
+        const float w1 = src[QK4_NL/2 + j]*src[QK4_NL/2 + j];
+        sumqx += w0*v0*src[j] + w1*v1*src[QK4_NL/2 + j];
+        sumq2 += w0*v0*v0 + w1*v1*v1;
+
+    }
+
+    dst.d = sumq2 > 0 ? sumqx/sumq2 : d;
 }
 
 template <typename type4x4>
@@ -276,6 +454,26 @@ void dequantize_q8_0_t4(device const block_q8_0 *xb, short il, thread type4 & re
 
     for (int i = 0; i < 4; i++) {
         reg[i] = (qs[4*(il%4) + i + 16*(il/4)] * d);
+    }
+}
+
+void quantize_q8_0(device const float * src, device block_q8_0 & dst) {
+    float amax = 0.0f; // absolute max
+
+    for (int j = 0; j < QK8_0; j++) {
+        const float v = src[j];
+        amax = MAX(amax, fabs(v));
+    }
+
+    const float d = amax / ((1 << 7) - 1);
+    const float id = d ? 1.0f/d : 0.0f;
+
+    dst.d = d;
+
+    for (int j = 0; j < QK8_0; ++j) {
+        const float x0 = src[j]*id;
+
+        dst.qs[j] = round(x0);
     }
 }
 
@@ -4410,6 +4608,7 @@ template [[host_name("kernel_cpy_bf16_f32")]]  kernel kernel_cpy_t kernel_cpy<bf
 template [[host_name("kernel_cpy_bf16_bf16")]] kernel kernel_cpy_t kernel_cpy<bfloat, bfloat>;
 #endif
 
+// TODO: templetify these kernels
 kernel void kernel_cpy_f32_q8_0(
         constant ggml_metal_kargs_cpy & args,
         device const char * src0,
@@ -4433,23 +4632,7 @@ kernel void kernel_cpy_f32_q8_0(
     for (int64_t i00 = tpitg.x*QK8_0; i00 < args.ne00; i00 += ntg.x*QK8_0) {
         device const float * src = (device float *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
 
-        float amax = 0.0f; // absolute max
-
-        for (int j = 0; j < QK8_0; j++) {
-            const float v = src[j];
-            amax = MAX(amax, fabs(v));
-        }
-
-        const float d = amax / ((1 << 7) - 1);
-        const float id = d ? 1.0f/d : 0.0f;
-
-        dst_data[i00/QK8_0].d = d;
-
-        for (int j = 0; j < QK8_0; ++j) {
-            const float x0 = src[j]*id;
-
-            dst_data[i00/QK8_0].qs[j] = round(x0);
-        }
+        quantize_q8_0(src, dst_data[i00/QK8_0]);
     }
 }
 
@@ -4476,32 +4659,7 @@ kernel void kernel_cpy_f32_q4_0(
     for (int64_t i00 = tpitg.x*QK4_0; i00 < args.ne00; i00 += ntg.x*QK4_0) {
         device const float * src = (device float *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
 
-        float amax = 0.0f; // absolute max
-        float max  = 0.0f;
-
-        for (int j = 0; j < QK4_0; j++) {
-            const float v = src[j];
-            if (amax < fabs(v)) {
-                amax = fabs(v);
-                max  = v;
-            }
-        }
-
-        const float d = max / -8;
-        const float id = d ? 1.0f/d : 0.0f;
-
-        dst_data[i00/QK4_0].d = d;
-
-        for (int j = 0; j < QK4_0/2; ++j) {
-            const float x0 = src[0       + j]*id;
-            const float x1 = src[QK4_0/2 + j]*id;
-
-            const uint8_t xi0 = MIN(15, (int8_t)(x0 + 8.5f));
-            const uint8_t xi1 = MIN(15, (int8_t)(x1 + 8.5f));
-
-            dst_data[i00/QK4_0].qs[j]  = xi0;
-            dst_data[i00/QK4_0].qs[j] |= xi1 << 4;
-        }
+        quantize_q4_0(src, dst_data[i00/QK4_0]);
     }
 }
 
@@ -4528,31 +4686,7 @@ kernel void kernel_cpy_f32_q4_1(
     for (int64_t i00 = tpitg.x*QK4_1; i00 < args.ne00; i00 += ntg.x*QK4_1) {
         device const float * src = (device float *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
 
-        float min = FLT_MAX;
-        float max = -FLT_MAX;
-
-        for (int j = 0; j < QK4_1; j++) {
-            const float v = src[j];
-            if (min > v) min = v;
-            if (max < v) max = v;
-        }
-
-        const float d = (max - min) / ((1 << 4) - 1);
-        const float id = d ? 1.0f/d : 0.0f;
-
-        dst_data[i00/QK4_1].d = d;
-        dst_data[i00/QK4_1].m = min;
-
-        for (int j = 0; j < QK4_1/2; ++j) {
-            const float x0 = (src[0       + j] - min)*id;
-            const float x1 = (src[QK4_1/2 + j] - min)*id;
-
-            const uint8_t xi0 = MIN(15, (int8_t)(x0 + 0.5f));
-            const uint8_t xi1 = MIN(15, (int8_t)(x1 + 0.5f));
-
-            dst_data[i00/QK4_1].qs[j]  = xi0;
-            dst_data[i00/QK4_1].qs[j] |= xi1 << 4;
-        }
+        quantize_q4_1(src, dst_data[i00/QK4_1]);
     }
 }
 
@@ -4579,38 +4713,7 @@ kernel void kernel_cpy_f32_q5_0(
     for (int64_t i00 = tpitg.x*QK5_0; i00 < args.ne00; i00 += ntg.x*QK5_0) {
         device const float * src = (device float *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
 
-        float amax = 0.0f; // absolute max
-        float max  = 0.0f;
-
-        for (int j = 0; j < QK5_0; j++) {
-            const float v = src[j];
-            if (amax < fabs(v)) {
-                amax = fabs(v);
-                max  = v;
-            }
-        }
-
-        const float d = max / -16;
-        const float id = d ? 1.0f/d : 0.0f;
-
-        dst_data[i00/QK5_0].d = d;
-
-        uint32_t qh = 0;
-        for (int j = 0; j < QK5_0/2; ++j) {
-            const float x0 = src[0       + j]*id;
-            const float x1 = src[QK5_0/2 + j]*id;
-
-            const uint8_t xi0 = MIN(31, (int8_t)(x0 + 16.5f));
-            const uint8_t xi1 = MIN(31, (int8_t)(x1 + 16.5f));
-
-            dst_data[i00/QK5_0].qs[j] = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
-            qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
-            qh |= ((xi1 & 0x10u) >> 4) << (j + QK5_0/2);
-        }
-        thread const uint8_t * qh8 = (thread const uint8_t *)&qh;
-        for (int j = 0; j < 4; ++j) {
-            dst_data[i00/QK5_0].qh[j] = qh8[j];
-        }
+        quantize_q5_0(src, dst_data[i00/QK5_0]);
     }
 }
 
@@ -4637,49 +4740,8 @@ kernel void kernel_cpy_f32_q5_1(
     for (int64_t i00 = tpitg.x*QK5_1; i00 < args.ne00; i00 += ntg.x*QK5_1) {
         device const float * src = (device float *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
 
-        float max = src[0];
-        float min = src[0];
-
-        for (int j = 1; j < QK5_1; j++) {
-            const float v = src[j];
-            min = v < min ? v : min;
-            max = v > max ? v : max;
-        }
-
-        const float d = (max - min) / 31;
-        const float id = d ? 1.0f/d : 0.0f;
-
-        dst_data[i00/QK5_1].d = d;
-        dst_data[i00/QK5_1].m = min;
-
-        uint32_t qh = 0;
-        for (int j = 0; j < QK5_1/2; ++j) {
-            const float x0 = (src[0       + j] - min)*id;
-            const float x1 = (src[QK5_1/2 + j] - min)*id;
-
-            const uint8_t xi0 = (uint8_t)(x0 + 0.5f);
-            const uint8_t xi1 = (uint8_t)(x1 + 0.5f);
-
-            dst_data[i00/QK5_1].qs[j] = (xi0 & 0xf) | ((xi1 & 0xf) << 4);
-            qh |= ((xi0 & 0x10u) >> 4) << (j + 0);
-            qh |= ((xi1 & 0x10u) >> 4) << (j + QK5_1/2);
-        }
-        thread const uint8_t * qh8 = (thread const uint8_t *)&qh;
-        for (int j = 0; j < 4; ++j) {
-            dst_data[i00/QK5_1].qh[j] = qh8[j];
-        }
+        quantize_q5_1(src, dst_data[i00/QK5_1]);
     }
-}
-
-static inline int best_index_int8(int n, constant float * val, float x) {
-    if (x <= val[0]) return 0;
-    if (x >= val[n-1]) return n-1;
-    int ml = 0, mu = n-1;
-    while (mu-ml > 1) {
-        int mav = (ml+mu)/2;
-        if (x < val[mav]) mu = mav; else ml = mav;
-    }
-    return x - val[mu-1] < val[mu] - x ? mu-1 : mu;
 }
 
 kernel void kernel_cpy_f32_iq4_nl(
@@ -4705,40 +4767,7 @@ kernel void kernel_cpy_f32_iq4_nl(
     for (int64_t i00 = tpitg.x*QK4_NL; i00 < args.ne00; i00 += ntg.x*QK4_NL) {
         device const float * src = (device float *)(src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00);
 
-        float amax = 0.0f; // absolute max
-        float max  = 0.0f;
-
-        for (int j = 0; j < QK4_NL; j++) {
-            const float v = src[j];
-            if (amax < fabs(v)) {
-                amax = fabs(v);
-                max  = v;
-            }
-        }
-
-        const float d = max / kvalues_iq4nl_f[0];
-        const float id = d ? 1.0f/d : 0.0f;
-
-        float sumqx = 0, sumq2 = 0;
-        for (int j = 0; j < QK4_NL/2; ++j) {
-            const float x0 = src[0        + j]*id;
-            const float x1 = src[QK4_NL/2 + j]*id;
-
-            const uint8_t xi0 = best_index_int8(16, kvalues_iq4nl_f, x0);
-            const uint8_t xi1 = best_index_int8(16, kvalues_iq4nl_f, x1);
-
-            dst_data[i00/QK4_NL].qs[j] = xi0 | (xi1 << 4);
-
-            const float v0 = kvalues_iq4nl_f[xi0];
-            const float v1 = kvalues_iq4nl_f[xi1];
-            const float w0 = src[0        + j]*src[0        + j];
-            const float w1 = src[QK4_NL/2 + j]*src[QK4_NL/2 + j];
-            sumqx += w0*v0*src[j] + w1*v1*src[QK4_NL/2 + j];
-            sumq2 += w0*v0*v0 + w1*v1*v1;
-
-        }
-
-        dst_data[i00/QK4_NL].d = sumq2 > 0 ? sumqx/sumq2 : d;
+        quantize_iq4_nl(src, dst_data[i00/QK4_NL]);
     }
 }
 
@@ -6419,10 +6448,10 @@ kernel void kernel_mul_mv_iq4_xs_f32(
 
 template<typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread float4x4 &)>
 kernel void kernel_get_rows_q(
+        constant ggml_metal_kargs_get_rows & args,
         device const  void * src0,
         device const  void * src1,
         device       float * dst,
-        constant ggml_metal_kargs_get_rows & args,
         uint3                tgpig[[threadgroup_position_in_grid]],
         uint                 tiitg[[thread_index_in_threadgroup]],
         uint3                tptg [[threads_per_threadgroup]]) {
@@ -6442,10 +6471,10 @@ kernel void kernel_get_rows_q(
 
 template<typename T>
 kernel void kernel_get_rows_f(
+        constant ggml_metal_kargs_get_rows & args,
         device const  void * src0,
         device const  void * src1,
         device       float * dst,
-        constant ggml_metal_kargs_get_rows & args,
         uint3                tgpig[[threadgroup_position_in_grid]],
         uint                 tiitg[[thread_index_in_threadgroup]],
         uint3                tptg [[threads_per_threadgroup]]) {
@@ -6463,10 +6492,10 @@ kernel void kernel_get_rows_f(
 }
 
 kernel void kernel_get_rows_i32(
+        constant ggml_metal_kargs_get_rows & args,
         device const  void * src0,
         device const  void * src1,
         device     int32_t * dst,
-        constant ggml_metal_kargs_get_rows & args,
         uint3                tgpig[[threadgroup_position_in_grid]],
         uint                 tiitg[[thread_index_in_threadgroup]],
         uint3                tptg [[threads_per_threadgroup]]) {
@@ -6483,6 +6512,67 @@ kernel void kernel_get_rows_i32(
     }
 }
 
+template<typename block_q, void (*quantize_func)(device const float *, device block_q &)>
+kernel void kernel_set_rows_q32(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) {
+        return;
+    }
+
+    const int32_t i10 = i01;
+    const int64_t i1 = ((const device int64_t *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+          device block_q * dst_row = (      device block_q *) ((      device char *) dst  +  i1*args.nb1  + i02*args.nb2  + i03*args.nb3);
+    const device float   * src_row = (const device float   *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    for (int ind = tiitg%tptg.x; ind < args.nk0; ind += tptg.x) {
+        quantize_func(src_row + 32*ind, dst_row[ind]);
+    }
+}
+
+template<typename T>
+kernel void kernel_set_rows_f(
+        constant ggml_metal_kargs_set_rows & args,
+        device const  void * src0,
+        device const  void * src1,
+        device       float * dst,
+        uint3                tgpig[[threadgroup_position_in_grid]],
+        uint                 tiitg[[thread_index_in_threadgroup]],
+        uint3                tptg [[threads_per_threadgroup]]) {
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = tgpig.y;
+
+    const int32_t i12 = i03%args.ne12;
+    const int32_t i11 = i02%args.ne11;
+
+    const int32_t i01 = tgpig.x*tptg.y + tiitg/tptg.x;
+    if (i01 >= args.ne01) {
+        return;
+    }
+
+    const int32_t i10 = i01;
+    const int64_t i1 = ((const device int64_t *) ((const device char *) src1 + i10*args.nb10 + i11*args.nb11 + i12*args.nb12))[0];
+
+    device T     * dst_row = (      device T     *) ((      device char *) dst  +  i1*args.nb1  + i02*args.nb2  + i03*args.nb3);
+    const device float * src_row = (const device float *) ((const device char *) src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+
+    for (int ind = tiitg%tptg.x; ind < args.nk0; ind += tptg.x) {
+        dst_row[ind] = (T) src_row[ind];
+    }
+}
 
 #define BLOCK_SIZE_M 64 // 8 simdgroup matrices from matrix A
 #define BLOCK_SIZE_N 32 // 4 simdgroup matrices from matrix B
@@ -6905,6 +6995,27 @@ template [[host_name("kernel_get_rows_iq1_s")]]   kernel get_rows_q_t kernel_get
 template [[host_name("kernel_get_rows_iq1_m")]]   kernel get_rows_q_t kernel_get_rows_q<block_iq1_m,   QK_NL, dequantize_iq1_m>;
 template [[host_name("kernel_get_rows_iq4_nl")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq4_nl,  2,     dequantize_iq4_nl>;
 template [[host_name("kernel_get_rows_iq4_xs")]]  kernel get_rows_q_t kernel_get_rows_q<block_iq4_xs,  QK_NL, dequantize_iq4_xs>;
+
+//
+// set rows
+//
+
+typedef decltype(kernel_set_rows_f<float>) set_rows_f_t;
+
+template [[host_name("kernel_set_rows_f32")]]  kernel set_rows_f_t kernel_set_rows_f<float>;
+template [[host_name("kernel_set_rows_f16")]]  kernel set_rows_f_t kernel_set_rows_f<half>;
+#if defined(GGML_METAL_USE_BF16)
+template [[host_name("kernel_set_rows_bf16")]] kernel set_rows_f_t kernel_set_rows_f<bfloat>;
+#endif
+
+typedef decltype(kernel_set_rows_q32<block_q8_0, quantize_q8_0>) set_rows_q32_t;
+
+template [[host_name("kernel_set_rows_q8_0")]]   kernel set_rows_q32_t kernel_set_rows_q32<block_q8_0,   quantize_q8_0>;
+template [[host_name("kernel_set_rows_q4_0")]]   kernel set_rows_q32_t kernel_set_rows_q32<block_q4_0,   quantize_q4_0>;
+template [[host_name("kernel_set_rows_q4_1")]]   kernel set_rows_q32_t kernel_set_rows_q32<block_q4_1,   quantize_q4_1>;
+template [[host_name("kernel_set_rows_q5_0")]]   kernel set_rows_q32_t kernel_set_rows_q32<block_q5_0,   quantize_q5_0>;
+template [[host_name("kernel_set_rows_q5_1")]]   kernel set_rows_q32_t kernel_set_rows_q32<block_q5_1,   quantize_q5_1>;
+template [[host_name("kernel_set_rows_iq4_nl")]] kernel set_rows_q32_t kernel_set_rows_q32<block_iq4_nl, quantize_iq4_nl>;
 
 //
 // matrix-matrix multiplication

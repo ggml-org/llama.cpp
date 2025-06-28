@@ -475,6 +475,7 @@ struct llm_graph_context {
     std::unique_ptr<llm_graph_result> res;
 
     llm_graph_context(const llm_graph_params & params);
+    virtual ~llm_graph_context() = default;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 

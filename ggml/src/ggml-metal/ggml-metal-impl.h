@@ -522,6 +522,22 @@ typedef struct {
 } ggml_metal_kargs_get_rows;
 
 typedef struct {
+    int32_t  nk0;
+    int32_t  ne01;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  ne11;
+    int32_t  ne12;
+    uint64_t nb10;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+} ggml_metal_kargs_set_rows;
+
+typedef struct {
     int64_t  ne00;
     int64_t  ne01;
     int64_t  ne02;

@@ -195,6 +195,7 @@ typedef pthread_t ggml_thread_t;
 
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
+        .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp32,
         .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_f32,
         .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
@@ -1817,6 +1818,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_get_rows_back(params, tensor);
             } break;
+        case GGML_OP_SET_ROWS:
+            {
+                ggml_compute_forward_set_rows(params, tensor);
+            } break;
         case GGML_OP_DIAG:
             {
                 ggml_compute_forward_diag(params, tensor);
@@ -2170,6 +2175,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 n_tasks = n_threads;
             } break;
         case GGML_OP_GET_ROWS:
+        case GGML_OP_SET_ROWS:
             {
                 // FIXME: get_rows can use additional threads, but the cost of launching additional threads
                 // decreases performance with GPU offloading
@@ -3122,6 +3128,10 @@ enum ggml_status ggml_graph_compute_with_ctx(struct ggml_context * ctx, struct g
     cplan.work_data = (uint8_t *)ggml_new_buffer(ctx, cplan.work_size);
 
     return ggml_graph_compute(cgraph, &cplan);
+}
+
+void ggml_cpu_fp32_to_fp32(const float * x, float * y, int64_t n) {
+    memcpy(y, x, n * sizeof(float));
 }
 
 void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
