@@ -180,16 +180,6 @@ template <auto _RowFunc> bool element_wise_op(hexagon::tensor * out, hexagon::co
     return true;
 }
 
-bool is_same_shape(const npu_device_tensor_spec & src, const npu_device_tensor_spec & dst) {
-    for (size_t i = 0; i < DEVICE_TENSOR_MAX_DIMS; ++i) {
-        if (src.ne[i] != dst.ne[i]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 bool is_element_wise_op_supported(npu_device_tensor_op op, const npu_device_tensor_spec * dst,
                                   const npu_device_tensor_spec * srcs, size_t src_len) {
     if (op != NPU_OP_ADD && op != NPU_OP_SUB && op != NPU_OP_MUL) {
@@ -229,7 +219,7 @@ bool is_element_wise_op_supported(npu_device_tensor_op op, const npu_device_tens
         return false;
     }
 
-    if (!is_same_shape(src0, *dst)) {
+    if (!hexagon::is_same_shape(src0, *dst)) {
         DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", hexagon::op_get_name(op));
         return false;
     }
@@ -355,7 +345,7 @@ bool is_unary_op_supported(npu_device_tensor_op op, const npu_device_tensor_spec
         return false;
     }
 
-    if (!is_same_shape(src0, *dst)) {
+    if (!hexagon::is_same_shape(src0, *dst)) {
         DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", hexagon::op_get_name(op));
         return false;
     }

@@ -306,12 +306,46 @@ bool rope_f32(tensor * out, compute_params * params) {
 
 bool is_rope_supported(npu_device_tensor_op op, const npu_device_tensor_spec * dst, const npu_device_tensor_spec * srcs,
                        size_t src_len) {
+    if (op != NPU_OP_ROPE) {
+        DEVICE_LOG_DEBUG("[%s]op is not ROPE\n", op_get_name(op));
+        return false;
+    }
+
     if (src_len < 3 || !dst || !srcs) {
         DEVICE_LOG_DEBUG("[%s]invalid dst or srcs\n", op_get_name(op));
         return false;
     }
 
-    return false;  // ROPE operation is not supported yet
+    if (dst->type != NPU_DATA_TYPE_F32) {
+        DEVICE_LOG_DEBUG("[%s]dst type is not F32: %s\n", op_get_name(op), get_type_name(dst->type));
+        return false;  // add more dst type if needed
+    }
+
+    const auto & src0 = srcs[0];
+    if (src0.type != dst->type) {
+        DEVICE_LOG_DEBUG("[%s]src0 type is not the same as dst type: %s vs %s\n", op_get_name(op),
+                         get_type_name(src0.type), get_type_name(dst->type));
+        return false;  // unsupported src0 type
+    }
+
+    const auto & src1 = srcs[1];
+    if (src1.type != NPU_DATA_TYPE_I32) {
+        DEVICE_LOG_DEBUG("[%s]src1 type is not I32: %s\n", op_get_name(op), get_type_name(src1.type));
+        return false;  // unsupported src1 type
+    }
+
+    const auto & src2 = srcs[2];
+    if (src2.type != NPU_DATA_TYPE_F32) {
+        DEVICE_LOG_DEBUG("[%s]src2 type is not F32: %s\n", op_get_name(op), get_type_name(src2.type));
+        return false;  // unsupported src2 type
+    }
+
+    if (!is_same_shape(src0, *dst)) {
+        DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", op_get_name(op));
+        return false;
+    }
+
+    return true;  // ROPE operation is not supported yet
 }
 
 }  // namespace hexagon
