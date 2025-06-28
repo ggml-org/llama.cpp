@@ -147,7 +147,7 @@ bool common_speculative_are_compatible(
 llama_tokens common_speculative_gen_draft(
         struct common_speculative * spec,
         struct common_speculative_params params,
-        const llama_tokens & prompt_tgt_main_model, // target model tokens
+        const llama_tokens & prompt_tgt_main_model, // specified in target model vocab
         llama_token id_last) {
     auto & batch  = spec->batch;
     auto & ctx_tgt = spec->ctx_tgt;
