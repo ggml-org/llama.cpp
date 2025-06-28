@@ -144,12 +144,12 @@ bool rope_f32(tensor * out, compute_params * params) {
     const bool is_vision = mode == NPU_ROPE_TYPE_VISION;
 
     if (is_mrope && sections[0] <= 0 && sections[1] <= 0 && sections[2] <= 0) {
-        DEVICE_LOG_ERROR("ROPE: invalid sections for MROPE: %d, %d, %d\n", sections[0], sections[1], sections[2]);
+        DEVICE_LOG_ERROR("[ROPE]invalid sections for MROPE: %d, %d, %d\n", sections[0], sections[1], sections[2]);
         return false;  // invalid sections for MROPE
     }
 
-    if (is_vision && n_dims != out->get_ne(0) / 2) {
-        DEVICE_LOG_ERROR("ROPE: invalid n_dims for vision ROPE: %d, expected: %d\n", n_dims, out->get_ne(0) / 2);
+    if (n_dims % 2 || (is_vision && n_dims != out->get_ne(0) / 2)) {
+        DEVICE_LOG_ERROR("[ROPE]invalid n_dims for vision ROPE: %d, expected: %d\n", n_dims, out->get_ne(0) / 2);
         return false;  // invalid n_dims for vision ROPE
     }
 
@@ -157,14 +157,14 @@ bool rope_f32(tensor * out, compute_params * params) {
     const size_t total_cache_size = hexagon::get_aligned_size(out->get_ne(0) * sizeof(float));
     auto *       cache_ptr        = params->get_vtcm_cache(total_cache_size);
     if (!cache_ptr) {
-        DEVICE_LOG_ERROR("Failed to allocate VTCM cache for flash_attn: %zu bytes\n", total_cache_size);
+        DEVICE_LOG_ERROR("[ROPE]Failed to allocate VTCM cache for flash_attn: %zu bytes\n", total_cache_size);
         return false;  // failed to allocate cache
     }
 
     const float * freq_factors = nullptr;
     if (src2 != nullptr) {
         if (src2->get_type() != NPU_DATA_TYPE_F32 || src2->get_ne(0) < n_dims / 2) {
-            DEVICE_LOG_ERROR("ROPE: src2 type is not F32 or F16: %s\n", get_type_name(src2->get_type()));
+            DEVICE_LOG_ERROR("[ROPE]src2 type is not F32 or F16: %s\n", get_type_name(src2->get_type()));
             return false;  // unsupported src2 type
         }
 
@@ -350,6 +350,7 @@ bool is_rope_supported(npu_device_tensor_op op, const npu_device_tensor_spec * d
         return false;
     }
 
+    // TODO: check the params for ROPE operation
     return true;  // ROPE operation is not supported yet
 }
 

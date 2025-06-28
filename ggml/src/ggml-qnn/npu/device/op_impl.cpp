@@ -450,14 +450,15 @@ bool requires_thread_barrier(npu_device_tensor_op op) {
 
 bool support_op(npu_device_tensor_op op, const npu_device_tensor_spec * dst, const npu_device_tensor_spec * srcs,
                 size_t src_len) {
-    if (get_compute_func_impl(op, dst->type) == nullptr) {
-        DEVICE_LOG_ERROR("[%s]unsupported, get_compute_func failed\n", op_get_name(op));
-        return false;
-    }
-
     auto is_supported_func = kOpCapabilities[op].is_supported;
     if (!is_supported_func || !is_supported_func(op, dst, srcs, src_len)) {
         DEVICE_LOG_DEBUG("[%s]unsupported, is_supported_func return false\n", op_get_name(op));
+        return false;
+    }
+
+    if (get_compute_func_impl(op, dst->type) == nullptr) {
+        DEVICE_LOG_DEBUG("[%s]unsupported, get_compute_func failed, type: %s\n", op_get_name(op),
+                         get_type_name(dst->type));
         return false;
     }
 
