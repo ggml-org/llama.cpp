@@ -178,6 +178,8 @@ bool rope_f32(tensor * out, compute_params * params) {
     // row index used to determine which thread to use
     int ir = 0;
 
+    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_MULTI_SUB_PROC(out, params->get_thread_index(), rope);
+
     const float     sin_sign      = 1.0f;
     const int32_t * pos           = src1->get_read_buffer_as<int32_t>();
     const uint8_t * src0_data_ptr = src0->get_read_buffer();
@@ -187,10 +189,12 @@ bool rope_f32(tensor * out, compute_params * params) {
         int64_t i2    = ip % out->get_ne(2);  // seq-len
         float * cache = reinterpret_cast<float *>(cache_ptr);
         if (!is_mrope) {
+            DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 0, cache);
             const int64_t p = pos[i2];
             rope_cache_init(p, freq_scale, freq_factors, corr_dims, out->get_ne(0), ext_factor, attn_factor, cache,
                             sin_sign, theta_scale);
         } else {
+            DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 0, cache);
             const int64_t p_t = pos[i2];
             const int64_t p_h = pos[i2 + out->get_ne(2)];
             const int64_t p_w = pos[i2 + out->get_ne(2) * 2];
@@ -199,6 +203,7 @@ bool rope_f32(tensor * out, compute_params * params) {
                              out->get_ne(0), ext_factor, attn_factor, cache, sin_sign, theta_scale);
         }
 
+        DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 1, loop);
         const uint8_t * src0_plane = src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2);
         uint8_t *       dst_plane  = dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2);
         for (int64_t i1 = 0; i1 < out->get_ne(1); i1++) {  // attn-heads
