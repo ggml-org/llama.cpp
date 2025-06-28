@@ -183,92 +183,33 @@ bool rope_f32(tensor * out, compute_params * params) {
     const uint8_t * src0_data_ptr = src0->get_read_buffer();
     uint8_t *       dst_data_ptr  = out->get_write_buffer();
     for (int64_t ip = 0; ip < total_planes; ip++) {
-        int64_t i3 = ip / out->get_ne(2);  // batch
-        int64_t i2 = ip % out->get_ne(2);  // seq-len
-        {
-            float * cache = reinterpret_cast<float *>(cache_ptr);
-            if (!is_mrope) {
-                const int64_t p = pos[i2];
-                rope_cache_init(p, freq_scale, freq_factors, corr_dims, out->get_ne(0), ext_factor, attn_factor, cache,
-                                sin_sign, theta_scale);
-            } else {
-                const int64_t p_t = pos[i2];
-                const int64_t p_h = pos[i2 + out->get_ne(2)];
-                const int64_t p_w = pos[i2 + out->get_ne(2) * 2];
-                const int64_t p_e = pos[i2 + out->get_ne(2) * 3];
-                mrope_cache_init(p_t, p_h, p_w, p_e, sections, is_vision, freq_scale, freq_factors, corr_dims,
-                                 out->get_ne(0), ext_factor, attn_factor, cache, sin_sign, theta_scale);
+        int64_t i3    = ip / out->get_ne(2);  // batch
+        int64_t i2    = ip % out->get_ne(2);  // seq-len
+        float * cache = reinterpret_cast<float *>(cache_ptr);
+        if (!is_mrope) {
+            const int64_t p = pos[i2];
+            rope_cache_init(p, freq_scale, freq_factors, corr_dims, out->get_ne(0), ext_factor, attn_factor, cache,
+                            sin_sign, theta_scale);
+        } else {
+            const int64_t p_t = pos[i2];
+            const int64_t p_h = pos[i2 + out->get_ne(2)];
+            const int64_t p_w = pos[i2 + out->get_ne(2) * 2];
+            const int64_t p_e = pos[i2 + out->get_ne(2) * 3];
+            mrope_cache_init(p_t, p_h, p_w, p_e, sections, is_vision, freq_scale, freq_factors, corr_dims,
+                             out->get_ne(0), ext_factor, attn_factor, cache, sin_sign, theta_scale);
+        }
+
+        for (int64_t i1 = 0; i1 < out->get_ne(1); i1++) {  // attn-heads
+            if (ir++ < start_end_row.first) {              // TODO: optimize this
+                continue;
+            }
+            if (ir > start_end_row.second) {  // TODO: optimize this
+                break;
             }
 
-            for (int64_t i1 = 0; i1 < out->get_ne(1); i1++) {  // attn-heads
-                if (ir++ < start_end_row.first) {              // TODO: optimize this
-                    continue;
-                }
-                if (ir > start_end_row.second) {  // TODO: optimize this
-                    break;
-                }
-
-                if (is_neox || is_mrope) {
-                    if (is_vision) {
-                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0 / 2;
-
-                            const float cos_theta = cache[i0 + 0];
-                            const float sin_theta = cache[i0 + 1];
-
-                            const float * const src =
-                                (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                           i1 * src0->get_nb(1) + ic * src0->get_nb(0));
-                            float * dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                          i1 * out->get_nb(1) + ic * out->get_nb(0));
-
-                            const float x0 = src[0];
-                            const float x1 = src[n_dims];
-
-                            dst_data[0]      = x0 * cos_theta - x1 * sin_theta;
-                            dst_data[n_dims] = x0 * sin_theta + x1 * cos_theta;
-                        }
-                    } else {
-                        for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                            const int64_t ic = i0 / 2;
-
-                            const float cos_theta = cache[i0 + 0];
-                            const float sin_theta = cache[i0 + 1];
-
-                            const float * const src =
-                                (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                           i1 * src0->get_nb(1) + ic * src0->get_nb(0));
-                            float * dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                          i1 * out->get_nb(1) + ic * out->get_nb(0));
-
-                            const float x0 = src[0];
-                            const float x1 = src[n_dims / 2];
-
-                            dst_data[0]          = x0 * cos_theta - x1 * sin_theta;
-                            dst_data[n_dims / 2] = x0 * sin_theta + x1 * cos_theta;
-                        }
-                    }
-                } else {
-                    for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
-                        const float cos_theta = cache[i0 + 0];
-                        const float sin_theta = cache[i0 + 1];
-
-                        const float * const src =
-                            (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                       i1 * src0->get_nb(1) + i0 * src0->get_nb(0));
-                        float * dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                      i1 * out->get_nb(1) + i0 * out->get_nb(0));
-
-                        const float x0 = src[0];
-                        const float x1 = src[1];
-
-                        dst_data[0] = x0 * cos_theta - x1 * sin_theta;
-                        dst_data[1] = x0 * sin_theta + x1 * cos_theta;
-                    }
-                }
-
+            if (is_neox || is_mrope) {
                 if (is_vision) {
-                    for (int64_t i0 = n_dims; i0 < out->get_ne(0); i0 += 2) {
+                    for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
                         const int64_t ic = i0 / 2;
 
                         const float cos_theta = cache[i0 + 0];
@@ -287,17 +228,71 @@ bool rope_f32(tensor * out, compute_params * params) {
                         dst_data[n_dims] = x0 * sin_theta + x1 * cos_theta;
                     }
                 } else {
-                    // fill the remain channels with data from src tensor
-                    for (int64_t i0 = n_dims; i0 < out->get_ne(0); i0 += 2) {
+                    for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                        const int64_t ic = i0 / 2;
+
+                        const float cos_theta = cache[i0 + 0];
+                        const float sin_theta = cache[i0 + 1];
+
                         const float * const src =
                             (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                       i1 * src0->get_nb(1) + i0 * src0->get_nb(0));
+                                       i1 * src0->get_nb(1) + ic * src0->get_nb(0));
                         float * dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                      i1 * out->get_nb(1) + i0 * out->get_nb(0));
+                                                      i1 * out->get_nb(1) + ic * out->get_nb(0));
 
-                        dst_data[0] = src[0];
-                        dst_data[1] = src[1];
+                        const float x0 = src[0];
+                        const float x1 = src[n_dims / 2];
+
+                        dst_data[0]          = x0 * cos_theta - x1 * sin_theta;
+                        dst_data[n_dims / 2] = x0 * sin_theta + x1 * cos_theta;
                     }
+                }
+            } else {
+                for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
+                    const float cos_theta = cache[i0 + 0];
+                    const float sin_theta = cache[i0 + 1];
+
+                    const float * const src = (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
+                                                         i1 * src0->get_nb(1) + i0 * src0->get_nb(0));
+                    float *             dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
+                                                  i1 * out->get_nb(1) + i0 * out->get_nb(0));
+
+                    const float x0 = src[0];
+                    const float x1 = src[1];
+
+                    dst_data[0] = x0 * cos_theta - x1 * sin_theta;
+                    dst_data[1] = x0 * sin_theta + x1 * cos_theta;
+                }
+            }
+
+            if (is_vision) {
+                for (int64_t i0 = n_dims; i0 < out->get_ne(0); i0 += 2) {
+                    const int64_t ic = i0 / 2;
+
+                    const float cos_theta = cache[i0 + 0];
+                    const float sin_theta = cache[i0 + 1];
+
+                    const float * const src = (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
+                                                         i1 * src0->get_nb(1) + ic * src0->get_nb(0));
+                    float *             dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
+                                                  i1 * out->get_nb(1) + ic * out->get_nb(0));
+
+                    const float x0 = src[0];
+                    const float x1 = src[n_dims];
+
+                    dst_data[0]      = x0 * cos_theta - x1 * sin_theta;
+                    dst_data[n_dims] = x0 * sin_theta + x1 * cos_theta;
+                }
+            } else {
+                // fill the remain channels with data from src tensor
+                for (int64_t i0 = n_dims; i0 < out->get_ne(0); i0 += 2) {
+                    const float * const src = (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
+                                                         i1 * src0->get_nb(1) + i0 * src0->get_nb(0));
+                    float *             dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
+                                                  i1 * out->get_nb(1) + i0 * out->get_nb(0));
+
+                    dst_data[0] = src[0];
+                    dst_data[1] = src[1];
                 }
             }
         }
