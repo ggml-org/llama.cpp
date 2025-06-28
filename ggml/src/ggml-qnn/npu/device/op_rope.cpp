@@ -171,8 +171,9 @@ bool rope_f32(tensor * out, compute_params * params) {
         freq_factors = src2->get_read_buffer_as<float>();
     }
 
-    const auto total_rows    = out->get_ne(3) * out->get_ne(2) * out->get_ne(1);
-    const auto start_end_row = params->get_work_slice(total_rows);
+    const int64_t total_planes  = out->get_ne(3) * out->get_ne(2);
+    const int64_t total_rows    = out->get_ne(3) * out->get_ne(2) * out->get_ne(1);
+    const auto    start_end_row = params->get_work_slice(total_rows);
 
     // row index used to determine which thread to use
     int ir = 0;
@@ -181,8 +182,10 @@ bool rope_f32(tensor * out, compute_params * params) {
     const int32_t * pos           = src1->get_read_buffer_as<int32_t>();
     const uint8_t * src0_data_ptr = src0->get_read_buffer();
     uint8_t *       dst_data_ptr  = out->get_write_buffer();
-    for (int64_t i3 = 0; i3 < out->get_ne(3); i3++) {      // batch
-        for (int64_t i2 = 0; i2 < out->get_ne(2); i2++) {  // seq-len
+    for (int64_t ip = 0; ip < total_planes; ip++) {
+        int64_t i3 = ip / out->get_ne(2);  // batch
+        int64_t i2 = ip % out->get_ne(2);  // seq-len
+        {
             float * cache = reinterpret_cast<float *>(cache_ptr);
             if (!is_mrope) {
                 const int64_t p = pos[i2];
