@@ -2211,6 +2211,9 @@ struct clip_model_loader {
                     {
                         hparams.rope_theta = 10000.0f;
                         hparams.warmup_image_size = hparams.patch_size * 8;
+                        // Mistral Small 2506 needs 1024x1024 image size cap to prevent OOM
+                        // ref: https://github.com/ggml-org/llama.cpp/issues/14310
+                        hparams.image_size = 1024;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.spatial_merge_size, false);
                     } break;
                 case PROJECTOR_TYPE_GEMMA3:

@@ -244,21 +244,34 @@ bool llama_batch_allocr::init(
             continue;
         }
 
-        if (memory) {
+        const llama_pos p0 = memory ? memory->seq_pos_max(s) : -1;
+
+        if (p0 >= 0) {
+            bool ok = true;
+
             if (batch.token) {
-                if (seq_pos_min(s) != memory->seq_pos_max(s) + 1) {
-                    LLAMA_LOG_ERROR("%s: sequence %d does not start from the last position stored in the memory\n", __func__, s);
-                    return false;
+                if (seq_pos_min(s) != p0 + 1) {
+                    ok = false;
                 }
             } else {
                 assert(batch.embd);
 
                 // for embeddings (typically used as vision input), we allow them to have repeating positions
                 // ref: https://github.com/ggml-org/llama.cpp/issues/13694#issuecomment-2983871762
-                if (seq_pos_min(s) != memory->seq_pos_max(s) && seq_pos_min(s) != memory->seq_pos_max(s) + 1) {
-                    LLAMA_LOG_ERROR("%s: sequence %d does not start from the last position stored in the memory\n", __func__, s);
-                    return false;
+                if (seq_pos_min(s) != p0 && seq_pos_min(s) != p0 + 1) {
+                    ok = false;
                 }
+            }
+
+            if (!ok) {
+                LLAMA_LOG_ERROR(
+                        "%s: the tokens of sequence %d in the input batch have inconsistent sequence positions:\n"
+                        " - the last position stored in the memory module of the context (i.e. the KV cache) for sequence %d is X = %d\n"
+                        " - the tokens for sequence %d in the input batch have a starting position of Y = %d\n"
+                        " it is required that the sequence positions remain consecutive: Y = X + 1\n",
+                        __func__, s, s, p0, s, seq_pos_min(s));
+
+                return false;
             }
         }
 

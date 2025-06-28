@@ -557,6 +557,10 @@ ninja
 
 To read documentation for how to build on Android, [click here](./android.md)
 
+## IBM Z & LinuxONE
+
+To read documentation for how to build on IBM Z & LinuxONE, [click here](./build-s390x.md)
+
 ## Notes about GPU-accelerated backends
 
 The GPU may still be used to accelerate some parts of the computation even when using the `-ngl 0` option. You can fully disable GPU acceleration by using `--device none`.

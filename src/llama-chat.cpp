@@ -528,12 +528,17 @@ int32_t llm_chat_apply_template(
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_RWKV_WORLD) {
         // this template requires the model to have "\n\n" as EOT token
-        for (auto message : chat) {
-            std::string role(message->role);
-            if (role == "user") {
-                ss << "User: " << message->content << "\n\nAssistant:";
-            } else {
-                ss << message->content << "\n\n";
+        for (size_t i = 0; i < chat.size(); i++) {
+            std::string role(chat[i]->role);
+            if (role == "system") {
+                ss << "System: " << trim(chat[i]->content) << "\n\n";
+            } else if (role == "user") {
+                ss << "User: " << trim(chat[i]->content) << "\n\n";
+                if (i == chat.size() - 1) {
+                    ss << "Assistant:";
+                }
+            } else if (role == "assistant") {
+                ss << "Assistant: " << trim(chat[i]->content) << "\n\n";
             }
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_GRANITE) {
