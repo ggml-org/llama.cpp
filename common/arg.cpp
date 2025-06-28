@@ -977,6 +977,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         for (auto & seq_breaker : params.sampling.dry_sequence_breakers) {
             string_process_escapes(seq_breaker);
         }
+        for (auto & pair : params.speculative.replacements) {
+            string_process_escapes(pair.first);
+            string_process_escapes(pair.second);
+        }
     }
 
     if (!params.kv_overrides.empty()) {
