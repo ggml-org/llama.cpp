@@ -311,7 +311,8 @@ bool is_rope_supported(npu_device_tensor_op op, const npu_device_tensor_spec * d
         return false;
     }
 
-    if (src_len < 3 || !dst || !srcs) {
+    if (src_len < 2 || !dst || !srcs) {
+        // freq can be optional, but we require at least 2 srcs: src0 and src1
         DEVICE_LOG_DEBUG("[%s]invalid dst or srcs\n", op_get_name(op));
         return false;
     }
@@ -334,10 +335,14 @@ bool is_rope_supported(npu_device_tensor_op op, const npu_device_tensor_spec * d
         return false;  // unsupported src1 type
     }
 
-    const auto & src2 = srcs[2];
-    if (src2.type != NPU_DATA_TYPE_F32) {
-        DEVICE_LOG_DEBUG("[%s]src2 type is not F32: %s\n", op_get_name(op), get_type_name(src2.type));
-        return false;  // unsupported src2 type
+    if (src_len > 2) {
+        const auto & src2 = srcs[2];
+        if (src2.type != NPU_DATA_TYPE_F32) {
+            DEVICE_LOG_DEBUG("[%s]src2 type is not F32: %s\n", op_get_name(op), get_type_name(src2.type));
+            return false;  // unsupported src2 type
+        }
+
+        DEVICE_LOG_DEBUG("[%s]freq is present\n", op_get_name(op));
     }
 
     if (!is_same_shape(src0, *dst)) {
