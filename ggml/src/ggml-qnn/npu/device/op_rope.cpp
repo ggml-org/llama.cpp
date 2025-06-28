@@ -109,17 +109,13 @@ void mrope_cache_init(float theta_base_t, float theta_base_h, float theta_base_w
     }
 }
 
-}  // namespace
-
-namespace hexagon {
-
-bool rope_f32(tensor * out, compute_params * params) {
-    const tensor * src0 = out->get_src(0);
-    const tensor * src1 = out->get_src(1);
-    const tensor * src2 = out->get_src(2);
+template <bool _IsNeoX, bool _IsMrope, bool _IsVision>
+bool rope_impl(hexagon::tensor * out, hexagon::compute_params * params) {
+    const auto * src0 = out->get_src(0);
+    const auto * src1 = out->get_src(1);
+    const auto * src2 = out->get_src(2);
 
     const int n_dims      = out->get_op_param<int32_t>(1);
-    const int mode        = out->get_op_param<int32_t>(2);
     const int n_ctx_orig  = out->get_op_param<int32_t>(4);
     const int sections[4] = {
         out->get_op_param<int32_t>(11),
@@ -139,16 +135,12 @@ bool rope_f32(tensor * out, compute_params * params) {
     float corr_dims[2];
     rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
 
-    const bool is_neox   = mode & NPU_ROPE_TYPE_NEOX;
-    const bool is_mrope  = mode & NPU_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
-    const bool is_vision = mode == NPU_ROPE_TYPE_VISION;
-
-    if (is_mrope && sections[0] <= 0 && sections[1] <= 0 && sections[2] <= 0) {
+    if (_IsMrope && sections[0] <= 0 && sections[1] <= 0 && sections[2] <= 0) {
         DEVICE_LOG_ERROR("[ROPE]invalid sections for MROPE: %d, %d, %d\n", sections[0], sections[1], sections[2]);
         return false;  // invalid sections for MROPE
     }
 
-    if (n_dims % 2 || (is_vision && n_dims != out->get_ne(0) / 2)) {
+    if (n_dims % 2 || (_IsVision && n_dims != out->get_ne(0) / 2)) {
         DEVICE_LOG_ERROR("[ROPE]invalid n_dims for vision ROPE: %d, expected: %d\n", n_dims, out->get_ne(0) / 2);
         return false;  // invalid n_dims for vision ROPE
     }
@@ -164,7 +156,7 @@ bool rope_f32(tensor * out, compute_params * params) {
     const float * freq_factors = nullptr;
     if (src2 != nullptr) {
         if (src2->get_type() != NPU_DATA_TYPE_F32 || src2->get_ne(0) < n_dims / 2) {
-            DEVICE_LOG_ERROR("[ROPE]src2 type is not F32 or F16: %s\n", get_type_name(src2->get_type()));
+            DEVICE_LOG_ERROR("[ROPE]src2 type is not F32 or F16: %s\n", hexagon::get_type_name(src2->get_type()));
             return false;  // unsupported src2 type
         }
 
@@ -188,7 +180,7 @@ bool rope_f32(tensor * out, compute_params * params) {
         int64_t i3    = ip / out->get_ne(2);  // batch
         int64_t i2    = ip % out->get_ne(2);  // seq-len
         float * cache = reinterpret_cast<float *>(cache_ptr);
-        if (!is_mrope) {
+        if constexpr (!_IsMrope) {
             DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 0, cache);
             const int64_t p = pos[i2];
             rope_cache_init(p, freq_scale, freq_factors, corr_dims, out->get_ne(0), ext_factor, attn_factor, cache,
@@ -199,7 +191,7 @@ bool rope_f32(tensor * out, compute_params * params) {
             const int64_t p_h = pos[i2 + out->get_ne(2)];
             const int64_t p_w = pos[i2 + out->get_ne(2) * 2];
             const int64_t p_e = pos[i2 + out->get_ne(2) * 3];
-            mrope_cache_init(p_t, p_h, p_w, p_e, sections, is_vision, freq_scale, freq_factors, corr_dims,
+            mrope_cache_init(p_t, p_h, p_w, p_e, sections, _IsVision, freq_scale, freq_factors, corr_dims,
                              out->get_ne(0), ext_factor, attn_factor, cache, sin_sign, theta_scale);
         }
 
@@ -216,8 +208,8 @@ bool rope_f32(tensor * out, compute_params * params) {
 
             const uint8_t * src0_row = src0_plane + i1 * src0->get_nb(1);
             uint8_t *       dst_row  = dst_plane + i1 * out->get_nb(1);
-            if (is_neox || is_mrope) {
-                if (is_vision) {
+            if constexpr (_IsNeoX || _IsMrope) {
+                if constexpr (_IsVision) {
                     for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
                         const int64_t ic = i0 / 2;
 
@@ -266,7 +258,7 @@ bool rope_f32(tensor * out, compute_params * params) {
                 }
             }
 
-            if (is_vision) {
+            if constexpr (_IsVision) {
                 for (int64_t i0 = n_dims; i0 < out->get_ne(0); i0 += 2) {
                     const int64_t ic = i0 / 2;
 
@@ -297,6 +289,41 @@ bool rope_f32(tensor * out, compute_params * params) {
 
     out->release_write_buffer();
     return true;
+}
+
+typedef bool (*rope_impl_func)(hexagon::tensor * out, hexagon::compute_params * params);
+
+constexpr const rope_impl_func kRopeImplFuncs[8] = {
+    rope_impl<false, false, false>,  // IsNotNeoX, IsNotMrope, IsNotVision
+    rope_impl<false, false, true>,   // IsNotNeoX, IsNotMrope, IsVision
+    rope_impl<false, true, false>,   // IsNotNeoX, IsMrope, IsNotVision
+    rope_impl<false, true, true>,    // IsNotNeoX, IsMrope, IsVision
+    rope_impl<true, false, false>,   // IsNeoX, IsNotMrope, IsNotVision
+    rope_impl<true, false, true>,    // IsNeoX, IsNotMrope, IsVision
+    rope_impl<true, true, false>,    // IsNeoX, IsMrope, IsNotVision
+    rope_impl<true, true, true>,     // IsNeoX, IsMrope, IsVision
+};
+
+}  // namespace
+
+namespace hexagon {
+
+bool rope_f32(tensor * out, compute_params * params) {
+    const int  mode      = out->get_op_param<int32_t>(2);
+    const bool is_neox   = mode & NPU_ROPE_TYPE_NEOX;
+    const bool is_mrope  = mode & NPU_ROPE_TYPE_MROPE;  // ggml_rope_multi, multimodal rotary position embedding
+    const bool is_vision = mode == NPU_ROPE_TYPE_VISION;
+
+    size_t impl_index = is_neox ? 4 : 0;
+    impl_index += is_mrope ? 2 : 0;
+    impl_index += is_vision ? 1 : 0;
+
+    if (impl_index >= sizeof(kRopeImplFuncs) / sizeof(kRopeImplFuncs[0])) {
+        DEVICE_LOG_ERROR("[ROPE]invalid impl_index: %zu\n", impl_index);
+        return false;  // invalid impl index
+    }
+
+    return kRopeImplFuncs[impl_index](out, params);
 }
 
 bool is_rope_supported(npu_device_tensor_op op, const npu_device_tensor_spec * dst, const npu_device_tensor_spec * srcs,
