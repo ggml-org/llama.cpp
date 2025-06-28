@@ -705,6 +705,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
+    if (arch == LLM_ARCH_HUNYUAN_MOE) {
+        weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens); // [n_expert_used, n_tokens]
+        weights = ggml_div(ctx0, weights, ggml_sum_rows(ctx0, weights)); // [1, n_tokens]
+        weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens); // [1, n_expert_used, n_tokens]
+        cb(weights, "ffn_moe_weights_scaled", il);
+    }
+
     if (norm_w) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
 

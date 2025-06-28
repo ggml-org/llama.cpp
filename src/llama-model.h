@@ -93,6 +93,7 @@ enum llm_type {
     LLM_TYPE_57B_A14B,
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
+    LLM_TYPE_A13B,
     LLM_TYPE_30B_A3B,
     LLM_TYPE_235B_A22B,
     LLM_TYPE_E2B,

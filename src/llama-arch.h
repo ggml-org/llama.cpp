@@ -80,6 +80,7 @@ enum llm_arch {
     LLM_ARCH_BAILINGMOE,
     LLM_ARCH_DOTS1,
     LLM_ARCH_ARCEE,
+    LLM_ARCH_HUNYUAN_MOE,
     LLM_ARCH_UNKNOWN,
 };
 

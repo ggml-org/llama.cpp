@@ -607,7 +607,6 @@ class TextModel(ModelBase):
 
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
-        vocab_size = self.hparams.get("vocab_size", len(tokenizer.vocab))
         assert max(tokenizer.vocab.values()) < vocab_size
 
         tokpre = self.get_vocab_base_pre(tokenizer)
@@ -815,6 +814,9 @@ class TextModel(ModelBase):
         if chkhsh == "1431a23e583c97432bc230bff598d103ddb5a1f89960c8f1d1051aaa944d0b35":
             # ref: https://huggingface.co/sapienzanlp/Minerva-7B-base-v1.0
             res = "minerva-7b"
+        if chkhsh == "7e57df22b1fe23a7b1e1c7f3dc4e3f96d43a4eb0836d0c6bdc3436d7b2f1c664":
+            # ref: https://huggingface.co/tencent/Hunyuan-A13B-Instruct
+            res = "hunyuan"
 
         if res is None:
             logger.warning("\n")
@@ -6389,6 +6391,125 @@ class UltravoxWhisperEncoderModel(WhisperEncoderModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
+
+
+@ModelBase.register("HunYuanMoEV1ForCausalLM")
+class HunYuanMoEModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
+    undo_permute = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+
+        # merge logic is copied from QwenModel, maybe incorrect
+        merges = []
+        vocab = {}
+        mergeable_ranks = tokenizer.mergeable_ranks
+        for token, rank in mergeable_ranks.items():
+            vocab[QwenModel.token_bytes_to_string(token)] = rank
+            if len(token) == 1:
+                continue
+            merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
+            if len(merged) == 2:
+                merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
+        self.gguf_writer.add_token_merges(merges)
+
+        reverse_vocab = tokenizer.decoder
+        assert max(reverse_vocab.keys()) < tokenizer.vocab_size
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+        added_vocab = tokenizer.get_added_vocab()
+
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(tokenizer.vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    # The tokenizer in llama.cpp assumes the CONTROL and USER_DEFINED tokens are pre-normalized.
+                    # To avoid unexpected issues - we make sure to normalize non-normalized tokens
+                    if not added_tokens_decoder[i].normalized:
+                        previous_token = token
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        if previous_token != token:
+                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
+
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        # NOTE: this was added for Gemma.
+                        # Encoding and decoding the tokens above isn't sufficient for this case.
+                        token = token.replace(b"\xe2\x96\x81".decode("utf-8"), " ")  # pre-normalize user-defined spaces
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        return tokens, toktypes, tokpre
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_expert_count(self.hparams["num_experts"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(self.hparams["intermediate_size"])
+
+        moe_intermediate_size = self.hparams["moe_intermediate_size"]
+        assert all(n == moe_intermediate_size[0] for n in moe_intermediate_size)
+        self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size[0])
+
+        moe_topk = self.hparams["moe_topk"]
+        assert all(topk == moe_topk[0] for topk in moe_topk)
+        self.gguf_writer.add_expert_used_count(moe_topk[0])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # process the experts separately
+        if name.find("mlp.experts") != -1:
+            n_experts = self.hparams["num_experts"]
+            assert bid is not None
+
+            tensors: list[tuple[str, Tensor]] = []
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                # merge the experts into a single 3d tensor
+                for w_name in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+
+                return tensors
+            else:
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 ###### CONVERSION LOGIC ######
 
