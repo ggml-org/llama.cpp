@@ -76,8 +76,10 @@ int main(int argc, char ** argv) {
     // first run
     printf("\nfirst run: %s", params.prompt.c_str());
 
+    int n_remain = params.n_predict;
     for (auto i = 0; i < params.n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl, ctx, -1);
+        --n_remain;
+        auto next_token     = llama_sampler_sample(smpl, ctx, -1, n_remain);
         auto next_token_str = common_token_to_piece(ctx, next_token);
 
         printf("%s", next_token_str.c_str());
@@ -128,8 +130,10 @@ int main(int argc, char ** argv) {
     n_past = n_past_saved;
 
     // second run
+    n_remain = params.n_predict;
     for (auto i = 0; i < params.n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl2, ctx2, -1);
+        --n_remain;
+        auto next_token     = llama_sampler_sample(smpl2, ctx2, -1, n_remain);
         auto next_token_str = common_token_to_piece(ctx2, next_token);
 
         printf("%s", next_token_str.c_str());
@@ -209,8 +213,10 @@ int main(int argc, char ** argv) {
     }
 
     // third run with seq 1 instead of 0
+    n_remain = params.n_predict;
     for (auto i = 0; i < params.n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl3, ctx3, -1);
+        --n_remain;
+        auto next_token     = llama_sampler_sample(smpl3, ctx3, -1, n_remain);
         auto next_token_str = common_token_to_piece(ctx3, next_token);
 
         printf("%s", next_token_str.c_str());

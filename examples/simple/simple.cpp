@@ -151,6 +151,8 @@ int main(int argc, char ** argv) {
     int n_decode = 0;
     llama_token new_token_id;
 
+    int n_remain = n_predict;
+
     for (int n_pos = 0; n_pos + batch.n_tokens < n_prompt + n_predict; ) {
         // evaluate the current batch with the transformer model
         if (llama_decode(ctx, batch)) {
@@ -162,7 +164,7 @@ int main(int argc, char ** argv) {
 
         // sample the next token
         {
-            new_token_id = llama_sampler_sample(smpl, ctx, -1);
+            new_token_id = llama_sampler_sample(smpl, ctx, -1, --n_remain);
 
             // is it an end of generation?
             if (llama_vocab_is_eog(vocab, new_token_id)) {

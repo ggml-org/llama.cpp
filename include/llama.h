@@ -1202,7 +1202,7 @@ extern "C" {
     struct llama_sampler_i {
         const char *           (*name)  (const struct llama_sampler * smpl);                                 // can be NULL
         void                   (*accept)(      struct llama_sampler * smpl, llama_token token);              // can be NULL
-        void                   (*apply) (      struct llama_sampler * smpl, llama_token_data_array * cur_p); // required
+        void                   (*apply) (      struct llama_sampler * smpl, llama_token_data_array * cur_p, float n_remain); // required
         void                   (*reset) (      struct llama_sampler * smpl);                                 // can be NULL
         struct llama_sampler * (*clone) (const struct llama_sampler * smpl);                                 // can be NULL if ctx is NULL
         void                   (*free)  (      struct llama_sampler * smpl);                                 // can be NULL if ctx is NULL
@@ -1220,7 +1220,7 @@ extern "C" {
     LLAMA_API struct llama_sampler * llama_sampler_init  (const struct llama_sampler_i * iface, llama_sampler_context_t ctx);
     LLAMA_API const char *           llama_sampler_name  (const struct llama_sampler * smpl);
     LLAMA_API void                   llama_sampler_accept(      struct llama_sampler * smpl, llama_token token);
-    LLAMA_API void                   llama_sampler_apply (      struct llama_sampler * smpl, llama_token_data_array * cur_p);
+    LLAMA_API void                   llama_sampler_apply (      struct llama_sampler * smpl, llama_token_data_array * cur_p, float n_remain);
     LLAMA_API void                   llama_sampler_reset (      struct llama_sampler * smpl);
     LLAMA_API struct llama_sampler * llama_sampler_clone (const struct llama_sampler * smpl);
     // important: do not free if the sampler has been added to a llama_sampler_chain (via llama_sampler_chain_add)
@@ -1351,7 +1351,10 @@ extern "C" {
     LLAMA_API struct llama_sampler * llama_sampler_init_logit_bias(
                              int32_t   n_vocab,
                              int32_t   n_logit_bias,
-              const llama_logit_bias * logit_bias);
+                             const llama_logit_bias * logit_bias,
+                             float eog_bias_per_tok,
+                             float start_eog_at_remain,
+                             const struct llama_vocab *vocab);
 
     // this sampler is meant to be used for fill-in-the-middle infilling
     // it's supposed to be used after top_k + top_p sampling
@@ -1389,7 +1392,7 @@ extern "C" {
     //    llama_sampler_accept(smpl, token);
     //    return token;
     // Returns the sampled token
-    LLAMA_API llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx);
+    LLAMA_API llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx, float n_remain);
 
     // TODO: extend in the future
     //LLAMA_API void llama_decode_with_sampler(struct llama_context * ctx, struct llama_sampler * smpl, struct llama_batch batch, ...);
