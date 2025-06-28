@@ -13,7 +13,7 @@ struct common_speculative_params {
 };
 
 struct common_speculative * common_speculative_init(
-        struct llama_context * ctx_main,
+        struct llama_context * ctx_tgt,
         struct llama_context * ctx_dft
 );
 

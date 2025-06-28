@@ -21,15 +21,15 @@ struct common_speculative {
 };
 
 struct common_speculative * common_speculative_init(
-        struct llama_context * ctx_main,
+        struct llama_context * ctx_tgt,
         struct llama_context * ctx_dft) {
     auto * result = new common_speculative {
-        /* .ctx_main   = */ ctx_main,
+        /* .ctx_main   = */ ctx_tgt,
         /* .ctx_dft    = */ ctx_dft,
         /* .smpl       = */ nullptr,
         /* .batch      = */ llama_batch_init(llama_n_batch(ctx_dft), 0, 1),
         /* .prompt_dft = */ {},
-        /* .vocab_dft_compatible = */ common_speculative_are_compatible(ctx_main, ctx_dft),
+        /* .vocab_dft_compatible = */ false,
     };
 
     // TODO: optimize or pass from outside?
@@ -64,6 +64,9 @@ struct common_speculative * common_speculative_init(
     }
 #endif
 
+    result->vocab_dft_compatible = common_speculative_are_compatible(ctx_tgt, ctx_dft);
+    LOG_DBG("vocab_dft_compatible = %d\n", result->vocab_dft_compatible);
+
     return result;
 }
 
@@ -95,8 +98,8 @@ bool common_speculative_are_compatible(
     LOG_DBG("%s: vocab_type dft: %d\n", __func__, vocab_type_dft);
 
     if (vocab_type_tgt != vocab_type_dft) {
-        LOG_ERR("%s: draft model vocab type must match target model to use speculation but ", __func__);
-        LOG_ERR("vocab_type_dft = %d while vocab_type_tgt = %d\n", vocab_type_dft, vocab_type_tgt);
+        LOG_DBG("%s: draft model vocab type must match target model to use speculation but ", __func__);
+        LOG_DBG("vocab_type_dft = %d while vocab_type_tgt = %d\n", vocab_type_dft, vocab_type_tgt);
         return false;
     }
 
@@ -106,7 +109,7 @@ bool common_speculative_are_compatible(
         llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
         llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
     ) {
-        LOG_ERR("%s: draft model special tokens must match target model to use speculation\n", __func__);
+        LOG_DBG("%s: draft model special tokens must match target model to use speculation\n", __func__);
         return false;
     }
 
@@ -118,8 +121,8 @@ bool common_speculative_are_compatible(
             : n_vocab_dft - n_vocab_tgt;
 
         if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
-            LOG_ERR("%s: draft model vocab must closely match target model to use speculation but ", __func__);
-            LOG_ERR("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
+            LOG_DBG("%s: draft model vocab must closely match target model to use speculation but ", __func__);
+            LOG_DBG("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
                     n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
             return false;
         }
@@ -128,8 +131,8 @@ bool common_speculative_are_compatible(
             const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
             const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
             if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
-                LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
+                LOG_DBG("%s: draft model vocab must match target model to use speculation but ", __func__);
+                LOG_DBG("token %d content differs - target '%s', draft '%s'\n", i,
                         common_token_to_piece(ctx_tgt, i).c_str(),
                         common_token_to_piece(ctx_dft, i).c_str());
                 return false;
@@ -160,7 +163,7 @@ llama_tokens common_speculative_gen_draft(
     const int n_ctx = llama_n_ctx(ctx_dft) - params.n_draft;
 
     llama_tokens prompt_tgt_draft_model;
-    if (!params.vocab_dft_compatible) {
+    if (!spec->vocab_dft_compatible) {
         // TODO: cache detokenized prompt string
         std::string detokenized = common_detokenize(ctx_main, prompt_tgt_main_model, true);
         LOG_DBG("main->draft detokenized string: '%s'\n", detokenized.c_str());
@@ -168,7 +171,7 @@ llama_tokens common_speculative_gen_draft(
         // FIXME: token healing
     }
     const llama_tokens &prompt_tgt =
-        params.vocab_dft_compatible ? prompt_tgt_main_model : prompt_tgt_draft_model;
+        spec->vocab_dft_compatible ? prompt_tgt_main_model : prompt_tgt_draft_model;
 
     const int i_start = std::max<int>(0, (int) prompt_tgt.size() - n_ctx);
 
@@ -223,6 +226,7 @@ llama_tokens common_speculative_gen_draft(
 
         if (reuse_n < (int) prompt_dft.size()) {
             llama_memory_seq_rm (mem, 0, reuse_n, -1);
+            prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
         }
     }
 
@@ -295,7 +299,7 @@ llama_tokens common_speculative_gen_draft(
         prompt_dft.push_back(id);
     }
 
-    if (!params.vocab_dft_compatible) {
+    if (!spec->vocab_dft_compatible) {
         std::string detokenized = common_detokenize(ctx_dft, result, true);
         LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
         result = common_tokenize(ctx_main, detokenized, false, false);

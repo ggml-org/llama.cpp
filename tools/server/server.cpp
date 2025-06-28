@@ -3554,7 +3554,6 @@ struct server_context {
                 params_spec.n_draft   = n_draft_max;
                 params_spec.n_reuse   = llama_n_ctx(slot.ctx_dft) - slot.params.speculative.n_max;
                 params_spec.p_min     = slot.params.speculative.p_min;
-                params_spec.vocab_dft_compatible = vocab_dft_compatible;
 
                 const llama_tokens & cached_text_tokens = slot.cache_tokens.get_text_tokens();
                 llama_tokens draft = common_speculative_gen_draft(slot.spec, params_spec, cached_text_tokens, id);
