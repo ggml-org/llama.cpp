@@ -199,6 +199,8 @@ bool rope_f32(tensor * out, compute_params * params) {
                              out->get_ne(0), ext_factor, attn_factor, cache, sin_sign, theta_scale);
         }
 
+        const uint8_t * src0_plane = src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2);
+        uint8_t *       dst_plane  = dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2);
         for (int64_t i1 = 0; i1 < out->get_ne(1); i1++) {  // attn-heads
             if (ir++ < start_end_row.first) {              // TODO: optimize this
                 continue;
@@ -207,6 +209,8 @@ bool rope_f32(tensor * out, compute_params * params) {
                 break;
             }
 
+            const uint8_t * src0_row = src0_plane + i1 * src0->get_nb(1);
+            uint8_t *       dst_row  = dst_plane + i1 * out->get_nb(1);
             if (is_neox || is_mrope) {
                 if (is_vision) {
                     for (int64_t i0 = 0; i0 < n_dims; i0 += 2) {
@@ -215,11 +219,8 @@ bool rope_f32(tensor * out, compute_params * params) {
                         const float cos_theta = cache[i0 + 0];
                         const float sin_theta = cache[i0 + 1];
 
-                        const float * const src =
-                            (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                       i1 * src0->get_nb(1) + ic * src0->get_nb(0));
-                        float * dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                      i1 * out->get_nb(1) + ic * out->get_nb(0));
+                        const float * const src      = (float *) (src0_row + ic * src0->get_nb(0));
+                        float *             dst_data = (float *) (dst_row + ic * out->get_nb(0));
 
                         const float x0 = src[0];
                         const float x1 = src[n_dims];
@@ -234,11 +235,8 @@ bool rope_f32(tensor * out, compute_params * params) {
                         const float cos_theta = cache[i0 + 0];
                         const float sin_theta = cache[i0 + 1];
 
-                        const float * const src =
-                            (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                       i1 * src0->get_nb(1) + ic * src0->get_nb(0));
-                        float * dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                      i1 * out->get_nb(1) + ic * out->get_nb(0));
+                        const float * const src      = (float *) (src0_row + ic * src0->get_nb(0));
+                        float *             dst_data = (float *) (dst_row + ic * out->get_nb(0));
 
                         const float x0 = src[0];
                         const float x1 = src[n_dims / 2];
@@ -252,10 +250,8 @@ bool rope_f32(tensor * out, compute_params * params) {
                     const float cos_theta = cache[i0 + 0];
                     const float sin_theta = cache[i0 + 1];
 
-                    const float * const src = (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                                         i1 * src0->get_nb(1) + i0 * src0->get_nb(0));
-                    float *             dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                  i1 * out->get_nb(1) + i0 * out->get_nb(0));
+                    const float * const src      = (float *) (src0_row + i0 * src0->get_nb(0));
+                    float *             dst_data = (float *) (dst_row + i0 * out->get_nb(0));
 
                     const float x0 = src[0];
                     const float x1 = src[1];
@@ -272,10 +268,8 @@ bool rope_f32(tensor * out, compute_params * params) {
                     const float cos_theta = cache[i0 + 0];
                     const float sin_theta = cache[i0 + 1];
 
-                    const float * const src = (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                                         i1 * src0->get_nb(1) + ic * src0->get_nb(0));
-                    float *             dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                  i1 * out->get_nb(1) + ic * out->get_nb(0));
+                    const float * const src      = (float *) (src0_row + ic * src0->get_nb(0));
+                    float *             dst_data = (float *) (dst_row + ic * out->get_nb(0));
 
                     const float x0 = src[0];
                     const float x1 = src[n_dims];
@@ -286,10 +280,8 @@ bool rope_f32(tensor * out, compute_params * params) {
             } else {
                 // fill the remain channels with data from src tensor
                 for (int64_t i0 = n_dims; i0 < out->get_ne(0); i0 += 2) {
-                    const float * const src = (float *) (src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2) +
-                                                         i1 * src0->get_nb(1) + i0 * src0->get_nb(0));
-                    float *             dst_data = (float *) (dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2) +
-                                                  i1 * out->get_nb(1) + i0 * out->get_nb(0));
+                    const float * const src      = (float *) (src0_row + i0 * src0->get_nb(0));
+                    float *             dst_data = (float *) (dst_row + i0 * out->get_nb(0));
 
                     dst_data[0] = src[0];
                     dst_data[1] = src[1];
