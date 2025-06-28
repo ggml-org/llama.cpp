@@ -1,5 +1,6 @@
 #include "speculative.h"
 
+#include "llama.h"
 #include "log.h"
 #include "common.h"
 #include "sampling.h"
@@ -163,12 +164,26 @@ llama_tokens common_speculative_gen_draft(
 
     llama_tokens prompt_tgt_draft_model;
     if (!spec->vocab_dft_compatible) {
-        // TODO: cache detokenized prompt string
-        std::string detokenized = common_detokenize(ctx_tgt, prompt_tgt_main_model, true);
-        LOG_DBG("main->draft detokenized string: '%s'\n", detokenized.c_str());
-        prompt_tgt_draft_model = common_tokenize(ctx_dft, detokenized, false, false);
-        // FIXME: token healing
+        const llama_model * model_tgt = llama_get_model(ctx_tgt);
+
+        std::string text;
+        text = common_detokenize(ctx_tgt, prompt_tgt_main_model, false);
+        LOG_DBG("main->draft detokenized string: '%s'\n", text.c_str());
+        prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, false);
+
+        text.clear();
+        const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
+        int32_t n_chars;
+        n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, false);
+        if (n_chars < 0) {
+            text.resize(-n_chars);
+            n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, false);
+        }
+        text.resize(n_chars);
+        LOG_DBG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
+        id_last = common_tokenize(ctx_dft, text, false, false)[0];
     }
+    // prompt_tgt's tokens will always be compatible with ctx_dft
     const llama_tokens &prompt_tgt =
         spec->vocab_dft_compatible ? prompt_tgt_main_model : prompt_tgt_draft_model;
 
@@ -216,6 +231,7 @@ llama_tokens common_speculative_gen_draft(
         if (reuse_i > 0) {
             llama_memory_seq_rm (mem_dft, 0, 0, reuse_i);
             llama_memory_seq_add(mem_dft, 0, reuse_i, -1, -reuse_i);
+
             prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
         }
 
@@ -295,7 +311,7 @@ llama_tokens common_speculative_gen_draft(
     }
 
     if (!spec->vocab_dft_compatible) {
-        std::string detokenized = common_detokenize(ctx_dft, result, true);
+        std::string detokenized = common_detokenize(ctx_dft, result, false);
         LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
         result = common_tokenize(ctx_tgt, detokenized, false, false);
     }
