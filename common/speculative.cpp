@@ -204,23 +204,23 @@ llama_tokens common_speculative_gen_draft(
         const llama_model * model_tgt = llama_get_model(ctx_tgt);
 
         std::string text;
-        text = common_detokenize(ctx_tgt, prompt_tgt_main_model, false);
+        text = common_detokenize(ctx_tgt, prompt_tgt_main_model, true);
         text = replace_to_dft(spec, text);
         LOG_DBG("main->draft detokenized string: '%s'\n", text.c_str());
-        prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, false);
+        prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, true);
         text.clear();
 
         const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
         int32_t n_chars;
-        n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, false);
+        n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, true);
         if (n_chars < 0) {
             text.resize(-n_chars);
-            n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, false);
+            n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, true);
         }
         text.resize(n_chars);
         text = replace_to_dft(spec, text);
         LOG_DBG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
-        id_last = common_tokenize(ctx_dft, text, false, false)[0];
+        id_last = common_tokenize(ctx_dft, text, false, true)[0];
     }
     // prompt_tgt's tokens will always be compatible with ctx_dft
     const llama_tokens &prompt_tgt =
@@ -350,10 +350,10 @@ llama_tokens common_speculative_gen_draft(
     }
 
     if (!spec->vocab_dft_compatible) {
-        std::string detokenized = common_detokenize(ctx_dft, result, false);
+        std::string detokenized = common_detokenize(ctx_dft, result, true);
         detokenized = replace_to_tgt(spec, detokenized);
         LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
-        result = common_tokenize(ctx_tgt, detokenized, false, false);
+        result = common_tokenize(ctx_tgt, detokenized, false, true);
     }
     return result;
 }
