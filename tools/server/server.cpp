@@ -2079,6 +2079,9 @@ struct server_context {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return;
                 }
+                for (auto &pair : params_base.speculative.replacements) {
+                    common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
+                }
             }
 
             SLT_INF(slot, "new slot n_ctx_slot = %d\n", slot.n_ctx);

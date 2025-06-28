@@ -7,6 +7,7 @@
 
 #include <cstring>
 #include <algorithm>
+#include <map>
 
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
@@ -19,6 +20,7 @@ struct common_speculative {
     llama_batch batch;
     llama_tokens prompt_dft;
     bool vocab_dft_compatible = true; // whether retokenization is needed
+    std::map<std::string, std::string> tgt_dft_replacements = {};
 };
 
 struct common_speculative * common_speculative_init(
@@ -144,6 +146,41 @@ bool common_speculative_are_compatible(
     return true;
 }
 
+void common_speculative_add_replacement_tgt_dft(
+        struct common_speculative * spec,
+        const char *source, const char *dest) {
+    spec->tgt_dft_replacements[source] = dest;
+}
+
+static std::string replace_to_dft(
+        struct common_speculative * spec,
+        const std::string& input) {
+    std::string result = input;
+    for (const auto& pair : spec->tgt_dft_replacements) {
+        size_t pos = result.find(pair.first);
+        while (pos != std::string::npos) {
+            result.replace(pos, pair.first.length(), pair.second);
+            pos = result.find(pair.first, pos + pair.second.length());
+        }
+    }
+    return result;
+}
+
+static std::string replace_to_tgt(
+        struct common_speculative * spec,
+        const std::string& input) {
+    std::string result = input;
+    for (const auto& pair : spec->tgt_dft_replacements) {
+        size_t pos = result.find(pair.second);
+        while (pos != std::string::npos) {
+            result.replace(pos, pair.second.length(), pair.first);
+            pos = result.find(pair.second, pos + pair.first.length());
+        }
+    }
+    return result;
+}
+
+
 llama_tokens common_speculative_gen_draft(
         struct common_speculative * spec,
         struct common_speculative_params params,
@@ -168,10 +205,11 @@ llama_tokens common_speculative_gen_draft(
 
         std::string text;
         text = common_detokenize(ctx_tgt, prompt_tgt_main_model, false);
+        text = replace_to_dft(spec, text);
         LOG_DBG("main->draft detokenized string: '%s'\n", text.c_str());
         prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, false);
-
         text.clear();
+
         const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
         int32_t n_chars;
         n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, false);
@@ -180,6 +218,7 @@ llama_tokens common_speculative_gen_draft(
             n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, false);
         }
         text.resize(n_chars);
+        text = replace_to_dft(spec, text);
         LOG_DBG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
         id_last = common_tokenize(ctx_dft, text, false, false)[0];
     }
@@ -312,6 +351,7 @@ llama_tokens common_speculative_gen_draft(
 
     if (!spec->vocab_dft_compatible) {
         std::string detokenized = common_detokenize(ctx_dft, result, false);
+        detokenized = replace_to_tgt(spec, detokenized);
         LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
         result = common_tokenize(ctx_tgt, detokenized, false, false);
     }

@@ -127,6 +127,9 @@ int main(int argc, char ** argv) {
     params_spec.p_min   = p_min;
 
     struct common_speculative * spec = common_speculative_init(ctx_tgt, ctx_dft);
+    for (auto &pair : params.speculative.replacements) {
+        common_speculative_add_replacement_tgt_dft(spec, pair.first.c_str(), pair.second.c_str());
+    }
 
     llama_batch batch_tgt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
 
