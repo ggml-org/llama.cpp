@@ -218,15 +218,9 @@ llama_tokens common_speculative_gen_draft(
             prompt_dft.erase(prompt_dft.begin(), prompt_dft.begin() + reuse_i);
         }
 
-        // FIXME
-        /*
-        if (reuse_n < (int) prompt.size()) {
+        if (reuse_n < (int) prompt_dft.size()) {
             llama_memory_seq_rm (mem, 0, reuse_n, -1);
         }
-        if (reuse_n < (int) prompt_dft.size()) {
-            llama_kv_self_seq_rm (ctx_dft, 0, reuse_n, -1);
-            prompt_dft.erase(prompt_dft.begin() + reuse_n, prompt_dft.end());
-        } */
     }
 
     // prepare a batch to evaluate any new tokens in the prompt
