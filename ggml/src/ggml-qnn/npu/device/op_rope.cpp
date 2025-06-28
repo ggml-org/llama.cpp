@@ -276,13 +276,8 @@ bool rope_impl(hexagon::tensor * out, hexagon::compute_params * params) {
                 }
             } else {
                 // fill the remain channels with data from src tensor
-                for (int64_t i0 = n_dims; i0 < out->get_ne(0); i0 += 2) {
-                    const float * const src      = (float *) (src0_row + i0 * src0->get_nb(0));
-                    float *             dst_data = (float *) (dst_row + i0 * out->get_nb(0));
-
-                    dst_data[0] = src[0];
-                    dst_data[1] = src[1];
-                }
+                memcpy(dst_row + n_dims * out->get_nb(0), src0_row + n_dims * src0->get_nb(0),
+                       (out->get_ne(0) - n_dims) * sizeof(float));
             }
         }
     }
