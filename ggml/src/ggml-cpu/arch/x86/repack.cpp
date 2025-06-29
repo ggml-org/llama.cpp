@@ -6,6 +6,7 @@
 #include "ggml-impl.h"
 #include "ggml-cpu.h"
 #include "ggml-cpu-impl.h"
+#include "simd-mappings.h"
 #include "traits.h"
 
 #include <cmath>
@@ -39,11 +40,11 @@ static inline __m512 __avx512_f32cx8x2_load(ggml_fp16_t *x, ggml_fp16_t *y) {
     float tmp[16];
 
     for (int i = 0; i < 8; i++) {
-        tmp[i] = GGML_FP16_TO_FP32(x[i]);
+        tmp[i] = GGML_CPU_FP16_TO_FP32(x[i]);
     }
 
     for (int i = 0; i < 8; i++) {
-        tmp[i + 8] = GGML_FP16_TO_FP32(y[i]);
+        tmp[i + 8] = GGML_CPU_FP16_TO_FP32(y[i]);
     }
 
     return _mm512_loadu_ps(tmp);
@@ -54,10 +55,10 @@ static inline __m512 __avx512_repeat_f32cx16_load(__m128i x) {
     _mm_storeu_si128((__m128i*)tmphalf, x);
 
     for (int i = 0; i < 4; i++) {
-        tmp[i] = GGML_FP16_TO_FP32(tmphalf[i]);
-        tmp[i + 4] = GGML_FP16_TO_FP32(tmphalf[i]);
-        tmp[i + 8] = GGML_FP16_TO_FP32(tmphalf[i]);
-        tmp[i + 12] = GGML_FP16_TO_FP32(tmphalf[i]);
+        tmp[i] = GGML_CPU_FP16_TO_FP32(tmphalf[i]);
+        tmp[i + 4] = GGML_CPU_FP16_TO_FP32(tmphalf[i]);
+        tmp[i + 8] = GGML_CPU_FP16_TO_FP32(tmphalf[i]);
+        tmp[i + 12] = GGML_CPU_FP16_TO_FP32(tmphalf[i]);
     }
 
     return _mm512_loadu_ps(tmp);
@@ -67,7 +68,7 @@ static inline __m256 __avx_f32cx8_load(ggml_fp16_t *x) {
     float tmp[8];
 
     for (int i = 0; i < 8; i++) {
-        tmp[i] = GGML_FP16_TO_FP32(x[i]);
+        tmp[i] = GGML_CPU_FP16_TO_FP32(x[i]);
     }
 
     return _mm256_loadu_ps(tmp);
@@ -76,8 +77,8 @@ static inline __m256 __avx_repeat_f32cx8_load(ggml_fp16_t *x) {
     float tmp[8];
 
     for (int i = 0; i < 4; i++) {
-        tmp[i] = GGML_FP16_TO_FP32(x[i]);
-        tmp[i + 4] = GGML_FP16_TO_FP32(x[i]);
+        tmp[i] = GGML_CPU_FP16_TO_FP32(x[i]);
+        tmp[i + 4] = GGML_CPU_FP16_TO_FP32(x[i]);
     }
 
     return _mm256_loadu_ps(tmp);
@@ -88,7 +89,7 @@ static inline __m256 __avx_rearranged_f32cx8_load(ggml_fp16_t *x, __m128i arrang
 
     _mm_storeu_si128((__m128i*)tmphalf, _mm_shuffle_epi8(_mm_loadu_si128((const __m128i *) x), arrangeMask));
     for (int i = 0; i < 8; i++) {
-        tmp[i] = GGML_FP16_TO_FP32(tmphalf[i]);
+        tmp[i] = GGML_CPU_FP16_TO_FP32(tmphalf[i]);
     }
 
     return _mm256_loadu_ps(tmp);
@@ -211,7 +212,7 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
             id[row_iter] = ( maxScalar != 0.0f ) ? 127.f / maxScalar : 0.0f; //d ? 1.0f / d : 0.0f;
 
             // Store the scale for the individual block
-            y[i].d[row_iter] = GGML_FP32_TO_FP16(d);
+            y[i].d[row_iter] = GGML_CPU_FP32_TO_FP16(d);
 
             // Store the values in blocks of eight values - Aim is to use these later for block interleaving
             srcv[row_iter][0] = v0;
@@ -297,7 +298,7 @@ void ggml_quantize_mat_q8_0_4x8(const float * GGML_RESTRICT x, void * GGML_RESTR
             const float d = amax / ((1 << 7) - 1);
             id[row_iter] = d ? 1.0f / d : 0.0f;
 
-            y[i].d[row_iter] = GGML_FP32_TO_FP16(d);
+            y[i].d[row_iter] = GGML_CPU_FP32_TO_FP16(d);
         }
 
         for (int j = 0; j < QK8_0 * 4; j++) {
@@ -647,7 +648,7 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 const __m256 col_scale_f32 = GGML_F32Cx8_REARRANGE_LOAD(b_ptr[b].d, changemask);
 
                 // Load and convert to FP32 scale from block_q8_0
-                const __m256 row_scale_f32 = _mm256_set1_ps(GGML_FP16_TO_FP32(a_ptr[b].d));
+                const __m256 row_scale_f32 = _mm256_set1_ps(GGML_CPU_FP16_TO_FP32(a_ptr[b].d));
 
                 // Load the block values in block_q8_0 in batches of 16 bytes and replicate the same across 256 bit vector
                 __m256i lhs_vec_0 = _mm256_castsi128_si256(_mm_loadu_si128((const __m128i *)a_ptr[b].qs));
@@ -706,7 +707,7 @@ void ggml_gemv_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                             const int v1 = (int8_t) (b_ptr[l].qs[k * ncols_interleaved * blocklen + j * blocklen + i] & 0xF0);
                             sumi += ((v0 * a_ptr[l].qs[k * blocklen + i]) + (v1 * a_ptr[l].qs[k * blocklen + i + qk / 2])) >> 4;
                         }
-                        sumf[j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_FP16_TO_FP32(a_ptr[l].d);
+                        sumf[j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_CPU_FP16_TO_FP32(a_ptr[l].d);
                     }
                 }
             }
@@ -972,13 +973,13 @@ void ggml_gemv_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         sumi2 = sumi2 * scales_1[j];
                         sumi += sumi1 + sumi2;
                     }
-                    sumf[j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
+                    sumf[j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
                 }
             }
             for (int sb = 0; sb < 8; sb++) {
                 uint8_t *mins = (uint8_t*) utmp + 8 + sb * 16;
                 for (int j = 0; j < ncols_interleaved; j++) {
-                    sum_minf[j] += mins[j] * (a_ptr[l].bsums[sb * 2] + a_ptr[l].bsums[sb * 2 + 1]) * GGML_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d;
+                    sum_minf[j] += mins[j] * (a_ptr[l].bsums[sb * 2] + a_ptr[l].bsums[sb * 2 + 1]) * GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d;
                 }
             }
         }
@@ -1755,7 +1756,7 @@ void ggml_gemm_q4_0_8x8_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                                 sumi += ((v0 * a_ptr[l].qs[k * 4 * blocklen + m * blocklen + i]) +
                                          (v1 * a_ptr[l].qs[k * 4 * blocklen + m * blocklen + i + qk / 2 * 4])) >> 4;
                             }
-                            sumf[m][j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_FP16_TO_FP32(a_ptr[l].d[m]);
+                            sumf[m][j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * GGML_CPU_FP16_TO_FP32(a_ptr[l].d[m]);
                         }
                     }
                 }
@@ -3259,7 +3260,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                                 sumi2 = sumi2 * scales_1[j];
                                 sumi += sumi1 + sumi2;
                             }
-                            sumf[m][j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d[m];
+                            sumf[m][j] += sumi * GGML_CPU_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d[m];
                         }
                     }
                 }
@@ -3268,7 +3269,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     for(int m = 0; m < 4; m++) {
                         const int16_t *bsums = a_ptr[l].bsums + (sb * 8) + (m * 4) - ((sb % 2) * 6);
                         for(int j = 0; j < ncols_interleaved; j++) {
-                            sum_minf[m][j] += mins[j] * (bsums[0] + bsums[1]) * GGML_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d[m];
+                            sum_minf[m][j] += mins[j] * (bsums[0] + bsums[1]) * GGML_CPU_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d[m];
                         }
                     }
                 }

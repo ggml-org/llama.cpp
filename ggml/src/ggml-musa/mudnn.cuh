@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../include/ggml.h"
-#include "../ggml-cuda/common.cuh"
+#include "ggml-cuda/common.cuh"
+#include "ggml.h"
 
 // Asynchronously copies data from src tensor to dst tensor using the provided context.
 // Returns a musaError_t indicating success or failure.

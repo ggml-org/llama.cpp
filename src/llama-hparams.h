@@ -143,6 +143,12 @@ struct llama_hparams {
     uint32_t n_attn_temp_floor_scale = 8192;
     float    f_attn_temp_scale       = 0.1;
 
+    // gemma3n altup
+    uint32_t n_altup      = 4; // altup_num_inputs
+    uint32_t i_altup_act  = 0; // altup_active_idx
+    uint32_t laurel_rank  = 64;
+    uint32_t n_embd_altup = 256;
+
     // needed by encoder-decoder models (e.g. T5, FLAN-T5)
     // ref: https://github.com/ggerganov/llama.cpp/pull/8141
     llama_token dec_start_token_id = LLAMA_TOKEN_NULL;

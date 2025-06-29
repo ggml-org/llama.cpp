@@ -33,13 +33,19 @@ llama_kv_cache_unified::llama_kv_cache_unified(
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
+    // TODO: this is temporary until we support passing reuse layer filters [KV_REUSE]
+    auto n_layer_cache = hparams.n_layer;
+    if (model.arch == LLM_ARCH_GEMMA3N) {
+        n_layer_cache = 20;
+    }
+
     // create a context for each buffer type
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(2u*hparams.n_layer*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(2u*n_layer_cache*ggml_tensor_overhead()),
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -62,7 +68,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
 
     cells.resize(kv_size);
 
-    for (uint32_t il = 0; il < hparams.n_layer; il++) {
+    for (uint32_t il = 0; il < n_layer_cache; il++) {
         if (filter && !filter(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, il);
             continue;
@@ -100,6 +106,26 @@ llama_kv_cache_unified::llama_kv_cache_unified(
 
         map_layer_ids[il] = layers.size();
         layers.push_back({ il, k, v });
+    }
+
+    // TODO: this is temporary until we support passing reuse layer filters [KV_REUSE]
+    if (model.arch == LLM_ARCH_GEMMA3N) {
+        LLAMA_LOG_DEBUG("%s: GEMMA3N: reuse layers [%d, %d]\n", __func__, n_layer_cache, hparams.n_layer - 1);
+
+        for (uint32_t il = n_layer_cache; il < hparams.n_layer; il++) {
+            if (filter && !filter(il)) {
+                LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, il);
+                continue;
+            }
+
+            const bool     is_swa   = hparams.is_swa(il);
+            const uint32_t il_reuse = n_layer_cache - (is_swa ? 2 : 1);
+
+            GGML_ASSERT(map_layer_ids.find(il_reuse) != map_layer_ids.end());
+            map_layer_ids[il] = map_layer_ids[il_reuse];
+
+            LLAMA_LOG_DEBUG("%s: layer %3d: reuse layer %d, isw = %d\n", __func__, il, il_reuse, is_swa);
+        }
     }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding

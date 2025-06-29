@@ -223,7 +223,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
                 new_type = GGML_TYPE_Q6_K;
             }
         }
-    } else if (name == "token_embd.weight") {
+    } else if (name == "token_embd.weight" || name == "per_layer_token_embd.weight") {
         if (qs.params->token_embedding_type < GGML_TYPE_COUNT) {
             new_type = qs.params->token_embedding_type;
         } else {
@@ -829,6 +829,13 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         // do not quantize expert gating tensors
         // NOTE: can't use LLM_TN here because the layer number is not known
         quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
+
+        // these are very small (e.g. 4x4)
+        quantize &= name.find("altup")  == std::string::npos;
+        quantize &= name.find("laurel") == std::string::npos;
+
+        // these are not too big so keep them as it is
+        quantize &= name.find("per_layer_model_proj") == std::string::npos;
 
         // do not quantize positional embeddings and token types (BERT)
         quantize &= name != LLM_TN(model.arch)(LLM_TENSOR_POS_EMBD,    "weight");

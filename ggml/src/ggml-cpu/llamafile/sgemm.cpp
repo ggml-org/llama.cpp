@@ -52,6 +52,7 @@
 #include "ggml-impl.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-quants.h"
+#include "simd-mappings.h"
 
 #include <array>
 #include <type_traits>
@@ -73,7 +74,7 @@
 namespace {
 
 inline float unhalf(ggml_fp16_t d) {
-    return GGML_FP16_TO_FP32(d);
+    return GGML_CPU_FP16_TO_FP32(d);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -252,7 +253,7 @@ template <> inline float32x4_t load(const ggml_fp16_t * p) {
     float tmp[4];
 
     for (int i = 0; i < 4; i++) {
-        tmp[i] = GGML_FP16_TO_FP32(p[i]);
+        tmp[i] = GGML_CPU_FP16_TO_FP32(p[i]);
     }
 
     return vec_xl(0, (const float *)(tmp));
