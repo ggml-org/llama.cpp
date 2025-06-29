@@ -82,7 +82,6 @@ void mrope_cache_init(float theta_base_t, float theta_base_h, float theta_base_w
                 theta_t = theta_base_t;
             } else if (sector == sections[0]) {
                 theta_h = theta_base_h;
-                ;
             } else if (sector == sec_w) {
                 theta_w = theta_base_w;
             } else if (sector == sec_e) {
