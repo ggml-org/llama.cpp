@@ -798,7 +798,7 @@ static bool show_statistics(const common_params & params) {
     const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
     LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Act²)", "      μZD", "μCosSim");
-    LOG_INF("===============================================\n");
+    LOG_INF("================================================\n");
     for (const auto & [first, second] : ws) {
         const auto & layer = first;
         const auto & stats = second;
