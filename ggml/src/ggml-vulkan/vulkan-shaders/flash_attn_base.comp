@@ -24,6 +24,7 @@ layout (push_constant) uniform parameter {
     uint32_t nev2;
     uint32_t nev3;
     uint32_t nem1;
+    uint32_t nem2;
 
     uint32_t nb01;
     uint32_t nb02;
@@ -34,7 +35,6 @@ layout (push_constant) uniform parameter {
     uint32_t nb21;
     uint32_t nb22;
     uint32_t nb23;
-    uint32_t nb31;
 
     float scale;
     float max_bias;
