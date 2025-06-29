@@ -424,6 +424,9 @@ struct llm_graph_params {
     const llm_graph_cb & cb;
 };
 
+// used in build_rs to properly order writes and avoid unnecessary copies
+using llm_graph_get_rows_fn = std::function<ggml_tensor * (ggml_context *, ggml_tensor * states, ggml_tensor * ids)>;
+
 struct llm_graph_context {
     const llm_arch arch;
 
@@ -663,7 +666,7 @@ struct llm_graph_context {
                uint32_t   kv_head,
                uint32_t   kv_size,
                 int32_t   rs_zero,
-                   bool   avoid_copies = false) const;
+            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 
     llm_graph_input_rs * build_rs_inp() const;
 
@@ -673,7 +676,7 @@ struct llm_graph_context {
             ggml_tensor * s,
                 int32_t   state_size,
                 int32_t   n_seqs,
-                   bool   avoid_copies = false) const;
+            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 
     ggml_tensor * build_rs(
             llm_graph_input_mem_hybrid * inp,
@@ -681,7 +684,7 @@ struct llm_graph_context {
             ggml_tensor * s,
                 int32_t   state_size,
                 int32_t   n_seqs,
-                   bool   avoid_copies = false) const;
+            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 
     ggml_tensor * build_rwkv_token_shift_load(
         llm_graph_input_rs * inp,

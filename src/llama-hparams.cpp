@@ -73,7 +73,8 @@ uint32_t llama_hparams::n_embd_r() const {
 
     // TODO: maybe support other convolution strides than 1
     // NOTE: since the first column of the conv_state is shifted out each time, it's not actually needed
-    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * ssm_d_inner;
+    // Corresponds to Mamba's conv_states size
+    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
 }
 
 uint32_t llama_hparams::n_embd_s() const {
