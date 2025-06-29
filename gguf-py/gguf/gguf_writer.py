@@ -714,8 +714,8 @@ class GGUFWriter:
     def add_clamp_kqv(self, value: float) -> None:
         self.add_float32(Keys.Attention.CLAMP_KQV.format(arch=self.arch), value)
 
-    def add_shared_kv_layers(self, value: float) -> None:
-        self.add_float32(Keys.Attention.SHARED_KV_LAYERS.format(arch=self.arch), value)
+    def add_shared_kv_layers(self, value: int) -> None:
+        self.add_uint32(Keys.Attention.SHARED_KV_LAYERS.format(arch=self.arch), value)
 
     def add_sliding_window_pattern(self, value: Sequence[bool]) -> None:
         self.add_array(Keys.Attention.SLIDING_WINDOW_PATTERN.format(arch=self.arch), value)
