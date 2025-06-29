@@ -60,15 +60,15 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
     }
     stage('Compiling llama.cpp'){
         sh'''#!/bin/bash
-            
+
             set -x
 
             mkdir -p .compiler_override
-                
+
             # Create symlinks in this temp directory
             ln -sf /usr/bin/gcc-14 .compiler_override/gcc
             ln -sf /usr/bin/g++-14 .compiler_override/g++
-            
+
             export CC="/usr/bin/gcc-14"
             export CXX="/usr/bin/g++-14"
 
@@ -84,7 +84,7 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
     }
     stage('Running llama.cpp'){
         sh'''#!/bin/bash
-            
+
             set -x
            ./build/bin/llama-cli -m /home/jenkins_user/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf -p "Hi, how are you?" -n 10
         '''
