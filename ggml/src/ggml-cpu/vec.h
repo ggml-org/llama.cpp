@@ -913,8 +913,8 @@ inline static void ggml_vec_reglu_f32 (const int n, float * y, const float * x, 
 
 inline static void ggml_vec_reglu_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
     for (int i = 0; i < n; ++i) {
-        float v = GGML_FP16_TO_FP32(x[i]);
-        y[i] = GGML_FP32_TO_FP16((v > 0.f) ? v * GGML_FP16_TO_FP32(g[i]) : 0.f);
+        float v = GGML_CPU_FP16_TO_FP32(x[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16((v > 0.f) ? v * GGML_CPU_FP16_TO_FP32(g[i]) : 0.f);
     }
 }
 
@@ -927,9 +927,9 @@ inline static void ggml_vec_geglu_f32(const int n, float * y, const float * x, c
         } else if (x[i] >= 10.0f) {
             y[i] = x[i] * g[i];
         } else {
-            ggml_fp16_t fp16 = GGML_FP32_TO_FP16(x[i]);
+            ggml_fp16_t fp16 = GGML_CPU_FP32_TO_FP16(x[i]);
             memcpy(&t, &fp16, sizeof(uint16_t));
-            y[i] = GGML_FP16_TO_FP32(ggml_table_gelu_f16[t]) * g[i];
+            y[i] = GGML_CPU_FP16_TO_FP32(ggml_table_gelu_f16[t]) * g[i];
         }
     }
 }
@@ -944,8 +944,8 @@ inline static void ggml_vec_geglu_f32(const int n, float * y, const float * x, c
 inline static void ggml_vec_geglu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
     const uint16_t * i16 = (const uint16_t *) x;
     for (int i = 0; i < n; ++i) {
-        float v = GGML_FP16_TO_FP32(g[i]);
-        y[i] = GGML_FP32_TO_FP16(GGML_FP16_TO_FP32(ggml_table_gelu_f16[i16[i]]) * v);
+        float v = GGML_CPU_FP16_TO_FP32(g[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(ggml_table_gelu_f16[i16[i]]) * v);
     }
 }
 
@@ -953,9 +953,9 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
 
 inline static void ggml_vec_swiglu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
     for (int i = 0; i < n; ++i) {
-        float v = GGML_FP16_TO_FP32(x[i]);
-        float w = GGML_FP16_TO_FP32(g[i]);
-        y[i] = GGML_FP32_TO_FP16((v/(1.0f + expf(-v))) * w);
+        float v = GGML_CPU_FP16_TO_FP32(x[i]);
+        float w = GGML_CPU_FP16_TO_FP32(g[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16((v/(1.0f + expf(-v))) * w);
     }
 }
 
