@@ -518,6 +518,7 @@ static bool string_starts_with(const std::string & str,
 
 // While we wait for C++20's std::string::ends_with...
 bool string_ends_with(const std::string_view & str, const std::string_view & suffix);
+bool string_remove_suffix(std::string & str, const std::string_view & suffix);
 size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop);
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);
