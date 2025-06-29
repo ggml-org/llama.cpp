@@ -45,7 +45,7 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
         sh'''#!/bin/bash
             
             set -x
-
+            GGUF_WEIGHT="/home/jenkins_user/DeepSeek-R1-Distill-Qwen-1.5B-Q4_K_M.gguf"  # Path to the GGUF model file
            ./build/bin/llama-cli -m {GGUF_WEIGHT} -p "Hi, how are you?" -n 10
         '''
     }
