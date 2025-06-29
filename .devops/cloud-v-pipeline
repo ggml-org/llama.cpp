@@ -22,12 +22,18 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
             
             set -x
 
-            alias gcc='/usr/bin/gcc-14' # Workaround for RVV error
-            alias g++='/usr/bin/g++-14' # Workaround for RVV error
+            mkdir -p .compiler_override
+                
+            # Create symlinks in this temp directory
+            ln -sf /usr/bin/gcc-14 .compiler_override/gcc
+            ln -sf /usr/bin/g++-14 .compiler_override/g++
+            
+            # Prepend the temp directory to PATH for this script's execution
+            export PATH="$PWD/.compiler_override:$PATH"
 
             gcc --version
             g++ --version
-            
+
             cmake -B build
             cmake --build build --config Release -j8 --target llama-cli llama-quantize
         '''
