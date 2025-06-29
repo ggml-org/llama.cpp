@@ -1271,7 +1271,7 @@ kernel void kernel_geglu_erf(
         const float x0 = src0_row[i0];
         const float x1 = src1_row[i0];
 
-        const float gelu_erf = 0.5f*x*(1.0f+erf_approx<float>(x*SQRT_2_INV));
+        const float gelu_erf = 0.5f*x0*(1.0f+erf_approx<float>(x0*SQRT_2_INV));
 
         dst_row[i0] = gelu_erf*x1;
     }
@@ -1293,7 +1293,7 @@ kernel void kernel_geglu_quick(
         const float x0 = src0_row[i0];
         const float x1 = src1_row[i0];
 
-        const float gelu_quick = x*(1.0f/(1.0f+exp(GELU_QUICK_COEF*x)));
+        const float gelu_quick = x0*(1.0f/(1.0f+exp(GELU_QUICK_COEF*x0)));
 
         dst_row[i0] = gelu_quick*x1;
     }
