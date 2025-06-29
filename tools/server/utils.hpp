@@ -792,7 +792,13 @@ static json oaicompat_chat_params_parse(
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {
-         chat_params.prompt += last_message.content;
+        if (!last_message.content_parts.empty()) {
+            for (auto & p : last_message.content_parts) {
+                chat_params.prompt += p.text;
+            }
+        } else {
+            chat_params.prompt += last_message.content;
+        }
     }
 
     llama_params["chat_format"]      = static_cast<int>(chat_params.format);
