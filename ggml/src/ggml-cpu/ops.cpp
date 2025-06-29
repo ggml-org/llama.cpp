@@ -6645,7 +6645,7 @@ static void ggml_compute_forward_conv_2d_impl(const ggml_compute_params * params
 
         const int64_t patch_per_thread  = (patch_n + params->nth - 1) / params->nth;
         const int64_t patch_start       = patch_start_batch + params->ith * patch_per_thread;
-        const int64_t patch_end         = std::min(patch_start + patch_per_thread,patch_end_batch);
+        const int64_t patch_end         = std::min(patch_start + patch_per_thread, patch_end_batch);
 
         //im2col for a patch
         for (int64_t p = patch_start; p < patch_end; ++p) {
@@ -6686,6 +6686,8 @@ static void ggml_compute_forward_conv_2d_impl(const ggml_compute_params * params
         ggml_barrier(params->threadpool);
 
         float * gemm_output = (float *) ((char *) tmp + patches_per_batch * knl_n * traits->type_size);
+
+        GGML_ASSERT(gemm_output + patch_n * c_out <= (float*)tmp + params->wsize);
 
         // GEMM: patches[patch_n, knl_n] × kernel[knl_n, c_out] = output[patch_n, c_out]
         ggml_call_mul_mat(kernel_type, params, patch_n, c_out, knl_n, tmp, knl_data, gemm_output);
