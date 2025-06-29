@@ -77,4 +77,8 @@ void ggml_sycl_abs(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
 void ggml_sycl_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
+void ggml_sycl_geglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_reglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+void ggml_sycl_swiglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
+
 #endif // GGML_SYCL_ELEMENTWISE_HPP

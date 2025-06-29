@@ -356,6 +356,33 @@ static void clamp(const T * x, T * dst, const float min, const float max, const 
     }
 }
 
+template<typename T>
+static void gated_op_fused_geglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_gelu(x[j0]) * g[j1];
+    }
+}
+
+template<typename T>
+static void gated_op_fused_reglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_relu(x[j0]) * g[j1];
+    }
+}
+
+template<typename T>
+static void gated_op_fused_swiglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1)  {
+        const int64_t j0 = (i / n) * o0 + (i % n);
+        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        dst[i] = op_silu(x[j0]) * g[j1];
+    }
+}
+
 namespace ggml_sycl_detail {
 static void acc_f32_sycl(const float *x, const float *y, float *dst,
                          const int n_elements, const int ne10, const int ne11,
@@ -423,6 +450,85 @@ static inline void dispatch_ggml_sycl_op_unary(ggml_backend_sycl_context & ctx, 
             {
                 auto data_pts = cast_data<float>(dst);
                 kernel_invoker(data_pts.src, data_pts.dst, (int)ggml_nelements(dst->src[0]), main_stream, std::forward<Args>(args)...);
+                break;
+            }
+        default:
+            GGML_ABORT("GGML tensor type not supported!\n");
+    }
+}
+
+template<typename KernelInvoker, typename... Args>
+static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & ctx, ggml_tensor * dst, KernelInvoker kernel_invoker, Args&&... args) {
+#if defined (GGML_SYCL_F16)
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32 || dst->src[0]->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+#else
+    GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+#endif
+    GGML_ASSERT(dst->src[0]->type == dst->type);
+    dpct::queue_ptr main_stream = ctx.stream();
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const int64_t nc = src1 ? src0->ne[0] : src0->ne[0] / 2;;
+    GGML_ASSERT(dst->ne[0] == nc);
+    GGML_ASSERT(ggml_is_contiguous_1(dst->src[0]));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    const int32_t swapped = ((const int32_t *) dst->op_params)[1];
+    void * src0_d = src0->data;
+    void * src1_d = src1 ? src1->data : src0->data;
+    const int64_t src0_o = src0->nb[1];
+    const int64_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
+    void * dst_d = dst->data;
+    if (src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src1->nb[0] == ggml_element_size(src1));
+        GGML_ASSERT(src1->ne[0] == nc);
+        GGML_ASSERT(src0->type == src1->type);
+    }
+    switch (dst->type) {
+#if defined (GGML_SYCL_F16)
+        case GGML_TYPE_F16:
+            {
+                sycl::half * src0_p = (sycl::half *) src0_d;
+                sycl::half * src1_p = (sycl::half *) src1_d;
+
+                    if (!src1) {
+                        src0_p += swapped ? nc : 0;
+                        src1_p += swapped ? 0 : nc;
+                    }
+                kernel_invoker(src0_p,
+                               src1_p,
+                               (sycl::half *) dst_d,
+                               ggml_nelements(dst),
+                               nc,
+                               src0_o / sizeof(sycl::half),
+                               src1_o / sizeof(sycl::half),
+                               main_stream,
+                               std::forward<Args>(args)...);
+                break;
+            }
+#endif
+        case GGML_TYPE_F32:
+            {
+                float * src0_p = (float *) src0_d;
+                float * src1_p = (float *) src1_d;
+
+                    if (!src1) {
+                        src0_p += swapped ? nc : 0;
+                        src1_p += swapped ? 0 : nc;
+                    }
+
+                kernel_invoker(src0_p,
+                               src1_p,
+                               (float *) dst_d,
+                               ggml_nelements(dst),
+                               nc,
+                               src0_o / sizeof(float),
+                               src1_o / sizeof(float),
+                               main_stream,
+                               std::forward<Args>(args)...);
                 break;
             }
         default:
@@ -839,6 +945,40 @@ static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor
     ggml_sycl_detail::acc_f32_sycl(src0_dd, src1_dd, dst_dd, (int)ggml_nelements(dst), (int)dst->src[1]->ne[0], (int)dst->src[1]->ne[1], (int)dst->src[1]->ne[2], nb1, nb2, offset, main_stream);
 }
 
+static inline void ggml_sycl_op_geglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
+        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
+            const uint32_t num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
+            sycl_parallel_for(main_stream,
+                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
+                gated_op_fused_geglu(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+            });
+        });
+}
+
+static inline void ggml_sycl_op_reglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
+        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
+            const uint32_t num_blocks = ceil_div((uint32_t)k, SYCL_RELU_BLOCK_SIZE); // Using RELU block size for reglu
+            sycl_parallel_for(main_stream,
+                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_RELU_BLOCK_SIZE)), sycl::range<1>(SYCL_RELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
+                gated_op_fused_reglu(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+            });
+        });
+}
+
+static inline void ggml_sycl_op_swiglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
+        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
+            const uint32_t num_blocks = ceil_div((uint32_t)k, SYCL_SILU_BLOCK_SIZE); // Using SILU block size for swiglu
+            sycl_parallel_for(main_stream,
+                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_SILU_BLOCK_SIZE)), sycl::range<1>(SYCL_SILU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) {
+                gated_op_fused_swiglu(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+            });
+        });
+}
+
+
 void ggml_sycl_sqrt(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_sqrt(ctx, dst);
@@ -964,3 +1104,17 @@ void ggml_sycl_elu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_op_elu(ctx, dst);
 }
 
+void ggml_sycl_geglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_geglu(ctx, dst);
+}
+
+void ggml_sycl_reglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_reglu(ctx, dst);
+}
+
+void ggml_sycl_swiglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_swiglu(ctx, dst);
+}
