@@ -28,6 +28,36 @@
       "id": 1734087548329,
       "role": "assistant",
       "content": "Code block:\n```js\nconsole.log('hello world')\n```\n```sh\nls -la /dev\n```"
+    },
+    {
+      "id": 1734087548330,
+      "role": "user",
+      "content": "What is the weather in San Francisco?"
+    },
+    {
+      "id": 1734087548331,
+      "role": "assistant",
+      "content": "<think>User wants to know what's te weather like in San Francisco.</think>Let me check that for you!",
+      "tool_calls": [
+        {
+          "id": "call_abc123",
+          "type": "function",
+          "function": {
+            "name": "get_current_weather",
+            "arguments": "{\n\"location\": \"San Francisco\"\n}"
+          }
+        }
+      ]
+    },
+    {
+      "id": 1734087548332,
+      "role": "tool",
+      "content": "{\"temperature\": 20, \"condition\": \"sunny\"}"
+    },
+    {
+      "id": 1734087548333,
+      "role": "assistant",
+      "content": "The weather in San Francisco is currently 20°C and sunny."
     }
   ]
 }
