@@ -162,12 +162,11 @@ bool rope_impl(hexagon::tensor * out, hexagon::compute_params * params) {
         freq_factors = src2->get_read_buffer_as<float>();
     }
 
-    const int64_t total_planes  = out->get_ne(3) * out->get_ne(2);
     const int64_t total_rows    = out->get_ne(3) * out->get_ne(2) * out->get_ne(1);
     const auto    start_end_row = params->get_work_slice(total_rows);
-
-    // row index used to determine which thread to use
-    int ir = 0;
+    const auto    start_end_plane =
+        std::pair<int64_t, int64_t>{ start_end_row.first / out->get_ne(1),
+                                     (start_end_row.second + out->get_ne(1) - 1) / out->get_ne(1) };
 
     DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_MULTI_SUB_PROC(out, params->get_thread_index(), rope);
 
@@ -175,7 +174,7 @@ bool rope_impl(hexagon::tensor * out, hexagon::compute_params * params) {
     const int32_t * pos           = src1->get_read_buffer_as<int32_t>();
     const uint8_t * src0_data_ptr = src0->get_read_buffer();
     uint8_t *       dst_data_ptr  = out->get_write_buffer();
-    for (int64_t ip = 0; ip < total_planes; ip++) {
+    for (int64_t ip = start_end_plane.first; ip < start_end_plane.second; ip++) {
         int64_t i3    = ip / out->get_ne(2);  // batch
         int64_t i2    = ip % out->get_ne(2);  // seq-len
         float * cache = reinterpret_cast<float *>(cache_ptr);
@@ -197,14 +196,10 @@ bool rope_impl(hexagon::tensor * out, hexagon::compute_params * params) {
         DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 1, loop);
         const uint8_t * src0_plane = src0_data_ptr + i3 * src0->get_nb(3) + i2 * src0->get_nb(2);
         uint8_t *       dst_plane  = dst_data_ptr + i3 * out->get_nb(3) + i2 * out->get_nb(2);
-        for (int64_t i1 = 0; i1 < out->get_ne(1); i1++) {  // attn-heads
-            if (ir++ < start_end_row.first) {              // TODO: optimize this
-                continue;
-            }
-            if (ir > start_end_row.second) {  // TODO: optimize this
-                break;
-            }
-
+        const int64_t   start_row  = ip == start_end_plane.first ? (start_end_row.first % out->get_ne(1)) : 0;
+        const int64_t   end_row    = ip == start_end_plane.second ? (start_end_row.second % out->get_ne(1)) :
+                                                                    out->get_ne(1);  // end row is exclusive
+        for (int64_t i1 = start_row; i1 < end_row; i1++) {                           // attn-heads
             const uint8_t * src0_row = src0_plane + i1 * src0->get_nb(1);
             uint8_t *       dst_row  = dst_plane + i1 * out->get_nb(1);
             if constexpr (_IsNeoX || _IsMrope) {
