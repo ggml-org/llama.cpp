@@ -2,6 +2,14 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
     stage('Cleanup'){
         cleanWs()               // Cleaning previous CI build in workspace
     }
+    stage('Install dependencies'){
+        sh'''
+            #!/bin/bash
+            sudo apt-get update
+            sudo apt-get install -y cmake build-essential git curl
+            git clone
+        '''
+    }
     stage('checkout repo'){
         retry(5){               // Retry if the cloning fails due to some reason
             checkout scm        // Clone the repo on Runner
