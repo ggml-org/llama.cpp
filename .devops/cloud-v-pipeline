@@ -1,4 +1,4 @@
-node('x86_runner1'){            // Running on x86 runner containing latest vector qemu, latest vector gcc and all the necessary libraries
+node('jupiter-16G-1'){            // Running on x86 runner containing latest vector qemu, latest vector gcc and all the necessary libraries
     stage('Cleanup'){
         cleanWs()               // Cleaning previous CI build in workspace
     }
@@ -9,14 +9,13 @@ node('x86_runner1'){            // Running on x86 runner containing latest vecto
     }
     stage('Compiling llama.cpp'){
         sh'''#!/bin/bash
-            make RISCV=1 RISCV_CROSS_COMPILE=1 # Compiling llama for RISC-V
+            cmake -B build
+            cmake --build build --config Release -j8 --target llama-cli llama-quantize
         '''
     }
     stage('Running llama.cpp'){
         sh'''#!/bin/bash
-            module load gnu-bin2/0.1            # loading latest versions of vector qemu and vector gcc
-            qemu-riscv64 -L /softwares/gnu-bin2/sysroot  -cpu rv64,v=true,vlen=256,elen=64,vext_spec=v1.0 ./llama-cli -m /home/alitariq/codellama-7b.Q4_K_M.gguf -p "Anything" -n 9 > llama_log.txt            # Running llama.cpp on vector qemu-riscv64
-            cat llama_log.txt                   # Printing results
+           ./build/bin/llama-cli -m {GGUF_WEIGHT} -p "Hi, how are you?" -n 20
         '''
     }
 }
