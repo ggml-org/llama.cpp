@@ -285,6 +285,14 @@ void ggml_cuda_op_swiglu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_op_unary_gated<op_silu>(ctx, dst);
 }
 
+void ggml_cuda_op_geglu_erf(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary_gated<op_gelu_erf>(ctx, dst);
+}
+
+void ggml_cuda_op_geglu_quick(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    ggml_cuda_op_unary_gated<op_gelu_quick>(ctx, dst);
+}
+
 /* silu_back */
 
 static __device__ __forceinline__ float op_silu_back(float grad, float x) {
