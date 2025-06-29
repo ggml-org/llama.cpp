@@ -246,7 +246,7 @@ bool llama_kv_cache_unified_iswa_context::next() {
 }
 
 bool llama_kv_cache_unified_iswa_context::apply() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+    assert(!llama_memory_status_is_fail(status));
 
     bool res = true;
 

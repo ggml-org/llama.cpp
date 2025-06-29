@@ -218,7 +218,7 @@ bool llama_memory_hybrid_context::next() {
 }
 
 bool llama_memory_hybrid_context::apply() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+    assert(!llama_memory_status_is_fail(status));
 
     bool res = true;
 
