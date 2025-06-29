@@ -5,6 +5,9 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
     stage('Install dependencies'){
         sh'''
             #!/bin/bash
+
+            set -x
+
             sudo apt update
             sudo apt install -y cmake build-essential git curl libcurl4-openssl-dev
         '''
@@ -16,13 +19,22 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
     }
     stage('Compiling llama.cpp'){
         sh'''#!/bin/bash
+            
+            set -x
+
+            alias gcc='/usr/bin/gcc-14' # Workaround for RVV error
+            alias g++='/usr/bin/g++-14' # Workaround for RVV error
+
             cmake -B build
             cmake --build build --config Release -j8 --target llama-cli llama-quantize
         '''
     }
     stage('Running llama.cpp'){
         sh'''#!/bin/bash
-           ./build/bin/llama-cli -m {GGUF_WEIGHT} -p "Hi, how are you?" -n 20
+            
+            set -x
+
+           ./build/bin/llama-cli -m {GGUF_WEIGHT} -p "Hi, how are you?" -n 10
         '''
     }
 }
