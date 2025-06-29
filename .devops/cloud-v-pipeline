@@ -25,6 +25,9 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
             alias gcc='/usr/bin/gcc-14' # Workaround for RVV error
             alias g++='/usr/bin/g++-14' # Workaround for RVV error
 
+            gcc --version
+            g++ --version
+            
             cmake -B build
             cmake --build build --config Release -j8 --target llama-cli llama-quantize
         '''
