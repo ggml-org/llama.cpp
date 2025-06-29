@@ -384,9 +384,16 @@ struct clip_ctx {
         if (!backend_cpu) {
             throw std::runtime_error("failed to initialize CPU backend");
         }
-        backend = ctx_params.use_gpu
-                    ? ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr)
-                    : nullptr;
+        backend = nullptr;
+        if (ctx_params.use_gpu) {
+            auto backend_name = std::getenv("MTMD_BACKEND_DEVICE");
+            if (backend_name != nullptr) {
+                backend = ggml_backend_init_by_name(backend_name, nullptr);
+            }
+            if (!backend) {
+                backend = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr);
+            }
+        }
 
         if (backend) {
             LOG_INF("%s: CLIP using %s backend\n", __func__, ggml_backend_name(backend));
