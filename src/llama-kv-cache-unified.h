@@ -236,6 +236,14 @@ public:
 
     virtual ~llama_kv_cache_unified_context();
 
+    // Delete copy constructor and copy assignment to prevent shallow copies
+    llama_kv_cache_unified_context(const llama_kv_cache_unified_context&) = delete;
+    llama_kv_cache_unified_context& operator=(const llama_kv_cache_unified_context&) = delete;
+
+    // Delete move constructor and move assignment to prevent issues
+    llama_kv_cache_unified_context(llama_kv_cache_unified_context&&) = delete;
+    llama_kv_cache_unified_context& operator=(llama_kv_cache_unified_context&&) = delete;
+
     //
     // llama_memory_context_i
     //

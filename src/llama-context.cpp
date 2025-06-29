@@ -7,10 +7,18 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 
+#include "ggml.h"
+
+#include <cmath>
 #include <cinttypes>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 //
 // llama_context
@@ -693,6 +701,7 @@ llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, 
     }
 
     auto res = graph_build(ctx_compute.get(), gf, ubatch, gtype, mctx);
+    res->graph = gf; // Store the graph pointer in the result object
     if (!res) {
         LLAMA_LOG_ERROR("%s: failed to build graph\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -700,6 +709,9 @@ llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, 
     }
 
     // LLAMA_LOG_INFO("graph build time: %.3f ms (%d nodes, %d leafs)\n", (ggml_time_us() - t_start_us)/1000.0, gf->n_nodes, gf->n_leafs);
+
+    // Dump computation graph for visualization
+    // ggml_graph_dump_dot(gf, NULL, "llama.dot");
 
     if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
         LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
@@ -1042,11 +1054,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
-        // plot the computation graph in dot format (for debugging purposes)
-        //if (n_past%100 == 0) {
-        //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
-        //}
-
         auto * t_logits = res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
 
@@ -1123,6 +1130,109 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     }
             }
         }
+
+        // Debug: Dump tensor values after computation (for PLaMo-2 only)
+#define PLAMO2_DEBUG
+#ifdef PLAMO2_DEBUG
+        if (model.arch == LLM_ARCH_PLAMO2) {  // Only for small inputs
+            // Create debug directory if it doesn't exist
+            #ifdef _WIN32
+            _mkdir("debug_tensors");
+            #else
+            mkdir("debug_tensors", 0755);
+            #endif
+            // Find debug tensors by searching through the graph (gf is now accessible via res->get_graph())
+            ggml_cgraph* current_gf = res->get_graph();
+            for (int i = 0; i < ggml_graph_n_nodes(current_gf); ++i) {
+                ggml_tensor* node = ggml_graph_node(current_gf, i);
+                printf("Processing node: %s\n", node->name ? node->name : "unknown");
+                if (node && node->name) {
+                    bool should_dump = (strcmp(node->name, "embedding_output") == 0) ||
+                                    (strstr(node->name, "mamba_") == node->name) ||
+                                    (strstr(node->name, "attn_norm") == node->name) ||
+                                    (strstr(node->name, "norm") == node->name) ||
+                                    (strcmp(node->name, "tokens") == 0) ||
+                                    (strstr(node->name, "attn_pre_norm") == node->name) ||
+                                    (strcmp(node->name, "inp_embd") == 0) ||
+                                    (strcmp(node->name, "inp_tokens") == 0);
+
+                    if (strcmp(node->name, "tokens") == 0) {
+                        llama_token* token_data = (llama_token*)node->data;
+                        printf("Input Tokens: ");
+                        for (int j = 0; j < node->ne[0]; ++j) {
+                            printf("%d ", token_data[j]);
+                        }
+                        printf("\n");
+                        continue;  // Skip dumping tensor values for "tokens"
+                    }
+
+                    if (should_dump && node->data) {
+                        printf("=== Post-Compute Tensor Values ===\n");
+                        printf("Tensor: %s\n", node->name);
+                        printf("Shape: [%ld, %ld", node->ne[0], node->ne[1]);
+                        if (node->ne[2] > 1) printf(", %ld", node->ne[2]);
+                        if (node->ne[3] > 1) printf(", %ld", node->ne[3]);
+                        printf("]\n");
+
+                        int64_t total_elements = ggml_nelements(node);
+                        float* data = new float[total_elements];
+                        if (node->type == GGML_TYPE_F32) {
+                            data = (float*)node->data;
+                        } else if (node->type == GGML_TYPE_BF16) {
+                            ggml_bf16_t * bf16_data = (ggml_bf16_t*)node->data;
+                            for (int64_t j = 0; j < total_elements; j++) {
+                                printf("%.6f -> %.6f \n", bf16_data[j], ggml_bf16_to_fp32(bf16_data[j]));
+                            }
+                            ggml_bf16_to_fp32_row((ggml_bf16_t*)node->data, data, total_elements);
+                        }
+
+                        if (total_elements > 0) {
+                            // Calculate statistics
+                            float sum = 0.0f, sum_sq = 0.0f, min_val = data[0], max_val = data[0];
+                            for (int64_t j = 0; j < total_elements; j++) {
+                                sum += data[j];
+                                sum_sq += data[j] * data[j];
+                                min_val = fminf(min_val, data[j]);
+                                max_val = fmaxf(max_val, data[j]);
+                            }
+
+                            float mean = sum / total_elements;
+                            float variance = (sum_sq / total_elements) - (mean * mean);
+                            float std_dev = sqrtf(variance);
+
+                            printf("Stats - Mean: %.6f, Std: %.6f, Min: %.6f, Max: %.6f\n",
+                                mean, std_dev, min_val, max_val);
+
+                            // Print first 8 values
+                            printf("First 8 values: ");
+                            for (int j = 0; j < 8 && j < total_elements; j++) {
+                                printf("%.6f ", data[j]);
+                            }
+                            printf("\n");
+
+                            // Save to file for detailed comparison
+                            char filename[256];
+                            snprintf(filename, sizeof(filename), "debug_tensors/%s.csv", node->name);
+                            FILE* f = fopen(filename, "w");
+                            if (f) {
+                                for (int64_t j = 0; j < total_elements; ++j) {
+                                    fprintf(f, "%f", data[j]);
+                                    if ((j + 1) % node->ne[0] == 0) {
+                                        fprintf(f, "\n");
+                                    } else {
+                                        fprintf(f, ",");
+                                    }
+                                }
+                                fclose(f);
+                                printf("Saved to: %s\n", filename);
+                            }
+                        }
+                        printf("==================================\n");
+                    }
+                }
+            }
+        }
+#endif // PLAMO2_DEBUG
 
         n_outputs_prev += n_outputs;
     } while (mctx->next());

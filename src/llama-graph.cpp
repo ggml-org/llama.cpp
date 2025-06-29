@@ -1,5 +1,6 @@
 #include "llama-graph.h"
 
+#include "ggml.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
@@ -802,7 +803,7 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
 
     if (ubatch.token) {
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
-        //cb(inp->tokens, "inp_tokens", -1);
+        // cb(inp->tokens, "inp_tokens", -1);
         ggml_set_input(inp->tokens);
         res->t_tokens = inp->tokens;
 
@@ -1226,7 +1227,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, k_cur);
     ggml_build_forward_expand(gf, v_cur);
 
-    const auto * mctx_cur = static_cast<const llama_kv_cache_unified_context *>(mctx);
+    const auto * mctx_cur = inp->mctx;
 
     // store to KV cache
     {

@@ -358,9 +358,11 @@ public:
     virtual ggml_tensor * get_tokens()      = 0;
     virtual ggml_tensor * get_logits()      = 0;
     virtual ggml_tensor * get_embd()        = 0;
+    virtual ggml_cgraph * get_graph()       = 0;
     virtual ggml_tensor * get_embd_pooled() = 0;
 
     virtual void set_inputs(const llama_ubatch * ubatch) = 0;
+    ggml_cgraph * graph = nullptr; // Store the graph here
 };
 
 using llm_graph_result_ptr = std::unique_ptr<llm_graph_result_i>;
@@ -373,6 +375,7 @@ public:
     ggml_tensor * get_tokens()      override { return t_tokens; }
     ggml_tensor * get_logits()      override { return t_logits; }
     ggml_tensor * get_embd()        override { return t_embd; }
+    ggml_cgraph * get_graph()       override { return graph; }
     ggml_tensor * get_embd_pooled() override { return t_embd_pooled; }
 
     void set_inputs(const llama_ubatch * ubatch) override {
