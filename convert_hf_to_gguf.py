@@ -3597,7 +3597,18 @@ class Plamo2Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
-        if name.endswith(".dt_bias"):
+        if name.endswith(".embed_tokens.weight"):
+            # If there is no lm_head, we need to map the token embedding to the output layer
+            assert self.tensor_names is not None
+            if all(['lm_head' not in name for name in self.tensor_names]):
+                name_base = name.replace(".embed_tokens.weight", "")
+                output_name = "lm_head"
+
+                embed_tokens_mapped = self.map_tensor_name(name)
+                output_mapped = self.map_tensor_name(output_name) + ".weight"
+
+                return [(embed_tokens_mapped, data_torch), (output_mapped, data_torch)]
+        elif name.endswith(".dt_bias"):
             name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
         elif name.endswith(".dt_norm_weight"):
             name = name.rpartition(".dt_norm_weight")[0] + ".dt_norm.weight"
@@ -3620,6 +3631,8 @@ class Plamo2Model(TextModel):
             data_torch += 1.0
         elif name.endswith(".post_mlp_norm.weight"):
             data_torch += 1.0 / (5**1.5)
+        elif name.endswith(".norm.weight"):
+            data_torch += 1.0
         elif name.endswith(".gate_up_proj.weight"):
             # Split the combined gate_up tensor
             split_size = data_torch.shape[0] // 2

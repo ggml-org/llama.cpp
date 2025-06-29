@@ -956,6 +956,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
 
                 switch (hparams.n_layer) {
+                    case 16: type = LLM_TYPE_1B; break;
                     case 32: type = LLM_TYPE_8B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                }
@@ -8232,6 +8233,9 @@ struct llm_build_plamo2 : public llm_graph_context {
 
             // ggml_graph_add_node(gf, model.layers[il].attn_norm);
             // cb(model.layers[il].attn_norm, "attn_norm", il);
+
+            ggml_graph_add_node(gf, model.layers[il].attn_norm);
+            cb(model.layers[il].attn_norm, "attn_norm_weight", il);
 
             // pre_mixer_norm
             cb(inpL, "attn_pre_norm_input", il);
