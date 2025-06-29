@@ -1776,7 +1776,7 @@ bool llama_kv_cache_unified_context::next() {
 }
 
 bool llama_kv_cache_unified_context::apply() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+    assert(!llama_memory_status_is_fail(status));
 
     // no ubatches -> this is a KV cache update
     if (ubatches.empty()) {
