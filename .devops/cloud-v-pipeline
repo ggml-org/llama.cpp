@@ -5,8 +5,8 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
     stage('Install dependencies'){
         sh'''
             #!/bin/bash
-            sudo apt-get update
-            sudo apt-get install -y cmake build-essential git curl
+            sudo apt update
+            sudo apt install -y cmake build-essential git curl
             git clone
         '''
     }
