@@ -317,9 +317,7 @@ if (GGML_CPU_ALL_VARIANTS)
         endif()
     elseif(GGML_SYSTEM_ARCH STREQUAL "ARM")
         if (CMAKE_SYSTEM_NAME MATCHES "Linux")
-            # Many of these features are optional so we build versions with popular
-            # combinations and name the backends based on the version they were
-            # first released with
+            # Generic ARM builds
             ggml_add_cpu_backend_variant(armv8.0_1)
             ggml_add_cpu_backend_variant(armv8.2_1    DOTPROD)
             ggml_add_cpu_backend_variant(armv8.2_2    DOTPROD FP16_VECTOR_ARITHMETIC)
@@ -328,6 +326,9 @@ if (GGML_CPU_ALL_VARIANTS)
             ggml_add_cpu_backend_variant(armv8.6_2    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SVE2)
             ggml_add_cpu_backend_variant(armv9.2_1    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SME)
             ggml_add_cpu_backend_variant(armv9.2_2    DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SVE2 SME)
+            # Builds optimized for specific cores
+            # neoverse-v2: AWS Graviton4, NVIDIA Grace
+            ggml_add_cpu_backend_variant(neoverse-v2  DOTPROD FP16_VECTOR_ARITHMETIC SVE MATMUL_INT8 SVE2)
         elseif (CMAKE_SYSTEM_NAME MATCHES "Android")
             # Android-specific backends with SoC-compatible feature sets
             ggml_add_cpu_backend_variant(android_armv8.0_1)
