@@ -28,6 +28,9 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
             ln -sf /usr/bin/gcc-14 .compiler_override/gcc
             ln -sf /usr/bin/g++-14 .compiler_override/g++
             
+            export CC="/usr/bin/gcc-14"
+            export CXX="/usr/bin/g++-14"
+
             # Prepend the temp directory to PATH for this script's execution
             export PATH="$PWD/.compiler_override:$PATH"
 
