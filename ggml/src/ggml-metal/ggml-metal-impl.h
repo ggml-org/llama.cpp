@@ -229,7 +229,9 @@ typedef struct {
     uint64_t nb21;
     uint64_t nb22;
     uint64_t nb23;
+    int32_t  ne32;
     uint64_t nb31;
+    uint64_t nb32;
     int32_t  ne1;
     int32_t  ne2;
     float    scale;
@@ -461,9 +463,21 @@ typedef struct {
 } ggml_metal_kargs_sum_rows;
 
 typedef struct {
-    int64_t  ne00;
-    int64_t  ne01;
-    int64_t  ne02;
+    int32_t  ne00;
+    int32_t  ne01;
+    int32_t  ne02;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  ne11;
+    int32_t  ne12;
+    int32_t  ne13;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
     float    scale;
     float    max_bias;
     float    m0;
