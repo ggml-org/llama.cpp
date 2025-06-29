@@ -6,7 +6,7 @@ node('jupiter-16G-1'){            // Running on x86 runner containing latest vec
         sh'''
             #!/bin/bash
             sudo apt update
-            sudo apt install -y cmake build-essential git curl
+            sudo apt install -y cmake build-essential git curl libcurl4-openssl-dev
         '''
     }
     stage('checkout repo'){
