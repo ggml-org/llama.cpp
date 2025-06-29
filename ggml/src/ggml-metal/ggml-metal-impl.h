@@ -425,7 +425,12 @@ typedef struct {
 typedef struct{
     int32_t  ne00;
     uint64_t nb01;
+    int32_t  ne10;
+    uint64_t nb11;
+    int32_t  ne0;
     uint64_t nb1;
+    int32_t  i00;
+    int32_t  i10;
 } ggml_metal_kargs_glu;
 
 typedef struct {

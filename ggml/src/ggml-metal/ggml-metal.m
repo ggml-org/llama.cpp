@@ -2438,6 +2438,10 @@ static bool ggml_metal_encode_node(
             {
                 GGML_ASSERT(ggml_is_contiguous_1(src0));
 
+                if (src1) {
+                    GGML_ASSERT(ggml_are_same_shape(src0, src1));
+                }
+
                 id<MTLComputePipelineState> pipeline = nil;
 
                 switch (ggml_get_glu_op(node)) {
@@ -2454,16 +2458,31 @@ static bool ggml_metal_encode_node(
                         GGML_ABORT("fatal error");
                 }
 
+                const int32_t swp = ((const int32_t *) dst->op_params)[1];
+
+                const int32_t i00 = swp ? ne0 : 0;
+                const int32_t i10 = swp ? 0 : ne0;
+
                 ggml_metal_kargs_glu args = {
                     /*.ne00 =*/ ne00,
                     /*.nb01 =*/ nb01,
+                    /*.ne10 =*/ src1 ? ne10 : ne00,
+                    /*.nb11 =*/ src1 ? nb11 : nb01,
+                    /*.ne0  =*/ ne0,
                     /*.nb1  =*/ nb1,
+                    /*.i00  =*/ src1 ? 0 : i00,
+                    /*.i10  =*/ src1 ? 0 : i10,
                 };
 
                 [encoder setComputePipelineState:pipeline];
                 [encoder setBuffer:id_src0 offset:offs_src0 atIndex:0];
-                [encoder setBuffer:id_dst  offset:offs_dst  atIndex:1];
-                [encoder setBytes:&args length:sizeof(args) atIndex:2];
+                if (src1) {
+                    [encoder setBuffer:id_src1 offset:offs_src1 atIndex:1];
+                } else {
+                    [encoder setBuffer:id_src0 offset:offs_src0 atIndex:1];
+                }
+                [encoder setBuffer:id_dst  offset:offs_dst  atIndex:2];
+                [encoder setBytes:&args length:sizeof(args) atIndex:3];
 
                 const int64_t nrows = ggml_nrows(src0);
 
