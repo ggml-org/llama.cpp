@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # validate-tvos.sh - Validate tvOS Application with embedded llama.xcframework using SwiftUI
 
 # Authentication options (optional) (can be set via environment variables)

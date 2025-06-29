@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 PROG=${0##*/}
 build_dir="build-ci-debug"

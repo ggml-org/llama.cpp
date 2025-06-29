@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 if [ $# -lt 2 ]; then
     echo "usage: ./scripts/compare-commits.sh <commit1> <commit2> [additional llama-bench arguments]"

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # validate-ios.sh - Validate iOS Application with embedded llama.xcframework using SwiftUI
 
 # Authentication options (optional) (can be set via environment variables)

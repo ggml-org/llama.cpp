@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 if [ $# -lt 2 ]; then
     printf "Usage: $0 <git-repo> <target-folder> [<test-exe>]\n"
