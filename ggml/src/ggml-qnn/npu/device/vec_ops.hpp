@@ -291,25 +291,41 @@ inline void vec_mad_f16(const npu_device_fp16_t * src, float scale, npu_device_f
     vec_scale_impl<hvx_vec_mad_f16_f16, hvx_scale_f16, npu_device_fp16_t>(src, scale, dst, count);
 }
 
+template <typename _TElem0, typename _TElem1>
+inline bool is_dot_product_aligned(const _TElem0 * src0, const _TElem1 * src1, size_t count) {
+    static_assert(sizeof(_TElem0) <= sizeof(_TElem1), "src0 should be smaller than src1");
+
+    if (!hexagon::is_addr_aligned(src0) || !hexagon::is_addr_aligned(src1)) {
+        return false;
+    }
+
+    if (count % (hexagon::kBytesPerVector / sizeof(_TElem0) * 2) != 0) {
+        return false;
+    }
+
+    return true;
+}
+
 float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count);
 float vec_dot_product_aligned_f32_f32(const float * src0, const float * src1, size_t count);
 
+inline bool is_f32_f32_dot_product_aligned(const float * src0, const float * src1, size_t count) {
+    return is_dot_product_aligned<float, float>(src0, src1, count);
+}
+
 float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count);
 float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count);
+
+inline bool is_f16_f16_dot_product_aligned(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1,
+                                           size_t count) {
+    return is_dot_product_aligned<npu_device_fp16_t, npu_device_fp16_t>(src0, src1, count);
+}
 
 float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
 float vec_dot_product_aligned_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
 
 inline bool is_f16_f32_dot_product_aligned(const npu_device_fp16_t * src0, const float * src1, size_t count) {
-    if (!hexagon::is_addr_aligned(src0) || !hexagon::is_addr_aligned(src1)) {
-        return false;
-    }
-
-    if (count % (hexagon::kBytesPerVector / sizeof(npu_device_fp16_t) * 2) != 0) {
-        return false;
-    }
-
-    return true;
+    return is_dot_product_aligned<npu_device_fp16_t, float>(src0, src1, count);
 }
 
 }  // namespace hexagon

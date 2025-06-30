@@ -100,15 +100,13 @@ inline float vec_dot_product_aligned_impl(const _TElem * src0, const _TElem * sr
     HVX_Vector         sum1             = Q6_V_vzero();
 
     while (src0_vec_ptr_end - src0_vec_ptr > 1) {
-        HVX_Vector curr0_lo = src0_vec_ptr[0];
-        HVX_Vector curr0_hi = src0_vec_ptr[1];
-        HVX_Vector curr1_lo = src1_vec_ptr[0];
-        HVX_Vector curr1_hi = src1_vec_ptr[1];
+        HVX_VectorPair curr0 = reinterpret_cast<HVX_VectorPair *>(src0_vec_ptr)[0];
+        HVX_VectorPair curr1 = reinterpret_cast<HVX_VectorPair *>(src1_vec_ptr)[0];
         src0_vec_ptr += 2;
         src1_vec_ptr += 2;
 
-        sum0 = _AddFunc(_MpyFunc(curr0_lo, curr1_lo), sum0);
-        sum1 = _AddFunc(_MpyFunc(curr0_hi, curr1_hi), sum1);
+        sum0 = _AddFunc(_MpyFunc(Q6_V_lo_W(curr0), Q6_V_lo_W(curr1)), sum0);
+        sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(curr0), Q6_V_hi_W(curr1)), sum1);
     }
 
     return _ReduceFunc(_AddFunc(sum0, sum1));

@@ -220,6 +220,32 @@ bool is_mul_mat_f16_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::ten
     return true;
 }
 
+bool is_mul_mat_f16_f16_src_tensors_aligned(hexagon::tensor * src0, hexagon::tensor * src1, bool is_src0_quantized) {
+    const auto * src1_ptr = src1->get_read_buffer_as<npu_device_fp16_t>();
+    const auto * src0_ptr = is_src0_quantized ? src1_ptr : src0->get_read_buffer_as<npu_device_fp16_t>();
+
+    if (!hexagon::is_f16_f16_dot_product_aligned(src0_ptr, src1_ptr, src0->get_ne(0))) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_unaligned: ne[0]: %ld\n", (long) src0->get_ne(0));
+        return false;
+    }
+
+    DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_aligned: ne[0]: %ld\n", (long) src0->get_ne(0));
+    return true;
+}
+
+bool is_mul_mat_f32_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::tensor * src1) {
+    const auto * src1_ptr = src1->get_read_buffer_as<float>();
+    const auto * src0_ptr = src0->get_read_buffer_as<float>();
+
+    if (!hexagon::is_f32_f32_dot_product_aligned(src0_ptr, src1_ptr, src0->get_ne(0))) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_unaligned: ne[0]: %ld\n", (long) src0->get_ne(0));
+        return false;
+    }
+
+    DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_aligned: ne[0]: %ld\n", (long) src0->get_ne(0));
+    return true;
+}
+
 }  // namespace
 
 namespace hexagon {
@@ -256,15 +282,27 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
                     mul_mat_impl<hexagon::vec_dot_product_f16_f32, false>(src0, src1, out, params);
                 }
             } else {
-                mul_mat_impl<hexagon::vec_dot_product_f32_f32, false>(src0, src1, out, params);
+                if (is_mul_mat_f32_f32_src_tensors_aligned(src0, src1)) {
+                    mul_mat_impl<hexagon::vec_dot_product_aligned_f32_f32, false>(src0, src1, out, params);
+                } else {
+                    mul_mat_impl<hexagon::vec_dot_product_f32_f32, false>(src0, src1, out, params);
+                }
             }
             return true;
 
         case NPU_DATA_TYPE_F16:
             if (is_src0_quantized) {
-                mul_mat_impl<hexagon::vec_dot_product_f16_f16, true>(src0, src1, out, params);
+                if (is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)) {
+                    mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, true>(src0, src1, out, params);
+                } else {
+                    mul_mat_impl<hexagon::vec_dot_product_f16_f16, true>(src0, src1, out, params);
+                }
             } else {
-                mul_mat_impl<hexagon::vec_dot_product_f16_f16, false>(src0, src1, out, params);
+                if (is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)) {
+                    mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, false>(src0, src1, out, params);
+                } else {
+                    mul_mat_impl<hexagon::vec_dot_product_f16_f16, false>(src0, src1, out, params);
+                }
             }
             return true;
         default:
