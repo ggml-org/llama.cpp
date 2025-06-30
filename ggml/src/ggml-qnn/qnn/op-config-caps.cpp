@@ -146,6 +146,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_TRANSPOSE
     {}, // GGML_OP_GET_ROWS
     {}, // GGML_OP_GET_ROWS_BACK
+    {}, // GGML_OP_SET_ROWS
     {}, // GGML_OP_DIAG
     {}, // GGML_OP_DIAG_MASK_INF
     {}, // GGML_OP_DIAG_MASK_ZERO
@@ -164,6 +165,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_POOL_2D_BACK
     {}, // GGML_OP_UPSCALE
     {}, // GGML_OP_PAD
+    {}, // GGML_OP_ROLL
     {}, // GGML_OP_PAD_REFLECT_1D
     {}, // GGML_OP_ARANGE
 
@@ -194,6 +196,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_CROSS_ENTROPY_LOSS
     {}, // GGML_OP_CROSS_ENTROPY_LOSS_BACK
     {}, // GGML_OP_OPT_STEP_ADAMW
+    {}, // GGML_OP_GLU
 
     // ggml_unary_op
     {}, // GGML_UNARY_OP_ABS
@@ -320,6 +323,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,                                                                                   // GGML_OP_TRANSPOSE
     nullptr,                                                                                   // GGML_OP_GET_ROWS
     nullptr,                                                                                   // GGML_OP_GET_ROWS_BACK
+    nullptr,                                                                                   // GGML_OP_SET_ROWS
     nullptr,                                                                                   // GGML_OP_DIAG
     nullptr,                                                                                   // GGML_OP_DIAG_MASK_INF
     nullptr,                                                                                   // GGML_OP_DIAG_MASK_ZERO
@@ -338,6 +342,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_POOL_2D_BACK
     nullptr,  // GGML_OP_UPSCALE
     nullptr,  // GGML_OP_PAD
+    nullptr,  // GGML_OP_ROLL
     nullptr,  // GGML_OP_PAD_REFLECT_1D
     nullptr,  // GGML_OP_ARANGE
     nullptr,  // GGML_OP_TIMESTEP_EMBEDDING
@@ -367,6 +372,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_CROSS_ENTROPY_LOSS
     nullptr,  // GGML_OP_CROSS_ENTROPY_LOSS_BACK
     nullptr,  // GGML_OP_OPT_STEP_ADAMW
+    nullptr,  // GGML_OP_GLU
 
     // ggml_unary_op
     nullptr,  // GGML_UNARY_OP_ABS

@@ -101,6 +101,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_TRANSPOSE
     false,  // GGML_OP_GET_ROWS
     false,  // GGML_OP_GET_ROWS_BACK
+    false,  // GGML_OP_SET_ROWS
     false,  // GGML_OP_DIAG
     false,  // GGML_OP_DIAG_MASK_INF
     false,  // GGML_OP_DIAG_MASK_ZERO
@@ -119,6 +120,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_POOL_2D_BACK
     false,  // GGML_OP_UPSCALE
     false,  // GGML_OP_PAD
+    false,  // GGML_OP_ROLL
     false,  // GGML_OP_PAD_REFLECT_1D
     false,  // GGML_OP_ARANGE
     false,  // GGML_OP_TIMESTEP_EMBEDDING
@@ -148,6 +150,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_CROSS_ENTROPY_LOSS
     false,  // GGML_OP_CROSS_ENTROPY_LOSS_BACK
     false,  // GGML_OP_OPT_STEP_ADAMW
+    false,  // GGML_OP_GLU
 
     // ggml_unary_op
     false,  // GGML_UNARY_OP_ABS
