@@ -38,6 +38,7 @@ enum llm_ffn_op_type {
     LLM_FFN_RELU_SQR,
     LLM_FFN_SWIGLU,
     LLM_FFN_GEGLU,
+    LLM_FFN_REGLU,
 };
 
 enum llm_ffn_gate_type {
@@ -478,6 +479,7 @@ struct llm_graph_context {
     std::unique_ptr<llm_graph_result> res;
 
     llm_graph_context(const llm_graph_params & params);
+    virtual ~llm_graph_context() = default;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
 

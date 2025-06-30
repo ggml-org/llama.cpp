@@ -359,7 +359,7 @@ struct ggml_backend_cann_context {
         ggml_cann_set_device(device);
         description = aclrtGetSocName();
 
-        bool async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
+        async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
     }

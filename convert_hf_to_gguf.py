@@ -2743,6 +2743,52 @@ class Qwen2Model(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("Ernie4_5_ForCausalLM")
+class Ernie4_5Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.ERNIE4_5
+
+    def set_vocab(self):
+        self._set_vocab_sentencepiece()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        num_heads = self.hparams["num_attention_heads"]
+        num_kv_heads = self.hparams["num_key_value_heads"]
+        head_dim = self.hparams["head_dim"]
+
+        if "ernie." in name:
+            name = name.replace("ernie.", "model.")
+        # split the qkv weights
+        # qkv_proj shape: [(num_heads + 2 * num_kv_heads) * head_dim, hidden_size]
+        if "qkv_proj" in name:
+            name_q = name.replace("qkv_proj.weight", "q_proj.weight")
+            name_k = name.replace("qkv_proj.weight", "k_proj.weight")
+            name_v = name.replace("qkv_proj.weight", "v_proj.weight")
+            total_q_dim = num_heads * head_dim
+            total_k_dim = num_kv_heads * head_dim
+            total_v_dim = num_kv_heads * head_dim
+            q_proj_weight, k_proj_weight, v_proj_weight = data_torch.split([total_q_dim, total_k_dim, total_v_dim], dim=0)
+            return [
+                (self.map_tensor_name(name_q), q_proj_weight),
+                (self.map_tensor_name(name_k), k_proj_weight),
+                (self.map_tensor_name(name_v), v_proj_weight)
+            ]
+        # split the up_gate_proj into gate and up
+        # up_gate_proj shape: [2 * intermediate_size, hidden_size]
+        if "up_gate_proj" in name:
+            name_up = name.replace("up_gate_proj.weight", "up_proj.weight")
+            name_gate = name.replace("up_gate_proj.weight", "gate_proj.weight")
+            dim_half = data_torch.shape[0] // 2
+            gate_proj_weight, up_proj_weight = data_torch.split(dim_half, dim=0)
+            return [
+                (self.map_tensor_name(name_gate), gate_proj_weight),
+                (self.map_tensor_name(name_up), up_proj_weight)
+            ]
+        return [(self.map_tensor_name(name), data_torch)]
+
+
 @ModelBase.register(
     "Qwen2VLModel",
     "Qwen2VLForConditionalGeneration",

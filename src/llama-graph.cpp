@@ -560,12 +560,20 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     switch (type_op) {
         case LLM_FFN_SILU:
-            {
+            if (gate && type_gate == LLM_FFN_PAR) {
+                cur = ggml_swiglu_split(ctx0, cur, tmp);
+                cb(cur, "ffn_swiglu", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
                 cur = ggml_silu(ctx0, cur);
                 cb(cur, "ffn_silu", il);
             } break;
         case LLM_FFN_GELU:
-            {
+            if (gate && type_gate == LLM_FFN_PAR) {
+                cur = ggml_geglu_split(ctx0, cur, tmp);
+                cb(cur, "ffn_geglu", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_gelu", il);
                 if (act_scales != NULL) {
@@ -574,7 +582,11 @@ ggml_tensor * llm_graph_context::build_ffn(
                 }
             } break;
         case LLM_FFN_RELU:
-            {
+            if (gate && type_gate == LLM_FFN_PAR) {
+                cur = ggml_reglu_split(ctx0, cur, tmp);
+                cb(cur, "ffn_reglu", il);
+                type_gate = LLM_FFN_SEQ;
+            } else {
                 cur = ggml_relu(ctx0, cur);
                 cb(cur, "ffn_relu", il);
             } break;
@@ -588,31 +600,18 @@ ggml_tensor * llm_graph_context::build_ffn(
             } break;
         case LLM_FFN_SWIGLU:
             {
-                // Project to 4h. If using swiglu double the output width, see https://arxiv.org/pdf/2002.05202.pdf
-                int64_t split_point = cur->ne[0] / 2;
-                // TODO: these conts should not be needed, see https://github.com/ggml-org/llama.cpp/pull/14090#discussion_r2137437217
-                ggml_tensor * x0 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0));
-                ggml_tensor * x1 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
-
-                x0 = ggml_silu(ctx0, x0);
-                cb(cur, "ffn_silu", il);
-
-                cur = ggml_mul(ctx0, x0, x1);
-                cb(cur, "ffn_mul", il);
+                cur = ggml_swiglu(ctx0, cur);
+                cb(cur, "ffn_swiglu", il);
             } break;
         case LLM_FFN_GEGLU:
             {
-                // Split into two equal parts
-                int64_t split_point = cur->ne[0] / 2;
-                // TODO: these conts should not be needed, see https://github.com/ggml-org/llama.cpp/pull/14090#discussion_r2137437217
-                ggml_tensor * x0 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], 0));
-                ggml_tensor * x1 = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, split_point, cur->ne[1], cur->nb[1], split_point * ggml_element_size(cur)));
-
-                x0 = ggml_gelu(ctx0, x0);
-                cb(x0, "ffn_gelu", il);
-
-                cur = ggml_mul(ctx0, x0, x1);
+                cur = ggml_geglu(ctx0, cur);
                 cb(cur, "ffn_geglu", il);
+            } break;
+        case LLM_FFN_REGLU:
+            {
+                cur = ggml_reglu(ctx0, cur);
+                cb(cur, "ffn_reglu", il);
             } break;
     }
 
@@ -743,22 +742,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
 
     switch (type_op) {
         case LLM_FFN_SILU:
-            {
+            if (gate_exps) {
+                cur = ggml_swiglu_split(ctx0, cur, up);
+                cb(cur, "ffn_moe_swiglu", il);
+            } else {
                 cur = ggml_silu(ctx0, cur);
                 cb(cur, "ffn_moe_silu", il);
             } break;
         case LLM_FFN_GELU:
-            {
+            if (gate_exps) {
+                cur = ggml_geglu_split(ctx0, cur, up);
+                cb(cur, "ffn_moe_geglu", il);
+            } else {
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_moe_gelu", il);
             } break;
         default:
             GGML_ABORT("fatal error");
-    }
-
-    if (gate_exps) {
-        cur = ggml_mul(ctx0, cur, up); // [n_ff, n_expert_used, n_tokens]
-        cb(cur, "ffn_moe_gate_par", il);
     }
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
