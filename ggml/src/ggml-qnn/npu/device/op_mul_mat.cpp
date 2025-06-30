@@ -205,9 +205,11 @@ bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const n
     return true;
 }
 
-bool is_mul_mat_f16_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::tensor * src1) {
-    const auto * src0_ptr = src0->get_read_buffer_as<npu_device_fp16_t>();
+bool is_mul_mat_f16_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::tensor * src1, bool is_src0_quantized) {
     const auto * src1_ptr = src1->get_read_buffer_as<float>();
+    const auto * src0_ptr = is_src0_quantized ?
+                                src1->get_read_buffer_as<npu_device_fp16_t>() :
+                                src0->get_read_buffer_as<npu_device_fp16_t>();  // skip src0 for quantized tensors
 
     if (!hexagon::is_f16_f32_dot_product_aligned(src0_ptr, src1_ptr, src0->get_ne(0))) {
         DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_unaligned: ne[0]: %ld\n", (long) src0->get_ne(0));
@@ -242,9 +244,13 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
     switch (src1->get_type()) {
         case NPU_DATA_TYPE_F32:
             if (is_src0_quantized) {
-                mul_mat_impl<hexagon::vec_dot_product_f16_f32, true>(src0, src1, out, params);
+                if (is_mul_mat_f16_f32_src_tensors_aligned(src0, src1, is_src0_quantized)) {
+                    mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, true>(src0, src1, out, params);
+                } else {
+                    mul_mat_impl<hexagon::vec_dot_product_f16_f32, true>(src0, src1, out, params);
+                }
             } else if (src0->get_type() == NPU_DATA_TYPE_F16) {
-                if (is_mul_mat_f16_f32_src_tensors_aligned(src0, src1)) {
+                if (is_mul_mat_f16_f32_src_tensors_aligned(src0, src1, is_src0_quantized)) {
                     mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, false>(src0, src1, out, params);
                 } else {
                     mul_mat_impl<hexagon::vec_dot_product_f16_f32, false>(src0, src1, out, params);
