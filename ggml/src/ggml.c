@@ -250,7 +250,7 @@ void ggml_log_internal(enum ggml_log_level level, const char * format, ...) {
     va_list args;
     va_start(args, format);
     if (level == GGML_LOG_LEVEL_TSAVORITE)
-    ggml_log_internal_v(level, format, args);
+        ggml_log_internal_v(level, format, args);
     va_end(args);
 }
 

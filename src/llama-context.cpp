@@ -975,9 +975,9 @@ int llama_context::decode(llama_batch & inp_batch) {
 
         const auto compute_status = graph_compute(gf, ubatch.n_tokens > 1);
 #ifdef GGML_PERF
-	if (perf_all_shape_fp) {
+        if (perf_all_shape_fp) {
             ggml_perf_write_detailed_csv(gf, perf_all_shape_fp);
-	}
+        }
         ggml_perf_accumulate(perf_totals, gf);
 #endif /* GGML_PERF */
         if (compute_status != GGML_STATUS_SUCCESS) {
