@@ -2227,8 +2227,6 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp);
 // capture perf into totals
 void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph);
 
-// print final stats
-void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]);
 #endif /* GGML_PERF */
 
 #ifdef  __cplusplus

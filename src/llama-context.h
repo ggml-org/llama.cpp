@@ -184,6 +184,9 @@ public:
     ggml_status graph_compute(
             ggml_cgraph * gf,
                    bool   batched);
+#ifdef GGML_PERF
+    struct ggml_perf_totals perf_totals[GGML_OP_COUNT] = {};  // add this to llama_context
+#endif
 
 private:
     llm_graph_result_ptr graph_build(
@@ -274,7 +277,4 @@ private:
 
     mutable int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     mutable int32_t n_eval   = 0; // number of eval calls
-#ifdef GGML_PERF
-    struct ggml_perf_totals perf_totals[GGML_OP_COUNT] = {};  // add this to llama_context
-#endif
 };

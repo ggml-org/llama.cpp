@@ -249,7 +249,7 @@ static void ggml_log_internal_v(enum ggml_log_level level, const char * format, 
 void ggml_log_internal(enum ggml_log_level level, const char * format, ...) {
     va_list args;
     va_start(args, format);
-    //if (level == GGML_LOG_LEVEL_TSAVORITE)
+    if (level == GGML_LOG_LEVEL_TSAVORITE)
     ggml_log_internal_v(level, format, args);
     va_end(args);
 }
@@ -6580,19 +6580,6 @@ void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct 
         totals[op].total_us += node->perf_time_us;
         totals[op].runs     += node->perf_runs;
         totals[op].op_count++;
-    }
-}
-
-void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
-    printf("\n=== GGML Perf Summary ===\n");
-    for (int i = 0; i < GGML_OP_COUNT; ++i) {
-        if (totals[i].runs > 0) {
-            printf("  %-16s: %5ld runs, %8ld us total, avg %.2f us\n",
-                   totals[i].op_name ? totals[i].op_name : "UNKNOWN",
-                   totals[i].runs,
-                   totals[i].total_us,
-                   (double)totals[i].total_us / totals[i].runs);
-        }
     }
 }
 
