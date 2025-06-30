@@ -241,6 +241,7 @@ void quantize_q5_1(device const float * src, device block_q5_1 & dst) {
 }
 
 void quantize_iq4_nl(device const float * src, device block_iq4_nl & dst) {
+#pragma METAL fp math_mode(safe)
     float amax = 0.0f; // absolute max
     float max  = 0.0f;
 
