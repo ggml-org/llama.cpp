@@ -305,7 +305,7 @@ inline bool is_f16_f32_dot_product_aligned(const npu_device_fp16_t * src0, const
         return false;
     }
 
-    if (count % (hexagon::kBytesPerVector / sizeof(npu_device_fp16_t)) != 0) {
+    if (count % (hexagon::kBytesPerVector / sizeof(npu_device_fp16_t) * 2) != 0) {
         return false;
     }
 
