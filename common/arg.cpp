@@ -891,51 +891,62 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     };
 
     for (int i = 1; i < argc; i++) {
-        const std::string arg_prefix = "--";
+    const std::string arg_prefix = "--";
 
-        std::string arg = argv[i];
-        if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
-            std::replace(arg.begin(), arg.end(), '_', '-');
-        }
-        if (arg_to_options.find(arg) == arg_to_options.end()) {
-            throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
-        }
-        auto opt = *arg_to_options[arg];
-        if (opt.has_value_from_env()) {
-            fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
-        }
-        try {
-            if (opt.handler_void) {
-                opt.handler_void(params);
-                continue;
-            }
-
-            // arg with single value
-            check_arg(i);
-            std::string val = argv[++i];
-            if (opt.handler_int) {
-                opt.handler_int(params, std::stoi(val));
-                continue;
-            }
-            if (opt.handler_string) {
-                opt.handler_string(params, val);
-                continue;
-            }
-
-            // arg with 2 values
-            check_arg(i);
-            std::string val2 = argv[++i];
-            if (opt.handler_str_str) {
-                opt.handler_str_str(params, val, val2);
-                continue;
-            }
-        } catch (std::exception & e) {
-            throw std::invalid_argument(string_format(
-                "error while handling argument \"%s\": %s\n\n"
-                "usage:\n%s\n\nto show complete usage, run with -h",
-                arg.c_str(), e.what(), arg_to_options[arg]->to_string().c_str()));
-        }
+    std::string arg = argv[i];
+    if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
+        std::replace(arg.begin(), arg.end(), '_', '-');
     }
+
+    // Skip --parse-layer and its value(s)
+    if (arg == "--parse-layer") {
+        // Assuming --parse-layer takes exactly 1 argument
+        if (i + 1 < argc) {
+            i++; // skip the next value as well
+        }
+        continue;
+    }
+
+    if (arg_to_options.find(arg) == arg_to_options.end()) {
+        throw std::invalid_argument(string_format("error: invalid argument: %s", arg.c_str()));
+    }
+
+    auto opt = *arg_to_options[arg];
+    if (opt.has_value_from_env()) {
+        fprintf(stderr, "warn: %s environment variable is set, but will be overwritten by command line argument %s\n", opt.env, arg.c_str());
+    }
+    try {
+        if (opt.handler_void) {
+            opt.handler_void(params);
+            continue;
+        }
+
+        // arg with single value
+        check_arg(i);
+        std::string val = argv[++i];
+        if (opt.handler_int) {
+            opt.handler_int(params, std::stoi(val));
+            continue;
+        }
+        if (opt.handler_string) {
+            opt.handler_string(params, val);
+            continue;
+        }
+
+        // arg with 2 values
+        check_arg(i);
+        std::string val2 = argv[++i];
+        if (opt.handler_str_str) {
+            opt.handler_str_str(params, val, val2);
+            continue;
+        }
+    } catch (std::exception & e) {
+        throw std::invalid_argument(string_format(
+            "error while handling argument \"%s\": %s\n\n"
+            "usage:\n%s\n\nto show complete usage, run with -h",
+            arg.c_str(), e.what(), arg_to_options[arg]->to_string().c_str()));
+    }
+}
 
     postprocess_cpu_params(params.cpuparams,       nullptr);
     postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
