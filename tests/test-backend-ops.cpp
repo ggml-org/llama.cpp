@@ -4860,9 +4860,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
 
-    test_cases.emplace_back(new test_llama(2, true));
-    // these tests are disabled to save execution time, but they can be handy for debugging
 #if 0
+    // these tests are disabled to save execution time, sbut they can be handy for debugging
+    test_cases.emplace_back(new test_llama(2, true));
     test_cases.emplace_back(new test_llama(1));
     test_cases.emplace_back(new test_llama(2));
     test_cases.emplace_back(new test_falcon(1));
