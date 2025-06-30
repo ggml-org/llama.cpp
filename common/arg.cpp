@@ -988,10 +988,6 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.tensor_buft_overrides.push_back({nullptr, nullptr});
     }
 
-    if (params.reranking && params.embedding) {
-        throw std::invalid_argument("error: either --embedding or --reranking can be specified, but not both");
-    }
-
     if (!params.chat_template.empty() && !common_chat_verify_template(params.chat_template, params.use_jinja)) {
         throw std::runtime_error(string_format(
             "error: the supplied chat template is not supported: %s%s\n",
@@ -2711,6 +2707,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
     add_opt(common_arg(
+        {"--cls-separator"}, "STRING",
+        "separator of classification sequences (default \\t) for example \"<#seq#>\"",
+        [](common_params & params, const std::string & value) {
+            params.cls_sep = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
+    add_opt(common_arg(
         {"--host"}, "HOST",
         string_format("ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: %s)", params.hostname.c_str()),
         [](common_params & params, const std::string & value) {
@@ -2747,9 +2750,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--reranking", "--rerank"},
-        string_format("enable reranking endpoint on server (default: %s)", params.reranking ? "enabled" : "disabled"),
+        string_format("enable reranking endpoint on server (default: %s)", "disabled"),
         [](common_params & params) {
-            params.reranking = true;
+            params.embedding = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_RANK;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
     add_opt(common_arg(
@@ -2790,6 +2794,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.ssl_file_cert = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SSL_CERT_FILE"));
+    add_opt(common_arg(
+        {"--chat-template-kwargs"}, "STRING",
+        string_format("sets additional params for the json template parser"),
+        [](common_params & params, const std::string &  value) {
+            auto parsed = json::parse(value);
+            for (const auto & item : parsed.items()) {
+                params.default_template_kwargs[item.key()] = item.value().dump();
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_CHAT_TEMPLATE_KWARGS"));
     add_opt(common_arg(
         {"-to", "--timeout"}, "N",
         string_format("server read/write timeout in seconds (default: %d)", params.timeout_read),
@@ -3213,6 +3227,32 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.model.path = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
+    add_opt(common_arg(
+        {"-ctkd", "--cache-type-k-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for K for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_k)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_k = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_K_DRAFT"));
+    add_opt(common_arg(
+        {"-ctvd", "--cache-type-v-draft"}, "TYPE",
+        string_format(
+            "KV cache data type for V for the draft model\n"
+            "allowed values: %s\n"
+            "(default: %s)",
+            get_all_kv_cache_types().c_str(),
+            ggml_type_name(params.speculative.cache_type_v)
+        ),
+        [](common_params & params, const std::string & value) {
+            params.speculative.cache_type_v = kv_cache_type_from_str(value);
+        }
+    ).set_env("LLAMA_ARG_CACHE_TYPE_V_DRAFT"));
 
     add_opt(common_arg(
         {"-mv", "--model-vocoder"}, "FNAME",

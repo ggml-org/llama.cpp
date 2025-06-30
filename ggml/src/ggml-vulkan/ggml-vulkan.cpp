@@ -78,7 +78,7 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define VK_VENDOR_ID_INTEL 0x8086
 #define VK_VENDOR_ID_NVIDIA 0x10de
 
-#define VK_DEVICE_DESCRIPTOR_POOL_SIZE 32
+#define VK_DEVICE_DESCRIPTOR_POOL_SIZE 256
 
 #define GGML_VK_MAX_NODES 8192
 
@@ -102,25 +102,11 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 struct ggml_backend_vk_context;
 
-struct vk_queue {
-    uint32_t queue_family_index;
-    vk::Queue queue;
-    vk::CommandPool pool;
-    uint32_t cmd_buffer_idx;
-    std::vector<vk::CommandBuffer> cmd_buffers;
-
-    vk::PipelineStageFlags stage_flags;
-
-    bool transfer_only;
-};
+#define MAX_PARAMETER_COUNT 8
 
 struct vk_pipeline_struct {
     std::string name;
     vk::ShaderModule shader_module;
-    vk::DescriptorSetLayout dsl;
-    std::vector<vk::DescriptorPool> descriptor_pools;
-    std::vector<vk::DescriptorSet> descriptor_sets;
-    uint32_t descriptor_set_idx;
     vk::PipelineLayout layout;
     vk::Pipeline pipeline;
     uint32_t push_constant_size;
@@ -165,6 +151,45 @@ typedef std::weak_ptr<vk_buffer_struct> vk_buffer_ref;
 struct ggml_backend_vk_buffer_type_context {
     std::string name;
     vk_device device;
+};
+
+struct vk_queue;
+
+// Stores command pool/buffers. There's an instance of this
+// for each (context,queue) pair and for each (device,queue) pair.
+struct vk_command_pool {
+    void init(vk_device& device, vk_queue *q_);
+    void destroy(vk::Device& device);
+
+    vk::CommandPool pool;
+    uint32_t cmd_buffer_idx;
+    std::vector<vk::CommandBuffer> cmd_buffers;
+
+    vk_queue *q;
+};
+
+// Prevent simultaneous submissions to the same queue.
+// This could be per vk_queue if we stopped having two vk_queue structures
+// sharing the same vk::Queue.
+static std::mutex queue_mutex;
+
+struct vk_queue {
+    uint32_t queue_family_index;
+    vk::Queue queue;
+
+    vk_command_pool cmd_pool;
+
+    vk::PipelineStageFlags stage_flags;
+
+    bool transfer_only;
+
+    // copy everything except the cmd_pool
+    void copyFrom(vk_queue &other) {
+        queue_family_index = other.queue_family_index;
+        queue = other.queue;
+        stage_flags = other.stage_flags;
+        transfer_only = other.transfer_only;
+    }
 };
 
 static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft);
@@ -280,7 +305,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
 }
 
 struct vk_device_struct {
-    std::mutex mutex;
+    std::recursive_mutex mutex;
 
     vk::PhysicalDevice physical_device;
     vk::PhysicalDeviceProperties properties;
@@ -341,6 +366,8 @@ struct vk_device_struct {
     // set to true to indicate that some shaders need to be compiled after the dryrun
     bool need_compiles {};
 
+    vk::DescriptorSetLayout dsl;
+
     vk_matmul_pipeline pipeline_matmul_f32 {};
     vk_matmul_pipeline pipeline_matmul_f32_f16 {};
     vk_matmul_pipeline pipeline_matmul_bf16 {};
@@ -398,6 +425,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_norm_f32;
     vk_pipeline pipeline_group_norm_f32;
     vk_pipeline pipeline_rms_norm_f32;
+    vk_pipeline pipeline_rms_norm_mul_f32;
     vk_pipeline pipeline_rms_norm_back_f32;
     vk_pipeline pipeline_l2_norm_f32;
 
@@ -408,6 +436,10 @@ struct vk_device_struct {
     vk_pipeline pipeline_relu[2];
     vk_pipeline pipeline_tanh[2];
     vk_pipeline pipeline_sigmoid[2];
+
+    vk_pipeline pipeline_geglu[2];
+    vk_pipeline pipeline_reglu[2];
+    vk_pipeline pipeline_swiglu[2];
 
     vk_pipeline pipeline_leaky_relu_f32;
     vk_pipeline pipeline_silu_back_f32;
@@ -458,7 +490,6 @@ struct vk_device_struct {
     vk_pipeline pipeline_flash_attn_split_k_reduce;
 
     std::unordered_map<std::string, vk_pipeline_ref> pipelines;
-    std::unordered_map<std::string, uint64_t> pipeline_descriptor_set_requirements;
 
     std::vector<std::tuple<void*, size_t, vk_buffer>> pinned_memory;
 
@@ -483,10 +514,8 @@ struct vk_device_struct {
 
         ggml_vk_destroy_buffer(sync_staging);
 
-        device.destroyCommandPool(compute_queue.pool);
-        if (!single_queue) {
-            device.destroyCommandPool(transfer_queue.pool);
-        }
+        compute_queue.cmd_pool.destroy(device);
+        transfer_queue.cmd_pool.destroy(device);
 
         for (auto& pipeline : pipelines) {
             if (pipeline.second.expired()) {
@@ -498,9 +527,25 @@ struct vk_device_struct {
         }
         pipelines.clear();
 
+        device.destroyDescriptorSetLayout(dsl);
+
         device.destroy();
     }
 };
+
+void vk_command_pool::init(vk_device& device, vk_queue *q_) {
+    cmd_buffer_idx = 0;
+    q = q_;
+
+    vk::CommandPoolCreateInfo command_pool_create_info(vk::CommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT), q->queue_family_index);
+    pool = device->device.createCommandPool(command_pool_create_info);
+}
+
+void vk_command_pool::destroy(vk::Device& device) {
+    device.destroyCommandPool(pool);
+    pool = nullptr;
+    cmd_buffers.clear();
+}
 
 struct vk_buffer_struct {
     vk::Buffer buffer = VK_NULL_HANDLE;
@@ -618,6 +663,13 @@ struct vk_op_push_constants {
     uint32_t KY;
     float param1;
     float param2;
+};
+
+struct vk_op_glu_push_constants {
+    uint32_t N;
+    uint32_t ne00;
+    uint32_t ne20;
+    uint32_t mode;  // 0: default, 1: swapped, 2: split
 };
 
 struct vk_op_unary_push_constants {
@@ -819,7 +871,7 @@ struct vk_context_struct {
     std::vector<vk_staging_memcpy> in_memcpys;
     std::vector<vk_staging_memcpy> out_memcpys;
 
-    vk_queue * q;
+    vk_command_pool * p {};
 };
 typedef std::shared_ptr<vk_context_struct> vk_context;
 typedef std::weak_ptr<vk_context_struct> vk_context_ref;
@@ -930,6 +982,18 @@ struct ggml_backend_vk_context {
     vk_context_ref transfer_ctx;
 
     std::vector<vk_context_ref> tensor_ctxs;
+
+    std::vector<vk::DescriptorPool> descriptor_pools;
+    std::vector<vk::DescriptorSet> descriptor_sets;
+    uint32_t descriptor_set_idx {};
+    uint32_t pipeline_descriptor_set_requirements {};
+
+    vk_command_pool compute_cmd_pool;
+    vk_command_pool transfer_cmd_pool;
+
+    // number of additional consecutive nodes that are being fused with the
+    // node currently being processed
+    uint32_t num_additional_fused_ops {};
 };
 
 static void * const vk_ptr_base = (void *)(uintptr_t) 0x1000;  // NOLINT
@@ -992,6 +1056,14 @@ void vk_memory_logger::log_deallocation(vk_buffer_ref buf_ref) {
 
 struct vk_instance_t {
     vk::Instance instance;
+
+    bool debug_utils_support = false;  // VK_EXT_debug_utils enabled
+    PFN_vkSetDebugUtilsObjectNameEXT pfn_vkSetDebugUtilsObjectNameEXT = {};
+    PFN_vkQueueBeginDebugUtilsLabelEXT pfn_vkQueueBeginDebugUtilsLabelEXT = {};
+    PFN_vkQueueEndDebugUtilsLabelEXT   pfn_vkQueueEndDebugUtilsLabelEXT   = {};
+    PFN_vkCmdBeginDebugUtilsLabelEXT   pfn_vkCmdBeginDebugUtilsLabelEXT   = {};
+    PFN_vkCmdEndDebugUtilsLabelEXT pfn_vkCmdEndDebugUtilsLabelEXT = {};
+    PFN_vkCmdInsertDebugUtilsLabelEXT  pfn_vkCmdInsertDebugUtilsLabelEXT  = {};
 
     std::vector<size_t> device_indices;
     vk_device devices[GGML_VK_MAX_DEVICES];
@@ -1060,19 +1132,11 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
                  ", (" << wg_denoms[0] << "," << wg_denoms[1] << "," << wg_denoms[2] << "), specialization_constants, " <<
                  disable_robustness << ", " << require_full_subgroups << ", " << required_subgroup_size << ")");
     GGML_ASSERT(parameter_count > 0);
+    GGML_ASSERT(parameter_count <= MAX_PARAMETER_COUNT);
     GGML_ASSERT(wg_denoms[0] > 0 && wg_denoms[1] > 0 && wg_denoms[2] > 0); // NOLINT
 
     vk::ShaderModuleCreateInfo shader_module_create_info({}, spv_size, reinterpret_cast<const uint32_t *>(spv_data));
     pipeline->shader_module = device->device.createShaderModule(shader_module_create_info);
-
-    std::vector<vk::DescriptorSetLayoutBinding> dsl_binding;
-    std::vector<vk::DescriptorBindingFlags> dsl_binding_flags;
-    for (uint32_t i = 0; i < parameter_count; i++) {
-        dsl_binding.push_back({i, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute});
-        dsl_binding_flags.push_back({});
-    }
-
-    vk::DescriptorSetLayoutBindingFlagsCreateInfo dslbfci = { dsl_binding_flags };
 
     vk::PushConstantRange pcr(
         vk::ShaderStageFlagBits::eCompute,
@@ -1080,19 +1144,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         pipeline->push_constant_size
     );
 
-    vk::DescriptorSetLayoutCreateInfo descriptor_set_layout_create_info(
-        {},
-        dsl_binding);
-    descriptor_set_layout_create_info.setPNext(&dslbfci);
-    pipeline->dsl = device->device.createDescriptorSetLayout(descriptor_set_layout_create_info);
-
-    vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eStorageBuffer, pipeline->parameter_count * VK_DEVICE_DESCRIPTOR_POOL_SIZE);
-    vk::DescriptorPoolCreateInfo descriptor_pool_create_info({}, VK_DEVICE_DESCRIPTOR_POOL_SIZE, descriptor_pool_size);
-    pipeline->descriptor_pools.push_back(device->device.createDescriptorPool(descriptor_pool_create_info));
-
-    pipeline->descriptor_set_idx = 0;
-
-    vk::PipelineLayoutCreateInfo pipeline_layout_create_info(vk::PipelineLayoutCreateFlags(), pipeline->dsl, pcr);
+    vk::PipelineLayoutCreateInfo pipeline_layout_create_info(vk::PipelineLayoutCreateFlags(), device->dsl, pcr);
     pipeline->layout = device->device.createPipelineLayout(pipeline_layout_create_info);
 
     std::vector<vk::SpecializationMapEntry> specialization_entries(specialization_constants.size());
@@ -1152,8 +1204,16 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
     }
     pipeline->compiled = true;
 
+    if (vk_instance.debug_utils_support) {
+        vk::DebugUtilsObjectNameInfoEXT duoni;
+        duoni.objectType = vk::ObjectType::ePipeline;
+        duoni.pObjectName = pipeline->name.c_str();
+        duoni.objectHandle = reinterpret_cast<uint64_t>(static_cast<VkPipeline_T*>(pipeline->pipeline));
+        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT(device->device, &static_cast<VkDebugUtilsObjectNameInfoEXT &>(duoni));
+    }
+
     {
-        std::lock_guard<std::mutex> guard(device->mutex);
+        std::lock_guard<std::recursive_mutex> guard(device->mutex);
         device->pipelines.insert({ pipeline->name, pipeline });
     }
 
@@ -1167,15 +1227,6 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 
 static void ggml_vk_destroy_pipeline(vk::Device& device, vk_pipeline& pipeline) {
     VK_LOG_DEBUG("ggml_pipeline_destroy_pipeline(" << pipeline->name << ")");
-    for (auto& pool : pipeline->descriptor_pools) {
-        device.destroyDescriptorPool(pool);
-    }
-    pipeline->descriptor_pools.clear();
-    pipeline->descriptor_sets.clear();
-    pipeline->descriptor_set_idx = 0;
-
-    device.destroyDescriptorSetLayout(pipeline->dsl);
-
     device.destroyPipelineLayout(pipeline->layout);
 
     device.destroyShaderModule(pipeline->shader_module);
@@ -1183,97 +1234,77 @@ static void ggml_vk_destroy_pipeline(vk::Device& device, vk_pipeline& pipeline) 
     device.destroyPipeline(pipeline->pipeline);
 }
 
-static void ggml_pipeline_request_descriptor_sets(vk_device& device, vk_pipeline& pipeline, uint32_t n) {
+static void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, vk_pipeline& pipeline, uint32_t n) {
     VK_LOG_DEBUG("ggml_pipeline_request_descriptor_sets(" << pipeline->name << ", " << n << ")");
-    device->pipeline_descriptor_set_requirements[pipeline->name] += n;
+    ctx->pipeline_descriptor_set_requirements += n;
     if (!pipeline->compiled) {
         pipeline->needed = true;
-        device->need_compiles = true;
+        ctx->device->need_compiles = true;
     }
 }
 
-static void ggml_pipeline_allocate_descriptor_sets(vk_device& device) {
-    std::lock_guard<std::mutex> guard(device->mutex);
+static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx) {
 
-    for (auto& pair : device->pipeline_descriptor_set_requirements) {
-        vk_pipeline pipeline = device->pipelines.at(pair.first).lock();
-        const uint64_t n = pair.second;
+    if (ctx->descriptor_sets.size() >= ctx->pipeline_descriptor_set_requirements) {
+        // Enough descriptors are available
+        return;
+    }
 
-        VK_LOG_DEBUG("ggml_pipeline_allocate_descriptor_sets(" << pipeline->name << ", " << n << ")");
+    vk_device& device = ctx->device;
 
-        if (pipeline->descriptor_sets.size() >= pipeline->descriptor_set_idx + n) {
-            // Enough descriptors are available
-            continue;
+    uint32_t to_alloc = ctx->pipeline_descriptor_set_requirements - ctx->descriptor_sets.size();
+    uint32_t pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE - ctx->descriptor_sets.size() % VK_DEVICE_DESCRIPTOR_POOL_SIZE;
+    uint32_t pool_idx = ctx->descriptor_sets.size() / VK_DEVICE_DESCRIPTOR_POOL_SIZE;
+
+    while (to_alloc > 0) {
+        const uint32_t alloc_count = std::min(pool_remaining, to_alloc);
+        to_alloc -= alloc_count;
+        pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE;
+
+        if (pool_idx >= ctx->descriptor_pools.size()) {
+            vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eStorageBuffer, MAX_PARAMETER_COUNT * VK_DEVICE_DESCRIPTOR_POOL_SIZE);
+            vk::DescriptorPoolCreateInfo descriptor_pool_create_info({}, VK_DEVICE_DESCRIPTOR_POOL_SIZE, descriptor_pool_size);
+            ctx->descriptor_pools.push_back(device->device.createDescriptorPool(descriptor_pool_create_info));
         }
 
-        uint32_t to_alloc = pipeline->descriptor_set_idx + n - pipeline->descriptor_sets.size();
-        uint32_t pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE - pipeline->descriptor_sets.size() % VK_DEVICE_DESCRIPTOR_POOL_SIZE;
-        uint32_t pool_idx = pipeline->descriptor_sets.size() / VK_DEVICE_DESCRIPTOR_POOL_SIZE;
-
-        while (to_alloc > 0) {
-            const uint32_t alloc_count = std::min(pool_remaining, to_alloc);
-            to_alloc -= alloc_count;
-            pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE;
-
-            if (pool_idx >= pipeline->descriptor_pools.size()) {
-                vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eStorageBuffer, pipeline->parameter_count * VK_DEVICE_DESCRIPTOR_POOL_SIZE);
-                vk::DescriptorPoolCreateInfo descriptor_pool_create_info({}, VK_DEVICE_DESCRIPTOR_POOL_SIZE, descriptor_pool_size);
-                pipeline->descriptor_pools.push_back(device->device.createDescriptorPool(descriptor_pool_create_info));
-            }
-
-            std::vector<vk::DescriptorSetLayout> layouts(alloc_count);
-            for (uint32_t i = 0; i < alloc_count; i++) {
-                layouts[i] = pipeline->dsl;
-            }
-            vk::DescriptorSetAllocateInfo descriptor_set_alloc_info(pipeline->descriptor_pools[pool_idx], alloc_count, layouts.data());
-            std::vector<vk::DescriptorSet> sets = device->device.allocateDescriptorSets(descriptor_set_alloc_info);
-            pipeline->descriptor_sets.insert(pipeline->descriptor_sets.end(), sets.begin(), sets.end());
-
-            pool_idx++;
+        std::vector<vk::DescriptorSetLayout> layouts(alloc_count);
+        for (uint32_t i = 0; i < alloc_count; i++) {
+            layouts[i] = device->dsl;
         }
+        vk::DescriptorSetAllocateInfo descriptor_set_alloc_info(ctx->descriptor_pools[pool_idx], alloc_count, layouts.data());
+        std::vector<vk::DescriptorSet> sets = device->device.allocateDescriptorSets(descriptor_set_alloc_info);
+        ctx->descriptor_sets.insert(ctx->descriptor_sets.end(), sets.begin(), sets.end());
+
+        pool_idx++;
     }
 }
 
-static void ggml_pipeline_cleanup(vk_pipeline& pipeline) {
-    VK_LOG_DEBUG("ggml_pipeline_cleanup(" << pipeline->name << ")");
-    pipeline->descriptor_set_idx = 0;
-}
-
-static vk::CommandBuffer ggml_vk_create_cmd_buffer(vk_device& device, vk_queue& q) {
+static vk::CommandBuffer ggml_vk_create_cmd_buffer(vk_device& device, vk_command_pool& p) {
     VK_LOG_DEBUG("ggml_vk_create_cmd_buffer()");
-    std::lock_guard<std::mutex> guard(device->mutex);
 
-    if (q.cmd_buffers.size() > q.cmd_buffer_idx) {
+    if (p.cmd_buffers.size() > p.cmd_buffer_idx) {
         // Reuse command buffer
-        return q.cmd_buffers[q.cmd_buffer_idx++];
+        return p.cmd_buffers[p.cmd_buffer_idx++];
     }
 
     vk::CommandBufferAllocateInfo command_buffer_alloc_info(
-        q.pool,
+        p.pool,
         vk::CommandBufferLevel::ePrimary,
         1);
     const std::vector<vk::CommandBuffer> cmd_buffers = device->device.allocateCommandBuffers(command_buffer_alloc_info);
     auto buf = cmd_buffers.front();
 
-    q.cmd_buffers.push_back(buf);
-    q.cmd_buffer_idx++;
+    p.cmd_buffers.push_back(buf);
+    p.cmd_buffer_idx++;
 
     return buf;
-}
-
-static vk_submission ggml_vk_create_submission(vk_device& device, vk_queue& q, std::vector<vk_semaphore> wait_semaphores, std::vector<vk_semaphore> signal_semaphores) {
-    VK_LOG_DEBUG("ggml_vk_create_submission()");
-    vk_submission s;
-    s.buffer = ggml_vk_create_cmd_buffer(device, q);
-    s.wait_semaphores = std::move(wait_semaphores);
-    s.signal_semaphores = std::move(signal_semaphores);
-    return s;
 }
 
 static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     if (ctx->seqs.empty()) {
         if (fence) {
-            ctx->q->queue.submit({}, fence);
+            std::lock_guard<std::mutex> guard(queue_mutex);
+            ctx->p->q->queue.submit({}, fence);
         }
         return;
     }
@@ -1312,7 +1343,7 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
             tl_signal_vals.push_back({});
             tl_signal_semaphores.push_back({});
             for (size_t i = 0; i < submission.wait_semaphores.size(); i++) {
-                stage_flags[idx].push_back(ctx->q->stage_flags);
+                stage_flags[idx].push_back(ctx->p->q->stage_flags);
                 tl_wait_vals[idx].push_back(submission.wait_semaphores[i].value);
                 tl_wait_semaphores[idx].push_back(submission.wait_semaphores[i].s);
             }
@@ -1342,7 +1373,8 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
         }
     }
 
-    ctx->q->queue.submit(submit_infos, fence);
+    std::lock_guard<std::mutex> guard(queue_mutex);
+    ctx->p->q->queue.submit(submit_infos, fence);
 
     ctx->seqs.clear();
 }
@@ -1395,33 +1427,30 @@ static uint32_t ggml_vk_find_queue_family_index(std::vector<vk::QueueFamilyPrope
 
 static void ggml_vk_create_queue(vk_device& device, vk_queue& q, uint32_t queue_family_index, uint32_t queue_index, vk::PipelineStageFlags&& stage_flags, bool transfer_only) {
     VK_LOG_DEBUG("ggml_vk_create_queue()");
-    std::lock_guard<std::mutex> guard(device->mutex);
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
 
     q.queue_family_index = queue_family_index;
     q.transfer_only = transfer_only;
 
-    vk::CommandPoolCreateInfo command_pool_create_info_compute(vk::CommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT), queue_family_index);
-    q.pool = device->device.createCommandPool(command_pool_create_info_compute);
-
-    q.cmd_buffer_idx = 0;
+    q.cmd_pool.init(device, &q);
 
     q.queue = device->device.getQueue(queue_family_index, queue_index);
 
     q.stage_flags = stage_flags;
 }
 
-static vk_context ggml_vk_create_context(ggml_backend_vk_context * ctx, vk_queue& q) {
+static vk_context ggml_vk_create_context(ggml_backend_vk_context * ctx, vk_command_pool& p) {
     vk_context result = std::make_shared<vk_context_struct>();
     VK_LOG_DEBUG("ggml_vk_create_context(" << result << ")");
     ctx->gc.contexts.emplace_back(result);
-    result->q = &q;
+    result->p = &p;
     return result;
 }
 
-static vk_context ggml_vk_create_temporary_context(vk_queue& q) {
+static vk_context ggml_vk_create_temporary_context(vk_command_pool& p) {
     vk_context result = std::make_shared<vk_context_struct>();
     VK_LOG_DEBUG("ggml_vk_create_temporary_context(" << result << ")");
-    result->q = &q;
+    result->p = &p;
     return result;
 }
 
@@ -1454,14 +1483,28 @@ static vk::Event ggml_vk_create_event(ggml_backend_vk_context * ctx) {
     return ctx->gc.events[ctx->event_idx++];
 }
 
-static void ggml_vk_queue_cleanup(vk_device& device, vk_queue& q) {
-    VK_LOG_DEBUG("ggml_vk_queue_cleanup()");
-    std::lock_guard<std::mutex> guard(device->mutex);
+static void ggml_vk_command_pool_cleanup(vk_device& device, vk_command_pool& p) {
+    VK_LOG_DEBUG("ggml_vk_command_pool_cleanup()");
 
     // Requires command buffers to be done
-    device->device.resetCommandPool(q.pool);
-    q.cmd_buffer_idx = 0;
+    device->device.resetCommandPool(p.pool);
+    p.cmd_buffer_idx = 0;
 }
+
+static void ggml_vk_queue_command_pools_cleanup(vk_device& device) {
+    VK_LOG_DEBUG("ggml_vk_queue_command_pools_cleanup()");
+
+    // Arbitrary frequency to cleanup/reuse command buffers
+    static constexpr uint32_t cleanup_frequency = 10;
+
+    if (device->compute_queue.cmd_pool.cmd_buffer_idx >= cleanup_frequency) {
+        ggml_vk_command_pool_cleanup(device, device->compute_queue.cmd_pool);
+    }
+    if (device->transfer_queue.cmd_pool.cmd_buffer_idx >= cleanup_frequency) {
+        ggml_vk_command_pool_cleanup(device, device->transfer_queue.cmd_pool);
+    }
+}
+
 
 static uint32_t find_properties(const vk::PhysicalDeviceMemoryProperties* mem_props, vk::MemoryRequirements* mem_req, vk::MemoryPropertyFlags flags) {
     for (uint32_t i = 0; i < mem_props->memoryTypeCount; ++i) {
@@ -1480,8 +1523,6 @@ static vk_buffer ggml_vk_create_buffer(vk_device& device, size_t size, vk::Memor
     if (size > device->max_memory_allocation_size) {
         throw vk::OutOfDeviceMemoryError("Requested buffer size exceeds device memory allocation limit");
     }
-
-    std::lock_guard<std::mutex> guard(device->mutex);
 
     vk_buffer buf = std::make_shared<vk_buffer_struct>();
 
@@ -1611,11 +1652,11 @@ static vk_subbuffer ggml_vk_subbuffer(vk_buffer& buf) {
 static void ggml_vk_sync_buffers(vk_context& ctx) {
     VK_LOG_DEBUG("ggml_vk_sync_buffers()");
 
-    const bool transfer_queue = ctx->q->transfer_only;
+    const bool transfer_queue = ctx->p->q->transfer_only;
 
     ctx->s->buffer.pipelineBarrier(
-        ctx->q->stage_flags,
-        ctx->q->stage_flags,
+        ctx->p->q->stage_flags,
+        ctx->p->q->stage_flags,
         {},
         { {
           { !transfer_queue ? (vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite) : (vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite) },
@@ -1634,8 +1675,8 @@ static void ggml_vk_wait_events(vk_context& ctx, std::vector<vk::Event>&& events
 
     ctx->s->buffer.waitEvents(
         events,
-        ctx->q->stage_flags,
-        ctx->q->stage_flags,
+        ctx->p->q->stage_flags,
+        ctx->p->q->stage_flags,
         {},
         {},
         {}
@@ -2630,7 +2671,8 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_norm_f32, "norm_f32", norm_f32_len, norm_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_group_norm_f32, "group_norm_f32", group_norm_f32_len, group_norm_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
-    ggml_vk_create_pipeline(device, device->pipeline_rms_norm_f32, "rms_norm_f32", rms_norm_f32_len, rms_norm_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_rms_norm_f32, "rms_norm_f32", rms_norm_f32_len, rms_norm_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 0}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_rms_norm_mul_f32, "rms_norm_mul_f32", rms_norm_f32_len, rms_norm_f32_data, "main", 3, sizeof(vk_op_binary_push_constants), {1, 1, 1}, {0, 1}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_rms_norm_back_f32, "rms_norm_back_f32", rms_norm_back_f32_len, rms_norm_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_l2_norm_f32, "l2_norm_f32", l2_norm_f32_len, l2_norm_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
 
@@ -2725,6 +2767,15 @@ static void ggml_vk_load_shaders(vk_device& device) {
     CREATE_UNARY(tanh)
     CREATE_UNARY(sigmoid)
 #undef CREATE_UNARY
+
+#define CREATE_GLU(name)  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);  \
+    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);
+
+    CREATE_GLU(geglu)
+    CREATE_GLU(reglu)
+    CREATE_GLU(swiglu)
+#undef CREATE_GLU
 
     ggml_vk_create_pipeline(device, device->pipeline_leaky_relu_f32, "leaky_relu_f32", leaky_relu_f32_len, leaky_relu_f32_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_silu_back_f32, "silu_back_f32", silu_back_f32_len, silu_back_f32_data, "main", 3, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
@@ -3369,6 +3420,22 @@ static vk_device ggml_vk_get_device(size_t idx) {
             }
         }
 
+
+        std::vector<vk::DescriptorSetLayoutBinding> dsl_binding;
+        std::vector<vk::DescriptorBindingFlags> dsl_binding_flags;
+        for (uint32_t i = 0; i < MAX_PARAMETER_COUNT; i++) {
+            dsl_binding.push_back({i, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute});
+            dsl_binding_flags.push_back({});
+        }
+
+        vk::DescriptorSetLayoutBindingFlagsCreateInfo dslbfci = { dsl_binding_flags };
+
+        vk::DescriptorSetLayoutCreateInfo descriptor_set_layout_create_info(
+            {},
+            dsl_binding);
+        descriptor_set_layout_create_info.setPNext(&dslbfci);
+        device->dsl = device->device.createDescriptorSetLayout(descriptor_set_layout_create_info);
+
         ggml_vk_load_shaders(device);
 
         if (!device->single_queue) {
@@ -3376,7 +3443,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
             ggml_vk_create_queue(device, device->transfer_queue, transfer_queue_family_index, transfer_queue_index, { vk::PipelineStageFlagBits::eTransfer }, true);
         } else {
             // TODO: Use pointer or reference to avoid copy
-            device->transfer_queue = device->compute_queue;
+            device->transfer_queue.copyFrom(device->compute_queue);
+            device->transfer_queue.cmd_pool.init(device, &device->transfer_queue);
         }
 
         device->buffer_type = {
@@ -3535,6 +3603,8 @@ static void ggml_vk_print_gpu_info(size_t idx) {
 static bool ggml_vk_instance_validation_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 static bool ggml_vk_instance_portability_enumeration_ext_available(const std::vector<vk::ExtensionProperties>& instance_extensions);
 
+static bool ggml_vk_instance_debug_utils_ext_available(const std::vector<vk::ExtensionProperties> & instance_extensions);
+
 static void ggml_vk_instance_init() {
     if (vk_instance_initialized) {
         return;
@@ -3555,7 +3625,7 @@ static void ggml_vk_instance_init() {
 #ifdef __APPLE__
     const bool portability_enumeration_ext = ggml_vk_instance_portability_enumeration_ext_available(instance_extensions);
 #endif
-
+    const bool debug_utils_ext = ggml_vk_instance_debug_utils_ext_available(instance_extensions) && getenv("GGML_VK_DEBUG_MARKERS") != nullptr;
     std::vector<const char*> layers;
 
     if (validation_ext) {
@@ -3570,6 +3640,9 @@ static void ggml_vk_instance_init() {
         extensions.push_back("VK_KHR_portability_enumeration");
     }
 #endif
+    if (debug_utils_ext) {
+        extensions.push_back("VK_EXT_debug_utils");
+    }
     vk::InstanceCreateInfo instance_create_info(vk::InstanceCreateFlags{}, &app_info, layers, extensions);
 #ifdef __APPLE__
     if (portability_enumeration_ext) {
@@ -3593,13 +3666,25 @@ static void ggml_vk_instance_init() {
     vk_instance.instance = vk::createInstance(instance_create_info);
     vk_instance_initialized = true;
 
-    vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
+    if (debug_utils_ext) {
+        vk_instance.debug_utils_support              = true;
+        vk_instance.pfn_vkSetDebugUtilsObjectNameEXT = (PFN_vkSetDebugUtilsObjectNameEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkSetDebugUtilsObjectNameEXT");
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT = (PFN_vkQueueBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueBeginDebugUtilsLabelEXT");
+        vk_instance.pfn_vkQueueEndDebugUtilsLabelEXT = (PFN_vkQueueEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkQueueEndDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdBeginDebugUtilsLabelEXT = (PFN_vkCmdBeginDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdBeginDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdEndDebugUtilsLabelEXT =   (PFN_vkCmdEndDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdEndDebugUtilsLabelEXT");
+        vk_instance.pfn_vkCmdInsertDebugUtilsLabelEXT = (PFN_vkCmdInsertDebugUtilsLabelEXT) vkGetInstanceProcAddr(vk_instance.instance, "vkCmdInsertDebugUtilsLabelEXT");
+
+    }
 
     size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+    vk_perf_logger_enabled = getenv("GGML_VK_PERF_LOGGER") != nullptr;
 
     // Emulate behavior of CUDA_VISIBLE_DEVICES for Vulkan
     char * devices_env = getenv("GGML_VK_VISIBLE_DEVICES");
     if (devices_env != nullptr) {
+        size_t num_available_devices = vk_instance.instance.enumeratePhysicalDevices().size();
+
         std::string devices(devices_env);
         std::replace(devices.begin(), devices.end(), ',', ' ');
 
@@ -3615,9 +3700,9 @@ static void ggml_vk_instance_init() {
     } else {
         std::vector<vk::PhysicalDevice> devices = vk_instance.instance.enumeratePhysicalDevices();
 
-        // Make sure at least one device exists
+        // If no vulkan devices are found, return early
         if (devices.empty()) {
-            std::cerr << "ggml_vulkan: Error: No devices found." << std::endl;
+            GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
             return;
         }
 
@@ -3700,9 +3785,20 @@ static void ggml_vk_instance_init() {
             }
         }
 
-        // If no dedicated GPUs found, fall back to GPU 0
+        // If no dedicated GPUs found, fall back to the first non-CPU device.
+        // If only CPU devices are available, return without devices.
         if (vk_instance.device_indices.empty()) {
-            vk_instance.device_indices.push_back(0);
+            for (size_t i = 0; i < devices.size(); i++) {
+                if (devices[i].getProperties().deviceType != vk::PhysicalDeviceType::eCpu) {
+                    vk_instance.device_indices.push_back(i);
+                    break;
+                }
+            }
+        }
+
+        if (vk_instance.device_indices.empty()) {
+            GGML_LOG_INFO("ggml_vulkan: No devices found.\n");
+            return;
         }
     }
     GGML_LOG_DEBUG("ggml_vulkan: Found %zu Vulkan devices:\n", vk_instance.device_indices.size());
@@ -3730,6 +3826,9 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
 
     ctx->fence = ctx->device->device.createFence({});
     ctx->almost_ready_fence = ctx->device->device.createFence({});
+
+    ctx->compute_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
+    ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
 
 #ifdef GGML_VULKAN_CHECK_RESULTS
     const char* skip_checks = getenv("GGML_VULKAN_SKIP_CHECKS");
@@ -4051,6 +4150,7 @@ static void * ggml_vk_host_malloc(vk_device& device, size_t size) {
         return nullptr;
     }
 
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
     device->pinned_memory.push_back(std::make_tuple(buf->ptr, size, buf));
 
     return buf->ptr;
@@ -4061,6 +4161,8 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
         return;
     }
     VK_LOG_MEMORY("ggml_vk_host_free(" << ptr << ")");
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+
     vk_buffer buf;
     size_t index;
     for (size_t i = 0; i < device->pinned_memory.size(); i++) {
@@ -4083,6 +4185,7 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
 }
 
 static void ggml_vk_host_get(vk_device& device, const void * ptr, vk_buffer& buf, size_t& buf_offset) {
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
     buf = nullptr;
     buf_offset = 0;
     for (size_t i = 0; i < device->pinned_memory.size(); i++) {
@@ -4096,9 +4199,9 @@ static void ggml_vk_host_get(vk_device& device, const void * ptr, vk_buffer& buf
     }
 }
 
-static vk_submission ggml_vk_begin_submission(vk_device& device, vk_queue& q, bool one_time = true) {
+static vk_submission ggml_vk_begin_submission(vk_device& device, vk_command_pool& p, bool one_time = true) {
     vk_submission s;
-    s.buffer = ggml_vk_create_cmd_buffer(device, q);
+    s.buffer = ggml_vk_create_cmd_buffer(device, p);
     if (one_time) {
         s.buffer.begin({ vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
     } else {
@@ -4143,10 +4246,10 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
         std::cerr << "(" << buffer.buffer << ", " << buffer.offset << ", " << buffer.range << "), ";
     }
     std::cerr << "}, (" << wg0 << "," << wg1 << "," << wg2 << "))");
-    GGML_ASSERT(pipeline->descriptor_set_idx < pipeline->descriptor_sets.size());
-    GGML_ASSERT(descriptor_buffer_infos.size() == pipeline->parameter_count);
+    GGML_ASSERT(ctx->descriptor_set_idx < ctx->descriptor_sets.size());
+    GGML_ASSERT(descriptor_buffer_infos.size() <= MAX_PARAMETER_COUNT);
 
-    vk::DescriptorSet& descriptor_set = pipeline->descriptor_sets[pipeline->descriptor_set_idx++];
+    vk::DescriptorSet& descriptor_set = ctx->descriptor_sets[ctx->descriptor_set_idx++];
     vk::WriteDescriptorSet write_descriptor_set{ descriptor_set, 0, 0, pipeline->parameter_count, vk::DescriptorType::eStorageBuffer, nullptr, descriptor_buffer_infos.begin() };
     ctx->device->device.updateDescriptorSets({ write_descriptor_set }, {});
 
@@ -4183,7 +4286,7 @@ static void ggml_vk_ctx_begin(vk_device& device, vk_context& subctx) {
         ggml_vk_ctx_end(subctx);
     }
 
-    subctx->seqs.push_back({ ggml_vk_begin_submission(device, *subctx->q) });
+    subctx->seqs.push_back({ ggml_vk_begin_submission(device, *subctx->p) });
     subctx->s = subctx->seqs[subctx->seqs.size() - 1].data();
 }
 
@@ -4384,7 +4487,9 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
             memcpy((uint8_t *)dst->ptr + offset + i * width, (const uint8_t *) src + i * spitch, width);
         }
     } else {
-        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue);
+        std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
+
+        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
         ggml_vk_ctx_begin(dst->device, subctx);
         ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, spitch, width, height, true);
         ggml_vk_ctx_end(subctx);
@@ -4396,6 +4501,7 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
         ggml_vk_submit(subctx, dst->device->fence);
         VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_buffer_write_2d waitForFences");
         dst->device->device.resetFences({ dst->device->fence });
+        ggml_vk_queue_command_pools_cleanup(dst->device);
     }
 }
 
@@ -4472,7 +4578,9 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
 
         memcpy(dst, (uint8_t *) src->ptr + offset, size);
     } else {
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue);
+        std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
+
+        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
         ggml_vk_buffer_read_async(subctx, src, offset, dst, size, true);
         ggml_vk_ctx_end(subctx);
@@ -4480,6 +4588,7 @@ static void ggml_vk_buffer_read(vk_buffer& src, size_t offset, void * dst, size_
         ggml_vk_submit(subctx, src->device->fence);
         VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_read waitForFences");
         src->device->device.resetFences({ src->device->fence });
+        ggml_vk_queue_command_pools_cleanup(src->device);
 
         for (auto& cpy : subctx->out_memcpys) {
             memcpy(cpy.dst, cpy.src, cpy.n);
@@ -4499,15 +4608,17 @@ static void ggml_vk_buffer_copy_async(vk_context& ctx, vk_buffer& dst, size_t ds
 
 static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& src, size_t src_offset, size_t size) {
     if (src->device == dst->device) {
+        std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
         VK_LOG_DEBUG("ggml_vk_buffer_copy(SINGLE_DEVICE, " << size << ")");
         // Copy within the device
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue);
+        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
         ggml_vk_buffer_copy_async(subctx, dst, dst_offset, src, src_offset, size);
         ggml_vk_ctx_end(subctx);
         ggml_vk_submit(subctx, src->device->fence);
         VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX), "vk_buffer_copy waitForFences");
         src->device->device.resetFences({ src->device->fence });
+        ggml_vk_queue_command_pools_cleanup(src->device);
     } else {
         VK_LOG_DEBUG("ggml_vk_buffer_copy(MULTI_DEVICE, " << size << ")");
         // Copy device to device
@@ -4532,7 +4643,8 @@ static void ggml_vk_buffer_memset_async(vk_context& ctx, vk_buffer& dst, size_t 
 static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, size_t size) {
     VK_LOG_DEBUG("ggml_vk_buffer_memset(" << offset << ", " << c << ", " << size << ")");
 
-    vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue);
+    std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
+    vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
     ggml_vk_ctx_begin(dst->device, subctx);
     subctx->s->buffer.fillBuffer(dst->buffer, offset, size, c);
     ggml_vk_ctx_end(subctx);
@@ -4540,6 +4652,7 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     ggml_vk_submit(subctx, dst->device->fence);
     VK_CHECK(dst->device->device.waitForFences({ dst->device->fence }, true, UINT64_MAX), "vk_memset waitForFences");
     dst->device->device.resetFences({ dst->device->fence });
+    ggml_vk_queue_command_pools_cleanup(dst->device);
 }
 
 static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, int m, int n, int k, const vk_pipeline& pipeline) {
@@ -4757,9 +4870,17 @@ static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const
         // type size must be exactly 2 or 4.
         GGML_ASSERT(ggml_is_quantized(to) || ggml_type_size(src->type) == 2 || ggml_type_size(src->type) == 4);
         if ((ggml_type_size(src->type) % 4) == 0) {
-            return ctx->device->pipeline_contig_cpy_f32_f32;
+            if (contig) {
+                return ctx->device->pipeline_contig_cpy_f32_f32;
+            } else {
+                return ctx->device->pipeline_cpy_f32_f32;
+            }
         } else {
-            return ctx->device->pipeline_contig_cpy_f16_f16;
+            if (contig) {
+                return ctx->device->pipeline_contig_cpy_f16_f16;
+            } else {
+                return ctx->device->pipeline_cpy_f16_f16;
+            }
         }
     }
 
@@ -4820,7 +4941,7 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     std::cerr << "), (" << src1 << ", name=" << src1->name << ", type=" << src1->type << ", ne0=" << src1->ne[0] << ", ne1=" << src1->ne[1] << ", ne2=" << src1->ne[2] << ", ne3=" << src1->ne[3] << ", nb0=" << src1->nb[0] << ", nb1=" << src1->nb[1] << ", nb2=" << src1->nb[2] << ", nb3=" << src1->nb[3];
     std::cerr << "), (" << dst << ", name=" << dst->name << ", type=" << dst->type << ", ne0=" << dst->ne[0] << ", ne1=" << dst->ne[1] << ", ne2=" << dst->ne[2] << ", ne3=" << dst->ne[3] << ", nb0=" << dst->nb[0] << ", nb1=" << dst->nb[1] << ", nb2=" << dst->nb[2] << ", nb3=" << dst->nb[3];
     std::cerr << "), " << (dryrun ? "dryrun" : "") << ")");
-    GGML_ASSERT(ggml_vk_dim01_contiguous(src0) || src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);  // NOLINT
+    GGML_ASSERT(ggml_vk_dim01_contiguous(src0) || src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);  // NOLINT
     GGML_ASSERT(ggml_vk_dim01_contiguous(src1) || src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);  // NOLINT
 
     const uint64_t ne00 = src0->ne[0];
@@ -4953,18 +5074,18 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         }
 
         // Request descriptor sets
-        ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         if (qx_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_0, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
         }
         if (qy_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_1, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_1, 1);
         }
         if (quantize_y) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_q8_1, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_q8_1, 1);
         }
         if (split_k > 1) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_matmul_split_k_reduce, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_split_k_reduce, 1);
         }
         return;
     }
@@ -5048,7 +5169,7 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     std::cerr << "), (" << src1 << ", name=" << src1->name << ", type=" << src1->type << ", ne0=" << src1->ne[0] << ", ne1=" << src1->ne[1] << ", ne2=" << src1->ne[2] << ", ne3=" << src1->ne[3] << ", nb0=" << src1->nb[0] << ", nb1=" << src1->nb[1] << ", nb2=" << src1->nb[2] << ", nb3=" << src1->nb[3];
     std::cerr << "), (" << dst << ", name=" << dst->name << ", type=" << dst->type << ", ne0=" << dst->ne[0] << ", ne1=" << dst->ne[1] << ", ne2=" << dst->ne[2] << ", ne3=" << dst->ne[3] << ", nb0=" << dst->nb[0] << ", nb1=" << dst->nb[1] << ", nb2=" << dst->nb[2] << ", nb3=" << dst->nb[3];
     std::cerr << "), " << (dryrun ? "dryrun" : "") << "),)");
-    GGML_ASSERT(ggml_vk_dim01_contiguous(src0) || src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);  // NOLINT
+    GGML_ASSERT(ggml_vk_dim01_contiguous(src0) || src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);  // NOLINT
     GGML_ASSERT(ggml_vk_dim01_contiguous(src1) || src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);  // NOLINT
 
     const uint64_t ne00 = src0->ne[0];
@@ -5146,12 +5267,12 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
 
         // Request descriptor sets
         if (qx_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_0, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
         }
         if (qy_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_1, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_1, 1);
         }
-        ggml_pipeline_request_descriptor_sets(ctx->device, dmmv, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, dmmv, 1);
         return;
     }
 
@@ -5284,7 +5405,7 @@ static void ggml_vk_mul_mat_vec_p021_f16_f32(ggml_backend_vk_context * ctx, vk_c
 
     if (dryrun) {
         // Request descriptor sets
-        ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_mul_mat_vec_p021_f16_f32[gqa_ratio - 1], 1);
+        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_mul_mat_vec_p021_f16_f32[gqa_ratio - 1], 1);
         return;
     }
 
@@ -5373,7 +5494,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
 
     if (dryrun) {
         // Request descriptor sets
-        ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_mul_mat_vec_nc_f16_f32, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_mul_mat_vec_nc_f16_f32, 1);
         return;
     }
 
@@ -5560,12 +5681,12 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         }
 
         // Request descriptor sets
-        ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         if (qx_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_0, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
         }
         if (qy_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_1, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_1, 1);
         }
         return;
     }
@@ -5649,7 +5770,7 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     std::cerr << "), (" << ids << ", name=" << ids->name << ", type=" << ids->type << ", ne0=" << ids->ne[0] << ", ne1=" << ids->ne[1] << ", ne2=" << ids->ne[2] << ", ne3=" << ids->ne[3] << ", nb0=" << ids->nb[0] << ", nb1=" << ids->nb[1] << ", nb2=" << ids->nb[2] << ", nb3=" << ids->nb[3];
     std::cerr << "), (" << dst << ", name=" << dst->name << ", type=" << dst->type << ", ne0=" << dst->ne[0] << ", ne1=" << dst->ne[1] << ", ne2=" << dst->ne[2] << ", ne3=" << dst->ne[3] << ", nb0=" << dst->nb[0] << ", nb1=" << dst->nb[1] << ", nb2=" << dst->nb[2] << ", nb3=" << dst->nb[3];
     std::cerr << "), " << (dryrun ? "dryrun" : "") << ")");
-    GGML_ASSERT(ggml_vk_dim01_contiguous(src0) || src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);  // NOLINT
+    GGML_ASSERT(ggml_vk_dim01_contiguous(src0) || src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);  // NOLINT
     GGML_ASSERT(ggml_vk_dim01_contiguous(src1) || src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);  // NOLINT
     GGML_ASSERT(ids->type == GGML_TYPE_I32);
 
@@ -5754,12 +5875,12 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
 
         // Request descriptor sets
         if (qx_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_0, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_0, 1);
         }
         if (qy_needs_dequant) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, to_fp16_vk_1, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, to_fp16_vk_1, 1);
         }
-        ggml_pipeline_request_descriptor_sets(ctx->device, dmmv, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, dmmv, 1);
         return;
     }
 
@@ -6079,9 +6200,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     if (dryrun) {
         // Request descriptor sets
-        ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         if (split_k > 1) {
-            ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
+            ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_flash_attn_split_k_reduce, 1);
         }
         return;
     }
@@ -6335,7 +6456,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_RMS_NORM:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
-            return ctx->device->pipeline_rms_norm_f32;
+            return ctx->num_additional_fused_ops > 0 ? ctx->device->pipeline_rms_norm_mul_f32 : ctx->device->pipeline_rms_norm_f32;
         }
         return nullptr;
     case GGML_OP_RMS_NORM_BACK:
@@ -6368,6 +6489,24 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_tanh[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_SIGMOID:
                 return ctx->device->pipeline_sigmoid[dst->type == GGML_TYPE_F16];
+            default:
+                break;
+        }
+        return nullptr;
+    case GGML_OP_GLU:
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) ||
+            (src0->type != dst->type)) {
+            return nullptr;
+        }
+
+        switch (ggml_get_glu_op(dst)) {
+            case GGML_GLU_OP_GEGLU:
+                return ctx->device->pipeline_geglu[dst->type == GGML_TYPE_F16];
+            case GGML_GLU_OP_REGLU:
+                return ctx->device->pipeline_reglu[dst->type == GGML_TYPE_F16];
+            case GGML_GLU_OP_SWIGLU:
+                return ctx->device->pipeline_swiglu[dst->type == GGML_TYPE_F16];
             default:
                 break;
         }
@@ -6644,7 +6783,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     }
 
     if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         return;
     }
 
@@ -6832,6 +6971,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONCAT:
     case GGML_OP_UPSCALE:
     case GGML_OP_UNARY:
+    case GGML_OP_GLU:
     case GGML_OP_CONV_2D_DW:
         {
             uint32_t ne = ggml_nelements(dst);
@@ -6872,7 +7012,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         }
     }
 
-    if (op == GGML_OP_SOFT_MAX) {
+    if (op == GGML_OP_SOFT_MAX || op == GGML_OP_GLU) {
         // Empty src1 is possible in soft_max, but the shader needs a buffer
         vk_subbuffer subbuf_y;
         if (use_src1) {
@@ -7025,7 +7165,7 @@ static void ggml_vk_op_f32_wkv(ggml_backend_vk_context * ctx, vk_context& subctx
     GGML_ASSERT(pipeline != nullptr);
 
     if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         return;
     }
 
@@ -7164,7 +7304,7 @@ static void ggml_vk_op_f32_opt_step_adamw(ggml_backend_vk_context * ctx, vk_cont
     GGML_ASSERT(pipeline != nullptr);
 
     if (dryrun) {
-        ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+        ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
         return;
     }
 
@@ -7435,18 +7575,19 @@ static void ggml_vk_group_norm(ggml_backend_vk_context * ctx, vk_context& subctx
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_GROUP_NORM, { group_size, 0, eps, 0.0f }, dryrun);
 }
 
-static void ggml_vk_rms_norm(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
+static void ggml_vk_rms_norm(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
     float * op_params = (float *)dst->op_params;
     const uint32_t src0_type_size = ggml_type_size(src0->type);
+    const uint32_t src1_type_size = ggml_type_size(src1->type);
     const uint32_t dst_type_size = ggml_type_size(dst->type);
 
-    ggml_vk_op_f32<vk_op_unary_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_RMS_NORM, {
+    ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_RMS_NORM, {
         (uint32_t)ggml_nelements(src0),
-        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2], (uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
-        (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2], (uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
+        (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],(uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
+        (uint32_t)src1->ne[0], (uint32_t)src1->ne[1], (uint32_t)src1->ne[2],(uint32_t)src1->ne[3], (uint32_t)src1->nb[0] / src1_type_size, (uint32_t)src1->nb[1] / src1_type_size, (uint32_t)src1->nb[2] / src1_type_size, (uint32_t)src1->nb[3] / src1_type_size,
+        (uint32_t) dst->ne[0], (uint32_t) dst->ne[1], (uint32_t) dst->ne[2],(uint32_t) dst->ne[3], (uint32_t) dst->nb[0] /  dst_type_size, (uint32_t) dst->nb[1] /  dst_type_size, (uint32_t) dst->nb[2] /  dst_type_size, (uint32_t) dst->nb[3] /  dst_type_size,
         0,
-        op_params[0], 0.0f,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        op_params[0], 0.0f, 0,
     }, dryrun);
 }
 
@@ -7462,6 +7603,25 @@ static void ggml_vk_l2_norm(ggml_backend_vk_context * ctx, vk_context& subctx, c
 
 static void ggml_vk_unary(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
     ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_UNARY, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f }, dryrun);
+}
+
+static void ggml_vk_glu(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
+    const bool swapped = (bool)dst->op_params[1];
+    const bool split = src1 != nullptr;
+
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    if (!split) {
+        GGML_ASSERT(src0->ne[0] / 2 == dst->ne[0]);
+    } else {
+        GGML_ASSERT(src0->ne[0] == src1->ne[0]);
+        GGML_ASSERT(src0->ne[0] == dst->ne[0]);
+        GGML_ASSERT(src0->type == src1->type);
+    }
+
+    const uint32_t mode = split ? 2 : (swapped ? 1 : 0);
+
+    ggml_vk_op_f32<vk_op_glu_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_GLU, { (uint32_t)ggml_nelements(dst), (uint32_t)src0->ne[0], (uint32_t)dst->ne[0], mode }, dryrun);
 }
 
 static void ggml_vk_diag_mask_inf(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -7842,9 +8002,9 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
         }
     }
 
-    ggml_pipeline_request_descriptor_sets(ctx->device, p, num_it);
+    ggml_pipeline_request_descriptor_sets(ctx, p, num_it);
     if (split_k > 1) {
-        ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_matmul_split_k_reduce, num_it);
+        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_split_k_reduce, num_it);
 
         if (ctx->prealloc_split_k == nullptr || ctx->prealloc_split_k->size < sizeof(float) * d_ne * split_k) {
             // Resize buffer
@@ -7859,7 +8019,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
         ggml_vk_load_shaders(ctx->device);
     }
 
-    ggml_pipeline_allocate_descriptor_sets(ctx->device);
+    ggml_pipeline_allocate_descriptor_sets(ctx);
 
     vk_buffer d_X = ggml_vk_create_buffer_check(ctx->device, sizeof(X_TYPE) * x_ne, vk::MemoryPropertyFlagBits::eDeviceLocal);
     vk_buffer d_Y = ggml_vk_create_buffer_check(ctx->device, sizeof(Y_TYPE) * y_ne, vk::MemoryPropertyFlagBits::eDeviceLocal);
@@ -7901,7 +8061,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     ggml_vk_buffer_write(d_X, 0, x, sizeof(X_TYPE) * k * m * batch);
     ggml_vk_buffer_write(d_Y, 0, y, sizeof(Y_TYPE) * k * n * batch);
 
-    vk_context subctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+    vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
     ggml_vk_ctx_begin(ctx->device, subctx);
     for (size_t i = 0; i < num_it; i++) {
         ggml_vk_matmul(
@@ -7917,6 +8077,7 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
     ggml_vk_submit(subctx, ctx->fence);
     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_matmul waitForFences");
     ctx->device->device.resetFences({ ctx->fence });
+    ggml_vk_queue_command_pools_cleanup(ctx->device);
 
     auto end = std::chrono::high_resolution_clock::now();
     double time = std::chrono::duration_cast<std::chrono::microseconds>(end-begin).count() / 1000.0;
@@ -8018,15 +8179,12 @@ static void ggml_vk_test_matmul(ggml_backend_vk_context * ctx, size_t m, size_t 
 
     free(d_chk);
 
-    ggml_vk_queue_cleanup(ctx->device, ctx->device->transfer_queue);
-    ggml_vk_queue_cleanup(ctx->device, ctx->device->compute_queue);
+    ggml_vk_command_pool_cleanup(ctx->device, ctx->compute_cmd_pool);
+    ggml_vk_command_pool_cleanup(ctx->device, ctx->transfer_cmd_pool);
 
     ggml_vk_destroy_buffer(d_X);
     ggml_vk_destroy_buffer(d_Y);
     ggml_vk_destroy_buffer(d_D);
-
-    ggml_pipeline_cleanup(p);
-    ggml_pipeline_cleanup(ctx->device->pipeline_matmul_split_k_reduce);
 
     free(x);
     free(y);
@@ -8105,17 +8263,17 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
     ggml_vk_quantize_data(x, qx, ne, quant);
     ggml_vk_dequantize_data(qx, x_ref, ne, quant);
 
-    ggml_pipeline_request_descriptor_sets(ctx->device, p, 1);
+    ggml_pipeline_request_descriptor_sets(ctx, p, 1);
 
     if (ctx->device->need_compiles) {
         ggml_vk_load_shaders(ctx->device);
     }
 
-    ggml_pipeline_allocate_descriptor_sets(ctx->device);
+    ggml_pipeline_allocate_descriptor_sets(ctx);
 
     ggml_vk_buffer_write(qx_buf, 0, qx, qx_sz);
 
-    vk_context subctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+    vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
     ggml_vk_ctx_begin(ctx->device, subctx);
     const std::vector<uint32_t> pc = { 1, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne, (uint32_t)ne };
     ggml_vk_dispatch_pipeline(ctx, subctx, p, { vk_subbuffer{ qx_buf, 0, qx_sz }, vk_subbuffer{ x_buf, 0, x_sz_f16 } }, pc, { (uint32_t)ne, 1, 1});
@@ -8126,6 +8284,7 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
     ggml_vk_submit(subctx, ctx->fence);
     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_dequant waitForFences");
     ctx->device->device.resetFences({ ctx->fence });
+    ggml_vk_queue_command_pools_cleanup(ctx->device);
 
     auto end = std::chrono::high_resolution_clock::now();
 
@@ -8205,17 +8364,17 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
 //
 //     vk_pipeline p = ggml_vk_get_quantize_pipeline(ctx, quant);
 //
-//     ggml_pipeline_request_descriptor_sets(ctx->device, p, 1);
+//     ggml_pipeline_request_descriptor_sets(ctx, p, 1);
 //
 //     if (ctx->device->need_compiles) {
 //         ggml_vk_load_shaders(ctx->device);
 //     }
 //
-//     ggml_pipeline_allocate_descriptor_sets(ctx->device);
+//     ggml_pipeline_allocate_descriptor_sets(ctx);
 //
 //     ggml_vk_buffer_write(x_buf, 0, x, x_sz);
 //
-//     vk_context subctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+//     vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
 //     ggml_vk_ctx_begin(ctx->device, subctx);
 //     ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(x_buf), ggml_vk_subbuffer(qx_buf), ne);
 //     ggml_vk_ctx_end(subctx);
@@ -8225,6 +8384,7 @@ static void ggml_vk_test_dequant(ggml_backend_vk_context * ctx, size_t ne, ggml_
 //     ggml_vk_submit(subctx, ctx->fence);
 //     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_quantize waitForFences");
 //     ctx->device->device.resetFences({ ctx->fence });
+//     ggml_vk_queue_command_pools_cleanup(ctx->device);
 //
 //     auto end = std::chrono::high_resolution_clock::now();
 //
@@ -8364,9 +8524,9 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
         // y[i] = i % k;
     }
 
-    ggml_pipeline_request_descriptor_sets(ctx->device, p, num_it);
+    ggml_pipeline_request_descriptor_sets(ctx, p, num_it);
     if (split_k > 1) {
-        ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_matmul_split_k_reduce, num_it);
+        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_split_k_reduce, num_it);
 
         if (ctx->prealloc_split_k == nullptr || ctx->prealloc_split_k->size < sizeof(float) * d_ne * split_k) {
             // Resize buffer
@@ -8377,19 +8537,19 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
         }
     }
     if (mmq) {
-        ggml_pipeline_request_descriptor_sets(ctx->device, ctx->device->pipeline_quantize_q8_1, num_it);
+        ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_quantize_q8_1, num_it);
     }
 
     if (ctx->device->need_compiles) {
         ggml_vk_load_shaders(ctx->device);
     }
 
-    ggml_pipeline_allocate_descriptor_sets(ctx->device);
+    ggml_pipeline_allocate_descriptor_sets(ctx);
 
     ggml_vk_buffer_write(qx_buf, 0, qx, qx_sz);
     ggml_vk_buffer_write(y_buf, 0, y, y_sz);
 
-    vk_context subctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+    vk_context subctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
     ggml_vk_ctx_begin(ctx->device, subctx);
     if (mmq) {
         for (size_t i = 0; i < num_it; i++) {
@@ -8418,6 +8578,7 @@ static void ggml_vk_test_dequant_matmul(ggml_backend_vk_context * ctx, size_t m,
     ggml_vk_submit(subctx, ctx->fence);
     VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "ggml_vk_test_dequant waitForFences");
     ctx->device->device.resetFences({ ctx->fence });
+    ggml_vk_queue_command_pools_cleanup(ctx->device);
 
     auto end = std::chrono::high_resolution_clock::now();
 
@@ -8640,7 +8801,8 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context* ctx, ggml_tensor* t
 
 // Returns true if node has enqueued work into the queue, false otherwise
 // If submit is true the current all operations queued so far are being submitted to Vulkan to overlap cmdlist creation and GPU execution.
-static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * node, int node_idx, ggml_tensor *node_begin, int node_idx_begin, bool dryrun, bool last_node, bool almost_ready, bool submit){
+static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int node_idx, ggml_tensor *node_begin, int node_idx_begin, bool dryrun, bool last_node, bool almost_ready, bool submit){
+    ggml_tensor * node = cgraph->nodes[node_idx];
     if (ggml_is_empty(node) || !node->buffer) {
         return false;
     }
@@ -8669,6 +8831,16 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
+            break;
+        default:
+            return false;
+        }
+        break;
+    case GGML_OP_GLU:
+        switch (ggml_get_glu_op(node)) {
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_REGLU:
+        case GGML_GLU_OP_SWIGLU:
             break;
         default:
             return false;
@@ -8732,7 +8904,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
 
     if (!dryrun) {
         if (ctx->compute_ctx.expired()) {
-            compute_ctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+            compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
             ctx->compute_ctx = compute_ctx;
             ggml_vk_ctx_begin(ctx->device, compute_ctx);
         } else {
@@ -8766,6 +8938,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_L2_NORM:
         case GGML_OP_UNARY:
+        case GGML_OP_GLU:
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
@@ -8786,7 +8959,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
                 // These operations all go through ggml_vk_op_f32, so short-circuit and
                 // do the only thing needed for the dryrun.
                 vk_pipeline pipeline = ggml_vk_op_get_pipeline(ctx, src0, src1, src2, node, node->op);
-                ggml_pipeline_request_descriptor_sets(ctx->device, pipeline, 1);
+                ggml_pipeline_request_descriptor_sets(ctx, pipeline, 1);
                 return false;
             }
         default:
@@ -8878,8 +9051,14 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
 
         break;
     case GGML_OP_RMS_NORM:
-        ggml_vk_rms_norm(ctx, compute_ctx, src0, node, dryrun);
-
+        if (ctx->num_additional_fused_ops > 0) {
+            // fused rms_norm + mul
+            ggml_tensor *mul = cgraph->nodes[node_idx + 1];
+            ggml_tensor *other_src = mul->src[0] == node ? mul->src[1] : mul->src[0];
+            ggml_vk_rms_norm(ctx, compute_ctx, src0, other_src, mul, dryrun);
+        } else {
+            ggml_vk_rms_norm(ctx, compute_ctx, src0, src0, node, dryrun);
+        }
         break;
     case GGML_OP_RMS_NORM_BACK:
         ggml_vk_rms_norm_back(ctx, compute_ctx, src0, src1, node, dryrun);
@@ -8898,6 +9077,17 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         case GGML_UNARY_OP_TANH:
         case GGML_UNARY_OP_SIGMOID:
             ggml_vk_unary(ctx, compute_ctx, src0, node, dryrun);
+            break;
+        default:
+            return false;
+        }
+        break;
+    case GGML_OP_GLU:
+        switch (ggml_get_glu_op(node)) {
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_REGLU:
+        case GGML_GLU_OP_SWIGLU:
+            ggml_vk_glu(ctx, compute_ctx, src0, src1, node, dryrun);
             break;
         default:
             return false;
@@ -9028,8 +9218,9 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_tensor * nod
         if (!ok) {
             if (node->op == GGML_OP_UNARY) {
                 std::cerr << __func__ << ": error: op not supported UNARY " << node->name << " (" << ggml_unary_op_name(static_cast<ggml_unary_op>(node->op_params[0])) << ")" << std::endl;
-            }
-            else {
+            } else if (node->op == GGML_OP_GLU) {
+                std::cerr << __func__ << ": error: op not supported GLU " << node->name << " (" << ggml_glu_op_name(static_cast<ggml_glu_op>(node->op_params[0])) << ")" << std::endl;
+            } else {
                 std::cerr << __func__ << ": error: op not supported " << node->name << " (" << ggml_op_name(node->op) << ")" << std::endl;
             }
         }
@@ -9108,6 +9299,17 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
             return false;
         }
         break;
+    case GGML_OP_GLU:
+        switch (ggml_get_glu_op(tensor)) {
+        case GGML_GLU_OP_GEGLU:
+        case GGML_GLU_OP_REGLU:
+        case GGML_GLU_OP_SWIGLU:
+            buf = tensor->buffer;
+            break;
+        default:
+            return false;
+        }
+        break;
     case GGML_OP_MUL_MAT:
     case GGML_OP_MUL_MAT_ID:
     case GGML_OP_FLASH_ATTN_EXT:
@@ -9178,19 +9380,8 @@ static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
     }
     ctx->gc.temp_buffers.clear();
 
-    for (auto& dsr : ctx->device->pipeline_descriptor_set_requirements) {
-        vk_pipeline_ref plr = ctx->device->pipelines[dsr.first];
-
-        if (plr.expired()) {
-            continue;
-        }
-
-        vk_pipeline pl = plr.lock();
-        ggml_pipeline_cleanup(pl);
-    }
-
-    ggml_vk_queue_cleanup(ctx->device, ctx->device->compute_queue);
-    ggml_vk_queue_cleanup(ctx->device, ctx->device->transfer_queue);
+    ggml_vk_command_pool_cleanup(ctx->device, ctx->compute_cmd_pool);
+    ggml_vk_command_pool_cleanup(ctx->device, ctx->transfer_cmd_pool);
 
     for (size_t i = 0; i < ctx->gc.semaphores.size(); i++) {
         ctx->device->device.destroySemaphore({ ctx->gc.semaphores[i].s });
@@ -9211,7 +9402,8 @@ static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
 
     ctx->tensor_ctxs.clear();
     ctx->gc.contexts.clear();
-    ctx->device->pipeline_descriptor_set_requirements.clear();
+    ctx->pipeline_descriptor_set_requirements = 0;
+    ctx->descriptor_set_idx = 0;
 }
 
 // Clean up on backend free
@@ -9238,6 +9430,15 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
 
     ctx->device->device.destroyFence(ctx->fence);
     ctx->device->device.destroyFence(ctx->almost_ready_fence);
+
+    for (auto& pool : ctx->descriptor_pools) {
+        ctx->device->device.destroyDescriptorPool(pool);
+    }
+    ctx->descriptor_pools.clear();
+    ctx->descriptor_sets.clear();
+
+    ctx->compute_cmd_pool.destroy(ctx->device->device);
+    ctx->transfer_cmd_pool.destroy(ctx->device->device);
 }
 
 static int ggml_vk_get_device_count() {
@@ -9445,6 +9646,12 @@ static size_t ggml_backend_vk_host_buffer_type_get_alignment(ggml_backend_buffer
     UNUSED(buft);
 }
 
+static size_t ggml_backend_vk_host_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    return vk_instance.devices[0]->suballocation_block_size;
+
+    UNUSED(buft);
+}
+
 // Should be changed to return device-specific host buffer type
 // but that probably requires changes in llama.cpp
 ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type() {
@@ -9453,7 +9660,7 @@ ggml_backend_buffer_type_t ggml_backend_vk_host_buffer_type() {
             /* .get_name         = */ ggml_backend_vk_host_buffer_type_name,
             /* .alloc_buffer     = */ ggml_backend_vk_host_buffer_type_alloc_buffer,
             /* .get_alignment    = */ ggml_backend_vk_host_buffer_type_get_alignment,
-            /* .get_max_size     = */ NULL, // defaults to SIZE_MAX
+            /* .get_max_size     = */ ggml_backend_vk_host_buffer_type_get_max_size,
             /* .get_alloc_size   = */ ggml_backend_cpu_buffer_type()->iface.get_alloc_size,
             /* .is_host          = */ ggml_backend_cpu_buffer_type()->iface.is_host,
         },
@@ -9504,7 +9711,7 @@ static void ggml_backend_vk_set_tensor_async(ggml_backend_t backend, ggml_tensor
 
     if (ctx->transfer_ctx.expired()) {
         // Initialize new transfer context
-        transfer_ctx = ggml_vk_create_context(ctx, ctx->device->transfer_queue);
+        transfer_ctx = ggml_vk_create_context(ctx, ctx->transfer_cmd_pool);
         ctx->transfer_ctx = transfer_ctx;
         ggml_vk_ctx_begin(ctx->device, transfer_ctx);
     } else {
@@ -9527,7 +9734,7 @@ static void ggml_backend_vk_get_tensor_async(ggml_backend_t backend, const ggml_
 
     if (ctx->transfer_ctx.expired()) {
         // Initialize new transfer context
-        transfer_ctx = ggml_vk_create_context(ctx, ctx->device->transfer_queue);
+        transfer_ctx = ggml_vk_create_context(ctx, ctx->transfer_cmd_pool);
         ctx->transfer_ctx = transfer_ctx;
         ggml_vk_ctx_begin(ctx->device, transfer_ctx);
     } else {
@@ -9550,7 +9757,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend, const ggml_
 
         if (ctx->transfer_ctx.expired()) {
             // Initialize new transfer context
-            transfer_ctx = ggml_vk_create_context(ctx, ctx->device->transfer_queue);
+            transfer_ctx = ggml_vk_create_context(ctx, ctx->transfer_cmd_pool);
             ctx->transfer_ctx = transfer_ctx;
             ggml_vk_ctx_begin(ctx->device, transfer_ctx);
         } else {
@@ -9600,18 +9807,30 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
+    if (vk_instance.debug_utils_support) {
+        vk::DebugUtilsLabelEXT dul = {};
+        dul.pLabelName = "ggml_backend_vk_graph_compute";
+        dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
+    }
+
     uint64_t total_mat_mul_bytes = 0;
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_vk_build_graph(ctx, cgraph->nodes[i], i, nullptr, 0, true, false, false, false);
+        if (ggml_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+            ctx->num_additional_fused_ops = 1;
+        }
+        ggml_vk_build_graph(ctx, cgraph, i, nullptr, 0, true, false, false, false);
         if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
             total_mat_mul_bytes += ggml_nbytes(cgraph->nodes[i]->src[0]);
         }
+        i += ctx->num_additional_fused_ops;
+        ctx->num_additional_fused_ops = 0;
     }
     if (ctx->device->need_compiles) {
         ggml_vk_load_shaders(ctx->device);
     }
     ggml_vk_preallocate_buffers(ctx);
-    ggml_pipeline_allocate_descriptor_sets(ctx->device);
+    ggml_pipeline_allocate_descriptor_sets(ctx);
 
     int last_node = cgraph->n_nodes - 1;
 
@@ -9643,7 +9862,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ctx->device->device.resetQueryPool(ctx->device->query_pool, 0, cgraph->n_nodes+1);
 
         GGML_ASSERT(ctx->compute_ctx.expired());
-        compute_ctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+        compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
         ctx->compute_ctx = compute_ctx;
         ggml_vk_ctx_begin(ctx->device, compute_ctx);
         compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, 0);
@@ -9667,24 +9886,31 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             mul_mat_bytes += ggml_nbytes(cgraph->nodes[i]->src[0]);
         }
 
+        if (ggml_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
+            ctx->num_additional_fused_ops = 1;
+        }
+
         // Signal the almost_ready fence when the graph is mostly complete (< 20% remaining)
         bool almost_ready = (cgraph->n_nodes - i) < cgraph->n_nodes / 5;
         bool submit = (submitted_nodes >= nodes_per_submit) ||
                       (mul_mat_bytes >= mul_mat_bytes_per_submit) ||
-                      (i == last_node) ||
+                      (i + ctx->num_additional_fused_ops == last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
 
-        bool enqueued = ggml_vk_build_graph(ctx, cgraph->nodes[i], i, cgraph->nodes[submit_node_idx], submit_node_idx, false, i == last_node, almost_ready, submit);
+        bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, false, i + ctx->num_additional_fused_ops == last_node, almost_ready, submit);
 
         if (vk_perf_logger_enabled) {
             if (ctx->compute_ctx.expired()) {
-                compute_ctx = ggml_vk_create_context(ctx, ctx->device->compute_queue);
+                compute_ctx = ggml_vk_create_context(ctx, ctx->compute_cmd_pool);
                 ctx->compute_ctx = compute_ctx;
                 ggml_vk_ctx_begin(ctx->device, compute_ctx);
             } else {
                 compute_ctx = ctx->compute_ctx.lock();
             }
-            compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, i+1);
+            // If there are fused ops, just write out timestamps for all nodes to keep the accounting simple
+            for (int j = 0; j < ctx->num_additional_fused_ops + 1; ++j) {
+                compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, i+j+1);
+            }
         }
 
         if (enqueued) {
@@ -9706,6 +9932,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             }
             submit_count++;
         }
+        i += ctx->num_additional_fused_ops;
+        ctx->num_additional_fused_ops = 0;
     }
 
     if (vk_perf_logger_enabled) {
@@ -9872,6 +10100,19 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_SIGMOID:
+                    return ggml_is_contiguous(op->src[0]) &&
+                           (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                           (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
+                           (op->src[0]->type == op->type);
+                default:
+                    return false;
+            }
+            break;
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_REGLU:
+                case GGML_GLU_OP_SWIGLU:
                     return ggml_is_contiguous(op->src[0]) &&
                            (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                            (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
@@ -10289,6 +10530,22 @@ static bool ggml_vk_instance_portability_enumeration_ext_available(const std::ve
     UNUSED(instance_extensions);
 }
 
+// Extension availability
+static bool ggml_vk_instance_debug_utils_ext_available(
+    const std::vector<vk::ExtensionProperties> & instance_extensions) {
+    // Check for portability enumeration extension for MoltenVK support
+    for (const auto & properties : instance_extensions) {
+        if (strcmp("VK_EXT_debug_utils", properties.extensionName) == 0) {
+            return true;
+        }
+    }
+
+    std::cerr << "ggml_vulkan: WARNING: Instance extension VK_EXT_debug_utils not found." << std::endl;
+    return false;
+
+    UNUSED(instance_extensions);
+}
+
 static bool ggml_vk_khr_cooperative_matrix_support(const vk::PhysicalDeviceProperties& props, const vk::PhysicalDeviceDriverProperties& driver_props, vk_device_architecture arch) {
     switch (props.vendorID) {
     case VK_VENDOR_ID_INTEL:
@@ -10593,6 +10850,12 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
         default:
             std::cerr << "Missing vk_check_results OP: " << ggml_op_name(tensor->op) << std::endl;
             GGML_ABORT("fatal error");
+        }
+    } else if (tensor->op == GGML_OP_GLU) {
+        if (src_clone[1] == nullptr) {
+            tensor_clone = ggml_glu(ggml_ctx, src_clone[0], (ggml_glu_op) tensor->op_params[0], tensor->op_params[1]);
+        } else {
+            tensor_clone = ggml_glu_split(ggml_ctx, src_clone[0], src_clone[1], (ggml_glu_op) tensor->op_params[0]);
         }
     } else if (tensor->op == GGML_OP_CPY || tensor->op == GGML_OP_DUP) {
         if (src1 == nullptr) {
