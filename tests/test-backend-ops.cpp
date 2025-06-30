@@ -24,10 +24,12 @@
 #include <array>
 #include <cfloat>
 #include <cinttypes>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <future>
 #include <memory>
 #include <random>
@@ -35,6 +37,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+// External declarations for build info
+extern int LLAMA_BUILD_NUMBER;
+extern const char *LLAMA_COMMIT;
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
@@ -317,6 +323,339 @@ enum test_mode {
     MODE_GRAD,
 };
 
+// Output format support similar to llama-bench
+enum output_formats { CONSOLE, SQL };
+
+static const char * output_format_str(output_formats format) {
+    switch (format) {
+        case CONSOLE:
+            return "console";
+        case SQL:
+            return "sql";
+        default:
+            GGML_ABORT("invalid output format");
+    }
+}
+
+static bool output_format_from_str(const std::string & s, output_formats & format) {
+    if (s == "console") {
+        format = CONSOLE;
+    } else if (s == "sql") {
+        format = SQL;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// Test result structure for SQL output
+struct test_result {
+    std::string test_time;
+    std::string build_commit;
+    int build_number;
+    std::string backend_name;
+    std::string op_name;
+    std::string op_params;
+    std::string test_mode;
+    bool supported;
+    bool passed;
+    std::string error_message;
+    double time_us;
+    double flops;
+    double bandwidth_gb_s;
+    size_t memory_kb;
+    int n_runs;
+
+    test_result() {
+        // Initialize with default values
+        time_us = 0.0;
+        flops = 0.0;
+        bandwidth_gb_s = 0.0;
+        memory_kb = 0;
+        n_runs = 0;
+        supported = false;
+        passed = false;
+
+        // Set test time
+        time_t t = time(NULL);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%FT%TZ", gmtime(&t));
+        test_time = buf;
+
+        // Set build info
+        build_commit = LLAMA_COMMIT;
+        build_number = LLAMA_BUILD_NUMBER;
+    }
+
+    test_result(const std::string& backend_name, const std::string& op_name, const std::string& op_params,
+                const std::string& test_mode, bool supported, bool passed, const std::string& error_message = "",
+                double time_us = 0.0, double flops = 0.0, double bandwidth_gb_s = 0.0,
+                size_t memory_kb = 0, int n_runs = 0)
+        : backend_name(backend_name), op_name(op_name), op_params(op_params), test_mode(test_mode),
+          supported(supported), passed(passed), error_message(error_message), time_us(time_us),
+          flops(flops), bandwidth_gb_s(bandwidth_gb_s), memory_kb(memory_kb), n_runs(n_runs) {
+        // Set test time
+        time_t t = time(NULL);
+        char buf[32];
+        std::strftime(buf, sizeof(buf), "%FT%TZ", gmtime(&t));
+        test_time = buf;
+
+        // Set build info
+        build_commit = LLAMA_COMMIT;
+        build_number = LLAMA_BUILD_NUMBER;
+    }
+
+    static const std::vector<std::string> & get_fields() {
+        static const std::vector<std::string> fields = {
+            "test_time", "build_commit", "build_number", "backend_name", "op_name", "op_params", "test_mode",
+            "supported", "passed", "error_message", "time_us", "flops",
+            "bandwidth_gb_s", "memory_kb", "n_runs"
+        };
+        return fields;
+    }
+
+    enum field_type { STRING, BOOL, INT, FLOAT };
+
+    static field_type get_field_type(const std::string & field) {
+        if (field == "supported" || field == "passed") {
+            return BOOL;
+        }
+        if (field == "memory_kb" || field == "n_runs" || field == "build_number") {
+            return INT;
+        }
+        if (field == "time_us" || field == "flops" || field == "bandwidth_gb_s") {
+            return FLOAT;
+        }
+        return STRING;
+    }
+
+    std::vector<std::string> get_values() const {
+        return {
+            test_time,
+            build_commit,
+            std::to_string(build_number),
+            backend_name,
+            op_name,
+            op_params,
+            test_mode,
+            std::to_string(supported),
+            std::to_string(passed),
+            error_message,
+            std::to_string(time_us),
+            std::to_string(flops),
+            std::to_string(bandwidth_gb_s),
+            std::to_string(memory_kb),
+            std::to_string(n_runs)
+        };
+    }
+};
+
+// Printer classes for different output formats
+struct printer {
+    virtual ~printer() {}
+    FILE * fout = stdout;
+    virtual void print_header() {}
+    virtual void print_test_result(const test_result & result) = 0;
+    virtual void print_footer() {}
+
+    // General purpose output methods
+    virtual void print_info(const char * format, ...) = 0;
+    virtual void print_error(const char * format, ...) = 0;
+    virtual void print_device_info(const char * format, ...) = 0;
+    virtual void print_test_summary(const char * format, ...) = 0;
+    virtual void print_status_ok() = 0;
+    virtual void print_status_fail() = 0;
+};
+
+struct console_printer : public printer {
+    void print_test_result(const test_result & result) override {
+        if (result.test_mode == "test") {
+            print_test_console(result);
+        } else if (result.test_mode == "perf") {
+            print_perf_console(result);
+        }
+    }
+
+    void print_info(const char * format, ...) override {
+        va_list args;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+    }
+
+    void print_error(const char * format, ...) override {
+        va_list args;
+        va_start(args, format);
+        vfprintf(stderr, format, args);
+        va_end(args);
+    }
+
+    void print_device_info(const char * format, ...) override {
+        va_list args;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+    }
+
+    void print_test_summary(const char * format, ...) override {
+        va_list args;
+        va_start(args, format);
+        vprintf(format, args);
+        va_end(args);
+    }
+
+    void print_status_ok() override {
+        printf("\033[1;32mOK\033[0m\n");
+    }
+
+    void print_status_fail() override {
+        printf("\033[1;31mFAIL\033[0m\n");
+    }
+
+private:
+    void print_test_console(const test_result & result) {
+        printf("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
+        fflush(stdout);
+
+        if (!result.supported) {
+            printf("not supported [%s] ", result.backend_name.c_str());
+            printf("\n");
+            return;
+        }
+
+        if (result.passed) {
+            printf("\033[1;32mOK\033[0m\n");
+        } else {
+            printf("\033[1;31mFAIL\033[0m\n");
+        }
+    }
+
+    void print_perf_console(const test_result & result) {
+        int len = printf("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
+        fflush(stdout);
+
+        if (!result.supported) {
+            printf("not supported\n");
+            return;
+        }
+
+        // align while also leaving some margin for variations in parameters
+        int align = 8;
+        int last = (len + align - 1) / align * align;
+        if (last - len < 5) {
+            last += align;
+        }
+        printf("%*s", last - len, "");
+
+        printf("    %8d runs - %8.2f us/run - ",
+            result.n_runs,
+            result.time_us);
+
+        if (result.flops > 0) {
+            auto format_flops = [](double flops) -> std::string {
+                char buf[256];
+                if (flops >= 1e12) {
+                    snprintf(buf, sizeof(buf), "%6.2f TFLOP", flops / 1e12);
+                } else if (flops >= 1e9) {
+                    snprintf(buf, sizeof(buf), "%6.2f GFLOP", flops / 1e9);
+                } else if (flops >= 1e6) {
+                    snprintf(buf, sizeof(buf), "%6.2f MFLOP", flops / 1e6);
+                } else {
+                    snprintf(buf, sizeof(buf), "%6.2f kFLOP", flops / 1e3);
+                }
+                return buf;
+            };
+            uint64_t op_flops_per_run = result.flops * result.time_us / 1e6;
+            printf("%s/run - \033[1;34m%sS\033[0m",
+                format_flops(op_flops_per_run).c_str(),
+                format_flops(result.flops).c_str());
+        } else {
+            printf("%8zu kB/run - \033[1;34m%7.2f GB/s\033[0m",
+                result.memory_kb,
+                result.bandwidth_gb_s);
+        }
+        printf("\n");
+    }
+};
+
+struct sql_printer : public printer {
+    static std::string get_sql_field_type(const std::string & field) {
+        switch (test_result::get_field_type(field)) {
+            case test_result::STRING:
+                return "TEXT";
+            case test_result::BOOL:
+            case test_result::INT:
+                return "INTEGER";
+            case test_result::FLOAT:
+                return "REAL";
+            default:
+                GGML_ABORT("invalid field type");
+        }
+    }
+
+    void print_header() override {
+        std::vector<std::string> fields = test_result::get_fields();
+        fprintf(fout, "CREATE TABLE IF NOT EXISTS test_backend_ops (\n");
+        for (size_t i = 0; i < fields.size(); i++) {
+            fprintf(fout, "  %s %s%s\n", fields[i].c_str(), get_sql_field_type(fields[i]).c_str(),
+                    i < fields.size() - 1 ? "," : "");
+        }
+        fprintf(fout, ");\n\n");
+    }
+
+    void print_test_result(const test_result & result) override {
+        fprintf(fout, "INSERT INTO test_backend_ops (");
+        std::vector<std::string> fields = test_result::get_fields();
+        for (size_t i = 0; i < fields.size(); i++) {
+            fprintf(fout, "%s%s", fields[i].c_str(), i < fields.size() - 1 ? ", " : "");
+        }
+        fprintf(fout, ") VALUES (");
+        std::vector<std::string> values = result.get_values();
+        for (size_t i = 0; i < values.size(); i++) {
+            fprintf(fout, "'%s'%s", values[i].c_str(), i < values.size() - 1 ? ", " : "");
+        }
+        fprintf(fout, ");\n");
+    }
+
+    // SQL printer ignores general output - only outputs test results
+    void print_info(const char * format, ...) override {
+        // Do nothing - SQL format only outputs test results
+        (void)format;
+    }
+
+    void print_error(const char * format, ...) override {
+        // Still output errors to stderr for SQL format
+        va_list args;
+        va_start(args, format);
+        vfprintf(stderr, format, args);
+        va_end(args);
+    }
+
+    void print_device_info(const char * format, ...) override {
+        (void)format;
+    }
+
+    void print_test_summary(const char * format, ...) override {
+        (void)format;
+    }
+
+    void print_status_ok() override {
+    }
+
+    void print_status_fail() override {
+    }
+};
+
+static std::unique_ptr<printer> create_printer(output_formats format) {
+    switch (format) {
+        case CONSOLE:
+            return std::make_unique<console_printer>();
+        case SQL:
+            return std::make_unique<sql_printer>();
+    }
+    GGML_ABORT("invalid output format");
+}
+
 struct test_case {
     virtual ~test_case() {}
 
@@ -434,7 +773,7 @@ struct test_case {
         return t;
     }
 
-    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name) {
+    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name, printer * output_printer = nullptr) {
         mode = MODE_TEST;
 
         ggml_init_params params = {
@@ -451,29 +790,33 @@ struct test_case {
         add_sentinel(ctx);
 
         ggml_tensor * out = build_graph(ctx);
-
-        if (op_name != nullptr && op_desc(out) != op_name) {
+        std::string current_op_name = op_desc(out);
+        if (op_name != nullptr && current_op_name != op_name) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
             ggml_free(ctx);
             return true;
         }
-
-        printf("  %s(%s): ", op_desc(out).c_str(), vars().c_str());
-        fflush(stdout);
 
         // check if the backends support the ops
         bool supported = true;
         for (ggml_backend_t backend : {backend1, backend2}) {
             for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
                 if (!ggml_backend_supports_op(backend, t)) {
-                    printf("not supported [%s] ", ggml_backend_name(backend));
                     supported = false;
                     break;
                 }
             }
         }
+
         if (!supported) {
-            printf("\n");
+            // Create test result for unsupported operation
+            test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test",
+                             false, false, "not supported");
+
+            if (output_printer) {
+                output_printer->print_test_result(result);
+            }
+
             ggml_free(ctx);
             return true;
         }
@@ -578,24 +921,24 @@ struct test_case {
 
         const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud, run_whole_graph() ? out : nullptr);
 
-        if (!cmp_ok) {
-            printf("compare failed ");
-        }
-
         ggml_backend_buffer_free(buf);
 
         ggml_free(ctx);
 
-        if (ud.ok && cmp_ok) {
-            printf("\033[1;32mOK\033[0m\n");
-            return true;
+        // Create test result
+        bool test_passed = ud.ok && cmp_ok;
+        std::string error_msg = test_passed ? "" : (!cmp_ok ? "compare failed" : "test failed");
+        test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test",
+                         supported, test_passed, error_msg);
+
+        if (output_printer) {
+            output_printer->print_test_result(result);
         }
 
-        printf("\033[1;31mFAIL\033[0m\n");
-        return false;
+        return test_passed;
     }
 
-    bool eval_perf(ggml_backend_t backend, const char * op_name) {
+    bool eval_perf(ggml_backend_t backend, const char * op_name, printer * output_printer = nullptr) {
         mode = MODE_PERF;
 
         static const size_t graph_nodes = 8192;
@@ -609,28 +952,24 @@ struct test_case {
         GGML_ASSERT(ctx);
 
         ggml_tensor * out = build_graph(ctx.get());
-
-        if (op_name != nullptr && op_desc(out) != op_name) {
+        std::string current_op_name = op_desc(out);
+        if (op_name != nullptr && current_op_name != op_name) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
             return true;
         }
 
-        int len = printf("  %s(%s): ", op_desc(out).c_str(), vars().c_str());
-        fflush(stdout);
-
         // check if backends support op
         if (!ggml_backend_supports_op(backend, out)) {
-            printf("not supported\n");
+            // Create test result for unsupported performance test
+            test_result result(ggml_backend_name(backend), current_op_name, vars(), "perf",
+                             false, false, "not supported");
+
+            if (output_printer) {
+                output_printer->print_test_result(result);
+            }
+
             return true;
         }
-
-        // align while also leaving some margin for variations in parameters
-        int align = 8;
-        int last = (len + align - 1) / align * align;
-        if (last - len < 5) {
-            last += align;
-        }
-        printf("%*s", last - len, "");
 
         // allocate
         ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend)); // smart ptr
@@ -715,40 +1054,24 @@ struct test_case {
             total_runs += n_runs;
         } while (total_time_us < 1000*1000); // run for at least 1 second
 
-        printf("    %8d runs - %8.2f us/run - ",
-            total_runs,
-            (double)total_time_us / total_runs);
+        // Create test result
+        double avg_time_us = (double)total_time_us / total_runs;
+        double calculated_flops = (op_flops(out) > 0) ? (op_flops(out) * total_runs) / (total_time_us / 1e6) : 0.0;
+        double calculated_bandwidth = (op_flops(out) == 0) ? total_mem / (total_time_us / 1e6) / 1024.0 / 1024.0 / 1024.0 : 0.0;
+        size_t calculated_memory_kb = op_size(out) / 1024;
 
-        if (op_flops(out) > 0) {
-            double flops_per_sec = (op_flops(out) * total_runs) / (total_time_us / 1e6);
-            auto format_flops = [](double flops) -> std::string {
-                char buf[256];
-                if (flops >= 1e12) {
-                    snprintf(buf, sizeof(buf), "%6.2f TFLOP", flops / 1e12);
-                } else if (flops >= 1e9) {
-                    snprintf(buf, sizeof(buf), "%6.2f GFLOP", flops / 1e9);
-                } else if (flops >= 1e6) {
-                    snprintf(buf, sizeof(buf), "%6.2f MFLOP", flops / 1e6);
-                } else {
-                    snprintf(buf, sizeof(buf), "%6.2f KFLOP", flops / 1e3);
-                }
-                return buf;
-            };
-            printf("%s/run - \033[1;34m%sS\033[0m",
-                format_flops(op_flops(out)).c_str(),
-                format_flops(flops_per_sec).c_str());
+        test_result result(ggml_backend_name(backend), current_op_name, vars(), "perf",
+                         true, true, "", avg_time_us, calculated_flops, calculated_bandwidth,
+                         calculated_memory_kb, total_runs);
 
-        } else {
-            printf("%8zu kB/run - \033[1;34m%7.2f GB/s\033[0m",
-                op_size(out) / 1024,
-                total_mem / (total_time_us / 1e6) / 1024.0 / 1024.0 / 1024.0);
+        if (output_printer) {
+            output_printer->print_test_result(result);
         }
-        printf("\n");
 
         return true;
     }
 
-    bool eval_grad(ggml_backend_t backend, const char * op_name) {
+    bool eval_grad(ggml_backend_t backend, const char * op_name, printer * output_printer = nullptr) {
         mode = MODE_GRAD;
         const std::vector<float> expect = grad_expect();
 
@@ -766,15 +1089,14 @@ struct test_case {
         ggml_tensor * out = build_graph(ctx.get());
 
         if ((op_name != nullptr && op_desc(out) != op_name) || out->op == GGML_OP_OPT_STEP_ADAMW) {
-            //printf("  %s: skipping\n", op_desc(out).c_str());
+            //output_printer->print_info("  %s: skipping\n", op_desc(out).c_str());
             return true;
         }
 
-        printf("  %s(%s): ", op_desc(out).c_str(), vars().c_str());
-        fflush(stdout);
+        output_printer->print_info("  %s(%s): ", op_desc(out).c_str(), vars().c_str());
 
         if (out->type != GGML_TYPE_F32) {
-            printf("not supported [%s->type != FP32]\n", out->name);
+            output_printer->print_info("not supported [%s->type != FP32]\n", out->name);
             return true;
         }
 
@@ -783,25 +1105,25 @@ struct test_case {
         bool any_params = false;
         for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != NULL; t = ggml_get_next_tensor(ctx.get(), t)) {
             if (!ggml_backend_supports_op(backend, t)) {
-                printf("not supported [%s] ", ggml_backend_name(backend));
+                output_printer->print_info("not supported [%s] ", ggml_backend_name(backend));
                 supported = false;
                 break;
             }
             if ((t->flags & GGML_TENSOR_FLAG_PARAM)) {
                 any_params = true;
                 if (t->type != GGML_TYPE_F32) {
-                    printf("not supported [%s->type != FP32] ", t->name);
+                    output_printer->print_info("not supported [%s->type != FP32] ", t->name);
                     supported = false;
                     break;
                 }
             }
         }
         if (!any_params) {
-            printf("not supported [%s] \n", op_desc(out).c_str());
+            output_printer->print_info("not supported [%s] \n", op_desc(out).c_str());
             supported = false;
         }
         if (!supported) {
-            printf("\n");
+            output_printer->print_info("\n");
             return true;
         }
 
@@ -812,7 +1134,7 @@ struct test_case {
             }
         }
         if (ngrads > grad_nmax()) {
-            printf("skipping large tensors for speed \n");
+            output_printer->print_info("skipping large tensors for speed \n");
             return true;
         }
 
@@ -835,25 +1157,25 @@ struct test_case {
 
         for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != NULL; t = ggml_get_next_tensor(ctx.get(), t)) {
             if (!ggml_backend_supports_op(backend, t)) {
-                printf("not supported [%s] ", ggml_backend_name(backend));
+                output_printer->print_info("not supported [%s] ", ggml_backend_name(backend));
                 supported = false;
                 break;
             }
             if ((t->flags & GGML_TENSOR_FLAG_PARAM) && t->type != GGML_TYPE_F32) {
-                printf("not supported [%s->type != FP32] ", t->name);
+                output_printer->print_info("not supported [%s->type != FP32] ", t->name);
                 supported = false;
                 break;
             }
         }
         if (!supported) {
-            printf("\n");
+            output_printer->print_info("\n");
             return true;
         }
 
         // allocate
         ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend)); // smart ptr
         if (buf == NULL) {
-            printf("failed to allocate tensors [%s] ", ggml_backend_name(backend));
+            output_printer->print_error("failed to allocate tensors [%s] ", ggml_backend_name(backend));
             return false;
         }
 
@@ -891,7 +1213,7 @@ struct test_case {
             for (int64_t i = 0; i < ne; ++i) { // gradient algebraic
                 // check for nans
                 if (!std::isfinite(ga[i])) {
-                    printf("[%s] nonfinite gradient at index %" PRId64 " (%s=%f) ", ggml_op_desc(t), i, bn, ga[i]);
+                    output_printer->print_info("[%s] nonfinite gradient at index %" PRId64 " (%s=%f) ", ggml_op_desc(t), i, bn, ga[i]);
                     ok = false;
                     break;
                 }
@@ -959,7 +1281,7 @@ struct test_case {
 
             const double err = mean_abs_asymm(gn.data(), ga.data(), gn.size(), expect);
             if (err > max_maa_err()) {
-                printf("[%s] MAA = %.9f > %.9f ", ggml_op_desc(t), err, max_maa_err());
+                output_printer->print_info("[%s] MAA = %.9f > %.9f ", ggml_op_desc(t), err, max_maa_err());
                 ok = false;
                 break;
             }
@@ -969,15 +1291,15 @@ struct test_case {
         }
 
         if (!ok) {
-            printf("compare failed ");
+            output_printer->print_info("compare failed ");
         }
 
         if (ok) {
-            printf("\033[1;32mOK\033[0m\n");
+            output_printer->print_status_ok();
             return true;
         }
 
-        printf("\033[1;31mFAIL\033[0m\n");
+        output_printer->print_status_fail();
         return false;
     }
 };
@@ -4936,7 +5258,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     return test_cases;
 }
 
-static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_name, const char * params_filter) {
+static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_name, const char * params_filter, printer * output_printer = nullptr) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
             return;
@@ -4959,17 +5281,17 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         filter_test_cases(test_cases, params_filter);
         ggml_backend_t backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
         if (backend_cpu == NULL) {
-            printf("  Failed to initialize CPU backend\n");
+            output_printer->print_error("  Failed to initialize CPU backend\n");
             return false;
         }
 
         size_t n_ok = 0;
         for (auto & test : test_cases) {
-            if (test->eval(backend, backend_cpu, op_name)) {
+            if (test->eval(backend, backend_cpu, op_name, output_printer)) {
                 n_ok++;
             }
         }
-        printf("  %zu/%zu tests passed\n", n_ok, test_cases.size());
+        output_printer->print_test_summary("  %zu/%zu tests passed\n", n_ok, test_cases.size());
 
         ggml_backend_free(backend_cpu);
 
@@ -4981,11 +5303,11 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         filter_test_cases(test_cases, params_filter);
         size_t n_ok = 0;
         for (auto & test : test_cases) {
-            if (test->eval_grad(backend, op_name)) {
+            if (test->eval_grad(backend, op_name, output_printer)) {
                 n_ok++;
             }
         }
-        printf("  %zu/%zu tests passed\n", n_ok, test_cases.size());
+        output_printer->print_test_summary("  %zu/%zu tests passed\n", n_ok, test_cases.size());
 
         return n_ok == test_cases.size();
     }
@@ -4994,7 +5316,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         auto test_cases = make_test_cases_perf();
         filter_test_cases(test_cases, params_filter);
         for (auto & test : test_cases) {
-            test->eval_perf(backend, op_name);
+            test->eval_perf(backend, op_name, output_printer);
         }
         return true;
     }
@@ -5003,16 +5325,18 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op>] [-b <backend>] [-p <params regex>]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op>] [-b <backend>] [-p <params regex>] [--output <console|sql>]\n", argv[0]);
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
     printf("      - perf (performance evaluation)\n");
     printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc)\n");
+    printf("    --output specifies output format (default: console)\n");
 }
 
 int main(int argc, char ** argv) {
     test_mode mode = MODE_TEST;
+    output_formats output_format = CONSOLE;
     const char * op_name_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
@@ -5045,6 +5369,16 @@ int main(int argc, char ** argv) {
                 usage(argv);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--output") == 0) {
+            if (i + 1 < argc) {
+                if (!output_format_from_str(argv[++i], output_format)) {
+                    usage(argv);
+                    return 1;
+                }
+            } else {
+                usage(argv);
+                return 1;
+            }
         } else {
             usage(argv);
             return 1;
@@ -5054,23 +5388,29 @@ int main(int argc, char ** argv) {
     // load and enumerate backends
     ggml_backend_load_all();
 
-    printf("Testing %zu devices\n\n", ggml_backend_dev_count());
+    // Create printer for output format
+    std::unique_ptr<printer> output_printer = create_printer(output_format);
+    if (output_printer) {
+        output_printer->print_header();
+    }
+
+    output_printer->print_info("Testing %zu devices\n\n", ggml_backend_dev_count());
 
     size_t n_ok = 0;
 
     for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
-        printf("Backend %zu/%zu: %s\n", i + 1, ggml_backend_dev_count(), ggml_backend_dev_name(dev));
+        output_printer->print_device_info("Backend %zu/%zu: %s\n", i + 1, ggml_backend_dev_count(), ggml_backend_dev_name(dev));
 
         if (backend_filter != NULL && strcmp(backend_filter, ggml_backend_dev_name(dev)) != 0) {
-            printf("  Skipping\n");
+            output_printer->print_device_info("  Skipping\n");
             n_ok++;
             continue;
         }
 
         if (backend_filter == NULL && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && mode != MODE_GRAD) {
-            printf("  Skipping CPU backend\n");
+            output_printer->print_device_info("  Skipping CPU backend\n");
             n_ok++;
             continue;
         }
@@ -5085,36 +5425,40 @@ int main(int argc, char ** argv) {
             ggml_backend_set_n_threads_fn(backend, std::thread::hardware_concurrency());
         }
 
-        printf("  Device description: %s\n", ggml_backend_dev_description(dev));
+        output_printer->print_device_info("  Device description: %s\n", ggml_backend_dev_description(dev));
         size_t free, total; // NOLINT
         ggml_backend_dev_memory(dev, &free, &total);
-        printf("  Device memory: %zu MB (%zu MB free)\n", total / 1024 / 1024, free / 1024 / 1024);
-        printf("\n");
+        output_printer->print_device_info("  Device memory: %zu MB (%zu MB free)\n", total / 1024 / 1024, free / 1024 / 1024);
+        output_printer->print_device_info("\n");
 
-        bool ok = test_backend(backend, mode, op_name_filter, params_filter);
+        bool ok = test_backend(backend, mode, op_name_filter, params_filter, output_printer.get());
 
-        printf("  Backend %s: ", ggml_backend_name(backend));
+        output_printer->print_device_info("  Backend %s: ", ggml_backend_name(backend));
         if (ok) {
-            printf("\033[1;32mOK\033[0m\n");
+            output_printer->print_status_ok();
             n_ok++;
         } else {
-            printf("\033[1;31mFAIL\033[0m\n");
+            output_printer->print_status_fail();
         }
 
-        printf("\n");
+        output_printer->print_device_info("\n");
 
         ggml_backend_free(backend);
     }
 
     ggml_quantize_free();
 
-    printf("%zu/%zu backends passed\n", n_ok, ggml_backend_dev_count());
+    if (output_printer) {
+        output_printer->print_footer();
+    }
+
+    output_printer->print_test_summary("%zu/%zu backends passed\n", n_ok, ggml_backend_dev_count());
 
     if (n_ok != ggml_backend_dev_count()) {
-        printf("\033[1;31mFAIL\033[0m\n");
+        output_printer->print_status_fail();
         return 1;
     }
 
-    printf("\033[1;32mOK\033[0m\n");
+    output_printer->print_status_ok();
     return 0;
 }
