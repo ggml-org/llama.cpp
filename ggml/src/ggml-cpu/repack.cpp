@@ -445,10 +445,10 @@ void ggml_gemv_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         }
         for (int l = 0; l < nb; l++) {
             for (int k = 0; k < (qk / (4 * blocklen)); k++) {
-                uint8_t *scales_0 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 ;
-                uint8_t *scales_1 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 + 16;
-                uint8_t *scales_2 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 + 32;
-                uint8_t *scales_3 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 + 48;
+                const uint8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64 ;
+                const uint8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
+                const uint8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
+                const uint8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sumi1 = 0;
                     sumi2 = 0;
@@ -470,13 +470,13 @@ void ggml_gemv_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                         sumi2 = sumi2 * (scales_1[offset] & 0xF);
                         sumi3 = sumi3 * (scales_2[offset] & 0xF);
                         sumi4 = sumi4 * (scales_3[offset] & 0xF);
-                        sumi += sumi1 + sumi2 + sumi3 + sumi4; 
+                        sumi += sumi1 + sumi2 + sumi3 + sumi4;
                     }
-                    sumf[j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;    
+                    sumf[j] += sumi * GGML_FP16_TO_FP32(b_ptr[l].d[j]) * a_ptr[l].d;
                 }
             }
             for(int sb = 0; sb < 8; sb++) {
-                uint8_t *mins = (uint8_t*) b_ptr[l].scales + sb * 16;
+                const uint8_t *mins = b_ptr[l].scales + sb * 16;
                 for(int j = 0; j < ncols_interleaved; j++){
                     sum_minf[j] += ((mins[j * 2] >> 4) * a_ptr[l].bsums[sb * 2] + (mins[(j * 2)+ 1] >> 4) * a_ptr[l].bsums[sb * 2 + 1]) * GGML_FP16_TO_FP32(b_ptr[l].dmin[j]) * a_ptr[l].d;
                 }
@@ -825,10 +825,10 @@ void ggml_gemm_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
             for (int l = 0; l < nb; l++) {
                 for (int k = 0; k < (qk / (4 * blocklen)); k++) {
 
-                    uint8_t *scales_0 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 ;
-                    uint8_t *scales_1 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 + 16;
-                    uint8_t *scales_2 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 + 32;
-                    uint8_t *scales_3 = (uint8_t*) b_ptr[l].scales + (k / 4) * 64 + 48;
+                    const uint8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64 ;
+                    const uint8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
+                    const uint8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
+                    const uint8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
                     for (int m = 0; m < 4; m++) {
                         for (int j = 0; j < ncols_interleaved; j++) {
                             sumi1 = 0;
@@ -857,7 +857,7 @@ void ggml_gemm_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                     }
                 }
                 for(int sb = 0; sb < 8; sb++) {
-                    uint8_t *mins = (uint8_t*) b_ptr[l].scales + sb * 16;
+                    const uint8_t *mins = b_ptr[l].scales + sb * 16;
                     for(int m = 0; m < 4; m++) {
                         const int16_t *bsums = a_ptr[l].bsums + (sb * 8) + (m * 4) - ((sb % 2) *  6);
                         for(int j = 0; j < ncols_interleaved; j++) {
@@ -1111,7 +1111,6 @@ static block_q2_Kx8 make_block_q2_Kx8(block_q2_K * in, unsigned int blck_size_in
     // The output Q2_Kx8 structure has 128 bytes for storing scales and mins
     // Every 16 byte is packed such that it contains scales and mins for corresponding sub blocks from Q2_K structure
     // For eg - First 16 bytes contains 16 scales and 16 mins - each of first and second sub blocks from different Q2_K structures
-    uint8_t s[128], m[128];
 
     for(int i = 0; i < 128; i++){
 
@@ -1119,9 +1118,6 @@ static block_q2_Kx8 make_block_q2_Kx8(block_q2_K * in, unsigned int blck_size_in
         int src1 = (i % 16) / 2;
         // Index for selecting scale
         int src2 = ((i / 16) * 2) + (i % 2);
-
-        s[i] = in[src1].scales[src2] & 15;
-        m[i] = in[src1].scales[src2] & 240;
 
         out.scales[i] = in[src1].scales[src2];
     }
