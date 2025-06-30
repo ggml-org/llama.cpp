@@ -1208,7 +1208,7 @@ const char * ggml_op_name(enum ggml_op op) {
 }
 
 #ifdef GGML_PERF
-static const char * ggml_backend_type(enum ggml_compute_backend_type backend) {
+const char * ggml_backend_type(enum ggml_compute_backend_type backend) {
     return GGML_BACKEND_TYPE[backend];
 }
 #endif /* GGML_PERF */
@@ -6580,6 +6580,19 @@ void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct 
         totals[op].total_us += node->perf_time_us;
         totals[op].runs     += node->perf_runs;
         totals[op].op_count++;
+
+	// Count backend runs
+        enum ggml_compute_backend_type be = node->ggml_compute_backend;
+        if (be >= GGML_COMPUTE_BACKEND_CPU && be < GGML_COMPUTE_BACKEND_COUNT) {
+            totals[op].backend_subtotals[be].total_us += node->perf_time_us;
+	    totals[op].backend_subtotals[be].runs     += node->perf_runs;
+        }
+
+        if (op == GGML_OP_UNARY) {
+            enum ggml_unary_op subop = ggml_get_unary_op(node);
+            totals[op].unary_subtotals[subop].total_us += node->perf_time_us;
+            totals[op].unary_subtotals[subop].runs     += node->perf_runs;
+        }
     }
 }
 
@@ -6607,7 +6620,10 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp) {
         }
     }
 
-    fprintf(fp, "ggml_graph_compute_perf: total compute time: %.3f ms\n", total_time_us / 1000.0);
+    fprintf(fp, "\n=== GGML Detailed Op Perf (%.3f ms total) ===\n", total_time_us / 1000.0);
+    fprintf(fp,
+        "%-12s %-20s %10s %12s %10s %10s %10s %10s %10s\n",
+        "Backend", "Op", "Runs", "Total ms", "Avg ms", "ne[0]", "ne[1]", "ne[2]", "ne[3]");
 
     for (int i = 0; i < cgraph->n_nodes; ++i) {
         struct ggml_tensor * node = cgraph->nodes[i];
@@ -6616,17 +6632,27 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp) {
         double t_ms   = node->perf_time_us / 1000.0;
         double avg_ms = t_ms / node->perf_runs;
 
+        const char * op_name = ggml_op_name(node->op);
+        char full_op[64];
+        if (node->op == GGML_OP_UNARY) {
+            enum ggml_unary_op subop = ggml_get_unary_op(node);
+            snprintf(full_op, sizeof(full_op), "UNARY(%s)", ggml_unary_op_name(subop));
+            op_name = full_op;
+        }
+
         fprintf(fp,
-            " - BACKEND:%s OP:%s: total %.3f ms over %d runs (avg %.3f ms) [shape=%d,%d,%d]\n",
+            "%-12s %-20s %10d %12.3f %10.3f %10ld %10ld %10ld %10ld\n",
             ggml_backend_type(node->ggml_compute_backend),
-            ggml_op_name(node->op),
-            t_ms,
+            op_name,
             node->perf_runs,
+            t_ms,
             avg_ms,
-            node->ne[0], node->ne[1], node->ne[2]);
+            node->ne[0],
+            node->ne[1],
+            node->ne[2],
+            node->ne[3]);
     }
 
-    fprintf(fp, "--------------------------------------------------\n\n");
+    fprintf(fp, "--------------------------------------------------------------------------------------------------------\n\n");
 }
-
 #endif /* GGML_PERF */
