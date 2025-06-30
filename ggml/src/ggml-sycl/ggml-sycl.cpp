@@ -4215,6 +4215,7 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_EXP:
                 case GGML_UNARY_OP_SGN:
                 case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_ELU:
@@ -4223,9 +4224,6 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
 #else
                     return ggml_is_contiguous(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) && (op->type == op->src[0]->type);
 #endif
-                case GGML_UNARY_OP_EXP:
-                     // Disable FP16 until we find out the root cause of failing fp16 sycl::exp
-                    return ggml_is_contiguous(op->src[0]) && (op->type == op->src[0]->type) && op->src[0]->type == GGML_TYPE_F32;
                 default:
                     return false;
             }
