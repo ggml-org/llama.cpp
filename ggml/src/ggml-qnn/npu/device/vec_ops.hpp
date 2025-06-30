@@ -298,5 +298,18 @@ float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_f
 float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count);
 
 float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
+float vec_dot_product_aligned_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
+
+inline bool is_f16_f32_dot_product_aligned(const npu_device_fp16_t * src0, const float * src1, size_t count) {
+    if (!hexagon::is_addr_aligned(src0) || !hexagon::is_addr_aligned(src1)) {
+        return false;
+    }
+
+    if (count % (hexagon::kBytesPerVector / sizeof(npu_device_fp16_t)) != 0) {
+        return false;
+    }
+
+    return true;
+}
 
 }  // namespace hexagon

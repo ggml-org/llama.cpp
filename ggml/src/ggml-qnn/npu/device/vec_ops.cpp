@@ -222,6 +222,39 @@ inline float vec_dot_product_mixed_impl(const _TElem0 * src0, const _TElem1 * sr
     return _ReduceFunc(sum);
 }
 
+template <typename _TElem0, typename _TElem1, HVX_VectorPair (*_ExpandFunc)(HVX_Vector),
+          HVX_Vector (*_MpyFunc)(HVX_Vector, HVX_Vector), HVX_Vector (*_AddFunc)(HVX_Vector, HVX_Vector),
+          float (*_ReduceFunc)(HVX_Vector)>
+inline float vec_dot_product_mix_aligned_impl(const _TElem0 * src0, const _TElem1 * src1, size_t count) {
+    static_assert(sizeof(_TElem0) < sizeof(_TElem1), "Element size mismatch: _TElem0 must be smaller than _TElem1");
+    static_assert((sizeof(_TElem1) / sizeof(_TElem0)) == 2,
+                  "Element size mismatch: _TElem1 must be twice the size of _TElem0");
+    static_assert((sizeof(_TElem1) % sizeof(_TElem0)) == 0,
+                  "Element size mismatch: _TElem1 must be a multiple of _TElem0");
+
+    constexpr const size_t kElementsPerVector1 = hexagon::kBytesPerVector / sizeof(_TElem1);
+
+    HVX_Vector *       src0_vec_ptr     = ((HVX_Vector *) src0);
+    HVX_Vector *       src1_vec_ptr     = ((HVX_Vector *) src1);
+    HVX_Vector * const src1_vec_ptr_end = ((HVX_Vector *) src1) + count / kElementsPerVector1;
+    HVX_Vector         sum0             = Q6_V_vzero();
+    HVX_Vector         sum1             = Q6_V_vzero();
+
+    while (src1_vec_ptr_end - src1_vec_ptr > 1) {
+        HVX_Vector     curr0 = src0_vec_ptr[0];
+        HVX_VectorPair curr1 = reinterpret_cast<HVX_VectorPair *>(src1_vec_ptr)[0];
+
+        HVX_VectorPair s0_pair = _ExpandFunc(curr0);
+        src0_vec_ptr++;
+        src1_vec_ptr += 2;
+
+        sum0 = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), Q6_V_lo_W(curr1)), sum0);
+        sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), Q6_V_hi_W(curr1)), sum1);
+    }
+
+    return _ReduceFunc(_AddFunc(sum0, sum1));
+}
+
 }  // namespace
 
 namespace hexagon {
@@ -247,6 +280,11 @@ float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_
 float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
     return vec_dot_product_mixed_impl<npu_device_fp16_t, float, hvx_vsf_convert_vhf, vec_mpy_qf32, vec_add_qf32,
                                       vec_reduction_f32_qf32>(src0, src1, count);
+}
+
+float vec_dot_product_aligned_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
+    return vec_dot_product_mix_aligned_impl<npu_device_fp16_t, float, hvx_vsf_convert_vhf, vec_mpy_qf32, vec_add_qf32,
+                                            vec_reduction_f32_qf32>(src0, src1, count);
 }
 
 }  // namespace hexagon
