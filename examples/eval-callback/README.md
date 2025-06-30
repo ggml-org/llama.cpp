@@ -6,13 +6,16 @@ It simply prints to the console all operations and tensor data.
 Usage:
 
 ```shell
-llama-eval-callback \
-  --hf-repo ggml-org/models \
-  --hf-file phi-2/ggml-model-q4_0.gguf \
-  --model phi-2-q4_0.gguf \
-  --prompt hello \
-  --seed 42 \
-  -ngl 33
+llama-eval-callback \                                                 
+--model path/to/model.gguf \
+--parse-layer l_out-31 \
+--n-predict 200 \
+--prompt "What is the capital of France?" \
+--prompt "Explain black holes" \
+--prompt "Give me a joke" > output.txt
+--seed 42 \
+-ngl 33
+
 ```
 
 Will print:
