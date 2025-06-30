@@ -24,6 +24,7 @@ enum llm_arch {
     LLM_ARCH_BERT,
     LLM_ARCH_NOMIC_BERT,
     LLM_ARCH_NOMIC_BERT_MOE,
+    LLM_ARCH_NEO_BERT,
     LLM_ARCH_JINA_BERT_V2,
     LLM_ARCH_BLOOM,
     LLM_ARCH_STABLELM,
@@ -45,6 +46,7 @@ enum llm_arch {
     LLM_ARCH_GEMMA,
     LLM_ARCH_GEMMA2,
     LLM_ARCH_GEMMA3,
+    LLM_ARCH_GEMMA3N,
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
     LLM_ARCH_XVERSE,
@@ -76,6 +78,9 @@ enum llm_arch {
     LLM_ARCH_WAVTOKENIZER_DEC,
     LLM_ARCH_PLM,
     LLM_ARCH_BAILINGMOE,
+    LLM_ARCH_DOTS1,
+    LLM_ARCH_ARCEE,
+    LLM_ARCH_ERNIE4_5,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -148,6 +153,7 @@ enum llm_kv {
     LLM_KV_ATTENTION_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
+    LLM_KV_ATTENTION_LAYER_INDICES,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
@@ -190,13 +196,13 @@ enum llm_kv {
     LLM_KV_TOKENIZER_MASK_ID,
     LLM_KV_TOKENIZER_ADD_BOS,
     LLM_KV_TOKENIZER_ADD_EOS,
+    LLM_KV_TOKENIZER_ADD_SEP,
     LLM_KV_TOKENIZER_ADD_PREFIX,
     LLM_KV_TOKENIZER_REMOVE_EXTRA_WS,
     LLM_KV_TOKENIZER_PRECOMPILED_CHARSMAP,
     LLM_KV_TOKENIZER_HF_JSON,
     LLM_KV_TOKENIZER_RWKV,
     LLM_KV_TOKENIZER_CHAT_TEMPLATE,
-    LLM_KV_TOKENIZER_CHAT_TEMPLATE_N,
     LLM_KV_TOKENIZER_FIM_PRE_ID,
     LLM_KV_TOKENIZER_FIM_SUF_ID,
     LLM_KV_TOKENIZER_FIM_MID_ID,
@@ -212,6 +218,8 @@ enum llm_kv {
 
     LLM_KV_CONVNEXT_EMBEDDING_LENGTH,
     LLM_KV_CONVNEXT_BLOCK_COUNT,
+
+    LLM_KV_CLASSIFIER_OUTPUT_LABELS,
 
     // deprecated:
     LLM_KV_TOKENIZER_PREFIX_ID,
@@ -263,6 +271,22 @@ enum llm_tensor {
     LLM_TENSOR_LAYER_OUT_NORM,
     LLM_TENSOR_POST_ATTN_NORM,
     LLM_TENSOR_POST_MLP_NORM,
+    LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
+    LLM_TENSOR_PER_LAYER_MODEL_PROJ, // gemma3n
+    LLM_TENSOR_PER_LAYER_INP_GATE,   // gemma3n
+    LLM_TENSOR_PER_LAYER_PROJ,       // gemma3n
+    LLM_TENSOR_PER_LAYER_PROJ_NORM,  // gemma3n
+    LLM_TENSOR_PER_LAYER_POST_NORM,  // gemma3n
+    LLM_TENSOR_ALTUP_PROJ,           // gemma3n
+    LLM_TENSOR_ALTUP_UNEMBD_PROJ,    // gemma3n
+    LLM_TENSOR_ALTUP_CORRECT_COEF,   // gemma3n
+    LLM_TENSOR_ALTUP_CORRECT_SCALE,  // gemma3n
+    LLM_TENSOR_ALTUP_PREDICT_COEF,   // gemma3n
+    LLM_TENSOR_ALTUP_ROUTER,         // gemma3n
+    LLM_TENSOR_ALTUP_ROUTER_NORM,    // gemma3n
+    LLM_TENSOR_LAUREL_L,             // gemma3n
+    LLM_TENSOR_LAUREL_R,             // gemma3n
+    LLM_TENSOR_LAUREL_POST_NORM,     // gemma3n
     LLM_TENSOR_SSM_IN,
     LLM_TENSOR_SSM_CONV1D,
     LLM_TENSOR_SSM_X,
@@ -435,3 +459,6 @@ const char * llm_arch_name(llm_arch arch);
 llm_arch llm_arch_from_string(const std::string & name);
 
 const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
+
+bool llm_arch_is_recurrent(const llm_arch & arch);
+bool llm_arch_is_hybrid   (const llm_arch & arch);

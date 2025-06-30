@@ -11,13 +11,13 @@ static void gated_linear_attn_f32_kernel(const dpct::queue_ptr stream, u_int B, 
     const u_int n_seq_tokens = T / B;
     sycl::range<1> block_dims((C / H));
     sycl::range<1> grid_dims((B * H));
-    stream->submit([&](sycl::handler & cgh) {
+    sycl_launch(stream, [&](sycl::handler & cgh) {
         /* local memory accessors*/
         auto _k  = sycl::local_accessor<float, 1>(sycl::range<1>(head_size), cgh);
         auto _r  = sycl::local_accessor<float, 1>(sycl::range<1>(head_size), cgh);
         auto _td = sycl::local_accessor<float, 1>(sycl::range<1>(head_size), cgh);
 
-        cgh.parallel_for(sycl::nd_range<1>(grid_dims * block_dims, block_dims), [=](sycl::nd_item<1> item) {
+        sycl_parallel_for<1>(cgh, sycl::nd_range<1>(grid_dims * block_dims, block_dims), [=](sycl::nd_item<1> item) {
             u_int tid = item.get_local_id(0);
             u_int bid = item.get_group(0);
 
@@ -76,6 +76,7 @@ static void gated_linear_attn_f32_kernel(const dpct::queue_ptr stream, u_int B, 
 }
 
 void ggml_sycl_op_gated_linear_attn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/5);
     const float * k_d  = static_cast<const float *>(dst->src[0]->data);
     const float * v_d  = static_cast<const float *>(dst->src[1]->data);
     const float * r_d  = static_cast<const float *>(dst->src[2]->data);

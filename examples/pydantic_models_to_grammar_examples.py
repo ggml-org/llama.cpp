@@ -23,7 +23,7 @@ def create_completion(host, prompt, gbnf_grammar):
     """Calls the /completion API on llama-server.
 
     See
-    https://github.com/ggml-org/llama.cpp/tree/HEAD/examples/server#api-endpoints
+    https://github.com/ggml-org/llama.cpp/tree/HEAD/tools/server#api-endpoints
     """
     print(f"  Request:\n    Grammar:\n{textwrap.indent(gbnf_grammar, '      ')}\n    Prompt:\n{textwrap.indent(prompt.rstrip(), '      ')}")
     headers = {"Content-Type": "application/json"}

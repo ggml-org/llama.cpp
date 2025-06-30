@@ -59,19 +59,14 @@ static void conv_transpose_1d_f32_f32_sycl(
     const int num_blocks = (output_size + SYCL_CONV_TRANPOSE_1D_BLOCK_SIZE - 1) / SYCL_CONV_TRANPOSE_1D_BLOCK_SIZE;
     const sycl::range<3> block_dims(1, 1, SYCL_CONV_TRANPOSE_1D_BLOCK_SIZE);
     const sycl::range<3> block_nums(1, 1, num_blocks);
-    stream->parallel_for(
-        sycl::nd_range<3>(
-            block_nums * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) {
-            conv_transpose_1d_kernel(
-                s0, output_size,
-                src0_ne0, src0_ne1, src0_ne2,
-                src1_ne0, dst_ne0,
-                src0, src1, dst, item_ct1);
-        });
+    sycl_parallel_for(stream, sycl::nd_range<3>(block_nums * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+        conv_transpose_1d_kernel(s0, output_size, src0_ne0, src0_ne1, src0_ne2, src1_ne0, dst_ne0, src0, src1, dst,
+                                 item_ct1);
+    });
 }
 
 void ggml_sycl_op_conv_transpose_1d(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
     const ggml_tensor *src0 = dst->src[0];
     const ggml_tensor *src1 = dst->src[1];
     const float * src0_d = (const float *)src0->data;

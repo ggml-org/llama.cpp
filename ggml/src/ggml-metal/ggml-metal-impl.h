@@ -207,6 +207,10 @@ typedef struct {
     float    attn_factor;
     float    beta_fast;
     float    beta_slow;
+    int32_t  sect_0;
+    int32_t  sect_1;
+    int32_t  sect_2;
+    int32_t  sect_3;
 } ggml_metal_kargs_rope;
 
 typedef struct {
@@ -299,21 +303,42 @@ typedef struct {
 } ggml_metal_kargs_mul_mv_ext;
 
 typedef struct {
-    int32_t  nei0;
-    int32_t  nei1;
-    uint64_t nbi1;
+    int32_t  ne10;
+    int32_t  ne11;  // n_expert_used (bcast)
+    uint64_t nb11;
+    uint64_t nb12;
+    int32_t  neh11; // n_tokens
+    uint64_t nbh11;
+    int32_t  ne20;  // n_expert_used
+    uint64_t nb21;
+} ggml_metal_kargs_mul_mm_id_map0;
+
+typedef struct {
+    int32_t  ne20; // n_expert_used
+    int32_t  neh0;
+    int32_t  neh1;
+    uint64_t nbh1;
+    uint64_t nbh2;
+    int32_t  ne0;
+    uint64_t nb1;
+    uint64_t nb2;
+} ggml_metal_kargs_mul_mm_id_map1;
+
+typedef struct {
     int32_t  ne00;
     int32_t  ne02;
     uint64_t nb01;
     uint64_t nb02;
-    int32_t  ne11;
-    int32_t  ne12;
-    int32_t  ne13;
-    uint64_t nb10;
-    uint64_t nb11;
-    uint64_t nb12;
-    int32_t  ne0;
-    int32_t  ne1;
+    uint64_t nb03;
+    int32_t  neh12;
+    uint64_t nbh10;
+    uint64_t nbh11;
+    uint64_t nbh12;
+    uint64_t nbh13;
+    int32_t  neh0;
+    int32_t  neh1;
+    int16_t  r2;
+    int16_t  r3;
 } ggml_metal_kargs_mul_mm_id;
 
 typedef struct {
@@ -396,6 +421,17 @@ typedef struct {
     int32_t  KW;
     int32_t  KHW; // KH * KW, pre-computed on CPU to save GPU resources
 } ggml_metal_kargs_im2col;
+
+typedef struct{
+    int32_t  ne00;
+    uint64_t nb01;
+    int32_t  ne10;
+    uint64_t nb11;
+    int32_t  ne0;
+    uint64_t nb1;
+    int32_t  i00;
+    int32_t  i10;
+} ggml_metal_kargs_glu;
 
 typedef struct {
     int64_t  ne00;
@@ -495,6 +531,22 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
 } ggml_metal_kargs_get_rows;
+
+typedef struct {
+    int32_t  nk0;
+    int32_t  ne01;
+    uint64_t nb01;
+    uint64_t nb02;
+    uint64_t nb03;
+    int32_t  ne11;
+    int32_t  ne12;
+    uint64_t nb10;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+} ggml_metal_kargs_set_rows;
 
 typedef struct {
     int64_t  ne00;

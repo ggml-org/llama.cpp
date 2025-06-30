@@ -50,8 +50,6 @@ int main(int argc, char ** argv) {
     const int N = 5;  // n-gram size
     const int G = 15; // max verification n-grams
 
-    const bool dump_kv_cache = params.dump_kv_cache;
-
     // init llama.cpp
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -61,6 +59,8 @@ int main(int argc, char ** argv) {
 
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
+
+    auto * mem = llama_get_memory(ctx);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -96,7 +96,7 @@ int main(int argc, char ** argv) {
     llama_decode(ctx, llama_batch_get_one(&inp.back(),           1));
 
     for (int s = 1; s < W + G + 1; ++s) {
-        llama_kv_self_seq_cp(ctx, 0, s, -1, -1);
+        llama_memory_seq_cp(mem, 0, s, -1, -1);
     }
 
     const auto t_enc_end = ggml_time_us();
@@ -152,9 +152,6 @@ int main(int argc, char ** argv) {
     // here we keep adding new n-grams as we go
     ngram_container ngrams_observed(llama_vocab_n_tokens(vocab), N, G);
 
-    // debug
-    struct llama_kv_cache_view kvc_view = llama_kv_cache_view_init(ctx, W + G + 1);
-
     const auto t_dec_start = ggml_time_us();
 
     // sample first token
@@ -172,12 +169,6 @@ int main(int argc, char ** argv) {
     }
 
     while (true) {
-        // debug
-        if (dump_kv_cache) {
-            llama_kv_cache_view_update(ctx, &kvc_view);
-            common_kv_cache_dump_view_seqs(kvc_view, 40);
-        }
-
         // build the mask from https://lmsys.org/blog/2023-11-21-lookahead-decoding/
         //
         // Example for W = 5, N = 4, G = 2:
@@ -438,17 +429,17 @@ int main(int argc, char ** argv) {
 
         // KV cache management
         // if no verification token matched, we simply remove all cells from this batch -> no fragmentation
-        llama_kv_self_seq_rm(ctx, -1, n_past, -1);
+        llama_memory_seq_rm(mem, -1, n_past, -1);
 
         if (seq_id_best != 0) {
             // if a verification token matched, we keep the best sequence and remove the rest
             // this leads to some KV cache fragmentation
-            llama_kv_self_seq_keep(ctx, seq_id_best);
-            llama_kv_self_seq_cp  (ctx, seq_id_best, 0, -1, -1);
-            llama_kv_self_seq_rm  (ctx, seq_id_best,    -1, -1);
+            llama_memory_seq_keep(mem, seq_id_best);
+            llama_memory_seq_cp  (mem, seq_id_best, 0, -1, -1);
+            llama_memory_seq_rm  (mem, seq_id_best,    -1, -1);
 
             for (int s = 1; s < W + G + 1; ++s) {
-                llama_kv_self_seq_cp(ctx, 0, s, -1, -1);
+                llama_memory_seq_cp(mem, 0, s, -1, -1);
             }
         }
     }
@@ -472,8 +463,6 @@ int main(int argc, char ** argv) {
     common_perf_print(ctx, smpl);
 
     common_sampler_free(smpl);
-
-    llama_kv_cache_view_free(&kvc_view);
 
     llama_batch_free(batch);
 

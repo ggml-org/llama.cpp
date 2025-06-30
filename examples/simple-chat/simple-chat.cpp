@@ -98,7 +98,7 @@ int main(int argc, char ** argv) {
     auto generate = [&](const std::string & prompt) {
         std::string response;
 
-        const bool is_first = llama_kv_self_used_cells(ctx) == 0;
+        const bool is_first = llama_memory_seq_pos_max(llama_get_memory(ctx), 0) == -1;
 
         // tokenize the prompt
         const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
@@ -113,7 +113,7 @@ int main(int argc, char ** argv) {
         while (true) {
             // check if we have enough space in the context to evaluate this batch
             int n_ctx = llama_n_ctx(ctx);
-            int n_ctx_used = llama_kv_self_used_cells(ctx);
+            int n_ctx_used = llama_memory_seq_pos_max(llama_get_memory(ctx), 0);
             if (n_ctx_used + batch.n_tokens > n_ctx) {
                 printf("\033[0m\n");
                 fprintf(stderr, "context size exceeded\n");

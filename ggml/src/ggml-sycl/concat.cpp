@@ -89,33 +89,24 @@ static void concat_f32_sycl(const float *x, const float *y, float *dst,
   sycl::range<3> gridDim(ne2, ne1, num_blocks);
   switch (dim) {
   case 0:
-    stream->parallel_for(
-        sycl::nd_range<3>(gridDim *
-                              sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-          concat_f32_dim0(x, y, dst, ne0, ne00, item_ct1);
-        });
-    break;
+      sycl_parallel_for(stream,
+                        sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+                                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
+                        [=](sycl::nd_item<3> item_ct1) { concat_f32_dim0(x, y, dst, ne0, ne00, item_ct1); });
+      break;
   case 1:
-    stream->parallel_for(
-        sycl::nd_range<3>(gridDim *
-                              sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-          concat_f32_dim1(x, y, dst, ne0, ne01, item_ct1);
-        });
-    break;
+      sycl_parallel_for(stream,
+                        sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+                                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
+                        [=](sycl::nd_item<3> item_ct1) { concat_f32_dim1(x, y, dst, ne0, ne01, item_ct1); });
+      break;
   // dim >=2 will be dispatched to the default path
   default:
-    stream->parallel_for(
-        sycl::nd_range<3>(gridDim *
-                              sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
-                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
-        [=](sycl::nd_item<3> item_ct1) {
-          concat_f32_dim2(x, y, dst, ne0, ne02, item_ct1);
-        });
-    break;
+      sycl_parallel_for(stream,
+                        sycl::nd_range<3>(gridDim * sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE),
+                                          sycl::range<3>(1, 1, SYCL_CONCAT_BLOCK_SIZE)),
+                        [=](sycl::nd_item<3> item_ct1) { concat_f32_dim2(x, y, dst, ne0, ne02, item_ct1); });
+      break;
   }
 }
 
@@ -129,69 +120,63 @@ static void concat_f32_sycl_non_cont(
     int64_t ne2, int64_t ne3, uint64_t nb0, uint64_t nb1, uint64_t nb2,
     uint64_t nb3, int32_t dim) {
   sycl::range<3> gridDim(ne3, ne2, ne1);
-  stream->parallel_for(
-      sycl::nd_range<3>(gridDim, sycl::range<3>(1, 1, 1)),
-      [=](sycl::nd_item<3> item_ct1) {
-        int64_t i3 = item_ct1.get_group(0);
-        int64_t i2 = item_ct1.get_group(1);
-        int64_t i1 = item_ct1.get_group(2);
+  sycl_parallel_for(stream, sycl::nd_range<3>(gridDim, sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
+      int64_t i3 = item_ct1.get_group(0);
+      int64_t i2 = item_ct1.get_group(1);
+      int64_t i1 = item_ct1.get_group(2);
 
-        int64_t o[4] = {0, 0, 0, 0};
-        o[dim] = dim == 0 ? ne00 : (dim == 1 ? ne01 : (dim == 2 ? ne02 : ne03));
+      int64_t o[4] = { 0, 0, 0, 0 };
+      o[dim]       = dim == 0 ? ne00 : (dim == 1 ? ne01 : (dim == 2 ? ne02 : ne03));
 
-        const float *x;
+      const float * x;
 
-        for (int i0 = item_ct1.get_local_id(2); i0 < ne0;
-             i0 += item_ct1.get_local_range(2)) {
+      for (int i0 = item_ct1.get_local_id(2); i0 < ne0; i0 += item_ct1.get_local_range(2)) {
           if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
-            x = (const float *)(src0 + (i3)*nb03 + (i2)*nb02 + (i1)*nb01 +
-                                (i0)*nb00);
+              x = (const float *) (src0 + (i3) *nb03 + (i2) *nb02 + (i1) *nb01 + (i0) *nb00);
           } else {
-            x = (const float *)(src1 + (i3 - o[3]) * nb13 + (i2 - o[2]) * nb12 +
-                                (i1 - o[1]) * nb11 + (i0 - o[0]) * nb10);
+              x = (const float *) (src1 + (i3 - o[3]) * nb13 + (i2 - o[2]) * nb12 + (i1 - o[1]) * nb11 +
+                                   (i0 - o[0]) * nb10);
           }
 
           float *y = (float *)(dst + i3 * nb3 + i2 * nb2 + i1 * nb1 + i0 * nb0);
 
           *y = *x;
-        }
-      });
+      }
+  });
 }
 
 void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
-  const ggml_tensor *src0 = dst->src[0];
-  const ggml_tensor *src1 = dst->src[1];
-  queue_ptr stream = ctx.stream();
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
+    const ggml_tensor *  src0   = dst->src[0];
+    const ggml_tensor *  src1   = dst->src[1];
+    queue_ptr            stream = ctx.stream();
 
-  const int32_t dim = ((int32_t *)dst->op_params)[0];
+    const int32_t dim = ((int32_t *) dst->op_params)[0];
 
-  if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
-    const float *src0_d = (const float *)src0->data;
-    const float *src1_d = (const float *)src1->data;
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
+        const float * src0_d = (const float *) src0->data;
+        const float * src1_d = (const float *) src1->data;
 
-    float *dst_d = (float *)dst->data;
+        float * dst_d = (float *) dst->data;
 
-    if (dim != 3) {
-      for (int i3 = 0; i3 < dst->ne[3]; i3++) {
-        concat_f32_sycl(
-            src0_d + i3 * (src0->nb[3] / 4), src1_d + i3 * (src1->nb[3] / 4),
-            dst_d + i3 * (dst->nb[3] / 4), src0->ne[0], src0->ne[1],
-            src0->ne[2], dst->ne[0], dst->ne[1], dst->ne[2], dim, stream);
-      }
+        if (dim != 3) {
+            for (int i3 = 0; i3 < dst->ne[3]; i3++) {
+                concat_f32_sycl(src0_d + i3 * (src0->nb[3] / 4), src1_d + i3 * (src1->nb[3] / 4),
+                                dst_d + i3 * (dst->nb[3] / 4), src0->ne[0], src0->ne[1], src0->ne[2], dst->ne[0],
+                                dst->ne[1], dst->ne[2], dim, stream);
+            }
+        } else {
+            const size_t size0 = ggml_nbytes(src0);
+            const size_t size1 = ggml_nbytes(src1);
+
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0).wait()));
+            SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d + size0 / 4, src1_d, size1).wait()));
+        }
     } else {
-      const size_t size0 = ggml_nbytes(src0);
-      const size_t size1 = ggml_nbytes(src1);
-
-      SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(dst_d, src0_d, size0).wait()));
-      SYCL_CHECK(CHECK_TRY_ERROR(
-          stream->memcpy(dst_d + size0 / 4, src1_d, size1).wait()));
+        concat_f32_sycl_non_cont(stream, (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
+                                 src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src0->nb[0], src0->nb[1],
+                                 src0->nb[2], src0->nb[3], src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+                                 src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3], dst->ne[0], dst->ne[1], dst->ne[2],
+                                 dst->ne[3], dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
     }
-  } else
-    concat_f32_sycl_non_cont(
-        stream, (const char *)src0->data, (const char *)src1->data,
-        (char *)dst->data, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-        src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], src1->ne[0],
-        src1->ne[1], src1->ne[2], src1->ne[3], src1->nb[0], src1->nb[1],
-        src1->nb[2], src1->nb[3], dst->ne[0], dst->ne[1], dst->ne[2],
-        dst->ne[3], dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3], dim);
 }

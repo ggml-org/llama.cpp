@@ -4,29 +4,37 @@ on:
   workflow_call:
 
 jobs:
-  ubuntu-latest-riscv64-cpu-cross:
-    runs-on: ubuntu-latest
+  ubuntu-24-riscv64-cpu-cross:
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
       - name: Setup Riscv
         run: |
           sudo dpkg --add-architecture riscv64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
-                  g++-14-riscv64-linux-gnu \
-                  libcurl4-openssl-dev:riscv64
+                  g++-14-riscv64-linux-gnu
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
@@ -40,35 +48,40 @@ jobs:
 
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-latest-riscv64-vulkan-cross:
-    runs-on: ubuntu-latest
+  ubuntu-24-riscv64-vulkan-cross:
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Riscv
         run: |
           sudo dpkg --add-architecture riscv64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/riscv64-ports.list
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=riscv64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
                   gcc-14-riscv64-linux-gnu \
                   g++-14-riscv64-linux-gnu \
-                  libvulkan-dev:riscv64 \
-                  libcurl4-openssl-dev:riscv64
+                  libvulkan-dev:riscv64
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
@@ -82,34 +95,39 @@ jobs:
 
           cmake --build build --config Release -j $(nproc)
 
-  ubuntu-latest-arm64-vulkan-cross:
-    runs-on: ubuntu-latest
+  ubuntu-24-arm64-vulkan-cross:
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
       - name: Setup Arm64
         run: |
           sudo dpkg --add-architecture arm64
-          sudo sed -i 's|http://azure.archive.ubuntu.com/ubuntu|http://ports.ubuntu.com/ubuntu-ports|g' \
-                 /etc/apt/sources.list /etc/apt/apt-mirrors.txt
-          sudo apt-get clean
-          sudo apt-get update
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
                   crossbuild-essential-arm64 \
-                  libvulkan-dev:arm64 \
-                  libcurl4-openssl-dev:arm64
+                  libvulkan-dev:arm64
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
                          -DGGML_VULKAN=ON \
                          -DGGML_OPENMP=OFF \
                          -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
                          -DLLAMA_BUILD_TESTS=OFF \
                          -DCMAKE_SYSTEM_NAME=Linux \
                          -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
@@ -117,6 +135,210 @@ jobs:
                          -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
                          -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
                          -DCMAKE_FIND_ROOT_PATH=/usr/lib/aarch64-linux-gnu \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
+
+  ubuntu-24-ppc64el-cpu-cross:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup PowerPC64le
+        run: |
+          sudo dpkg --add-architecture ppc64el
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
+          sudo apt-get install -y --no-install-recommends \
+                  build-essential \
+                  gcc-14-powerpc64le-linux-gnu \
+                  g++-14-powerpc64le-linux-gnu
+
+      - name: Build
+        run: |
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DCMAKE_SYSTEM_NAME=Linux \
+                         -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
+                         -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
+
+  ubuntu-24-ppc64el-vulkan-cross:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup PowerPC64le
+        run: |
+          sudo dpkg --add-architecture ppc64el
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | sudo tee /etc/apt/sources.list.d/ppc64el-ports.list
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-updates main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-security main universe
+          deb [arch=ppc64el] http://ports.ubuntu.com/ubuntu-ports/ noble-backports main universe
+          EOF
+
+          sudo apt-get update || true    ;# Prevent failure due to missing URLs.
+
+          sudo apt-get install -y --no-install-recommends \
+                  build-essential \
+                  glslc \
+                  gcc-14-powerpc64le-linux-gnu \
+                  g++-14-powerpc64le-linux-gnu \
+                  libvulkan-dev:ppc64el
+
+      - name: Build
+        run: |
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_VULKAN=ON \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DCMAKE_SYSTEM_NAME=Linux \
+                         -DCMAKE_SYSTEM_PROCESSOR=ppc64 \
+                         -DCMAKE_C_COMPILER=powerpc64le-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=powerpc64le-linux-gnu-g++-14 \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/powerpc64le-linux-gnu \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
+
+  debian-13-loongarch64-cpu-cross:
+    runs-on: ubuntu-24.04
+    container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup LoongArch
+        run: |
+          rm -f /etc/apt/sources.list.d/*
+          cat << EOF | tee /etc/apt/sources.list.d/debian-ports.list
+          deb http://snapshot.debian.org/archive/debian/20250515T202920Z/ trixie main
+          EOF
+          ( echo 'quiet "true";'; \
+            echo 'APT::Get::Assume-Yes "true";'; \
+            echo 'APT::Install-Recommends "false";'; \
+            echo 'Acquire::Check-Valid-Until "false";'; \
+            echo 'Acquire::Retries "5";'; \
+          ) > /etc/apt/apt.conf.d/99snapshot-repos
+
+          apt-get update
+          apt-get install -y ca-certificates debian-ports-archive-keyring cmake git zip
+          dpkg --add-architecture loong64
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | tee /etc/apt/sources.list.d/loong64-ports.list
+          deb [arch=loong64] http://snapshot.debian.org/archive/debian-ports/20250515T194251Z/ sid main
+          EOF
+
+          apt-get update || true    ;# Prevent failure due to missing URLs.
+
+          apt-get install -y --no-install-recommends \
+                  build-essential \
+                  gcc-14-loongarch64-linux-gnu \
+                  g++-14-loongarch64-linux-gnu
+
+      - name: Build
+        run: |
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DCMAKE_SYSTEM_NAME=Linux \
+                         -DCMAKE_SYSTEM_PROCESSOR=loongarch64 \
+                         -DCMAKE_C_COMPILER=loongarch64-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=loongarch64-linux-gnu-g++-14 \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/loongarch64-linux-gnu \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
+
+  debian-13-loongarch64-vulkan-cross:
+    runs-on: ubuntu-24.04
+    container: debian@sha256:653dfb9f86c3782e8369d5f7d29bb8faba1f4bff9025db46e807fa4c22903671
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup LoongArch
+        run: |
+          rm -f /etc/apt/sources.list.d/*
+          cat << EOF | tee /etc/apt/sources.list.d/debian-ports.list
+          deb http://snapshot.debian.org/archive/debian/20250515T202920Z/ trixie main
+          EOF
+          ( echo 'quiet "true";'; \
+            echo 'APT::Get::Assume-Yes "true";'; \
+            echo 'APT::Install-Recommends "false";'; \
+            echo 'Acquire::Check-Valid-Until "false";'; \
+            echo 'Acquire::Retries "5";'; \
+          ) > /etc/apt/apt.conf.d/99snapshot-repos
+
+          apt-get update
+          apt-get install -y ca-certificates debian-ports-archive-keyring cmake git zip
+          dpkg --add-architecture loong64
+
+          # Add arch-specific repositories for non-amd64 architectures
+          cat << EOF | tee /etc/apt/sources.list.d/loong64-ports.list
+          deb [arch=loong64] http://snapshot.debian.org/archive/debian-ports/20250515T194251Z/ sid main
+          EOF
+
+          apt-get update || true    ;# Prevent failure due to missing URLs.
+
+          apt-get install -y --no-install-recommends \
+                  build-essential \
+                  glslc \
+                  gcc-14-loongarch64-linux-gnu \
+                  g++-14-loongarch64-linux-gnu \
+                  libvulkan-dev:loong64
+
+      - name: Build
+        run: |
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_VULKAN=ON \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DCMAKE_SYSTEM_NAME=Linux \
+                         -DCMAKE_SYSTEM_PROCESSOR=loongarch64 \
+                         -DCMAKE_C_COMPILER=loongarch64-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=loongarch64-linux-gnu-g++-14 \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/loongarch64-linux-gnu \
                          -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
                          -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
                          -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
