@@ -246,6 +246,35 @@ bool is_mul_mat_f32_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::ten
     return true;
 }
 
+typedef void (*mul_mat_func_type)(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tensor * dst,
+                                  hexagon::compute_params * params);
+
+constexpr const mul_mat_func_type kMulMatF16F32Funcs[2][2] = {
+    {
+     // non-quantized
+        mul_mat_impl<hexagon::vec_dot_product_f16_f32, false>, // F32 * F32 unaligned
+        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, false>,                                        // F32 * F32 aligned
+    },
+    {
+     // quantized
+        mul_mat_impl<hexagon::vec_dot_product_f16_f32,                                                 true>,         // F32 * F32 quantized unaligned
+        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, true>,  // F32 * F32 quantized aligned
+    },
+};
+
+constexpr const mul_mat_func_type kMulMatF16Funcs[2][2] = {
+    {
+     // non-quantized
+        mul_mat_impl<hexagon::vec_dot_product_f16_f16, false>, // F16 * F16 unaligned
+        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, false>,                                        // F16 * F16 aligned
+    },
+    {
+     // quantized
+        mul_mat_impl<hexagon::vec_dot_product_f16_f16,                                                 true>,         // F16 * F16 quantized unaligned
+        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, true>,  // F16 * F16 quantized aligned
+    },
+};
+
 }  // namespace
 
 namespace hexagon {
@@ -269,18 +298,9 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
     const bool is_src0_quantized = is_quantized_type(src0->get_type());
     switch (src1->get_type()) {
         case NPU_DATA_TYPE_F32:
-            if (is_src0_quantized) {
-                if (is_mul_mat_f16_f32_src_tensors_aligned(src0, src1, is_src0_quantized)) {
-                    mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, true>(src0, src1, out, params);
-                } else {
-                    mul_mat_impl<hexagon::vec_dot_product_f16_f32, true>(src0, src1, out, params);
-                }
-            } else if (src0->get_type() == NPU_DATA_TYPE_F16) {
-                if (is_mul_mat_f16_f32_src_tensors_aligned(src0, src1, is_src0_quantized)) {
-                    mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, false>(src0, src1, out, params);
-                } else {
-                    mul_mat_impl<hexagon::vec_dot_product_f16_f32, false>(src0, src1, out, params);
-                }
+            if (is_src0_quantized || src0->get_type() == NPU_DATA_TYPE_F16) {
+                kMulMatF16F32Funcs[is_src0_quantized][is_mul_mat_f16_f32_src_tensors_aligned(
+                    src0, src1, is_src0_quantized)](src0, src1, out, params);
             } else {
                 if (is_mul_mat_f32_f32_src_tensors_aligned(src0, src1)) {
                     mul_mat_impl<hexagon::vec_dot_product_aligned_f32_f32, false>(src0, src1, out, params);
@@ -289,21 +309,9 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
                 }
             }
             return true;
-
         case NPU_DATA_TYPE_F16:
-            if (is_src0_quantized) {
-                if (is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)) {
-                    mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, true>(src0, src1, out, params);
-                } else {
-                    mul_mat_impl<hexagon::vec_dot_product_f16_f16, true>(src0, src1, out, params);
-                }
-            } else {
-                if (is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)) {
-                    mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, false>(src0, src1, out, params);
-                } else {
-                    mul_mat_impl<hexagon::vec_dot_product_f16_f16, false>(src0, src1, out, params);
-                }
-            }
+            kMulMatF16Funcs[is_src0_quantized][is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)](
+                src0, src1, out, params);
             return true;
         default:
             break;
