@@ -3416,5 +3416,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    add_opt(common_arg(
+        {"--default-client-config"}, "JSON_FNAME",
+        string_format("JSON file containing the default client config"),
+        [](common_params & params, const std::string & value) {
+            params.public_default_client_config = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DEFAULT_CLIENT_CONFIG"));
+
     return ctx_arg;
 }

@@ -370,6 +370,7 @@ struct common_params {
 
     std::string hostname      = "127.0.0.1";
     std::string public_path   = "";                                                                         // NOLINT
+    std::string public_default_client_config = "";                                                          // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;

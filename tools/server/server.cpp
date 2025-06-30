@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cinttypes>
 #include <deque>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <signal.h>
@@ -1905,6 +1906,7 @@ struct server_context {
     // slots / clients
     std::vector<server_slot> slots;
     json default_generation_settings_for_props;
+    json default_client_config = json::object();
 
     server_queue    queue_tasks;
     server_response queue_results;
@@ -2096,6 +2098,15 @@ struct server_context {
         }
 
         default_generation_settings_for_props = slots[0].to_json();
+
+        if (!params_base.public_default_client_config.empty()) {
+            std::ifstream file(params_base.public_default_client_config);
+            LOG_INF("%s: Loading default client config from %s\n", __func__, params_base.public_default_client_config.c_str());
+            if (!file.is_open()) {
+                throw std::runtime_error("Error: default client config file not open");
+            }
+            file >> default_client_config;
+        }
 
         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
@@ -3851,6 +3862,11 @@ int main(int argc, char ** argv) {
         res_ok(res, health);
     };
 
+    const auto handle_default_config = [&](const httplib::Request &, httplib::Response & res) {
+        // default client-side config
+        res_ok(res, ctx_server.default_client_config);
+    };
+
     const auto handle_slots = [&](const httplib::Request & req, httplib::Response & res) {
         if (!params.endpoint_slots) {
             res_error(res, format_error_response("This server does not support slots endpoint. Start it with `--slots`", ERROR_TYPE_NOT_SUPPORTED));
@@ -4830,6 +4846,7 @@ int main(int argc, char ** argv) {
 
     // register API routes
     svr->Get ("/health",              handle_health); // public endpoint (no API key check)
+    svr->Get ("/defaultConfig.json",  handle_default_config); // public endpoint (no API key check)
     svr->Get ("/metrics",             handle_metrics);
     svr->Get ("/props",               handle_props);
     svr->Post("/props",               handle_props_change);
