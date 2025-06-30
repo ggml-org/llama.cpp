@@ -591,7 +591,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     endif()
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
-        # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "fassociative-math"
+        # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "-fassociative-math"
         target_compile_options(${GGML_CPU_NAME} PRIVATE "-fno-associative-math")
     endif()
 endfunction()
