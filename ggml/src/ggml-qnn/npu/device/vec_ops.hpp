@@ -299,7 +299,7 @@ inline bool is_dot_product_aligned(const _TElem0 * src0, const _TElem1 * src1, s
         return false;
     }
 
-    if (count % (hexagon::kBytesPerVector / sizeof(_TElem0) * 2) != 0) {
+    if (count % (hexagon::kBytesPerVector / sizeof(_TElem0)) != 0) {
         return false;
     }
 
