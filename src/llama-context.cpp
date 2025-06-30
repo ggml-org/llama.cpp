@@ -932,6 +932,9 @@ int llama_context::decode(llama_batch & inp_batch) {
     kv_self_update();
 
     int64_t n_outputs_prev = 0;
+#ifdef GGML_PERF
+    FILE *perf_all_shape_fp = ggml_perf_log_open("ggml_perf-all-shape.log");
+#endif /* GGML_PERF */
 
     while (sbatch.n_tokens > 0) {
         llama_ubatch ubatch = kv_self->ubatch_next(sbatch, cparams.n_ubatch, embd_pooled);
@@ -971,6 +974,12 @@ int llama_context::decode(llama_batch & inp_batch) {
         res->set_inputs(&ubatch);
 
         const auto compute_status = graph_compute(gf, ubatch.n_tokens > 1);
+#ifdef GGML_PERF
+        if (perf_all_shape_fp) {
+            ggml_perf_write_detailed_csv(gf, perf_all_shape_fp);
+        }
+        ggml_perf_accumulate(perf_totals, gf);
+#endif /* GGML_PERF */
         if (compute_status != GGML_STATUS_SUCCESS) {
             switch (compute_status) {
                 case GGML_STATUS_ABORTED:
@@ -2611,6 +2620,19 @@ llama_perf_context_data llama_perf_context(const llama_context * ctx) {
     return data;
 }
 
+void ggml_perf_print_totals(struct ggml_perf_totals totals[GGML_OP_COUNT]) {
+    LLAMA_LOG_TSAVORITE("\n=== GGML Perf Summary ===\n");
+    for (int i = 0; i < GGML_OP_COUNT; ++i) {
+        if (totals[i].runs > 0) {
+            LLAMA_LOG_TSAVORITE("  %-16s: %5ld runs, %8ld us total, avg %.2f us\n",
+                   totals[i].op_name ? totals[i].op_name : "UNKNOWN",
+                   totals[i].runs,
+                   totals[i].total_us,
+                   (double)totals[i].total_us / totals[i].runs);
+        }
+    }
+}
+
 void llama_perf_context_print(const llama_context * ctx) {
     const auto data = llama_perf_context(ctx);
 
@@ -2622,12 +2644,16 @@ void llama_perf_context_print(const llama_context * ctx) {
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_INFO("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
 
+#ifdef GGML_PERF
     LLAMA_LOG_TSAVORITE("%s:        load time = %10.2f ms\n", __func__, data.t_load_ms);
     LLAMA_LOG_TSAVORITE("%s: prompt eval time = %10.2f ms / %5d tokens (%8.2f ms per token, %8.2f tokens per second)\n",
             __func__, data.t_p_eval_ms, data.n_p_eval, data.t_p_eval_ms / data.n_p_eval, 1e3 / data.t_p_eval_ms * data.n_p_eval);
     LLAMA_LOG_TSAVORITE("%s:        eval time = %10.2f ms / %5d runs   (%8.2f ms per token, %8.2f tokens per second)\n",
             __func__, data.t_eval_ms, data.n_eval, data.t_eval_ms / data.n_eval, 1e3 / data.t_eval_ms * data.n_eval);
     LLAMA_LOG_TSAVORITE("%s:       total time = %10.2f ms / %5d tokens\n", __func__, (t_end_ms - data.t_start_ms), (data.n_p_eval + data.n_eval));
+
+    ggml_perf_print_totals(const_cast<ggml_perf_totals *>(ctx->perf_totals));
+#endif /* GGML_PERF */
 }
 
 void llama_perf_context_reset(llama_context * ctx) {

@@ -2844,8 +2844,21 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
     for (int node_n = 0; node_n < cgraph->n_nodes && atomic_load_explicit(&tp->abort, memory_order_relaxed) != node_n; node_n++) {
         struct ggml_tensor * node = cgraph->nodes[node_n];
 
+#ifdef GGML_PERF
+        int64_t t_start = ggml_time_us();
+#endif
         ggml_compute_forward(&params, node);
 
+#ifdef GGML_PERF
+        int64_t t_end = ggml_time_us();
+        node->perf_runs++;
+        if (t_end >= t_start) {
+            node->perf_time_us += (t_end - t_start);
+        } else {
+            // Handle wraparound by assuming timer rolls over at max int64_t value
+            node->perf_time_us += (INT64_MAX - t_start + t_end + 1);
+        }
+#endif
         if (state->ith == 0 && cplan->abort_callback &&
                 cplan->abort_callback(cplan->abort_callback_data)) {
             atomic_store_explicit(&tp->abort, node_n + 1, memory_order_relaxed);

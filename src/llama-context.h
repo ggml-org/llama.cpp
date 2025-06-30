@@ -8,6 +8,7 @@
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
+#include "ggml.h"
 
 #include <map>
 #include <vector>
@@ -183,6 +184,9 @@ public:
     ggml_status graph_compute(
             ggml_cgraph * gf,
                    bool   batched);
+#ifdef GGML_PERF
+    struct ggml_perf_totals perf_totals[GGML_OP_COUNT] = {};  // add this to llama_context
+#endif
 
 private:
     llm_graph_result_ptr graph_build(
