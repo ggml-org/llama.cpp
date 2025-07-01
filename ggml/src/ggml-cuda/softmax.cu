@@ -179,7 +179,7 @@ static __global__ void soft_max_back_f32(
 }
 
 template<typename T>
-static void soft_max_f32_cuda(const float * x, const T * mask, float * dst, soft_max_params params, cudaStream_t stream) {
+static void soft_max_f32_cuda(const float * x, const T * mask, float * dst, const soft_max_params & params, cudaStream_t stream) {
     int nth = WARP_SIZE;
     const int64_t ncols_x = params.ncols;
 
