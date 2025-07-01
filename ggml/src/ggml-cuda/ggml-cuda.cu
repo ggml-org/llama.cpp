@@ -3249,13 +3249,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_DIAG_MASK_INF:
             return true;
         case GGML_OP_SOFT_MAX:
-            // TODO: support batching
-            if (op->src[0]->ne[3] != 1) {
-                return false;
-            }
-            // TODO: support broadcast
-            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
-            return !op->src[1] || (op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1);
+            return true;
         case GGML_OP_SOFT_MAX_BACK: {
             float max_bias = 0.0f;
             memcpy(&max_bias, (const float *) op->op_params + 1, sizeof(float));
