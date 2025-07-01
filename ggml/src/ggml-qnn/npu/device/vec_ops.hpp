@@ -125,11 +125,8 @@ inline HVX_VectorPair hvx_vqf32_convert_vhf(HVX_Vector vxl) {
     return qhmath_hvx_vqf32_convert_vqf16(qhmath_hvx_vqf16_convert_vhf(vxl));
 }
 
-inline HVX_VectorPair hvx_vsf_convert_vhf(HVX_Vector vxl) {
-    constexpr const __fp16 kOne = 1.0f;
-    const HVX_Vector kOneV      = Q6_Vh_vsplat_R(reinterpret_cast<const uint16_t &>(kOne));
-
-    HVX_VectorPair res   = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vxl), kOneV);
+inline HVX_VectorPair hvx_vsf_convert_vhf(HVX_Vector vxl, HVX_Vector one) {
+    HVX_VectorPair res   = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vxl), one);
     HVX_Vector     vxl_w = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(res));
     HVX_Vector     vxh_w = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(res));
     return Q6_W_vcombine_VV(vxh_w, vxl_w);
