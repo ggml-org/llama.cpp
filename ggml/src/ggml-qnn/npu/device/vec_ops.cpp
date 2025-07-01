@@ -258,15 +258,15 @@ inline float vec_dot_product_mix_aligned_impl(const _TElem0 * src0, const _TElem
         HVX_VectorPair curr10 = reinterpret_cast<HVX_VectorPair *>(src1_vec_ptr)[0];
         HVX_VectorPair curr11 = reinterpret_cast<HVX_VectorPair *>(src1_vec_ptr)[1];
 
-        HVX_VectorPair s00 = _ExpandFunc(Q6_V_lo_W(curr0), kOneV);
-        HVX_VectorPair s01 = _ExpandFunc(Q6_V_hi_W(curr0), kOneV);
+        HVX_VectorPair curr00 = _ExpandFunc(Q6_V_lo_W(curr0), kOneV);
+        HVX_VectorPair curr01 = _ExpandFunc(Q6_V_hi_W(curr0), kOneV);
         src0_vec_ptr += 2;
         src1_vec_ptr += 4;
 
-        sum0 = _AddFunc(_MpyFunc(Q6_V_lo_W(s00), Q6_V_lo_W(curr10)), sum0);
-        sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(s00), Q6_V_hi_W(curr10)), sum1);
-        sum2 = _AddFunc(_MpyFunc(Q6_V_lo_W(s01), Q6_V_lo_W(curr11)), sum2);
-        sum3 = _AddFunc(_MpyFunc(Q6_V_hi_W(s01), Q6_V_hi_W(curr11)), sum3);
+        sum0 = _AddFunc(_MpyFunc(Q6_V_lo_W(curr00), Q6_V_lo_W(curr10)), sum0);
+        sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(curr00), Q6_V_hi_W(curr10)), sum1);
+        sum2 = _AddFunc(_MpyFunc(Q6_V_lo_W(curr01), Q6_V_lo_W(curr11)), sum2);
+        sum3 = _AddFunc(_MpyFunc(Q6_V_hi_W(curr01), Q6_V_hi_W(curr11)), sum3);
     }
 
     sum0 = _AddFunc(sum0, sum2);
