@@ -87,6 +87,11 @@ destn_path='/tsi/proj/model-cache/gguf/' # Destination Directory in FPGA where u
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 os.makedirs(UPLOAD_FOLDER, exist_ok=True) # Create the upload folder if it doesn't exist
 
+def read_cmd_from_serial(port,baudrate,command):
+    job_status['running'] = True
+    temp = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True, check=True)
+    print(temp.stdout)
+    job_status['running'] = False
 
 @app.route('/upload-gguf', methods=['POST', 'GET'])
 def upload_serial_command():
@@ -123,9 +128,12 @@ def upload_serial_command():
             thread = threading.Thread(target=scriptRecvFromHost)
             job_status = {"running": True, "result": "", "thread": thread}
             thread.start()
-
+            thread.join()
             stdout, stderr = process.communicate()
-        return render_template('uploadtofpga.html', apple = process, recvoutput=f"On FPGA Target, recvFromHost completed ; transf    ered file:{filename} received")
+        
+        read_cmd_from_serial(port,baudrate,f"cd {destn_path}; ls -lt")
+
+        return render_template('uploadtofpga.html', apple = process, recvoutput=f"On FPGA Target, recvFromHost completed ; transfered file:{filename} received")
     return render_template('upload.html') # Display the upload form
 
 
@@ -135,6 +143,8 @@ def upload_serial_command():
 #        return result.stdout, 200
 #    except subprocess.CalledProcessError as e:
 #        return f"Error executing script: {e.stderr}", 500
+
+
 
 
 @app.route('/upload-file', methods=['GET', 'POST'])
@@ -160,12 +170,14 @@ def upload_file():
 
             script_path = "./recvFromHost "
             temporary_destination_path = request.form.get("destination_file_path") # I've tested this on fpga4 and it correctly gets the user-inputted file path
-            command = f"cd {exe_path}; {script_path} {temporary_destination_path}{filename}"
+            command = f"cd {exe_path}; {script_path} {temporary_destination_path}{filename}" 
             def scriptRecvFromHost():
                  try:
                      result = subprocess.run(['python3', 'serial_script.py', port, baudrate, command], capture_output=True, text=True,     check=True)
                      job_status["result"] = result.stdout
+                     
                      print(result.stdout)
+                     
                      recv_output = result.stdout
                  except subprocess.CalledProcessError as e:
                      job_status["result"] = f"Error: {e.stderr}"
@@ -174,9 +186,12 @@ def upload_file():
             thread = threading.Thread(target=scriptRecvFromHost)
             job_status = {"running": True, "result": "", "thread": thread}
             thread.start()
-
+            thread.join()
             stdout, stderr = process.communicate()
-        return render_template('uploadtofpga.html', apple = process, recvoutput=f"On FPGA Target, recvFromHost completed ; transf    ered file:{filename} received")
+        
+        read_cmd_from_serial(port,baudrate,f"cd {temporary_destination_path}; ls -lt")
+        
+        return render_template('uploadtofpga.html', apple = process, recvoutput=f'On FPGA Target, recvFromHost completed ; transfered file:{filename} received ')
     return render_template('upload.html') # Display the upload form
 
 def internal_restart_txe():

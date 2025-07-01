@@ -83,7 +83,8 @@ def send_serial_command(port, baudrate, command):
                     if (first_time == 1) :
                         first_time = 0
                     else:
-                        data += read_next_line  # Keep the line as-is with newline
+                        if 'read in progress' not in read_next_line:
+                            data += read_next_line  # Keep the line as-is with newline
                 else:
                     break  # Exit loop if no data is received
             except serial.SerialException as e:
