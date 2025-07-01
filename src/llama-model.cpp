@@ -16159,10 +16159,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     return res;
 }
 
-llm_graph_result_ptr llama_model::build_graph(
-        const llm_graph_params & params,
-                   ggml_cgraph * gf,
-                llm_graph_type   type) const {
+ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
+    // TODO: temporary - will refactor this to keep the "gf" instance in the llm_graph_context and avoid passing it everywhere
+    auto * gf = params.res->get_gf();
+
     std::unique_ptr<llm_graph_context> llm;
 
     switch (arch) {
@@ -16373,7 +16373,7 @@ llm_graph_result_ptr llama_model::build_graph(
             } break;
         case LLM_ARCH_T5:
             {
-                switch (type) {
+                switch (params.gtype) {
                     case LLM_GRAPH_TYPE_ENCODER:
                         llm = std::make_unique<llm_build_t5_enc>(*this, params, gf);
                         break;
@@ -16479,7 +16479,10 @@ llm_graph_result_ptr llama_model::build_graph(
     // add on pooling layer
     llm->build_pooling(gf, cls, cls_b, cls_out, cls_out_b);
 
-    return std::move(llm->res);
+    // TODO: updating the graph parameters here is a little bit obscure - figure out something better
+    llm->res->params = params;
+
+    return llm->res->get_gf();
 }
 
 //

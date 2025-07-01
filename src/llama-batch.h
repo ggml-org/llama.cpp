@@ -34,6 +34,31 @@ struct llama_ubatch {
     llama_seq_id *  seq_id_unq; // [n_seqs_unq]       | s   | seq_id
     int32_t      *  seq_idx;    // [LLAMA_MAX_SEQ]    | -   | seq_idx
     int8_t       *  output;     // [n_tokens]         | i   | -
+
+    bool is_same(const llama_ubatch & other) const {
+        bool res =
+            equal_seqs   == other.equal_seqs &&
+            n_tokens     == other.n_tokens &&
+            n_seq_tokens == other.n_seq_tokens &&
+            n_seqs       == other.n_seqs &&
+            n_seqs_unq   == other.n_seqs_unq &&
+            (
+                (!token && !other.token) ||
+                (!embd  && !other.embd)
+            );
+
+        if (!res) {
+            return false;
+        }
+
+        // TODO: this won't work because seq_id_unq ptr can point to an old balloc that has
+        //       been freed by this point. find a way to fix this
+        //for (uint32_t s = 0; s < n_seqs_unq; ++s) {
+        //    res &= seq_id_unq[s] == other.seq_id_unq[s];
+        //}
+
+        return res;
+    }
 };
 
 // a helper for sanitizing, fulfilling and splitting a batch

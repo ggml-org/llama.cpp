@@ -121,6 +121,9 @@ public:
 
     uint32_t get_n_kv() const;
 
+    // TODO: temporary
+    bool get_supports_set_rows() const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
@@ -193,12 +196,14 @@ private:
 
     // env: LLAMA_SET_ROWS (temporary)
     // ref: https://github.com/ggml-org/llama.cpp/pull/14285
-    int supports_set_rows = false;
+    bool supports_set_rows = false;
 
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
+
+    std::unique_ptr<llm_graph_result> gf_res;
 
     llama_kv_cells_unified cells;
 
@@ -226,15 +231,13 @@ private:
                           float   freq_base,
                           float   freq_scale) const;
 
-    llm_graph_result_ptr build_graph_shift(
-            const llama_cparams & cparams,
-                   ggml_context * ctx,
-                    ggml_cgraph * gf) const;
+    ggml_cgraph * build_graph_shift(
+               llm_graph_result * res,
+                  llama_context * lctx) const;
 
-    llm_graph_result_ptr build_graph_defrag(
-            const llama_cparams & cparams,
-                   ggml_context * ctx,
-                    ggml_cgraph * gf,
+    ggml_cgraph * build_graph_defrag(
+               llm_graph_result * res,
+                  llama_context * lctx,
               const defrag_info & dinfo) const;
 
     void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
@@ -287,6 +290,9 @@ public:
     //
 
     uint32_t get_n_kv() const;
+
+    // TODO: temporary
+    bool get_supports_set_rows() const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;

@@ -35,8 +35,6 @@ struct llama_context {
 
     ggml_backend_sched_t get_sched() const;
 
-    ggml_context * get_ctx_compute() const;
-
     uint32_t n_ctx()         const;
     uint32_t n_ctx_per_seq() const;
     uint32_t n_batch()       const;
@@ -96,7 +94,7 @@ struct llama_context {
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
     // returns nullptr only if ret != GGML_STATUS_SUCCESS
-    llm_graph_result_ptr process_ubatch(
+    llm_graph_result_i * process_ubatch(
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
@@ -188,10 +186,7 @@ private:
     //
 
 public:
-    int32_t graph_max_nodes() const;
-
-    // zero-out inputs and create the ctx_compute for the compute graph
-    ggml_cgraph * graph_init();
+    uint32_t graph_max_nodes() const;
 
     // returns the result of ggml_backend_sched_graph_compute_async execution
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
@@ -200,12 +195,11 @@ public:
     ggml_cgraph * graph_reserve(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx);
 
 private:
-    llm_graph_result_ptr graph_build(
-                      ggml_context * ctx,
-                       ggml_cgraph * gf,
-                const llama_ubatch & ubatch,
-                    llm_graph_type   gtype,
-      const llama_memory_context_i * mctx);
+    llm_graph_params graph_params(
+                      llm_graph_result_i * res,
+                      const llama_ubatch & ubatch,
+            const llama_memory_context_i * mctx,
+                          llm_graph_type   gtype) const;
 
     llm_graph_cb graph_get_cb() const;
 
@@ -258,8 +252,6 @@ private:
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
 
-    ggml_context_ptr ctx_compute;
-
     // training
     ggml_opt_context_t opt_ctx = nullptr;
 
@@ -275,8 +267,8 @@ private:
     std::vector<ggml_backend_t>             backend_ptrs;
     std::vector<ggml_backend_buffer_type_t> backend_buft;
 
-    // memory buffers used to evaluate the model
-    std::vector<uint8_t> buf_compute_meta;
+    llm_graph_result_ptr gf_res_prev;
+    llm_graph_result_ptr gf_res_reserve;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
@@ -294,4 +286,6 @@ private:
 
     mutable int32_t n_p_eval = 0; // number of tokens in eval calls for the prompt (with batch size > 1)
     mutable int32_t n_eval   = 0; // number of eval calls
+
+    mutable int32_t n_reused = 0; // number of times the previous graph was reused
 };
