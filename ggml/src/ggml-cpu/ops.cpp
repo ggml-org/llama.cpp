@@ -3,6 +3,7 @@
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
 #include "binary-ops.h"
+#include "ggml.h"
 #include "unary-ops.h"
 #include "vec.h"
 
@@ -6831,6 +6832,186 @@ void ggml_compute_forward_im2col_back_f32(
     }
 }
 
+static void ggml_call_mul_mat(ggml_type type, const ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
+                              void * a, void * b, float * c) {
+    const ggml_type_traits * traits = ggml_get_type_traits(type);
+    struct ggml_tensor src1 = {};
+    src1.type  = type;
+    src1.ne[0] = k;
+    src1.ne[1] = m;
+    src1.ne[2] = 1;
+    src1.ne[3] = 1;
+    src1.nb[0] = traits->type_size;
+    src1.nb[1] = k * traits->type_size;
+    src1.nb[2] = src1.nb[1];
+    src1.nb[3] = src1.nb[2];
+    src1.data  = a;
+
+    struct ggml_tensor src0 = {};
+    src0.type  = type;
+    src0.ne[0] = k;
+    src0.ne[1] = n;
+    src0.ne[2] = 1;
+    src0.ne[3] = 1;
+    src0.nb[0] = traits->type_size;
+    src0.nb[1] = k * traits->type_size;
+    src0.nb[2] = src0.nb[1];
+    src0.nb[3] = src0.nb[2];
+    src0.data  = b;
+
+    struct ggml_tensor dst = {};
+    dst.ne[0] = n;
+    dst.ne[1] = m;
+    dst.ne[2] = 1;
+    dst.ne[3] = 1;
+    dst.nb[0] = sizeof(float);
+    dst.nb[1] = n * sizeof(float);
+    dst.nb[2] = dst.nb[1];
+    dst.nb[3] = dst.nb[2];
+    dst.data  = c;
+    dst.src[0] = &src0;
+    dst.src[1] = &src1;
+
+    ggml_compute_forward_mul_mat(params, &dst);
+}
+
+// ggml_compute_forward_conv_2d
+
+static void ggml_compute_forward_conv_2d_impl(const ggml_compute_params * params,
+                                              const ggml_tensor *         kernel,  // [KW, KH, IC, OC]
+                                              const ggml_tensor *         src,     // [W, H, C, N]
+                                              ggml_tensor *               dst,     // [OW, OH, OC, N]
+                                              ggml_type                   kernel_type) {
+
+    GGML_ASSERT(ggml_is_contiguous(kernel));
+    GGML_ASSERT(kernel_type == GGML_TYPE_F16 || kernel_type == GGML_TYPE_F32);
+    GGML_ASSERT(kernel->type == kernel_type);
+
+    const ggml_type_traits * traits = ggml_get_type_traits(kernel_type);
+
+    const int32_t stride_x   = dst->op_params[0];
+    const int32_t stride_y   = dst->op_params[1];
+    const int32_t pad_x      = dst->op_params[2];
+    const int32_t pad_y      = dst->op_params[3];
+    const int32_t dilation_x = dst->op_params[4];
+    const int32_t dilation_y = dst->op_params[5];
+
+    const int64_t c_in  = src->ne[2];
+    const int64_t c_out = kernel->ne[3];
+    GGML_ASSERT(c_in == kernel->ne[2]);
+
+    const int64_t src_w = src->ne[0];
+    const int64_t src_h = src->ne[1];
+    const int64_t knl_w = kernel->ne[0];
+    const int64_t knl_h = kernel->ne[1];
+    const int64_t dst_w = dst->ne[0];
+    const int64_t dst_h = dst->ne[1];
+
+    const float * src_data = (float *) src->data;
+    void  * knl_data       = kernel->data;
+    float * dst_data       = (float *) dst->data;
+
+    const int64_t knl_n           = knl_w * knl_h * c_in;
+    const int64_t patch_total     = dst->ne[3] * dst_w * dst_h;
+
+    const int64_t space_per_patch   = knl_n * traits->type_size + c_out * sizeof(float);
+    const int64_t batch_size        = params->wsize / space_per_patch;
+    const int64_t patches_per_batch = batch_size > 8 ? (batch_size / 8) * 8 : batch_size;
+    const int64_t batch_n           = (patch_total + patches_per_batch - 1) / patches_per_batch;
+
+    GGML_ASSERT(patches_per_batch > 0 && batch_size >= 1);
+
+    void * tmp = params->wdata;
+
+    for (int64_t batch_i = 0; batch_i < batch_n; ++batch_i) {
+
+        const int64_t patch_start_batch = batch_i * patches_per_batch;
+        const int64_t patch_end_batch   = std::min(patch_start_batch + patches_per_batch,
+                                              patch_total);
+        const int64_t patch_n           = patch_end_batch - patch_start_batch;
+
+        const int64_t patch_per_thread  = (patch_n + params->nth - 1) / params->nth;
+        const int64_t patch_start       = patch_start_batch + params->ith * patch_per_thread;
+        const int64_t patch_end         = std::min(patch_start + patch_per_thread, patch_end_batch);
+
+        //im2col for a patch
+        for (int64_t p = patch_start; p < patch_end; ++p) {
+            const int64_t  batch_n     =  p / (dst_w * dst_h);
+            const int64_t  src_x       = (p / dst_w) % dst_h;
+            const int64_t  src_y       =  p % dst_w;
+
+            const float * src_base = (const float *)((const char *)src_data + batch_n * src->nb[3]);
+            char *        dst_row  = (char *) tmp + (p % patches_per_batch) * knl_n * traits->type_size;
+
+            for (int64_t ic = 0; ic < c_in; ++ic) {
+                for (int64_t ky = 0; ky < knl_h; ++ky) {
+                    for (int64_t kx = 0; kx < knl_w; ++kx) {
+                        const int64_t sy = src_x * stride_y + ky * dilation_y - pad_y;
+                        const int64_t sx = src_y * stride_x + kx * dilation_x - pad_x;
+
+                        int64_t dst_idx = ic * (knl_h * knl_w) + ky * knl_w + kx;
+
+                        float src_val;
+                        if (sy < 0 || sy >= src_h || sx < 0 || sx >= src_w) {
+                            src_val = 0.0f;
+                        } else {
+                            const float * src_ptr = (const float *)((const char *)src_base + sx * src->nb[0] + sy * src->nb[1] + ic * src->nb[2]);
+                            src_val               = *src_ptr;
+                        }
+
+                        char * element_ptr = dst_row + dst_idx * traits->type_size;
+                        if (kernel_type == GGML_TYPE_F32) {
+                            *(float *) element_ptr = src_val;
+                        } else if (kernel_type == GGML_TYPE_F16) {
+                            *(ggml_fp16_t *) element_ptr = GGML_CPU_FP32_TO_FP16(src_val);
+                        }
+                    }
+                }
+            }
+        }   // patches handled by this thread
+
+        ggml_barrier(params->threadpool);
+
+        float * gemm_output = (float *) ((char *) tmp + patches_per_batch * knl_n * traits->type_size);
+
+        GGML_ASSERT(gemm_output + patch_n * c_out <= (float*)tmp + params->wsize);
+
+        // GEMM: patches[patch_n, knl_n] × kernel[knl_n, c_out] = output[patch_n, c_out]
+        ggml_call_mul_mat(kernel_type, params, patch_n, c_out, knl_n, tmp, knl_data, gemm_output);
+
+        ggml_barrier(params->threadpool);
+
+
+        //permute back [OC, N, OH, OW] to [N, OC, OH, OW]
+        const int64_t permute_per_thread = (patch_n + params->nth - 1) / params->nth;
+        const int64_t permute_start = params->ith * permute_per_thread;
+        const int64_t permute_end = std::min(permute_start + permute_per_thread, patch_n);
+
+        for (int64_t i = permute_start; i < permute_end; ++i) {
+            const int64_t p       = patch_start_batch + i;
+            const int64_t batch_n = p / (dst_w * dst_h);
+            const int64_t dst_y   = (p / dst_w) % dst_h;
+            const int64_t dst_x   = p % dst_w;
+
+            for (int64_t oc = 0; oc < c_out; ++oc) {
+                const float value = gemm_output[i * c_out + oc];
+                float * dst_ptr = (float *)((char *)dst_data + dst_x * dst->nb[0] + dst_y * dst->nb[1] + oc * dst->nb[2] + batch_n * dst->nb[3]);
+                *dst_ptr = value;
+            }
+        }
+    }
+}
+
+void ggml_compute_forward_conv_2d(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    ggml_compute_forward_conv_2d_impl(params, src0, src1, dst, src0->type);
+}
+
 // ggml_compute_forward_conv_transpose_2d
 
 void ggml_compute_forward_conv_transpose_2d(
@@ -7381,12 +7562,13 @@ static void ggml_compute_forward_upscale_f32(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    const float sf0 = (float)ne0/src0->ne[0];
-    const float sf1 = (float)ne1/src0->ne[1];
-    const float sf2 = (float)ne2/src0->ne[2];
-    const float sf3 = (float)ne3/src0->ne[3];
+    float sf0 = (float)ne0/src0->ne[0];
+    float sf1 = (float)ne1/src0->ne[1];
+    float sf2 = (float)ne2/src0->ne[2];
+    float sf3 = (float)ne3/src0->ne[3];
 
-    const ggml_scale_mode mode = (ggml_scale_mode) ggml_get_op_params_i32(dst, 0);
+    const int32_t mode_flags = ggml_get_op_params_i32(dst, 0);
+    const ggml_scale_mode mode = (ggml_scale_mode) (mode_flags & 0xFF);
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
         for (int64_t i3 = 0; i3 < ne3; i3++) {
@@ -7407,8 +7589,12 @@ static void ggml_compute_forward_upscale_f32(
             }
         }
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        // setting a pixel offset of 0 would replicate the behavior of pytorch interpolate with align_corners=True
-        const float pixel_offset = 0.5f;
+        float pixel_offset = 0.5f;
+        if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+            pixel_offset = 0.0f;
+            sf0 = (float)(ne0 - 1) / (src0->ne[0] - 1);
+            sf1 = (float)(ne1 - 1) / (src0->ne[1] - 1);
+        }
 
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;

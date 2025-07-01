@@ -138,6 +138,7 @@ void quantize_q4_0(device const float * src, device block_q4_0 & dst) {
 }
 
 void quantize_q4_1(device const float * src, device block_q4_1 & dst) {
+#pragma METAL fp math_mode(safe)
     float min = FLT_MAX;
     float max = -FLT_MAX;
 
@@ -203,6 +204,7 @@ void quantize_q5_0(device const float * src, device block_q5_0 & dst) {
 }
 
 void quantize_q5_1(device const float * src, device block_q5_1 & dst) {
+#pragma METAL fp math_mode(safe)
     float max = src[0];
     float min = src[0];
 
@@ -239,6 +241,7 @@ void quantize_q5_1(device const float * src, device block_q5_1 & dst) {
 }
 
 void quantize_iq4_nl(device const float * src, device block_iq4_nl & dst) {
+#pragma METAL fp math_mode(safe)
     float amax = 0.0f; // absolute max
     float max  = 0.0f;
 
