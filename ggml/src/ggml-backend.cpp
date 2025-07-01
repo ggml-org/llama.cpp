@@ -941,10 +941,9 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 }
 		// Below Code is Optimization which i am disabling for now since we have not implemented other
 		// Operation at tsavorite
-            } else if (cur_backend_id != -1 || (node->op == GGML_OP_UNARY)) {
-                //ggml_backend_sched_set_if_supported(sched, node, cur_backend_id, node_backend_id);
+            } else { 
                 ggml_backend_sched_set_if_supported(sched, node, 0, node_backend_id);
-            }
+	    }
         }
     }
     // expand gpu up
