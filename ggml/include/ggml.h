@@ -612,9 +612,9 @@ extern "C" {
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 #ifdef GGML_PERF
-	int64_t perf_runs;
+        int64_t perf_runs;
         int64_t perf_time_us;
-	enum ggml_compute_backend_type ggml_compute_backend;
+        enum ggml_compute_backend_type ggml_compute_backend;
         char padding[4];
 #else
         char padding[8];
@@ -2213,12 +2213,26 @@ extern "C" {
     GGML_API bool                          ggml_threadpool_params_match  (const struct ggml_threadpool_params * p0, const struct ggml_threadpool_params * p1);
  
 #ifdef GGML_PERF
+struct ggml_perf_backend_subtotals {
+    int64_t total_us;
+    int64_t runs;
+};
+
+struct ggml_perf_unary_subtotals {
+    int64_t total_us;
+    int64_t runs;
+};
 // internal perf accumulation struct
 struct ggml_perf_totals {
     int op_count;
     int64_t total_us;
     int64_t runs;
     const char * op_name;
+
+    // Only used for UNARY
+    struct ggml_perf_unary_subtotals unary_subtotals[GGML_UNARY_OP_COUNT];
+    // run count per backend
+    struct ggml_perf_backend_subtotals backend_subtotals[GGML_COMPUTE_BACKEND_COUNT];
 };
 
 FILE * ggml_perf_log_open(const char *filename);
@@ -2226,6 +2240,7 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp);
 
 // capture perf into totals
 void ggml_perf_accumulate(struct ggml_perf_totals totals[GGML_OP_COUNT], struct ggml_cgraph * cgraph);
+const char * ggml_backend_type(enum ggml_compute_backend_type backend);
 
 #endif /* GGML_PERF */
 
