@@ -132,6 +132,10 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                 src0_plane = src0_plane_cache_ptr;
             }
 
+            if (start_end_row.second > start_end_row.first) {
+                hexagon::l2fetch_row(src1_plane + start_end_row.first * src1->get_nb(1), valid_row1_bytes);
+            }
+
             for (int64_t i1 = start_end_row.first; i1 < start_end_row.second; i1++) {
                 DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 1, vec_dot);
                 auto *  src1_row = src1_plane + i1 * src1->get_nb(1);
