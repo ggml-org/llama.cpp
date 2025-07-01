@@ -53,6 +53,7 @@ static __global__ void soft_max_f32(
     const int64_t i02 = blockIdx.y;
     const int64_t i01 = blockIdx.x;
 
+    //TODO: noncontigous inputs/outputs
     const int rowx = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;
 
     const int64_t i11 = i01;
