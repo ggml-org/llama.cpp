@@ -3443,8 +3443,6 @@ void ggml_gemm_q2_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     int64_t b_nb = n / QK_K;
     int64_t y = 0;
 
-    // Mask to mask out nibbles from packed bytes
-    const __m256i m4b = _mm256_set1_epi8(0x0F);
     // Permute mask used for easier vector processing at later stages
     __m256i requiredOrder = _mm256_set_epi32(3, 2, 1, 0, 7, 6, 5, 4);
     int64_t xstart = 0;
@@ -3466,6 +3464,9 @@ void ggml_gemm_q2_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #ifdef __AVX512F__
 
     int anc = nc - nc % 16; // Used to align nc with boundary of 16
+    
+    // Mask to mask out nibbles from packed bytes
+    const __m256i m4b = _mm256_set1_epi8(0x0F);
     // Mask to mask out nibbles from packed bytes expanded to 512 bit length
     const __m512i m3bexpanded = _mm512_set1_epi8(3);
     //Take group of four block_q8_Kx4 structures at each pass of the loop and perform dot product operation
