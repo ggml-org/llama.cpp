@@ -23,6 +23,7 @@ struct soft_max_params {
     int64_t ne00;
     int64_t ne01;
     int64_t ne02;
+    int64_t ne03;
     int64_t nb11;
     int64_t nb12;
     int64_t nb13;
@@ -47,18 +48,19 @@ static __global__ void soft_max_f32(
     const int ncols = ncols_template == 0 ? p.ncols : ncols_template;
 
     const int tid  = threadIdx.x;
-    const int rowx = blockIdx.x;
 
-    const int64_t i03 = rowx / (p.ne01 * p.ne02);
-    const int64_t i02 = (rowx % (p.ne01 * p.ne02)) / p.ne01;
-    const int64_t i01 = rowx % p.ne01;
+    const int64_t i03 = blockIdx.z;
+    const int64_t i02 = blockIdx.y;
+    const int64_t i01 = blockIdx.x;
+
+    const int rowx = blockIdx.x + blockIdx.y * gridDim.x + blockIdx.z * gridDim.x * gridDim.y;
 
     const int64_t i11 = i01;
     const int64_t i12 = i02 % p.ne12;
     const int64_t i13 = i03 % p.ne13;
 
     x    += int64_t(rowx)*ncols;
-    mask += (int64_t(i11)*p.nb11 + int64_t(i12)*p.nb12 + int64_t(i13)*p.nb13) / sizeof(T) * (mask != nullptr);
+    mask += (i11*p.nb11 + i12*p.nb12 + i13*p.nb13) / sizeof(T) * (mask != nullptr);
     dst  += int64_t(rowx)*ncols;
 
     const int block_size = block_size_template == 0 ? blockDim.x : block_size_template;
@@ -185,7 +187,7 @@ static void soft_max_f32_cuda(const float * x, const T * mask, float * dst, cons
 
     while (nth < ncols_x && nth < CUDA_SOFT_MAX_BLOCK_SIZE) nth *= 2;
     const dim3 block_dims(nth,     1, 1);
-    const dim3 block_nums(params.nrows_x, 1, 1);
+    const dim3 block_nums(params.ne01, params.ne02, params.ne03);
     const size_t nbytes_shared = (GGML_PAD(ncols_x, WARP_SIZE) + WARP_SIZE)*sizeof(float);
     static_assert(CUDA_SOFT_MAX_BLOCK_SIZE == 1024, "These values need to be adjusted.");
 
@@ -287,25 +289,25 @@ void ggml_cuda_op_soft_max(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
 
-    soft_max_params params = {
-        .nheads = src0->ne[2],
-        .n_head_log2 = n_head_log2,
-        .ncols = ne00,
-        .nrows_x = nrows_x,
-        .nrows_y = nrows_y,
-        .ne00 = src0->ne[0],
-        .ne01 = src0->ne[1],
-        .ne02 = src0->ne[2],
-        .nb11 = nb11,
-        .nb12 = nb12,
-        .nb13 = nb13,
-        .ne12 = ne12,
-        .ne13 = ne13,
-        .scale = scale,
-        .max_bias = max_bias,
-        .m0 = m0,
-        .m1 = m1
-    };
+    soft_max_params params = {};
+    params.nheads = src0->ne[2];
+    params.n_head_log2 = n_head_log2;
+    params.ncols = ne00;
+    params.nrows_x = nrows_x;
+    params.nrows_y = nrows_y;
+    params.ne00 = src0->ne[0];
+    params.ne01 = src0->ne[1];
+    params.ne02 = src0->ne[2];
+    params.ne03 = src0->ne[3];
+    params.nb11 = nb11;
+    params.nb12 = nb12;
+    params.nb13 = nb13;
+    params.ne12 = ne12;
+    params.ne13 = ne13;
+    params.scale = scale;
+    params.max_bias = max_bias;
+    params.m0 = m0;
+    params.m1 = m1;
 
     if (use_f16) {
         soft_max_f32_cuda(src0_d, (const half  *) src1_d, dst_d, params, stream);
