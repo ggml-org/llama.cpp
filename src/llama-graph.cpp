@@ -28,6 +28,15 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+bool llm_graph_input_embd::update(const llm_graph_params & params) {
+    bool res = true;
+
+    res &= (!tokens && !params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
+    res &= (!embd   && !params.ubatch.embd)  || (embd   &&   embd->ne[0] == params.ubatch.n_tokens);
+
+    return res;
+}
+
 void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
     if (ubatch->pos && pos) {
         const int64_t n_tokens = ubatch->n_tokens;
@@ -48,6 +57,14 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
             ggml_backend_tensor_set(pos, ubatch->pos, 0, n_tokens*n_pos_per_embd*ggml_element_size(pos));
         }
     }
+}
+
+bool llm_graph_input_pos::update(const llm_graph_params & params) {
+    bool res = true;
+
+    res &= pos->ne[0] == params.ubatch.n_tokens;
+
+    return res;
 }
 
 void llm_graph_input_attn_temp::set_input(const llama_ubatch * ubatch) {
@@ -116,6 +133,14 @@ void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
             data[n_outputs++] = i;
         }
     }
+}
+
+bool llm_graph_input_out_ids::update(const llm_graph_params & params) {
+    bool res = true;
+
+    res &= n_outputs == params.n_outputs;
+
+    return res;
 }
 
 void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
@@ -287,6 +312,24 @@ void llm_graph_input_attn_kv_unified::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
 }
 
+bool llm_graph_input_attn_kv_unified::update(const llm_graph_params & params) {
+    const auto * mctx = static_cast<const llama_kv_cache_unified_context *>(params.mctx);
+
+    this->mctx = mctx;
+
+    bool res = true;
+
+    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    res &= self_v_idxs->ne[0] == params.ubatch.n_tokens;
+
+    res &= self_kq_mask->ne[0] == mctx->get_n_kv();
+    res &= self_kq_mask->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
+
+    res &= mctx->get_supports_set_rows(); // TODO: tmp
+
+    return res;
+}
+
 void llm_graph_input_attn_kv_unified_iswa::set_input(const llama_ubatch * ubatch) {
     mctx->get_base()->set_input_k_idxs(self_k_idxs, ubatch);
     mctx->get_base()->set_input_v_idxs(self_v_idxs, ubatch);
@@ -297,6 +340,30 @@ void llm_graph_input_attn_kv_unified_iswa::set_input(const llama_ubatch * ubatch
     mctx->get_swa()->set_input_v_idxs(self_v_idxs_swa, ubatch);
 
     mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+}
+
+bool llm_graph_input_attn_kv_unified_iswa::update(const llm_graph_params & params) {
+    const auto * mctx = static_cast<const llama_kv_cache_unified_iswa_context *>(params.mctx);
+
+    this->mctx = mctx;
+
+    bool res = true;
+
+    res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
+    res &= self_v_idxs->ne[0] == params.ubatch.n_tokens;
+
+    res &= self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
+    res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens;
+
+    res &= self_kq_mask->ne[0] == mctx->get_base()->get_n_kv();
+    res &= self_kq_mask->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
+
+    res &= self_kq_mask_swa->ne[0] == mctx->get_swa()->get_n_kv();
+    res &= self_kq_mask_swa->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
+
+    res &= mctx->get_base()->get_supports_set_rows(); // TODO: tmp
+
+    return res;
 }
 
 void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
@@ -374,7 +441,6 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_ctx_orig       (cparams.n_ctx_orig_yarn),
     pooling_type     (cparams.pooling_type),
     rope_type        (hparams.rope_type),
-    ctx0             (params.ctx),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
@@ -382,7 +448,8 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     mctx             (params.mctx),
     cross            (params.cross),
     cb_func          (params.cb),
-    res              (std::make_unique<llm_graph_result>()) {
+    res              (static_cast<llm_graph_result *>(params.res)),
+    ctx0             (res->get_ctx()) {
     }
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {

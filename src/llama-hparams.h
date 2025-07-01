@@ -202,6 +202,8 @@ struct llama_hparams {
     uint32_t n_pos_per_embd() const;
 
     bool is_swa(uint32_t il) const;
+
+    bool is_same(const llama_hparams & other) const;
 };
 
 static_assert(std::is_trivially_copyable<llama_hparams>::value, "llama_hparams must be trivially copyable");

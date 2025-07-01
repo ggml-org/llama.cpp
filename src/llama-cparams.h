@@ -33,9 +33,12 @@ struct llama_cparams {
     bool no_perf;
     bool warmup;
     bool op_offload;
+    bool graph_reuse;
 
     enum llama_pooling_type pooling_type;
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+
+    bool is_same(const llama_cparams & other) const;
 };

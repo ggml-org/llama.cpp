@@ -375,6 +375,8 @@ extern "C" {
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
                           // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
                           //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573
+
+        bool graph_reuse; // reuse previous compute graphs when possible
     };
 
     // model quantization parameters
@@ -1430,6 +1432,7 @@ extern "C" {
 
         int32_t n_p_eval;
         int32_t n_eval;
+        int32_t n_reused;
     };
 
     struct llama_perf_sampler_data {
