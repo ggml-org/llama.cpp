@@ -4453,7 +4453,8 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
-    const ggml_scale_mode mode = (ggml_scale_mode) ggml_get_op_params_i32(dst, 0);
+    const int mode_flags        = (ggml_scale_mode) ggml_get_op_params_i32(dst, 0);
+    const ggml_scale_mode mode  = (ggml_scale_mode) (mode_flags & 0xFF);
     cl_kernel kernel = nullptr;
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
@@ -4484,18 +4485,22 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
     const cl_ulong nb02 = src0->nb[2];
     const cl_ulong nb03 = src0->nb[3];
 
-    const int ne00_src = src0->ne[0];
-    const int ne01_src = src0->ne[1];
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
+    const int ne02 = src0->ne[2];
+    const int ne03 = src0->ne[3];
 
-    const int ne10_dst = dst->ne[0];
-    const int ne11_dst = dst->ne[1];
-    const int ne12_dst = dst->ne[2];
-    const int ne13_dst = dst->ne[3];
+    const int ne0 = dst->ne[0];
+    const int ne1 = dst->ne[1];
+    const int ne2 = dst->ne[2];
+    const int ne3 = dst->ne[3];
 
-    const float sf0 = (float)dst->ne[0] / src0->ne[0];
-    const float sf1 = (float)dst->ne[1] / src0->ne[1];
-    const float sf2 = (float)dst->ne[2] / src0->ne[2];
-    const float sf3 = (float)dst->ne[3] / src0->ne[3];
+    float sf0 = (float)ne0 / ne00;
+    float sf1 = (float)ne1 / ne01;
+    float sf2 = (float)ne2 / ne02;
+    float sf3 = (float)ne3 / ne03;
+
+    float pixel_offset = 0.5f;
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),    &extra_src0->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong),  &off_src0));
@@ -4507,29 +4512,36 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
     CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_ulong),  &nb03));
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne10_dst));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne11_dst));
-        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12_dst));
-        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne13_dst));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne0));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne2));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne3));
         CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float),    &sf0));
         CL_CHECK(clSetKernelArg(kernel, 13, sizeof(float),    &sf1));
         CL_CHECK(clSetKernelArg(kernel, 14, sizeof(float),    &sf2));
         CL_CHECK(clSetKernelArg(kernel, 15, sizeof(float),    &sf3));
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne00_src));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne01_src));
-        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne10_dst));
-        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11_dst));
-        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12_dst));
-        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne13_dst));
+        if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+            sf0 = (float)(ne0 - 1) / (ne00 - 1);
+            sf1 = (float)(ne1 - 1) / (ne01 - 1);
+            pixel_offset = 0.0f;
+        }
+
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne00));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne01));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne0));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne2));
+        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne3));
         CL_CHECK(clSetKernelArg(kernel, 14, sizeof(float),    &sf0));
         CL_CHECK(clSetKernelArg(kernel, 15, sizeof(float),    &sf1));
         CL_CHECK(clSetKernelArg(kernel, 16, sizeof(float),    &sf2));
         CL_CHECK(clSetKernelArg(kernel, 17, sizeof(float),    &sf3));
+        CL_CHECK(clSetKernelArg(kernel, 18, sizeof(float),    &pixel_offset));
     }
 
 
-    size_t dst_total_elements = (size_t)ne10_dst * ne11_dst * ne12_dst * ne13_dst;
+    size_t dst_total_elements = (size_t)ne0 * ne1 * ne2 * ne3;
     if (dst_total_elements == 0) {
         return;
     }
