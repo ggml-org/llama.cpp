@@ -71,7 +71,9 @@ else()
         # note: adding -fno-inline fixes the tests when using MTL_SHADER_VALIDATION=1
         # note: unfortunately, we have to call it default.metallib instead of ggml.metallib
         #       ref: https://github.com/ggerganov/whisper.cpp/issues/1720
-        set(XC_FLAGS -fno-fast-math -fno-inline -g)
+        # note: adding -g causes segmentation fault during compile
+        #set(XC_FLAGS -fno-fast-math -fno-inline -g)
+        set(XC_FLAGS -fno-fast-math -fno-inline)
     else()
         set(XC_FLAGS -O3)
     endif()
