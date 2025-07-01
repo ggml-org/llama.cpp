@@ -48,7 +48,7 @@ cmake --build build-fpga --config Release
 
 
 echo 'creating tar bundle for fpga'
-TSI_GGML_VERSION=0.0.3
+TSI_GGML_VERSION=0.0.4
 TSI_GGML_BUNDLE_INSTALL_DIR=tsi-ggml
 GGML_TSI_INSTALL_DIR=ggml-tsi-kernel
 TSI_GGML_RELEASE_DIR=/proj/rel/sw/ggml/
@@ -83,7 +83,19 @@ cp build-fpga/bin/simple-backend-tsi ${TSI_GGML_BUNDLE_INSTALL_DIR}/
 
 tar -cvzf ${TSI_GGML_BUNDLE_INSTALL_DIR}-${TSI_GGML_VERSION}.tz ${TSI_GGML_BUNDLE_INSTALL_DIR}/*
 
-if [ "$1" == "Release" ] || [ "$1" == "release" ]
+if [ "$(echo "$1" | tr '[:upper:]' '[:lower:]')" = "release" ];
 then
     cp ${TSI_GGML_BUNDLE_INSTALL_DIR}-${TSI_GGML_VERSION}.tz ${TSI_GGML_RELEASE_DIR}
+
+    LATEST_TZ="${TSI_GGML_BUNDLE_INSTALL_DIR}-${TSI_GGML_VERSION}.tz"
+    LATEST_FULL_PATH="${TSI_GGML_RELEASE_DIR}/$(basename "$LATEST_TZ")"
+
+    # Remove old symlinks if they exist
+    rm -f "$TSI_GGML_RELEASE_DIR/tsi-ggml-aws-latest.tz"
+    rm -f "$TSI_GGML_RELEASE_DIR/tsi-ggml-latest.tz"
+    # Create new symbolic links
+    ln -s "$LATEST_FULL_PATH" "$TSI_GGML_RELEASE_DIR/tsi-ggml-aws-latest.tz"
+    ln -s "$LATEST_FULL_PATH" "$TSI_GGML_RELEASE_DIR/tsi-ggml-latest.tz"
+
+    echo "Symlinks updated to point to $(basename "$LATEST_FULL_PATH")"
 fi
