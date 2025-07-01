@@ -202,19 +202,32 @@ void ggml_print_backtrace(void) {
 }
 #endif
 
+static ggml_abort_callback_t g_abort_callback = NULL;
+
+// Set the abort callback (passing null will restore original abort functionality: printing a message to stdout)
+GGML_API void ggml_set_abort_callback(ggml_abort_callback_t callback) {
+    g_abort_callback = callback;
+}
+
 void ggml_abort(const char * file, int line, const char * fmt, ...) {
     fflush(stdout);
 
-    fprintf(stderr, "%s:%d: ", file, line);
+    char message[2048];
+    int  offset = snprintf(message, sizeof(message), "%s:%d: ", file, line);
 
     va_list args;
     va_start(args, fmt);
-    vfprintf(stderr, fmt, args);
+    vsnprintf(message + offset, sizeof(message) - offset, fmt, args);
     va_end(args);
 
-    fprintf(stderr, "\n");
+    if (g_abort_callback) {
+        g_abort_callback(message);
+    } else {
+        // default: print to stderr and abort
+        fprintf(stderr, "%s\n", message);
+        ggml_print_backtrace();
+    }
 
-    ggml_print_backtrace();
     abort();
 }
 
