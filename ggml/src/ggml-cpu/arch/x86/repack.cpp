@@ -3464,7 +3464,7 @@ void ggml_gemm_q2_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 #ifdef __AVX512F__
 
     int anc = nc - nc % 16; // Used to align nc with boundary of 16
-    
+
     // Mask to mask out nibbles from packed bytes
     const __m256i m4b = _mm256_set1_epi8(0x0F);
     // Mask to mask out nibbles from packed bytes expanded to 512 bit length
