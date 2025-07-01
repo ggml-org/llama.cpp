@@ -35,7 +35,7 @@ cd ../../
 #Compile for posix with build-posix as a target folder
 
 echo 'building llama.cp, ggml for tsavorite  and other binary for posix'
-cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix
+cmake -B build-posix -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=posix -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
 cmake --build build-posix --config Release
 
 #Compile for fpga with build-fpga as a target folder
@@ -43,7 +43,7 @@ cmake --build build-posix --config Release
 echo 'building llama.cp, ggml for tsavorite  and other binary for fpga'
 export CC="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-gcc"
 export CXX="/proj/rel/sw/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu/bin/aarch64-none-linux-gnu-g++"
-cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga
+cmake -B build-fpga -DGGML_TSAVORITE=ON -DGGML_TSAVORITE_TARGET=fpga -DCMAKE_C_FLAGS="-DGGML_PERF"   -DCMAKE_CXX_FLAGS="-DGGML_PERF"
 cmake --build build-fpga --config Release
 
 
