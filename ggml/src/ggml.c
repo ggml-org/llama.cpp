@@ -205,8 +205,10 @@ void ggml_print_backtrace(void) {
 static ggml_abort_callback_t g_abort_callback = NULL;
 
 // Set the abort callback (passing null will restore original abort functionality: printing a message to stdout)
-GGML_API void ggml_set_abort_callback(ggml_abort_callback_t callback) {
+GGML_API ggml_abort_callback_t ggml_set_abort_callback(ggml_abort_callback_t callback) {
+    ggml_abort_callback_t retVal = g_abort_callback;
     g_abort_callback = callback;
+    return retVal;
 }
 
 void ggml_abort(const char * file, int line, const char * fmt, ...) {
