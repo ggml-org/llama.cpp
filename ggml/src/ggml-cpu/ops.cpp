@@ -7276,12 +7276,13 @@ static void ggml_compute_forward_upscale_f32(
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    const float sf0 = (float)ne0/src0->ne[0];
-    const float sf1 = (float)ne1/src0->ne[1];
-    const float sf2 = (float)ne2/src0->ne[2];
-    const float sf3 = (float)ne3/src0->ne[3];
+    float sf0 = (float)ne0/src0->ne[0];
+    float sf1 = (float)ne1/src0->ne[1];
+    float sf2 = (float)ne2/src0->ne[2];
+    float sf3 = (float)ne3/src0->ne[3];
 
-    const ggml_scale_mode mode = (ggml_scale_mode) ggml_get_op_params_i32(dst, 0);
+    const int32_t mode_flags = ggml_get_op_params_i32(dst, 0);
+    const ggml_scale_mode mode = (ggml_scale_mode) (mode_flags & 0xFF);
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
         for (int64_t i3 = 0; i3 < ne3; i3++) {
@@ -7302,8 +7303,12 @@ static void ggml_compute_forward_upscale_f32(
             }
         }
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        // setting a pixel offset of 0 would replicate the behavior of pytorch interpolate with align_corners=True
-        const float pixel_offset = 0.5f;
+        float pixel_offset = 0.5f;
+        if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+            pixel_offset = 0.0f;
+            sf0 = (float)(ne0 - 1) / (src0->ne[0] - 1);
+            sf1 = (float)(ne1 - 1) / (src0->ne[1] - 1);
+        }
 
         for (int64_t i3 = 0; i3 < ne3; i3++) {
             const int64_t i03 = i3 / sf3;
