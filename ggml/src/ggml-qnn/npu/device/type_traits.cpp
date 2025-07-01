@@ -29,24 +29,24 @@ inline npu_device_fp16_t to_fp16(const float src) {
 }
 
 template <typename _TBlock> inline HVX_Vector load_block_generic(const _TBlock & src) {
-    uint8_t buffer[hexagon::kBytesPerVector];
+    alignas(hexagon::kBytesPerVector) uint8_t buffer[hexagon::kBytesPerVector];
 
     static_assert(sizeof(buffer) == sizeof(HVX_Vector), "wrong cvt size/padding");
     static_assert(sizeof(buffer) >= sizeof(src.qs), "wrong q4_0 block size/padding");
 
     memcpy(&buffer[0], src.qs, sizeof(src.qs));
-    return *reinterpret_cast<HVX_UVector *>(buffer);
+    return *reinterpret_cast<HVX_Vector *>(buffer);
 }
 
 template <typename _TBlock> inline HVX_Vector load_dual_block_generic(const _TBlock & src1, const _TBlock & src2) {
-    uint8_t buffer[hexagon::kBytesPerVector];
+    alignas(hexagon::kBytesPerVector) uint8_t buffer[hexagon::kBytesPerVector];
 
     static_assert(sizeof(buffer) == sizeof(HVX_Vector), "wrong cvt size/padding");
     static_assert(sizeof(buffer) >= sizeof(src1.qs) * 2, "wrong q4_0 block size/padding");
 
     memcpy(&buffer[0], src1.qs, sizeof(src1.qs));
     memcpy(&buffer[sizeof(src1.qs)], src2.qs, sizeof(src2.qs));
-    return *reinterpret_cast<HVX_UVector *>(buffer);
+    return *reinterpret_cast<HVX_Vector *>(buffer);
 }
 
 inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t * d, uint8_t * m) {
