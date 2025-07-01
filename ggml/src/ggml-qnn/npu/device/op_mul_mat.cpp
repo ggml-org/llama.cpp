@@ -123,7 +123,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                         auto * dst_row = reinterpret_cast<hexagon::dequant_target_type *>(src0_plane_cache_ptr +
                                                                                           ir * src0_actual_row_size);
                         dequantize_row_func(src0_row, reinterpret_cast<hexagon::dequant_target_type *>(dst_row),
-                                            src0->get_ne(0), params->f16_to_f32_table);
+                                            src0->get_ne(0));
                     }
 
                     last_cached_plane_ptr = src0_plane;

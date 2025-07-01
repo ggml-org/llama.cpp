@@ -148,7 +148,7 @@ float make_qkx2_quants(int n, int nmax, const float * x, const float * weights, 
     return scale;
 }
 
-void quantize_row_fp16(const float * src, void * dst, size_t count, const float * f16_to_f32_table) {
+void quantize_row_fp16(const float * src, void * dst, size_t count) {
     auto * out = reinterpret_cast<npu_device_fp16_t *>(dst);
     // TODO: use hvx intrinsics for better performance
     for (size_t i = 0; i < count; i++) {
@@ -156,7 +156,7 @@ void quantize_row_fp16(const float * src, void * dst, size_t count, const float 
     }
 }
 
-void quantize_row_q8_0(const float * src, void * dst, size_t count, const float * f16_to_f32_table) {
+void quantize_row_q8_0(const float * src, void * dst, size_t count) {
     const int nb  = count / QUANT_BLOCK_SIZE;
     auto *    out = reinterpret_cast<npu_device_block_q8_0 *>(dst);
 
@@ -181,7 +181,7 @@ void quantize_row_q8_0(const float * src, void * dst, size_t count, const float 
     }
 }
 
-void quantize_row_q4_0(const float * src, void * dst, size_t count, const float * f16_to_f32_table) {
+void quantize_row_q4_0(const float * src, void * dst, size_t count) {
     constexpr const int qk = QUANT_BLOCK_SIZE;
 
     const int nb  = count / qk;
@@ -217,7 +217,7 @@ void quantize_row_q4_0(const float * src, void * dst, size_t count, const float 
     }
 }
 
-void quantize_row_q4_K(const float * src, void * dst, size_t count, const float * f16_to_f32_table) {
+void quantize_row_q4_K(const float * src, void * dst, size_t count) {
     const int nb  = count / QUANT_K_BLOCK_SIZE;
     auto *    out = reinterpret_cast<npu_device_block_q4_k *>(dst);
 
@@ -274,11 +274,11 @@ void quantize_row_q4_K(const float * src, void * dst, size_t count, const float 
         uint8_t sc, m;
         for (int j = 0; j < QUANT_K_BLOCK_SIZE / 32; ++j) {
             get_scale_min_k4(j, out[i].scales, &sc, &m);
-            const float d = f16_to_f32_table[out[i].d] * sc;
+            const float d = to_float(out[i].d) * sc;
             if (!d) {
                 continue;
             }
-            const float dm = f16_to_f32_table[out[i].dmin] * m;
+            const float dm = to_float(out[i].dmin) * m;
             for (int ii = 0; ii < 32; ++ii) {
                 int l          = nearest_int((src[32 * j + ii] + dm) / d);
                 l              = std::max<int>(0, std::min<int>(15, l));
@@ -298,8 +298,7 @@ void quantize_row_q4_K(const float * src, void * dst, size_t count, const float 
     }
 }
 
-void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, size_t count,
-                         const float * f16_to_f32_table) {
+void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, size_t count) {
     constexpr const int qk = QUANT_BLOCK_SIZE;
     static_assert(QUANT_BLOCK_SIZE == hexagon::kBytesPerVector / sizeof(float));
 
@@ -380,8 +379,7 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
     }
 }
 
-void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count,
-                         const float * f16_to_f32_table) {
+void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count) {
     const bool dst_aligned = hexagon::is_addr_aligned(dst);
     if (dst_aligned) {
         dequantize_row_q4_0<true>(src, dst, count);
@@ -390,8 +388,7 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
     }
 }
 
-void dequantize_row_q4_K(const void * src, hexagon::dequant_target_type * dst, size_t count,
-                         const float * f16_to_f32_table) {
+void dequantize_row_q4_K(const void * src, hexagon::dequant_target_type * dst, size_t count) {
     const int    nb      = count / QUANT_K_BLOCK_SIZE;
     const auto * src_ptr = reinterpret_cast<const npu_device_block_q4_k *>(src);
     auto *       dst_ptr = reinterpret_cast<__fp16 *>(dst);

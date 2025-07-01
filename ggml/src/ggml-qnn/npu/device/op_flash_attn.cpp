@@ -120,7 +120,7 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
             hexagon::l2fetch_row(q_data + q->get_nb(1), row_bytes_q);
         }
 
-        q_to_vec_dot(reinterpret_cast<const float *>(q_data), Q_q, DK, params->f16_to_f32_table);
+        q_to_vec_dot(reinterpret_cast<const float *>(q_data), Q_q, DK);
 
         // online softmax / attention
         // loop over n_kv and n_head_kv
