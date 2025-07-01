@@ -270,8 +270,6 @@ inline float vec_dot_product_mix_aligned_impl(const _TElem0 * src0, const _TElem
         HVX_VectorPair curr1 = reinterpret_cast<HVX_VectorPair *>(src1_vec_ptr)[0];
 
         HVX_VectorPair s0_pair = _ExpandFunc(curr0);
-        src0_vec_ptr++;
-        src1_vec_ptr += 2;
 
         sum0 = _AddFunc(_MpyFunc(Q6_V_lo_W(s0_pair), Q6_V_lo_W(curr1)), sum0);
         sum1 = _AddFunc(_MpyFunc(Q6_V_hi_W(s0_pair), Q6_V_hi_W(curr1)), sum1);
