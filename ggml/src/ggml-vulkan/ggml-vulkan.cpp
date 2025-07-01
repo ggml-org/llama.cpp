@@ -431,6 +431,7 @@ struct vk_device_struct {
 
     // [src/dst 0=fp32,1=fp16]
     vk_pipeline pipeline_gelu[2];
+    vk_pipeline pipeline_gelu_erf[2];
     vk_pipeline pipeline_gelu_quick[2];
     vk_pipeline pipeline_silu[2];
     vk_pipeline pipeline_relu[2];
@@ -2761,6 +2762,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 2, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
     CREATE_UNARY(gelu)
+    CREATE_UNARY(gelu_erf)
     CREATE_UNARY(gelu_quick)
     CREATE_UNARY(silu)
     CREATE_UNARY(relu)
@@ -5964,7 +5966,30 @@ static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx
     if (src2->ne[1] == 1 && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type))) {
         ggml_vk_mul_mat_vec_id_q_f16(ctx, subctx, src0, src1, src2, dst, dryrun);
     } else {
-        ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, src1, src2, dst, dryrun);
+        // Split based on number of ids, to fit in shared memory
+        const uint32_t nei0 = (uint32_t)src2->ne[0];
+        const uint32_t nei1 = (uint32_t)src2->ne[1];
+
+        GGML_ASSERT(nei0 <= 4096);
+        const uint32_t split_size = std::min(nei1, 4096u / nei0);
+
+        ggml_tensor src1_copy = *src1;
+        ggml_tensor src2_copy = *src2;
+        ggml_tensor dst_copy = *dst;
+
+        for (uint32_t token_start = 0; token_start < nei1; token_start += split_size) {
+            const uint32_t n_tokens = std::min(split_size, nei1 - token_start);
+
+            src1_copy.view_offs = src1->view_offs + token_start * src1_copy.nb[2];
+            src2_copy.view_offs = src2->view_offs + token_start * src2_copy.nb[1];
+            dst_copy.view_offs = dst->view_offs + token_start * dst_copy.nb[2];
+
+            src1_copy.ne[2] = n_tokens;
+            src2_copy.ne[1] = n_tokens;
+            dst_copy.ne[2] = n_tokens;
+
+            ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, &src1_copy, &src2_copy, &dst_copy, dryrun);
+        }
     }
 }
 
@@ -6481,6 +6506,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                 return ctx->device->pipeline_silu[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_GELU:
                 return ctx->device->pipeline_gelu[dst->type == GGML_TYPE_F16];
+            case GGML_UNARY_OP_GELU_ERF:
+                return ctx->device->pipeline_gelu_erf[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_GELU_QUICK:
                 return ctx->device->pipeline_gelu_quick[dst->type == GGML_TYPE_F16];
             case GGML_UNARY_OP_RELU:
@@ -8827,6 +8854,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         switch (ggml_get_unary_op(node)) {
         case GGML_UNARY_OP_SILU:
         case GGML_UNARY_OP_GELU:
+        case GGML_UNARY_OP_GELU_ERF:
         case GGML_UNARY_OP_GELU_QUICK:
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
@@ -9072,6 +9100,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         switch (ggml_get_unary_op(node)) {
         case GGML_UNARY_OP_SILU:
         case GGML_UNARY_OP_GELU:
+        case GGML_UNARY_OP_GELU_ERF:
         case GGML_UNARY_OP_GELU_QUICK:
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
@@ -9289,6 +9318,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_tensor *
         switch (ggml_get_unary_op(tensor)) {
         case GGML_UNARY_OP_SILU:
         case GGML_UNARY_OP_GELU:
+        case GGML_UNARY_OP_GELU_ERF:
         case GGML_UNARY_OP_GELU_QUICK:
         case GGML_UNARY_OP_RELU:
         case GGML_UNARY_OP_TANH:
@@ -10095,6 +10125,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
                 case GGML_UNARY_OP_GELU:
+                case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_RELU:
@@ -10127,9 +10158,15 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 ggml_type src0_type = op->src[0]->type;
                 ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
                 const vk_device& device = ggml_vk_get_device(ctx->device);
-                if (op->op == GGML_OP_MUL_MAT_ID && !device->mul_mat_id_s[src0_type] && !device->mul_mat_id_m[src0_type] && !device->mul_mat_id_l[src0_type]) {
-                    // If there's not enough shared memory for row_ids and the result tile, fallback to CPU
-                    return false;
+                if (op->op == GGML_OP_MUL_MAT_ID) {
+                    if (!device->mul_mat_id_s[src0_type] && !device->mul_mat_id_m[src0_type] && !device->mul_mat_id_l[src0_type]) {
+                        // If there's not enough shared memory for row_ids and the result tile, fallback to CPU
+                        return false;
+                    }
+                    // Check against size of shared memory variable
+                    if (op->src[2]->ne[0] > 4096) {
+                        return false;
+                    }
                 }
                 switch (src0_type) {
                     case GGML_TYPE_F32:
@@ -10834,6 +10871,9 @@ static void ggml_vk_check_results_0(ggml_tensor * tensor) {
             break;
         case GGML_UNARY_OP_GELU:
             tensor_clone = ggml_gelu(ggml_ctx, src_clone[0]);
+            break;
+        case GGML_UNARY_OP_GELU_ERF:
+            tensor_clone = ggml_gelu_erf(ggml_ctx, src_clone[0]);
             break;
         case GGML_UNARY_OP_GELU_QUICK:
             tensor_clone = ggml_gelu_quick(ggml_ctx, src_clone[0]);

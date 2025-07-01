@@ -945,6 +945,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CONV_TRANSPOSE_1D",
     "IM2COL",
     "IM2COL_BACK",
+    "CONV_2D",
     "CONV_2D_DW",
     "CONV_TRANSPOSE_2D",
     "POOL_1D",
@@ -986,7 +987,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 85, "GGML_OP_COUNT != 85");
+static_assert(GGML_OP_COUNT == 86, "GGML_OP_COUNT != 86");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1044,6 +1045,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "conv_transpose_1d(x)",
     "im2col(x)",
     "im2col_back(x)",
+    "conv_2d(x)",
     "conv_2d_dw(x)",
     "conv_transpose_2d(x)",
     "pool_1d(x)",
@@ -1085,7 +1087,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 85, "GGML_OP_COUNT != 85");
+static_assert(GGML_OP_COUNT == 86, "GGML_OP_COUNT != 86");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4291,6 +4293,44 @@ struct ggml_tensor * ggml_conv_2d_dw_direct(
     return result;
 }
 
+// ggml_conv_2d_direct
+
+struct ggml_tensor * ggml_conv_2d_direct(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,   // convolution kernel [KW, KH, IC, OC]
+        struct ggml_tensor  * b,   // input data [W, H, C, N]
+        int                   s0,  // stride dimension 0
+        int                   s1,  // stride dimension 1
+        int                   p0,  // padding dimension 0
+        int                   p1,  // padding dimension 1
+        int                   d0,  // dilation dimension 0
+        int                   d1) {// dilation dimension 1
+
+    GGML_ASSERT(a->ne[2] == b->ne[2]);
+    //GGML_ASSERT(a->type == b->type);
+
+    int64_t ne[4];
+    ne[0] = ggml_calc_conv_output_size(b->ne[0], a->ne[0], s0, p0, d0);
+    ne[1] = ggml_calc_conv_output_size(b->ne[1], a->ne[1], s1, p1, d1);
+    ne[2] = a->ne[3];
+    ne[3] = b->ne[3];
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, b->type, 4, ne);
+
+    ggml_set_op_params_i32(result, 0, s0);
+    ggml_set_op_params_i32(result, 1, s1);
+    ggml_set_op_params_i32(result, 2, p0);
+    ggml_set_op_params_i32(result, 3, p1);
+    ggml_set_op_params_i32(result, 4, d0);
+    ggml_set_op_params_i32(result, 5, d1);
+
+    result->op = GGML_OP_CONV_2D;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml_conv_transpose_2d_p0
 
 static int64_t ggml_calc_conv_transpose_output_size(int64_t ins, int64_t ks, int s, int p) {
@@ -4407,24 +4447,21 @@ struct ggml_tensor * ggml_pool_2d_back(
     return result;
 }
 
-// ggml_upscale
+// ggml_upscale / ggml_interpolate
 
-static struct ggml_tensor * ggml_upscale_impl(
+static struct ggml_tensor * ggml_interpolate_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
-        int                   ne0,
-        int                   ne1,
-        int                   ne2,
-        int                   ne3,
-        enum ggml_scale_mode  mode) {
-    GGML_ASSERT(a->ne[0] <= ne0);
-    GGML_ASSERT(a->ne[1] <= ne1);
-    GGML_ASSERT(a->ne[2] <= ne2);
-    GGML_ASSERT(a->ne[3] <= ne3);
+        int64_t               ne0,
+        int64_t               ne1,
+        int64_t               ne2,
+        int64_t               ne3,
+        uint32_t              mode) {
+    GGML_ASSERT((mode & 0xFF) < GGML_SCALE_MODE_COUNT);
 
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type, ne0, ne1, ne2, ne3);
 
-    ggml_set_op_params_i32(result, 0, mode);
+    ggml_set_op_params_i32(result, 0, (int32_t)mode);
 
     result->op     = GGML_OP_UPSCALE;
     result->src[0] = a;
@@ -4437,7 +4474,8 @@ struct ggml_tensor * ggml_upscale(
         struct ggml_tensor  * a,
         int                   scale_factor,
         enum ggml_scale_mode  mode) {
-    return ggml_upscale_impl(ctx, a, a->ne[0] * scale_factor, a->ne[1] * scale_factor, a->ne[2], a->ne[3], mode);
+    GGML_ASSERT(scale_factor > 1);
+    return ggml_interpolate_impl(ctx, a, a->ne[0] * scale_factor, a->ne[1] * scale_factor, a->ne[2], a->ne[3], mode);
 }
 
 struct ggml_tensor * ggml_upscale_ext(
@@ -4448,7 +4486,18 @@ struct ggml_tensor * ggml_upscale_ext(
         int                   ne2,
         int                   ne3,
         enum ggml_scale_mode  mode) {
-    return ggml_upscale_impl(ctx, a, ne0, ne1, ne2, ne3, mode);
+    return ggml_interpolate_impl(ctx, a, ne0, ne1, ne2, ne3, mode);
+}
+
+struct ggml_tensor * ggml_interpolate(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int64_t               ne0,
+        int64_t               ne1,
+        int64_t               ne2,
+        int64_t               ne3,
+        uint32_t              mode) {
+    return ggml_interpolate_impl(ctx, a, ne0, ne1, ne2, ne3, mode);
 }
 
 // ggml_pad

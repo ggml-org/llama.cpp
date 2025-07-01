@@ -65,6 +65,7 @@ set(GGML_OPENCL_KERNELS
     gemv_noshuffle_general
     gemv_noshuffle
     get_rows
+    glu
     group_norm
     im2col_f32
     im2col_f16
