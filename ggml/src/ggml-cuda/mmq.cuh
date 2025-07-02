@@ -226,27 +226,30 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
 
 static int mmq_get_granularity_host(ggml_type type, const int mmq_x, const int cc) {
     if (amd_mma_available(cc)) {
-        // 32x32 tile_C -> 32 ; 16x16 tile_C -> 16
         switch (type) {
-            case GGML_TYPE_Q4_0:    return 16; // vec_dot_q8_0_q8_1_mma
-            case GGML_TYPE_Q4_1:    return 16; // vec_dot_q8_1_q8_1_mma
-            case GGML_TYPE_Q5_0:    return 16; // vec_dot_q8_0_q8_1_mma
-            case GGML_TYPE_Q5_1:    return 16; // vec_dot_q8_1_q8_1_mma
-            case GGML_TYPE_Q8_0:    return 16; // vec_dot_q8_0_q8_1_mma
-            case GGML_TYPE_Q2_K:    return 32; // vec_dot_q2_K_q8_1_mma
-            case GGML_TYPE_Q3_K:    return 32; // vec_dot_q8_0_16_q8_1_mma
-            case GGML_TYPE_Q4_K:    return 16; // vec_dot_q8_1_q8_1_mma
-            case GGML_TYPE_Q5_K:    return 16; // vec_dot_q8_1_q8_1_mma
-            case GGML_TYPE_Q6_K:    return 32; // vec_dot_q6_K_q8_1_mma
-            case GGML_TYPE_IQ2_XXS: return 16; // vec_dot_q8_0_q8_1_mma
-            case GGML_TYPE_IQ2_XS:  return 32; // vec_dot_q8_0_16_q8_1_mma
-            case GGML_TYPE_IQ2_S:   return 32; // vec_dot_q8_0_16_q8_1_mma
-            case GGML_TYPE_IQ3_XXS: return 16; // vec_dot_q8_0_q8_1_mma
-            case GGML_TYPE_IQ3_S:   return 16; // vec_dot_q8_0_q8_1_mma
-            case GGML_TYPE_IQ1_S:   return 16; // vec_dot_q8_1_q8_1_mma
-            case GGML_TYPE_IQ4_XS:  return 16; // vec_dot_q8_0_q8_1_mma
-            case GGML_TYPE_IQ4_NL:  return 16; // vec_dot_q8_0_q8_1_mma
-            default:                return 0;
+            // vec_dot_q8_0_q8_1_mma
+            case GGML_TYPE_Q4_0:    
+            case GGML_TYPE_Q5_0:    
+            case GGML_TYPE_Q8_0:    
+            case GGML_TYPE_IQ2_XXS: 
+            case GGML_TYPE_IQ3_XXS: 
+            case GGML_TYPE_IQ3_S:   
+            case GGML_TYPE_IQ4_XS:  
+            case GGML_TYPE_IQ4_NL:  
+                return mmq_x >= 128 ? 32 : 16;
+            // vec_dot_q8_1_q8_1_mma
+            case GGML_TYPE_Q4_1:    
+            case GGML_TYPE_Q5_1:    
+            case GGML_TYPE_Q4_K:    
+            case GGML_TYPE_Q5_K:    
+            case GGML_TYPE_IQ1_S:   
+                return mmq_x >= 128 ? 32 : 16;
+            case GGML_TYPE_Q2_K:   // vec_dot_q2_K_q8_1_mma
+            case GGML_TYPE_Q3_K:   // vec_dot_q8_0_16_q8_1_mma
+            case GGML_TYPE_Q6_K:   // vec_dot_q6_K_q8_1_mma
+            case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
+            case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
+                return mmq_x >= 192 ? 64 : 32;
         }
     } else if (new_mma_available(cc) && mmq_x >= 48) {
         return 16;
@@ -256,26 +259,29 @@ static int mmq_get_granularity_host(ggml_type type, const int mmq_x, const int c
 #if defined(AMD_MMA_AVAILABLE)
 static constexpr __device__ int mmq_get_granularity_device(ggml_type type, const int mmq_x) {
     switch (type) {
-        // 32x32 tile_C -> 32 ; 16x16 tile_C -> 16
-        case GGML_TYPE_Q4_0:    return 16;
-        case GGML_TYPE_Q4_1:    return 16;
-        case GGML_TYPE_Q5_0:    return 16;
-        case GGML_TYPE_Q5_1:    return 16;
-        case GGML_TYPE_Q8_0:    return 16;
-        case GGML_TYPE_Q2_K:    return 32;
-        case GGML_TYPE_Q3_K:    return 32;
-        case GGML_TYPE_Q4_K:    return 16;
-        case GGML_TYPE_Q5_K:    return 16;
-        case GGML_TYPE_Q6_K:    return 32;
-        case GGML_TYPE_IQ2_XXS: return 16;
-        case GGML_TYPE_IQ2_XS:  return 32;
-        case GGML_TYPE_IQ2_S:   return 32;
-        case GGML_TYPE_IQ3_XXS: return 16;
-        case GGML_TYPE_IQ3_S:   return 16;
-        case GGML_TYPE_IQ1_S:   return 16;
-        case GGML_TYPE_IQ4_XS:  return 16;
-        case GGML_TYPE_IQ4_NL:  return 16;
-        default:                return 0;
+        // vec_dot_q8_0_q8_1_mma
+        case GGML_TYPE_Q4_0:    
+        case GGML_TYPE_Q5_0:    
+        case GGML_TYPE_Q8_0:    
+        case GGML_TYPE_IQ2_XXS: 
+        case GGML_TYPE_IQ3_XXS: 
+        case GGML_TYPE_IQ3_S:   
+        case GGML_TYPE_IQ4_XS:  
+        case GGML_TYPE_IQ4_NL:  
+            return mmq_x >= 128 ? 32 : 16;
+        // vec_dot_q8_1_q8_1_mma
+        case GGML_TYPE_Q4_1:    
+        case GGML_TYPE_Q5_1:    
+        case GGML_TYPE_Q4_K:    
+        case GGML_TYPE_Q5_K:    
+        case GGML_TYPE_IQ1_S:   
+            return mmq_x >= 128 ? 32 : 16;
+        case GGML_TYPE_Q2_K:   // vec_dot_q2_K_q8_1_mma
+        case GGML_TYPE_Q3_K:   // vec_dot_q8_0_16_q8_1_mma
+        case GGML_TYPE_Q6_K:   // vec_dot_q6_K_q8_1_mma
+        case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
+        case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
+            return mmq_x >= 192 ? 64 : 32;
     }
 }
 #elif defined(NEW_MMA_AVAILABLE)
@@ -290,27 +296,30 @@ static constexpr __device__ int mmq_get_granularity_device(ggml_type type, const
 
 static int get_mmq_nwarps_host(ggml_type type, const int cc) {
     if (amd_mma_available(cc)) {
-        // 32x32 tile_C -> 4 ; 16x16 tile_C -> 8
         switch (type) {
-            case GGML_TYPE_Q4_0:    return 8;
-            case GGML_TYPE_Q4_1:    return 8;
-            case GGML_TYPE_Q5_0:    return 8;
-            case GGML_TYPE_Q5_1:    return 8;
-            case GGML_TYPE_Q8_0:    return 8;
-            case GGML_TYPE_Q2_K:    return 4;
-            case GGML_TYPE_Q3_K:    return 4;
-            case GGML_TYPE_Q4_K:    return 8;
-            case GGML_TYPE_Q5_K:    return 8;
-            case GGML_TYPE_Q6_K:    return 4;
-            case GGML_TYPE_IQ2_XXS: return 8;
-            case GGML_TYPE_IQ2_XS:  return 4;
-            case GGML_TYPE_IQ2_S:   return 4;
-            case GGML_TYPE_IQ3_XXS: return 8;
-            case GGML_TYPE_IQ3_S:   return 8;
-            case GGML_TYPE_IQ1_S:   return 8;
-            case GGML_TYPE_IQ4_XS:  return 8;
-            case GGML_TYPE_IQ4_NL:  return 8;
-            default:                return 0;
+            // vec_dot_q8_0_q8_1_mma
+            case GGML_TYPE_Q4_0:    
+            case GGML_TYPE_Q5_0:    
+            case GGML_TYPE_Q8_0:    
+            case GGML_TYPE_IQ2_XXS: 
+            case GGML_TYPE_IQ3_XXS: 
+            case GGML_TYPE_IQ3_S:   
+            case GGML_TYPE_IQ4_XS:  
+            case GGML_TYPE_IQ4_NL:  
+                return 8;
+            // vec_dot_q8_1_q8_1_mma
+            case GGML_TYPE_Q4_1:    
+            case GGML_TYPE_Q5_1:    
+            case GGML_TYPE_Q4_K:    
+            case GGML_TYPE_Q5_K:    
+            case GGML_TYPE_IQ1_S:   
+                return 8;
+            case GGML_TYPE_Q2_K:   // vec_dot_q2_K_q8_1_mma
+            case GGML_TYPE_Q3_K:   // vec_dot_q8_0_16_q8_1_mma
+            case GGML_TYPE_Q6_K:   // vec_dot_q6_K_q8_1_mma
+            case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
+            case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
+                return 4;
         }
     } else {
         return 8;
@@ -319,27 +328,30 @@ static int get_mmq_nwarps_host(ggml_type type, const int cc) {
 
 #if defined(AMD_MMA_AVAILABLE)
 static constexpr __device__ int get_mmq_nwarps_device(ggml_type type) {
-    // 32x32 tile_C -> 4 ; 16x16 tile_C -> 8
     switch (type) {
-        case GGML_TYPE_Q4_0:    return 8;
-        case GGML_TYPE_Q4_1:    return 8;
-        case GGML_TYPE_Q5_0:    return 8;
-        case GGML_TYPE_Q5_1:    return 8;
-        case GGML_TYPE_Q8_0:    return 8;
-        case GGML_TYPE_Q2_K:    return 4;
-        case GGML_TYPE_Q3_K:    return 4;
-        case GGML_TYPE_Q4_K:    return 8;
-        case GGML_TYPE_Q5_K:    return 8;
-        case GGML_TYPE_Q6_K:    return 4;
-        case GGML_TYPE_IQ2_XXS: return 8;
-        case GGML_TYPE_IQ2_XS:  return 4;
-        case GGML_TYPE_IQ2_S:   return 4;
-        case GGML_TYPE_IQ3_XXS: return 8;
-        case GGML_TYPE_IQ3_S:   return 8;
-        case GGML_TYPE_IQ1_S:   return 8;
-        case GGML_TYPE_IQ4_XS:  return 8;
-        case GGML_TYPE_IQ4_NL:  return 8;
-        default:                return 0;
+        // vec_dot_q8_0_q8_1_mma
+        case GGML_TYPE_Q4_0:    
+        case GGML_TYPE_Q5_0:    
+        case GGML_TYPE_Q8_0:    
+        case GGML_TYPE_IQ2_XXS: 
+        case GGML_TYPE_IQ3_XXS: 
+        case GGML_TYPE_IQ3_S:   
+        case GGML_TYPE_IQ4_XS:  
+        case GGML_TYPE_IQ4_NL:  
+            return 8;
+        // vec_dot_q8_1_q8_1_mma
+        case GGML_TYPE_Q4_1:    
+        case GGML_TYPE_Q5_1:    
+        case GGML_TYPE_Q4_K:    
+        case GGML_TYPE_Q5_K:    
+        case GGML_TYPE_IQ1_S:   
+            return 8;
+        case GGML_TYPE_Q2_K:   // vec_dot_q2_K_q8_1_mma
+        case GGML_TYPE_Q3_K:   // vec_dot_q8_0_16_q8_1_mma
+        case GGML_TYPE_Q6_K:   // vec_dot_q6_K_q8_1_mma
+        case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
+        case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
+            return 4;
     }
 }
 #else
@@ -896,21 +908,30 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     typedef tile<16,  8, int> tile_B;
     typedef tile<16, 16, int> tile_C;
 
+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q4_K, mmq_x);
+    constexpr int rows_per_warp = granularity;
+    constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
+
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
+
     const int   * x_qs = (const int   *) x;
     const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;
     const int   * y_qs = (const int   *) y + 4;
     const half2 * y_dm = (const half2 *) y;
 
-    const int i0 = threadIdx.y * tile_A::I;
+    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += QI8_1) {
         const int k0 = k00 + k01;
         
-        tile_A A;
-        load_ldmatrix(A, x_qs + i0*MMQ_MMA_TILE_X_K_Q8_1 + k0, MMQ_MMA_TILE_X_K_Q8_1);
+        tile_A A[ntx];
+#pragma unroll
+        for (int n = 0; n < ntx; ++n) {
+            load_ldmatrix(A[n], x_qs + (i0 + n*tile_A::I)*MMQ_MMA_TILE_X_K_Q8_1 + k0, MMQ_MMA_TILE_X_K_Q8_1);
+        }
 
 #pragma unroll
-        for (int j0 = 0; j0 < mmq_x; j0 += tile_C::J) {
+        for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
@@ -918,13 +939,18 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             const int j = j0 + tile_C::get_j(0);
             dsB = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
 
-            tile_C C;
-            mma(C, A, B);
+#pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+                tile_C C;
+                mma(C, A[n], B);
 
-            for (int l = 0; l < tile_C::ne; ++l) {
-                float2 dmA = __half22float2(x_dm[(i0 + tile_C::get_i(l))*MMQ_MMA_TILE_X_K_Q8_1 + k0/QI8_1]);
-                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA.x*dsB.x*C.x[l];
-                sum[(j0/tile_C::J)*tile_C::ne + l] += dmA.y*dsB.y;
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    const int i = i0 + n*tile_A::I + tile_C::get_i(l);
+                    float2 dmA = __half22float2(x_dm[i*MMQ_MMA_TILE_X_K_Q8_1 + k0/QI8_1]);
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA.x*dsB.x*C.x[l];
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += dmA.y*dsB.y;
+                }
             }
         }
     }
@@ -2067,21 +2093,30 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
     typedef tile<32,  4, int> tile_B;
     typedef tile<32, 32, int> tile_C;
 
+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q6_K, mmq_x);
+    constexpr int rows_per_warp = granularity;
+    constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
+
+    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + MMQ_TILE_NE_K*2;
     const int   * x_sc = (const int   *) x_df + MMQ_TILE_NE_K/QI6_K;
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
 
-    const int i0 = threadIdx.y * tile_A::I;
+    const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
         
-        tile_A A;
-        load_ldmatrix(A, x_qs + i0*MMQ_MMA_TILE_X_K_Q6_K + k0, MMQ_MMA_TILE_X_K_Q6_K);
+        tile_A A[ntx];
+#pragma unroll
+        for (int n = 0; n < ntx; ++n) {
+            load_ldmatrix(A[n], x_qs + (i0 + n*tile_A::I)*MMQ_MMA_TILE_X_K_Q6_K + k0, MMQ_MMA_TILE_X_K_Q6_K);
+        }
 
-        for (int j0 = 0; j0 < mmq_x; j0 += tile_C::J) {
+        for (int j0 = 0; j0 < mmq_x; j0 += ntx*tile_C::J) {
             tile_B B;
             load_ldmatrix(B, y_qs + j0*MMQ_TILE_Y_K + k01, MMQ_TILE_Y_K);
 
@@ -2089,12 +2124,17 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
             const int j = j0 + tile_C::get_j(0);
             dB = y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
 
-            tile_C C;
-            mma(C, A, B);
+#pragma unroll
+            for (int n = 0; n < ntx; ++n) {
+                tile_C C;
+                mma(C, A[n], B);
 
-            for (int l = 0; l < tile_C::ne; ++l) {
-                const int8_t * sc = (const int8_t *) (x_sc + (i0 + tile_C::get_i(l))*MMQ_MMA_TILE_X_K_Q6_K + k00/16);
-                sum[(j0/tile_C::J)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[(i0 + tile_C::get_i(l))*MMQ_MMA_TILE_X_K_Q6_K] * dB;
+#pragma unroll
+                for (int l = 0; l < tile_C::ne; ++l) {
+                    const int i = i0 + n*tile_C::I + tile_C::get_i(l);
+                    const int8_t * sc = (const int8_t *) (x_sc + i*MMQ_MMA_TILE_X_K_Q6_K + k00/16);
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[i*MMQ_MMA_TILE_X_K_Q6_K] * dB;
+                }
             }
         }
     }
@@ -2618,7 +2658,8 @@ static __device__ __forceinline__ void mmq_write_back_mma(
     constexpr int nwarps = get_mmq_nwarps_device(type);
 
 #if defined(AMD_MMA_AVAILABLE)
-    typedef tile<granularity, granularity, int> tile_C;
+    constexpr int tileC_IJ = mmq_get_granularity_device(type, 0);
+    typedef tile<tileC_IJ, tileC_IJ, int> tile_C;
     constexpr int rows_per_warp = granularity;
 #else
     typedef tile<16, 8, int> tile_C;

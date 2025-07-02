@@ -31,8 +31,9 @@ static __global__ void quantize_q8_1(
     float amax = fabsf(xi);
     float sum = xi;
 
-    amax = warp_reduce_max(amax);
-    sum  = warp_reduce_sum(sum);
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    amax = warp_reduce_max<warp_size>(amax);
+    sum  = warp_reduce_sum<warp_size>(sum);
 
     const float  d = amax / 127;
     const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
