@@ -38,8 +38,11 @@ template <typename _TBlock> inline HVX_Vector load_block_generic(const _TBlock &
     return *reinterpret_cast<HVX_Vector *>(buffer);
 }
 
-template <typename _TBlock> inline HVX_Vector load_dual_block_generic(const _TBlock & src0, const _TBlock & src1) {
+template <typename _TBlock> inline HVX_Vector load_dual_block_generic(const _TBlock * srcs) {
     alignas(hexagon::kBytesPerVector) uint8_t buffer[hexagon::kBytesPerVector];
+
+    const _TBlock & src0 = srcs[0];
+    const _TBlock & src1 = srcs[1];
 
     static_assert(sizeof(buffer) == sizeof(HVX_Vector), "wrong cvt size/padding");
     static_assert(sizeof(buffer) >= sizeof(src0.qs) * 2, "wrong q4_0 block size/padding");
@@ -49,10 +52,13 @@ template <typename _TBlock> inline HVX_Vector load_dual_block_generic(const _TBl
     return *reinterpret_cast<HVX_Vector *>(buffer);
 }
 
-template <typename _TBlock>
-inline HVX_Vector load_qual_block_generic(const _TBlock & src0, const _TBlock & src1, const _TBlock & src2,
-                                          const _TBlock & src3) {
+template <typename _TBlock> inline HVX_Vector load_qual_block_generic(const _TBlock * srcs) {
     alignas(hexagon::kBytesPerVector) uint8_t buffer[hexagon::kBytesPerVector];
+
+    const _TBlock & src0 = srcs[0];
+    const _TBlock & src1 = srcs[1];
+    const _TBlock & src2 = srcs[2];
+    const _TBlock & src3 = srcs[3];
 
     static_assert(sizeof(buffer) == sizeof(HVX_Vector), "wrong cvt size/padding");
     static_assert(sizeof(buffer) >= sizeof(src0.qs) * 4, "wrong q4_0 block size/padding");
@@ -361,7 +367,7 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_target_type * d
         HVX_Vector scales23 =
             Q6_V_valign_VVR(Q6_Vh_vsplat_R(src3.d), Q6_Vh_vsplat_R(src2.d), hexagon::kBytesPerVector / 2);
 
-        HVX_Vector     qs   = load_qual_block_generic(src0, src1, src2, src3);
+        HVX_Vector     qs   = load_qual_block_generic(src_ptr);
         HVX_Vector     q_lo = Q6_V_vand_VV(qs, mask);
         HVX_Vector     q_hi = Q6_Vub_vlsr_VubR(qs, 4);
         HVX_VectorPair qp0  = Q6_W_vshuff_VVR(q_hi, q_lo, kSizeOfQs * (1 + 2 + 4));
@@ -390,7 +396,7 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_target_type * d
         HVX_Vector scales01 =
             Q6_V_valign_VVR(Q6_Vh_vsplat_R(src1.d), Q6_Vh_vsplat_R(src0.d), hexagon::kBytesPerVector / 2);
 
-        HVX_Vector     qs   = load_dual_block_generic(src0, src1);
+        HVX_Vector     qs   = load_dual_block_generic(src_ptr);
         HVX_Vector     q_lo = Q6_V_vand_VV(qs, mask);
         HVX_Vector     q_hi = Q6_Vub_vlsr_VubR(qs, 4);
         HVX_VectorPair qp0  = Q6_W_vshuff_VVR(q_hi, q_lo, kSizeOfQs * (1 + 2));
