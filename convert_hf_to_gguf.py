@@ -4408,9 +4408,6 @@ class Gemma3NModel(Gemma3Model):
         ]
 
     def set_vocab(self):
-        with open(self.dir_model / "chat_template.jinja") as f:
-            # quick hack to make sure chat template is added
-            self.gguf_writer.add_chat_template(f.read())
         super().set_vocab()
 
     def set_gguf_parameters(self):

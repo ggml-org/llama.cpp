@@ -245,9 +245,18 @@ class SpecialVocab:
         if not tokenizer_config:
             return True
         chat_template_alt = None
-        chat_template_file = path / 'chat_template.json'
-        if chat_template_file.is_file():
-            with open(chat_template_file, encoding = 'utf-8') as f:
+        chat_template_json = path / 'chat_template.json'
+        chat_template_jinja = path / 'chat_template.jinja'
+        if chat_template_jinja.is_file():
+            with open(chat_template_jinja, encoding = 'utf-8') as f:
+                chat_template_alt = f.read()
+            if additional_templates := list((path / 'additional_chat_templates').glob('*.jinja')):
+                chat_template_alt = [{'name': 'default', 'template': chat_template_alt}]
+                for template_path in additional_templates:
+                    with open(template_path, encoding = 'utf-8') as fp:
+                        chat_template_alt.append({'name': template_path.stem, 'template': fp.read()})
+        elif chat_template_json.is_file():
+            with open(chat_template_json, encoding = 'utf-8') as f:
                 chat_template_alt = json.load(f).get('chat_template')
         chat_template = tokenizer_config.get('chat_template', chat_template_alt)
         if chat_template is None or isinstance(chat_template, (str, list)):
