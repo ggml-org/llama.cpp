@@ -354,6 +354,9 @@ llama_tokens common_speculative_gen_draft(
         detokenized = replace_to_tgt(spec, detokenized);
         LOG_DBG("draft->main detokenized string: '%s'\n", detokenized.c_str());
         result = common_tokenize(ctx_tgt, detokenized, false, true);
+        if (result.size() > (size_t)params.n_draft) {
+            result.resize(params.n_draft);
+        }
     }
     return result;
 }
