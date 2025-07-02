@@ -646,6 +646,9 @@ extern "C" {
 
     // misc
 
+    GGML_API const char * ggml_version(void);
+    GGML_API const char * ggml_commit(void);
+
     GGML_API void    ggml_time_init(void); // call this once at the beginning of the program
     GGML_API int64_t ggml_time_ms(void);
     GGML_API int64_t ggml_time_us(void);

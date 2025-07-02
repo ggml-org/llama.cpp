@@ -473,6 +473,14 @@ bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b) {
     return memcmp(guid_a, guid_b, sizeof(ggml_guid)) == 0;
 }
 
+const char * ggml_version(void) {
+    return GGML_VERSION;
+}
+
+const char * ggml_commit(void) {
+    return GGML_COMMIT;
+}
+
 //
 // timing
 //
