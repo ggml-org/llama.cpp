@@ -182,21 +182,34 @@ static __global__ void soft_max_back_f32(
     }
 }
 
-template<int... Ns>
-void increase_shared_mem_limits(std::size_t smpbo)
+template<int... Ns, typename T>
+static void launch_soft_max_kernels(float * x, const T * mask, float * dst,
+                             const soft_max_params & p, cudaStream_t stream)
 {
-    auto apply_limit = [smpbo](auto I) {
-        constexpr int ncols  = decltype(I)::value;
-        constexpr int block  = (ncols > 1024 ? 1024 : ncols);
+    const int id       = ggml_cuda_get_device();
+    const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
 
-        CUDA_SET_SHARED_MEMORY_LIMIT(
-            (soft_max_f32<true, ncols, block, half >),  smpbo);
-        CUDA_SET_SHARED_MEMORY_LIMIT(
-            (soft_max_f32<true, ncols, block, float>), smpbo);
+    auto launch_kernel = [=](auto I) -> bool {
+        constexpr int ncols = decltype(I)::value;
+        constexpr int block = (ncols > 1024 ? 1024 : ncols);
+
+        if (p.ncols == ncols) {
+            CUDA_SET_SHARED_MEMORY_LIMIT((soft_max_f32<true, ncols, block, T>), smpbo);
+            soft_max_f32<true, ncols, block><<<p.ne01, p.ne02, p.ne03, stream>>>
+                (x, mask, dst, p);
+            return true;
+        }
+        return false;
     };
 
-    //unary fold
-    ( apply_limit(std::integral_constant<int, Ns>{}), ... );
+    // unary fold over launch_kernel
+    if ((launch_kernel(std::integral_constant<int, Ns>{}) || ...)) {
+        return;
+    }
+
+    //default case
+    CUDA_SET_SHARED_MEMORY_LIMIT((soft_max_f32<true, 0, 0, T>), smpbo);
+    soft_max_f32<true, 0, 0><<<p.ne01, p.ne02, p.ne03, stream>>>(x, mask, dst, p);
 }
 
 
@@ -217,47 +230,8 @@ static void soft_max_f32_cuda(const float * x, const T * mask, float * dst, cons
 
 
     if (nbytes_shared <= smpbo) {
-
-        increase_shared_mem_limits<0, 32, 64, 128, 256, 512, 1024, 2048, 4096>(smpbo);
-
-        switch (ncols_x) {
-            case 32:
-                soft_max_f32<true,   32,   32><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            case 64:
-                soft_max_f32<true,   64,   64><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            case 128:
-                soft_max_f32<true,  128,  128><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            case 256:
-                soft_max_f32<true,  256,  256><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            case 512:
-                soft_max_f32<true,  512,  512><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            case 1024:
-                soft_max_f32<true, 1024, 1024><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            case 2048:
-                soft_max_f32<true, 2048, 1024><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            case 4096:
-                soft_max_f32<true, 4096, 1024><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-            default:
-                soft_max_f32<true,    0,    0><<<block_nums, block_dims, nbytes_shared, stream>>>
-                    (x, mask, dst, params);
-                break;
-        }
+        
+        launch_soft_max_kernels<32, 64, 128, 256, 512, 1024, 2048, 4096>(x, mask, dst, params, stream);
     } else {
         const size_t nbytes_shared_low = WARP_SIZE*sizeof(float);
         soft_max_f32<false, 0, 0><<<block_nums, block_dims, nbytes_shared_low, stream>>>(x, mask, dst, params);

@@ -187,7 +187,7 @@ static const char * cu_get_error_str(CUresult err) {
     } while (0)
 #else
 #define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes) do {} while (0)
-#endif
+#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
 
 #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA)
 #define GGML_CUDA_ASSUME(x) __builtin_assume(x)
