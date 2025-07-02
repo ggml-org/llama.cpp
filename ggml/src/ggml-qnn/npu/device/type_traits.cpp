@@ -43,10 +43,8 @@ template <typename _TBlock> inline HVX_Vector load_dual_block_generic(const _TBl
     const HVX_Vector * qs0    = reinterpret_cast<const HVX_Vector *>(srcs->qs);
     const HVX_Vector * qs1    = qs0 + 1;
     HVX_Vector         blocks = Q6_V_valign_VVR(*qs1, *qs0, (size_t) srcs->qs);
-    HVX_Vector         block0 = Q6_V_valign_VVR(blocks, Q6_V_vzero(), kSizeOfQs);
     HVX_Vector         block1 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock));
-    HVX_Vector         result = Q6_V_valign_VVR(block1, block0, hexagon::kBytesPerVector - kSizeOfQs);
-    return result;
+    return Q6_V_lo_W(Q6_W_vshuff_VVR(block1, blocks, kSizeOfQs));
 }
 
 template <typename _TBlock> inline HVX_Vector load_qual_block_generic(const _TBlock * srcs) {
@@ -56,15 +54,13 @@ template <typename _TBlock> inline HVX_Vector load_qual_block_generic(const _TBl
     const HVX_Vector * qs0    = reinterpret_cast<const HVX_Vector *>(srcs->qs);
     const HVX_Vector * qs1    = qs0 + 1;
     HVX_Vector         blocks = Q6_V_valign_VVR(*qs1, *qs0, (size_t) srcs->qs);
-    HVX_Vector         block0 = Q6_V_valign_VVR(blocks, Q6_V_vzero(), kSizeOfQs);
     HVX_Vector         block1 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock));
     HVX_Vector         block2 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock) * 2);
     HVX_Vector         block3 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock) * 3);
 
-    HVX_Vector result = Q6_V_valign_VVR(block1, block0, kSizeOfQs);
-    result            = Q6_V_valign_VVR(block2, result, kSizeOfQs);
-    result            = Q6_V_valign_VVR(block3, result, hexagon::kBytesPerVector - kSizeOfQs * 3);
-    return result;
+    HVX_VectorPair qp0 = Q6_W_vshuff_VVR(block1, blocks, kSizeOfQs);
+    HVX_VectorPair qp1 = Q6_W_vshuff_VVR(block3, block2, kSizeOfQs);
+    return Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_lo_W(qp1), Q6_V_lo_W(qp0), kSizeOfQs * 2));
 }
 
 inline void get_scale_min_k4(int j, const uint8_t * q, uint8_t * d, uint8_t * m) {
