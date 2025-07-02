@@ -9904,7 +9904,9 @@ struct llm_build_mamba : public llm_graph_context {
         // {n_embd, n_tokens}
         inpL = build_inp_embd(model.tok_embd);
 
-        auto * inp = build_rs_inp();
+        auto * rs_inp = build_rs_inp();
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
             // norm
@@ -9914,14 +9916,12 @@ struct llm_build_mamba : public llm_graph_context {
             cb(cur, "attn_norm", il);
 
             if (model.arch == LLM_ARCH_MAMBA2) {
-                cur = build_mamba2_layer(inp, gf, cur, model, ubatch, il);
+                cur = build_mamba2_layer(rs_inp, gf, cur, model, ubatch, il);
             } else {
-                cur = build_mamba_layer(inp, gf, cur, model, ubatch, il);
+                cur = build_mamba_layer(rs_inp, gf, cur, model, ubatch, il);
             }
 
             if (il == n_layer - 1) {
-                // skip computing output for unused tokens
-                ggml_tensor * inp_out_ids = build_inp_out_ids();
                 cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
                 inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
             }
@@ -13550,7 +13550,6 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
 };
 
 struct llm_build_granite : public llm_graph_context {
-
     llm_build_granite(
         const llama_model & model,
         const llm_graph_params & params,
