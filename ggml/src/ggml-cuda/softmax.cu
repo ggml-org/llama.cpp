@@ -2,6 +2,7 @@
 #include "ggml.h"
 #include "softmax.cuh"
 #include <cstdint>
+#include <utility>
 
 template <typename T>
 static __device__ __forceinline__ float t2f32(T val) {
@@ -181,6 +182,24 @@ static __global__ void soft_max_back_f32(
     }
 }
 
+template<int... Ns>
+void increase_shared_mem_limits(std::size_t smpbo)
+{
+    auto apply_limit = [smpbo](auto I) {
+        constexpr int ncols  = decltype(I)::value;
+        constexpr int block  = (ncols > 1024 ? 1024 : ncols);
+
+        CUDA_SET_SHARED_MEMORY_LIMIT(
+            (soft_max_f32<true, ncols, block, half >),  smpbo);
+        CUDA_SET_SHARED_MEMORY_LIMIT(
+            (soft_max_f32<true, ncols, block, float>), smpbo);
+    };
+
+    //unary fold
+    ( apply_limit(std::integral_constant<int, Ns>{}), ... );
+}
+
+
 template<typename T>
 static void soft_max_f32_cuda(const float * x, const T * mask, float * dst, const soft_max_params & params, cudaStream_t stream) {
     int nth = WARP_SIZE;
@@ -193,8 +212,14 @@ static void soft_max_f32_cuda(const float * x, const T * mask, float * dst, cons
     static_assert(CUDA_SOFT_MAX_BLOCK_SIZE == 1024, "These values need to be adjusted.");
 
 
-    // FIXME: this limit could be raised by ~2-4x on Ampere or newer
-    if (nbytes_shared < ggml_cuda_info().devices[ggml_cuda_get_device()].smpb) {
+    const int id       = ggml_cuda_get_device();
+    const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
+
+
+    if (nbytes_shared <= smpbo) {
+
+        increase_shared_mem_limits<0, 32, 64, 128, 256, 512, 1024, 2048, 4096>(smpbo);
+
         switch (ncols_x) {
             case 32:
                 soft_max_f32<true,   32,   32><<<block_nums, block_dims, nbytes_shared, stream>>>
