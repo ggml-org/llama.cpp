@@ -3199,7 +3199,7 @@ static void dump_tensor(ggml_backend_t backend, const struct ggml_tensor * tenso
 
     // Open file and dump.
     char fname[512];
-    sprintf(fname, "./tensor-dumps/%s.txt", tensor->name);
+    snprintf(fname, 512, "./tensor-dumps/%s.txt", tensor->name);
     FILE * f = fopen(fname, "w");
     if (!f) {
         printf("Failed to open %s\n", fname);
