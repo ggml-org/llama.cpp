@@ -740,9 +740,6 @@ jobs:
           - build: 'llvm-arm64-opencl-adreno'
             arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
-         # - build: 'kompute-x64'
-         #   arch: 'x64'
-         #   defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON'
 
     steps:
       - name: Clone
@@ -755,12 +752,6 @@ jobs:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: ccache
           evict-old-files: 1d
-
-      - name: Clone Kompute submodule
-        id: clone_kompute
-        if: ${{ matrix.build == 'kompute-x64' }}
-        run: |
-          git submodule update --init ggml/src/ggml-kompute/kompute
 
       - name: Download OpenBLAS
         id: get_openblas
@@ -777,7 +768,7 @@ jobs:
 
       - name: Install Vulkan SDK
         id: get_vulkan
-        if: ${{ matrix.build == 'kompute-x64' || matrix.build == 'vulkan-x64' }}
+        if: ${{ matrix.build == 'vulkan-x64' }}
         run: |
           curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
           & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
