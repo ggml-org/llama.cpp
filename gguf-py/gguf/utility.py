@@ -111,7 +111,7 @@ class SafetensorRemote:
     ALIGNMENT = 8 # bytes
 
     @classmethod
-    def get_list_tensors_hf_model(cls, model_id: str) -> dict[str, RemoteTensor]:
+    def get_list_tensors_model(cls, model_id: str) -> dict[str, RemoteTensor]:
         """
         Get list of tensors from a Hugging Face model repository.
 
@@ -120,8 +120,12 @@ class SafetensorRemote:
         """
         # case 1: model has only one single model.safetensor file
         is_single_file = cls.check_file_exist(f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/model.safetensors")
+        is_single_file_consolidated = cls.check_file_exist(f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/consolidated.safetensors", user_agent="convert_mistral_to_gguf")
         if is_single_file:
             url = f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/model.safetensors"
+            return cls.get_list_tensors(url)
+        if is_single_file_consolidated:
+            url = f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/consolidated.safetensors"
             return cls.get_list_tensors(url)
 
         # case 2: model has multiple files
@@ -145,7 +149,11 @@ class SafetensorRemote:
                     tensors[key] = val
             return tensors
 
-        raise ValueError(f"Model {model_id} does not have any safetensor files")
+        raise ValueError(
+            f"No safetensor file has been found for model {model_id}."
+            "If the repo has safetensor files, make sure the model is public or you have a "
+            "valid Hugging Face token set in the environment variable HF_TOKEN."
+        )
 
     @classmethod
     def get_list_tensors(cls, url: str) -> dict[str, RemoteTensor]:
@@ -234,7 +242,7 @@ class SafetensorRemote:
         return response.content[slice(size if size > -1 else None)]
 
     @classmethod
-    def check_file_exist(cls, url: str) -> bool:
+    def check_file_exist(cls, url: str, user_agent="convert_hf_to_gguf") -> bool:
         """
         Check if a file exists at the given URL.
         Returns True if the file exists, False otherwise.
@@ -247,7 +255,7 @@ class SafetensorRemote:
             raise ValueError(f"Invalid URL: {url}")
 
         try:
-            headers = cls._get_request_headers()
+            headers = cls._get_request_headers(user_agent=user_agent)
             headers["Range"] = "bytes=0-0"
             response = requests.head(url, allow_redirects=True, headers=headers)
             # Success (2xx) or redirect (3xx)
@@ -256,9 +264,9 @@ class SafetensorRemote:
             return False
 
     @classmethod
-    def _get_request_headers(cls) -> dict[str, str]:
+    def _get_request_headers(cls, user_agent="convert_hf_to_gguf") -> dict[str, str]:
         """Prepare common headers for requests."""
-        headers = {"User-Agent": "convert_hf_to_gguf"}
+        headers = {"User-Agent": user_agent}
         if os.environ.get("HF_TOKEN"):
             headers["Authorization"] = f"Bearer {os.environ['HF_TOKEN']}"
         return headers

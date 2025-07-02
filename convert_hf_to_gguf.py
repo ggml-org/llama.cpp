@@ -104,9 +104,9 @@ class ModelBase:
 
             def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
                 logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
-                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
+                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_model(remote_hf_model_id)
                 self.tensor_names = set(name for name in remote_tensors.keys())
-                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id).items():
+                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_model(remote_hf_model_id).items():
                     yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
 
             self.get_tensors = get_remote_tensors
