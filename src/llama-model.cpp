@@ -9921,7 +9921,7 @@ struct llm_build_mamba : public llm_graph_context {
                 cur = build_mamba_layer(rs_inp, gf, cur, model, ubatch, il);
             }
 
-            if (il == n_layer - 1) {
+            if (il == n_layer - 1 && inp_out_ids) {
                 cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
                 inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
             }
@@ -13785,6 +13785,8 @@ struct llm_build_granite_hybrid : public llm_graph_context {
 
         auto * inp = build_inp_mem_hybrid();
 
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
         // Positional embeddings populated if rope enabled
         ggml_tensor * inp_pos = nullptr;
         if (use_rope) {
@@ -13810,9 +13812,7 @@ struct llm_build_granite_hybrid : public llm_graph_context {
                     n_embd_head, use_rope, il);
             }
 
-            if (il == n_layer - 1) {
-                // skip computing output for unused tokens
-                ggml_tensor * inp_out_ids = build_inp_out_ids();
+            if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
