@@ -336,8 +336,8 @@ void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, s
     }
 }
 
-template <bool _IsAligned>
-void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count) {
+template <bool _IsDstAligned>
+void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_target_type * dst, size_t count) {
     constexpr const int qk = QUANT_BLOCK_SIZE;
     static_assert(qk % 2 == 0, "qk must be even");
     static_assert(QUANT_BLOCK_SIZE == hexagon::kBytesPerVector / sizeof(float));
@@ -376,7 +376,7 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
         q_lo               = Q6_Vqf16_vmpy_VhfVhf(q_lo, dm1);
         q_hi               = Q6_Vqf16_vmpy_VhfVhf(q_hi, dm2);
 
-        if constexpr (_IsAligned) {
+        if constexpr (_IsDstAligned) {
             reinterpret_cast<HVX_Vector *>(dst_ptr)[0] = Q6_Vhf_equals_Vqf16(q_lo);
             reinterpret_cast<HVX_Vector *>(dst_ptr)[1] = Q6_Vhf_equals_Vqf16(q_hi);
         } else {
@@ -405,7 +405,7 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
 
-        if constexpr (_IsAligned) {
+        if constexpr (_IsDstAligned) {
             *reinterpret_cast<HVX_Vector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(q_lo);
         } else {
             *reinterpret_cast<HVX_UVector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(q_lo);
@@ -427,7 +427,7 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
         HVX_VectorPair q = Q6_Wh_vunpack_Vb(q_lo);
         q_lo             = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q_lo             = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
-        if constexpr (_IsAligned) {
+        if constexpr (_IsDstAligned) {
             hexagon::q6op_vstu_variable_aligned<hexagon::kBytesPerVector / 2>(dst_ptr, Q6_Vhf_equals_Vqf16(q_lo));
         } else {
             hexagon::q6op_vstu_variable_ARV<hexagon::kBytesPerVector / 2>(
@@ -440,9 +440,9 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
 void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, size_t count) {
     const bool dst_aligned = hexagon::is_addr_aligned(dst);
     if (dst_aligned) {
-        dequantize_row_q4_0<true>(src, dst, count);
+        dequantize_row_q4_0_impl<true>(src, dst, count);
     } else {
-        dequantize_row_q4_0<false>(src, dst, count);
+        dequantize_row_q4_0_impl<false>(src, dst, count);
     }
 }
 
