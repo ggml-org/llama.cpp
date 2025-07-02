@@ -1,7 +1,6 @@
 #pragma once
 
 #include <hexagon_types.h>
-#include <HTP/core/intrinsics.h>
 
 #include <cstdint>
 
@@ -119,6 +118,39 @@ inline HVX_VectorPair qhmath_hvx_vqf32_convert_vqf16(HVX_Vector vxl) {
     vxh_w       = Q6_Vw_vadd_VwVw(reqh, eh_exponent);
 
     return Q6_W_vcombine_VV(vxh_w, vxl_w);
+}
+
+template <uint32_t _TyBytes> inline void q6op_vstu_variable_ARV(void * addr, HVX_Vector vin) {
+    vin                      = Q6_V_vlalign_VVR(vin, vin, (size_t) addr);  //rotate as needed.
+    uint32_t       left_off  = unaligned_bytes(addr);
+    uint32_t       right_off = left_off + _TyBytes;
+    HVX_VectorPred qL_not    = Q6_Q_vsetq_R((size_t) addr);
+    HVX_VectorPred qR        = Q6_Q_vsetq2_R(right_off);
+    if (right_off > 128) {
+        Q6_vmaskedstoreq_QAV(qR, (HVX_Vector *) addr + 1, vin);
+        qR = Q6_Q_vcmp_eq_VbVb(vin, vin);  // all 1's
+    }
+    qL_not = Q6_Q_or_QQn(qL_not, qR);
+    Q6_vmaskedstorenq_QAV(qL_not, (HVX_Vector *) addr, vin);
+}
+
+template <uint32_t _TyBytes> inline void q6op_vstu_variable_aligned(void * addr, HVX_Vector vin) {
+    HVX_VectorPred qR = Q6_Q_vsetq2_R(_TyBytes);
+    Q6_vmaskedstorenq_QAV(qR, (HVX_Vector *) addr, vin);
+}
+
+inline void q6op_vstu_variable_ARV(void * addr, int n, HVX_Vector vin) {
+    vin                      = Q6_V_vlalign_VVR(vin, vin, (size_t) addr);  //rotate as needed.
+    unsigned       left_off  = unaligned_bytes(addr);
+    unsigned       right_off = left_off + n;
+    HVX_VectorPred qL_not    = Q6_Q_vsetq_R((size_t) addr);
+    HVX_VectorPred qR        = Q6_Q_vsetq2_R(right_off);
+    if (right_off > 128) {
+        Q6_vmaskedstoreq_QAV(qR, (HVX_Vector *) addr + 1, vin);
+        qR = Q6_Q_vcmp_eq_VbVb(vin, vin);  // all 1's
+    }
+    qL_not = Q6_Q_or_QQn(qL_not, qR);
+    Q6_vmaskedstorenq_QAV(qL_not, (HVX_Vector *) addr, vin);
 }
 
 inline HVX_VectorPair hvx_vqf32_convert_vhf(HVX_Vector vxl) {

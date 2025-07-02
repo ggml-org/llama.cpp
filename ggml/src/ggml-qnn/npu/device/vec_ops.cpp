@@ -1,7 +1,5 @@
 #include "vec_ops.hpp"
 
-#include <HTP/core/intrinsics.h>
-
 #include "util.hpp"
 
 namespace {

@@ -329,8 +329,9 @@ void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, s
         HVX_VectorPair q    = Q6_Wh_vunpack_Vb(q_lo);
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
-        q6op_vstu_variable_ARV(dst_ptr, hexagon::kBytesPerVector / 2,
-                               Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
+        hexagon::q6op_vstu_variable_ARV<hexagon::kBytesPerVector / 2>(
+            dst_ptr,
+            Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
         dst_ptr += qk;
     }
 }
@@ -426,8 +427,13 @@ void dequantize_row_q4_0(const void * src, hexagon::dequant_target_type * dst, s
         HVX_VectorPair q = Q6_Wh_vunpack_Vb(q_lo);
         q_lo             = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
         q_lo             = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
-        q6op_vstu_variable_ARV(dst_ptr, hexagon::kBytesPerVector / 2,
-                               Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
+        if constexpr (_IsAligned) {
+            hexagon::q6op_vstu_variable_aligned<hexagon::kBytesPerVector / 2>(dst_ptr, Q6_Vhf_equals_Vqf16(q_lo));
+        } else {
+            hexagon::q6op_vstu_variable_ARV<hexagon::kBytesPerVector / 2>(
+                dst_ptr,
+                Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
+        }
     }
 }
 

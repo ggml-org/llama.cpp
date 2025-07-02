@@ -63,7 +63,7 @@ inline void vec_op_impl(const _TyData * src0, const _TyData * src1, size_t count
             (leftover_bytes + hexagon::unaligned_bytes(iptr1) > hexagon::kBytesPerVector) ? *iptr1 : prev1;
         curr1 = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
 
-        q6op_vstu_variable_ARV(optr, leftover_bytes, _OpIntrinsic(curr0, curr1));
+        hexagon::q6op_vstu_variable_ARV(optr, leftover_bytes, _OpIntrinsic(curr0, curr1));
     }
 }
 
