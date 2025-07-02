@@ -3137,6 +3137,72 @@ class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
 
+@ModelBase.register("DreamModel")
+class DreamModel(Qwen2Model):
+    model_arch = gguf.MODEL_ARCH.DREAM
+
+    def set_vocab(self):
+        self._set_vocab_dream()
+
+    def _set_vocab_dream(self):
+        import json
+        
+        # Read vocab.json
+        vocab_file = self.dir_model / "vocab.json"
+        with open(vocab_file, 'r', encoding='utf-8') as f:
+            vocab = json.load(f)
+        
+        # Read added_tokens.json 
+        added_tokens_file = self.dir_model / "added_tokens.json"
+        with open(added_tokens_file, 'r', encoding='utf-8') as f:
+            added_tokens = json.load(f)
+        
+        # Read merges.txt
+        merges_file = self.dir_model / "merges.txt"
+        merges = []
+        with open(merges_file, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if i == 0 and line.startswith("#version:"):
+                    continue
+                if not line:
+                    continue
+                merges.append(line)
+        
+        # Combine vocab and added_tokens
+        combined_vocab = {**vocab, **added_tokens}
+        vocab_size = self.hparams["vocab_size"]
+        
+        # Create reverse mapping (id -> token)
+        reverse_vocab = {id_: token for token, id_ in combined_vocab.items()}
+        
+        # Build tokens and token types lists
+        tokens = []
+        toktypes = []
+        
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            elif reverse_vocab[i] in added_tokens:
+                tokens.append(reverse_vocab[i])
+                toktypes.append(gguf.TokenType.CONTROL)
+            else:
+                tokens.append(reverse_vocab[i])
+                toktypes.append(gguf.TokenType.NORMAL)
+        
+        # Set GGUF tokenizer data
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre("gpt2")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+        
+        # Add special vocabulary
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
+        special_vocab.merges = merges
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+
 @ModelBase.register("GPT2LMHeadModel")
 class GPT2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT2
