@@ -1406,7 +1406,8 @@ static void ggml_compute_forward_mul_mat_one_chunk(
     const int64_t ir0_start,
     const int64_t ir0_end,
     const int64_t ir1_start,
-    const int64_t ir1_end) {
+    const int64_t ir1_end,
+    int ith) {
 
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -1429,7 +1430,12 @@ static void ggml_compute_forward_mul_mat_one_chunk(
         return;
     }
 
+#ifdef GGML_USE_NUMA_MIGRATE
+    int node_id = ggml_get_node_from_cpu(ith);
+    const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata_numa[node_id];
+#else
     const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+#endif
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
     assert(ne12 % ne02 == 0);
@@ -1551,8 +1557,16 @@ UseGgmlGemm1:;
 #endif
 
     if (src1->type != vec_dot_type) {
+#ifdef GGML_USE_NUMA_MIGRATE
+        int node_id = ggml_get_node_from_cpu(ith);
+        int round_cnts = ggml_cores_per_numa(ith);
+        int start_id = ggml_get_start_id_in_node(ith);
+        char * wdata = params->wdata_numa[node_id];
+#else
         char * wdata = params->wdata;
-
+        int round_cnts = nth;
+        int start_id = ith;
+#endif
         const size_t nbw0 = ggml_type_size(vec_dot_type);
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
         const size_t nbw2 = nbw1*ne11;
@@ -1576,8 +1590,8 @@ UseGgmlGemm1:;
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
                 for (int64_t i11 = 0; i11 < ne11; ++i11) {
                     size_t bs = ggml_blck_size(vec_dot_type);
-                    int64_t ne10_block_start = (ith * ne10/bs) / nth;
-                    int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
+                    int64_t ne10_block_start = (start_id * ne10/bs) / round_cnts;
+                    int64_t ne10_block_end   = ((start_id + 1) * ne10/bs) / round_cnts;
                     from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
                                (ne10_block_end - ne10_block_start) * bs);
@@ -1592,7 +1606,12 @@ UseGgmlGemm1:;
         atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
     }
 
+
+#ifdef GGML_USE_NUMA_MIGRATE
+    ggml_barrier_numa_aware(params->threadpool, ith, GGML_BARRIER_NODE_LAST);
+#else
     ggml_barrier(params->threadpool);
+#endif
 
 #if GGML_USE_LLAMAFILE
     if (src1->type != vec_dot_type) {
@@ -1672,7 +1691,7 @@ UseGgmlGemm2:;
         if ((nr0 % 2 != 0) || (ne11 % 2 != 0) || ((ir0_end - ir0_start) % 2 != 0) || ((ir1_end - ir1_start) % 2 != 0)) {
             num_rows_per_vec_dot = 1;
         }
-        ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, num_rows_per_vec_dot, ir0_start, ir0_end, ir1_start, ir1_end);
+        ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, num_rows_per_vec_dot, ir0_start, ir0_end, ir1_start, ir1_end, ith);
 
         if (nth >= nchunk0 * nchunk1) {
             break;
@@ -1796,7 +1815,18 @@ static void ggml_compute_forward_mul_mat_id(
     const int n_ids = ids->ne[0]; // n_expert_used
     const int n_as  = ne02;       // n_expert
 
+#ifdef GGML_USE_NUMA_MIGRATE
+    int round_cnts = ggml_cores_per_numa(ith);
+    assert(round_cnts);
+    int start_id = ggml_get_start_id_in_node(ith);
+    int node_id = ggml_get_node_from_cpu(ith);
+
+    void * wdata_cur = (void *)(params->wdata_numa[node_id]);
+#else
     void * wdata_cur = params->wdata;
+    int start_id = ith;
+    int round_cnts = nth;
+#endif
 
     if (src1->type != vec_dot_type) {
         incr_ptr_aligned(&wdata_cur, ggml_row_size(vec_dot_type, ggml_nelements(src1)), sizeof(int64_t));
@@ -1811,10 +1841,18 @@ static void ggml_compute_forward_mul_mat_id(
     char (*atomic_current_chunk)[CACHE_LINE_SIZE] = // [n_as]
         incr_ptr_aligned(&wdata_cur, CACHE_LINE_SIZE * n_as, CACHE_LINE_SIZE);
 
+#ifdef GGML_USE_NUMA_MIGRATE
+    GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata_numa[node_id]));
+#else
     GGML_ASSERT(params->wsize >= (size_t)((char *) wdata_cur - (char *) params->wdata));
+#endif
 
     if (src1->type != vec_dot_type) {
+#ifdef GGML_USE_NUMA_MIGRATE
+        char * wdata = params->wdata_numa[node_id];
+#else
         char * wdata = params->wdata;
+#endif
 
         const size_t nbw0 = ggml_type_size(vec_dot_type);
         const size_t nbw1 = ggml_row_size(vec_dot_type, ne10);
@@ -1839,8 +1877,8 @@ static void ggml_compute_forward_mul_mat_id(
             for (int64_t i12 = 0; i12 < ne12; ++i12) {
                 for (int64_t i11 = 0; i11 < ne11; ++i11) {
                     size_t bs = ggml_blck_size(vec_dot_type);
-                    int64_t ne10_block_start = (ith * ne10/bs) / nth;
-                    int64_t ne10_block_end   = ((ith + 1) * ne10/bs) / nth;
+                    int64_t ne10_block_start = (start_id * ne10/bs) / round_cnts;
+                    int64_t ne10_block_end   = ((start_id + 1) * ne10/bs) / round_cnts;
                     from_float((float *)((char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11 + ne10_block_start*bs*nb10),
                                (void *)               (wdata + i13*nbw3 + i12*nbw2 + i11*nbw1 + ne10_block_start*nbw0),
                                (ne10_block_end - ne10_block_start) * bs);
@@ -1850,7 +1888,7 @@ static void ggml_compute_forward_mul_mat_id(
 #endif
     }
 
-    if (ith == 0) {
+    if (start_id == 0) {
         // initialize matrix_row_counts
         memset(matrix_row_counts, 0, n_as*sizeof(int64_t));
 
@@ -1868,12 +1906,16 @@ static void ggml_compute_forward_mul_mat_id(
     }
 
     // reset current_chunk
-    for (int cur_a = ith; cur_a < n_as; cur_a += nth) {
+    for (int cur_a = start_id; cur_a < n_as; cur_a += round_cnts) {
         atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + cur_a);
-        *current_chunk_ctr = nth;
+        *current_chunk_ctr = round_cnts;
     }
 
+#ifdef GGML_USE_NUMA_MIGRATE
+    ggml_barrier_numa_aware(params->threadpool, ith, GGML_BARRIER_NODE_LAST);
+#else
     ggml_barrier(params->threadpool);
+#endif
 
     for (int cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
@@ -1882,8 +1924,22 @@ static void ggml_compute_forward_mul_mat_id(
             continue;
         }
 
+#ifdef GGML_USE_NUMA_MIGRATE
+        if ((cur_a < (n_as / 2)) && (ith >= nth / 2)) {
+            continue;
+        }
+
+        if ((cur_a >= (n_as / 2)) && (ith < nth / 2)) {
+            continue;
+        }
+#endif
+
         const char * src0_cur = (const char *) src0->data + cur_a * nb02;
+#ifdef GGML_USE_NUMA_MIGRATE
+        const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata_numa[node_id];
+#else
         const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+#endif
         const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 
         const int64_t nr0 = ne01;
@@ -1902,18 +1958,23 @@ static void ggml_compute_forward_mul_mat_id(
         const bool disable_chunking = ggml_is_numa();
 #endif // defined(__aarch64__)
 
+#ifdef GGML_USE_NUMA_MIGRATE
+        int nth_copy = nth / 2;
+#else
+        int nth_copy = nth;
+#endif
         int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
         int64_t nchunk1 = (nr1 + chunk_size - 1) / chunk_size;
 
         if (nchunk0 * nchunk1 < nth * 4 || disable_chunking) {
-            nchunk0 = nr0 > nr1 ? nth : 1;
+            nchunk0 = nr0 > nr1 ? nth_copy : 1;
             nchunk1 = nr0 > nr1 ? 1 : nth;
         }
 
         const int64_t dr0 = (nr0 + nchunk0 - 1) / nchunk0;
         const int64_t dr1 = (nr1 + nchunk1 - 1) / nchunk1;
 
-        int current_chunk = ith;
+        int current_chunk = start_id;
 
         atomic_int * current_chunk_ctr = (atomic_int *)(atomic_current_chunk + cur_a);
 
@@ -1933,7 +1994,7 @@ static void ggml_compute_forward_mul_mat_id(
                 src0_cur, matrix_rows, row_size, src1_cont, wdata
             );
 
-            if (nth >= nchunk0 * nchunk1) {
+            if (nth_copy >= nchunk0 * nchunk1) {
                 break;
             }
 
@@ -3138,7 +3199,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
 #ifdef GGML_USE_NUMA_MIGRATE
     for (int i = 0; i < GGML_NUMA_MIGRATE_NODES; i++) {
-        params.wdata_numa[i] = cplan->work_data_numa[ggml_get_node_from_cpu(state->ith)];
+        params.wdata_numa[i] = cplan->work_data_numa[i];
     }
 #endif
 
