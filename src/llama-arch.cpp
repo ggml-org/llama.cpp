@@ -1991,8 +1991,6 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
 }
 
 bool llm_arch_is_hybrid(const llm_arch & arch) {
-    // TODO: There are currently no hybrid models! Once there are, this will be
-    //  the place to identify them
     switch (arch) {
         case LLM_ARCH_BAMBA:
         case LLM_ARCH_GRANITE_MOE_HYBRID:
