@@ -3193,7 +3193,7 @@ class DreamModel(Qwen2Model):
         
         # Set GGUF tokenizer data
         self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre("gpt2")
+        self.gguf_writer.add_tokenizer_pre("default")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
         
