@@ -2187,6 +2187,10 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
         //       dependencies.
         sync_with_other_backends(backend);
 
+        if (ggml_is_empty(node)) {
+            continue;
+        }
+
         if (node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
         }
