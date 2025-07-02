@@ -5232,14 +5232,17 @@ static void ggml_compute_forward_soft_max_f32(
     memcpy(&scale,    (float *) dst->op_params + 0, sizeof(float));
     memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
 
-    // TODO: handle transposed/permuted matrices
-
     const int ith = params->ith;
     const int nth = params->nth;
 
     GGML_TENSOR_UNARY_OP_LOCALS
 
-    //const int64_t ne11 = src1 ? src1->ne[1] : 1;
+    const int64_t nb11 = src1 ? src1->nb[1] : 1;
+    const int64_t nb12 = src1 ? src1->nb[2] : 1;
+    const int64_t nb13 = src1 ? src1->nb[3] : 1;
+
+    const int64_t ne12 = src1 ? src1->ne[2] : 1;
+    const int64_t ne13 = src1 ? src1->ne[3] : 1;
 
     // TODO: is this supposed to be ceil instead of floor?
     //       https://huggingface.co/mosaicml/mpt-7b/blob/main/attention.py#L370
@@ -5249,68 +5252,66 @@ static void ggml_compute_forward_soft_max_f32(
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    const int nc = src0->ne[0];
-    const int nr = ggml_nrows(src0);
-
-    // rows per thread
-    const int dr = (nr + nth - 1)/nth;
-
-    // row range for this thread
-    const int ir0 = dr*ith;
-    const int ir1 = MIN(ir0 + dr, nr);
-
-    float * wp = (float *) params->wdata + (nc + CACHE_LINE_SIZE_F32) * ith;
+    float * wp = (float *) params->wdata + (ne00 + CACHE_LINE_SIZE_F32) * ith;
 
     const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
 
-    for (int i1 = ir0; i1 < ir1; i1++) {
-        // ALiBi
-        const uint32_t h = (i1/ne01)%ne02; // head
-        const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+    for (int64_t i03 = 0; i03 < ne03; i03++) {
+        for (int64_t i02 = 0; i02 < ne02; i02++) {
+            for (int64_t i01 = ith; i01 < ne01; i01 += nth) {
+                const int64_t i11 = i01;
+                const int64_t i12 = i02%ne12;
+                const int64_t i13 = i03%ne13;
 
-        float * sp = (float *)((char *) src0->data + i1*src0->nb[1]);
-        float * dp = (float *)((char *)  dst->data +  i1*dst->nb[1]);
+                // ALiBi
+                const uint32_t h = i02; // head
+                const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
 
-        // broadcast the mask across rows
-        ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
-        float       * mp_f32 = src1 ? (float       *)((char *) src1->data) + (i1%ne01)*ne00 : NULL;
+                float * sp = (float *)((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03);
+                float * dp = (float *)((char *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3);
 
-        ggml_vec_cpy_f32  (nc, wp, sp);
-        ggml_vec_scale_f32(nc, wp, scale);
-        if (mp_f32) {
-            if (use_f16) {
-                for (int i = 0; i < nc; ++i) {
-                    wp[i] += slope*GGML_CPU_FP16_TO_FP32(mp_f16[i]);
+                // broadcast the mask across rows
+                ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
+                float       * mp_f32 = src1 ? (float       *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
+
+                ggml_vec_cpy_f32  (ne00, wp, sp);
+                ggml_vec_scale_f32(ne00, wp, scale);
+                if (mp_f32) {
+                    if (use_f16) {
+                        for (int i = 0; i < ne00; ++i) {
+                            wp[i] += slope*GGML_CPU_FP16_TO_FP32(mp_f16[i]);
+                        }
+                    } else {
+                        for (int i = 0; i < ne00; ++i) {
+                            wp[i] += slope*mp_f32[i];
+                        }
+                    }
                 }
-            } else {
-                for (int i = 0; i < nc; ++i) {
-                    wp[i] += slope*mp_f32[i];
+
+#ifndef NDEBUG
+                for (int i = 0; i < ne00; ++i) {
+                    //printf("p[%d] = %f\n", i, p[i]);
+                    assert(!isnan(wp[i]));
                 }
+#endif
+
+                float max = -INFINITY;
+                ggml_vec_max_f32(ne00, &max, wp);
+
+                ggml_float sum = ggml_vec_soft_max_f32(ne00, dp, wp, max);
+                assert(sum > 0.0);
+
+                sum = 1.0/sum;
+                ggml_vec_scale_f32(ne00, dp, sum);
+
+#ifndef NDEBUG
+                for (int i = 0; i < ne00; ++i) {
+                    assert(!isnan(dp[i]));
+                    assert(!isinf(dp[i]));
+                }
+#endif
             }
         }
-
-#ifndef NDEBUG
-        for (int i = 0; i < nc; ++i) {
-            //printf("p[%d] = %f\n", i, p[i]);
-            assert(!isnan(wp[i]));
-        }
-#endif
-
-        float max = -INFINITY;
-        ggml_vec_max_f32(nc, &max, wp);
-
-        ggml_float sum = ggml_vec_soft_max_f32(nc, dp, wp, max);
-        assert(sum > 0.0);
-
-        sum = 1.0/sum;
-        ggml_vec_scale_f32(nc, dp, sum);
-
-#ifndef NDEBUG
-        for (int i = 0; i < nc; ++i) {
-            assert(!isnan(dp[i]));
-            assert(!isinf(dp[i]));
-        }
-#endif
     }
 }
 
@@ -7766,7 +7767,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    ggml_type    const k_vec_dot_type      = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
+    ggml_type         const k_vec_dot_type = ggml_get_type_traits_cpu(k->type)->vec_dot_type;
     ggml_from_float_t const q_to_vec_dot   = ggml_get_type_traits_cpu(k_vec_dot_type)->from_float;
     ggml_vec_dot_t    const kq_vec_dot     = ggml_get_type_traits_cpu(k->type)->vec_dot;
     ggml_to_float_t   const v_to_float     = ggml_get_type_traits(v->type)->to_float;
@@ -7798,7 +7799,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
             memset(VKQ32, 0, DV*sizeof(float));
         }
 
-        const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1]) : NULL;
+        const ggml_fp16_t * mp = mask ? (ggml_fp16_t *)((char *) mask->data + iq1*mask->nb[1] + (iq3%mask->ne[2])*mask->nb[2]) : NULL;
 
         // k indices
         const int ik3 = iq3 / rk3;

@@ -84,7 +84,8 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_METAL_EMBED_LIBRARY=OFF \
+            -DGGML_METAL_SHADER_DEBUG=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 

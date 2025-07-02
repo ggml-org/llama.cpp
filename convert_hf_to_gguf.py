@@ -4877,7 +4877,7 @@ class Mamba2Model(TextModel):
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self.d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
         self.d_inner = self.find_hparam(["intermediate_size", "d_inner"], optional=True) or 2 * self.d_model
-        self.n_group = self.hparams.get("n_groups", 1)
+        self.n_group = self.find_hparam(["n_groups"], optional=True) or 1
 
     def set_vocab(self):
         vocab_size = self.hparams["vocab_size"]
@@ -4900,30 +4900,27 @@ class Mamba2Model(TextModel):
             self._set_vocab_builtin("gpt-neox", vocab_size)
 
     def set_gguf_parameters(self):
-        d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
-        d_conv  = self.find_hparam(["conv_kernel",       "d_conv"],  optional=True) or 4
-        d_inner = self.find_hparam(["intermediate_size", "d_inner"], optional=True) or 2 * d_model
-        d_state = self.find_hparam(["state_size",        "d_state"], optional=True) or 128
-        head_dim = self.find_hparam(["head_dim"],                    optional=True) or 64
-        n_group = self.find_hparam(["n_groups"],                     optional=True) or 1
+        d_conv  = self.find_hparam(["conv_kernel", "d_conv"],  optional=True) or 4
+        d_state = self.find_hparam(["state_size",  "d_state"], optional=True) or 128
+        head_dim = self.find_hparam(["head_dim"],              optional=True) or 64
 
         rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
 
         # Fail early for models which don't have a block expansion factor of 2
         # TODO: does this really matter?
-        assert d_inner == 2 * d_model
-        assert d_inner % head_dim == 0
+        assert self.d_inner == 2 * self.d_model
+        assert self.d_inner % head_dim == 0
 
         self.gguf_writer.add_context_length(2**20)  # arbitrary value; for those who use the default
-        self.gguf_writer.add_embedding_length(d_model)
+        self.gguf_writer.add_embedding_length(self.d_model)
         self.gguf_writer.add_feed_forward_length(0)  # unused, but seemingly required when loading
         self.gguf_writer.add_head_count(0)  # unused, but seemingly required when loading
         self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_ssm_conv_kernel(d_conv)
-        self.gguf_writer.add_ssm_inner_size(d_inner)
+        self.gguf_writer.add_ssm_inner_size(self.d_inner)
         self.gguf_writer.add_ssm_state_size(d_state)
-        self.gguf_writer.add_ssm_time_step_rank(d_inner // head_dim)
-        self.gguf_writer.add_ssm_group_count(n_group)
+        self.gguf_writer.add_ssm_time_step_rank(self.d_inner // head_dim)
+        self.gguf_writer.add_ssm_group_count(self.n_group)
         self.gguf_writer.add_layer_norm_rms_eps(rms_norm_eps)
         self.gguf_writer.add_file_type(self.ftype)
 

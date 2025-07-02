@@ -4395,9 +4395,15 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
         case GGML_OP_CONT:
             return op->src[0]->type != GGML_TYPE_BF16;
-        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
-            return true;
+            // TODO: support batching
+            if (op->src[0]->ne[3] != 1) {
+                return false;
+            }
+            // TODO: support broadcast
+            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
+            return !op->src[1] || (op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1);
+        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_ROPE:
         case GGML_OP_IM2COL:
             return true;

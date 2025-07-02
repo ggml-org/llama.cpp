@@ -588,6 +588,10 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.norm",     # bamba
         ),
 
+        MODEL_TENSOR.SSM_NORM: (
+            "backbone.layers.{bid}.mixer.norm",  # mamba2
+        ),
+
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",
             "backbone.layers.{bid}.mixer.out_proj",

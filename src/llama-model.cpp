@@ -15420,9 +15420,6 @@ llm_graph_result_ptr llama_model::build_graph(
                 llm = std::make_unique<llm_build_starcoder2>(*this, params, gf);
             } break;
         case LLM_ARCH_MAMBA:
-            {
-                llm = std::make_unique<llm_build_mamba>(*this, params, gf);
-            } break;
         case LLM_ARCH_MAMBA2:
             {
                 llm = std::make_unique<llm_build_mamba>(*this, params, gf);

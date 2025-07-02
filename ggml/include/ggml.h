@@ -314,6 +314,13 @@
 extern "C" {
 #endif
 
+    // Function type used in fatal error callbacks
+    typedef void (*ggml_abort_callback_t)(const char * error_message);
+
+    // Set the abort callback (passing null will restore original abort functionality: printing a message to stdout)
+    // Returns the old callback for chaining
+    GGML_API ggml_abort_callback_t ggml_set_abort_callback(ggml_abort_callback_t callback);
+
     GGML_NORETURN GGML_ATTRIBUTE_FORMAT(3, 4)
     GGML_API void ggml_abort(const char * file, int line, const char * fmt, ...);
 
@@ -638,6 +645,9 @@ extern "C" {
     GGML_API bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b);
 
     // misc
+
+    GGML_API const char * ggml_version(void);
+    GGML_API const char * ggml_commit(void);
 
     GGML_API void    ggml_time_init(void); // call this once at the beginning of the program
     GGML_API int64_t ggml_time_ms(void);
@@ -1503,8 +1513,14 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // a    [ne0, ne01, ne02, ne03]
+    // mask [ne0, ne11, ne12, ne13] | ne11 >= ne01, F16 or F32, optional
+    //
+    // broadcast:
+    //   ne02 % ne12 == 0
+    //   ne03 % ne13 == 0
+    //
     // fused soft_max(a*scale + mask*(ALiBi slope))
-    // mask is optional
     // max_bias = 0.0f for no ALiBi
     GGML_API struct ggml_tensor * ggml_soft_max_ext(
             struct ggml_context * ctx,
@@ -1967,11 +1983,16 @@ extern "C" {
 
 #define GGML_KQ_MASK_PAD 64
 
-    // q:    [n_embd_k, n_batch,     n_head,    1]
-    // k:    [n_embd_k, n_kv,        n_head_kv, 1]
-    // v:    [n_embd_v, n_kv,        n_head_kv, 1] !! not transposed !!
-    // mask: [n_kv,     n_batch_pad, 1,         1] !! n_batch_pad = GGML_PAD(n_batch, GGML_KQ_MASK_PAD) !!
-    // res:  [n_embd_v, n_head,      n_batch,   1] !! permuted !!
+    // q:    [n_embd_k, n_batch,     n_head,    ne3]
+    // k:    [n_embd_k, n_kv,        n_head_kv, ne3]
+    // v:    [n_embd_v, n_kv,        n_head_kv, ne3] !! not transposed !!
+    // mask: [n_kv,     n_batch_pad, ne32,      1] !! n_batch_pad = GGML_PAD(n_batch, GGML_KQ_MASK_PAD) !!
+    // res:  [n_embd_v, n_head,      n_batch,   ne3] !! permuted !!
+    //
+    // broadcast:
+    //   n_head % n_head_kv == 0
+    //   ne3    % ne32      == 0
+    //
     GGML_API struct ggml_tensor * ggml_flash_attn_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,

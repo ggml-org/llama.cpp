@@ -3329,15 +3329,18 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 return op->src[0]->ne[0] == 128 && op->src[0]->ne[1] % 16 == 0;
             } else {
                 // Mamba
-                // (kernel only supports d_state == 16, n_group == 1, d_head == 1)
-                return op->src[0]->ne[0] == 16 && op->src[4]->ne[1] == 1 && op->src[0]->ne[1] == 1;
+                // (kernel only supports d_state == 16, d_head == 1, n_head % 128 == 0, n_group == 1)
+                return op->src[0]->ne[0] == 16 && op->src[0]->ne[1] == 1 && op->src[0]->ne[2] % 128 == 0 && op->src[4]->ne[1] == 1;
             }
         }
-        case GGML_OP_SSM_CONV:
-            return true;
+        case GGML_OP_SSM_CONV: {
+            // assumes d_inner % threads == 0
+            return op->src[0]->ne[1] % 128 == 0;
+        }
         case GGML_OP_CONT:
             return op->src[0]->type != GGML_TYPE_BF16;
         case GGML_OP_DIAG_MASK_INF:
+            return true;
         case GGML_OP_SOFT_MAX:
             return true;
         case GGML_OP_SOFT_MAX_BACK: {
@@ -3386,6 +3389,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             if (op->src[0]->ne[0] == 192) {
                 return false;
             }
+            // TODO: support broadcast
+            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
             if (op->src[0]->ne[3] != 1) {
                 return false;
             }

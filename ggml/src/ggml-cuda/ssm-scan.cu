@@ -204,7 +204,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
     const int threads = 128;
     // NOTE: if you change conditions here, be sure to update the corresponding supports_op condition!
     if (src3_nb1 == sizeof(float)) {
-        // Mamba2
+        // Mamba-2
         if (d_state == 128) {
             GGML_ASSERT(d_state % threads == 0);
             // NOTE: can be any power of two between 4 and 64
@@ -219,8 +219,7 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
             GGML_ABORT("doesn't support d_state!=128.");
         }
     } else {
-        // Mamba1
-        // todo: consider n_head cannot be divided, does this situation exist?
+        // Mamba-1
         GGML_ASSERT(n_head % threads == 0);
         GGML_ASSERT(head_dim == 1);
         GGML_ASSERT(n_group == 1);
