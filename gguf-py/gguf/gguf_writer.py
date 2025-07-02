@@ -270,7 +270,7 @@ class GGUFWriter:
         self.state = WriterState.TI_DATA
 
     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
-        # Disallow duplicate keys if they differ by value or type
+        # Warn about duplicate keys if they differ by value or type
         if any(
             (
                 key in kv_data
