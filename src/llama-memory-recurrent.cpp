@@ -1071,7 +1071,15 @@ bool llama_memory_recurrent_context::next() {
 }
 
 bool llama_memory_recurrent_context::apply() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+    assert(!llama_memory_status_is_fail(status));
+
+    // no ubatches -> this is an update
+    if (ubatches.empty()) {
+        // recurrent cache never performs updates
+        assert(status == LLAMA_MEMORY_STATUS_NO_UPDATE);
+
+        return true;
+    }
 
     mem->find_slot(ubatches[i_next]);
 

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 cp -rpv ../ggml/CMakeLists.txt       ./ggml/CMakeLists.txt
 cp -rpv ../ggml/src/CMakeLists.txt   ./ggml/src/CMakeLists.txt
