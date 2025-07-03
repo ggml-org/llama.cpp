@@ -2,6 +2,13 @@ struct MulMatParams {
     m: u32,
     n: u32,
     k: u32,
+    stride_01: u32,
+    stride_11: u32,
+    stride_02: u32,
+    stride_12: u32,
+    stride_03: u32,
+    stride_13: u32,
+
     bs02: u32,
     bs03: u32,
     broadcast2: u32,
@@ -21,12 +28,6 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         return;
     }
 
-    let src02_stride = params.n * params.k;
-    let src03_stride = src02_stride * params.bs02;
-
-    let src12_stride = params.m * params.k;
-    let src13_stride = src12_stride * params.bs02 * params.broadcast2;
-
     let dst2_stride = params.m * params.n;
     let dst3_stride = dst2_stride * params.bs02 * params.broadcast2;
 
@@ -37,7 +38,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     let dst2_idx = dst3_rem / dst2_stride;
     let src02_idx = dst2_idx / params.broadcast2; // src0 may also be broadcast along the second dimension
-    let src12_idx = dst2_idx;
+    let src12_idx = dst2_idx; // src1 is not broadcast
 
     let dst2_rem = dst3_rem % dst2_stride; 
 
@@ -46,8 +47,8 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
     var sum = 0.0;
     for (var i: u32 = 0u; i < params.k; i = i + 1u) {
-        let src0_idx = src03_idx * src03_stride + src02_idx * src02_stride + col * params.k + i;
-        let src1_idx = src13_idx * src13_stride + src12_idx * src12_stride + row * params.k + i;
+        let src0_idx = src03_idx * params.stride_03 + src02_idx * params.stride_02 + col * params.stride_01 + i;
+        let src1_idx = src13_idx * params.stride_13 + src12_idx * params.stride_12 + row * params.stride_11 + i;
         sum = sum + src0[src0_idx] * src1[src1_idx];
     }
     dst[dst3_idx * dst3_stride + dst2_idx * dst2_stride + row * params.n + col] = sum;

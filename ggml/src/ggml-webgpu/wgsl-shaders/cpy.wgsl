@@ -7,26 +7,54 @@ var<storage, read_write> src: array<f32>;
 var<storage, read_write> dst: array<f16>;
 
 struct Params {
-    ne: u32, // number of elements
-    src_offset: u32, // src offset in bytes
-    dst_offset: u32 // dst offset in bytes
+    ne: u32,            // total number of elements
+    src_offset: u32,    // in bytes
+    dst_offset: u32,    // in bytes
+
+    // Strides (in elements) — may be permuted
+    stride_src0: u32,
+    stride_src1: u32,
+    stride_src2: u32,
+    stride_src3: u32,
+
+    stride_dst0: u32,
+    stride_dst1: u32,
+    stride_dst2: u32,
+    stride_dst3: u32,
+
+    // Logical shape (same for both tensors)
+    ne0: u32,
+    ne1: u32,
+    ne2: u32,
+    ne3: u32,
 };
 
 @group(0) @binding(2)
 var<uniform> params: Params;
 
 override wg_size: u32;
-const elems_per_thread: u32 = 4;
-
 @compute @workgroup_size(wg_size)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let idx = gid.x * elems_per_thread;
-    // chunked loop
-    for (var j: u32 = 0u; j < elems_per_thread; j = j + 1u) {
-        let i = idx + j;
-        if (i < params.ne) {
-            // Convert f32 to f16
-            dst[dst_offset/2 + i] = f16(src[src_offset/4 + i]);
-        }
+    if (gid.x >= params.ne) {
+        return;
     }
+
+    var i = gid.x;
+
+    let i3 = i / (params.ne2 * params.ne1 * params.ne0);
+    i = i % (params.ne2 * params.ne1 * params.ne0);
+
+    let i2 = i / (params.ne1 * params.ne0);
+    i = i % (params.ne1 * params.ne0);
+
+    let i1 = i / params.ne0;
+    let i0 = i % params.ne0;
+
+    let src_idx = i0 * params.stride_src0 + i1 * params.stride_src1 +
+                  i2 * params.stride_src2 + i3 * params.stride_src3;
+
+    let dst_idx = i0 * params.stride_dst0 + i1 * params.stride_dst1 +
+                  i2 * params.stride_dst2 + i3 * params.stride_dst3;
+
+    dst[params.dst_offset / 2 + dst_idx] = f16(src[params.src_offset / 4 + src_idx]);
 }

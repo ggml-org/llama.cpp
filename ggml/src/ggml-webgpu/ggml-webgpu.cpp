@@ -22,8 +22,8 @@
 #define WEBGPU_MAX_BUFFERS 32
 
 #define WEBGPU_MUL_MAT_WG_SIZE 64
-#define WEBGPU_MUL_MAT_PARAMS_SIZE (7 * sizeof(uint32_t)) // M, N, K, batch sizes, broadcasts
-#define WEBGPU_CPY_PARAMS_SIZE (3 * sizeof(uint32_t)) // number of elements to copy, alignments
+#define WEBGPU_MUL_MAT_PARAMS_SIZE (13 * sizeof(uint32_t)) // M, N, K, batch sizes, broadcasts
+#define WEBGPU_CPY_PARAMS_SIZE (15 * sizeof(uint32_t)) // strides and offsets
 #define WEBGPU_STORAGE_BUF_BINDING_MULT 4 // a storage buffer binding size must be a multiple of 4
 
 /* End Constants */
@@ -266,10 +266,26 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
             ggml_backend_webgpu_map_buffer(ctx, ctx->cpy_params_host_buf, 
                 wgpu::MapMode::Write, 0, ctx->cpy_params_host_buf.GetSize());
             uint32_t * params = (uint32_t *) ctx->cpy_params_host_buf.GetMappedRange();
-            uint32_t ne = (uint32_t)ggml_nelements(node); // number of elements to copy
+            uint32_t ne = (uint32_t)ggml_nelements(node);
             params[0] = ne;
             params[1] = src_misalignment;
             params[2] = dst_misalignment;
+
+            // Convert byte-strides to element-strides
+            params[3] = (uint32_t)src->nb[0]/ggml_type_size(src->type);
+            params[4] = (uint32_t)src->nb[1]/ggml_type_size(src->type);
+            params[5] = (uint32_t)src->nb[2]/ggml_type_size(src->type);
+            params[6] = (uint32_t)src->nb[3]/ggml_type_size(src->type);
+            params[7] = (uint32_t)node->nb[0]/ggml_type_size(node->type);
+            params[8] = (uint32_t)node->nb[1]/ggml_type_size(node->type);
+            params[9] = (uint32_t)node->nb[2]/ggml_type_size(node->type);
+            params[10] = (uint32_t)node->nb[3]/ggml_type_size(node->type);
+            // Logical shape — same for both tensors even if permuted
+            params[11] = (uint32_t)(src->ne[0]);
+            params[12] = (uint32_t)(src->ne[1]);
+            params[13] = (uint32_t)(src->ne[2]);
+            params[14] = (uint32_t)(src->ne[3]);
+
             ctx->cpy_params_host_buf.Unmap();
 
             wgpu::BindGroupEntry entries[3];
@@ -338,10 +354,18 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
             params[0] = (uint32_t)node->ne[1]; // number of rows in result (M)
             params[1] = (uint32_t)node->ne[0]; // number of columns in result (N)
             params[2] = (uint32_t)src0->ne[0]; // number of columns in src0/src1 (K)
-            params[3] = (uint32_t)src0->ne[2]; // batch size in dimension 2
-            params[4] = (uint32_t)src0->ne[3]; // batch size in dimension 3
-            params[5] = (uint32_t)(src1->ne[2]/src0->ne[2]); // broadcast in dimension 2
-            params[6] = (uint32_t)(src1->ne[3]/src0->ne[3]); // broadcast in dimension 3
+
+            params[3] = (uint32_t)src0->nb[1]/ggml_type_size(src0->type); // stride (elements) of src0 in dimension 1
+            params[4] = (uint32_t)src1->nb[1]/ggml_type_size(src1->type); // stride (elements) of src1 in dimension 1
+            params[5] = (uint32_t)src0->nb[2]/ggml_type_size(src0->type); // stride (elements) of src0 in dimension 2
+            params[6] = (uint32_t)src1->nb[2]/ggml_type_size(src1->type); // stride (elements) of src1 in dimension 2
+            params[7] = (uint32_t)src0->nb[3]/ggml_type_size(src0->type); // stride (elements) of src0 in dimension 3
+            params[8] = (uint32_t)src1->nb[3]/ggml_type_size(src1->type); // stride (elements) of src1 in dimension 3
+
+            params[9] = (uint32_t)src0->ne[2]; // batch size in dimension 2
+            params[10] = (uint32_t)src0->ne[3]; // batch size in dimension 3
+            params[11] = (uint32_t)(src1->ne[2]/src0->ne[2]); // broadcast in dimension 2
+            params[12] = (uint32_t)(src1->ne[3]/src0->ne[3]); // broadcast in dimension 3
 
             ctx->mul_mat_params_host_buf.Unmap();
 
