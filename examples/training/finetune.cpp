@@ -2,6 +2,7 @@
 #include "common.h"
 #include "log.h"
 #include "llama.h"
+#include "../../src/parquet_dataset.h"
 
 #include <cmath>
 #include <cstdio>
@@ -18,7 +19,7 @@ int main(int argc, char ** argv) {
 
     params.escape = false;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_FINETUNE)) {
         return 1;
     }
 
@@ -57,7 +58,23 @@ int main(int argc, char ** argv) {
 
     constexpr float val_split = 0.05f;
 
-    std::vector<llama_token> tokens = common_tokenize(ctx.get(), params.prompt, true);
+    std::vector<llama_token> tokens;
+#ifdef LLAMA_PARQUET
+    if (params.dataset_format == "text") {
+#endif
+        tokens = common_tokenize(ctx.get(), params.prompt, true); //load from text file
+#ifdef LLAMA_PARQUET
+    }
+    else if (params.dataset_format == "parquet") {
+        tokens = load_parquet_dataset(params.parquet_path, params.tokens_column);
+        if (tokens.empty()) {
+            LOG_ERR("No tokens in %s, or column %s not found/invalid", params.parquet_path.c_str(), params.tokens_column.c_str());
+            return 1;
+        }
+        LOG_INF("Loaded %zu tokens from Parquet", tokens.size());
+    }
+#endif
+
     ggml_opt_dataset_t dataset = common_opt_dataset_init(ctx.get(), tokens, llama_n_ctx(ctx.get())/2);
 
     struct ggml_opt_optimizer_params optimizer_params = ggml_opt_get_default_optimizer_params(nullptr);
