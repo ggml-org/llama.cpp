@@ -1,46 +1,5 @@
 #include "ggml-dsp.h"
 
-// 128 byte vectors
-#define VSIZE_BYTES 128
-#define VSIZE_WORDS VSIZE_BYTES/4
-
-union ui32f { int32_t i; float f; };
-
-// create a vector of floats from a float
-static __attribute__((always_inline)) HVX_Vector create_sfv_from_sf(float value) {
-    union ui32f cvt;
-    cvt.f = value;
-    HVX_Vector tmp = Q6_V_vsplat_R(cvt.i);
-    return tmp;
-}
-
-// create a vector of qf32's from a float
-static __attribute__((always_inline)) HVX_Vector create_qf32v_from_sf(float value) {
-    HVX_Vector tmp = Q6_Vqf32_vadd_Vqf32Vsf(Q6_V_vsplat_R(0), create_sfv_from_sf(value));
-    return tmp;
-}
-
-// convert qf32 vector to float vector
-static __attribute__((always_inline)) HVX_Vector convert_qf32v_to_fltv(HVX_Vector vect) {
-    HVX_Vector tmp = Q6_Vsf_equals_Vqf32(vect);
-    return tmp;
-}
-
-// get lowest float from a vector of floats
-static __attribute__((always_inline)) float get_flt0_from_fltv(HVX_Vector vect) {
-    union ui32f cvt;
-    cvt.i = vect[0];
-    return cvt.f;
-}
-
-// get lowest float from a vector of qf32's
-static __attribute__((always_inline)) float get_flt0_from_qf32v(HVX_Vector vect) {
-    union ui32f cvt;
-    HVX_Vector tmp = convert_qf32v_to_fltv(vect);
-    cvt.i = tmp[0];
-    return cvt.f;
-}
-
 static void vec_dot_f32(int n, float *GGML_RESTRICT s, size_t bs, const float *GGML_RESTRICT x,
                     size_t bx, const float *GGML_RESTRICT y, size_t by, int nrc) {
     assert(nrc == 1);
@@ -145,7 +104,6 @@ static void ggml_compute_forward_mul_mat_one_chunk(const ggml_tensor *src0, cons
     }
 }
 
-//TODO: only support fp32 mulmat on cDSP
 static int ggmlop_dsp_mulmat_singlethread(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
     ggmlhexagon_dump_tensor(src0, 0);
@@ -274,7 +232,6 @@ static int ggmlop_dsp_mulmat_singlethread(remote_handle64 h, const ggml_tensor *
     return 0;
 }
 
-//TODO:multithreading mulmat
 static int ggmlop_dsp_mulmat_multithread(remote_handle64 h, const struct dsptensor * src0, const struct dsptensor * src1, dsptensor * dst) {
     GGMLHEXAGON_LOG_DEBUG("enter %s", __func__ );
     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );

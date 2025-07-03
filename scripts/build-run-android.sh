@@ -14,7 +14,7 @@ PROJECT_ROOT_PATH=${PROJECT_HOME_PATH}
 HOST_CPU_COUNTS=`cat /proc/cpuinfo | grep "processor" | wc | awk '{print int($1)}'`
 
 #running path on Android phone
-REMOTE_PATH=/data/local/tmp/
+REMOTE_PATH=/data/local/tmp
 
 #Android NDK can be found at:
 #https://developer.android.com/ndk/downloads
@@ -31,9 +31,11 @@ QNN_SDK_VERSION=2.32.0.250228
 QNN_SDK_VERSION=2.33.0.250327
 QNN_SDK_VERSION=2.34.0.250424
 QNN_SDK_VERSION=2.35.0.250530
+QNN_SDK_VERSION=2.36.0.250627
 #fully official QNN SDK, will be downloaded automatically via this script
-QNN_SDK_PATH=${PROJECT_ROOT_PATH}/prebuilts/QNN_SDK/qairt/2.34.0.250424/
-QNN_SDK_PATH=${PROJECT_ROOT_PATH}/prebuilts/QNN_SDK/qairt/2.35.0.250530/
+QNN_SDK_PATH=${PROJECT_ROOT_PATH}/prebuilts/QNN_SDK/qairt/2.34.0.250424
+QNN_SDK_PATH=${PROJECT_ROOT_PATH}/prebuilts/QNN_SDK/qairt/2.35.0.250530
+QNN_SDK_PATH=${PROJECT_ROOT_PATH}/prebuilts/QNN_SDK/qairt/2.36.0.250627
 
 #Qualcomm Hexagon SDK can be found at:
 #https://developer.qualcomm.com/software/hexagon-dsp-sdk/tools
@@ -42,8 +44,8 @@ HEXAGON_SDK_PATH=/opt/qcom/Hexagon_SDK/6.2.0.1
 #customized/tailored Hexagon SDK from the offcial Hexagon SDK for simplify workflow
 HEXAGON_SDK_PATH=${PROJECT_ROOT_PATH}/prebuilts/Hexagon_SDK/6.2.0.1
 
-#running_params="- ngl 99 -t 8 -n 256 --no-warmup -fa 1 "
-running_params=" -ngl 99 -t 8 -n 256 --no-warmup "
+#running_params="- ngl 99 -t 4 -n 256 --no-warmup -fa 1 "
+running_params=" -ngl 99 -t 4 -n 256 --no-warmup "
 
 ######## part-2 ########
 
@@ -52,8 +54,9 @@ PROMPT_STRING="introduce the movie Once Upon a Time in America briefly.\n"
 #1.12 GiB, will be downloadded automatically via this script
 GGUF_MODEL_NAME=/sdcard/qwen1_5-1_8b-chat-q4_0.gguf
 
-#ref: https://github.com/quic/ai-hub-apps/tree/main/tutorials/llm_on_genie
 #supported htp arch version:
+#v68 --- Snapdragon 888
+#v69 --- Snapdragon 8 Gen1
 #v73 --- Snapdragon 8 Gen2
 #v75 --- Snapdragon 8 Gen3
 #v79 --- Snapdragon 8 Elite

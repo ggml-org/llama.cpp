@@ -134,7 +134,6 @@ static void ggml_compute_forward_add_f32(
     GGMLHEXAGON_LOG_DEBUG("leave %s", __func__ );
 }
 
-//FIXME: why failed with test-backend-ops when disable ion rpc mempool
 int ggmlop_dsp_add(remote_handle64 h, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGMLHEXAGON_LOG_DEBUG("enter %s\n", __func__);
     ggml_compute_forward_add_f32(src0, src1, dst);

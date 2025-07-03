@@ -32,7 +32,7 @@ endif()
 #v69 --- Snapdragon 8 Gen1
 #v73 --- Snapdragon 8 Gen2
 #v75 --- Snapdragon 8 Gen3
-#v79 --- Snapdragon 8 Elite(aka Gen4)
+#v79 --- Snapdragon 8 Elite
 if(NOT DEFINED HTP_ARCH_VERSION)
     message(FATAL_ERROR "HTP_ARCH_VERSION not defined, valid htp arch: v68,v69,v73,v75,v79")
 endif()

@@ -1,6 +1,3 @@
- /*
- * Copyright (c) 2024-2025 The ggml authors
- */
 #pragma once
 
 #include "ggml.h"
@@ -43,6 +40,8 @@ GGML_BACKEND_API const char *       ggml_backend_hexagon_get_devname(size_t dev_
 GGML_BACKEND_API void               ggml_backend_hexagon_set_cfg(int new_hexagon_backend, int new_hwaccel_approach);
 
 GGML_BACKEND_API int                ggml_backend_hexagon_get_mulmat_algotype(void);
+
+GGML_BACKEND_API void               ggml_backend_hexagon_set_mulmat_algotype(int new_mulmat_algotype);
 
 #ifdef __cplusplus
 }
