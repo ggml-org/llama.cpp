@@ -17,6 +17,7 @@
 #include <openvino/runtime/compiled_model.hpp>
 #include <openvino/runtime/infer_request.hpp>
 #include <openvino/runtime/intel_npu/properties.hpp>
+#include <openvino/runtime/properties.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <unordered_map>
 #include <vector>
@@ -88,6 +89,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     if (cache_dir && !is_static) {
         core.set_property(ov::cache_dir(cache_dir));
     }
+    // core.set_property(ov::enable_profiling(true));
 
     static std::unordered_map<struct ggml_cgraph*, std::shared_ptr<ov::InferRequest>> infer_request_cache;
     static std::unordered_map<struct ggml_cgraph*, std::vector<std::string>> ov_input_names_cache;
@@ -256,10 +258,10 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
     } else {
         if (param_name == "inp_tokens" || param_name == "inp_pos") {
             if (is_first_token) {
-                size_t max_token_len = ggml_decoder->get_max_token_len();
+                size_t context_size = ggml_decoder->get_context_size();
                 const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
-                std::vector<int32_t> padded_data = pad_input<int32_t>(input_tensor_ggml, 1, max_token_len, 0);
-                input_tensor = ov::Tensor(ov::element::i32, ov::Shape{ 1, 1, max_token_len });
+                std::vector<int32_t> padded_data = pad_input<int32_t>(input_tensor_ggml, 1, context_size, 0);
+                input_tensor = ov::Tensor(ov::element::i32, ov::Shape{1, 1, context_size});
                 auto* data_ptr = input_tensor.data<int32_t>();
                 std::copy(padded_data.begin(), padded_data.end(), data_ptr);
             } else {
@@ -267,18 +269,18 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
             }
 
         } else if (param_name == "KQ_mask") {
-            size_t max_token_len = ggml_decoder->get_max_token_len();
+            size_t context_size = ggml_decoder->get_context_size();
             const auto* input_tensor_ggml = ggml_decoder->get_input_ggml_tensor(param_name);
             if (is_first_token) {
                 std::vector<float> padded_data =
-                    pad_input<float>(input_tensor_ggml, max_token_len, max_token_len, -INFINITY);
-                set_zero_diagonal(padded_data, max_token_len);
-                input_tensor = ov::Tensor(ov::element::f32, ov::Shape{ 1, max_token_len, max_token_len });
+                    pad_input<float>(input_tensor_ggml, context_size, context_size, -INFINITY);
+                set_zero_diagonal(padded_data, context_size);
+                input_tensor = ov::Tensor(ov::element::f32, ov::Shape{1, context_size, context_size});
                 auto* data_ptr = input_tensor.data<float>();
                 std::copy(padded_data.begin(), padded_data.end(), data_ptr);
             } else {
-                std::vector<float> padded_data = pad_input<float>(input_tensor_ggml, 1, max_token_len, -INFINITY);
-                input_tensor = ov::Tensor(ov::element::f32, ov::Shape{ 1, 1, max_token_len });
+                std::vector<float> padded_data = pad_input<float>(input_tensor_ggml, 1, context_size, -INFINITY);
+                input_tensor = ov::Tensor(ov::element::f32, ov::Shape{1, 1, context_size});
                 auto* data_ptr = input_tensor.data<float>();
                 std::copy(padded_data.begin(), padded_data.end(), data_ptr);
             }

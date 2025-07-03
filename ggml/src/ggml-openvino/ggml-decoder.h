@@ -11,9 +11,9 @@
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
-    using ov::frontend::ggml::GgmlDecoder::GgmlDecoder;
-
     GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token);
+    GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
+                  int context_size, int num_heads, int num_heads_kv, int head_size);
 
     virtual ov::Any get_attribute(const std::string& name) const override {
         return nullptr;
@@ -90,7 +90,7 @@ public:
         return m_model_output_names;
     }
 
-    virtual int get_max_token_len() const override { return m_max_token_len; }
+    virtual int get_context_size() const override { return m_context_size; }
 
     virtual int get_num_heads() const override { return m_num_heads; }
 
@@ -114,7 +114,7 @@ private:
     static std::vector<size_t> get_stride(const ggml_tensor* tensor);
     static ov::element::Type get_ov_type(const ggml_tensor* tensor);
 
-    // set max_token_len, num_heads, etc
+    // set context_size, num_heads, etc
     void set_llm_params();
 
     static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
@@ -136,7 +136,7 @@ private:
     std::map<std::string, std::shared_ptr<ov::Tensor>> m_model_extra_input_values;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_weights;
     std::vector<std::string> m_model_output_names;
-    int m_max_token_len;
+    int m_context_size;
     int m_num_heads;
     int m_num_heads_kv;
     int m_head_size;
