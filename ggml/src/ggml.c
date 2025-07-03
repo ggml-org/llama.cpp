@@ -6641,16 +6641,24 @@ void ggml_perf_write_detailed_csv(struct ggml_cgraph * cgraph, FILE *fp) {
         }
 
         fprintf(fp,
-            "%-12s %-20s %10d %12.3f %10.3f %10ld %10ld %10ld %10ld\n",
+            "%-12s %-20s %10" PRId64 " %12.3f %10.3f %10ld %10ld %10ld %10ld\n",
             ggml_backend_type(node->ggml_compute_backend),
             op_name,
             node->perf_runs,
             t_ms,
             avg_ms,
-            node->ne[0],
-            node->ne[1],
-            node->ne[2],
-            node->ne[3]);
+            node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+
+        // Loop over all possible source tensors
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            struct ggml_tensor * src = node->src[s];
+            if (src) {
+                fprintf(fp,
+                    "             src%-2d:                             ne[0]=%6ld  ne[1]=%6ld  ne[2]=%6ld  ne[3]=%6ld\n",
+                    s,
+                    src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
+            }
+        }
     }
 
     fprintf(fp, "--------------------------------------------------------------------------------------------------------\n\n");
