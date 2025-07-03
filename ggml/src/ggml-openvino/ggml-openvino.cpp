@@ -237,21 +237,29 @@ static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_host_ptr(g
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_ASSERT(dev->reg != nullptr);
 
-  static const std::set<ggml_op> supported_ops{
-      GGML_OP_ADD,       GGML_OP_MUL,      GGML_OP_MUL_MAT, GGML_OP_VIEW,
-      GGML_OP_CONT,      GGML_OP_CPY,      GGML_OP_RESHAPE, GGML_OP_PERMUTE,
-      GGML_OP_TRANSPOSE, GGML_OP_GET_ROWS, GGML_OP_ROPE,    GGML_OP_RMS_NORM,
-      GGML_OP_SCALE,     GGML_OP_SOFT_MAX,
-  };
-  static const std::set<ggml_unary_op> supported_unary_ops{
-      GGML_UNARY_OP_SILU,
-  };
+    static const std::set<ggml_op> supported_ops{GGML_OP_NONE,     GGML_OP_ADD,       GGML_OP_MUL,      GGML_OP_MUL_MAT,
+                                                 GGML_OP_VIEW,     GGML_OP_CONT,      GGML_OP_CPY,      GGML_OP_RESHAPE,
+                                                 GGML_OP_PERMUTE,  GGML_OP_TRANSPOSE, GGML_OP_GET_ROWS, GGML_OP_ROPE,
+                                                 GGML_OP_RMS_NORM, GGML_OP_SCALE,     GGML_OP_SOFT_MAX};
+    static const std::set<ggml_unary_op> supported_unary_ops{
+        GGML_UNARY_OP_SILU,
+    };
+    static const std::set<ggml_glu_op> supported_glu_ops{
+        GGML_GLU_OP_SWIGLU,
+    };
 
-  if (op->op == GGML_OP_UNARY) {
-      return supported_unary_ops.find(ggml_get_unary_op(op)) !=
-             supported_unary_ops.end();
-  }
-  return supported_ops.find(op->op) != supported_ops.end();
+    auto res = false;
+    switch (op->op) {
+        case GGML_OP_UNARY:
+            res = supported_unary_ops.find(ggml_get_unary_op(op)) != supported_unary_ops.end();
+            break;
+        case GGML_OP_GLU:
+            res = supported_glu_ops.find(ggml_get_glu_op(op)) != supported_glu_ops.end();
+            break;
+        default:
+            res = supported_ops.find(op->op) != supported_ops.end();
+    }
+    return res;
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {

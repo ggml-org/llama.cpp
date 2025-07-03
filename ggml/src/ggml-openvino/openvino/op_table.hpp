@@ -24,8 +24,8 @@ GGML_OP_CONVERTER(translate_scale);
 GGML_OP_CONVERTER(translate_unary_silu);
 GGML_OP_CONVERTER(translate_soft_max);
 GGML_OP_CONVERTER(translate_transpose);
-GGML_OP_CONVERTER(translate_unary);
 GGML_OP_CONVERTER(translate_view);
+GGML_OP_CONVERTER(translate_glu_swiglu);
 
 } // namespace op
 

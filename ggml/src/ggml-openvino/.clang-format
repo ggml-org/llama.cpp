@@ -4,6 +4,7 @@ AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
 ReferenceAlignment: Left
 PointerAlignment: Left
+Cpp11BracedListStyle: true
 
 Language:        Cpp
 AlignAfterOpenBracket: Align
@@ -65,7 +66,6 @@ CommentPragmas:  '^ IWYU pragma:'
 CompactNamespaces: false
 ConstructorInitializerIndentWidth: 4
 ContinuationIndentWidth: 4
-Cpp11BracedListStyle: false
 DerivePointerAlignment: false
 DisableFormat:   false
 EmptyLineBeforeAccessModifier: Leave
