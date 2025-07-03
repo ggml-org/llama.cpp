@@ -54,6 +54,7 @@ public:
 
     uint32_t get_n_tokens()  const;
     uint32_t get_n_outputs() const;
+    uint32_t get_n_used()    const;
 
     // the array of output indices in the order they were encountered during the ubatch splitting
     std::vector<int32_t> & get_out_ids();
@@ -124,6 +125,8 @@ private:
 
     // batch indices of the output
     std::vector<int32_t> out_ids;
+
+    uint32_t n_used;
 
     // used[i] indicates if token i has already been used in a previous ubatch
     std::vector<bool> used;

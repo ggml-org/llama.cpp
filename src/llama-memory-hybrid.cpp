@@ -80,6 +80,11 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
             ubatches.push_back(std::move(ubatch)); // NOLINT
         }
 
+        if (balloc.get_n_used() < balloc.get_n_tokens()) {
+            // failed to find a suitable split
+            break;
+        }
+
         // prepare the recurrent batches first
         if (!mem_recr->prepare(ubatches)) {
             // TODO: will the recurrent cache be in an undefined context at this point?

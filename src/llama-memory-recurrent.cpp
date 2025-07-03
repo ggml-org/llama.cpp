@@ -377,7 +377,8 @@ llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr &
                 ubatch = balloc.split_equal(n_ubatch);
             }
 
-            if (ubatch.n_tokens == 0) {
+            if (balloc.get_n_used() < balloc.get_n_tokens()) {
+                // failed to find a suitable split
                 break;
             }
 
