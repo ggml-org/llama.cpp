@@ -8,8 +8,8 @@ var<storage, read_write> dst: array<f16>;
 
 struct Params {
     ne: u32,            // total number of elements
-    src_offset: u32,    // in bytes
-    dst_offset: u32,    // in bytes
+    offset_src: u32,    // in bytes
+    offset_dst: u32,    // in bytes
 
     // Strides (in elements) — may be permuted
     stride_src0: u32,
@@ -56,5 +56,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dst_idx = i0 * params.stride_dst0 + i1 * params.stride_dst1 +
                   i2 * params.stride_dst2 + i3 * params.stride_dst3;
 
-    dst[params.dst_offset / 2 + dst_idx] = f16(src[params.src_offset / 4 + src_idx]);
+    dst[params.offset_dst / 2 + dst_idx] = f16(src[params.offset_src / 4 + src_idx]);
 }

@@ -18,9 +18,6 @@
 
 /* Constants */
 
-// TODO: find a better way to get the memory available
-#define WEBGPU_MAX_BUFFERS 32
-
 #define WEBGPU_MUL_MAT_WG_SIZE 64
 #define WEBGPU_MUL_MAT_PARAMS_SIZE (13 * sizeof(uint32_t)) // M, N, K, batch sizes, broadcasts
 #define WEBGPU_CPY_PARAMS_SIZE (15 * sizeof(uint32_t)) // strides and offsets
@@ -119,7 +116,7 @@ static void ggml_webgpu_create_pipeline(wgpu::Device &device, wgpu::ComputePipel
     pipeline_desc.label = label;
     pipeline_desc.compute.module = shader_module;
     pipeline_desc.compute.entryPoint = "main"; // Entry point in the WGSL code
-    pipeline_desc.layout = nullptr; // Guessing that nullptr means auto layout
+    pipeline_desc.layout = nullptr; // nullptr means auto layout
     if (constants.size() > 0) {
         pipeline_desc.compute.constants = constants.data();
         pipeline_desc.compute.constantCount = constants.size();
@@ -199,7 +196,6 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_context ctx, wgpu::Buffer b
     pass.End();
     wgpu::CommandBuffer commands = encoder.Finish();
 
-    // TODO, async, do we need to wait on this?
     ctx->queue.Submit(1, &commands);
 }
 
@@ -489,7 +485,6 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
 
-    // TODO: wait on this?
     webgpu_ctx->queue.WriteBuffer(buf_ctx->buffer, total_offset, data, (size/4)*4);
 
     if (size % 4 != 0) {
@@ -617,9 +612,9 @@ static const char * ggml_backend_webgpu_device_get_description(ggml_backend_dev_
 
 static void ggml_backend_webgpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
-    // TODO: what do we actually want to return here?
-    *free = ctx->webgpu_ctx->limits.maxBufferSize * WEBGPU_MAX_BUFFERS;
-    *total = ctx->webgpu_ctx->limits.maxBufferSize * WEBGPU_MAX_BUFFERS;
+    // TODO: what do we actually want to return here? maxBufferSize might not be the full available memory.
+    *free = ctx->webgpu_ctx->limits.maxBufferSize;
+    *total = ctx->webgpu_ctx->limits.maxBufferSize;
 }
 
 static enum ggml_backend_dev_type ggml_backend_webgpu_device_get_type(ggml_backend_dev_t dev) {
