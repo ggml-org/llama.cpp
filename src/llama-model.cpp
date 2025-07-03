@@ -15927,6 +15927,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 params.swa_full,
                                 cparams.n_ctx,
                                 cparams.n_seq_max,
+                                cparams.n_seq_virt,
                                 cparams.n_ubatch,
                                 padding);
                     } else {
@@ -15941,6 +15942,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 cparams.offload_kqv,
                                 cparams.n_ctx,
                                 cparams.n_seq_max,
+                                cparams.n_seq_virt,
                                 padding,
                                 hparams.n_swa,
                                 hparams.swa_type);

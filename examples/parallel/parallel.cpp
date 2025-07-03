@@ -236,7 +236,7 @@ int main(int argc, char ** argv) {
 
     // the max batch size is as large as the context to handle cases where we get very long input prompt from multiple
     // users. regardless of the size, the main loop will chunk the batch into a maximum of params.n_batch tokens at a time
-    llama_batch batch = llama_batch_init(n_ctx, 0, 1);
+    llama_batch batch = llama_batch_init(n_ctx*n_clients, 0, 1);
 
     int32_t n_total_prompt = 0;
     int32_t n_total_gen    = 0;
@@ -290,6 +290,7 @@ int main(int argc, char ** argv) {
             // all sequences have ended - clear the entire KV cache
             for (int i = 1; i <= n_clients; ++i) {
                 llama_memory_seq_rm(mem, i, -1, -1);
+
                 // but keep the system prompt
                 llama_memory_seq_cp(mem, 0, i, -1, -1);
             }
