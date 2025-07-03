@@ -26,27 +26,36 @@
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
 
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* m_cgraph, bool is_static,
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
+                             int context_size, int num_heads, int num_heads_kv, int head_size) :
+    GgmlOvDecoder::GgmlOvDecoder(node, cgraph, is_static, is_first_token) {
+    m_context_size = context_size;
+    m_num_heads = num_heads;
+    m_num_heads_kv = num_heads_kv;
+    m_head_size = head_size;
+}
+
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static,
                              bool is_first_token) :
-    m_cgraph(m_cgraph),
+    m_cgraph(cgraph),
     m_node(node),
     m_op_name(m_node ? std::string(m_node->name) : "NONE_OP"),
     m_is_static(is_static),
     m_is_first_token(is_first_token) {
+    // TODO avoid static
     static std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
-
     if (m_node) {
         set_input_output(m_node);
     } else {
         static bool printed = false;
         if (!printed && getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
-            print_tensor_address_map(m_cgraph);
+            print_tensor_address_map(cgraph);
             printed = true;
         }
 
         if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
             std::string filename = "cgraph.txt";
-            dump_cgraph(m_cgraph, filename);
+            dump_cgraph(cgraph, filename);
         }
 
         set_llm_params();
@@ -57,8 +66,8 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* m_cgr
             weight_created = true;
         }
 
-        for (int node_n = 0; node_n < m_cgraph->n_nodes; node_n++) {
-            auto* cur_node = m_cgraph->nodes[node_n];
+        for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+            auto* cur_node = cgraph->nodes[node_n];
             m_nodes.push_back(cur_node);
             set_input_output(cur_node);
         }
@@ -195,7 +204,7 @@ void GgmlOvDecoder::set_llm_params() {
         auto* node = m_cgraph->nodes[i];
         if (node->op == GGML_OP_VIEW && std::string(node->name) == "cache_k_l0 (view)") {
             auto* cache_k = node->src[0];
-            m_max_token_len = cache_k->ne[1];
+            m_context_size = cache_k->ne[1];
         } else if (node->op == GGML_OP_ROPE && std::string(node->name) == "Qcur-0") {
             m_head_size = node->ne[0];
             m_num_heads = node->ne[1];
@@ -210,30 +219,30 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
     if (std::string(src->name) == "inp_tokens" || std::string(src->name) == "inp_pos") {
         if (m_is_static) {
             if (m_is_first_token) {
-                input_shape = ov::PartialShape{ 1, 1, m_max_token_len };
+                input_shape = ov::PartialShape{1, 1, m_context_size};
             } else {
-                input_shape = ov::PartialShape{ 1, 1, 1 };
+                input_shape = ov::PartialShape{1, 1, 1};
             }
         } else {
-            input_shape = ov::PartialShape{ 1, 1, ov::Dimension(1, m_max_token_len) };
+            input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_context_size)};
         }
     } else if (std::string(src->name) == "KQ_mask") {
         if (m_is_static) {
             if (m_is_first_token) {
-                input_shape = ov::PartialShape{ 1, m_max_token_len, m_max_token_len };
+                input_shape = ov::PartialShape{1, m_context_size, m_context_size};
             } else {
-                input_shape = ov::PartialShape{ 1, 1, m_max_token_len };
+                input_shape = ov::PartialShape{1, 1, m_context_size};
             }
         } else {
-            auto max_mask_size = GGML_PAD(m_max_token_len, GGML_KQ_MASK_PAD);
-            input_shape = ov::PartialShape{ 1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size) };
+            auto max_mask_size = GGML_PAD(m_context_size, GGML_KQ_MASK_PAD);
+            input_shape = ov::PartialShape{1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size)};
         }
     } else if (std::string(src->name).find("cache_k") == 0) {
-        input_shape = ov::PartialShape{ m_max_token_len, m_num_heads_kv, m_head_size };
+        input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
     } else if (std::string(src->name).find("cache_v") == 0) {
-        input_shape = ov::PartialShape{ m_num_heads_kv, m_head_size, m_max_token_len };
+        input_shape = ov::PartialShape{m_num_heads_kv, m_head_size, m_context_size};
     } else {
-        input_shape = ov::PartialShape{ get_shape(src) };
+        input_shape = ov::PartialShape{get_shape(src)};
     }
     return input_shape;
 }
@@ -557,7 +566,8 @@ int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const {
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const {
     for (const auto& node : m_nodes) {
-        auto decoder = std::make_shared<GgmlOvDecoder>(node, m_cgraph, m_is_static, m_is_first_token);
+        auto decoder = std::make_shared<GgmlOvDecoder>(node, m_cgraph, m_is_static, m_is_first_token, m_context_size,
+                                                       m_num_heads, m_num_heads_kv, m_head_size);
         node_visitor(decoder);
     }
 }
