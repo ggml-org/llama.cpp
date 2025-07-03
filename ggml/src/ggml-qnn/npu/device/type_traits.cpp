@@ -320,7 +320,24 @@ void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, s
     const auto * src_ptr = reinterpret_cast<const npu_device_block_q8_0 *>(src);
     auto *       dst_ptr = ((hexagon::dequant_target_type *) dst);  // TODO: opt for aligned access
 
-    for (int i = 0; i < nb; i++) {
+    int i = 0;
+    for (; i + 1 < nb; i += 2) {
+        const auto & src0 = src_ptr[i];
+        const auto & src1 = src_ptr[i + 1];
+
+        HVX_Vector scales01 =
+            Q6_V_valign_VVR(Q6_Vh_vsplat_R(src1.d), Q6_Vh_vsplat_R(src0.d), hexagon::kBytesPerVector / 2);
+
+        HVX_Vector     qs     = load_dual_block_generic(src_ptr + i);
+        HVX_VectorPair qp0    = Q6_Wh_vunpack_Vb(qs);
+        HVX_Vector     q_lo   = Q6_Vhf_equals_Vh(Q6_V_lo_W(qp0));
+        HVX_Vector     result = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales01);
+
+        *reinterpret_cast<HVX_UVector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(result);
+        dst_ptr += qk * 2;
+    }
+
+    if (i < nb) {
         const auto & src = src_ptr[i];
         HVX_Vector   d   = Q6_Vh_vsplat_R(src.d);
 
