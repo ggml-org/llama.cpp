@@ -222,8 +222,7 @@ function PresetsManager({
   );
 }
 
-// Moved SETTING_SECTIONS inside component so it can access localConfig
-const createSettingSections = (
+const SETTING_SECTIONS = (
   localConfig: typeof CONFIG_DEFAULT,
   setLocalConfig: (config: typeof CONFIG_DEFAULT) => void
 ): SettingSection[] => [
@@ -458,7 +457,10 @@ export default function SettingDialog({
   const { showConfirm, showAlert } = useModals();
 
   // Generate sections with access to local state
-  const settingSections = createSettingSections(localConfig, setLocalConfig);
+  const SETTING_SECTIONS_GENERATED = SETTING_SECTIONS(
+    localConfig,
+    setLocalConfig
+  );
 
   const resetConfig = async () => {
     if (await showConfirm('Are you sure you want to reset all settings?')) {
@@ -526,7 +528,7 @@ export default function SettingDialog({
             aria-description="Settings sections"
             tabIndex={0}
           >
-            {settingSections.map((section, idx) => (
+            {SETTING_SECTIONS_GENERATED.map((section, idx) => (
               <button
                 key={idx}
                 className={classNames({
@@ -549,10 +551,10 @@ export default function SettingDialog({
           >
             <details className="dropdown">
               <summary className="btn bt-sm w-full m-1">
-                {settingSections[sectionIdx].title}
+                {SETTING_SECTIONS_GENERATED[sectionIdx].title}
               </summary>
               <ul className="menu dropdown-content bg-base-100 rounded-box z-[1] w-52 p-2 shadow">
-                {settingSections.map((section, idx) => (
+                {SETTING_SECTIONS_GENERATED.map((section, idx) => (
                   <div
                     key={idx}
                     className={classNames({
@@ -571,7 +573,7 @@ export default function SettingDialog({
 
           {/* Right panel, showing setting fields */}
           <div className="grow overflow-y-auto px-4">
-            {settingSections[sectionIdx].fields.map((field, idx) => {
+            {SETTING_SECTIONS_GENERATED[sectionIdx].fields.map((field, idx) => {
               const key = `${sectionIdx}-${idx}`;
               if (field.type === SettingInputType.SHORT_INPUT) {
                 return (
