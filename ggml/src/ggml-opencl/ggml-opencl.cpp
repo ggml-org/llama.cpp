@@ -5766,7 +5766,6 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     const cl_long nb02 = src0->nb[2];
     const cl_long nb03 = src0->nb[3];
 
-    const int ne11 = src1 ? src1->ne[1] : 0;
     const int ne12 = src1 ? src1->ne[2] : 0;
     const int ne13 = src1 ? src1->ne[3] : 0;
 
@@ -5827,25 +5826,22 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
     CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
     CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb01));
-    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb02));
-    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb03));
-    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne11));
-    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne12));
-    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne13));
-    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &nb11));
-    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb12));
-    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nb13));
-    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb1));
-    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb2));
-    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(cl_ulong), &nb3));
-    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(float),    &scale));
-    CL_CHECK(clSetKernelArg(kernel, 22, sizeof(float),    &max_bias));
-    CL_CHECK(clSetKernelArg(kernel, 23, sizeof(float),    &m0));
-    CL_CHECK(clSetKernelArg(kernel, 24, sizeof(float),    &m1));
-    CL_CHECK(clSetKernelArg(kernel, 25, sizeof(int),      &n_head_log2));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne13));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb11));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb12));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb13));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nb3));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(float),    &scale));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(float),    &max_bias));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(float),    &m0));
+    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(float),    &m1));
+    CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &n_head_log2));
 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
