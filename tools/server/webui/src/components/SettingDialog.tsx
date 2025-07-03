@@ -6,14 +6,17 @@ import StorageUtils from '../utils/storage';
 import { classNames, isBoolean, isNumeric, isString } from '../utils/misc';
 import {
   BeakerIcon,
+  BookmarkIcon,
   ChatBubbleOvalLeftEllipsisIcon,
   Cog6ToothIcon,
   FunnelIcon,
   HandRaisedIcon,
   SquaresPlusIcon,
+  TrashIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
 import { useModals } from './ModalProvider';
+import { SettingsPreset } from '../utils/types';
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
@@ -74,7 +77,156 @@ interface SettingSection {
 
 const ICON_CLASSNAME = 'w-4 h-4 mr-1 inline';
 
-const SETTING_SECTIONS: SettingSection[] = [
+// Presets Component
+function PresetsManager({
+  currentConfig,
+  onLoadPreset,
+}: {
+  currentConfig: typeof CONFIG_DEFAULT;
+  onLoadPreset: (config: typeof CONFIG_DEFAULT) => void;
+}) {
+  const [presets, setPresets] = useState<SettingsPreset[]>(() =>
+    StorageUtils.getPresets()
+  );
+  const [presetName, setPresetName] = useState('');
+  const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
+  const { showConfirm, showAlert } = useModals();
+
+  const handleSavePreset = async () => {
+    if (!presetName.trim()) {
+      await showAlert('Please enter a preset name');
+      return;
+    }
+
+    // Check if preset name already exists
+    const existingPreset = presets.find((p) => p.name === presetName.trim());
+    if (existingPreset) {
+      if (
+        await showConfirm(
+          `Preset "${presetName}" already exists. Do you want to overwrite it?`
+        )
+      ) {
+        StorageUtils.updatePreset(existingPreset.id, currentConfig);
+        setPresets(StorageUtils.getPresets());
+        setPresetName('');
+        await showAlert('Preset updated successfully');
+      }
+    } else {
+      const newPreset = StorageUtils.savePreset(
+        presetName.trim(),
+        currentConfig
+      );
+      setPresets([...presets, newPreset]);
+      setPresetName('');
+      await showAlert('Preset saved successfully');
+    }
+  };
+
+  const handleLoadPreset = async (preset: SettingsPreset) => {
+    if (
+      await showConfirm(
+        `Load preset "${preset.name}"? Current settings will be replaced.`
+      )
+    ) {
+      onLoadPreset(preset.config as typeof CONFIG_DEFAULT);
+      setSelectedPresetId(preset.id);
+    }
+  };
+
+  const handleDeletePreset = async (preset: SettingsPreset) => {
+    if (await showConfirm(`Delete preset "${preset.name}"?`)) {
+      StorageUtils.deletePreset(preset.id);
+      setPresets(presets.filter((p) => p.id !== preset.id));
+      if (selectedPresetId === preset.id) {
+        setSelectedPresetId(null);
+      }
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Save current settings as preset */}
+      <div className="form-control">
+        <label className="label">
+          <span className="label-text">Save current settings as preset</span>
+        </label>
+        <div className="join">
+          <input
+            type="text"
+            placeholder="Enter preset name"
+            className="input input-bordered join-item flex-1"
+            value={presetName}
+            onChange={(e) => setPresetName(e.target.value)}
+            onKeyPress={(e) => {
+              if (e.key === 'Enter') {
+                handleSavePreset();
+              }
+            }}
+          />
+          <button
+            className="btn btn-primary join-item"
+            onClick={handleSavePreset}
+          >
+            Save Preset
+          </button>
+        </div>
+      </div>
+
+      {/* List of saved presets */}
+      <div className="form-control">
+        <label className="label">
+          <span className="label-text">Saved presets</span>
+        </label>
+        {presets.length === 0 ? (
+          <div className="alert">
+            <span>No presets saved yet</span>
+          </div>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {presets.map((preset) => (
+              <div
+                key={preset.id}
+                className={classNames({
+                  'card bg-base-200 p-3': true,
+                  'ring-2 ring-primary': selectedPresetId === preset.id,
+                })}
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold">{preset.name}</h4>
+                    <p className="text-sm opacity-70">
+                      Created: {new Date(preset.createdAt).toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => handleLoadPreset(preset)}
+                    >
+                      Load
+                    </button>
+                    <button
+                      className="btn btn-sm btn-error"
+                      onClick={() => handleDeletePreset(preset)}
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Moved SETTING_SECTIONS inside component so it can access localConfig
+const createSettingSections = (
+  localConfig: typeof CONFIG_DEFAULT,
+  setLocalConfig: (config: typeof CONFIG_DEFAULT) => void
+): SettingSection[] => [
   {
     title: (
       <>
@@ -267,6 +419,26 @@ const SETTING_SECTIONS: SettingSection[] = [
       },
     ],
   },
+  {
+    title: (
+      <>
+        <BookmarkIcon className={ICON_CLASSNAME} />
+        Presets
+      </>
+    ),
+    fields: [
+      {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key for presets
+        component: () => (
+          <PresetsManager
+            currentConfig={localConfig}
+            onLoadPreset={setLocalConfig}
+          />
+        ),
+      },
+    ],
+  },
 ];
 
 export default function SettingDialog({
@@ -284,6 +456,9 @@ export default function SettingDialog({
     JSON.parse(JSON.stringify(config))
   );
   const { showConfirm, showAlert } = useModals();
+
+  // Generate sections with access to local state
+  const settingSections = createSettingSections(localConfig, setLocalConfig);
 
   const resetConfig = async () => {
     if (await showConfirm('Are you sure you want to reset all settings?')) {
@@ -351,7 +526,7 @@ export default function SettingDialog({
             aria-description="Settings sections"
             tabIndex={0}
           >
-            {SETTING_SECTIONS.map((section, idx) => (
+            {settingSections.map((section, idx) => (
               <button
                 key={idx}
                 className={classNames({
@@ -374,10 +549,10 @@ export default function SettingDialog({
           >
             <details className="dropdown">
               <summary className="btn bt-sm w-full m-1">
-                {SETTING_SECTIONS[sectionIdx].title}
+                {settingSections[sectionIdx].title}
               </summary>
               <ul className="menu dropdown-content bg-base-100 rounded-box z-[1] w-52 p-2 shadow">
-                {SETTING_SECTIONS.map((section, idx) => (
+                {settingSections.map((section, idx) => (
                   <div
                     key={idx}
                     className={classNames({
@@ -396,7 +571,7 @@ export default function SettingDialog({
 
           {/* Right panel, showing setting fields */}
           <div className="grow overflow-y-auto px-4">
-            {SETTING_SECTIONS[sectionIdx].fields.map((field, idx) => {
+            {settingSections[sectionIdx].fields.map((field, idx) => {
               const key = `${sectionIdx}-${idx}`;
               if (field.type === SettingInputType.SHORT_INPUT) {
                 return (
