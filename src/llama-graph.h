@@ -319,39 +319,6 @@ public:
     const llama_cross * cross = nullptr;
 };
 
-class llm_graph_input_mem_hybrid : public llm_graph_input_i {
-public:
-    llm_graph_input_mem_hybrid(
-            const llama_hparams & hparams,
-            const llama_cparams & cparams,
-            const llama_memory_hybrid_context * mctx) :
-        hparams(hparams),
-        cparams(cparams),
-        mctx(mctx) {
-    }
-    virtual ~llm_graph_input_mem_hybrid() = default;
-
-    void set_input(const llama_ubatch * ubatch) override;
-
-    ggml_tensor * s_copy; // I32 [kv_size]
-
-    ggml_tensor * get_k_idxs() const { return self_k_idxs; }
-    ggml_tensor * get_v_idxs() const { return self_v_idxs; }
-
-    ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
-
-    ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
-    ggml_tensor * self_v_idxs = nullptr; // I64 [n_batch]
-
-    ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch]
-    ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch]
-
-    const llama_hparams & hparams;
-    const llama_cparams & cparams;
-
-    const llama_memory_hybrid_context * mctx;
-};
-
 // TODO: remove this when ggml_scale_add is implemented
 class llm_graph_input_one : public llm_graph_input_i {
 public:
@@ -579,8 +546,6 @@ struct llm_graph_context {
     ggml_tensor * build_inp_pos_bucket_dec() const;
     ggml_tensor * build_pos_bias(ggml_tensor * pos_bucket, ggml_tensor * attn_rel_b) const;
 
-    llm_graph_input_mem_hybrid * build_inp_mem_hybrid() const;
-
     //
     // attention
     //
@@ -610,7 +575,7 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    llm_graph_input_attn_kv_unified * build_attn_inp_kv_unified() const;
+    llm_graph_input_attn_kv_unified * build_attn_inp_kv_unified(const llama_kv_cache_unified_context * mctx_cur = nullptr) const;
 
     ggml_tensor * build_attn(
             llm_graph_input_attn_kv_unified * inp,
@@ -625,7 +590,7 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    llm_graph_input_attn_kv_unified_iswa * build_attn_inp_kv_unified_iswa() const;
+    llm_graph_input_attn_kv_unified_iswa * build_attn_inp_kv_unified_iswa(const llama_kv_cache_unified_iswa_context * mctx_cur = nullptr) const;
 
     // note: if k_cur or v_cur are not provided, they will not be stored in the memory
     ggml_tensor * build_attn(
@@ -656,18 +621,6 @@ struct llm_graph_context {
                   float   kq_scale,
                     int   il) const;
 
-    ggml_tensor * build_attn(
-            llm_graph_input_mem_hybrid * inp,
-            ggml_cgraph * gf,
-            ggml_tensor * wo,
-            ggml_tensor * wo_b,
-            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
-            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
-            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
-            ggml_tensor * kq_b,
-            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
-                  float   kq_scale,
-                    int   il) const;
     //
     // recurrent
     //
@@ -690,18 +643,10 @@ struct llm_graph_context {
                 int32_t   rs_zero,
             const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 
-    llm_graph_input_rs * build_rs_inp() const;
+    llm_graph_input_rs * build_rs_inp(const llama_memory_recurrent_context * mctx_cur = nullptr) const;
 
     ggml_tensor * build_rs(
             llm_graph_input_rs * inp,
-            ggml_cgraph * gf,
-            ggml_tensor * s,
-                int32_t   state_size,
-                int32_t   n_seqs,
-            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
-
-    ggml_tensor * build_rs(
-            llm_graph_input_mem_hybrid * inp,
             ggml_cgraph * gf,
             ggml_tensor * s,
                 int32_t   state_size,

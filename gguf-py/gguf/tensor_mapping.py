@@ -279,6 +279,8 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
+            "model.layers.{bid}.pre_ff_layernorm",                           # jamba
+            "model.layers.{bid}.pre_moe_layernorm",                          # mini-jamba
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
             "model.layers.{bid}.pre_ff_layernorm",                           # bamba
@@ -301,6 +303,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate",                      # qwen2moe olmoe
             "transformer.decoder_layer.{bid}.router",           # Grok
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
+            "model.layers.{bid}.feed_forward.router",           # jamba
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
             "model.layers.{bid}.feed_forward.router",           # llama4
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
@@ -343,6 +346,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.gated_layers",                   # jina-bert-v2 (GEGLU)
             "encoder.layer.{bid}.mlp.up_gated_layer",                 # jina-v2-code (GEGLU)
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
+            "model.layers.{bid}.feed_forward.up_proj",                # jamba
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4
@@ -383,6 +387,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2 (split up/gate, no longer used)
             "transformer.h.{bid}.mlp.linear_1",           # refact
             "model.layers.{bid}.residual_mlp.w1",         # arctic
+            "model.layers.{bid}.feed_forward.gate_proj",  # jamba
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
             "language_model.model.layers.{bid}.feed_forward.gate_proj", # llama4
             "model.layers.{bid}.feed_forward.gate_proj",  # bamba
@@ -428,6 +433,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.ffn.proj_2",                    # openelm
             "model.layers.{bid}.residual_mlp.w2",                     # arctic
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
+            "model.layers.{bid}.feed_forward.down_proj",              # jamba
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4
@@ -549,38 +555,53 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_IN: (
-            "model.layers.{bid}.in_proj",
-            "backbone.layers.{bid}.mixer.in_proj",
-            "model.layers.{bid}.mamba.in_proj",     # bamba
+            "model.layers.{bid}.in_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.in_proj",  # mamba
+            "model.layers.{bid}.mamba.in_proj",     # jamba, bamba
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
-            "model.layers.{bid}.conv1d",
-            "backbone.layers.{bid}.mixer.conv1d",
-            "model.layers.{bid}.mamba.conv1d",     # bamba
+            "model.layers.{bid}.conv1d",           # mamba-hf
+            "backbone.layers.{bid}.mixer.conv1d",  # mamba
+            "model.layers.{bid}.mamba.conv1d",     # jamba, bamba
         ),
 
         MODEL_TENSOR.SSM_X: (
-            "model.layers.{bid}.x_proj",
-            "backbone.layers.{bid}.mixer.x_proj",
+            "model.layers.{bid}.x_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.x_proj",  # mamba
+            "model.layers.{bid}.mamba.x_proj",     # jamba
         ),
 
         MODEL_TENSOR.SSM_DT: (
-            "model.layers.{bid}.dt_proj",
-            "backbone.layers.{bid}.mixer.dt_proj",
-            "model.layers.{bid}.mamba.dt_proj",     # bamba
+            "model.layers.{bid}.dt_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.dt_proj",  # mamba
+            "model.layers.{bid}.mamba.dt_proj",     # jamba, bamba
+        ),
+
+        MODEL_TENSOR.SSM_DT_NORM: (
+            "model.layers.{bid}.mamba.dt_layernorm",  # jamba
         ),
 
         MODEL_TENSOR.SSM_A: (
-            "model.layers.{bid}.A_log",
-            "backbone.layers.{bid}.mixer.A_log",
-            "model.layers.{bid}.mamba.A_log",     # bamba
+            "model.layers.{bid}.A_log",           # mamba-hf
+            "backbone.layers.{bid}.mixer.A_log",  # mamba
+            "model.layers.{bid}.mamba.A_log",     # jamba, bamba
+        ),
+
+        MODEL_TENSOR.SSM_B_NORM: (
+            "model.layers.{bid}.mamba.b_layernorm",  # jamba
+            "model.layers.{bid}.mamba.B_layernorm",  # mini-jamba
+        ),
+
+        MODEL_TENSOR.SSM_C_NORM: (
+            "model.layers.{bid}.mamba.c_layernorm",  # jamba
+            "model.layers.{bid}.mamba.C_layernorm",  # mini-jamba
         ),
 
         MODEL_TENSOR.SSM_D: (
-            "model.layers.{bid}.D",
-            "backbone.layers.{bid}.mixer.D",
-            "model.layers.{bid}.mamba.D",     # bamba
+            "model.layers.{bid}.D",           # mamba-hf
+            "backbone.layers.{bid}.mixer.D",  # mamba
+            "model.layers.{bid}.mamba.D",     # jamba, bamba
         ),
 
         MODEL_TENSOR.SSM_NORM: (
@@ -589,9 +610,9 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_OUT: (
-            "model.layers.{bid}.out_proj",
-            "backbone.layers.{bid}.mixer.out_proj",
-            "model.layers.{bid}.mamba.out_proj",     # bamba
+            "model.layers.{bid}.out_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.out_proj",  # mamba
+            "model.layers.{bid}.mamba.out_proj",     # jamba, bamba
         ),
 
         MODEL_TENSOR.TIME_MIX_W0: (
