@@ -10268,7 +10268,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // TODO: support broadcast
                 // note: this was initially implemented in https://github.com/ggml-org/llama.cpp/pull/14449, but
                 //       the interface of ggml_flash_attn_ext() changed in https://github.com/ggml-org/llama.cpp/pull/14505
-                if (op->src[0]->ne[3] != 1) {
+                if (op->src[0]->ne[3] != 1 || (op->src[3] && op->src[3]->ne[2] != 1)) {
                     return false;
                 }
                 // It's straightforward to support different K/V dequant, but would
