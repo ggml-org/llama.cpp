@@ -27,7 +27,7 @@ OutputVector translate_permute(const NodeContext& context) {
     if (op_case == 1) {
         auto perm = argsort_descend(context.get_output_stride(0));
         res = std::make_shared<ov::op::v1::Transpose>(context.get_input(0),
-                                                      ov::op::v0::Constant::create(ov::element::i64, { 3 }, perm));
+                                                      ov::op::v0::Constant::create(ov::element::i64, {3}, perm));
     } else {
         auto src = context.get_input(0);
         auto attention_size = context.get_input("attention_size");
@@ -51,19 +51,16 @@ OutputVector translate_permute(const NodeContext& context) {
                 false);
         }
 
-        auto slice_start = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>(3, 0));
-        auto slice_step = ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>(3, 1));
-        std::shared_ptr<ov::Node> slice_end;
+        auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
+        auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
+        auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
+        std::shared_ptr<ov::Node> slice_axis;
         if (op_case == 2) {
-            slice_end = std::make_shared<ov::op::v0::Concat>(
-                ov::OutputVector{attention_size, ov::op::v0::Constant::create(ov::element::i64, {2}, {src_shape[1], src_shape[2]})},
-                0);
+            slice_axis = zero;
         } else {
-            slice_end = std::make_shared<ov::op::v0::Concat>(
-                ov::OutputVector{ov::op::v0::Constant::create(ov::element::i64, {2}, {src_shape[1], src_shape[0]}), attention_size},
-                0);
+            slice_axis = two;
         }
-        auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, slice_start, slice_end, slice_step);
+        auto src_slice = std::make_shared<ov::op::v8::Slice>(src_reshaped, zero, attention_size, one, slice_axis);
 
         if (op_case == 2) {
             res = std::make_shared<ov::op::v1::Transpose>(src_slice, ov::op::v0::Constant::create(ov::element::i64, {3}, {1, 0, 2}));
@@ -71,7 +68,7 @@ OutputVector translate_permute(const NodeContext& context) {
             res = src_slice;
         }
     }
-    return rename_outputs_with_suffix({ res }, context.get_name());
+    return rename_outputs_with_suffix({res}, context.get_name());
 }
 
 }  // namespace op
