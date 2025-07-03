@@ -69,7 +69,8 @@ public:
     llama_ubatch split_simple(uint32_t n_ubatch);
 
     // make ubatches of equal-length sequences sets
-    llama_ubatch split_equal(uint32_t n_ubatch);
+    // if sequential == true, the tokens in the ubatch will have increasing sequential sequence ids
+    llama_ubatch split_equal(uint32_t n_ubatch, bool sequential);
 
     // sequence-set-wise split - each ubatch contains a single sequence-set
     llama_ubatch split_seq(uint32_t n_ubatch);
@@ -111,6 +112,9 @@ private:
 
     using pos_set_t = std::set<llama_pos>;
     using seq_cpl_t = std::vector<bool>;
+
+    // helper flag to quickly determine if there are any coupled sequences in the batch
+    bool has_cpl;
 
     std::vector<pos_set_t> seq_pos; // seq_pos[s]: the set of positions in sequence s
     std::vector<seq_cpl_t> seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
