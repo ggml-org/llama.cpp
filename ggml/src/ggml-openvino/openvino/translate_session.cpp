@@ -9,6 +9,7 @@
 #include <openvino/pass/make_stateful.hpp>
 
 #include "input_model.hpp"
+#include "pass/fuse_to_sdpa.hpp"
 
 namespace ov {
 namespace frontend {
@@ -145,6 +146,8 @@ void TranslateSession::apply_transformations(const std::shared_ptr<Model>& model
         const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
         const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
         manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
+
+        manager.register_pass<pass::FuseToSDPA>();
     }
 
     manager.run_passes(model);

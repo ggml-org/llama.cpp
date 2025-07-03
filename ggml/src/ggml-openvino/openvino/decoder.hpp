@@ -65,7 +65,7 @@ public:
 
     virtual bool is_static() const = 0;
     virtual bool is_first_token() const = 0;
-    virtual int get_max_token_len() const = 0;
+    virtual int get_context_size() const = 0;
 };
 
 }  // namespace ggml

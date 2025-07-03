@@ -91,11 +91,16 @@ public:
     bool is_first_token() const {
         return m_decoder->is_first_token();
     }
-    int get_max_token_len() const {
-        return m_decoder->get_max_token_len();
-    }
 
-private:
+    int get_num_heads() const { return m_decoder->get_num_heads(); }
+
+    int get_num_heads_kv() const { return m_decoder->get_num_heads_kv(); }
+
+    int get_head_size() const { return m_decoder->get_head_size(); }
+
+    int get_context_size() const { return m_decoder->get_context_size(); }
+
+  private:
     std::shared_ptr<GgmlDecoder> m_decoder;
     std::shared_ptr<TensorMap>& m_tensor_map;
     TranslateSession* m_translate_session;
