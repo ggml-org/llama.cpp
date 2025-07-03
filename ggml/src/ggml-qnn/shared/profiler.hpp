@@ -59,5 +59,5 @@ inline scoped_timer make_scope_perf_timer(const char * format, ...) {
 #    define PROFILER_LOG_DEBUG(fmt, ...) GGML_LOG_INFO("[profiler]" fmt, __VA_ARGS__)
 #else
 #    define SCOPED_PERFORMANCE_TRACKER(fmt, ...) ((void) 0)
-#    define PROFILER_LOG_DEBUG(...)              GGML_LOG_DEBUG(__VA_ARGS__)
+#    define PROFILER_LOG_DEBUG(...)              ((void) 0)
 #endif
