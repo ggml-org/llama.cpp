@@ -1,6 +1,6 @@
 # Build llama.cpp locally
 
-The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](include/llama.h).
+The main product of this project is the `llama` library. Its C-style interface can be found in [include/llama.h](../include/llama.h).
 
 The project also includes many example programs and tools using the `llama` library. The examples range from simple, minimal code snippets to sophisticated sub-projects such as an OpenAI-compatible HTTP server.
 
@@ -573,6 +573,10 @@ cmake --build build --config Release
 WebGPU allows cross-platform access to the GPU from supported browsers. We utilize [Emscripten](https://emscripten.org/) to compile ggml's WebGPU backend to WebAssembly. Emscripten does not officially support WebGPU bindings yet, but Dawn currently maintains its own WebGPU bindings called emdawnwebgpu. 
 
 Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/src/emdawnwebgpu/) to download or build the emdawnwebgpu package (Note that it might be safer to build the emdawbwebgpu package locally, so that it stays in sync with the version of Dawn you have installed above). When building using CMake, the path to the emdawnwebgpu port file needs to be set with the flag `EMDAWNWEBGPU_DIR`.
+
+## IBM Z & LinuxONE
+
+To read documentation for how to build on IBM Z & LinuxONE, [click here](./build-s390x.md)
 
 ## Notes about GPU-accelerated backends
 

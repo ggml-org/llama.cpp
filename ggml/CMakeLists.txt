@@ -131,6 +131,7 @@ option(GGML_RVV              "ggml: enable rvv"              ON)
 option(GGML_RV_ZFH           "ggml: enable riscv zfh"        OFF)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
 option(GGML_VXE              "ggml: enable vxe"              ON)
+option(GGML_NNPA             "ggml: enable nnpa"             ON)
 
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
 set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
@@ -180,7 +181,6 @@ option(GGML_VULKAN_MEMORY_DEBUG             "ggml: enable Vulkan memory debug ou
 option(GGML_VULKAN_SHADER_DEBUG_INFO        "ggml: enable Vulkan shader debug info"           OFF)
 option(GGML_VULKAN_VALIDATE                 "ggml: enable Vulkan validation"                  OFF)
 option(GGML_VULKAN_RUN_TESTS                "ggml: run Vulkan tests"                          OFF)
-option(GGML_KOMPUTE                         "ggml: use Kompute"                               OFF)
 option(GGML_WEBGPU                          "ggml: use WebGPU"                                OFF)
 option(GGML_WEBGPU_DEBUG                    "ggml: enable WebGPU debug output"                OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
@@ -267,7 +267,6 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-cann.h
     include/ggml-cpp.h
     include/ggml-cuda.h
-    include/ggml-kompute.h
     include/ggml-opt.h
     include/ggml-metal.h
     include/ggml-rpc.h
@@ -362,6 +361,13 @@ write_basic_package_version_file(
     VERSION ${GGML_INSTALL_VERSION}
     COMPATIBILITY SameMajorVersion)
 
+target_compile_definitions(ggml-base PRIVATE
+    GGML_VERSION="${GGML_INSTALL_VERSION}"
+    GGML_COMMIT="${GGML_BUILD_COMMIT}"
+)
+message(STATUS "ggml version: ${GGML_INSTALL_VERSION}")
+message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
+
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ggml)
@@ -371,6 +377,8 @@ if (MSVC)
         /wd4005  # Macro redefinition
         /wd4244  # Conversion from one type to another type, possible loss of data
         /wd4267  # Conversion from 'size_t' to a smaller type, possible loss of data
+        /wd4305  # Conversion from 'type1' to 'type2', possible loss of data
+        /wd4566  # Conversion from 'char' to 'wchar_t', possible loss of data
         /wd4996  # Disable POSIX deprecation warnings
         /wd4702  # Unreachable code warnings
     )
@@ -390,4 +398,46 @@ if (MSVC)
     disable_msvc_warnings(ggml-cpu-skylakex)
     disable_msvc_warnings(ggml-cpu-icelake)
     disable_msvc_warnings(ggml-cpu-alderlake)
+
+    if (GGML_BUILD_EXAMPLES)
+        disable_msvc_warnings(common-ggml)
+        disable_msvc_warnings(common)
+
+        disable_msvc_warnings(mnist-common)
+        disable_msvc_warnings(mnist-eval)
+        disable_msvc_warnings(mnist-train)
+
+        disable_msvc_warnings(gpt-2-ctx)
+        disable_msvc_warnings(gpt-2-alloc)
+        disable_msvc_warnings(gpt-2-backend)
+        disable_msvc_warnings(gpt-2-sched)
+        disable_msvc_warnings(gpt-2-quantize)
+        disable_msvc_warnings(gpt-2-batched)
+
+        disable_msvc_warnings(gpt-j)
+        disable_msvc_warnings(gpt-j-quantize)
+
+        disable_msvc_warnings(magika)
+        disable_msvc_warnings(yolov3-tiny)
+        disable_msvc_warnings(sam)
+
+        disable_msvc_warnings(simple-ctx)
+        disable_msvc_warnings(simple-backend)
+    endif()
+
+    if (GGML_BUILD_TESTS)
+        disable_msvc_warnings(test-mul-mat)
+        disable_msvc_warnings(test-arange)
+        disable_msvc_warnings(test-backend-ops)
+        disable_msvc_warnings(test-cont)
+        disable_msvc_warnings(test-conv-transpose)
+        disable_msvc_warnings(test-conv-transpose-1d)
+        disable_msvc_warnings(test-conv1d)
+        disable_msvc_warnings(test-conv2d)
+        disable_msvc_warnings(test-conv2d-dw)
+        disable_msvc_warnings(test-customop)
+        disable_msvc_warnings(test-dup)
+        disable_msvc_warnings(test-opt)
+        disable_msvc_warnings(test-pool)
+    endif ()
 endif()

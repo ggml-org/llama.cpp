@@ -24,8 +24,6 @@ public:
     // this callback is used to filter out layers that should not be included in the cache
     using layer_filter_cb = std::function<bool(int32_t il)>;
 
-    using ubatch_heads = std::vector<uint32_t>;
-
     struct defrag_info {
         bool empty() const {
             return ids.empty();
@@ -36,6 +34,32 @@ public:
         //  - if ids[i] == i || ids[i] == ids.size(), then cell i is not moved
         std::vector<uint32_t> ids;
     };
+
+    // for each ubatch, create a slot_info that contains information about where the ubatch should be inserted in the
+    //   KV cells. for example, cell indices for each token, such that: token[i] -> goes to cells[idxs[i]]
+    struct slot_info {
+        // data for ggml_set_rows
+        using idx_vec_t = std::vector<uint32_t>;
+
+        idx_vec_t idxs;
+
+        uint32_t head() const {
+            return idxs.at(0);
+        }
+
+        bool empty() const {
+            return idxs.empty();
+        }
+
+        void clear() {
+            idxs.clear();
+        }
+
+        // TODO: implement
+        //std::vector<idx_vec_t> seq_idxs;
+    };
+
+    using slot_info_vec_t = std::vector<slot_info>;
 
     llama_kv_cache_unified(
             const llama_model &  model,
@@ -56,14 +80,14 @@ public:
     // llama_memory_i
     //
 
-    llama_memory_state_ptr init_batch(
-            const llama_batch & batch,
+    llama_memory_context_ptr init_batch(
+            llama_batch_allocr & balloc,
             uint32_t n_ubatch,
             bool embd_all) override;
 
-    llama_memory_state_ptr init_full() override;
+    llama_memory_context_ptr init_full() override;
 
-    llama_memory_state_ptr init_update(llama_context * lctx, bool optimize) override;
+    llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
 
     bool get_can_shift() const override;
 
@@ -102,29 +126,36 @@ public:
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il, uint32_t head_cur) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il, uint32_t head_cur) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
 
     //
     // preparation API
     //
 
-    // find places for the provided ubatches in the cache, returns the head locations
+    // find places for the provided ubatches in the cache, returns the slot infos
     // return empty vector on failure
-    ubatch_heads prepare(const std::vector<llama_ubatch> & ubatches);
+    slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches);
 
     bool update(llama_context * lctx, bool do_shift, const defrag_info & dinfo);
 
-    // return the cell position where we can insert the ubatch
-    // return -1 on failure to find a contiguous slot of kv cells
-    int32_t find_slot(const llama_ubatch & ubatch) const;
+    // find a slot of kv cells that can hold the ubatch
+    // if cont == true, then the slot must be continuous
+    // return empty slot_info on failure
+    slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
-    // emplace the ubatch context into slot: [head_cur, head_cur + ubatch.n_tokens)
-    void apply_ubatch(uint32_t head_cur, const llama_ubatch & ubatch);
+    // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
     //
-    // set_input API
+    // input API
     //
+
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+
+    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
+    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_k_shift   (ggml_tensor * dst) const;
@@ -157,7 +188,12 @@ private:
     // SWA
     const uint32_t n_swa = 0;
 
+    // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
+
+    // env: LLAMA_SET_ROWS (temporary)
+    // ref: https://github.com/ggml-org/llama.cpp/pull/14285
+    int supports_set_rows = false;
 
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
@@ -208,49 +244,46 @@ private:
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
 };
 
-class llama_kv_cache_unified_state : public llama_memory_state_i {
+class llama_kv_cache_unified_context : public llama_memory_context_i {
 public:
     // some shorthands
-    using ubatch_heads = llama_kv_cache_unified::ubatch_heads;
-    using defrag_info  = llama_kv_cache_unified::defrag_info;
+    using slot_info_vec_t = llama_kv_cache_unified::slot_info_vec_t;
+    using defrag_info     = llama_kv_cache_unified::defrag_info;
 
     // used for errors
-    llama_kv_cache_unified_state(llama_memory_status status);
+    llama_kv_cache_unified_context(llama_memory_status status);
 
-    // used to create a full-cache state
-    llama_kv_cache_unified_state(
+    // used to create a full-cache context
+    llama_kv_cache_unified_context(
             llama_kv_cache_unified * kv);
 
-    // used to create an update state
-    llama_kv_cache_unified_state(
+    // used to create an update context
+    llama_kv_cache_unified_context(
             llama_kv_cache_unified * kv,
             llama_context * lctx,
             bool do_shift,
             defrag_info dinfo);
 
-    // used to create a decode state from a batch
-    llama_kv_cache_unified_state(
+    // used to create a batch procesing context from a batch
+    llama_kv_cache_unified_context(
             llama_kv_cache_unified * kv,
-            llama_sbatch sbatch,
-            ubatch_heads heads,
+            slot_info_vec_t sinfos,
             std::vector<llama_ubatch> ubatches);
 
-    virtual ~llama_kv_cache_unified_state();
+    virtual ~llama_kv_cache_unified_context();
 
     //
-    // llama_memory_state_i
+    // llama_memory_context_i
     //
 
     bool next()  override;
     bool apply() override;
 
-    std::vector<int64_t> & out_ids() override;
-
     llama_memory_status  get_status() const override;
     const llama_ubatch & get_ubatch() const override;
 
     //
-    // llama_kv_cache_unified_state specific API
+    // llama_kv_cache_unified_context specific API
     //
 
     uint32_t get_n_kv() const;
@@ -260,11 +293,16 @@ public:
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
-    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, int32_t il) const;
-    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, int32_t il) const;
+    ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
+    ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
 
-    void set_input_k_shift(ggml_tensor * dst) const;
+    ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+    ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
 
+    void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
@@ -275,7 +313,7 @@ private:
     llama_context * lctx;
 
     //
-    // update state
+    // update context
     //
 
     bool do_shift = false;
@@ -283,15 +321,13 @@ private:
     defrag_info dinfo;
 
     //
-    // batch processing state
+    // batch processing context
     //
 
-    llama_sbatch sbatch;
+    // the index of the cur ubatch to process
+    size_t i_cur = 0;
 
-    // the index of the next ubatch to process
-    size_t i_next = 0;
-
-    ubatch_heads heads;
+    slot_info_vec_t sinfos;
 
     std::vector<llama_ubatch> ubatches;
 
@@ -302,7 +338,4 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
-
-    // the beginning of the current slot in which the ubatch will be inserted
-    int32_t head;
 };

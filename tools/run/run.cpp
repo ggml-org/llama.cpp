@@ -9,6 +9,9 @@
 #include <nlohmann/json.hpp>
 
 #if defined(_WIN32)
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
 #    include <windows.h>
 #    include <io.h>
 #else
@@ -939,17 +942,30 @@ static int apply_chat_template(const struct common_chat_templates * tmpls, Llama
 // Function to tokenize the prompt
 static int tokenize_prompt(const llama_vocab * vocab, const std::string & prompt,
                            std::vector<llama_token> & prompt_tokens, const LlamaData & llama_data) {
-    const bool is_first = llama_memory_seq_pos_max(llama_get_memory(llama_data.context.get()), 0) == 0;
-
-    const int n_prompt_tokens = -llama_tokenize(vocab, prompt.c_str(), prompt.size(), NULL, 0, is_first, true);
-    prompt_tokens.resize(n_prompt_tokens);
-    if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), is_first,
-                       true) < 0) {
-        printe("failed to tokenize the prompt\n");
+    const bool is_first = llama_memory_seq_pos_max(llama_get_memory(llama_data.context.get()), 0) == -1;
+    int n_tokens = prompt.size() + 2 * is_first;
+    prompt_tokens.resize(n_tokens);
+    n_tokens = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
+                              prompt_tokens.data(), prompt_tokens.size(),
+                              is_first, /*parse_special =*/true);
+    if (n_tokens == std::numeric_limits<int32_t>::min()) {
+        printe("tokenization failed: input too large\n");
         return -1;
     }
-
-    return n_prompt_tokens;
+    if (n_tokens < 0) {
+        prompt_tokens.resize(-n_tokens);
+        int check = llama_tokenize(vocab, prompt.c_str(), prompt.size(),
+                                   prompt_tokens.data(), prompt_tokens.size(),
+                                   is_first, /*parse_special =*/true);
+        if (check != -n_tokens) {
+            printe("failed to tokenize the prompt (size mismatch)\n");
+            return -1;
+        }
+        n_tokens = check;
+    } else {
+        prompt_tokens.resize(n_tokens);
+    }
+    return n_tokens;
 }
 
 // Check if we have enough space in the context to evaluate this batch

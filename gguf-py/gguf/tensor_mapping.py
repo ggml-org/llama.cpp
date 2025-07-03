@@ -477,7 +477,71 @@ class TensorNameMap:
             "encoder.layers.{bid}.norm2",                   # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_3",   # Grok
             "encoder.layer.{bid}.mlp.layernorm",            # jina-bert-v2
-            "encoder.layer.{bid}.layer_norm_2"              # jina-v2-code
+            "encoder.layer.{bid}.layer_norm_2",             # jina-v2-code
+        ),
+
+        MODEL_TENSOR.PER_LAYER_TOKEN_EMBD: (
+            "model.embed_tokens_per_layer",  # gemma3n
+        ),
+
+        MODEL_TENSOR.PER_LAYER_MODEL_PROJ: (
+            "model.per_layer_model_projection",  # gemma3n
+        ),
+
+        MODEL_TENSOR.PER_LAYER_PROJ_NORM: (
+            "model.per_layer_projection_norm",  # gemma3n
+        ),
+
+        MODEL_TENSOR.ALTUP_PROJ: (
+            "model.altup_projections",  # gemma3n
+        ),
+
+        MODEL_TENSOR.ALTUP_UNEMBD_PROJ: (
+            "model.altup_unembed_projections",  # gemma3n
+        ),
+
+        MODEL_TENSOR.PER_LAYER_INP_GATE: (
+            "model.layers.{bid}.per_layer_input_gate",  # gemma3n
+        ),
+
+        MODEL_TENSOR.PER_LAYER_PROJ: (
+            "model.layers.{bid}.per_layer_projection",  # gemma3n
+        ),
+
+        MODEL_TENSOR.PER_LAYER_POST_NORM: (
+            "model.layers.{bid}.post_per_layer_input_norm",  # gemma3n
+        ),
+
+        MODEL_TENSOR.ALTUP_CORRECT_COEF: (
+            "model.layers.{bid}.altup.correction_coefs",  # gemma3n
+        ),
+
+        MODEL_TENSOR.ALTUP_CORRECT_SCALE: (
+            "model.layers.{bid}.altup.correct_output_scale",  # gemma3n
+        ),
+
+        MODEL_TENSOR.ALTUP_PREDICT_COEF: (
+            "model.layers.{bid}.altup.prediction_coefs",  # gemma3n
+        ),
+
+        MODEL_TENSOR.ALTUP_ROUTER: (
+            "model.layers.{bid}.altup.modality_router",  # gemma3n
+        ),
+
+        MODEL_TENSOR.ALTUP_ROUTER_NORM: (
+            "model.layers.{bid}.altup.router_norm",  # gemma3n
+        ),
+
+        MODEL_TENSOR.LAUREL_L: (
+            "model.layers.{bid}.laurel.linear_left",  # gemma3n
+        ),
+
+        MODEL_TENSOR.LAUREL_R: (
+            "model.layers.{bid}.laurel.linear_right",  # gemma3n
+        ),
+
+        MODEL_TENSOR.LAUREL_POST_NORM: (
+            "model.layers.{bid}.laurel.post_laurel_norm",  # gemma3n
         ),
 
         MODEL_TENSOR.SSM_IN: (
@@ -508,6 +572,10 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_D: (
             "model.layers.{bid}.D",
             "backbone.layers.{bid}.mixer.D",
+        ),
+
+        MODEL_TENSOR.SSM_NORM: (
+            "backbone.layers.{bid}.mixer.norm",  # mamba2
         ),
 
         MODEL_TENSOR.SSM_OUT: (

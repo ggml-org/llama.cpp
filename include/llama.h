@@ -390,6 +390,7 @@ extern "C" {
         void * imatrix;                       // pointer to importance matrix data
         void * kv_overrides;                  // pointer to vector containing overrides
         void * tensor_types;                  // pointer to vector containing tensor types
+        void * prune_layers;                  // pointer to vector containing layer indices to prune
     } llama_model_quantize_params;
 
     typedef struct llama_logit_bias {
@@ -943,12 +944,14 @@ extern "C" {
     // Requires the context to have a memory.
     // For encode-decoder contexts, processes the batch using the decoder.
     // Positive return values does not mean a fatal error, but rather a warning.
-    // Upon non-zero return values, the memory state is restored to the state before this call
+    // Upon fatal-error or abort, the ubatches that managed to be been processed will remain in the memory state of the context
+    //   To handle this correctly, query the memory state using llama_memory_seq_pos_min() and llama_memory_seq_pos_max()
+    // Upon other return values, the memory state is restored to the state before this call
     //    0 - success
     //    1 - could not find a KV slot for the batch (try reducing the size of the batch or increase the context)
-    //    2 - aborted
+    //    2 - aborted     (processed ubatches will remain in the context's memory)
     //   -1 - invalid input batch
-    // < -1 - error
+    // < -1 - fatal error (processed ubatches will remain in the context's memory)
     LLAMA_API int32_t llama_decode(
             struct llama_context * ctx,
               struct llama_batch   batch);
@@ -1044,6 +1047,7 @@ extern "C" {
 
     LLAMA_API bool llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_eos(const struct llama_vocab * vocab);
+    LLAMA_API bool llama_vocab_get_add_sep(const struct llama_vocab * vocab);
 
     LLAMA_API llama_token llama_vocab_fim_pre(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_fim_suf(const struct llama_vocab * vocab);
@@ -1087,6 +1091,7 @@ extern "C" {
     /// @param tokens The tokens pointer must be large enough to hold the resulting tokens.
     /// @return Returns the number of tokens on success, no more than n_tokens_max
     /// @return Returns a negative number on failure - the number of tokens that would have been returned
+    /// @return Returns INT32_MIN on overflow (e.g., tokenization result size exceeds int32_t limit)
     /// @param add_special Allow to add BOS and EOS tokens if model is configured to do so.
     /// @param parse_special Allow tokenizing special and/or control tokens which otherwise are not exposed and treated
     ///                      as plaintext. Does not insert a leading space.
