@@ -328,10 +328,9 @@ void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, s
         HVX_Vector scales01 =
             Q6_V_valign_VVR(Q6_Vh_vsplat_R(src1.d), Q6_Vh_vsplat_R(src0.d), hexagon::kBytesPerVector / 2);
 
-        HVX_Vector     qs     = load_dual_block_generic(src_ptr + i);
-        HVX_VectorPair qp0    = Q6_Wh_vunpack_Vb(qs);
-        HVX_Vector     q_lo   = Q6_Vhf_equals_Vh(Q6_V_lo_W(qp0));
-        HVX_Vector     result = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales01);
+        HVX_Vector qs     = load_dual_block_generic(src_ptr + i);
+        HVX_Vector q_lo   = Q6_Vhf_equals_Vh(Q6_V_lo_W(Q6_Wh_vunpack_Vb(qs)));
+        HVX_Vector result = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales01);
 
         *reinterpret_cast<HVX_UVector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(result);
         dst_ptr += qk * 2;
@@ -339,16 +338,15 @@ void dequantize_row_q8_0(const void * src, hexagon::dequant_target_type * dst, s
 
     if (i < nb) {
         const auto & src = src_ptr[i];
-        HVX_Vector   d   = Q6_Vh_vsplat_R(src.d);
 
-        HVX_Vector     q_lo = load_block_generic(src);
-        HVX_VectorPair q    = Q6_Wh_vunpack_Vb(q_lo);
-        q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(q));
-        q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, d);
+        HVX_Vector scales = Q6_Vh_vsplat_R(src.d);
+
+        HVX_Vector q_lo   = load_block_generic(src);
+        q_lo              = Q6_Vhf_equals_Vh(Q6_V_lo_W(Q6_Wh_vunpack_Vb(q_lo)));
+        HVX_Vector result = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales);
         hexagon::q6op_vstu_variable_ARV<hexagon::kBytesPerVector / 2>(
             dst_ptr,
-            Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
-        dst_ptr += qk;
+            Q6_Vhf_equals_Vqf16(result));  // TODO: opt the store
     }
 }
 

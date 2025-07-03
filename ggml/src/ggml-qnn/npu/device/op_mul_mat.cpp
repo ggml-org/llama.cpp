@@ -41,10 +41,10 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
 
     if (total_planes >= params->get_thread_count()) {
         start_end_plane = params->get_work_slice(total_planes);
-    } else if (dst->get_ne(1) >= params->get_thread_count()) {
-        start_end_row = params->get_work_slice(dst->get_ne(1));
-    } else {
+    } else if (dst->get_ne(0) >= params->get_thread_count()) {
         start_end_element = params->get_work_slice(dst->get_ne(0));
+    } else {
+        start_end_row = params->get_work_slice(dst->get_ne(1));
     }
 
     if (start_end_plane.second <= start_end_plane.first || start_end_row.second <= start_end_row.first ||
@@ -62,19 +62,17 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
     size_t          src0_plane_cache_size      = 0;
     uint8_t *       src0_plane_cache_ptr       = nullptr;
     const uint8_t * last_cached_plane_ptr      = nullptr;
-    bool            is_mem_cache               = false;
     if constexpr (_IsQuantized) {
         src0_plane_slice_row_count =
             std::min(params->get_vtcm_quota_size() / src0_actual_row_size, src0_plane_slice_row_count);
         src0_plane_cache_size = src0_actual_row_size * src0_plane_slice_row_count;
         src0_plane_cache_ptr  = params->get_vtcm_cache(src0_plane_cache_size);
         if (src0_plane_cache_ptr == nullptr) {
-            DEVICE_LOG_DEBUG(
+            DEVICE_LOG_ERROR(
                 "mul_mat_impl: failed to get VTCM cache for src0, size: %zu, src0_plane_slice_row_count: %zu, "
                 "src0_actual_row_size: %zu, will fallback to mem cache\n",
                 src0_plane_cache_size, src0_plane_slice_row_count, src0_actual_row_size);
-            src0_plane_cache_ptr = params->get_mem_cache(src0_plane_cache_size);
-            is_mem_cache         = true;
+            return;
         }
     }
 
@@ -95,7 +93,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         return;
     }
 
-    const bool      should_fetch_src0_row = !src0_plane_cache_ptr || is_mem_cache;
+    constexpr bool  should_fetch_src0_row = !_IsQuantized;
     const uint8_t * src0_ptr              = src0->get_read_buffer();
     const uint8_t * src1_ptr              = src1->get_read_buffer();
     for (int64_t ip = start_end_plane.first; ip < start_end_plane.second; ip++) {
@@ -143,7 +141,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                 int64_t i0       = 0;
                 for (; i0 + 1 < (int64_t) actual_row_count; i0 += 2) {
                     auto * src0_row = src0_plane + i0 * src0_actual_row_size;
-                    if (should_fetch_src0_row) {
+                    if constexpr (should_fetch_src0_row) {
                         hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row0_bytes);
                     }
 
