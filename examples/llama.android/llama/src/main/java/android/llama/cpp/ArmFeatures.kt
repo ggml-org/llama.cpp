@@ -78,13 +78,15 @@ object ArmFeaturesMapper {
     /**
      * Gets the feature support data for UI display.
      */
-    fun getFeatureDisplayData(tier: LLamaTier?): List<DisplayItem> =
-        getSupportedFeatures(tier).let { flags ->
-            allFeatures.mapIndexed { index, feature ->
-                DisplayItem(
-                    feature = feature,
-                    isSupported = flags?.getOrElse(index) { false } == true
-                )
+    fun getFeatureDisplayData(tier: LLamaTier?): List<DisplayItem>? =
+        getSupportedFeatures(tier).let { optFlags ->
+            optFlags?.let { flags ->
+                allFeatures.mapIndexed { index, feature ->
+                    DisplayItem(
+                        feature = feature,
+                        isSupported = flags.getOrElse(index) { false }
+                    )
+                }
             }
         }
 }
