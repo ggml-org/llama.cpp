@@ -7,7 +7,7 @@ import android.llama.cpp.TierDetection
  * Internal factory to create [InferenceEngine] and [TierDetection]
  */
 internal object InferenceEngineFactory {
-    fun createInstance(context: Context) = InferenceEngineLoader.createInstance(context)
+    fun getInstance(context: Context) = InferenceEngineLoader.getInstance(context)
 
     fun getTierDetection(context: Context): TierDetection = TierDetectionImpl(context)
 }

@@ -48,22 +48,22 @@ internal class InferenceEngineImpl private constructor(
 
         /**
          * Create [InferenceEngineImpl] instance with specific tier
+         *
+         * @throws IllegalArgumentException if tier's library name is invalid
+         * @throws UnsatisfiedLinkError if library failed to load
          */
-        internal fun createWithTier(tier: LLamaTier): InferenceEngineImpl? {
-            if (initialized) {
-                Log.w(TAG, "LLamaAndroid already initialized")
-                return null
-            }
+        internal fun createWithTier(tier: LLamaTier): InferenceEngineImpl {
+            assert(!initialized) { "Inference Engine has already been initialized!" }
 
-            try {
+            require(tier.libraryName.isNotBlank()) { "Unexpected library: ${tier.libraryName}" }
+
+            return try {
                 Log.i(TAG, "Instantiating InferenceEngineImpl w/ ${tier.libraryName}")
-                val instance = InferenceEngineImpl(tier)
-                initialized = true
-                return instance
+                InferenceEngineImpl(tier).also { initialized = true }
 
             } catch (e: UnsatisfiedLinkError) {
                 Log.e(TAG, "Failed to load ${tier.libraryName}", e)
-                return null
+                throw e
             }
         }
     }

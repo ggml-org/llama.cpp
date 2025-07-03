@@ -12,7 +12,7 @@ object KleidiLlama {
      * Create an inference engine instance with automatic tier detection.
      */
     fun createInferenceEngine(context: Context) =
-        InferenceEngineFactory.createInstance(context)
+        InferenceEngineFactory.getInstance(context)
 
     /**
      * Get tier detection information for debugging/settings.

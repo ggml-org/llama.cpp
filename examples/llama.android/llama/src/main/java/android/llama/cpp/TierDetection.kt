@@ -13,6 +13,7 @@ interface TierDetection {
  * Higher tiers provide better performance on supported hardware.
  */
 enum class LLamaTier(val rawValue: Int, val libraryName: String, val description: String) {
+    NONE(404, "", "No valid Arm optimization available!"),
     T0(0, "llama_android_t0", "ARMv8-a baseline with SIMD"),
     T1(1, "llama_android_t1", "ARMv8.2-a with DotProd"),
     T2(2, "llama_android_t2", "ARMv8.6-a with DotProd + I8MM"),

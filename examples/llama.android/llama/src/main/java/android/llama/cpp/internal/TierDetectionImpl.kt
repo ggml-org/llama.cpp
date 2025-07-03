@@ -9,7 +9,7 @@ import android.llama.cpp.TierDetection
  */
 internal class TierDetectionImpl(private val context: Context) : TierDetection {
     override val detectedTier: LLamaTier?
-        get() = InferenceEngineLoader.detectedTier
+        get() = InferenceEngineLoader.getDetectedTier(context)
 
     override fun clearCache() = InferenceEngineLoader.clearCache(context)
 }

@@ -65,14 +65,14 @@ object ArmFeaturesMapper {
      * Maps a LLamaTier to its supported ARM features.
      * Returns a list of booleans where each index corresponds to allFeatures.
      */
-    fun getSupportedFeatures(tier: LLamaTier?): List<Boolean> =
+    fun getSupportedFeatures(tier: LLamaTier?): List<Boolean>? =
         when (tier) {
+            LLamaTier.NONE, null -> null                              // No tier detected
             LLamaTier.T0 -> listOf(true, false, false, false, false)  // ASIMD only
             LLamaTier.T1 -> listOf(true, true, false, false, false)   // ASIMD + DOTPROD
             LLamaTier.T2 -> listOf(true, true, true, false, false)    // ASIMD + DOTPROD + I8MM
             LLamaTier.T3 -> listOf(true, true, true, true, false)     // ASIMD + DOTPROD + I8MM + SVE
             // TODO-han.yin: implement T4 once obtaining an Android device with SME!
-            null -> listOf(false, false, false, false, false)         // No tier detected
         }
 
     /**
@@ -83,7 +83,7 @@ object ArmFeaturesMapper {
             allFeatures.mapIndexed { index, feature ->
                 DisplayItem(
                     feature = feature,
-                    isSupported = flags.getOrElse(index) { false }
+                    isSupported = flags?.getOrElse(index) { false } == true
                 )
             }
         }
