@@ -563,43 +563,58 @@ void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecode
 }
 
 const std::string& GgmlOvDecoder::get_op_type() const {
-    static const std::map<ggml_op, std::string> opTypeMap = {
-        {GGML_OP_ACC, "GGML_OP_ACC"},           {GGML_OP_ADD, "GGML_OP_ADD"},
-        {GGML_OP_ADD1, "GGML_OP_ADD1"},         {GGML_OP_CONT, "GGML_OP_CONT"},
-        {GGML_OP_CPY, "GGML_OP_CPY"},           {GGML_OP_DIV, "GGML_OP_DIV"},
-        {GGML_OP_DUP, "GGML_OP_DUP"},           {GGML_OP_GET_ROWS, "GGML_OP_GET_ROWS"},
-        {GGML_OP_MUL, "GGML_OP_MUL"},           {GGML_OP_MUL_MAT, "GGML_OP_MUL_MAT"},
-        {GGML_OP_PERMUTE, "GGML_OP_PERMUTE"},   {GGML_OP_RESHAPE, "GGML_OP_RESHAPE"},
-        {GGML_OP_RMS_NORM, "GGML_OP_RMS_NORM"}, {GGML_OP_ROPE, "GGML_OP_ROPE"},
-        {GGML_OP_SCALE, "GGML_OP_SCALE"},       {GGML_OP_SOFT_MAX, "GGML_OP_SOFT_MAX"},
-        {GGML_OP_SUB, "GGML_OP_SUB"},           {GGML_OP_TRANSPOSE, "GGML_OP_TRANSPOSE"},
-        {GGML_OP_UNARY, "GGML_OP_UNARY"},       {GGML_OP_VIEW, "GGML_OP_VIEW"}};
-    static const std::map<ggml_unary_op, std::string> unaryOpTypeMap = {
-        {GGML_UNARY_OP_ABS, "GGML_UNARY_OP_ABS"},
-        {GGML_UNARY_OP_SGN, "GGML_UNARY_OP_SGN"},
-        {GGML_UNARY_OP_NEG, "GGML_UNARY_OP_NEG"},
-        {GGML_UNARY_OP_STEP, "GGML_UNARY_OP_STEP"},
-        {GGML_UNARY_OP_TANH, "GGML_UNARY_OP_TANH"},
-        {GGML_UNARY_OP_ELU, "GGML_UNARY_OP_ELU"},
-        {GGML_UNARY_OP_RELU, "GGML_UNARY_OP_RELU"},
-        {GGML_UNARY_OP_SIGMOID, "GGML_UNARY_OP_SIGMOID"},
-        {GGML_UNARY_OP_GELU, "GGML_UNARY_OP_GELU"},
-        {GGML_UNARY_OP_GELU_QUICK, "GGML_UNARY_OP_GELU_QUICK"},
-        {GGML_UNARY_OP_SILU, "GGML_UNARY_OP_SILU"},
-        {GGML_UNARY_OP_HARDSWISH, "GGML_UNARY_OP_HARDSWISH"},
+    static const std::map<ggml_op, std::string> ops = {
+        {GGML_OP_ACC,       "GGML_OP_ACC"      },
+        {GGML_OP_ADD,       "GGML_OP_ADD"      },
+        {GGML_OP_ADD1,      "GGML_OP_ADD1"     },
+        {GGML_OP_CONT,      "GGML_OP_CONT"     },
+        {GGML_OP_CPY,       "GGML_OP_CPY"      },
+        {GGML_OP_DIV,       "GGML_OP_DIV"      },
+        {GGML_OP_DUP,       "GGML_OP_DUP"      },
+        {GGML_OP_GET_ROWS,  "GGML_OP_GET_ROWS" },
+        {GGML_OP_MUL,       "GGML_OP_MUL"      },
+        {GGML_OP_MUL_MAT,   "GGML_OP_MUL_MAT"  },
+        {GGML_OP_PERMUTE,   "GGML_OP_PERMUTE"  },
+        {GGML_OP_RESHAPE,   "GGML_OP_RESHAPE"  },
+        {GGML_OP_RMS_NORM,  "GGML_OP_RMS_NORM" },
+        {GGML_OP_ROPE,      "GGML_OP_ROPE"     },
+        {GGML_OP_SCALE,     "GGML_OP_SCALE"    },
+        {GGML_OP_SOFT_MAX,  "GGML_OP_SOFT_MAX" },
+        {GGML_OP_SUB,       "GGML_OP_SUB"      },
+        {GGML_OP_TRANSPOSE, "GGML_OP_TRANSPOSE"},
+        {GGML_OP_VIEW,      "GGML_OP_VIEW"     }
+    };
+    static const std::map<ggml_unary_op, std::string> unary_ops = {
+        {GGML_UNARY_OP_ABS,         "GGML_UNARY_OP_ABS"        },
+        {GGML_UNARY_OP_SGN,         "GGML_UNARY_OP_SGN"        },
+        {GGML_UNARY_OP_NEG,         "GGML_UNARY_OP_NEG"        },
+        {GGML_UNARY_OP_STEP,        "GGML_UNARY_OP_STEP"       },
+        {GGML_UNARY_OP_TANH,        "GGML_UNARY_OP_TANH"       },
+        {GGML_UNARY_OP_ELU,         "GGML_UNARY_OP_ELU"        },
+        {GGML_UNARY_OP_RELU,        "GGML_UNARY_OP_RELU"       },
+        {GGML_UNARY_OP_SIGMOID,     "GGML_UNARY_OP_SIGMOID"    },
+        {GGML_UNARY_OP_GELU,        "GGML_UNARY_OP_GELU"       },
+        {GGML_UNARY_OP_GELU_QUICK,  "GGML_UNARY_OP_GELU_QUICK" },
+        {GGML_UNARY_OP_SILU,        "GGML_UNARY_OP_SILU"       },
+        {GGML_UNARY_OP_HARDSWISH,   "GGML_UNARY_OP_HARDSWISH"  },
         {GGML_UNARY_OP_HARDSIGMOID, "GGML_UNARY_OP_HARDSIGMOID"},
-        {GGML_UNARY_OP_EXP, "GGML_UNARY_OP_EXP"},
-        {GGML_UNARY_OP_COUNT, "GGML_UNARY_OP_COUNT"}};
-    auto it = opTypeMap.find(m_node->op);
-    if (it != opTypeMap.end()) {
-        if (it->first == GGML_OP_UNARY) {
-            auto unary_it = unaryOpTypeMap.find(ggml_get_unary_op(m_node));
-            if (unary_it != unaryOpTypeMap.end()) {
-                return unary_it->second;
-            }
-        }
-        return it->second;
+        {GGML_UNARY_OP_EXP,         "GGML_UNARY_OP_EXP"        },
+        {GGML_UNARY_OP_COUNT,       "GGML_UNARY_OP_COUNT"      }
+    };
+    static const std::map<ggml_glu_op, std::string> glu_ops = {
+        {GGML_GLU_OP_SWIGLU, "GGML_GLU_OP_SWIGLU"},
+        {GGML_GLU_OP_GEGLU,  "GGML_GLU_OP_GEGLU" },
+        {GGML_GLU_OP_REGLU,  "GGML_GLU_OP_REGLU" }
+    };
+
+    switch (m_node->op) {
+        case GGML_OP_UNARY:
+            return unary_ops.at(ggml_get_unary_op(m_node));
+        case GGML_OP_GLU:
+            return glu_ops.at(ggml_get_glu_op(m_node));
+        default:
+            return ops.at(m_node->op);
     }
-    static const std::string unknown_op = "UNKNOWN_OP";
+    static const std::string unknown_op = "UNKNOWN_GGML_OP";
     return unknown_op;
 }
