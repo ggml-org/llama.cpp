@@ -7,10 +7,18 @@
 #include "llama-mmap.h"
 #include "llama-model.h"
 
+#include "ggml.h"
+
+#include <cmath>
 #include <cinttypes>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 //
 // llama_context
@@ -693,6 +701,7 @@ llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, 
     }
 
     auto res = graph_build(ctx_compute.get(), gf, ubatch, gtype, mctx);
+    res->graph = gf; // Store the graph pointer in the result object
     if (!res) {
         LLAMA_LOG_ERROR("%s: failed to build graph\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -700,6 +709,9 @@ llm_graph_result_ptr llama_context::process_ubatch(const llama_ubatch & ubatch, 
     }
 
     // LLAMA_LOG_INFO("graph build time: %.3f ms (%d nodes, %d leafs)\n", (ggml_time_us() - t_start_us)/1000.0, gf->n_nodes, gf->n_leafs);
+
+    // Dump computation graph for visualization
+    // ggml_graph_dump_dot(gf, NULL, "llama.dot");
 
     if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
         LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
@@ -1041,11 +1053,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
                 case GGML_STATUS_SUCCESS:      GGML_ABORT("should not happen");
             }
         }
-
-        // plot the computation graph in dot format (for debugging purposes)
-        //if (n_past%100 == 0) {
-        //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
-        //}
 
         auto * t_logits = res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;

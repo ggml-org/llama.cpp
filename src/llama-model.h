@@ -258,6 +258,11 @@ struct llama_layer {
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b     = nullptr;
 
+    // mamba norm (PLaMo-2)
+    struct ggml_tensor * ssm_dt_norm = nullptr;
+    struct ggml_tensor * ssm_b_norm  = nullptr;
+    struct ggml_tensor * ssm_c_norm  = nullptr;
+
     // rwkv
     struct ggml_tensor * time_mix_w1         = nullptr;
     struct ggml_tensor * time_mix_w2         = nullptr;
