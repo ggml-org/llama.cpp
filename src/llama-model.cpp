@@ -8234,13 +8234,8 @@ struct llm_build_plamo2 : public llm_graph_context {
             // ggml_graph_add_node(gf, model.layers[il].attn_norm);
             // cb(model.layers[il].attn_norm, "attn_norm", il);
 
-            ggml_graph_add_node(gf, model.layers[il].attn_norm);
-            cb(model.layers[il].attn_norm, "attn_norm_weight", il);
-
             // pre_mixer_norm
-            cb(inpL, "attn_pre_norm_input", il);
             cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-            cb(cur, "attn_pre_norm", il);
 
             // check if this layer is Mamba or Attention
             bool is_mamba_layer = hparams.is_recurrent(il);
@@ -8280,6 +8275,10 @@ struct llm_build_plamo2 : public llm_graph_context {
             cur = ggml_add(ctx0, cur, residual);
 
             inpL = cur;
+
+            if (il >= 2) {
+                break;
+            }
         }
 
         cur = inpL;
@@ -8445,17 +8444,28 @@ private:
         ggml_tensor * zx = build_lora_mm(model.layers[il].ssm_in, cur);
         cb(zx, "mamba_in_proj", il);
 
+        zx = ggml_permute(ctx0, zx, 0, 2, 1, 3);
+        zx = ggml_reshape_4d(ctx0, zx, 2 * hparams.ssm_head_dim, hparams.ssm_num_heads, n_seq_tokens, n_seqs);
+        cb(zx, "mamba_in_proj_out", il);
+
         // split into z and x
         // => {d_inner, n_seq_tokens, n_seqs}
-        ggml_tensor * x = ggml_view_3d(ctx0, zx, d_inner, zx->ne[1], zx->ne[2], zx->nb[1], zx->nb[2], 0);
-        ggml_tensor * z = ggml_view_3d(ctx0, zx, d_inner, zx->ne[1], zx->ne[2], zx->nb[1], zx->nb[2], d_inner*ggml_element_size(zx));
+        ggml_tensor * x = ggml_view_4d(ctx0, zx, hparams.ssm_head_dim, zx->ne[1], zx->ne[2], zx->ne[3], zx->nb[1], zx->nb[2], zx->nb[3], hparams.ssm_head_dim*ggml_element_size(zx));
+        x = ggml_cont(ctx0, x);
+        x = ggml_reshape_4d(ctx0, x, hparams.ssm_head_dim * hparams.ssm_num_heads, 1, n_seq_tokens, n_seqs);
+        x = ggml_permute(ctx0, x, 0, 2, 1, 3);
         cb(x, "mamba_x_split", il);
+        ggml_tensor * z = ggml_view_4d(ctx0, zx, hparams.ssm_head_dim, zx->ne[1], zx->ne[2], zx->ne[3], zx->nb[1], zx->nb[2], zx->nb[3], 0);
+        z = ggml_cont(ctx0, z);
+        z = ggml_reshape_4d(ctx0, z, hparams.ssm_head_dim * hparams.ssm_num_heads, 1, n_seq_tokens, n_seqs);
+        z = ggml_permute(ctx0, z, 0, 2, 1, 3);
         cb(z, "mamba_z_split", il);
 
         // conv1d
         {
             // => {d_conv - 1 + n_seq_tokens, d_inner, n_seqs}
             ggml_tensor * conv_x = ggml_concat(ctx0, conv, ggml_transpose(ctx0, x), 0);
+            cb(conv_x, "mamba_conv1d_input", il);
 
             // copy last (d_conv - 1) columns back into the state cache
             ggml_tensor * last_conv = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_inner, n_seqs,
@@ -8471,9 +8481,6 @@ private:
             x = ggml_ssm_conv(ctx0, conv_x, model.layers[il].ssm_conv1d);
             cb(x, "mamba_conv1d", il);
 
-            // bias
-            // x = ggml_add(ctx0, x, model.layers[il].ssm_conv1d_b);  // PLaMo-2 does not use bias here
-
             x = ggml_silu(ctx0, x);
             cb(x, "mamba_conv1d_silu", il);
         }
@@ -8486,9 +8493,9 @@ private:
 
             // split into dt, B, C
             const int64_t dt_dim = std::max(64, int(hparams.n_embd / 16));
-            ggml_tensor * dt = ggml_view_3d(ctx0, x_bcdt, dt_dim, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], 0);
-            ggml_tensor * C  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*dt_dim);
-            ggml_tensor * B  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*(dt_dim + d_state));
+            ggml_tensor * B = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], 0);
+            ggml_tensor * C  = ggml_view_3d(ctx0, x_bcdt, d_state, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*d_state);
+            ggml_tensor * dt  = ggml_view_3d(ctx0, x_bcdt, dt_dim, n_seq_tokens, n_seqs, x_bcdt->nb[1], x_bcdt->nb[2], ggml_element_size(x_bcdt)*(2*d_state));
             cb(B, "mamba_B_raw", il);
             cb(C, "mamba_C_raw", il);
             cb(dt, "mamba_dt_raw", il);
@@ -8503,15 +8510,17 @@ private:
 
             // dt_proj: {dt_rank, d_inner} @ {dt_rank, n_seq_tokens, n_seqs} => {d_inner, n_seq_tokens, n_seqs}
             dt = build_lora_mm(model.layers[il].ssm_dt, dt);
-            dt = ggml_add(ctx0, dt, model.layers[il].ssm_dt_b);
             cb(dt, "mamba_dt_proj", il);
 
             // This is corresponding to the broadcast_to operation in ssd_update_state() of the originall code
-            ggml_tensor * dt_expanded = ggml_new_tensor_2d(ctx0, dt->type, d_inner, n_seq_tokens);
+            ggml_tensor * dt_expanded = ggml_new_tensor_2d(ctx0, dt->type, dt_dim * hparams.ssm_num_heads, dt->ne[1]);
             dt = ggml_repeat(ctx0, dt, dt_expanded);
+            cb(dt, "mamba_dt_expanded", il);
+
             ggml_tensor * A_expanded = ggml_new_tensor_2d(ctx0, model.layers[il].ssm_a->type, d_state, d_inner);
             A_expanded = ggml_repeat(ctx0, model.layers[il].ssm_a, A_expanded);
-            cb(dt, "mamba_dt_expanded", il);
+            A_expanded = ggml_exp(ctx0, A_expanded);
+            A_expanded = ggml_scale(ctx0, A_expanded, -1.0f);
             cb(A_expanded, "mamba_A_expanded", il);
 
             // SSM scan operation
