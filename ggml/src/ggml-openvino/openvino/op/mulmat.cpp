@@ -38,9 +38,8 @@ OutputVector translate_mulmat(const NodeContext& context) {
         ov::Output<ov::Node> B = context.get_input(0);
         ov::Output<ov::Node> A = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
 
-        auto src0_shape = context.get_input_shape(0).to_shape();
-        int64_t num_heads = context.get_input_shape(1).to_shape()[0];
-        int64_t num_heads_kv = src0_shape[0];
+        int64_t num_heads = context.get_num_heads();
+        int64_t num_heads_kv = context.get_num_heads_kv();
         int64_t kv_num_heads_factor = num_heads / num_heads_kv;
         if (kv_num_heads_factor > 1) {
             auto num_heads_node = ov::op::v0::Constant::create(ov::element::i64, {1}, std::vector<int64_t>{num_heads});
