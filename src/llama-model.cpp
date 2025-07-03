@@ -14028,7 +14028,11 @@ struct llm_build_granite_hybrid : public llm_graph_context {
 
         inpL = build_inp_embd(model.tok_embd);
 
-        auto * inp = build_inp_mem_hybrid();
+        const auto * mctx_hyb = static_cast<const llama_memory_hybrid_context *>(mctx);
+
+        auto * inp_rs = build_rs_inp(mctx_hyb->get_recr());
+
+        auto * inp_attn = build_attn_inp_kv_unified(mctx_hyb->get_attn());
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -14049,11 +14053,11 @@ struct llm_build_granite_hybrid : public llm_graph_context {
 
             if (hparams.is_recurrent(il)) {
                 // ssm layer //
-                cur = build_mamba2_layer(inp, gf, cur, model, ubatch, il);
+                cur = build_mamba2_layer(inp_rs, gf, cur, model, ubatch, il);
             } else {
                 // attention layer //
                 cur = build_granite_attention_layer(
-                    gf, cur, inp_pos, inp, model,
+                    gf, cur, inp_pos, inp_attn, model,
                     n_embd_head, use_rope, il);
             }
 
@@ -14092,12 +14096,12 @@ struct llm_build_granite_hybrid : public llm_graph_context {
     }
 
     ggml_tensor * build_mamba2_layer(
-        llm_graph_input_mem_hybrid * inp,
-                       ggml_cgraph * gf,
-                       ggml_tensor * cur,
-                 const llama_model & model,
-                const llama_ubatch & ubatch,
-                             int   il) const {
+        llm_graph_input_rs * inp,
+               ggml_cgraph * gf,
+               ggml_tensor * cur,
+         const llama_model & model,
+        const llama_ubatch & ubatch,
+                     int   il) const {
         const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx)->get_recr();
 
         const auto kv_head = mctx_cur->get_head();
@@ -14221,14 +14225,14 @@ struct llm_build_granite_hybrid : public llm_graph_context {
     }
 
     ggml_tensor * build_granite_attention_layer(
-              ggml_cgraph                * gf,
-              ggml_tensor                * cur,
-              ggml_tensor                * inp_pos,
-              llm_graph_input_mem_hybrid * inp,
-        const llama_model                & model,
-        const int64_t                      n_embd_head,
-        const bool                         use_rope,
-        const int                          il) {
+              ggml_cgraph                     * gf,
+              ggml_tensor                     * cur,
+              ggml_tensor                     * inp_pos,
+              llm_graph_input_attn_kv_unified * inp,
+        const llama_model                     & model,
+        const int64_t                           n_embd_head,
+        const bool                              use_rope,
+        const int                               il) {
 
         // compute Q and K and (optionally) RoPE them
         ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
