@@ -118,6 +118,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
                 }
                 auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(src));
                 param_node->set_friendly_name(src_name);
+                param_node->output(0).get_tensor().set_names({src_name});
                 m_model_inputs[src_name] = param_node;
             }
         }
@@ -262,6 +263,7 @@ void GgmlOvDecoder::add_extra_inputs() {
             std::string name = "past_token_len";
             auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
             param_node->set_friendly_name(name);
+            param_node->output(0).get_tensor().set_names({name});
             m_model_extra_inputs[name] = param_node;
 
             auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
@@ -280,6 +282,7 @@ void GgmlOvDecoder::add_extra_inputs() {
             std::string name = "attention_size";
             auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
             param_node->set_friendly_name(name);
+            param_node->output(0).get_tensor().set_names({name});
             m_model_extra_inputs[name] = param_node;
 
             auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
