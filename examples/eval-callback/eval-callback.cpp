@@ -55,6 +55,10 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * cb_data = (callback_data *) user_data;
 
     if (ask) {
+        if (cb_data->parse_layer_name == "__LIST__") {
+            std::cout << t->name << "\n";
+            return false;
+        }
         return std::string(t->name) == cb_data->parse_layer_name;
     }
 
@@ -137,11 +141,15 @@ static bool run(llama_context * ctx, const common_params & params, callback_data
 int main(int argc, char **argv) {
     callback_data cb_data;
     common_params params;
+    bool list_layers = false;
+    std::string list_layers_filter = "";
     std::string parse_layer_value;
     std::vector<char*> filtered_argv;
     std::vector<std::string> prompts;
 
     filtered_argv.push_back(argv[0]);
+    params.n_gpu_layers = 20;
+
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -165,10 +173,26 @@ int main(int argc, char **argv) {
                 return 1;
             }
             continue;
+        } else if (arg == "--n-gpu-layers") {
+            if (i + 1 < argc) {
+                params.n_gpu_layers = std::stoi(argv[++i]);  // override default
+            } else {
+                fprintf(stderr, "error: --n-gpu-layers requires an integer argument\n");
+                return 1;
+            }
+            continue;
+        }
+        else if (arg == "--list-layers") {
+            list_layers = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                list_layers_filter = argv[++i];  // take optional argument
+            }
+            continue;
         }
 
         filtered_argv.push_back(argv[i]);
     }
+
 
     if (!common_params_parse((int)filtered_argv.size(), filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
@@ -187,6 +211,7 @@ int main(int argc, char **argv) {
     params.cb_eval_user_data = &cb_data;
     params.warmup = false;
 
+
     common_init_result llama_init = common_init_from_params(params);
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
@@ -204,6 +229,18 @@ int main(int argc, char **argv) {
         prompts.emplace_back("What is the capital of France?");  // Fallback default
     }
 
+    if (list_layers) {
+        cb_data.parse_layer_name = "__LIST__";
+        params.n_predict = 1;
+        params.prompt = "dummy";  // any valid prompt to trigger eval
+
+        if (!run(ctx, params, cb_data)) {
+            LOG_ERR("Failed during layer listing run\n");
+            return 1;
+        }
+        return 0;
+
+    }
 
     for (const auto& prompt : prompts) {
         LOG_INF("Running prompt: %s\n", prompt.c_str());
