@@ -198,6 +198,76 @@ const SETTING_SECTIONS: SettingSection[] = [
         },
       },
       {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key, won't be used
+        component: () => {
+          const exportDB = async () => {
+            const blob = await StorageUtils.exportDB();
+            const a = document.createElement('a');
+            document.body.appendChild(a);
+            a.href = URL.createObjectURL(blob);
+            document.body.appendChild(a);
+            a.download = `aa_dump.json`;
+            a.click();
+            document.body.removeChild(a);
+          };
+          return (
+            <button className="btn" onClick={exportDB}>
+              export database
+            </button>
+          );
+        },
+      },
+      {
+        type: SettingInputType.CUSTOM,
+        key: 'custom', // dummy key, won't be used
+        component: () => {
+          const importDB = async (e: React.ChangeEvent<HTMLInputElement>) => {
+            console.log(e);
+            if (!e.target.files) {
+              throw new Error('e.target.files cant be null');
+            }
+            if (e.target.files.length != 1)
+              throw new Error(
+                'Number of selected files for DB import must be 1 but was ' +
+                  e.target.files.length +
+                  '.'
+              );
+            const file = e.target.files[0];
+            try {
+              if (!file) throw new Error('No DB found to import.');
+              console.log('Importing DB ' + file.name);
+              await StorageUtils.importDB(file);
+              console.log('Import complete');
+              window.location.reload();
+            } catch (error) {
+              console.error('' + error);
+            }
+          };
+          return (
+            <div>
+              <label
+                htmlFor="db-import"
+                className="btn"
+                role="button"
+                tabIndex={0}
+              >
+                {' '}
+                reset and import database{' '}
+              </label>
+              <input
+                id="db-import"
+                type="file"
+                accept=".json"
+                className="file-upload"
+                onInput={importDB}
+                hidden
+              />
+            </div>
+          );
+        },
+      },
+      {
         type: SettingInputType.CHECKBOX,
         label: 'Show tokens per second',
         key: 'showTokensPerSecond',
