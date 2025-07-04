@@ -103,6 +103,7 @@ set(GGML_OPENCL_KERNELS
     tanh
     pad
     repeat
+    mul_mat_f16_f32
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})
