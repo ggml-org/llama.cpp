@@ -47,7 +47,7 @@ __kernel void mul_mat_f16_f32(
     }
 
     const int numTiles = (K + CPWK - 1) / CPWK;
-    
+
     const int load_row_a = lid % OPWM;
     const int load_vec_k_a = lid / OPWM;
     const int global_row_a = offsetM + load_row_a;
