@@ -45,8 +45,8 @@ public:
         llama_seq_id s0;
         llama_seq_id s1;
 
-        std::vector<llama_seq_id> strm_id; // [ns]
-        std::vector<idx_vec_t>    idxs;    // [ns]
+        std::vector<llama_seq_id> strm; // [ns]
+        std::vector<idx_vec_t>    idxs; // [ns]
 
         uint32_t head() const {
             GGML_ASSERT(idxs.size() == 1);
@@ -55,18 +55,18 @@ public:
         }
 
         void resize(size_t n) {
-            strm_id.resize(n);
+            strm.resize(n);
             idxs.resize(n);
         }
 
         size_t size() const {
-            GGML_ASSERT(idxs.size() == strm_id.size());
+            GGML_ASSERT(idxs.size() == strm.size());
 
             return idxs.at(0).size();
         }
 
         size_t n_stream() const {
-            return strm_id.size();
+            return strm.size();
         }
 
         bool empty() const {
@@ -266,11 +266,17 @@ private:
                     ggml_cgraph * gf,
               const defrag_info & dinfo) const;
 
-    void state_write_meta(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges, llama_seq_id seq_id = -1) const;
-    void state_write_data(llama_io_write_i & io, const std::vector<std::pair<uint32_t, uint32_t>> & cell_ranges) const;
+    struct cell_ranges_t {
+        uint32_t strm;
 
-    bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
-    bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+        std::vector<std::pair<uint32_t, uint32_t>> data; // ranges, from inclusive, to exclusive
+    };
+
+    void state_write_meta(llama_io_write_i & io, const cell_ranges_t & cr, llama_seq_id seq_id = -1) const;
+    void state_write_data(llama_io_write_i & io, const cell_ranges_t & cr) const;
+
+    bool state_read_meta(llama_io_read_i & io, uint32_t strm, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
+    bool state_read_data(llama_io_read_i & io, uint32_t strm, uint32_t cell_count);
 };
 
 class llama_kv_cache_unified_context : public llama_memory_context_i {
