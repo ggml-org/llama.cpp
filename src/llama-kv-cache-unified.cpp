@@ -789,7 +789,7 @@ llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_
         res.s1 = std::max<llama_seq_id>(res.s1, seq_to_stream[seq_id]);
 
         res.strm[s] = seq_to_stream[seq_id];
-        res.idxs[s].resize(n_tokens);
+        res.idxs[s].reserve(n_tokens);
 
         const auto & cells = v_cells[seq_to_stream[seq_id]];
 
@@ -806,7 +806,6 @@ llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_
             return { };
         }
 
-        uint32_t n_found  = 0;
         uint32_t n_tested = 0;
 
         // for continuous slots, we test that all tokens in the ubatch fit, starting from the current head
@@ -857,9 +856,7 @@ llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_
                 }
 
                 if (can_use) {
-                    res.idxs[s][n_found] = idx;
-
-                    n_found++;
+                    res.idxs[s].push_back(idx);
                 } else {
                     if (cont) {
                         break;
@@ -867,12 +864,12 @@ llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_
                 }
             }
 
-            if (n_found == n_tokens) {
+            if (res.idxs[s].size() == n_tokens) {
                 break;
             }
 
             if (cont) {
-                n_found = 0;
+                res.idxs[s].clear();
             }
 
             if (n_tested >= cells.size()) {
@@ -882,7 +879,7 @@ llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_
         }
 
         // we didn't find a suitable slot - return empty result
-        if (n_found < n_tokens) {
+        if (res.idxs[s].size() < n_tokens) {
             return { };
         }
     }
