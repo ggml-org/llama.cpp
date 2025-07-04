@@ -744,6 +744,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const uint32_t n_tokens = balloc->get_n_tokens();
 
+    // [TAG_NO_CACHE_PAD]
+    // TODO: add new split mode where we pad the input sequences so that ubatch.equal_seqs == true
     const llama_ubatch ubatch = balloc->split_simple(n_tokens);
 
     // micro-batching is not possible for non-causal encoding, so we process the batch in a single shot
