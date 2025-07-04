@@ -983,7 +983,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
-    const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+    const auto n_stream = k->ne[3];
 
     q = ggml_reshape_4d(ctx0, q, q->ne[0], q->ne[1], q->ne[2]/n_stream, n_stream);
 
@@ -991,9 +991,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
-    const auto n_tokens = q->ne[1];
-    const auto n_head   = q->ne[2];
-    const auto n_kv     = k->ne[1];
+    const auto n_kv = k->ne[1];
 
     ggml_tensor * cur;
 
@@ -1035,8 +1033,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 #endif
         }
 
-        // recombine streams
-        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*n_head, n_tokens*n_stream);
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
 
@@ -1082,7 +1079,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
 
         // recombine streams
-        cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*n_head, n_tokens*n_stream);
+        cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
 
         if (!cparams.offload_kqv) {
             // all nodes between the KV store and the attention output are run on the CPU
@@ -1128,6 +1125,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_build_forward_expand(gf, v_cur);
 
     const auto & kq_mask = inp->get_kq_mask();
+
+    // [TAG_NO_CACHE_PAD]
+    // TODO: if ubatch.equal_seqs == true, we can split the three tensors below into ubatch.n_seqs_unq streams
+    assert(ubatch.equal_seqs == false);
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;
