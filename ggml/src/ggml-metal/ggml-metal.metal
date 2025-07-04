@@ -109,6 +109,7 @@ void dequantize_q4_0_t4(device const block_q4_0 * xb, short il, thread type4 & r
 }
 
 void quantize_q4_0(device const float * src, device block_q4_0 & dst) {
+#pragma METAL fp math_mode(safe)
     float amax = 0.0f; // absolute max
     float max  = 0.0f;
 
@@ -167,6 +168,7 @@ void quantize_q4_1(device const float * src, device block_q4_1 & dst) {
 }
 
 void quantize_q5_0(device const float * src, device block_q5_0 & dst) {
+#pragma METAL fp math_mode(safe)
     float amax = 0.0f; // absolute max
     float max  = 0.0f;
 
@@ -461,6 +463,7 @@ void dequantize_q8_0_t4(device const block_q8_0 *xb, short il, thread type4 & re
 }
 
 void quantize_q8_0(device const float * src, device block_q8_0 & dst) {
+#pragma METAL fp math_mode(safe)
     float amax = 0.0f; // absolute max
 
     for (int j = 0; j < QK8_0; j++) {
