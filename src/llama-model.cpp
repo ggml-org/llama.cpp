@@ -15913,7 +15913,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                     uint32_t n_ctx_per_stream = cparams.n_ctx;
 
-                    if (!cparams.kv_unified) {
+                    if (cparams.attn_streams) {
                         n_ctx_per_stream = (cparams.n_ctx + cparams.n_seq_max - 1)/cparams.n_seq_max;
                         n_ctx_per_stream = GGML_PAD(n_ctx_per_stream, padding);
 
@@ -15936,7 +15936,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
                                 params.swa_full,
-                                cparams.kv_unified,
+                                !cparams.attn_streams,
                                 n_ctx_per_stream,
                                 cparams.n_seq_max,
                                 cparams.n_ubatch,
@@ -15951,7 +15951,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 params.type_v,
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
-                                cparams.kv_unified,
+                                !cparams.attn_streams,
                                 n_ctx_per_stream,
                                 cparams.n_seq_max,
                                 padding,

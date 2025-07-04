@@ -317,14 +317,23 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
         // TODO: do we need synchronization here?
     }
 
-    // TODO: support this:
-    GGML_ASSERT(v_cells[s0].get_has_shift() == false && "cannot copy a KV buffer that has a pending shift");
-
     v_cells[s1].reset();
     for (uint32_t i = 0; i < v_cells[s0].size(); ++i) {
         if (v_cells[s0].seq_has(i, seq_id_src)) {
-            v_cells[s1].pos_set(i, v_cells[s0].pos_get(i));
+            llama_pos pos   = v_cells[s0].pos_get(i);
+            llama_pos shift = v_cells[s0].get_shift(i);
+
+            if (shift != 0) {
+                pos -= shift;
+                assert(pos >= 0);
+            }
+
+            v_cells[s1].pos_set(i, pos);
             v_cells[s1].seq_add(i, seq_id_dst);
+
+            if (shift != 0) {
+                v_cells[s1].pos_add(i, shift);
+            }
         }
     }
 
@@ -1057,7 +1066,7 @@ ggml_tensor * llama_kv_cache_unified::cpy_k(ggml_context * ctx, ggml_tensor * k_
     // TODO: fallback to old ggml_cpy() method for backwards compatibility
     //       will be removed when ggml_set_rows() is adopted by all backends
 
-    GGML_ASSERT(n_stream == 1 && "n_stream > 1 not supported");
+    GGML_ASSERT(n_stream == 1 && "n_stream > 1 not supported without LLAMA_SET_ROWS");
 
     ggml_tensor * k_view = ggml_view_1d(ctx, k,
             n_tokens*n_embd_k_gqa,
@@ -1101,7 +1110,7 @@ ggml_tensor * llama_kv_cache_unified::cpy_v(ggml_context * ctx, ggml_tensor * v_
     // TODO: fallback to old ggml_cpy() method for backwards compatibility
     //       will be removed when ggml_set_rows() is adopted by all backends
 
-    GGML_ASSERT(n_stream == 1 && "n_stream > 1 not supported");
+    GGML_ASSERT(n_stream == 1 && "n_stream > 1 not supported without LLAMA_SET_ROWS");
 
     ggml_tensor * v_view = nullptr;
 
