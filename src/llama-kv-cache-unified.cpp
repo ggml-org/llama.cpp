@@ -573,7 +573,7 @@ llama_kv_cache_unified::slot_info_vec_t llama_kv_cache_unified::prepare(const st
         apply_ubatch(sinfo_new, ubatch);
     }
 
-    GGML_ASSERT(!states.empty());
+    GGML_ASSERT(!states.empty() || !success);
 
     // iterate backwards and restore the cells to their original state
     for (auto it = states.rbegin(); it != states.rend(); ++it) {
