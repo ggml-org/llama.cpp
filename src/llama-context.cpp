@@ -34,7 +34,7 @@ llama_context::llama_context(
     }
 
     const char * LLAMA_HT = getenv("LLAMA_HT");
-    cparams.n_seq_virt = LLAMA_HT ? cparams.n_seq_max : 1;
+    cparams.kv_unified = (LLAMA_HT && atoi(LLAMA_HT) > 0) ? false : true;
 
     cparams.n_threads        = params.n_threads;
     cparams.n_threads_batch  = params.n_threads_batch;
@@ -270,7 +270,7 @@ llama_context::llama_context(
 
     // reserve worst-case graph
     if (!hparams.vocab_only && memory) {
-        const uint32_t n_seqs = 1; // reserve worst-case graph for single-sequence batches
+        const uint32_t n_seqs = cparams.kv_unified ? 1 : cparams.n_seq_max;
         const uint32_t n_tokens = std::min(cparams.n_ctx, cparams.n_ubatch);
 
         LLAMA_LOG_DEBUG("%s: worst-case: n_tokens = %d, n_seqs = %d, n_outputs = %d\n", __func__, n_tokens, n_seqs, n_outputs);
@@ -303,7 +303,7 @@ llama_context::llama_context(
 
         // reserve with tg graph to get the number of splits and nodes
         {
-            auto * gf = graph_reserve(1, 1, 1, mctx.get());
+            auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get());
             if (!gf) {
                 throw std::runtime_error("failed to allocate compute tg buffers");
             }

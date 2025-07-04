@@ -41,11 +41,12 @@ public:
         // data for ggml_set_rows
         using idx_vec_t = std::vector<uint32_t>;
 
+        // number of streams: ns = s1 - s0 + 1
         llama_seq_id s0;
         llama_seq_id s1;
 
-        std::vector<llama_seq_id> seq_id_virt;
-        std::vector<idx_vec_t>    idxs;
+        std::vector<llama_seq_id> strm_id; // [ns]
+        std::vector<idx_vec_t>    idxs;    // [ns]
 
         uint32_t head() const {
             GGML_ASSERT(idxs.size() == 1);
@@ -54,18 +55,18 @@ public:
         }
 
         void resize(size_t n) {
-            seq_id_virt.resize(n);
+            strm_id.resize(n);
             idxs.resize(n);
         }
 
         size_t size() const {
-            GGML_ASSERT(idxs.size() == seq_id_virt.size());
+            GGML_ASSERT(idxs.size() == strm_id.size());
 
             return idxs.at(0).size();
         }
 
-        size_t n_seq_virt() const {
-            return seq_id_virt.size();
+        size_t n_stream() const {
+            return strm_id.size();
         }
 
         bool empty() const {
@@ -86,9 +87,9 @@ public:
                     ggml_type    type_v,
                          bool    v_trans,
                          bool    offload,
+                         bool    unified,
                      uint32_t    kv_size,
                      uint32_t    n_seq_max,
-                     uint32_t    n_seq_virt,
                      uint32_t    n_pad,
                      uint32_t    n_swa,
                llama_swa_type    swa_type);
@@ -130,7 +131,8 @@ public:
     // llama_kv_cache_unified specific API
     //
 
-    uint32_t get_size() const;
+    uint32_t get_size()     const;
+    uint32_t get_n_stream() const;
 
     bool get_has_shift() const;
 
@@ -193,14 +195,14 @@ private:
         ggml_tensor * k;
         ggml_tensor * v;
 
-        std::vector<ggml_tensor *> k_seq;
-        std::vector<ggml_tensor *> v_seq;
+        std::vector<ggml_tensor *> k_stream;
+        std::vector<ggml_tensor *> v_stream;
     };
 
     bool v_trans = true;  // the value tensor is transposed
 
-    const uint32_t n_seq_max  = 1;
-    const uint32_t n_seq_virt = 1;
+    const uint32_t n_seq_max = 1;
+    const uint32_t n_stream  = 1;
 
     // required padding
     const uint32_t n_pad = 1;
@@ -226,8 +228,8 @@ private:
 
     std::vector<llama_kv_cells_unified> v_cells;
 
-    // maps from a sequence id to a virtual sequence id
-    std::vector<uint32_t> seq_virt_idx;
+    // maps from a sequence id to a stream id
+    std::vector<uint32_t> seq_to_stream;
 
     std::vector<kv_layer> layers;
 

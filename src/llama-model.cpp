@@ -15911,7 +15911,18 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 } else {
                     const auto padding = llama_kv_cache_unified::get_padding(cparams);
 
-                    cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
+                    uint32_t n_ctx_per_stream = cparams.n_ctx;
+
+                    if (!cparams.kv_unified) {
+                        n_ctx_per_stream = (cparams.n_ctx + cparams.n_seq_max - 1)/cparams.n_seq_max;
+                        n_ctx_per_stream = GGML_PAD(n_ctx_per_stream, padding);
+
+                        cparams.n_ctx = n_ctx_per_stream*cparams.n_seq_max;
+                    } else {
+                        n_ctx_per_stream = GGML_PAD(n_ctx_per_stream, padding);
+
+                        cparams.n_ctx = n_ctx_per_stream;
+                    }
 
                     LLAMA_LOG_DEBUG("%s: n_ctx = %u (padded)\n", __func__, cparams.n_ctx);
 
@@ -15925,9 +15936,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
                                 params.swa_full,
-                                cparams.n_ctx,
+                                cparams.kv_unified,
+                                n_ctx_per_stream,
                                 cparams.n_seq_max,
-                                cparams.n_seq_virt,
                                 cparams.n_ubatch,
                                 padding);
                     } else {
@@ -15940,9 +15951,9 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 params.type_v,
                                 !cparams.flash_attn,
                                 cparams.offload_kqv,
-                                cparams.n_ctx,
+                                cparams.kv_unified,
+                                n_ctx_per_stream,
                                 cparams.n_seq_max,
-                                cparams.n_seq_virt,
                                 padding,
                                 hparams.n_swa,
                                 hparams.swa_type);
