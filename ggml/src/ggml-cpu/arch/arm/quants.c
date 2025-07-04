@@ -45,7 +45,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
     block_q8_0 * GGML_RESTRICT y = vy;
 
 #if defined(__ARM_FEATURE_SVE)
-    const int sve_register_length = ggml_cpu_get_sve_cnt() * 8;
+    const int sve_register_length = svcntb() * 8;
     const int ggml_f32_epr = sve_register_length / 32;
     const svfloat32_t inactive1 = svdup_n_f32(0.0f);
     const svbool_t pg = svptrue_b32();
@@ -79,6 +79,7 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
             svst1b_s32(pg, &y[i].qs[j], result);
         }
     }
+
 #elif defined(__ARM_NEON)
     for (int i = 0; i < nb; i++) {
         float32x4_t srcv [8];
