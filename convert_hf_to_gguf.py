@@ -4872,6 +4872,9 @@ class Mamba2Model(TextModel):
             with open(dir_model / "config.json", "r", encoding="utf-8") as f:
                 hparams = json.load(f)
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
+        self.d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
+        self.d_inner = self.find_hparam(["intermediate_size", "d_inner"], optional=True) or 2 * self.d_model
+        self.n_group = self.find_hparam(["n_groups"], optional=True) or 1
 
     def set_vocab(self):
         vocab_size = self.hparams["vocab_size"]
@@ -4894,30 +4897,27 @@ class Mamba2Model(TextModel):
             self._set_vocab_builtin("gpt-neox", vocab_size)
 
     def set_gguf_parameters(self):
-        d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
-        d_conv  = self.find_hparam(["conv_kernel",       "d_conv"],  optional=True) or 4
-        d_inner = self.find_hparam(["intermediate_size", "d_inner"], optional=True) or 2 * d_model
-        d_state = self.find_hparam(["state_size",        "d_state"], optional=True) or 128
-        head_dim = self.find_hparam(["head_dim"],                    optional=True) or 64
-        n_group = self.find_hparam(["n_groups"],                     optional=True) or 1
+        d_conv  = self.find_hparam(["conv_kernel", "d_conv"],  optional=True) or 4
+        d_state = self.find_hparam(["state_size",  "d_state"], optional=True) or 128
+        head_dim = self.find_hparam(["head_dim"],              optional=True) or 64
 
         rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
 
         # Fail early for models which don't have a block expansion factor of 2
         # TODO: does this really matter?
-        assert d_inner == 2 * d_model
-        assert d_inner % head_dim == 0
+        assert self.d_inner == 2 * self.d_model
+        assert self.d_inner % head_dim == 0
 
         self.gguf_writer.add_context_length(2**20)  # arbitrary value; for those who use the default
-        self.gguf_writer.add_embedding_length(d_model)
+        self.gguf_writer.add_embedding_length(self.d_model)
         self.gguf_writer.add_feed_forward_length(0)  # unused, but seemingly required when loading
         self.gguf_writer.add_head_count(0)  # unused, but seemingly required when loading
         self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_ssm_conv_kernel(d_conv)
-        self.gguf_writer.add_ssm_inner_size(d_inner)
+        self.gguf_writer.add_ssm_inner_size(self.d_inner)
         self.gguf_writer.add_ssm_state_size(d_state)
-        self.gguf_writer.add_ssm_time_step_rank(d_inner // head_dim)
-        self.gguf_writer.add_ssm_group_count(n_group)
+        self.gguf_writer.add_ssm_time_step_rank(self.d_inner // head_dim)
+        self.gguf_writer.add_ssm_group_count(self.n_group)
         self.gguf_writer.add_layer_norm_rms_eps(rms_norm_eps)
         self.gguf_writer.add_file_type(self.ftype)
 
@@ -4942,16 +4942,236 @@ class Mamba2Model(TextModel):
             # (D is also unsqueezed, but for more straightforward broadcast internally)
             data_torch = data_torch.reshape((*data_torch.shape, 1))
         elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_NORM, bid):
-            d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
-            d_inner = self.find_hparam(["intermediate_size", "d_inner"], optional=True) or 2 * d_model
-            n_group = self.hparams.get("n_groups", 1)
-            data_torch = data_torch.reshape((n_group, d_inner // n_group))
+            data_torch = data_torch.reshape((self.n_group, self.d_inner // self.n_group))
 
         if name.endswith(".A_log"):
             logger.debug("A_log --> A ==> " + new_name)
             data_torch = -torch.exp(data_torch)
 
         yield (new_name, data_torch)
+
+
+@ModelBase.register("BambaForCausalLM")
+class BambaModel(Mamba2Model):
+    """Bamba is a hybrid SSM + Attention model that uses Mamba2 SSM layers"""
+    model_arch = gguf.MODEL_ARCH.BAMBA
+    undo_permute = True
+
+    def __init__(self, *args, **kwargs):
+
+        # Hybrid mamba models use a prefix for the mamba-specific params.
+        # TODO: Extend this if the prefix(es) need to be configurable
+        self.hparam_prefixes = ["mamba"]
+
+        super().__init__(*args, **kwargs)
+
+        # Use Llama conversion for attention
+        self._transformer_model_class: type[TextModel] = LlamaModel
+
+        # Lists of which layers use ssm vs attention
+        self._attn_layers = self.get_attn_layres()
+        self._ssm_layers = [
+            i for i in range(self.block_count)
+            if i not in self._attn_layers
+        ]
+
+        # n_group and d_inner are used during reshape_tensors for mamaba2
+        self.d_model = self.find_hparam(["hidden_size", "d_model"])
+        self.n_group = self.find_hparam(["n_groups"])
+        self.d_inner = self.find_hparam(["expand"]) * self.d_model
+
+    def get_attn_layres(self) -> list[int]:
+        attn_layers = self.hparams.get("attn_layer_indices", [])
+        if not attn_layers:
+            attn_period = self.hparams.get("attn_layer_period")
+            assert attn_period, "Didn't find attn_layer_indices or attn_layer_period"
+            attn_offset = self.hparams.get("attn_layer_offset")
+            assert attn_offset is not None, "No attention layer offset set with attn_layer_period"
+            attn_layers = [
+                i for i in range(self.block_count)
+                if i % attn_period == attn_offset
+            ]
+        return attn_layers
+
+    def find_hparam(self, keys: Iterable[str], *args, **kwargs) -> Any:
+        prefixed = []
+        for pfx in self.hparam_prefixes:
+            prefixed.extend(
+                "_".join([pfx, k])
+                for k in keys
+            )
+        keys = list(keys) + prefixed
+        return super().find_hparam(keys, *args, **kwargs)
+
+    def set_gguf_parameters(self):
+
+        ## General Params ##
+        self.gguf_writer.add_embedding_length(self.d_model)
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 0))
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
+
+        ## Mamba mixer params ##
+        self.gguf_writer.add_ssm_conv_kernel(self.find_hparam(["conv_kernel", "d_conv"]))
+        self.gguf_writer.add_ssm_state_size(self.find_hparam(["state_size", "d_state"]))
+        self.gguf_writer.add_ssm_group_count(self.n_group)
+        self.gguf_writer.add_ssm_inner_size(self.d_inner)
+        # NOTE: The mamba_dt_rank is _not_ the right field for how this is used
+        #   in llama.cpp
+        self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads"]))
+
+        ## Attention params ##
+        self.gguf_writer.add_attn_layer_indices(self._attn_layers)
+        if rope_dim := self.hparams.get("attn_rotary_emb"):
+            self.gguf_writer.add_rope_dimension_count(rope_dim)
+        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
+        self.gguf_writer.add_head_count_kv(self.find_hparam(["num_key_value_heads", "n_head_kv"]))
+
+        ## Feed Forward Params ##
+        self.gguf_writer.add_layer_norm_rms_eps(
+            self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
+        )
+
+        ## Validation ##
+        d_head = self.find_hparam(["d_head"], optional=True) or 64
+        assert self.hparams.get("hidden_act") in [None, "silu"], "Only SILU activation supported"
+        assert self.d_inner % d_head == 0, f"SSM inner size {self.d_inner} not a multiple of head dim {d_head}"
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+
+        # Determine whether this is a mamaba layer or an attention layer
+        if bid in self._ssm_layers:
+            for mamba_new_name, data_torch in super().modify_tensors(
+                data_torch, name, bid
+            ):
+                yield mamba_new_name, data_torch
+        elif bid in self._attn_layers:
+            for llama_new_name, data_torch in self._transformer_model_class.modify_tensors(
+                self, data_torch, name, bid
+            ):
+                yield llama_new_name, data_torch
+        else:
+            yield self.map_tensor_name(name), data_torch
+
+
+@ModelBase.register("JambaForCausalLM")
+class JambaModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.JAMBA
+
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        del tokenizer  # unused
+
+        return "gpt-2"
+
+    def set_vocab(self):
+        if (self.dir_model / "tokenizer.model").is_file():
+            # Using Jamba's tokenizer.json causes errors on model load
+            # (something about "byte not found in vocab"),
+            # but there's a working tokenizer.model
+            self._set_vocab_sentencepiece()
+        else:
+            # Some Jamba models only have a tokenizer.json, which works.
+            self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        d_model = self.find_hparam(["hidden_size", "mamba_d_model"])
+        d_conv  = self.find_hparam(["mamba_d_conv"],  optional=True) or 4
+        d_inner = self.hparams["mamba_expand"] * d_model
+        d_state = self.find_hparam(["mamba_d_state"], optional=True) or 16
+        # ceiling division
+        # ref: https://stackoverflow.com/a/17511341/22827863
+        # ref: https://github.com/state-spaces/mamba/blob/ce59daea3a090d011d6476c6e5b97f6d58ddad8b/mamba_ssm/modules/mamba_simple.py#L58
+        dt_rank      = self.find_hparam(["mamba_dt_rank"], optional=True) or -(d_model // -16)
+        rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-6
+        n_kv_head = self.hparams["num_key_value_heads"]
+        attn_offset = self.hparams["attn_layer_offset"]
+        attn_period = self.hparams["attn_layer_period"]
+        n_kv_vec = [0 for _ in range(attn_offset)] + [
+            n_kv_head if (i - attn_offset) % attn_period == 0 else 0 for i in range(attn_offset, self.block_count)
+        ]
+
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_context_length(self.find_hparam(["max_position_embeddings", "n_ctx"]))
+        self.gguf_writer.add_embedding_length(d_model)
+        self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
+        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
+        self.gguf_writer.add_head_count_kv(n_kv_vec)
+        self.gguf_writer.add_ssm_conv_kernel(d_conv)
+        self.gguf_writer.add_ssm_inner_size(d_inner)
+        self.gguf_writer.add_ssm_state_size(d_state)
+        self.gguf_writer.add_ssm_time_step_rank(dt_rank)
+        self.gguf_writer.add_layer_norm_rms_eps(rms_norm_eps)
+        self.gguf_writer.add_expert_count(self.hparams["num_experts"])
+        self.gguf_writer.add_expert_used_count(self.hparams["num_experts_per_tok"])
+        self.gguf_writer.add_file_type(self.ftype)
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+
+        # Mini-Jamba
+        name = name.replace(".moe.", ".feed_forward.")
+        if bid is not None:
+            moe_offset = self.hparams["expert_layer_offset"]
+            moe_period = self.hparams["expert_layer_period"]
+
+            if not (bid >= moe_offset and (bid - moe_offset) % moe_period == 0):
+                name = name.replace(".experts.0.", ".")
+
+        # process the experts separately
+        if ".feed_forward.experts." in name:
+            n_experts = self.hparams["num_experts"]
+
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+
+                # merge the experts into a single 3d tensor
+                for wid in ["down_proj", "gate_proj", "up_proj"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.feed_forward.experts.{xid}.{wid}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    # using the same merged name as qwen2moe
+                    merged_name = f"model.layers.{bid}.mlp.experts.{wid}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    yield new_name, data_torch
+            return
+
+        new_name = self.map_tensor_name(name)
+
+        if self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_CONV1D, bid):
+            data_torch = data_torch.squeeze()
+
+        if name.endswith(".A_log"):
+            logger.debug("A_log --> A ==> " + new_name)
+            data_torch = -torch.exp(data_torch)
+
+        yield (new_name, data_torch)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register("CohereForCausalLM")
@@ -6325,6 +6545,39 @@ class GraniteMoeModel(GraniteModel):
             ]
 
         return super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("GraniteMoeHybridForCausalLM")
+class GraniteMoeHybridModel(BambaModel, GraniteMoeModel):
+    """GraniteMoeHybrid is a hybrid SSM + MoE Attention model that uses Mamba2
+    SSM layers"""
+    model_arch = gguf.MODEL_ARCH.GRANITE_MOE_HYBRID
+
+    def get_attn_layres(self):
+        if layer_types := self.hparams.get("layer_types"):
+            return [
+                i for i, typ in enumerate(layer_types)
+                if typ == "attention"
+            ]
+        return super().get_attn_layres()
+
+    def modify_tensors(
+        self, data_torch: Tensor, name: str, bid: int | None
+    ) -> Iterable[tuple[str, Tensor]]:
+        if (
+            name.endswith("block_sparse_moe.input_linear.weight")
+            or name.endswith("shared_mlp.input_linear.weight")
+        ):
+            return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
+        return super().modify_tensors(data_torch, name, bid)
+
+    def set_gguf_parameters(self):
+        GraniteMoeModel.set_gguf_parameters(self)
+        BambaModel.set_gguf_parameters(self)
+
+    def set_vocab(self):
+        self.hparams["pad_vocab_size_multiple"] = 8
+        super().set_vocab()
 
 
 @ModelBase.register("BailingMoeForCausalLM")
