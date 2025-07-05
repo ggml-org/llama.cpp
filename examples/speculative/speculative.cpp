@@ -99,49 +99,6 @@ int main(int argc, char ** argv) {
     const bool vocab_type_dft = llama_vocab_type(vocab_dft);
     LOG_DBG("vocab_type dft: %d\n", vocab_type_dft);
 
-    if (vocab_type_tgt != vocab_type_dft) {
-        LOG_ERR("%s: draft model vocab type must match target model to use speculation but ", __func__);
-        LOG_ERR("vocab_type_dft = %d while vocab_type_tgt = %d\n", vocab_type_dft, vocab_type_tgt);
-        return 1;
-    }
-
-    if (
-        llama_vocab_get_add_bos(vocab_tgt) != llama_vocab_get_add_bos(vocab_dft) ||
-        llama_vocab_get_add_eos(vocab_tgt) != llama_vocab_get_add_eos(vocab_dft) ||
-        llama_vocab_bos(vocab_tgt) != llama_vocab_bos(vocab_dft) ||
-        llama_vocab_eos(vocab_tgt) != llama_vocab_eos(vocab_dft)
-    ) {
-        LOG_ERR("%s: draft model special tokens must match target model to use speculation\n", __func__);
-        return 1;
-    }
-
-    {
-        const int n_vocab_tgt = llama_vocab_n_tokens(vocab_tgt);
-        const int n_vocab_dft = llama_vocab_n_tokens(vocab_dft);
-        const int vocab_diff  = n_vocab_tgt > n_vocab_dft
-            ? n_vocab_tgt - n_vocab_dft
-            : n_vocab_dft - n_vocab_tgt;
-
-        if (vocab_diff > SPEC_VOCAB_MAX_SIZE_DIFFERENCE) {
-            LOG_ERR("%s: draft model vocab must closely match target model to use speculation but ", __func__);
-            LOG_ERR("target vocab size %d does not match draft vocab size %d - difference %d, max allowed %d\n",
-                    n_vocab_tgt, llama_vocab_n_tokens(vocab_dft), vocab_diff, SPEC_VOCAB_MAX_SIZE_DIFFERENCE);
-            return 1;
-        }
-
-        for (int i = SPEC_VOCAB_CHECK_START_TOKEN_ID; i < std::min(n_vocab_tgt, n_vocab_dft); ++i) {
-            const char * token_text_tgt = llama_vocab_get_text(vocab_tgt, i);
-            const char * token_text_dft = llama_vocab_get_text(vocab_dft, i);
-            if (std::strcmp(token_text_tgt, token_text_dft) != 0) {
-                LOG_ERR("%s: draft model vocab must match target model to use speculation but ", __func__);
-                LOG_ERR("token %d content differs - target '%s', draft '%s'\n", i,
-                        common_token_to_piece(ctx_tgt, i).c_str(),
-                        common_token_to_piece(ctx_dft, i).c_str());
-                return 1;
-            }
-        }
-    }
-
     auto * mem_tgt = llama_get_memory(ctx_tgt);
     auto * mem_dft = llama_get_memory(ctx_dft);
 
