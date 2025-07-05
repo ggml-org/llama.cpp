@@ -203,6 +203,11 @@ const SETTING_SECTIONS: SettingSection[] = [
         key: 'showTokensPerSecond',
       },
       {
+        type: SettingInputType.CHECKBOX,
+        label: 'Show server information',
+        key: 'showServerInformation',
+      },
+      {
         type: SettingInputType.LONG_INPUT,
         label: (
           <>
