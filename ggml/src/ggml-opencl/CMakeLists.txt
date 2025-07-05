@@ -103,6 +103,7 @@ set(GGML_OPENCL_KERNELS
     tanh
     pad
     repeat
+    conv2d
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})
