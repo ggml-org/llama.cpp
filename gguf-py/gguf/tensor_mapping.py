@@ -286,12 +286,14 @@ class TensorNameMap:
         # Post feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
+            "model.layers.{bid}.pre_ff_layernorm.weight",
         ),
 
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
             "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
+            "model.layers.{bid}.feed_forward.up_proj",  
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (
@@ -362,6 +364,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert.up_proj",          # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.up_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.up_proj", # llama4
+            "model.layers.{bid}.feed_forward.down_proj",    
         ),
 
         # AWQ-activation gate
@@ -547,11 +550,13 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_IN: (
             "model.layers.{bid}.in_proj",
             "backbone.layers.{bid}.mixer.in_proj",
+            "model.layers.{bid}.mamba.in_proj",    
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
             "model.layers.{bid}.conv1d",
             "backbone.layers.{bid}.mixer.conv1d",
+            "model.layers.{bid}.mamba.conv1d",  
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -562,16 +567,19 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_DT: (
             "model.layers.{bid}.dt_proj",
             "backbone.layers.{bid}.mixer.dt_proj",
+            "model.layers.{bid}.mamba.dt_proj",  
         ),
 
         MODEL_TENSOR.SSM_A: (
             "model.layers.{bid}.A_log",
             "backbone.layers.{bid}.mixer.A_log",
+            "model.layers.{bid}.mamba.A_log",   
         ),
 
         MODEL_TENSOR.SSM_D: (
             "model.layers.{bid}.D",
             "backbone.layers.{bid}.mixer.D",
+            "model.layers.{bid}.mamba.D",
         ),
 
         MODEL_TENSOR.SSM_NORM: (
@@ -581,6 +589,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",
             "backbone.layers.{bid}.mixer.out_proj",
+            "model.layers.{bid}.mamba.out_proj",          # falcon-h1
         ),
 
         MODEL_TENSOR.TIME_MIX_W0: (
@@ -1166,6 +1175,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_RESMPL_ATTN_OUT: (
             "resampler.attn.out_proj",
+        ),
+
+        MODEL_TENSOR.SSM_MUP_VEC: (
+            "model.layers.{bid}.mamba.mup_vector",            # falcon_h1
+        ),
+
+        MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.mamba.norm",
         ),
 
         MODEL_TENSOR.V_RESMPL_KV: (

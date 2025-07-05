@@ -545,6 +545,10 @@ ggml_tensor * llm_graph_context::build_ffn(
             case LLM_FFN_PAR:
                 {
                     cur = build_lora_mm(gate, cur);
+                    if (arch == LLM_ARCH_FALCON_H1) {
+                        cur = ggml_scale(ctx0, cur, hparams.mlp_gate_multiplier);
+                    }
+
                     cb(cur, "ffn_gate", il);
                 } break;
         }
@@ -630,6 +634,9 @@ ggml_tensor * llm_graph_context::build_ffn(
         if (arch == LLM_ARCH_GLM4) {
             // GLM4 seems to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+        }
+        if (arch == LLM_ARCH_FALCON_H1) {
+            cur = ggml_scale(ctx0, cur, hparams.mlp_down_multiplier);
         }
     }
 

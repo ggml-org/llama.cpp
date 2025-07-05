@@ -172,6 +172,7 @@ class Keys:
         TIME_STEP_RANK = "{arch}.ssm.time_step_rank"
         GROUP_COUNT    = "{arch}.ssm.group_count"
         DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
+        HEAD_DIM       = "{arch}.ssm.head_dim"
 
     class WKV:
         HEAD_SIZE = "{arch}.wkv.head_size"
@@ -288,6 +289,7 @@ class MODEL_ARCH(IntEnum):
     LLAMA4           = auto()
     DECI             = auto()
     FALCON           = auto()
+    FALCON_H1           = auto()
     BAICHUAN         = auto()
     GROK             = auto()
     GPT2             = auto()
@@ -525,6 +527,7 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
+    SSM_MUP_VEC          = auto()
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -660,6 +663,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DOTS1:            "dots1",
     MODEL_ARCH.ARCEE:            "arcee",
     MODEL_ARCH.ERNIE4_5:         "ernie4_5",
+    MODEL_ARCH.FALCON_H1:         "falcon_h1",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -736,6 +740,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_D:                     "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_NORM:                  "blk.{bid}.ssm_norm",
     MODEL_TENSOR.SSM_OUT:                   "blk.{bid}.ssm_out",
+    MODEL_TENSOR.SSM_MUP_VEC:               "blk.{bid}.ssm_mup_vec",
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -2210,6 +2215,41 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.FALCON_H1: [
+        # Token embedding
+        MODEL_TENSOR.TOKEN_EMBD,
+
+        # Input layernorm
+        MODEL_TENSOR.ATTN_NORM,
+
+        # Attention components
+        MODEL_TENSOR.ATTN_Q,         # Query projection
+        MODEL_TENSOR.ATTN_K,         # Key projection
+        MODEL_TENSOR.ATTN_V,         # Value projection
+        MODEL_TENSOR.ATTN_OUT,       # Output projection
+
+        # SSM components (Mamba2 specific)
+        MODEL_TENSOR.SSM_MUP_VEC,    # Mup vector
+        MODEL_TENSOR.SSM_IN,         # Input projection for SSM
+        MODEL_TENSOR.SSM_CONV1D,     # Convolution layer
+        MODEL_TENSOR.SSM_DT,         # Delta time projection
+        MODEL_TENSOR.SSM_A,          # A parameter (log form)
+        MODEL_TENSOR.SSM_D,          # D parameter
+        MODEL_TENSOR.SSM_NORM,       # Normalization in SSM
+        MODEL_TENSOR.SSM_OUT,        # Output projection
+
+        # Pre-feedforward layernorm
+        MODEL_TENSOR.FFN_PRE_NORM,
+
+        # Feed-forward network components
+        MODEL_TENSOR.FFN_GATE,       # Gate projection (SwiGLU)
+        MODEL_TENSOR.FFN_DOWN,       # Down projection
+        MODEL_TENSOR.FFN_UP,         # Up projection
+
+        # Post-feedforward layernorm
+        MODEL_TENSOR.OUTPUT_NORM,    # Final layer norm
+        MODEL_TENSOR.OUTPUT,         # Output projection (lm_head)
     ],
     # TODO
 }
