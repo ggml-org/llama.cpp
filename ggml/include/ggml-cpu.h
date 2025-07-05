@@ -12,6 +12,9 @@ extern "C" {
     struct ggml_cplan {
         size_t    work_size; // size of work buffer, calculated by `ggml_graph_plan()`
         uint8_t * work_data; // work buffer, to be allocated by caller before calling to `ggml_graph_compute()`
+#ifdef GGML_USE_NUMA_MIGRATE
+        uint8_t * work_data_numa[GGML_NUMA_MIGRATE_NODES];
+#endif
 
         int n_threads;
         struct ggml_threadpool * threadpool;
@@ -28,6 +31,9 @@ extern "C" {
         GGML_NUMA_STRATEGY_ISOLATE    = 2,
         GGML_NUMA_STRATEGY_NUMACTL    = 3,
         GGML_NUMA_STRATEGY_MIRROR     = 4,
+#ifdef GGML_USE_NUMA_MIGRATE
+        GGML_NUMA_STRATEGY_MIGRATE    = 5,
+#endif
         GGML_NUMA_STRATEGY_COUNT
     };
 
