@@ -102,3 +102,12 @@ bool llama_hparams::is_swa(uint32_t il) const {
 
     GGML_ABORT("fatal error");
 }
+
+bool llama_hparams::is_same(const llama_hparams & other) const {
+    return
+        n_ctx_train == other.n_ctx_train &&
+        n_embd == other.n_embd &&
+        n_layer == other.n_layer &&
+        n_expert == other.n_expert &&
+        n_expert_used == other.n_expert_used;
+}
