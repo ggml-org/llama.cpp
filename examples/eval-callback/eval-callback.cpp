@@ -4,6 +4,7 @@
 #include "llama.h"
 #include "ggml.h"
 #include "sampling.h"
+#include <algorithm>
 
 #include <cstdio>
 #include <string>
