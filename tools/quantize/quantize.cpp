@@ -1,11 +1,13 @@
 #include "common.h"
 #include "llama.h"
+#include "gguf.h"
 
 #include <cstdio>
 #include <cstring>
 #include <vector>
 #include <string>
 #include <unordered_map>
+#include <map>
 #include <fstream>
 #include <cmath>
 #include <cctype>
@@ -68,6 +70,11 @@ static const char * const LLM_KV_QUANTIZE_IMATRIX_DATASET    = "quantize.imatrix
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES  = "quantize.imatrix.entries_count";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS   = "quantize.imatrix.chunks_count";
 
+// TODO: share with imatrix.cpp
+static const char * const LLM_KV_IMATRIX_DATASETS    = "imatrix.datasets";
+static const char * const LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
+static const char * const LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
+
 static bool striequals(const char * a, const char * b) {
     while (*a && *b) {
         if (std::tolower(*a) != std::tolower(*b)) {
@@ -84,7 +91,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
     for (auto ch : ftype_str_in) {
         ftype_str.push_back(std::toupper(ch));
     }
-    for (auto & it : QUANT_OPTIONS) {
+    for (const auto & it : QUANT_OPTIONS) {
         if (striequals(it.name.c_str(), ftype_str.c_str())) {
             ftype = it.ftype;
             ftype_str_out = it.name;
@@ -93,7 +100,7 @@ static bool try_parse_ftype(const std::string & ftype_str_in, llama_ftype & ftyp
     }
     try {
         int ftype_int = std::stoi(ftype_str);
-        for (auto & it : QUANT_OPTIONS) {
+        for (const auto & it : QUANT_OPTIONS) {
             if (it.ftype == ftype_int) {
                 ftype = it.ftype;
                 ftype_str_out = it.name;
@@ -129,7 +136,7 @@ static void usage(const char * executable) {
     printf("      Advanced option to override model metadata by key in the quantized model. May be specified multiple times.\n");
     printf("Note: --include-weights and --exclude-weights cannot be used together\n");
     printf("\nAllowed quantization types:\n");
-    for (auto & it : QUANT_OPTIONS) {
+    for (const auto & it : QUANT_OPTIONS) {
         if (it.name != "COPY") {
             printf("  %2d  or  ", it.ftype);
         } else {
@@ -140,7 +147,7 @@ static void usage(const char * executable) {
     exit(1);
 }
 
-static int load_imatrix(const std::string & imatrix_file, std::string & imatrix_dataset, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+static int load_legacy_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
     std::ifstream in(imatrix_file.c_str(), std::ios::binary);
     if (!in) {
         printf("%s: failed to open %s\n",__func__, imatrix_file.c_str());
@@ -180,7 +187,9 @@ static int load_imatrix(const std::string & imatrix_file, std::string & imatrix_
             exit(1);
         }
         if (ncall > 0) {
-            for (auto& v : e) v /= ncall;
+            for (auto & v : e) {
+                v /= ncall;
+            }
         }
 
         if (getenv("LLAMA_TRACE")) {
@@ -188,7 +197,7 @@ static int load_imatrix(const std::string & imatrix_file, std::string & imatrix_
         }
     }
 
-    // latest imatrix version contains the dataset filename at the end of the file
+    // latest legacy imatrix version contains the dataset filename at the end of the file
     int m_last_call = 0;
     if (in.peek() != EOF) {
         in.read((char *)&m_last_call, sizeof(m_last_call));
@@ -196,15 +205,130 @@ static int load_imatrix(const std::string & imatrix_file, std::string & imatrix_
         in.read((char *)&dataset_len, sizeof(dataset_len));
         std::vector<char> dataset_as_vec(dataset_len);
         in.read(dataset_as_vec.data(), dataset_len);
-        imatrix_dataset.assign(dataset_as_vec.begin(), dataset_as_vec.end());
-        printf("%s: imatrix dataset='%s'\n", __func__, imatrix_dataset.c_str());
+        imatrix_datasets.resize(1);
+        imatrix_datasets[0].assign(dataset_as_vec.begin(), dataset_as_vec.end());
+        printf("%s: imatrix dataset='%s'\n", __func__, imatrix_datasets[0].c_str());
     }
     printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__, int(imatrix_data.size()), imatrix_file.c_str(), m_last_call);
     return m_last_call;
 }
 
+static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+
+    struct ggml_context * ctx = nullptr;
+    struct gguf_init_params meta_gguf_params = {
+        /* .no_alloc = */ false, // the data is needed
+        /* .ctx      = */ &ctx,
+    };
+    struct gguf_context * ctx_gguf = gguf_init_from_file(imatrix_file.c_str(), meta_gguf_params);
+    if (!ctx_gguf) {
+        fprintf(stderr, "%s: imatrix file '%s' is using old format\n", __func__, imatrix_file.c_str());
+        return load_legacy_imatrix(imatrix_file, imatrix_datasets, imatrix_data);
+    }
+    const int32_t n_entries = gguf_get_n_tensors(ctx_gguf);
+    if (n_entries < 1) {
+        fprintf(stderr, "%s: no data in file %s\n", __func__, imatrix_file.c_str());
+        gguf_free(ctx_gguf);
+        ggml_free(ctx);
+        exit(1);
+    }
+
+    const int dataset_idx     = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_DATASETS);
+    const int chunk_count_idx = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_CHUNK_COUNT);
+    const int chunk_size_idx  = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_CHUNK_SIZE);
+    if (dataset_idx < 0 || chunk_count_idx < 0 || chunk_size_idx < 0) {
+        fprintf(stderr, "%s: missing imatrix metadata in file %s\n", __func__, imatrix_file.c_str());
+        gguf_free(ctx_gguf);
+        ggml_free(ctx);
+        exit(1);
+    }
+
+    const uint32_t chunk_size = gguf_get_val_u32(ctx_gguf, chunk_size_idx);
+
+    const std::string sums_suffix{ ".in_sum2" };
+    const std::string counts_suffix{ ".counts" };
+
+    // Using an ordered map to get a deterministic iteration order.
+    std::map<std::string, std::pair<struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
+
+    for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
+        std::string name = cur->name;
+
+        if (name.empty()) { continue; }
+
+        if (string_remove_suffix(name, sums_suffix)) {
+            // in_sum2
+            sums_counts_for[std::move(name)].first = cur;
+        } else if (string_remove_suffix(name, counts_suffix)) {
+            // counts
+            sums_counts_for[std::move(name)].second = cur;
+        } else {
+            // ignore other tensors
+        }
+    }
+
+    for (const auto & sc : sums_counts_for) {
+        const        std::string & name   = sc.first;
+        const struct ggml_tensor * sums   = sc.second.first;
+        const struct ggml_tensor * counts = sc.second.second;
+
+        if (!sums || !counts) {
+            fprintf(stderr, "%s: mismatched sums and counts for %s\n", __func__, name.c_str());
+            gguf_free(ctx_gguf);
+            ggml_free(ctx);
+            exit(1);
+        }
+
+        const int64_t ne0 = sums->ne[0];
+        const int64_t ne1 = sums->ne[1];
+
+        auto & e = imatrix_data[name];
+        e.resize(ggml_nelements(sums));
+        float max_count = 0.0f;
+        for (int64_t j = 0; j < ne1; ++j) {
+            const float count = ((const float *) counts->data)[j];
+            if (count > 0.0f) {
+                for (int64_t i = 0; i < ne0; ++i) {
+                    e[j*ne0 + i] = ((const float *) sums->data)[j*ne0 + i] / count;
+                }
+            } else {
+                // Partial imatrix data, this tensor never got any input during calibration
+                for (int64_t i = 0; i < ne0; ++i) {
+                    e[j*ne0 + i] = 1;
+                }
+            }
+            if (count > max_count) {
+                max_count = count;
+            }
+        }
+        if (getenv("LLAMA_TRACE")) {
+            printf("%s: loaded data (size = %6d, n_tokens = %6d, n_chunks = %6d) for '%s'\n", __func__, int(e.size()), int(max_count), int(max_count / chunk_size), name.c_str());
+        }
+    }
+
+    int m_last_chunk = gguf_get_val_u32(ctx_gguf, chunk_count_idx);
+
+    int64_t n_datasets = gguf_get_arr_n(ctx_gguf, dataset_idx);
+    imatrix_datasets.reserve(n_datasets);
+    for (int64_t i = 0; i < n_datasets; ++i) {
+        imatrix_datasets.push_back(gguf_get_val_str(ctx_gguf, dataset_idx));
+    }
+    printf("%s: imatrix datasets=['%s'", __func__, imatrix_datasets[0].c_str());
+    for (size_t i = 1; i < imatrix_datasets.size(); ++i) {
+        printf(", '%s'", imatrix_datasets[i].c_str());
+    }
+    printf("]\n");
+
+    printf("%s: loaded %d importance matrix entries from %s computed on %d chunks\n", __func__, int(imatrix_data.size()), imatrix_file.c_str(), m_last_chunk);
+
+    gguf_free(ctx_gguf);
+    ggml_free(ctx);
+
+    return m_last_chunk;
+}
+
 static int prepare_imatrix(const std::string & imatrix_file,
-        std::string & imatrix_dataset,
+        std::vector<std::string> & imatrix_dataset,
         const std::vector<std::string> & included_weights,
         const std::vector<std::string> & excluded_weights,
         std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
@@ -216,18 +340,21 @@ static int prepare_imatrix(const std::string & imatrix_file,
         return m_last_call;
     }
     if (!excluded_weights.empty()) {
-        for (auto& name : excluded_weights) {
-            for (auto it = imatrix_data.begin(); it != imatrix_data.end(); ) {
+        for (const auto & name : excluded_weights) {
+            for (auto it = imatrix_data.begin(); it != imatrix_data.end();) {
                 auto pos = it->first.find(name);
-                if (pos != std::string::npos) it = imatrix_data.erase(it);
-                else ++it;
+                if (pos != std::string::npos) {
+                    it = imatrix_data.erase(it);
+                } else {
+                    ++it;
+                }
             }
         }
     }
     if (!included_weights.empty()) {
         std::unordered_map<std::string, std::vector<float>> tmp;
-        for (auto& name : included_weights) {
-            for (auto& e : imatrix_data) {
+        for (const auto & name : included_weights) {
+            for (auto & e : imatrix_data) {
                 auto pos = e.first.find(name);
                 if (pos != std::string::npos) {
                     tmp.emplace(std::move(e));
@@ -396,9 +523,9 @@ int main(int argc, char ** argv) {
         usage(argv[0]);
     }
 
-    std::string imatrix_dataset;
+    std::vector<std::string> imatrix_datasets;
     std::unordered_map<std::string, std::vector<float>> imatrix_data;
-    int m_last_call = prepare_imatrix(imatrix_file, imatrix_dataset, included_weights, excluded_weights, imatrix_data);
+    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data);
     if (!imatrix_data.empty()) {
         params.imatrix = &imatrix_data;
         {
@@ -409,11 +536,12 @@ int main(int argc, char ** argv) {
             kvo.val_str[127] = '\0';
             kv_overrides.emplace_back(std::move(kvo));
         }
-        if (!imatrix_dataset.empty()) {
+        if (!imatrix_datasets.empty()) {
             llama_model_kv_override kvo;
+            // TODO: list multiple datasets when there are more than one
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_DATASET);
             kvo.tag = LLAMA_KV_OVERRIDE_TYPE_STR;
-            strncpy(kvo.val_str, imatrix_dataset.c_str(), 127);
+            strncpy(kvo.val_str, imatrix_datasets[0].c_str(), 127);
             kvo.val_str[127] = '\0';
             kv_overrides.emplace_back(std::move(kvo));
         }
