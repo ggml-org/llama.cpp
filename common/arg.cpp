@@ -2749,6 +2749,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
+        {"--truncate-embed"},
+        string_format("allow truncation for embedding tasks to handle large inputs (default: %s)", params.truncate_embed ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.truncate_embed = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TRUNCATE_EMBED"));
+    add_opt(common_arg(
         {"--reranking", "--rerank"},
         string_format("enable reranking endpoint on server (default: %s)", "disabled"),
         [](common_params & params) {
