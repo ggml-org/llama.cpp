@@ -11,6 +11,12 @@
 #include <vector>
 #include <iostream>
 
+#include <fstream>
+
+std::ofstream prompt_output_file;
+std::ofstream tensor_output_file;
+
+
 struct callback_data {
     std::vector<uint8_t> data;
     std::string parse_layer_name;
@@ -30,10 +36,10 @@ static std::string ggml_ne_string(const ggml_tensor * t) {
 
 static void ggml_print_tensor_block(const std::string& tensor_name, uint8_t * data, ggml_type type, const int64_t * ne, const size_t * nb, int64_t token_idx) {
     const int64_t dim = ne[0];
-    std::cout << "=== TOKEN " << token_idx << " ===\n";
-    std::cout << "--- TENSOR: " << tensor_name << " ---\n";
-    std::cout << "SHAPE: [" << dim << "]\n";
-    std::cout << "DATA:\n";
+    tensor_output_file << "=== TOKEN " << token_idx << " ===\n";
+    tensor_output_file << "--- TENSOR: " << tensor_name << " ---\n";
+    tensor_output_file << "SHAPE: [" << dim << "]\n";
+    tensor_output_file << "DATA:\n";
 
     for (int64_t i = 0; i < dim; ++i) {
         size_t offset = i * nb[0];
@@ -45,11 +51,11 @@ static void ggml_print_tensor_block(const std::string& tensor_name, uint8_t * da
             default: GGML_ABORT("Unsupported tensor type");
         }
 
-        std::cout << v;
-        if (i < dim - 1) std::cout << ", ";
+        tensor_output_file << v;
+        if (i < dim - 1) tensor_output_file << ", ";
     }
 
-    std::cout << "\n\n";
+    tensor_output_file << "\n\n";
 }
 
 static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
@@ -57,7 +63,7 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
 
     if (ask) {
         if (cb_data->parse_layer_name == "__LIST__") {
-            std::cout << t->name << "\n";
+            tensor_output_file << t->name << "\n";
             return false;
         }
         return std::string(t->name) == cb_data->parse_layer_name;
@@ -133,13 +139,21 @@ static bool run(llama_context * ctx, const common_params & params, callback_data
     llama_sampler_free(sampler);
 
     // Output final result
-    std::cout << "\n\nFull output:\n" << result << "\n";
+    prompt_output_file << "\n\nFull output:\n" << result << "\n";
 
     return true;
 }
 
 
 int main(int argc, char **argv) {
+    prompt_output_file.open("prompt_output.txt");
+    tensor_output_file.open("tensor_output.txt");
+
+    if (!prompt_output_file || !tensor_output_file) {
+        std::cerr << "❌ Failed to open output files.\n";
+        return 1;
+    }
+
     callback_data cb_data;
     common_params params;
     bool list_layers = false;
@@ -239,12 +253,15 @@ int main(int argc, char **argv) {
             LOG_ERR("Failed during layer listing run\n");
             return 1;
         }
+        prompt_output_file.close();
+        tensor_output_file.close();
+
         return 0;
 
     }
 
     for (const auto& prompt : prompts) {
-        LOG_INF("Running prompt: %s\n", prompt.c_str());
+        prompt_output_file << "Running prompt: " << prompt << "\n";
         params.prompt = prompt;
         if (!run(ctx, params, cb_data)) {
             LOG_ERR("Failed on prompt: %s\n", prompt.c_str());
@@ -256,6 +273,8 @@ int main(int argc, char **argv) {
     llama_perf_context_print(ctx);
 
     llama_backend_free();
+    prompt_output_file.close();
+    tensor_output_file.close();
 
     return 0;
 }
