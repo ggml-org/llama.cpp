@@ -253,6 +253,7 @@ int main(int argc, char ** argv) {
 
         int seq_id_best = 0;
 
+        int n_remain = N;
         for (int v = 0; v < N; ++v) {
             int i_batch = 0;
 
@@ -274,8 +275,9 @@ int main(int argc, char ** argv) {
                 }
             }
 
+            --n_remain;
             // sample the next token
-            id = common_sampler_sample(smpl, ctx, i_batch);
+            id = common_sampler_sample(smpl, ctx, i_batch, n_remain);
 
             common_sampler_accept(smpl, id, true);
 
@@ -349,10 +351,11 @@ int main(int argc, char ** argv) {
                     tokens_j[j] = tokens_j[j + 1];
                 }
 
+                unsigned constexpr NA = (unsigned)-1;
                 if (v == 0) {
                     // sample from the last level
                     for (int i = 0; i < W; i++) {
-                        tokens_j[N - 2][i] = common_sampler_sample(smpl, ctx, ngrams_cur.size()*(N-1) + W*(N - 2) + i);
+                      tokens_j[N - 2][i] = common_sampler_sample(smpl, ctx, ngrams_cur.size()*(N-1) + W*(N - 2) + i, NA);
                     }
                 } else {
                     for (int i = 0; i < W; i++) {

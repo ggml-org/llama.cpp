@@ -117,7 +117,8 @@ int main(int argc, char ** argv){
         int i_dft = 0;
         while (true) {
             // sample from the target model
-            llama_token id = common_sampler_sample(smpl, ctx, i_dft);
+            unsigned const n_remain = params.n_predict - n_predict;
+            llama_token id = common_sampler_sample(smpl, ctx, i_dft, n_remain);
 
             common_sampler_accept(smpl, id, true);
 
