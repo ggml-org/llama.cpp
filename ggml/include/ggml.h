@@ -314,6 +314,13 @@
 extern "C" {
 #endif
 
+    // Function type used in fatal error callbacks
+    typedef void (*ggml_abort_callback_t)(const char * error_message);
+
+    // Set the abort callback (passing null will restore original abort functionality: printing a message to stdout)
+    // Returns the old callback for chaining
+    GGML_API ggml_abort_callback_t ggml_set_abort_callback(ggml_abort_callback_t callback);
+
     GGML_NORETURN GGML_ATTRIBUTE_FORMAT(3, 4)
     GGML_API void ggml_abort(const char * file, int line, const char * fmt, ...);
 
@@ -482,6 +489,7 @@ extern "C" {
         GGML_OP_CONV_TRANSPOSE_1D,
         GGML_OP_IM2COL,
         GGML_OP_IM2COL_BACK,
+        GGML_OP_CONV_2D,
         GGML_OP_CONV_2D_DW,
         GGML_OP_CONV_TRANSPOSE_2D,
         GGML_OP_POOL_1D,
@@ -549,6 +557,8 @@ extern "C" {
         GGML_GLU_OP_REGLU,
         GGML_GLU_OP_GEGLU,
         GGML_GLU_OP_SWIGLU,
+        GGML_GLU_OP_GEGLU_ERF,
+        GGML_GLU_OP_GEGLU_QUICK,
 
         GGML_GLU_OP_COUNT,
     };
@@ -637,6 +647,9 @@ extern "C" {
     GGML_API bool ggml_guid_matches(ggml_guid_t guid_a, ggml_guid_t guid_b);
 
     // misc
+
+    GGML_API const char * ggml_version(void);
+    GGML_API const char * ggml_commit(void);
 
     GGML_API void    ggml_time_init(void); // call this once at the beginning of the program
     GGML_API int64_t ggml_time_ms(void);
@@ -1136,6 +1149,22 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_geglu_erf(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_erf_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     // A: n columns, r rows,
     // B: n columns, r rows,
     GGML_API struct ggml_tensor * ggml_glu_split(
@@ -1155,6 +1184,16 @@ extern "C" {
             struct ggml_tensor  * b);
 
     GGML_API struct ggml_tensor * ggml_swiglu_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_geglu_erf_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick_split(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
@@ -1502,8 +1541,14 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    // a    [ne0, ne01, ne02, ne03]
+    // mask [ne0, ne11, ne12, ne13] | ne11 >= ne01, F16 or F32, optional
+    //
+    // broadcast:
+    //   ne02 % ne12 == 0
+    //   ne03 % ne13 == 0
+    //
     // fused soft_max(a*scale + mask*(ALiBi slope))
-    // mask is optional
     // max_bias = 0.0f for no ALiBi
     GGML_API struct ggml_tensor * ggml_soft_max_ext(
             struct ggml_context * ctx,
@@ -1813,6 +1858,17 @@ extern "C" {
             struct ggml_tensor  * b,
             int                   stride);
 
+    GGML_API struct ggml_tensor * ggml_conv_2d_direct(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,   // convolution kernel [KW, KH, IC, OC]
+            struct ggml_tensor  * b,   // input data [W, H, C, N]
+            int                   s0,  // stride dimension 0
+            int                   s1,  // stride dimension 1
+            int                   p0,  // padding dimension 0
+            int                   p1,  // padding dimension 1
+            int                   d0,  // dilation dimension 0
+            int                   d1); // dilation dimension 1
+
     enum ggml_op_pool {
         GGML_OP_POOL_MAX,
         GGML_OP_POOL_AVG,
@@ -1855,6 +1911,12 @@ extern "C" {
     enum ggml_scale_mode {
         GGML_SCALE_MODE_NEAREST  = 0,
         GGML_SCALE_MODE_BILINEAR = 1,
+
+        GGML_SCALE_MODE_COUNT
+    };
+
+    enum ggml_scale_flag {
+        GGML_SCALE_FLAG_ALIGN_CORNERS = (1 << 8)
     };
 
     // interpolate
@@ -1867,14 +1929,26 @@ extern "C" {
 
     // interpolate
     // interpolate scale to specified dimensions
-    GGML_API struct ggml_tensor * ggml_upscale_ext(
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_upscale_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             int                   ne0,
             int                   ne1,
             int                   ne2,
             int                   ne3,
-            enum ggml_scale_mode  mode);
+            enum ggml_scale_mode  mode),
+        "use ggml_interpolate instead");
+
+    // Up- or downsamples the input to the specified size.
+    // 2D scale modes (eg. bilinear) are applied to the first two dimensions.
+    GGML_API struct ggml_tensor * ggml_interpolate(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int64_t               ne0,
+            int64_t               ne1,
+            int64_t               ne2,
+            int64_t               ne3,
+            uint32_t              mode); // ggml_scale_mode [ | ggml_scale_flag...]
 
     // pad each dimension with zeros: [x, ..., x] -> [x, ..., x, 0, ..., 0]
     GGML_API struct ggml_tensor * ggml_pad(
@@ -1937,11 +2011,17 @@ extern "C" {
 
 #define GGML_KQ_MASK_PAD 64
 
-    // q:    [n_embd_k, n_batch,     n_head,    1]
-    // k:    [n_embd_k, n_kv,        n_head_kv, 1]
-    // v:    [n_embd_v, n_kv,        n_head_kv, 1] !! not transposed !!
-    // mask: [n_kv,     n_batch_pad, 1,         1] !! n_batch_pad = GGML_PAD(n_batch, GGML_KQ_MASK_PAD) !!
-    // res:  [n_embd_v, n_head,      n_batch,   1] !! permuted !!
+    // q:    [n_embd_k, n_batch,     n_head,    ne3 ]
+    // k:    [n_embd_k, n_kv,        n_head_kv, ne3 ]
+    // v:    [n_embd_v, n_kv,        n_head_kv, ne3 ] !! not transposed !!
+    // mask: [n_kv,     n_batch_pad, ne32,      ne33] !! n_batch_pad = GGML_PAD(n_batch, GGML_KQ_MASK_PAD) !!
+    // res:  [n_embd_v, n_head,      n_batch,   ne3 ] !! permuted !!
+    //
+    // broadcast:
+    //   n_head % n_head_kv == 0
+    //   n_head % ne32      == 0
+    //   ne3    % ne33      == 0
+    //
     GGML_API struct ggml_tensor * ggml_flash_attn_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
@@ -1980,7 +2060,8 @@ extern "C" {
             struct ggml_tensor  * dt,
             struct ggml_tensor  * A,
             struct ggml_tensor  * B,
-            struct ggml_tensor  * C);
+            struct ggml_tensor  * C,
+            struct ggml_tensor  * ids);
 
     // partition into non-overlapping windows with padding if needed
     // example:

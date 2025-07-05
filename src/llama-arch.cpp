@@ -45,6 +45,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GEMMA3N,          "gemma3n"          },
     { LLM_ARCH_STARCODER2,       "starcoder2"       },
     { LLM_ARCH_MAMBA,            "mamba"            },
+    { LLM_ARCH_MAMBA2,           "mamba2"           },
     { LLM_ARCH_XVERSE,           "xverse"           },
     { LLM_ARCH_COMMAND_R,        "command-r"        },
     { LLM_ARCH_COHERE2,          "cohere2"          },
@@ -170,6 +171,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_INNER_SIZE,     "%s.ssm.inner_size"     },
     { LLM_KV_SSM_STATE_SIZE,     "%s.ssm.state_size"     },
     { LLM_KV_SSM_TIME_STEP_RANK, "%s.ssm.time_step_rank" },
+    { LLM_KV_SSM_GROUP_COUNT,    "%s.ssm.group_count"    },
     { LLM_KV_SSM_DT_B_C_RMS,     "%s.ssm.dt_b_c_rms"     },
 
     { LLM_KV_WKV_HEAD_SIZE, "%s.wkv.head_size" },
@@ -1005,6 +1007,22 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
+        LLM_ARCH_MAMBA2,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
+            { LLM_TENSOR_OUTPUT,          "output" },
+            { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
+            { LLM_TENSOR_SSM_IN,          "blk.%d.ssm_in" },
+            { LLM_TENSOR_SSM_CONV1D,      "blk.%d.ssm_conv1d" },
+            { LLM_TENSOR_SSM_DT,          "blk.%d.ssm_dt" },
+            { LLM_TENSOR_SSM_A,           "blk.%d.ssm_a" },
+            { LLM_TENSOR_SSM_D,           "blk.%d.ssm_d" },
+            { LLM_TENSOR_SSM_NORM,        "blk.%d.ssm_norm" },
+            { LLM_TENSOR_SSM_OUT,         "blk.%d.ssm_out" },
+        },
+    },
+    {
         LLM_ARCH_XVERSE,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -1761,6 +1779,7 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_SSM_CONV1D,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
     {LLM_TENSOR_SSM_A,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_SCAN}},
     {LLM_TENSOR_SSM_D,                      {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_SSM_NORM,                   {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_TIME_MIX_LERP_X,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_TIME_MIX_LN,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_CHANNEL_MIX_LERP_K,         {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1894,6 +1913,7 @@ const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor) {
 bool llm_arch_is_recurrent(const llm_arch & arch) {
     switch (arch) {
         case LLM_ARCH_MAMBA:
+        case LLM_ARCH_MAMBA2:
         case LLM_ARCH_RWKV6:
         case LLM_ARCH_RWKV6QWEN2:
         case LLM_ARCH_RWKV7:

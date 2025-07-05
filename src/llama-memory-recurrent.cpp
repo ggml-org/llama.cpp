@@ -374,10 +374,11 @@ llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr &
                 // if all tokens are output, split by sequence
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                ubatch = balloc.split_equal(n_ubatch);
+                ubatch = balloc.split_equal(n_ubatch, false);
             }
 
-            if (ubatch.n_tokens == 0) {
+            if (balloc.get_n_used() < balloc.get_n_tokens()) {
+                // failed to find a suitable split
                 break;
             }
 
@@ -1071,7 +1072,15 @@ bool llama_memory_recurrent_context::next() {
 }
 
 bool llama_memory_recurrent_context::apply() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+    assert(!llama_memory_status_is_fail(status));
+
+    // no ubatches -> this is an update
+    if (ubatches.empty()) {
+        // recurrent cache never performs updates
+        assert(status == LLAMA_MEMORY_STATUS_NO_UPDATE);
+
+        return true;
+    }
 
     mem->find_slot(ubatches[i_next]);
 

@@ -65,8 +65,9 @@
 #include <aclnnop/aclnn_eq_tensor.h>
 #include <aclnnop/aclnn_gt_scalar.h>
 #include <aclnnop/aclnn_pow.h>
-#include <aclnnop/aclnn_grouped_matmul_v2.h>
+#include <aclnnop/aclnn_grouped_matmul_v3.h>
 #include <aclnnop/aclnn_fused_infer_attention_score_v2.h>
+#include <aclnnop/aclnn_zero.h>
 #include <float.h>
 
 #include <cmath>
@@ -804,10 +805,11 @@ static aclTensor* aclnn_zero(ggml_backend_cann_context& ctx, void* buffer,
         nb[i] = nb[i - 1] * ne[i - 1];
     }
 
-    ggml_cann_async_memset(ctx, buffer, n_bytes, 0);
     aclTensor* zero =
         ggml_cann_create_tensor(buffer, type, type_size, ne, nb, dims);
+    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceZero, zero);
     return zero;
+    GGML_UNUSED(n_bytes);
 }
 
 /**
@@ -2654,6 +2656,67 @@ static void ggml_cann_mul_mat_id_fp(ggml_backend_cann_context& ctx, ggml_tensor*
         memcpy(ori_src0_nb, cast_nb, sizeof(ori_src0_nb));
     }
 
+#ifdef ASCEND_310P
+    ggml_tensor src0_row = *src0;
+    ggml_tensor src1_row = *src1;
+    ggml_tensor dst_row = *dst;
+
+    if (src0->type == GGML_TYPE_F16) {
+        src0_row.type = GGML_TYPE_F32;
+    }
+
+    // src0_row [D, M, 1, 1] weight without permute
+    src0_row.ne[2] = 1;
+    src0_row.ne[3] = 1;
+    src0_row.nb[0] = ori_src0_nb[0];
+    src0_row.nb[1] = ori_src0_nb[1];
+    src0_row.nb[2] = ori_src0_nb[1];
+    src0_row.nb[3] = ori_src0_nb[1];
+
+    // src1_row [D, 1, 1, 1] -> input
+    src1_row.ne[1] = 1;
+    src1_row.ne[2] = 1;
+    src1_row.ne[3] = 1;
+    src1_row.nb[2] = nb11;
+    src1_row.nb[3] = nb11;
+
+    // dst_row [M, 1, 1, 1] -> out
+    dst_row.ne[1] = 1;
+    dst_row.ne[2] = 1;
+    dst_row.ne[3] = 1;
+    dst_row.nb[2] = nb1;
+    dst_row.nb[3] = nb1;
+
+    //create weight for one row
+    for (int64_t iid1 = 0; iid1 < ids->ne[1]; iid1++) {
+        for (int64_t id = 0; id < n_ids; id++) {
+            // expert index
+            int32_t i02 = *(int32_t *) (ids_host.data() + iid1*ids->nb[1] + id*ids->nb[0]);
+            GGML_ASSERT(i02 >= 0 && i02 < n_as);
+
+            // If B = 1 (broadcast), always use 0; otherwise, use id.
+            int64_t i11 = (ne11 == 1 ? 0 : id);
+            int64_t i12 = iid1;
+
+            int64_t i1 = id;
+            int64_t i2 = i12;
+
+            void* src0_tmp_ptr = src0_original + i02*ori_src0_nb[2];
+            void* src1_tmp_ptr = src1_original + i11*nb11 + i12*nb12;
+            void* dst_tmp_ptr  = dst_original  + i1*nb1   + i2*nb2;
+
+            src0_row.data = src0_tmp_ptr;
+            src1_row.data = src1_tmp_ptr;
+            dst_row.data = dst_tmp_ptr;
+            dst_row.src[0] = &src0_row;
+            dst_row.src[1] = &src1_row;
+
+            ggml_cann_mul_mat(ctx, &dst_row);
+        }
+    }
+    return;
+#endif
+
     std::vector<aclTensor*> src0_tensor_vec;
     std::vector<aclTensor*> src1_tensor_vec;
     std::vector<aclTensor*> dst_tensor_vec;
@@ -2701,9 +2764,9 @@ static void ggml_cann_mul_mat_id_fp(ggml_backend_cann_context& ctx, ggml_tensor*
     }
 
     size_t GROUP_SIZE = 128;
-    // GroupedMatmulV2 required tensor_list.size < 128
+    // GroupedMatmulV3 required tensor_list.size < 128
     for (size_t i = 0; i < src0_tensor_vec.size(); i += GROUP_SIZE) {
-        // split and call GroupedMatmulV2
+        // split and call GroupedMatmulV3
         size_t end = std::min(i + GROUP_SIZE, src0_tensor_vec.size());
         std::vector<aclTensor*> src0_tensor_vec_split(src0_tensor_vec.begin() + i, src0_tensor_vec.begin() + end);
         std::vector<aclTensor*> src1_tensor_vec_split(src1_tensor_vec.begin() + i, src1_tensor_vec.begin() + end);
@@ -2713,7 +2776,7 @@ static void ggml_cann_mul_mat_id_fp(ggml_backend_cann_context& ctx, ggml_tensor*
         aclTensorList* src1_tensor_list = aclCreateTensorList(src1_tensor_vec_split.data(), src1_tensor_vec_split.size());
         aclTensorList* dst_tensor_list = aclCreateTensorList(dst_tensor_vec_split.data(), dst_tensor_vec_split.size());
 
-        GGML_CANN_CALL_ACLNN_OP(ctx, GroupedMatmulV2, src1_tensor_list, src0_tensor_list,
+        GGML_CANN_CALL_ACLNN_OP(ctx, GroupedMatmulV3, src1_tensor_list, src0_tensor_list,
             nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, 0, -1, dst_tensor_list);
 
         ggml_cann_release_resources(ctx, src0_tensor_list, src1_tensor_list, dst_tensor_list);

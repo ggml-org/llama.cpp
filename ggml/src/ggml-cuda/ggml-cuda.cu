@@ -2314,6 +2314,12 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
                 case GGML_GLU_OP_SWIGLU:
                     ggml_cuda_op_swiglu(ctx, dst);
                     break;
+                case GGML_GLU_OP_GEGLU_ERF:
+                    ggml_cuda_op_geglu_erf(ctx, dst);
+                    break;
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    ggml_cuda_op_geglu_quick(ctx, dst);
+                    break;
                 default:
                     return false;
             }
@@ -3116,6 +3122,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_GLU_OP_REGLU:
                 case GGML_GLU_OP_GEGLU:
                 case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                case GGML_GLU_OP_GEGLU_QUICK:
                     return ggml_is_contiguous_1(op->src[0]);
                 default:
                     return false;
@@ -3321,12 +3329,26 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
         case GGML_OP_LOG:
-        case GGML_OP_SSM_SCAN:
-        case GGML_OP_SSM_CONV:
             return true;
+        case GGML_OP_SSM_SCAN: {
+            if (op->src[3]->ne[0] == 1) {
+                // Mamba2
+                // (kernel only supports d_state == 128 && d_head % 16 == 0)
+                return op->src[0]->ne[0] == 128 && op->src[0]->ne[1] % 16 == 0;
+            } else {
+                // Mamba
+                // (kernel only supports d_state == 16, d_head == 1, n_head % 128 == 0, n_group == 1)
+                return op->src[0]->ne[0] == 16 && op->src[0]->ne[1] == 1 && op->src[0]->ne[2] % 128 == 0 && op->src[4]->ne[1] == 1;
+            }
+        }
+        case GGML_OP_SSM_CONV: {
+            // assumes d_inner % threads == 0
+            return op->src[0]->ne[1] % 128 == 0;
+        }
         case GGML_OP_CONT:
             return op->src[0]->type != GGML_TYPE_BF16;
         case GGML_OP_DIAG_MASK_INF:
+            return true;
         case GGML_OP_SOFT_MAX:
             return true;
         case GGML_OP_SOFT_MAX_BACK: {
@@ -3375,6 +3397,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             if (op->src[0]->ne[0] == 192) {
                 return false;
             }
+            // TODO: support broadcast
+            // note: this was initially implemented in https://github.com/ggml-org/llama.cpp/pull/14500, but
+            //       the interface of ggml_flash_attn_ext() changed in https://github.com/ggml-org/llama.cpp/pull/14505
             if (op->src[0]->ne[3] != 1) {
                 return false;
             }

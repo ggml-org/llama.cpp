@@ -351,6 +351,7 @@ struct ggml_backend_opencl_context {
     cl_program program_gemv_noshuffle_general;
     cl_program program_gemv_noshuffle;
     cl_program program_get_rows;
+    cl_program program_glu;
     cl_program program_im2col_f16;
     cl_program program_im2col_f32;
     cl_program program_mul_mat_Ab_Bi_8x4;
@@ -397,10 +398,13 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_scale;
     cl_kernel kernel_silu, kernel_silu_4;
     cl_kernel kernel_gelu, kernel_gelu_4;
+    cl_kernel kernel_gelu_erf, kernel_gelu_erf_4;
     cl_kernel kernel_gelu_quick, kernel_gelu_quick_4;
     cl_kernel kernel_relu;
     cl_kernel kernel_sigmoid_f32, kernel_sigmoid_f16;
     cl_kernel kernel_clamp;
+    cl_kernel kernel_geglu, kernel_reglu, kernel_swiglu, kernel_geglu_erf, kernel_geglu_quick,
+              kernel_geglu_f16, kernel_reglu_f16, kernel_swiglu_f16, kernel_geglu_erf_f16, kernel_geglu_quick_f16;
     cl_kernel kernel_norm;
     cl_kernel kernel_rms_norm;
     cl_kernel kernel_group_norm;
@@ -733,8 +737,35 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
 
         CL_CHECK((backend_ctx->kernel_gelu         = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu", &err), err));
         CL_CHECK((backend_ctx->kernel_gelu_4       = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_4", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu_erf     = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_erf", &err), err));
+        CL_CHECK((backend_ctx->kernel_gelu_erf_4   = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_erf_4", &err), err));
         CL_CHECK((backend_ctx->kernel_gelu_quick   = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_quick", &err), err));
         CL_CHECK((backend_ctx->kernel_gelu_quick_4 = clCreateKernel(backend_ctx->program_gelu, "kernel_gelu_quick_4", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // glu
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "glu.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("glu.cl");
+#endif
+        backend_ctx->program_glu =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_geglu           = clCreateKernel(backend_ctx->program_glu, "kernel_geglu", &err), err));
+        CL_CHECK((backend_ctx->kernel_reglu           = clCreateKernel(backend_ctx->program_glu, "kernel_reglu", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu          = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_erf       = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_quick     = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_reglu_f16       = clCreateKernel(backend_ctx->program_glu, "kernel_reglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_swiglu_f16      = clCreateKernel(backend_ctx->program_glu, "kernel_swiglu_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_erf_f16   = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_erf_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_geglu_quick_f16 = clCreateKernel(backend_ctx->program_glu, "kernel_geglu_quick_f16", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2163,7 +2194,7 @@ static ggml_status ggml_backend_opencl_graph_compute(ggml_backend_t backend, ggm
         //       dependencies.
         sync_with_other_backends(backend);
 
-        if (node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+        if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
             continue;
         }
 
@@ -2198,6 +2229,12 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 default:
                     return false;
             }
+        case GGML_OP_SET_ROWS:
+            {
+                // TODO: add support
+                // ref: https://github.com/ggml-org/llama.cpp/pull/14274
+                return false;
+            } break;
         case GGML_OP_CPY:
         case GGML_OP_DUP:
         case GGML_OP_CONT:
@@ -2232,6 +2269,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_RELU:
+                case GGML_UNARY_OP_GELU_ERF:
                 case GGML_UNARY_OP_GELU_QUICK:
                    return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
                 case GGML_UNARY_OP_SIGMOID:
@@ -2239,6 +2277,17 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 case GGML_UNARY_OP_TANH:
                    return (op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32) ||
                           (op->src[0]->type == GGML_TYPE_F16 && op->type == GGML_TYPE_F16);
+                default:
+                    return false;
+            }
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_REGLU:
+                case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    return ggml_is_contiguous_1(op->src[0]) && (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16);
                 default:
                     return false;
             }
@@ -3166,7 +3215,7 @@ static void dump_tensor(ggml_backend_t backend, const struct ggml_tensor * tenso
 
     // Open file and dump.
     char fname[512];
-    sprintf(fname, "./tensor-dumps/%s.txt", tensor->name);
+    snprintf(fname, sizeof(fname), "./tensor-dumps/%s.txt", tensor->name);
     FILE * f = fopen(fname, "w");
     if (!f) {
         printf("Failed to open %s\n", fname);
@@ -3825,6 +3874,44 @@ static void ggml_cl_gelu(ggml_backend_t backend, const ggml_tensor * src0, const
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+static void ggml_cl_gelu_erf(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0);
+    GGML_ASSERT(src0->extra);
+    GGML_ASSERT(dst);
+    GGML_ASSERT(dst->extra);
+
+    UNUSED(src1);
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    cl_kernel kernel;
+
+    int n = ggml_nelements(dst);
+
+    if (n % 4 == 0) {
+        kernel = backend_ctx->kernel_gelu_erf_4;
+        n /= 4;
+    } else {
+        kernel = backend_ctx->kernel_gelu_erf;
+    }
+
+    CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
+
+    size_t global_work_size[] = {(size_t)n, 1, 1};
+    size_t local_work_size[] = {64, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+}
+
 static void ggml_cl_gelu_quick(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -4420,7 +4507,8 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
-    const ggml_scale_mode mode = (ggml_scale_mode) ggml_get_op_params_i32(dst, 0);
+    const int mode_flags        = (ggml_scale_mode) ggml_get_op_params_i32(dst, 0);
+    const ggml_scale_mode mode  = (ggml_scale_mode) (mode_flags & 0xFF);
     cl_kernel kernel = nullptr;
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
@@ -4451,18 +4539,22 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
     const cl_ulong nb02 = src0->nb[2];
     const cl_ulong nb03 = src0->nb[3];
 
-    const int ne00_src = src0->ne[0];
-    const int ne01_src = src0->ne[1];
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
+    const int ne02 = src0->ne[2];
+    const int ne03 = src0->ne[3];
 
-    const int ne10_dst = dst->ne[0];
-    const int ne11_dst = dst->ne[1];
-    const int ne12_dst = dst->ne[2];
-    const int ne13_dst = dst->ne[3];
+    const int ne0 = dst->ne[0];
+    const int ne1 = dst->ne[1];
+    const int ne2 = dst->ne[2];
+    const int ne3 = dst->ne[3];
 
-    const float sf0 = (float)dst->ne[0] / src0->ne[0];
-    const float sf1 = (float)dst->ne[1] / src0->ne[1];
-    const float sf2 = (float)dst->ne[2] / src0->ne[2];
-    const float sf3 = (float)dst->ne[3] / src0->ne[3];
+    float sf0 = (float)ne0 / ne00;
+    float sf1 = (float)ne1 / ne01;
+    float sf2 = (float)ne2 / ne02;
+    float sf3 = (float)ne3 / ne03;
+
+    float pixel_offset = 0.5f;
 
     CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem),    &extra_src0->data_device));
     CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_ulong),  &off_src0));
@@ -4474,29 +4566,36 @@ static void ggml_cl_upscale(ggml_backend_t backend, const ggml_tensor * src0, gg
     CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_ulong),  &nb03));
 
     if (mode == GGML_SCALE_MODE_NEAREST) {
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne10_dst));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne11_dst));
-        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12_dst));
-        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne13_dst));
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne0));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne2));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne3));
         CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float),    &sf0));
         CL_CHECK(clSetKernelArg(kernel, 13, sizeof(float),    &sf1));
         CL_CHECK(clSetKernelArg(kernel, 14, sizeof(float),    &sf2));
         CL_CHECK(clSetKernelArg(kernel, 15, sizeof(float),    &sf3));
     } else if (mode == GGML_SCALE_MODE_BILINEAR) {
-        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne00_src));
-        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne01_src));
-        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne10_dst));
-        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne11_dst));
-        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne12_dst));
-        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne13_dst));
+        if (mode_flags & GGML_SCALE_FLAG_ALIGN_CORNERS) {
+            sf0 = (float)(ne0 - 1) / (ne00 - 1);
+            sf1 = (float)(ne1 - 1) / (ne01 - 1);
+            pixel_offset = 0.0f;
+        }
+
+        CL_CHECK(clSetKernelArg(kernel, 8, sizeof(int),       &ne00));
+        CL_CHECK(clSetKernelArg(kernel, 9, sizeof(int),       &ne01));
+        CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne0));
+        CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne1));
+        CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne2));
+        CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne3));
         CL_CHECK(clSetKernelArg(kernel, 14, sizeof(float),    &sf0));
         CL_CHECK(clSetKernelArg(kernel, 15, sizeof(float),    &sf1));
         CL_CHECK(clSetKernelArg(kernel, 16, sizeof(float),    &sf2));
         CL_CHECK(clSetKernelArg(kernel, 17, sizeof(float),    &sf3));
+        CL_CHECK(clSetKernelArg(kernel, 18, sizeof(float),    &pixel_offset));
     }
 
 
-    size_t dst_total_elements = (size_t)ne10_dst * ne11_dst * ne12_dst * ne13_dst;
+    size_t dst_total_elements = (size_t)ne0 * ne1 * ne2 * ne3;
     if (dst_total_elements == 0) {
         return;
     }
@@ -5712,19 +5811,31 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
 
     cl_ulong offset1 = extra1 ? extra1->offset + src1->view_offs : offset0;
 
-    const int  ne00 = src0 ? src0->ne[0] : 0;
-    const int  ne01 = src0 ? src0->ne[1] : 0;
-    const int  ne02 = src0 ? src0->ne[2] : 0;
-    const int  ne03 = src0 ? src0->ne[3] : 0;
+    const int ne00 = src0->ne[0];
+    const int ne01 = src0->ne[1];
+    const int ne02 = src0->ne[2];
+    const int ne03 = src0->ne[3];
+
+    const cl_long nb01 = src0->nb[1];
+    const cl_long nb02 = src0->nb[2];
+    const cl_long nb03 = src0->nb[3];
+
+    const int ne12 = src1 ? src1->ne[2] : 0;
+    const int ne13 = src1 ? src1->ne[3] : 0;
+
+    const cl_long nb11 = src1 ? src1->nb[1] : 0;
+    const cl_long nb12 = src1 ? src1->nb[2] : 0;
+    const cl_long nb13 = src1 ? src1->nb[3] : 0;
+
+    const cl_long nb1 = dst->nb[1];
+    const cl_long nb2 = dst->nb[2];
+    const cl_long nb3 = dst->nb[3];
 
     float scale, max_bias;
     memcpy(&scale,    dst->op_params + 0, sizeof(float));
     memcpy(&max_bias, dst->op_params + 1, sizeof(float));
 
-    const int nrows_x = ggml_nrows(src0);
-    const int nrows_y = src0->ne[1];
-
-    const int n_head      = nrows_x/nrows_y;
+    const int n_head      = src0->ne[2];
     const int n_head_log2 = 1u << (uint32_t) floorf(log2f((float) n_head));
 
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
@@ -5769,13 +5880,22 @@ static void ggml_cl_soft_max(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
     CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
     CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
-    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
-    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
-    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(float),    &scale));
-    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(float),    &max_bias));
-    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(float),    &m0));
-    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(float),    &m1));
-    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &n_head_log2));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb02));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb03));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne13));
+    CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb11));
+    CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb12));
+    CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb13));
+    CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb2));
+    CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nb3));
+    CL_CHECK(clSetKernelArg(kernel, 18, sizeof(float),    &scale));
+    CL_CHECK(clSetKernelArg(kernel, 19, sizeof(float),    &max_bias));
+    CL_CHECK(clSetKernelArg(kernel, 20, sizeof(float),    &m0));
+    CL_CHECK(clSetKernelArg(kernel, 21, sizeof(float),    &m1));
+    CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &n_head_log2));
 
     size_t global_work_size[] = {(size_t)ne01*nth, (size_t)ne02, (size_t)ne03};
     size_t local_work_size[] = {(size_t)nth, 1, 1};
@@ -6143,6 +6263,105 @@ static void ggml_cl_sum_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+static void ggml_cl_glu(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(src0);
+    GGML_ASSERT(src0->extra);
+    GGML_ASSERT(dst);
+    GGML_ASSERT(dst->extra);
+
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+
+    if (src1) {
+        GGML_ASSERT(src1);
+        GGML_ASSERT(src1->extra);
+        GGML_ASSERT(ggml_are_same_shape(src0, src1));
+    }
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    cl_kernel kernel;
+    switch (ggml_get_glu_op(dst)) {
+        case GGML_GLU_OP_GEGLU:
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->kernel_geglu;
+            } else {
+                kernel = backend_ctx->kernel_geglu_f16;
+            }
+            break;
+        case GGML_GLU_OP_REGLU:
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->kernel_reglu;
+            } else {
+                kernel = backend_ctx->kernel_reglu_f16;
+            }
+            break;
+        case GGML_GLU_OP_SWIGLU:
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->kernel_swiglu;
+            } else {
+                kernel = backend_ctx->kernel_swiglu_f16;
+            }
+            break;
+        case GGML_GLU_OP_GEGLU_ERF:
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->kernel_geglu_erf;
+            } else {
+                kernel = backend_ctx->kernel_geglu_erf_f16;
+            }
+            break;
+        case GGML_GLU_OP_GEGLU_QUICK:
+            if (dst->type == GGML_TYPE_F32) {
+                kernel = backend_ctx->kernel_geglu_quick;
+            } else {
+                kernel = backend_ctx->kernel_geglu_quick_f16;
+            }
+            break;
+        default:
+            GGML_ABORT("Unsupported glu op");
+    }
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    ggml_tensor_extra_cl * extra1 = src1 ? (ggml_tensor_extra_cl *)src1->extra : nullptr;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    cl_ulong offset1 = extra1 ? extra1->offset + src1->view_offs : offset0;
+
+    const int ne0       = dst->ne[0];
+
+    const cl_ulong nb01 = src0->nb[1];
+    const cl_ulong nb11 = src1 ? src1->nb[1] : nb01;
+
+    const cl_ulong nb1  = dst->nb[1];
+
+    const int swp = ((const int32_t *) dst->op_params)[1];
+    const int ne00_off = src1 ? 0 : (swp ? ne0 : 0);
+    const int ne10_off = src1 ? 0 : (swp ? 0 : ne0);
+
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   src1 ? &extra1->data_device : &extra0->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_ulong), &nb01));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb11));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne0));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb1));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne00_off));
+    CL_CHECK(clSetKernelArg(kernel, 11, sizeof(int),      &ne10_off));
+
+    const size_t nrows = ggml_nrows(src0);
+    size_t nth = 512;
+    size_t global_work_size[] = {nrows*nth, 1, 1};
+    size_t local_work_size[] = {nth, 1, 1};
+
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+}
+
 //------------------------------------------------------------------------------
 // Op offloading
 //------------------------------------------------------------------------------
@@ -6211,6 +6430,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                     }
                     func = ggml_cl_gelu;
                     break;
+                case GGML_UNARY_OP_GELU_ERF:
+                    if (!any_on_device) {
+                        return false;
+                    }
+                    func = ggml_cl_gelu_erf;
+                    break;
                 case GGML_UNARY_OP_GELU_QUICK:
                     if (!any_on_device) {
                         return false;
@@ -6244,6 +6469,12 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
                 default:
                     return false;
             } break;
+        case GGML_OP_GLU:
+            if (!any_on_device) {
+                return false;
+            }
+            func = ggml_cl_glu;
+            break;
         case GGML_OP_CLAMP:
             if (!any_on_device) {
                 return false;
