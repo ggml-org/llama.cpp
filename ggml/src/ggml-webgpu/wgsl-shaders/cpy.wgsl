@@ -8,8 +8,8 @@ var<storage, read_write> dst: array<f16>;
 
 struct Params {
     ne: u32,            // total number of elements
-    offset_src: u32,    // in bytes
-    offset_dst: u32,    // in bytes
+    offset_src: u32,    // in elements
+    offset_dst: u32,    // in elements
 
     // Strides (in elements) — may be permuted
     stride_src0: u32,

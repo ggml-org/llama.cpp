@@ -2,6 +2,7 @@ struct MulMatParams {
     m: u32,
     n: u32,
     k: u32,
+    // all strides are in elements
     stride_01: u32,
     stride_11: u32,
     stride_02: u32,
@@ -16,7 +17,7 @@ struct MulMatParams {
 };
 
 @group(0) @binding(0) var<storage, read_write> src0: array<f32>; // N rows, K columns
-@group(0) @binding(1) var<storage, read_write> src1: array<f32>; // M rows, K columns
+@group(0) @binding(1) var<storage, read_write> src1: array<f32>; // M rows, K columns (transposed)
 @group(0) @binding(2) var<storage, read_write> dst: array<f32>; // M rows, N columns
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;

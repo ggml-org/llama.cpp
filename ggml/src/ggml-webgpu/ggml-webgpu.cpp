@@ -264,8 +264,8 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
             uint32_t * params = (uint32_t *) ctx->cpy_params_host_buf.GetMappedRange();
             uint32_t ne = (uint32_t)ggml_nelements(node);
             params[0] = ne;
-            params[1] = src_misalignment;
-            params[2] = dst_misalignment;
+            params[1] = src_misalignment/ggml_type_size(src->type);
+            params[2] = dst_misalignment/ggml_type_size(node->type);
 
             // Convert byte-strides to element-strides
             params[3] = (uint32_t)src->nb[0]/ggml_type_size(src->type);
@@ -881,10 +881,11 @@ ggml_backend_reg_t ggml_backend_webgpu_reg() {
     ctx.name = GGML_WEBGPU_NAME;
     ctx.device_count = 1;
 
-
-    wgpu::InstanceDescriptor instanceDescriptor{};
-    instanceDescriptor.capabilities.timedWaitAnyEnable = true;
-    webgpu_ctx->instance = wgpu::CreateInstance(&instanceDescriptor);
+    wgpu::InstanceDescriptor instance_descriptor{};
+    std::vector<wgpu::InstanceFeatureName> instance_features = {wgpu::InstanceFeatureName::TimedWaitAny};
+    instance_descriptor.requiredFeatures = instance_features.data();
+    instance_descriptor.requiredFeatureCount = instance_features.size();
+    webgpu_ctx->instance = wgpu::CreateInstance(&instance_descriptor);
     GGML_ASSERT(webgpu_ctx->instance != nullptr);
 
     static ggml_backend_reg reg = {
