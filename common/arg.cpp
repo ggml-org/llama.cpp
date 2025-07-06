@@ -2735,7 +2735,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STATIC_PATH"));
     add_opt(common_arg(
-        {"--prefix"}, "PREFIX",
+        {"--api-prefix"}, "PREFIX",
         string_format("prefix path the server serves from, without the trailing slash (default: %s)", params.server_prefix.c_str()),
         [](common_params & params, const std::string & value) {
             params.server_prefix = value;

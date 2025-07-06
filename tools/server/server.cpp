@@ -4800,7 +4800,7 @@ int main(int argc, char ** argv) {
     // Router
     //
 
-    const char* server_prefix = params.server_prefix.c_str();
+    const char * server_prefix = params.server_prefix.c_str();
 
     if (!params.webui) {
         LOG_INF("Web UI is disabled\n");
