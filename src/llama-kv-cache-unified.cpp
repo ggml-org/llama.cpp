@@ -267,6 +267,9 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
     const auto s1 = seq_to_stream[seq_id_dst];
 
     if (s0 == s1) {
+        // since both sequences are in the same stream, no data copy is necessary
+        // we just have to update the cells meta data
+
         auto & cells = v_cells[s0];
 
         if (seq_id_src == seq_id_dst) {
@@ -294,6 +297,8 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
         return;
     }
 
+    // cross-stream sequence copies require to copy the actual buffer data
+
     bool is_full = true;
 
     if (p0 > 0 && p0 + 1 < (int) get_size()) {
@@ -313,8 +318,6 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
 
         ggml_backend_tensor_copy(layer.k_stream[s0], layer.k_stream[s1]);
         ggml_backend_tensor_copy(layer.v_stream[s0], layer.v_stream[s1]);
-
-        // TODO: do we need synchronization here?
     }
 
     v_cells[s1].reset();
