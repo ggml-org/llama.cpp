@@ -88,6 +88,7 @@ set(GGML_OPENCL_KERNELS
     rms_norm
     rope
     scale
+    set_rows
     sigmoid
     silu
     softmax_4_f32
