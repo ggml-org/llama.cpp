@@ -214,8 +214,8 @@ void llama_kv_cache_unified::clear(bool data) {
 }
 
 bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    auto & cells = v_cells[seq_to_stream[seq_id]];
-    auto & head  = v_heads[seq_to_stream[seq_id]];
+    auto & cells = v_cells[seq_to_stream.at(seq_id)];
+    auto & head  = v_heads[seq_to_stream.at(seq_id)];
 
     uint32_t new_head = cells.size();
 
@@ -263,8 +263,8 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
 }
 
 void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
-    const auto s0 = seq_to_stream[seq_id_src];
-    const auto s1 = seq_to_stream[seq_id_dst];
+    const auto s0 = seq_to_stream.at(seq_id_src);
+    const auto s1 = seq_to_stream.at(seq_id_dst);
 
     if (s0 == s1) {
         // since both sequences are in the same stream, no data copy is necessary
@@ -348,8 +348,8 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
 }
 
 void llama_kv_cache_unified::seq_keep(llama_seq_id seq_id) {
-    auto & cells = v_cells[seq_to_stream[seq_id]];
-    auto & head  = v_heads[seq_to_stream[seq_id]];
+    auto & cells = v_cells[seq_to_stream.at(seq_id)];
+    auto & head  = v_heads[seq_to_stream.at(seq_id)];
 
     uint32_t new_head = cells.size();
 
@@ -368,8 +368,8 @@ void llama_kv_cache_unified::seq_keep(llama_seq_id seq_id) {
 }
 
 void llama_kv_cache_unified::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
-    auto & cells = v_cells[seq_to_stream[seq_id]];
-    auto & head  = v_heads[seq_to_stream[seq_id]];
+    auto & cells = v_cells[seq_to_stream.at(seq_id)];
+    auto & head  = v_heads[seq_to_stream.at(seq_id)];
 
     if (shift == 0) {
         return;
@@ -410,7 +410,7 @@ void llama_kv_cache_unified::seq_add(llama_seq_id seq_id, llama_pos p0, llama_po
 }
 
 void llama_kv_cache_unified::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, int d) {
-    auto & cells = v_cells[seq_to_stream[seq_id]];
+    auto & cells = v_cells[seq_to_stream.at(seq_id)];
 
     if (d == 1) {
         return;
@@ -441,13 +441,13 @@ void llama_kv_cache_unified::seq_div(llama_seq_id seq_id, llama_pos p0, llama_po
 }
 
 llama_pos llama_kv_cache_unified::seq_pos_min(llama_seq_id seq_id) const {
-    const auto & cells = v_cells[seq_to_stream[seq_id]];
+    const auto & cells = v_cells[seq_to_stream.at(seq_id)];
 
     return cells.seq_pos_min(seq_id);
 }
 
 llama_pos llama_kv_cache_unified::seq_pos_max(llama_seq_id seq_id) const {
-    const auto & cells = v_cells[seq_to_stream[seq_id]];
+    const auto & cells = v_cells[seq_to_stream.at(seq_id)];
 
     return cells.seq_pos_max(seq_id);
 }
@@ -1842,7 +1842,7 @@ void llama_kv_cache_unified::state_read(llama_io_read_i & io, llama_seq_id seq_i
             continue;
         }
 
-        const uint32_t strm = seq_id == -1 ? s : seq_to_stream[seq_id];
+        const uint32_t strm = seq_id == -1 ? s : seq_to_stream.at(seq_id);
 
         bool res = true;
         res = res && state_read_meta(io, strm, cell_count, seq_id);
