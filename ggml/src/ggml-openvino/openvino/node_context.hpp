@@ -71,6 +71,9 @@ public:
     }
 
     Output<Node> get_input(const std::string& name) const override {
+        if (m_tensor_map->find(name) == m_tensor_map->end()) {
+            throw std::runtime_error("'" + name + "' not found in tensor map.");
+        }
         return m_tensor_map->at(name);
     }
 
