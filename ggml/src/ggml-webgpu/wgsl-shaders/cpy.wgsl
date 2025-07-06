@@ -56,5 +56,5 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let dst_idx = i0 * params.stride_dst0 + i1 * params.stride_dst1 +
                   i2 * params.stride_dst2 + i3 * params.stride_dst3;
 
-    dst[params.offset_dst / 2 + dst_idx] = f16(src[params.offset_src / 4 + src_idx]);
+    dst[params.offset_dst + dst_idx] = f16(src[params.offset_src + src_idx]);
 }
