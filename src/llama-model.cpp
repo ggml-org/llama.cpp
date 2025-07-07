@@ -14829,12 +14829,14 @@ struct llm_build_falcon_h1 : public llm_graph_context {
 
         // {n_embd, d_in_proj} @ {n_embd, n_seq_tokens, n_seqs} => {d_in_proj, n_seq_tokens, n_seqs}
         ggml_tensor * zxBCdt = build_lora_mm(model.layers[il].ssm_in, cur);
+        cb(zxBCdt, "zxBCdt", il);
 
 
         // check if the models has ssm_multipliers (MuP)
         if (hparams.ssm_has_mup) {
             struct ggml_tensor * mup_vec = model.layers[il].ssm_mup_vec;
             cur = ggml_mul(ctx0, zxBCdt, mup_vec);
+            cb(cur, "ssm_mup", il);
             zxBCdt = cur;
         }
 
