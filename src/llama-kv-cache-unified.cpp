@@ -311,14 +311,9 @@ void llama_kv_cache_unified::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
 
     GGML_ASSERT(is_full && "seq_cp() is only supported for full KV buffers");
 
-    //LLAMA_LOG_WARN("%s: copying KV buffer from %d (stream = %d) to %d (stream = %d)\n", __func__, seq_id_src, s0, seq_id_dst, s1);
-
-    for (uint32_t il = 0; il < layers.size(); ++il) {
-        const auto & layer = layers[il];
-
-        ggml_backend_tensor_copy(layer.k_stream[s0], layer.k_stream[s1]);
-        ggml_backend_tensor_copy(layer.v_stream[s0], layer.v_stream[s1]);
-    }
+    // enqueue the copy operation - the buffer copy will be performed during the next update
+    sc_info.ssrc.push_back(s0);
+    sc_info.sdst.push_back(s1);
 
     v_cells[s1].reset();
     for (uint32_t i = 0; i < v_cells[s0].size(); ++i) {
@@ -526,7 +521,7 @@ llama_memory_context_ptr llama_kv_cache_unified::init_update(llama_context * lct
         }
     }
 
-    return std::make_unique<llama_kv_cache_unified_context>(this, lctx, do_shift, std::move(dinfo));
+    return std::make_unique<llama_kv_cache_unified_context>(this, lctx, do_shift, std::move(dinfo), std::move(sc_info));
 }
 
 llama_kv_cache_unified::slot_info_vec_t llama_kv_cache_unified::prepare(const std::vector<llama_ubatch> & ubatches) {
@@ -598,10 +593,34 @@ llama_kv_cache_unified::slot_info_vec_t llama_kv_cache_unified::prepare(const st
     return res;
 }
 
-bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const defrag_info & dinfo) {
+bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const defrag_info & dinfo, const stream_copy_info & sc_info) {
     bool updated = false;
 
     auto * sched = lctx->get_sched();
+
+    if (!sc_info.empty()) {
+        assert(n_stream > 1 && "stream copy should never happen with a single stream");
+
+        llama_synchronize(lctx);
+
+        const size_t n_copy = sc_info.ssrc.size();
+
+        for (size_t i = 0; i < n_copy; ++i) {
+            const auto ssrc = sc_info.ssrc.at(i);
+            const auto sdst = sc_info.sdst.at(i);
+
+            LLAMA_LOG_DEBUG("%s: copying KV buffer: stream %d to stream %d\n", __func__, ssrc, sdst);
+
+            assert(ssrc != sdst);
+
+            for (uint32_t il = 0; il < layers.size(); ++il) {
+                const auto & layer = layers[il];
+
+                ggml_backend_tensor_copy(layer.k_stream.at(ssrc), layer.k_stream.at(sdst));
+                ggml_backend_tensor_copy(layer.v_stream.at(ssrc), layer.v_stream.at(sdst));
+            }
+        }
+    }
 
     if (do_shift) {
         if (!get_can_shift()) {
@@ -2242,8 +2261,9 @@ llama_kv_cache_unified_context::llama_kv_cache_unified_context(
         llama_kv_cache_unified * kv,
         llama_context * lctx,
         bool do_shift,
-        defrag_info dinfo) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), dinfo(std::move(dinfo)) {
-    if (!do_shift && this->dinfo.empty()) {
+        defrag_info dinfo,
+        stream_copy_info sc_info) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), lctx(lctx), do_shift(do_shift), dinfo(std::move(dinfo)), sc_info(std::move(sc_info)) {
+    if (!do_shift && this->dinfo.empty() && this->sc_info.empty()) {
         status = LLAMA_MEMORY_STATUS_NO_UPDATE;
     }
 }
@@ -2271,7 +2291,7 @@ bool llama_kv_cache_unified_context::apply() {
 
     // no ubatches -> this is a KV cache update
     if (ubatches.empty()) {
-        kv->update(lctx, do_shift, dinfo);
+        kv->update(lctx, do_shift, dinfo, sc_info);
 
         return true;
     }
