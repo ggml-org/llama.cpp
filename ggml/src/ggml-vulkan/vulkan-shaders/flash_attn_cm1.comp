@@ -126,8 +126,8 @@ void main() {
     uint32_t v_offset = (iv2*p.nb22 + iv3*p.nb23) / 2;
 #endif
     uint32_t m_offset = 0;
-    if (p.nem2 != 1) {
-        m_offset = (iq3 % p.nem2) * p.nem1 * KV;
+    if (p.nem2 != 1 || p.nem3 != 1) {
+        m_offset = ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV;
     }
 
     [[dont_unroll]]
@@ -182,7 +182,7 @@ void main() {
             barrier();
         }
 
-        if (p.mask != 0) {
+        if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0) {
             [[unroll]] for (uint32_t idx = 0; idx < Bc * Br; idx += gl_WorkGroupSize.x) {
                 uint32_t c = (idx + tid) % Bc;
                 uint32_t r = (idx + tid) / Bc;

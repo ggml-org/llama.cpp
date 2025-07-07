@@ -25,6 +25,7 @@ layout (push_constant) uniform parameter {
     uint32_t nev3;
     uint32_t nem1;
     uint32_t nem2;
+    uint32_t nem3;
 
     uint32_t nb01;
     uint32_t nb02;
@@ -40,8 +41,7 @@ layout (push_constant) uniform parameter {
     float max_bias;
     float logit_softcap;
 
-    uint32_t mask;
-    uint32_t n_head_log2;
+    uint32_t mask_n_head_log2;
     float m0;
     float m1;
 
@@ -49,6 +49,9 @@ layout (push_constant) uniform parameter {
     uint32_t split_kv;
     uint32_t k_num;
 } p;
+
+#define MASK_ENABLE_BIT (1<<16)
+#define N_LOG2_MASK 0xFFFF
 
 layout (binding = 4) writeonly buffer O {D_TYPE data_o[];};
 
@@ -100,8 +103,10 @@ ACC_TYPE perElemOpComputeSlope(const in uint32_t r, const in uint32_t c, const i
 {
     const uint32_t h = iq2 + (r % p.gqa_ratio);
 
-    const ACC_TYPE base = ACC_TYPE(h < p.n_head_log2 ? p.m0 : p.m1);
-    const int      exph = int(h < p.n_head_log2 ? h + 1 : 2*(h - p.n_head_log2) + 1);
+    uint32_t n_head_log2 = p.mask_n_head_log2 & N_LOG2_MASK;
+
+    const ACC_TYPE base = ACC_TYPE(h < n_head_log2 ? p.m0 : p.m1);
+    const int      exph = int(h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1);
 
     return ACC_TYPE(pow(base, ACC_TYPE(exph)));
 }
