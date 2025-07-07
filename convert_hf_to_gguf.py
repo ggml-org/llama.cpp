@@ -6600,23 +6600,19 @@ class FalconH1Model(Mamba2Model):
 
         return mup_vector
 
-    def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
-        for name, tensor in super().get_tensors():
-            if name.startswith("model.backbone") or name.startswith("model.lm_head"):
-                name = name.removeprefix("model.")
-            yield name, tensor
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        tensors = list(super().modify_tensors(data_torch, name, bid))
 
-            if self.ssm_multipliers is not None:
-                # Insert MUP vector after mamba.dt_bias
-                if "mamba.dt_bias" in name:
-                    block_match = re.search(r"(?:model\.layers\.)?(\d+)\.mamba\.dt_bias", name)
-                    if block_match:
-                        block_id = int(block_match.group(1))
-                        # Generate MUP vector with correct name format
-                        mup_tensor = self._generate_mup_vector(block_id)
-                        mup_name = f"blk.{block_id}.ssm_mup_vec"
-                        logger.debug(f"Inserting MUP vector for block {block_id}: {mup_name}")
-                        yield mup_name, mup_tensor
+        if self.ssm_multipliers is not None and "mamba.dt_bias" in name:
+            block_match = re.search(r"(?:model\.layers\.)?(\d+)\.mamba\.dt_bias", name)
+            if block_match:
+                block_id = int(block_match.group(1))
+                mup_tensor = self._generate_mup_vector(block_id)
+                mup_name = f"blk.{block_id}.ssm_mup_vec"
+                logger.debug(f"Inserting MUP vector for block {block_id}: {mup_name}")
+                tensors.append((self.map_tensor_name(mup_name), mup_tensor))
+
+        return tensors
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
