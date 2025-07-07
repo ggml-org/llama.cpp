@@ -143,7 +143,7 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const st
     const float act_dev       = std::sqrt(std::max(0.0f, act_var));
     float threshold           = 1e-5f;
     const int inactive_count  = std::count_if(activations.begin(), activations.end(),
-                                               [threshold](const float v) { return fabs(v) <= threshold; });
+                                               [threshold](const float v) { return fabsf(v) <= threshold; });
     const float active_ratio  = 1 - static_cast<float>(inactive_count) / activations.size();
 
     float entropy = 0;
