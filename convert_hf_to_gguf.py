@@ -4899,7 +4899,7 @@ class Mamba2Model(TextModel):
     def set_gguf_parameters(self):
         d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
         d_conv  = self.find_hparam(["conv_kernel",       "d_conv"],  optional=True) or 4
-        d_inner = self.find_hparam(["intermediate_size", "d_inner"], optional=True) or 2 * d_model
+        d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or 2 * d_model
         d_state = self.find_hparam(["state_size",        "d_state"], optional=True) or 128
         head_dim = self.find_hparam(["head_dim"],                    optional=True) or 64
         n_group = self.find_hparam(["n_groups"],                     optional=True) or 1
@@ -4948,12 +4948,8 @@ class Mamba2Model(TextModel):
             data_torch = data_torch.reshape((*data_torch.shape, 1))
         elif self.match_model_tensor_name(new_name, gguf.MODEL_TENSOR.SSM_NORM, bid):
             d_model = self.find_hparam(["hidden_size", "d_model", "dim"])
-            d_inner = self.find_hparam(["intermediate_size", "d_inner"], optional=True) or 2 * d_model
+            d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or 2 * d_model
             n_group = self.hparams.get("n_groups", 1)
-            architectures = self.hparams.get("architectures")
-            if architectures is not None and architectures[0] == "FalconH1ForCausalLM":
-                # FalconH1F has a different d_inner
-                d_inner = self.hparams.get("mamba_d_ssm")
             data_torch = data_torch.reshape((n_group, d_inner // n_group))
 
         if name.endswith(".A_log"):
