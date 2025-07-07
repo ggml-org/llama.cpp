@@ -18,6 +18,16 @@ bool llama_hparams::is_swa_any() const {
     return false;
 }
 
+bool llama_hparams::is_swa_all() const {
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (!swa_layers[il]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 uint32_t llama_hparams::n_head(uint32_t il) const {
     if (il < n_layer) {
         return n_head_arr[il];

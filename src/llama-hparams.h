@@ -9,9 +9,10 @@
 #define LLAMA_MAX_EXPERTS 256  // DeepSeekV3
 
 enum llama_expert_gating_func_type {
-    LLAMA_EXPERT_GATING_FUNC_TYPE_NONE    = 0,
-    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX = 1,
-    LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID = 2,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX        = 1,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID        = 2,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT = 3, // applied to the router weights instead of the logits
 };
 
 enum llama_swa_type {
@@ -174,6 +175,9 @@ struct llama_hparams {
 
     // return true if one of the layers is SWA
     bool is_swa_any() const;
+
+    // return true if all layers are SWA
+    bool is_swa_all() const;
 
     uint32_t n_head(uint32_t il = 0) const;
 

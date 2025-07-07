@@ -618,6 +618,8 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cur = ggml_reglu(ctx0, cur);
                 cb(cur, "ffn_reglu", il);
             } break;
+        default:
+            GGML_ABORT("fatal error");
     }
 
     if (gate && type_gate == LLM_FFN_PAR) {
@@ -664,12 +666,54 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                float   w_scale,
          llama_expert_gating_func_type gating_op,
                  int   il) const {
+    return build_moe_ffn(
+        cur,
+        gate_inp,  /* gate_inp_b  */ nullptr,
+        up_exps,   /* up_exps_b   */ nullptr,
+        gate_exps, /* gate_exps_b */ nullptr,
+        down_exps, /* down_exps_b */ nullptr,
+        exp_probs_b,
+        n_expert,
+        n_expert_used,
+        type_op,
+        norm_w,
+        scale_w,
+        w_scale,
+        gating_op,
+        il
+    );
+}
+
+ggml_tensor * llm_graph_context::build_moe_ffn(
+         ggml_tensor * cur,
+         ggml_tensor * gate_inp,
+         ggml_tensor * gate_inp_b,
+         ggml_tensor * up_exps,
+         ggml_tensor * up_exps_b,
+         ggml_tensor * gate_exps,
+         ggml_tensor * gate_exps_b,
+         ggml_tensor * down_exps,
+         ggml_tensor * down_exps_b,
+         ggml_tensor * exp_probs_b,
+             int64_t   n_expert,
+             int64_t   n_expert_used,
+     llm_ffn_op_type   type_op,
+                bool   norm_w,
+                bool   scale_w,
+               float   w_scale,
+        llama_expert_gating_func_type gating_op,
+                     int   il) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
 
     ggml_tensor * logits = build_lora_mm(gate_inp, cur); // [n_expert, n_tokens]
     cb(logits, "ffn_moe_logits", il);
+
+    if (gate_inp_b) {
+        logits = ggml_add(ctx0, logits, gate_inp_b);
+        cb(logits, "ffn_moe_logits_biased", il);
+    }
 
     ggml_tensor * probs = nullptr;
     switch (gating_op) {
@@ -680,6 +724,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         case LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID:
             {
                 probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
+            } break;
+        case LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT:
+            {
+                probs = logits; // [n_expert, n_tokens]
             } break;
         default:
             GGML_ABORT("fatal error");
@@ -709,6 +757,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
+    if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
+        weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
+        weights = ggml_soft_max(ctx0, weights); // [n_expert_used, n_tokens]
+        weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
+        cb(weights, "ffn_moe_weights_softmax", il);
+    }
+
     if (norm_w) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
 
@@ -737,12 +792,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
     cb(up, "ffn_moe_up", il);
 
+    if (up_exps_b) {
+        up_exps_b = ggml_repeat_4d(ctx0, up_exps_b,
+                        up_exps_b->ne[0], up_exps_b->ne[1], selected_experts->ne[1], 1);
+        up = ggml_add(ctx0, up, ggml_get_rows(ctx0, up_exps_b, selected_experts));
+        cb(up, "ffn_moe_up_biased", il);
+    }
+
     ggml_tensor * experts = nullptr;
     if (gate_exps) {
         cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
         cb(cur, "ffn_moe_gate", il);
     } else {
         cur = up;
+    }
+
+    if (gate_exps_b) {
+        gate_exps_b = ggml_repeat_4d(ctx0, gate_exps_b,
+                        gate_exps_b->ne[0], gate_exps_b->ne[1], selected_experts->ne[1], 1);
+        cur = ggml_add(ctx0, cur, ggml_get_rows(ctx0, gate_exps_b, selected_experts));
+        cb(cur, "ffn_moe_gate_biased", il);
     }
 
     switch (type_op) {
@@ -762,12 +831,34 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cur = ggml_gelu(ctx0, cur);
                 cb(cur, "ffn_moe_gelu", il);
             } break;
+        case LLM_FFN_SWIGLU_OAI_MOE:
+            {
+                // ref python code: (x_glu = gate ; x_linear = up)
+                // out_glu = x_glu * torch.sigmoid(alpha * x_glu)
+                // return out_glu * (x_linear + 1)
+                constexpr float alpha = 1.702f;
+                ggml_tensor * tmp = ggml_sigmoid(ctx0, ggml_scale(ctx0, cur, alpha));
+                cur = ggml_mul(ctx0, cur, tmp);
+                cb(cur, "ffn_moe_swiglu", il);
+
+                // add extra bias of 1.0 to the up tensor
+                ggml_tensor * one = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+                one = ggml_cos(ctx0, ggml_scale(ctx0, one, 0.0f));
+                up = ggml_add(ctx0, up, one);
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
+
+    if (down_exps_b) {
+        down_exps_b = ggml_repeat_4d(ctx0, down_exps_b,
+                        down_exps_b->ne[0], down_exps_b->ne[1], selected_experts->ne[1], 1);
+        experts = ggml_add(ctx0, experts, ggml_get_rows(ctx0, down_exps_b, selected_experts));
+        cb(experts, "ffn_moe_down_biased", il);
+    }
 
     if (!weight_before_ffn) {
         experts = ggml_mul(ctx0, experts, weights);

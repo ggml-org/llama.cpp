@@ -264,6 +264,10 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.rotary_emb.inv_freq",            # codeshell
         ),
 
+        MODEL_TENSOR.ATTN_SINKS: (
+            "model.layers.{bid}.self_attn.sinks", # openai-moe
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
@@ -303,6 +307,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
             "model.layers.{bid}.feed_forward.router",           # llama4
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
+            "model.layers.{bid}.mlp.router",                    # openai-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
