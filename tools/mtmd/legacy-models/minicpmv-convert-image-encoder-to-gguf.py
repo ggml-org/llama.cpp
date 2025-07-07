@@ -546,19 +546,22 @@ if args.use_f32:
 minicpmv_version = args.minicpmv_version
 emb_dim = 4096
 block_count = 26
-if minicpmv_version == 1:
+if minicpmv_version == 1:  # MiniCPM-V 2.0
     emb_dim = 2304
     block_count = 26
-elif minicpmv_version == 2:
+elif minicpmv_version == 2:  # MiniCPM-V 2.5
     emb_dim = 4096
     block_count = 27
-elif minicpmv_version == 3:
+elif minicpmv_version == 3:  # MiniCPM-V 2.6
     emb_dim = 3584
     block_count = 27
-elif minicpmv_version == 4:
+elif minicpmv_version == 4:  # MiniCPM-o 2.6
     emb_dim = 3584
     block_count = 27
-
+elif minicpmv_version == 5:  # MiniCPM-V 4.0
+    emb_dim = 2560
+    block_count = 27
+    
 default_vision_config = {
         "hidden_size": 1152,
         "image_size": 980,
@@ -575,6 +578,10 @@ if minicpmv_version == 3:
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
 elif minicpmv_version == 4:
+    vision_config = SiglipVisionConfig(**default_vision_config)
+    model = SiglipVisionTransformer(vision_config)
+elif minicpmv_version == 5:
+    default_vision_config["model_type"] = "siglip_vision_model"
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
 
