@@ -35,6 +35,16 @@ public:
         std::vector<uint32_t> ids;
     };
 
+    struct stream_copy_info {
+        bool empty() const {
+            assert(ssrc.size() == sdst.size());
+            return ssrc.empty();
+        }
+
+        std::vector<uint32_t> ssrc;
+        std::vector<uint32_t> sdst;
+    };
+
     // for each ubatch, create a slot_info that contains information about where the ubatch should be inserted in the
     //   KV cells. for example, cell indices for each token, such that: token[i] -> goes to cells[idxs[i]]
     struct slot_info {
@@ -158,7 +168,7 @@ public:
     // return empty vector on failure
     slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches);
 
-    bool update(llama_context * lctx, bool do_shift, const defrag_info & dinfo);
+    bool update(llama_context * lctx, bool do_shift, const defrag_info & dinfo, const stream_copy_info & sc_info);
 
     // find a slot of kv cells that can hold the ubatch
     // if cont == true, then the slot must be continuous
@@ -231,6 +241,9 @@ private:
     // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;
 
+    // pending stream copies that will be applied during the next update
+    stream_copy_info sc_info;
+
     std::vector<kv_layer> layers;
 
     // model layer id -> KV cache layer id
@@ -282,8 +295,9 @@ private:
 class llama_kv_cache_unified_context : public llama_memory_context_i {
 public:
     // some shorthands
-    using slot_info_vec_t = llama_kv_cache_unified::slot_info_vec_t;
-    using defrag_info     = llama_kv_cache_unified::defrag_info;
+    using slot_info_vec_t  = llama_kv_cache_unified::slot_info_vec_t;
+    using defrag_info      = llama_kv_cache_unified::defrag_info;
+    using stream_copy_info = llama_kv_cache_unified::stream_copy_info;
 
     // used for errors
     llama_kv_cache_unified_context(llama_memory_status status);
@@ -297,7 +311,8 @@ public:
             llama_kv_cache_unified * kv,
             llama_context * lctx,
             bool do_shift,
-            defrag_info dinfo);
+            defrag_info dinfo,
+            stream_copy_info sc_info);
 
     // used to create a batch procesing context from a batch
     llama_kv_cache_unified_context(
@@ -354,6 +369,8 @@ private:
     bool do_shift = false;
 
     defrag_info dinfo;
+
+    stream_copy_info sc_info;
 
     //
     // batch processing context
