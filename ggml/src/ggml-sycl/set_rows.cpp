@@ -68,10 +68,10 @@ static void set_rows_sycl(
         const size_t src_type_size, const size_t dst_type_size,
         queue_ptr stream) {
 
-    const int max_threads_per_row = 128; // KEEPING 128 for now
+    const int max_threads_per_row = 256; // KEEPING 256 for now
     const int threads_per_row     = std::min((int)ne00, max_threads_per_row);
 
-    const int max_threads_per_block = 128;
+    const int max_threads_per_block = 256;
     const int rows_per_block        = std::max(1, max_threads_per_block / threads_per_row);
 
     const sycl::range<3> block_size(1, rows_per_block, threads_per_row);
