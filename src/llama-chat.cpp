@@ -60,6 +60,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "granite",           LLM_CHAT_TEMPLATE_GRANITE           },
     { "gigachat",          LLM_CHAT_TEMPLATE_GIGACHAT          },
     { "megrez",            LLM_CHAT_TEMPLATE_MEGREZ            },
+    { "velvet",            LLM_CHAT_TEMPLATE_VELVET            },
     { "yandex",            LLM_CHAT_TEMPLATE_YANDEX            },
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
@@ -177,6 +178,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_GIGACHAT;
     } else if (tmpl_contains("<|role_start|>")) {
         return LLM_CHAT_TEMPLATE_MEGREZ;
+    } else if (tmpl_contains("<instruction>")) {
+        return LLM_CHAT_TEMPLATE_VELVET;
     } else if (tmpl_contains(" Ассистент:")) {
         return LLM_CHAT_TEMPLATE_YANDEX;
     } else if (tmpl_contains("<role>ASSISTANT</role>") && tmpl_contains("'HUMAN'")) {
@@ -589,6 +592,31 @@ int32_t llm_chat_apply_template(
 
         if (add_ass) {
             ss << "<|role_start|>assistant<|role_end|>";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_VELVET) {
+        // Velvet template
+        std::string leading_space = "";
+        std::string trailing_space = "";
+        bool trim_assistant_message = false;
+        bool is_inside_turn = false;
+        std::string system_message = "";
+        std::string last_message(chat.back()->content);
+        ss << "<s>";
+        for (auto message : chat) {
+            if (!is_inside_turn) {
+                ss << leading_space << "<instruction>" << trailing_space;
+                is_inside_turn = true;
+            }
+            std::string role(message->role);
+            std::string content(message->content);
+            if (role == "system" && content != " ") {
+                system_message = content + "\n\n";
+            } else if (role == "user") {
+                ss << (content==last_message ? system_message : "") << content << leading_space << "</instruction>";
+            } else {
+                ss << trailing_space << (trim_assistant_message ? trim(content) : content) << "</s>";
+                is_inside_turn = false;
+            }
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_YANDEX) {
         // Yandex template ("\n\n" is defined as EOT token)
