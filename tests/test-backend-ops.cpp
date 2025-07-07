@@ -2583,10 +2583,6 @@ struct test_rms_norm_mul : public test_case {
         }
     }
 
-    double max_nmse_err() override {
-        return 1e-6;
-    }
-
     float grad_eps() override {
         return 1.0f;
     }
@@ -5058,7 +5054,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_rms_norm_back(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
         test_cases.emplace_back(new test_l2_norm      (GGML_TYPE_F32, {64, 5, 4, 3}, eps));
     }
-    for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f}) {
+    for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f}) {
         test_cases.emplace_back(new test_rms_norm_mul(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
     }
 
