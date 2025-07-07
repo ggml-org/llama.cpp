@@ -10466,7 +10466,7 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+                residual = ggml_get_rows(ctx0, residual, inp_out_ids);
             }
 
             // residual connection
@@ -10474,12 +10474,6 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
             cb(cur, "ffn_residual", il);
 
             inpL = cur;
-
-            if (il == 1) {
-                cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
-                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
-                break;
-            }
         }
 
         cur = inpL;
@@ -10627,7 +10621,7 @@ private:
         // in_proj: {n_embd, 2*d_inner} @ {n_embd, n_seq_tokens, n_seqs} => {2*d_inner, n_seq_tokens, n_seqs}
         ggml_tensor * zx = build_lora_mm(model.layers[il].ssm_in, cur);
         cb(zx, "mamba_in_proj", il);
-
+        // {8192, 5, 1, 1} -> {8192, 1, 5, 1}
         zx = ggml_permute(ctx0, zx, 0, 2, 1, 3);
         zx = ggml_reshape_4d(ctx0, zx, head_dim * 2, n_heads, n_seq_tokens, n_seqs);
         cb(zx, "mamba_in_proj_out", il);
@@ -10636,14 +10630,11 @@ private:
         // => {head_dim * n_heads, n_seq_tokens, n_seqs}
         ggml_tensor * x = ggml_view_4d(ctx0, zx, head_dim, n_heads, n_seq_tokens, n_seqs, zx->nb[1], zx->nb[2], zx->nb[3], head_dim*ggml_element_size(zx));
         x = ggml_cont(ctx0, x);
-        x = ggml_reshape_4d(ctx0, x, head_dim * n_heads, 1, n_seq_tokens, n_seqs);
-        x = ggml_permute(ctx0, x, 0, 2, 1, 3);
+        x = ggml_reshape_3d(ctx0, x, head_dim * n_heads, n_seq_tokens, n_seqs);
+        // x = ggml_permute(ctx0, x, 0, 2, 1, 3);
         cb(x, "mamba_x_split", il);
 
         ggml_tensor * z = ggml_view_4d(ctx0, zx, head_dim, n_heads, n_seq_tokens, n_seqs, zx->nb[1], zx->nb[2], zx->nb[3], 0);
-        z = ggml_cont(ctx0, z);
-        z = ggml_reshape_4d(ctx0, z, head_dim * n_heads, 1, n_seq_tokens, n_seqs);
-        z = ggml_permute(ctx0, z, 0, 2, 1, 3);
         cb(z, "mamba_z_split", il);
 
         // conv1d
@@ -10699,11 +10690,10 @@ private:
             dt = ggml_add(ctx0, dt, model.layers[il].ssm_dt_b);
             cb(dt, "mamba_dt_proj", il);
 
-            ggml_tensor * A = ggml_new_tensor_2d(ctx0, model.layers[il].ssm_a->type, d_state, n_heads);
-            A = ggml_repeat(ctx0, model.layers[il].ssm_a, A);
+            ggml_tensor * A = ggml_reshape_2d(ctx0, model.layers[il].ssm_a, 1, n_heads);
             cb(A, "mamba_A", il);
 
-            x = ggml_view_4d(ctx0, x, head_dim, n_heads, n_seq_tokens, n_seqs, head_dim * x->nb[0], x->nb[1], x->nb[2], 0);
+            x = ggml_view_4d(ctx0, x, head_dim, n_heads, n_seq_tokens, n_seqs, head_dim * ggml_element_size(x), head_dim * n_heads * ggml_element_size(x), head_dim * n_heads * n_seq_tokens * ggml_element_size(x), 0);
             B = ggml_view_4d(ctx0, B, d_state, 1, n_seq_tokens, n_seqs, d_state * B->nb[0], B->nb[1], B->nb[2], 0);
             C = ggml_view_4d(ctx0, C, d_state, 1, n_seq_tokens, n_seqs, d_state * C->nb[0], C->nb[1], C->nb[2], 0);
 
@@ -10725,22 +10715,22 @@ private:
             // store last states
             ggml_build_forward_expand(gf,
                 ggml_cpy(ctx0,
-                    ggml_view_1d(ctx0, y_ssm, d_state*d_inner*n_seqs, x->nb[3]),
+                    ggml_view_1d(ctx0, y_ssm, d_state*d_inner*n_seqs, x->nb[3]*x->ne[3]),
                     ggml_view_1d(ctx0, ssm_states_all, d_state*d_inner*n_seqs,
                             kv_head*d_state*d_inner*ggml_element_size(ssm_states_all))));
 
-            ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_heads, n_seq_tokens, n_seqs, head_dim * x->nb[0], head_dim * n_heads * x->nb[1], head_dim * n_heads * n_seq_tokens * x->nb[2], 0);
+            ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_heads, n_seq_tokens, n_seqs, head_dim * ggml_element_size(x), head_dim * n_heads * ggml_element_size(x), head_dim * n_heads * n_seq_tokens * ggml_element_size(x), 0);
             cb(y, "mamba_y_view", il);
 
             // Add D parameter and apply gating with z
             // {d_inner, n_seq_tokens, n_seqs} * {d_inner} => {d_inner, n_seq_tokens, n_seqs}
-            y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
-            cb(y, "mamba_y_with_D", il);
+            ggml_tensor * D = ggml_reshape_2d(ctx0, model.layers[il].ssm_d, 1, n_heads);
+            y = ggml_add(ctx0, y, ggml_mul(ctx0, x, D));
+            cb(y, "mamba_y_add_d", il);
 
             ggml_tensor * z_silu = ggml_silu(ctx0, ggml_cont(ctx0, z));
             cb(z_silu, "mamba_z_silu", il);
 
-            y = ggml_reshape_3d(ctx0, y, head_dim * n_heads, n_seq_tokens, n_seqs);
             y = ggml_mul(ctx0, y, z_silu);
             cb(y, "mamba_y_gated", il);
 
