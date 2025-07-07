@@ -14687,18 +14687,18 @@ struct llm_build_falcon_h1 : public llm_graph_context {
 
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
-                    n_rot, 0, n_ctx_orig, freq_base, freq_scale,
+                    n_rot, hparams.rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow);
 
             Kcur = ggml_rope_ext(
                     ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, 0, n_ctx_orig, freq_base, freq_scale,
+                    n_rot, hparams.rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
 
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
+            cb(Qcur, "Qcur-post-rope", il);
+            cb(Kcur, "Kcur-post-rope", il);
+            cb(Vcur, "Vcur-post-rope", il);
 
             ggml_tensor * attn_out = build_attn(inp, gf,
                     model.layers[il].wo, NULL,
@@ -15577,11 +15577,11 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_NEO_BERT:
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
-        case LLM_ARCH_FALCON_H1:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
         case LLM_ARCH_FALCON:
+        case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_GROK:
         case LLM_ARCH_DBRX:
         case LLM_ARCH_BERT:
