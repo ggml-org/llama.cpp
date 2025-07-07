@@ -1566,8 +1566,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
 
                 // Falcon-H1 parameters
                 ml.get_key(LLM_KV_ATTN_HEAD_DIM,      hparams.attn_head_dim);
-                ml.get_key(LLM_KV_FALCON_H1_USE_MLP, hparams.mamba_use_mlp);
-                ml.get_key(LLM_KV_FALCON_H1_MAMBA_NORM_BEFORE_GATE, hparams.mamba_norm_before_gate);
                 ml.get_key(LLM_KV_FALCON_H1_MAMBA_RMS_NORM, hparams.mamba_rms_norm);
 
                 std::fill(hparams.recurrent_layer_arr.begin(), hparams.recurrent_layer_arr.end(), true);

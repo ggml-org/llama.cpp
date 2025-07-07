@@ -227,8 +227,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_SSM_HEAD_DIM,           "%s.ssm.head_dim"       },
     { LLM_KV_MAMBA_D_SSM,            "%s.ssm.mamba_d_ssm"    },
 
-    { LLM_KV_FALCON_H1_USE_MLP,                  "%s.mamba_use_mlp"            },
-    { LLM_KV_FALCON_H1_MAMBA_NORM_BEFORE_GATE,   "%s.mamba_norm_before_gate"   },
     { LLM_KV_FALCON_H1_MAMBA_RMS_NORM,           "%s.mamba_rms_norm"           },
 
     { LLM_KV_ADAPTER_TYPE,       "adapter.type"       },
