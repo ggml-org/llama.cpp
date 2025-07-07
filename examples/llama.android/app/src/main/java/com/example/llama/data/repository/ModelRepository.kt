@@ -9,6 +9,7 @@ import com.example.llama.data.local.dao.ModelDao
 import com.example.llama.data.local.entity.ModelEntity
 import com.example.llama.data.model.GgufMetadata
 import com.example.llama.data.model.ModelInfo
+import com.example.llama.data.remote.HuggingFaceDownloadInfo
 import com.example.llama.data.remote.HuggingFaceModel
 import com.example.llama.data.remote.HuggingFaceModelDetails
 import com.example.llama.data.remote.HuggingFaceRemoteDataSource
@@ -93,12 +94,17 @@ interface ModelRepository {
     suspend fun getHuggingFaceModelDetails(modelId: String): HuggingFaceModelDetails
 
     /**
+     * Obtain the model's size from HTTP response header
+     */
+    suspend fun getHuggingFaceModelFileSize(downloadInfo: HuggingFaceDownloadInfo): Long?
+
+    /**
      * Download and import a HuggingFace model
      */
     suspend fun importHuggingFaceModel(
-        model: HuggingFaceModel,
-        progressTracker: (Float) -> Unit
-    ): ModelInfo
+        downloadInfo: HuggingFaceDownloadInfo,
+        actualSize: Long,
+    ): Result<Unit>
 }
 
 class InsufficientStorageException(message: String) : IOException(message)
@@ -171,7 +177,9 @@ class ModelRepositoryImpl @Inject constructor(
         val fileSize = size ?: getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
         if (!hasEnoughSpaceForImport(fileSize)) {
             throw InsufficientStorageException(
-                "Not enough storage space. Required: ${formatFileByteSize(fileSize)}, Available: ${formatFileByteSize(availableSpaceBytes)}"
+                "Not enough storage space! " +
+                    "Required: ${formatFileByteSize(fileSize)}, " +
+                    "Available: ${formatFileByteSize(availableSpaceBytes)}"
             )
         }
 
@@ -265,7 +273,7 @@ class ModelRepositoryImpl @Inject constructor(
     // Add this method to ModelRepositoryImpl.kt
     private fun hasEnoughSpaceForImport(fileSize: Long): Boolean {
         val availableSpace = availableSpaceBytes
-        val requiredSpace = (fileSize * MODEL_IMPORT_SPACE_BUFFER_SCALE ).toLong()
+        val requiredSpace = (fileSize * MODEL_IMPORT_SPACE_BUFFER_SCALE).toLong()
         return availableSpace >= requiredSpace
     }
 
@@ -343,125 +351,43 @@ class ModelRepositoryImpl @Inject constructor(
 
     override suspend fun searchHuggingFaceModels(
         limit: Int
-    ): List<HuggingFaceModel> = withContext(Dispatchers.Default) {
+    ): List<HuggingFaceModel> = withContext(Dispatchers.IO) {
         huggingFaceRemoteDataSource.searchModels(limit = limit)
     }
 
     override suspend fun getHuggingFaceModelDetails(
         modelId: String
-    ) = withContext(Dispatchers.Default) {
+    ) = withContext(Dispatchers.IO) {
         huggingFaceRemoteDataSource.getModelDetails(modelId)
     }
 
+    override suspend fun getHuggingFaceModelFileSize(
+        downloadInfo: HuggingFaceDownloadInfo,
+    ): Long? = withContext(Dispatchers.IO) {
+        huggingFaceRemoteDataSource.getFileSize(downloadInfo.modelId, downloadInfo.filename)
+    }
+
     override suspend fun importHuggingFaceModel(
-        model: HuggingFaceModel,
-        progressTracker: (Float) -> Unit
-    ): ModelInfo = withContext(Dispatchers.IO) {
-        try {
-            // Find GGUF files in the model repository
-            val modelFiles = findGgufFiles(model.id)
-            if (modelFiles.isEmpty()) {
-                throw IOException("No GGUF files found for model ${model.id}")
-            }
-
-            // Create directory for the model
-            val modelDir = File(modelsDir, model.id.replace("/", "_"))
-            if (!modelDir.exists()) {
-                modelDir.mkdirs()
-            }
-
-            var totalDownloaded = 0L
-            var fileIndex = 0
-            val totalFiles = modelFiles.size
-
-            // Download each GGUF file
-            modelFiles.forEach { filePath ->
-                fileIndex++
-                progressTracker(fileIndex.toFloat() / totalFiles)
-
-                val outputFile = File(modelDir, filePath.substringAfterLast("/"))
-                huggingFaceRemoteDataSource.downloadModelFile(
-                    model.id, filePath, outputFile
-                ).onSuccess { file ->
-                    totalDownloaded += file.length()
-                }
-            }
-
-            // Create and save the model entity
-            val modelEntity = ModelEntity(
-                id = UUID.randomUUID().toString(), // Generate a new ID for local storage
-                name = model.modelId.split("/").last(),
-                path = modelDir.absolutePath,
-                sizeInBytes = totalDownloaded,
-                metadata = createGgufMetadataFromHfModel(model),
-                dateAdded = System.currentTimeMillis(),
-                dateLastUsed = null
+        downloadInfo: HuggingFaceDownloadInfo,
+        actualSize: Long,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!hasEnoughSpaceForImport(actualSize)) {
+            throw InsufficientStorageException(
+                "Not enough storage space! " +
+                    "Estimated required: ${formatFileByteSize(actualSize)}, " +
+                    "Available: ${formatFileByteSize(availableSpaceBytes)}"
             )
-
-            modelDao.insertModel(modelEntity)
-            return@withContext modelEntity.toModelInfo()
-
-        } catch (e: Exception) {
-            // Clean up if download fails
-            File(modelsDir, model.id.replace("/", "_")).let {
-                if (it.exists()) {
-                    it.deleteRecursively()
-                }
-            }
-            throw e
         }
-    }
 
-    // TODO-han.yin: replace this heuristic approach with API call
-    private suspend fun findGgufFiles(modelId: String): List<String> = withContext(Dispatchers.IO) {
-        // In a real implementation, we would query the Hugging Face API or use Git APIs
-        // to get the file listing. For now, we'll use a simpler approach:
-
-        // 1. Try standard filenames first
-        val standardNames = listOf(
-            "model.gguf",
-            "model-q4_0.gguf",
-            "model-q4_k_m.gguf",
-            "model-q5_k_m.gguf",
-            "model-q8_0.gguf"
-        )
-
-        // 2. Check if standard files exist (would require separate API call)
-        // For now, just return the standard names as a fallback
-        standardNames
-    }
-
-    /**
-     * Convert HuggingFace model metadata to GgufMetadata format
-     *
-     * TODO-han.yin: improve this conversion coverage
-     */
-    private fun createGgufMetadataFromHfModel(model: HuggingFaceModel) =
-        GgufMetadata(
-            version = GgufMetadata.GgufVersion.VALIDATED_V3,
-            tensorCount = 0,
-            kvCount = 0,
-            basic = GgufMetadata.BasicInfo(
-                uuid = model.id,
-                name = model.modelId.split("/").last(),
-                nameLabel = model.modelId,
-                sizeLabel = extractModelSize(model.tags)
-            ),
-            additional = GgufMetadata.AdditionalInfo(
-                type = model.pipeline_tag,
-                description = null,
-                tags = model.tags,
-                languages = model.tags?.filter { it.length <= 3 } // language codes
+        try {
+            huggingFaceRemoteDataSource.downloadModelFile(
+                context = context,
+                downloadInfo = downloadInfo,
             )
-        )
-
-    private fun extractModelSize(tags: List<String>?): String? {
-        // Try to extract model size from tags
-        if (tags == null) return null
-
-        // Common model size patterns: 7B, 13B, 70B, etc.
-        val sizePattern = Regex("\\d+(\\.\\d+)?[Bb]")
-        return tags.find { it.matches(sizePattern) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Import failed: ${e.message}")
+            Result.failure(e)
+        }
     }
 
     companion object {
