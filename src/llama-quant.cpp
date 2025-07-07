@@ -315,11 +315,6 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, ggml_type new_t
         else if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS) {
             new_type = GGML_TYPE_IQ2_S;
         }
-    } else if (name.find("ssm_in.weight") != std::string::npos) {
-        // For mamba-based models it's better to not quantize the ssm-proj layers
-        if (ftype == LLAMA_FTYPE_MOSTLY_Q3_K_S) {
-            new_type = GGML_TYPE_BF16;
-        }
     } else if (name.find("attn_q.weight") != std::string::npos) {
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS) {
             new_type = GGML_TYPE_IQ3_XXS;
