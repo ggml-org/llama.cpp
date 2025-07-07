@@ -18,7 +18,7 @@ interface HuggingFaceApiService {
     ): List<HuggingFaceModel>
 
     @GET("api/models/{modelId}")
-    suspend fun getModelDetails(@Path("modelId") modelId: String): HuggingFaceModel
+    suspend fun getModelDetails(@Path("modelId") modelId: String): HuggingFaceModelDetails
 
     @GET("{modelId}/resolve/main/{filePath}")
     @Streaming

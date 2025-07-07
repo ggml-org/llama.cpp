@@ -10,6 +10,7 @@ import com.example.llama.data.local.entity.ModelEntity
 import com.example.llama.data.model.GgufMetadata
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.remote.HuggingFaceModel
+import com.example.llama.data.remote.HuggingFaceModelDetails
 import com.example.llama.data.remote.HuggingFaceRemoteDataSource
 import com.example.llama.data.repository.ModelRepository.ImportProgressTracker
 import com.example.llama.monitoring.StorageMetrics
@@ -89,7 +90,7 @@ interface ModelRepository {
     /**
      * Obtain the model details from HuggingFace
      */
-    suspend fun getHuggingFaceModelDetails(modelId: String): HuggingFaceModel
+    suspend fun getHuggingFaceModelDetails(modelId: String): HuggingFaceModelDetails
 
     /**
      * Download and import a HuggingFace model

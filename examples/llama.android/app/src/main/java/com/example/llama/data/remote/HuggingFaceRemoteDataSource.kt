@@ -16,7 +16,7 @@ interface HuggingFaceRemoteDataSource {
         limit: Int? = 20
     ): List<HuggingFaceModel>
 
-    suspend fun getModelDetails(modelId: String): HuggingFaceModel
+    suspend fun getModelDetails(modelId: String): HuggingFaceModelDetails
 
     suspend fun downloadModelFile(modelId: String, filePath: String, outputFile: File): Result<File>
 }
