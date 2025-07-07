@@ -14802,10 +14802,9 @@ struct llm_build_falcon_h1 : public llm_graph_context {
 
         const int64_t d_conv  = hparams.ssm_d_conv;
         const int64_t d_ssm = hparams.ssm_mamba_d_ssm;
-        const int64_t d_inner = hparams.ssm_d_inner;
         const int64_t d_state = hparams.ssm_d_state;
         const int64_t n_head  = hparams.ssm_dt_rank;
-        const int64_t head_dim = hparams.ssm_head_dim == 0 ? d_inner / n_head : hparams.ssm_head_dim;
+        const int64_t head_dim = hparams.ssm_head_dim == 0 ? d_ssm / n_head : hparams.ssm_head_dim;
         const int64_t n_group = hparams.ssm_n_group;
         const int64_t n_seqs  = ubatch.n_seqs;
 
