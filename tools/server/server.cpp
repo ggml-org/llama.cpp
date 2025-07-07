@@ -4800,22 +4800,20 @@ int main(int argc, char ** argv) {
     // Router
     //
 
-    const char * server_prefix = params.server_prefix.c_str();
-
     if (!params.webui) {
         LOG_INF("Web UI is disabled\n");
     } else {
         // register static assets routes
         if (!params.public_path.empty()) {
             // Set the base directory for serving static files
-            bool is_found = svr->set_mount_point(string_format("%s/", server_prefix), params.public_path);
+            bool is_found = svr->set_mount_point(params.api_prefix + "/", params.public_path);
             if (!is_found) {
                 LOG_ERR("%s: static assets path not found: %s\n", __func__, params.public_path.c_str());
                 return 1;
             }
         } else {
             // using embedded static index.html
-            svr->Get(string_format("%s/", server_prefix), [](const httplib::Request & req, httplib::Response & res) {
+            svr->Get(params.api_prefix + "/", [](const httplib::Request & req, httplib::Response & res) {
                 if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
                     res.set_content("Error: gzip is not supported by this browser", "text/plain");
                 } else {
@@ -4831,37 +4829,37 @@ int main(int argc, char ** argv) {
     }
 
     // register API routes
-    svr->Get (string_format("%s/health", server_prefix),              handle_health); // public endpoint (no API key check)
-    svr->Get (string_format("%s/metrics", server_prefix),             handle_metrics);
-    svr->Get (string_format("%s/props", server_prefix),               handle_props);
-    svr->Post(string_format("%s/props", server_prefix),               handle_props_change);
-    svr->Post(string_format("%s/api/show", server_prefix),            handle_api_show);
-    svr->Get (string_format("%s/models", server_prefix),              handle_models); // public endpoint (no API key check)
-    svr->Get (string_format("%s/v1/models", server_prefix),           handle_models); // public endpoint (no API key check)
-    svr->Get (string_format("%s/api/tags", server_prefix),            handle_models); // ollama specific endpoint. public endpoint (no API key check)
-    svr->Post(string_format("%s/completion", server_prefix),          handle_completions); // legacy
-    svr->Post(string_format("%s/completions", server_prefix),         handle_completions);
-    svr->Post(string_format("%s/v1/completions", server_prefix),      handle_completions_oai);
-    svr->Post(string_format("%s/chat/completions", server_prefix),    handle_chat_completions);
-    svr->Post(string_format("%s/v1/chat/completions", server_prefix), handle_chat_completions);
-    svr->Post(string_format("%s/api/chat", server_prefix),            handle_chat_completions); // ollama specific endpoint
-    svr->Post(string_format("%s/infill", server_prefix),              handle_infill);
-    svr->Post(string_format("%s/embedding", server_prefix),           handle_embeddings); // legacy
-    svr->Post(string_format("%s/embeddings", server_prefix),          handle_embeddings);
-    svr->Post(string_format("%s/v1/embeddings", server_prefix),       handle_embeddings_oai);
-    svr->Post(string_format("%s/rerank", server_prefix),              handle_rerank);
-    svr->Post(string_format("%s/reranking", server_prefix),           handle_rerank);
-    svr->Post(string_format("%s/v1/rerank", server_prefix),           handle_rerank);
-    svr->Post(string_format("%s/v1/reranking", server_prefix),        handle_rerank);
-    svr->Post(string_format("%s/tokenize", server_prefix),            handle_tokenize);
-    svr->Post(string_format("%s/detokenize", server_prefix),          handle_detokenize);
-    svr->Post(string_format("%s/apply-template", server_prefix),      handle_apply_template);
+    svr->Get (params.api_prefix + "/health",              handle_health); // public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/metrics",             handle_metrics);
+    svr->Get (params.api_prefix + "/props",               handle_props);
+    svr->Post(params.api_prefix + "/props",               handle_props_change);
+    svr->Post(params.api_prefix + "/api/show",            handle_api_show);
+    svr->Get (params.api_prefix + "/models",              handle_models); // public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/v1/models",           handle_models); // public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/api/tags",            handle_models); // ollama specific endpoint. public endpoint (no API key check)
+    svr->Post(params.api_prefix + "/completion",          handle_completions); // legacy
+    svr->Post(params.api_prefix + "/completions",         handle_completions);
+    svr->Post(params.api_prefix + "/v1/completions",      handle_completions_oai);
+    svr->Post(params.api_prefix + "/chat/completions",    handle_chat_completions);
+    svr->Post(params.api_prefix + "/v1/chat/completions", handle_chat_completions);
+    svr->Post(params.api_prefix + "/api/chat",            handle_chat_completions); // ollama specific endpoint
+    svr->Post(params.api_prefix + "/infill",              handle_infill);
+    svr->Post(params.api_prefix + "/embedding",           handle_embeddings); // legacy
+    svr->Post(params.api_prefix + "/embeddings",          handle_embeddings);
+    svr->Post(params.api_prefix + "/v1/embeddings",       handle_embeddings_oai);
+    svr->Post(params.api_prefix + "/rerank",              handle_rerank);
+    svr->Post(params.api_prefix + "/reranking",           handle_rerank);
+    svr->Post(params.api_prefix + "/v1/rerank",           handle_rerank);
+    svr->Post(params.api_prefix + "/v1/reranking",        handle_rerank);
+    svr->Post(params.api_prefix + "/tokenize",            handle_tokenize);
+    svr->Post(params.api_prefix + "/detokenize",          handle_detokenize);
+    svr->Post(params.api_prefix + "/apply-template",      handle_apply_template);
     // LoRA adapters hotswap
-    svr->Get (string_format("%s/lora-adapters", server_prefix),       handle_lora_adapters_list);
-    svr->Post(string_format("%s/lora-adapters", server_prefix),       handle_lora_adapters_apply);
+    svr->Get (params.api_prefix + "/lora-adapters",       handle_lora_adapters_list);
+    svr->Post(params.api_prefix + "/lora-adapters",       handle_lora_adapters_apply);
     // Save & load slots
-    svr->Get (string_format("%s/slots", server_prefix),               handle_slots);
-    svr->Post(string_format("%s/slots/:id_slot", server_prefix),      handle_slots_action);
+    svr->Get (params.api_prefix + "/slots",               handle_slots);
+    svr->Post(params.api_prefix + "/slots/:id_slot",      handle_slots_action);
 
     //
     // Start the server
