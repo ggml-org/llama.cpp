@@ -14031,11 +14031,7 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba, public llm_gra
 
         inpL = build_inp_embd(model.tok_embd);
 
-        const auto * mctx_hyb = static_cast<const llama_memory_hybrid_context *>(mctx);
-
-        auto * inp_rs = build_rs_inp(mctx_hyb->get_recr());
-
-        auto * inp_attn = build_attn_inp_kv_unified(mctx_hyb->get_attn());
+        auto * inp = build_inp_mem_hybrid();
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -14056,11 +14052,11 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba, public llm_gra
 
             if (hparams.is_recurrent(il)) {
                 // ssm layer //
-                cur = build_mamba2_layer(inp_rs, gf, cur, model, ubatch, il);
+                cur = build_mamba2_layer(inp->get_recr(), gf, cur, model, ubatch, il);
             } else {
                 // attention layer //
                 cur = build_attention_layer(
-                    gf, cur, inp_pos, inp_attn, model,
+                    gf, cur, inp_pos, inp->get_attn(), model,
                     n_embd_head, use_rope, il);
             }
 
