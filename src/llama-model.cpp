@@ -8699,11 +8699,6 @@ struct llm_build_minicpm3 : public llm_graph_context {
                 v_states = ggml_cont(ctx0, v_states);
                 cb(v_states, "v_states", il);
 
-                v_states = ggml_view_2d(ctx0, v_states, hparams.n_embd_head_v * n_head, n_tokens,
-                        ggml_row_size(kv->type, hparams.n_embd_head_v * n_head),
-                        0);
-                cb(v_states, "v_states", il);
-
                 q_pe = ggml_rope_ext(
                         ctx0, q_pe, inp_pos, rope_factors,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
