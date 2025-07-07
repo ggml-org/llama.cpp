@@ -2220,14 +2220,8 @@ llama_context * llama_init_from_model(
         return nullptr;
     }
 
-    //  try {
     auto * ctx = new llama_context(*model, params);
     return ctx;
-    // } catch (const std::exception & err) {
-    //     LLAMA_LOG_ERROR("%s: failed to initialize the context: %s\n", __func__, err.what());
-    // }
-
-    // return nullptr;
 }
 
 // deprecated
