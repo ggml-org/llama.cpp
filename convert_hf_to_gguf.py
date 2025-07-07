@@ -6666,10 +6666,6 @@ class FalconH1Model(Mamba2Model):
         self.gguf_writer.add_value_length(self.hparams["head_dim"])
         self.gguf_writer.add_float64("falcon_h1.key_multiplier", self.hparams["key_multiplier"])
 
-        ## Other params
-        # self.gguf_writer.add_float64("falcon_h1.lm_head_multiplier", self.hparams["lm_head_multiplier"])
-        # self.gguf_writer.add_float64("falcon_h1.embedding_multiplier", self.hparams["embedding_multiplier"])
-
         ## Validation ##
         assert self.hparams.get("hidden_act") in [None, "silu"], "Only SILU activation supported"
         assert self.d_inner % d_head == 0, f"SSM inner size {self.d_inner} not a multiple of head dim {d_head}"
@@ -6684,16 +6680,6 @@ class FalconH1Model(Mamba2Model):
                                     self.find_hparam(["num_key_value_heads"], optional=True) or 
                                     self.find_hparam(["num_attention_heads"]))
 
-        # # Add multipliers as metadata instead of tensors
-        # self.gguf_writer.add_float64("falcon_h1.attention_in_multiplier", self.attention_in_multiplier)
-        # self.gguf_writer.add_float64("falcon_h1.attention_out_multiplier", self.attention_out_multiplier)
-        # self.gguf_writer.add_float64("falcon_h1.ssm_in_multiplier", self.ssm_in_multiplier)
-        # self.gguf_writer.add_float64("falcon_h1.ssm_out_multiplier", self.ssm_out_multiplier)
-
-        # # Add MLP multipliers
-        # if isinstance(self.mlp_multipliers, (list, tuple)) and len(self.mlp_multipliers) == 2:
-        #     self.gguf_writer.add_float64("falcon_h1.mlp_gate_multiplier", self.mlp_multipliers[0])
-        #     self.gguf_writer.add_float64("falcon_h1.mlp_down_multiplier", self.mlp_multipliers[1])
 
         # Add any other Falcon Mamba2 specific configuration
         self.gguf_writer.add_bool("falcon_h1.mamba_use_mlp", self.find_hparam(["mamba_use_mlp"], optional=True))
