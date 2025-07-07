@@ -1175,7 +1175,7 @@ struct gguf_writer {
         buf.insert(buf.end(), val.begin(), val.end());
     }
 
-    void write(const bool & val) const {
+    void write(const bool val) const {
         const int8_t val8 = val ? 1 : 0;
         write(val8);
     }
@@ -1194,11 +1194,11 @@ struct gguf_writer {
         write(std::string(val));
     }
 
-    void write(const enum ggml_type & val) const {
+    void write(const enum ggml_type val) const {
         write(int32_t(val));
     }
 
-    void write(const enum gguf_type & val) const {
+    void write(const enum gguf_type val) const {
         write(int32_t(val));
     }
 
