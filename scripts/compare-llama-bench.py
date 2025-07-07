@@ -45,13 +45,15 @@ LLAMA_BENCH_DB_TYPES = [
 
 # All test-backend-ops SQL fields
 TEST_BACKEND_OPS_DB_FIELDS = [
-    "test_time", "build_commit", "build_number", "backend_name", "op_name", "op_params", "test_mode",
-    "supported", "passed", "error_message", "time_us", "flops", "bandwidth_gb_s", "memory_kb", "n_runs"
+    "test_time", "build_commit", "backend_name",  "op_name", "op_params", "test_mode",
+    "supported", "passed",       "error_message", "time_us", "flops",     "bandwidth_gb_s",
+    "memory_kb", "n_runs"
 ]
 
 TEST_BACKEND_OPS_DB_TYPES = [
-    "TEXT", "TEXT", "INTEGER", "TEXT", "TEXT", "TEXT", "TEXT",
-    "INTEGER", "INTEGER", "TEXT", "REAL", "REAL", "REAL", "INTEGER", "INTEGER"
+    "TEXT",    "TEXT",    "TEXT", "TEXT", "TEXT", "TEXT",
+    "INTEGER", "INTEGER", "TEXT", "REAL", "REAL", "REAL",
+    "INTEGER", "INTEGER"
 ]
 
 # Legacy aliases for backward compatibility
