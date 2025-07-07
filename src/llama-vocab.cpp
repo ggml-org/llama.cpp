@@ -1159,6 +1159,40 @@ struct llm_tokenizer_rwkv : llm_tokenizer {
     struct naive_trie token_matcher;
 };
 
+struct llm_tokenizer_plamo2 : llm_tokenizer {
+    llm_tokenizer_plamo2(const llama_vocab & vocab) {
+        // Build vocabulary entries for PLaMo-2 tokenizer
+        std::vector<llama_vocab_plamo2::vocab_entry> vocab_entries;
+        vocab_entries.reserve(vocab.n_tokens());
+
+        for (uint32_t id = 0; id < vocab.n_tokens(); ++id) {
+            const auto & data = vocab.get_token_data(id);
+            llama_vocab_plamo2::vocab_entry entry;
+            entry.text = data.text;
+            entry.score = data.score;
+
+            // Check if this is a byte token
+            if (vocab.is_byte(id)) {
+                entry.type = "BYTE";
+            } else {
+                entry.type = "";
+            }
+
+            vocab_entries.push_back(entry);
+        }
+
+        // Build the Aho-Corasick automaton
+        plamo2_tokenizer.build(vocab_entries);
+    }
+
+    void tokenize(const std::string & text, std::vector<llama_token> & output) {
+        std::vector<llama_token> tokens = plamo2_tokenizer.encode(text);
+        output.insert(output.end(), tokens.begin(), tokens.end());
+    }
+
+    llama_vocab_plamo2 plamo2_tokenizer;
+};
+
 struct llm_tokenizer_rwkv_session {
     llm_tokenizer_rwkv_session(const llama_vocab & vocab, const llm_tokenizer_rwkv & tokenizer) : vocab(vocab), tokenizer(tokenizer) {}
 
@@ -1498,6 +1532,16 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             special_unk_id = LLAMA_TOKEN_NULL;
             special_sep_id = LLAMA_TOKEN_NULL;
             special_pad_id = LLAMA_TOKEN_NULL;
+        } else if (tokenizer_model == "plamo2") {
+            type = LLAMA_VOCAB_TYPE_PLAMO2;
+
+            // PLaMo-2 default special tokens (these will be overridden by model config)
+            special_bos_id = 1;  // <|plamo:bos|>
+            special_eos_id = 2;  // <|plamo:eos|>
+            special_unk_id = 0;  // <|plamo:unk|>
+            special_sep_id = LLAMA_TOKEN_NULL;
+            special_pad_id = 3;  // <|plamo:pad|>
+            special_mask_id = LLAMA_TOKEN_NULL;
         } else {
             throw std::runtime_error(format("unknown tokenizer: '%s'", tokenizer_model.c_str()));
         }
@@ -2134,12 +2178,13 @@ enum llama_vocab_type llama_vocab::impl::get_type() const {
 
 std::string llama_vocab::impl::type_name() const{
     switch (type) {
-        case LLAMA_VOCAB_TYPE_NONE: return "no vocab";
-        case LLAMA_VOCAB_TYPE_SPM:  return "SPM";
-        case LLAMA_VOCAB_TYPE_BPE:  return "BPE";
-        case LLAMA_VOCAB_TYPE_WPM:  return "WPM";
-        case LLAMA_VOCAB_TYPE_UGM:  return "UGM";
-        case LLAMA_VOCAB_TYPE_RWKV: return "RWKV";
+        case LLAMA_VOCAB_TYPE_NONE:   return "no vocab";
+        case LLAMA_VOCAB_TYPE_SPM:    return "SPM";
+        case LLAMA_VOCAB_TYPE_BPE:    return "BPE";
+        case LLAMA_VOCAB_TYPE_WPM:    return "WPM";
+        case LLAMA_VOCAB_TYPE_UGM:    return "UGM";
+        case LLAMA_VOCAB_TYPE_RWKV:   return "RWKV";
+        case LLAMA_VOCAB_TYPE_PLAMO2: return "PLaMo2";
         default:                    return "unknown";
     }
 }
@@ -2222,6 +2267,9 @@ void llama_vocab::impl::init_tokenizer(enum llama_vocab_type type) {
             break;
         case LLAMA_VOCAB_TYPE_RWKV:
             tokenizer = std::make_unique<llm_tokenizer_rwkv>(vocab);
+            break;
+        case LLAMA_VOCAB_TYPE_PLAMO2:
+            tokenizer = std::make_unique<llm_tokenizer_plamo2>(vocab);
             break;
         default:
             GGML_ABORT("unsupported vocab type");
@@ -2565,6 +2613,23 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
                     }
                 }
             } break;
+        case LLAMA_VOCAB_TYPE_PLAMO2:
+            {
+                auto * plamo2_tokenizer = static_cast<llm_tokenizer_plamo2 *>(tokenizer.get());
+                for (const auto & fragment : fragment_buffer) {
+                    if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
+                        std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
+
+#ifdef PRETOKENIZERDEBUG
+                        LLAMA_LOG_WARN("TT: (%ld %ld %ld) '%s'\n", text.length(), fragment.offset, fragment.length, text.c_str());
+#endif
+
+                        plamo2_tokenizer->tokenize(text, output);
+                    } else { // if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_TOKEN)
+                        output.push_back(fragment.token);
+                    }
+                }
+            } break;
         case LLAMA_VOCAB_TYPE_NONE:
             GGML_ABORT("fatal error");
     }
@@ -2652,6 +2717,24 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
 
                 memcpy(buf, result.data(), result.size());
                 return (int)result.size();
+            }
+            case LLAMA_VOCAB_TYPE_PLAMO2: {
+                // PLaMo-2 uses similar token handling as BPE/SPM
+                if (vocab.is_byte(token)) {
+                    // Handle byte tokens like <0xXX>
+                    if (token_text.length() == 6 && token_text.substr(0, 3) == "<0x" && token_text.back() == '>') {
+                        int hex_val = std::stoi(token_text.substr(3, 2), nullptr, 16);
+                        if (length < 1) {
+                            return -1;
+                        }
+                        buf[0] = static_cast<char>(hex_val);
+                        return 1;
+                    }
+                }
+
+                // Normal token - just copy the text
+                std::string result = token_text;
+                return _try_copy(result.data(), result.size());
             }
             default:
                 GGML_ABORT("fatal error");
@@ -2896,6 +2979,12 @@ llama_token llama_vocab::byte_to_token(uint8_t ch) const {
         case LLAMA_VOCAB_TYPE_WPM:
         case LLAMA_VOCAB_TYPE_BPE: {
             return pimpl->token_to_id.at(unicode_byte_to_utf8(ch));
+        }
+        case LLAMA_VOCAB_TYPE_PLAMO2: {
+            // PLaMo-2 uses byte tokens in format <0xXX>
+            char hex_str[8];
+            snprintf(hex_str, sizeof(hex_str), "<0x%02X>", ch);
+            return pimpl->token_to_id.at(hex_str);
         }
         default:
             GGML_ABORT("fatal error");
@@ -3375,3 +3464,286 @@ int32_t llama_detokenize(
     return vocab->detokenize(tokens, n_tokens, text, text_len_max, remove_special, unparse_special);
 }
 
+//
+// PLaMo-2 Aho-Corasick tokenizer implementation
+//
+
+llama_vocab_plamo2::llama_vocab_plamo2() : bytes_(256, 0) {
+}
+
+llama_vocab_plamo2::~llama_vocab_plamo2() {
+}
+
+void llama_vocab_plamo2::build(const std::vector<vocab_entry> & vocab) {
+    // Reset internal structures
+    tokens_.clear();
+    bytes_.assign(256, 0);
+    to_suffix_id_.clear();
+    table_.clear();
+
+    // Build token list and byte mapping
+    std::unordered_map<std::string, float> suffix_to_score;
+    std::unordered_map<std::string, llama_token> token_to_id;
+
+    for (size_t token_id = 0; token_id < vocab.size(); ++token_id) {
+        const auto & entry = vocab[token_id];
+        tokens_.push_back(entry.text);
+        token_to_id[entry.text] = static_cast<llama_token>(token_id);
+
+        // Handle byte tokens
+        if (entry.type == "BYTE") {
+            if (entry.text.length() == 6 && entry.text.substr(0, 3) == "<0x" && entry.text.back() == '>') {
+                std::string hex_str = entry.text.substr(3, 2);
+                int byte_val = std::stoi(hex_str, nullptr, 16);
+                bytes_[byte_val] = static_cast<llama_token>(token_id);
+            }
+            continue;
+        }
+
+        // Add token and all its suffixes to suffix_to_score
+        suffix_to_score[entry.text] = entry.score;
+        for (size_t i = 1; i < entry.text.length(); ++i) {
+            std::string suffix = entry.text.substr(i);
+            if (suffix_to_score.find(suffix) == suffix_to_score.end()) {
+                suffix_to_score[suffix] = std::numeric_limits<float>::quiet_NaN();
+            }
+        }
+    }
+
+    // Check that all byte tokens are set
+    for (int i = 0; i < 256; ++i) {
+        if (bytes_[i] == 0) {
+            throw std::runtime_error("Byte token for <0x" + std::to_string(i) + "> is not set");
+        }
+    }
+
+    // Build suffix list in lexicographical order of reversed strings
+    std::vector<std::string> suffixes;
+    for (const auto & pair : suffix_to_score) {
+        suffixes.push_back(pair.first);
+    }
+    suffixes.push_back("");  // Empty suffix
+
+    std::sort(suffixes.begin(), suffixes.end(), [](const std::string & a, const std::string & b) {
+        std::string rev_a(a.rbegin(), a.rend());
+        std::string rev_b(b.rbegin(), b.rend());
+        return rev_a < rev_b;
+    });
+
+    // Build suffix_to_id and to_suffix_id_
+    std::unordered_map<std::string, int32_t> suffix_to_id;
+    int32_t num_pieces = 0;
+
+    for (const auto & s : suffixes) {
+        suffix_to_id[s] = num_pieces;
+        if (!s.empty()) {
+            // Convert first character to Unicode code point
+            std::vector<int32_t> unicode_chars = utf8_to_unicode(s);
+            if (!unicode_chars.empty()) {
+                int64_t piece_code = (static_cast<int64_t>(unicode_chars[0]) << 32) | suffix_to_id[s.substr(1)];
+                to_suffix_id_[piece_code] = num_pieces;
+            }
+        }
+
+        // Count number of pieces for this suffix
+        int32_t pieces_for_suffix = 1; // sentinel row
+        for (size_t i = 1; i <= s.length(); ++i) {
+            std::string prefix = s.substr(0, i);
+            if (suffix_to_score.find(prefix) != suffix_to_score.end()) {
+                pieces_for_suffix++;
+            }
+        }
+        num_pieces += pieces_for_suffix;
+    }
+
+    // Build flattened table
+    table_.resize(num_pieces, std::vector<int32_t>(4, 0));
+    int32_t table_idx = 0;
+
+    for (const auto & suffix : suffixes) {
+        // Add all prefixes of the suffix to the table (in decreasing order of length)
+        for (int32_t piece_length = static_cast<int32_t>(suffix.length()); piece_length > 0; --piece_length) {
+            std::string piece = suffix.substr(0, piece_length);
+            auto score_it = suffix_to_score.find(piece);
+            if (score_it == suffix_to_score.end()) {
+                continue;
+            }
+
+            table_[table_idx][TABLE_PIECE_LENGTH] = piece_length;
+            auto token_it = token_to_id.find(piece);
+            table_[table_idx][TABLE_TOKEN_ID] = (token_it != token_to_id.end()) ? token_it->second : -1;
+
+            float score = score_it->second;
+            table_[table_idx][TABLE_SCORE] = std::isfinite(score) ?
+                static_cast<int32_t>(std::round(score * 1e4)) : INVALID_SCORE;
+            table_[table_idx][TABLE_PIECE_ID] = suffix_to_id[piece];
+
+            table_idx++;
+        }
+
+        // Add sentinel row
+        table_[table_idx][TABLE_PIECE_LENGTH] = 1;
+        table_[table_idx][TABLE_TOKEN_ID] = -1;
+        table_[table_idx][TABLE_SCORE] = UNKNOWN_SCORE;
+        table_idx++;
+    }
+}
+
+std::vector<int32_t> llama_vocab_plamo2::utf8_to_unicode(const std::string & text) const {
+    std::vector<int32_t> result;
+    const char * ptr = text.c_str();
+    const char * end = ptr + text.length();
+
+    while (ptr < end) {
+        int32_t codepoint = 0;
+        int bytes_read = 0;
+
+        if ((*ptr & 0x80) == 0) {
+            // ASCII
+            codepoint = *ptr;
+            bytes_read = 1;
+        } else if ((*ptr & 0xE0) == 0xC0) {
+            // 2-byte UTF-8
+            codepoint = (*ptr & 0x1F) << 6;
+            codepoint |= (*(ptr + 1) & 0x3F);
+            bytes_read = 2;
+        } else if ((*ptr & 0xF0) == 0xE0) {
+            // 3-byte UTF-8
+            codepoint = (*ptr & 0x0F) << 12;
+            codepoint |= (*(ptr + 1) & 0x3F) << 6;
+            codepoint |= (*(ptr + 2) & 0x3F);
+            bytes_read = 3;
+        } else if ((*ptr & 0xF8) == 0xF0) {
+            // 4-byte UTF-8
+            codepoint = (*ptr & 0x07) << 18;
+            codepoint |= (*(ptr + 1) & 0x3F) << 12;
+            codepoint |= (*(ptr + 2) & 0x3F) << 6;
+            codepoint |= (*(ptr + 3) & 0x3F);
+            bytes_read = 4;
+        } else {
+            // Invalid UTF-8, skip this byte
+            ptr++;
+            continue;
+        }
+
+        result.push_back(codepoint);
+        ptr += bytes_read;
+    }
+
+    return result;
+}
+
+std::vector<llama_token> llama_vocab_plamo2::encode_unicode(const std::vector<int32_t> & unicode_data) const {
+    if (unicode_data.empty()) {
+        return {};
+    }
+
+    const size_t data_len = unicode_data.size();
+
+    // Initialize scores array (dynamic programming)
+    std::vector<int64_t> scores(data_len + 1, static_cast<int64_t>(1) << 60);
+    scores[data_len] = 0;
+
+    // Path array to track best tokenization
+    std::vector<std::vector<int32_t>> path(data_len + 1, std::vector<int32_t>(3, 0));
+
+    int32_t suffix_id = 0;
+
+    // Process from end to beginning
+    for (int i = static_cast<int>(data_len) - 1; i >= 0; --i) {
+        int32_t c = unicode_data[i];
+
+        // Find next suffix ID
+        for (size_t p = suffix_id; p < table_.size(); ++p) {
+            int64_t piece_code = (static_cast<int64_t>(c) << 32) | table_[p][TABLE_PIECE_ID];
+            auto it = to_suffix_id_.find(piece_code);
+            suffix_id = (it != to_suffix_id_.end()) ? it->second : 0;
+
+            if (suffix_id > 0 || table_[p][TABLE_SCORE] == UNKNOWN_SCORE) {
+                break;
+            }
+        }
+
+        // Update best path
+        for (size_t p = suffix_id; p < table_.size(); ++p) {
+            int32_t score = table_[p][TABLE_SCORE];
+            if (score > INVALID_SCORE) {
+                int32_t piece_length = table_[p][TABLE_PIECE_LENGTH];
+                int64_t s = scores[i + piece_length] - score;
+
+                if (s < scores[i]) {
+                    scores[i] = s;
+                    path[i][PATH_TOKEN_LENGTH] = piece_length;
+                    path[i][PATH_TOKEN_ID] = table_[p][TABLE_TOKEN_ID];
+                    path[i][PATH_NUM_TOKENS] = path[i + piece_length][PATH_NUM_TOKENS] + 1;
+
+                    if (score == UNKNOWN_SCORE) {
+                        // Add UTF-8 byte count
+                        path[i][PATH_NUM_TOKENS] += (c >= 0x80) + (c >= 0x800) + (c >= 0x10000);
+                    }
+                }
+            }
+
+            if (score == UNKNOWN_SCORE) {
+                break;
+            }
+        }
+    }
+
+    // Decode the best path
+    std::vector<llama_token> token_ids;
+    token_ids.reserve(path[0][PATH_NUM_TOKENS]);
+
+    int pos = 0;
+    while (pos < static_cast<int>(data_len)) {
+        if (path[pos][PATH_TOKEN_ID] >= 0) {
+            token_ids.push_back(path[pos][PATH_TOKEN_ID]);
+        } else {
+            // Fall back to byte tokens
+            int32_t c = unicode_data[pos];
+            int s = 1 + (c >= 0x80) + (c >= 0x800) + (c >= 0x10000);
+
+            for (int j = 0; j < s; ++j) {
+                uint8_t b = (s == 1) ? c :
+                           (j == 0) ? (0xF00 >> s) & 0xFF :
+                           0x80 | ((c >> ((s - j - 1) * 6)) & 0x3F);
+                token_ids.push_back(bytes_[b]);
+            }
+        }
+
+        pos += path[pos][PATH_TOKEN_LENGTH];
+    }
+
+    return token_ids;
+}
+
+std::vector<llama_token> llama_vocab_plamo2::encode(const std::string & text) const {
+    std::vector<int32_t> unicode_data = utf8_to_unicode(text);
+    return encode_unicode(unicode_data);
+}
+
+std::vector<std::string> llama_vocab_plamo2::encode_as_tokens(const std::string & text) const {
+    std::vector<llama_token> token_ids = encode(text);
+    std::vector<std::string> result;
+    result.reserve(token_ids.size());
+
+    for (llama_token id : token_ids) {
+        if (id >= 0 && id < static_cast<llama_token>(tokens_.size())) {
+            result.push_back(tokens_[id]);
+        }
+    }
+
+    return result;
+}
+
+const std::string & llama_vocab_plamo2::get_token_text(llama_token id) const {
+    static const std::string empty_string;
+    if (id >= 0 && id < static_cast<llama_token>(tokens_.size())) {
+        return tokens_[id];
+    }
+    return empty_string;
+}
+
+size_t llama_vocab_plamo2::vocab_size() const {
+    return tokens_.size();
+}

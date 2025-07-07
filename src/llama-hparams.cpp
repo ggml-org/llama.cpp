@@ -1,6 +1,7 @@
 #include "llama-hparams.h"
 
 #include "ggml.h"
+#include "llama-arch.h"
 
 void llama_hparams::set_swa_pattern(uint32_t n_pattern) {
     for (uint32_t il = 0; il < n_layer; ++il) {
