@@ -14676,6 +14676,8 @@ struct llm_build_falcon_h1 : public llm_graph_context {
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -14740,8 +14742,6 @@ struct llm_build_falcon_h1 : public llm_graph_context {
             cb(cur, "layer_out", il);
 
             if (il == n_layer - 1) {
-                // skip computing output for unused tokens
-                ggml_tensor * inp_out_ids = build_inp_out_ids();
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
@@ -14831,7 +14831,6 @@ struct llm_build_falcon_h1 : public llm_graph_context {
         ggml_tensor * zxBCdt = build_lora_mm(model.layers[il].ssm_in, cur);
         cb(zxBCdt, "zxBCdt", il);
 
-
         // check if the models has ssm_multipliers (MuP)
         if (hparams.ssm_has_mup) {
             struct ggml_tensor * mup_vec = model.layers[il].ssm_mup_vec;
@@ -14849,7 +14848,6 @@ struct llm_build_falcon_h1 : public llm_graph_context {
         {
             // => {d_conv - 1 + n_seq_tokens, d_inner + 2*n_group*d_state, n_seqs}
             ggml_tensor * conv_x = ggml_concat(ctx0, conv, ggml_transpose(ctx0, xBC), 0);
-
 
             // copy last (d_conv - 1) columns back into the state cache
             ggml_tensor * last_conv = ggml_view_3d(ctx0, conv_x, d_conv - 1, d_ssm + 2*n_group*d_state, n_seqs, conv_x->nb[1], conv_x->nb[2], n_seq_tokens*(conv_x->nb[0]));
@@ -14888,7 +14886,6 @@ struct llm_build_falcon_h1 : public llm_graph_context {
 
             // {n_head, n_seq_tokens, n_seqs}
             dt = ggml_add(ctx0, ggml_cont(ctx0, dt), model.layers[il].ssm_dt_b);
-
 
             ggml_tensor * A = model.layers[il].ssm_a;
 
