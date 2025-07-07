@@ -60,8 +60,9 @@ public:
 
         uint32_t head() const {
             GGML_ASSERT(idxs.size() == 1);
+            GGML_ASSERT(!idxs[0].empty());
 
-            return idxs.at(0).at(0);
+            return idxs[0][0];
         }
 
         void resize(size_t n) {
@@ -71,8 +72,9 @@ public:
 
         size_t size() const {
             GGML_ASSERT(idxs.size() == strm.size());
+            GGML_ASSERT(!idxs.empty());
 
-            return idxs.at(0).size();
+            return idxs[0].size();
         }
 
         size_t n_stream() const {
