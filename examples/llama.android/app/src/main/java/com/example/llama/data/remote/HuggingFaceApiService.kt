@@ -14,7 +14,8 @@ interface HuggingFaceApiService {
         @Query("filter") filter: String? = null,
         @Query("sort") sort: String? = null,
         @Query("direction") direction: String? = null,
-        @Query("limit") limit: Int? = null
+        @Query("limit") limit: Int? = null,
+        @Query("full") full: Boolean? = null,
     ): List<HuggingFaceModel>
 
     @GET("api/models/{modelId}")

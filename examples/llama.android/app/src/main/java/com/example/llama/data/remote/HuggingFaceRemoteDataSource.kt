@@ -9,11 +9,12 @@ import javax.inject.Singleton
 
 interface HuggingFaceRemoteDataSource {
     suspend fun searchModels(
-        query: String? = "gguf",
+        query: String? = "gguf q4_0",
         filter: String? = "text-generation", // Only generative models,
         sort: String? = "downloads",
         direction: String? = "-1",
-        limit: Int? = 20
+        limit: Int? = 20,
+        full: Boolean = true,
     ): List<HuggingFaceModel>
 
     suspend fun getModelDetails(modelId: String): HuggingFaceModelDetails
@@ -31,14 +32,16 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
         filter: String?,
         sort: String?,
         direction: String?,
-        limit: Int?
+        limit: Int?,
+        full: Boolean,
     ) = withContext(Dispatchers.IO) {
         apiService.getModels(
             search = query,
             filter = filter,
             sort = sort,
             direction = direction,
-            limit = limit
+            limit = limit,
+            full = full,
         )
     }
 

@@ -21,6 +21,7 @@ import com.example.llama.engine.ModelLoadingService
 import com.example.llama.engine.StubInferenceEngine
 import com.example.llama.engine.StubTierDetection
 import com.example.llama.monitoring.PerformanceMonitor
+import com.google.gson.GsonBuilder
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -32,6 +33,8 @@ import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import javax.inject.Singleton
+
+private const val HUGGINGFACE_DATETIME_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -61,7 +64,7 @@ internal abstract class AppModule {
     ): HuggingFaceRemoteDataSource
 
     companion object {
-        private const val USE_STUB_ENGINE = false
+        const val USE_STUB_ENGINE = false
 
         @Provides
         fun provideInferenceEngine(@ApplicationContext context: Context): InferenceEngine {
@@ -111,7 +114,9 @@ internal abstract class AppModule {
             Retrofit.Builder()
                 .baseUrl("https://huggingface.co/")
                 .client(okHttpClient)
-                .addConverterFactory(GsonConverterFactory.create())
+                .addConverterFactory(GsonConverterFactory.create(
+                    GsonBuilder().setDateFormat(HUGGINGFACE_DATETIME_FORMAT).create()
+                ))
                 .build()
                 .create(HuggingFaceApiService::class.java)
     }

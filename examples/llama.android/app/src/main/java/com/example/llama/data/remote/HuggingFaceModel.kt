@@ -1,14 +1,32 @@
 package com.example.llama.data.remote
 
+import java.util.Date
+
 data class HuggingFaceModel(
+    val _id: String,
     val id: String,
     val modelId: String,
+
+    val author: String,
+    val createdAt: Date?,
+    val lastModified: Date?,
+
+    val library_name: String?,
+    val pipeline_tag: String?,
+    val tags: List<String>?,
+
+    val private: Boolean?,
+    val gated: Boolean?,
+
     val likes: Int?,
     val trendingScore: Int?,
-    val private: Boolean?,
     val downloads: Int?,
-    val tags: List<String>?,
-    val pipeline_tag: String?,
-    val library_name: String?,
-    val createdAt: String?
-)
+
+    val sha: String?,
+
+    val siblings: List<Sibling>?,
+) {
+    data class Sibling(
+        val rfilename: String,
+    )
+}
