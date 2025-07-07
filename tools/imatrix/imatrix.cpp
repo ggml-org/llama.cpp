@@ -865,6 +865,7 @@ int main(int argc, char ** argv) {
 
     // init
     common_init_result llama_init = common_init_from_params(params);
+
     llama_model * model = llama_init.model.get();
     llama_context * ctx = llama_init.context.get();
 
