@@ -47,7 +47,7 @@ dir="build-bench"
 function run {
     rm -fr ${dir} > /dev/null
     cmake -B ${dir} -S . ${CMAKE_OPTS} > /dev/null
-    cmake --build ${dir} -t $target > /dev/null
+    cmake --build ${dir} -t $target -j $(nproc) > /dev/null
     ${dir}/bin/$target $run_args | sqlite3 "$db_file"
 }
 
