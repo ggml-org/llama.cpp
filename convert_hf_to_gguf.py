@@ -4909,8 +4909,7 @@ class Mamba2Model(TextModel):
         # Fail early for models which don't have a block expansion factor of 2
         # TODO: does this really matter?
         # skip the assertion for FalconH1 Model
-        architectures = self.hparams.get("architectures")
-        if architectures is None or architectures[0] != "FalconH1ForCausalLM":
+        if self.model_arch != gguf.MODEL_ARCH.FALCON_H1:
             assert d_inner == 2 * d_model
             assert d_inner % head_dim == 0
 
