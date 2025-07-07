@@ -6672,7 +6672,6 @@ class FalconH1Model(Mamba2Model):
 
 
         # Add Falcon Mamba2 specific configuration
-        self.gguf_writer.add_uint32("falcon_h1.ssm.mamba_chunk_size", self.hparams["mamba_chunk_size"])
         self.gguf_writer.add_uint32("falcon_h1.attention.head_dim", self.hparams["head_dim"])
         self.gguf_writer.add_uint32("falcon_h1.ssm.mamba_d_ssm", self.hparams["mamba_d_ssm"])
         self.gguf_writer.add_uint32("falcon_h1.num_attention_heads", self.find_hparam(["num_attention_heads"]))

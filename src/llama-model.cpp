@@ -1563,7 +1563,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
                 ml.get_key(LLM_KV_SSM_HEAD_DIM,       hparams.ssm_head_dim);
-                ml.get_key(LLM_KV_FALCON_H1_MAMBA_CHUNK_SIZE, hparams.chunk_size);
 
                 // Falcon-H1 parameters
                 ml.get_key(LLM_KV_ATTN_HEAD_DIM,      hparams.attn_head_dim);
