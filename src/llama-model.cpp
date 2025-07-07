@@ -1562,7 +1562,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
 
                 hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-                hparams.set_swa_pattern(0); // all layers are SWA
+                hparams.set_swa_pattern(2);
 
                 // TODO: switch (hparams.n_layer)
             } break;

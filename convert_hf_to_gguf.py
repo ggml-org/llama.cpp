@@ -6535,8 +6535,8 @@ class UltravoxWhisperEncoderModel(WhisperEncoderModel):
         super().set_gguf_parameters()
         self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
 
-@ModelBase.register("OpenaiForCausalLM")
-class OpenaiMOEModel(TextModel):
+@ModelBase.register("OpenAIMoeForCausalLM")
+class OpenAIMoeModel(TextModel):
     model_arch = gguf.MODEL_ARCH.OPENAI_MOE
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -6577,7 +6577,7 @@ class OpenaiMOEModel(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
     def set_vocab(self):
-        self._set_vocab_gpt2() # FOR TESTING ONLY!!!
+        self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
