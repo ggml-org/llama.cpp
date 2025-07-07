@@ -6675,7 +6675,7 @@ class FalconH1Model(Mamba2Model):
         self.gguf_writer.add_bool("falcon_h1.mamba_use_mlp", self.find_hparam(["mamba_use_mlp"], optional=True))
         self.gguf_writer.add_bool("falcon_h1.mamba_norm_before_gate", self.find_hparam(["mamba_norm_before_gate"], optional=True))
         self.gguf_writer.add_bool("falcon_h1.mamba_rms_norm", self.find_hparam(["mamba_rms_norm"], optional=True))
-        self.gguf_writer.add_float64("falcon_h1.rope_theta", self.find_hparam(["rope_theta"], optional=True))
+        self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
 
 ###### CONVERSION LOGIC ######
 

@@ -237,7 +237,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_FALCON_H1_SSM_HAS_MUP,              "%s.ssm.has_mup"              },
     { LLM_KV_FALCON_H1_MAMBA_NORM_BEFORE_GATE,   "%s.mamba_norm_before_gate"   },
     { LLM_KV_FALCON_H1_MAMBA_RMS_NORM,           "%s.mamba_rms_norm"           },
-    { LLM_KV_FALCON_H1_ROPE_THETA,               "%s.rope_theta"               },
     { LLM_KV_FALCON_H1_KEY_MULTIPLIER,           "%s.key_multiplier"           },
     { LLM_KV_FALCON_H1_LM_HEAD_MULTIPLIER,       "%s.lm_head_multiplier"       },
     { LLM_KV_FALCON_H1_EMBEDDING_MULTIPLIER,     "%s.embedding_multiplier"     },
