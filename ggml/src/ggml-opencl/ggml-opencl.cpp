@@ -531,6 +531,16 @@ struct ggml_backend_opencl_context {
         fclose(ftrace);
     }
 
+    size_t get_kernel_workgroup_size(cl_kernel kernel) const {
+        size_t workgroup_size = 0;
+        size_t ret_size = 0;
+        CL_CHECK(
+            clGetKernelWorkGroupInfo(kernel, device, CL_KERNEL_WORK_GROUP_SIZE,
+                sizeof(size_t), &workgroup_size, &ret_size));
+        GGML_ASSERT(sizeof(size_t) == ret_size);
+        return workgroup_size;
+    }
+
     void enqueue_ndrange_kernel(cl_kernel kernel, cl_uint work_dim, size_t *global_work_size, size_t *local_work_size, const ggml_tensor * tensor) {
 #ifdef GGML_OPENCL_PROFILING
         cl_event evt;
@@ -3480,9 +3490,29 @@ static void ggml_cl_set_rows(ggml_backend_t backend, const ggml_tensor * src0, c
     CL_CHECK(clSetKernelArg(kernel, 17, sizeof(cl_ulong), &nb2));
     CL_CHECK(clSetKernelArg(kernel, 18, sizeof(cl_ulong), &nb3));
 
-    int nth0 = 256;
-    size_t global_work_size[] = {(size_t)ne01*nth0, (size_t)ne02, (size_t)ne03};
-    size_t local_work_size[] = {(size_t)nth0, 1, 1};
+    int nth0 = 64;
+    if (backend_ctx->gpu_family == INTEL) {
+        nth0 = 32;
+    } else if (backend_ctx->gpu_family == ADRENO) {
+        nth0 = 64;
+    }
+
+    int max_workgroup_size = backend_ctx->get_kernel_workgroup_size(kernel);
+    while (nth0 < nblk0 && nth0 < max_workgroup_size) {
+        nth0 *= 2;
+    }
+
+    int rows_per_workgroup = 1;
+    if (nth0 > nblk0) {
+        rows_per_workgroup = nth0 / nblk0;
+        nth0 = nblk0;
+    }
+
+    size_t global_work_size[] = {
+        (size_t)(ne01 + rows_per_workgroup - 1)/rows_per_workgroup*nth0,
+        (size_t)ne02*rows_per_workgroup,
+        (size_t)ne03};
+    size_t local_work_size[] = {(size_t)nth0, (size_t)rows_per_workgroup, 1};
 
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }

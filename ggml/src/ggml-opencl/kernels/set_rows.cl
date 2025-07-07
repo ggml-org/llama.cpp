@@ -27,7 +27,11 @@ kernel void kernel_set_rows_f32(
 
     int i03 = get_group_id(2);
     int i02 = get_group_id(1);
-    int i01 = get_group_id(0);
+    int i01 = get_group_id(0)*get_local_size(1) + get_local_id(1);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     int i12 = i03%ne12;
     int i11 = i02%ne11;
@@ -70,7 +74,11 @@ kernel void kernel_set_rows_f16(
 
     int i03 = get_group_id(2);
     int i02 = get_group_id(1);
-    int i01 = get_group_id(0);
+    int i01 = get_group_id(0)*get_local_size(1) + get_local_id(1);
+
+    if (i01 >= ne01) {
+        return;
+    }
 
     int i12 = i03%ne12;
     int i11 = i02%ne11;
