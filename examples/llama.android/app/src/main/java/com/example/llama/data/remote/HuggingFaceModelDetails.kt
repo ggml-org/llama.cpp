@@ -20,7 +20,6 @@ data class HuggingFaceModelDetails(
     val gated: Boolean?,
 
     val likes: Int?,
-    val trendingScore: Int?,    // TODO-han.yin: ??
     val downloads: Int?,
 
     val usedStorage: Long?,

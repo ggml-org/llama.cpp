@@ -19,7 +19,6 @@ data class HuggingFaceModel(
     val gated: Boolean?,
 
     val likes: Int?,
-    val trendingScore: Int?,
     val downloads: Int?,
 
     val sha: String?,

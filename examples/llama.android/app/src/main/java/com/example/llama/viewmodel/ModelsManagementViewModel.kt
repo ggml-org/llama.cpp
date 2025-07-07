@@ -226,7 +226,7 @@ class ModelsManagementViewModel @Inject constructor(
 
             Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
             models.forEachIndexed { index, model ->
-                Log.d(TAG, "#$index: ${model.id}")
+                Log.d(TAG, "#$index: $model")
             }
         }
     }
