@@ -230,7 +230,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_FALCON_H1_USE_MLP,                  "%s.mamba_use_mlp"            },
     { LLM_KV_FALCON_H1_MAMBA_NORM_BEFORE_GATE,   "%s.mamba_norm_before_gate"   },
     { LLM_KV_FALCON_H1_MAMBA_RMS_NORM,           "%s.mamba_rms_norm"           },
-    { LLM_KV_FALCON_H1_MAMBA_CHUNK_SIZE,         "%s.ssm.mamba_chunk_size"     },
 
     { LLM_KV_ADAPTER_TYPE,       "adapter.type"       },
     { LLM_KV_ADAPTER_LORA_ALPHA, "adapter.lora.alpha" },
