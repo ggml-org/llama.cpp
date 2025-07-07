@@ -227,7 +227,6 @@ struct llama_layer {
 
     // falcon_h1
     struct ggml_tensor * ssm_in_b   = nullptr;
-    struct ggml_tensor * ssm_mup_vec = nullptr;
 
     // ff MoE
     struct ggml_tensor * ffn_gate_inp  = nullptr;

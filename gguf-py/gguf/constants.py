@@ -527,7 +527,6 @@ class MODEL_TENSOR(IntEnum):
     POSNET_ATTN_K        = auto()
     POSNET_ATTN_V        = auto()
     POSNET_ATTN_OUT      = auto()
-    SSM_MUP_VEC          = auto()
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
@@ -740,7 +739,6 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SSM_D:                     "blk.{bid}.ssm_d",
     MODEL_TENSOR.SSM_NORM:                  "blk.{bid}.ssm_norm",
     MODEL_TENSOR.SSM_OUT:                   "blk.{bid}.ssm_out",
-    MODEL_TENSOR.SSM_MUP_VEC:               "blk.{bid}.ssm_mup_vec",
     MODEL_TENSOR.TIME_MIX_W0:               "blk.{bid}.time_mix_w0",
     MODEL_TENSOR.TIME_MIX_W1:               "blk.{bid}.time_mix_w1",
     MODEL_TENSOR.TIME_MIX_W2:               "blk.{bid}.time_mix_w2",
@@ -2230,7 +2228,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_OUT,       # Output projection
 
         # SSM components (Mamba2 specific)
-        MODEL_TENSOR.SSM_MUP_VEC,    # Mup vector
         MODEL_TENSOR.SSM_IN,         # Input projection for SSM
         MODEL_TENSOR.SSM_CONV1D,     # Convolution layer
         MODEL_TENSOR.SSM_DT,         # Delta time projection
