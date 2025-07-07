@@ -122,17 +122,7 @@ struct llama_hparams {
     bool     mamba_use_mlp            = false;
     bool     mamba_norm_before_gate   = false;
     bool     mamba_rms_norm           = false;
-    double attention_in_multiplier  = 1.0;
-    double attention_out_multiplier = 1.0;
-    double ssm_in_multiplier        = 1.0;
-    double ssm_out_multiplier       = 1.0;
-    double mlp_gate_multiplier      = 1.0;
-    double mlp_down_multiplier      = 1.0;
-    double key_multiplier           = 1.0;
-    double lm_head_multiplier       = 1.0;
     double rope_theta               = 10000.0;
-    double embedding_multiplier     = 1.0;
-    bool     ssm_has_mup              = false;
     uint32_t vocab_size               = 0;
     uint32_t intermediate_size        = 0;
     float    mamba_expand             = 0.0f;
