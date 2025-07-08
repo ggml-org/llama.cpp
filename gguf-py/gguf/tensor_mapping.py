@@ -155,6 +155,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.layer_norm_1",             # jina-v2-code
             "rwkv.blocks.{bid}.ln2",                        # rwkv6
             "model.layers.{bid}.ln2",                       # rwkv7
+            "model.layers.{bid}.post_attention_layernorm",  # cogvlm
         ),
 
         # Attention query-key-value
@@ -195,6 +196,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.q_proj",                     # llada
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
+            "model.layers.{bid}.self_attn.language_expert_query",        # cogvlm
         ),
 
         # Attention key
@@ -215,6 +217,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.k_proj",                   # llada
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
+            "model.layers.{bid}.self_attn.language_expert_key",        # cogvlm
         ),
 
         # Attention value
@@ -234,6 +237,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.v_proj",                     # llada
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
+            "model.layers.{bid}.self_attn.language_expert_value",        # cogvlm
         ),
 
         # Attention output
@@ -270,6 +274,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.attn_out",                      # llada
             "layers.{bid}.self_attn.o_proj",                                # qwen3-embedding
             "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
+            "model.layers.{bid}.self_attn.language_expert_dense",           # cogvlm
         ),
 
         # Attention output norm
@@ -402,6 +407,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.up_proj",                 # llada
             "layers.{bid}.mlp.up_proj",                               # qwen3-embedding
             "backbone.layers.{bid}.mixer.up_proj",                    # nemotron-h
+            "model.layers.{bid}.mlp.language_mlp.up_proj",            # cogvlm
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -430,21 +436,22 @@ class TensorNameMap:
 
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
-            "model.layers.{bid}.mlp.gate_proj",           # llama-hf refact olmo2
-            "layers.{bid}.mlp.gate_proj",                 # embeddinggemma
-            "layers.{bid}.feed_forward.w1",               # llama-pth
-            "transformer.h.{bid}.mlp.w2",                 # qwen
-            "transformer.h.{bid}.mlp.c_fc2",              # jais
-            "model.layers.layers.{bid}.mlp.gate_proj",    # plamo
-            "model.layers.{bid}.feed_forward.w1",         # internlm2
-            "encoder.layers.{bid}.mlp.fc12",              # nomic-bert
-            "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2 (split up/gate, no longer used)
-            "transformer.h.{bid}.mlp.linear_1",           # refact
-            "model.layers.{bid}.residual_mlp.w1",         # arctic
-            "transformer.h.{bid}.mlp.c_fc_0",             # exaone
-            "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba granite-hybrid
-            "model.transformer.blocks.{bid}.ff_proj",     # llada
-            "layers.{bid}.mlp.gate_proj",                 # qwen3-embedding
+            "model.layers.{bid}.mlp.gate_proj",               # llama-hf refact olmo2
+            "layers.{bid}.mlp.gate_proj",                     # embeddinggemma
+            "layers.{bid}.feed_forward.w1",                   # llama-pth
+            "transformer.h.{bid}.mlp.w2",                     # qwen
+            "transformer.h.{bid}.mlp.c_fc2",                  # jais
+            "model.layers.layers.{bid}.mlp.gate_proj",        # plamo
+            "model.layers.{bid}.feed_forward.w1",             # internlm2
+            "encoder.layers.{bid}.mlp.fc12",                  # nomic-bert
+            "encoder.layer.{bid}.mlp.gated_layers_w",         # jina-bert-v2 (split up/gate, no longer used)
+            "transformer.h.{bid}.mlp.linear_1",               # refact
+            "model.layers.{bid}.residual_mlp.w1",             # arctic
+            "transformer.h.{bid}.mlp.c_fc_0",                 # exaone
+            "model.layers.{bid}.feed_forward.gate_proj",      # llama4 jamba granite-hybrid
+            "model.transformer.blocks.{bid}.ff_proj",         # llada
+            "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
+            "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -498,6 +505,7 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.ff_out",                  # llada
             "layers.{bid}.mlp.down_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.down_proj",                  # nemotron-h
+            "model.layers.{bid}.mlp.language_mlp.down_proj",          # cogvlm
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -1012,6 +1020,34 @@ class TensorNameMap:
 
         MODEL_TENSOR.ENC_FFN_DOWN: (
             "encoder.block.{bid}.layer.1.DenseReluDense.wo", # t5
+        ),
+
+        MODEL_TENSOR.VISEXP_UP: (
+            "model.layers.{bid}.mlp.vision_mlp.up_proj",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_GATE: (
+            "model.layers.{bid}.mlp.vision_mlp.gate_proj",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_DOWN: (
+            "model.layers.{bid}.mlp.vision_mlp.down_proj",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_ATTN_OUT: (
+            "model.layers.{bid}.self_attn.vision_expert_dense",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_ATTN_Q: (
+            "model.layers.{bid}.self_attn.vision_expert_query",  # cogvlm
+        ),
+        
+        MODEL_TENSOR.VISEXP_ATTN_K: (
+            "model.layers.{bid}.self_attn.vision_expert_key",  # cogvlm
+        ),
+
+        MODEL_TENSOR.VISEXP_ATTN_V: (
+            "model.layers.{bid}.self_attn.vision_expert_value",  # cogvlm
         ),
 
         ############################################################################

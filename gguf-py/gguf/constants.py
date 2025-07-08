@@ -567,6 +567,13 @@ class MODEL_TENSOR(IntEnum):
     SHORTCONV_CONV       = auto()
     SHORTCONV_INPROJ     = auto()
     SHORTCONV_OUTPROJ    = auto()
+    VISEXP_ATTN_Q        = auto()
+    VISEXP_ATTN_K        = auto()
+    VISEXP_ATTN_V        = auto()
+    VISEXP_ATTN_OUT      = auto()
+    VISEXP_GATE          = auto()
+    VISEXP_DOWN          = auto()
+    VISEXP_UP            = auto()
     # vision
     V_MMPROJ             = auto()
     V_MMPROJ_FC          = auto()
