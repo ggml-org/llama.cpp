@@ -54,7 +54,6 @@ static void rope_norm(const T * x, T * dst, const int ne0, const int ne1, const 
     const int i2 = channel0 * s2 + row0 * s1 + i0;
 
     if (i0 >= n_dims) {
-        const int i = row * ne0 + i0;
         *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i2);
         return;
     }
@@ -95,8 +94,7 @@ static void rope_neox(const T * x, T * dst, const int ne0, const int ne1, const 
     const int i2 = channel0 * s2 + row0 * s1 + i0 / 2;
 
     if (i0 >= n_dims) {
-        const int i = row * ne0 + i0;
-        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i0 / 2 + i);
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i + i0 / 2) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i2 + i0 / 2);
         return;
     }
 
@@ -135,8 +133,7 @@ static void rope_multi(const T * x, T * dst, const int ne0, const int ne1, const
     const size_t ix        = ((size_t) channel_x * s2) + ((size_t) row_x * s1) + (i0 / 2);
 
     if (i0 >= n_dims) {
-        const int i = row_dst*ne0 + i0;
-        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i0 / 2 + i);
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + idst + i0 / 2) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i0 / 2 + ix);
         return;
     }
 
