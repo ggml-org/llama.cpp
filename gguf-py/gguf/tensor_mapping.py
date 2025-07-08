@@ -32,6 +32,7 @@ class TensorNameMap:
             "model.word_embeddings",                     # bailingmoe
             "language_model.model.embed_tokens",         # llama4
             "encoder",                                   # neobert
+            "model.text_model.embed_tokens.weight",      # smoldocling
         ),
 
         # Token type embeddings
@@ -63,7 +64,7 @@ class TensorNameMap:
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox
             "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe
-            "output",                    # llama-pth bloom internlm2
+            "output",                    # llama-pth bloom internlm2 smoldocling
             "word_embeddings_for_head",  # persimmon
             "lm_head.linear",            # phi2
             "output_layer",              # chatglm
@@ -93,6 +94,7 @@ class TensorNameMap:
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
+            "output_norm",                             # smoldocling
         ),
 
         # Rope frequencies
@@ -136,6 +138,7 @@ class TensorNameMap:
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
             "transformer_encoder.{bid}.attention_norm",             # neobert
+            "blk.{bid}.attn_norm",                                  # smoldocling
         ),
 
         # Attention norm 2
@@ -179,6 +182,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
+            "blk.{bid}.attn_q",                                          # smoldocling
         ),
 
         # Attention key
@@ -195,6 +199,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
+            "blk.{bid}.attn_k",                                        # smoldocling
         ),
 
         # Attention value
@@ -210,6 +215,8 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
+            "blk.{bid}.attn_v",                                          # smoldocling
+
         ),
 
         # Attention output
@@ -240,6 +247,7 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
             "transformer_encoder.{bid}.wo",                                 # neobert
+            "blk.{bid}.attn_output",                                        # smoldocling
         ),
 
         # Attention output norm
@@ -249,6 +257,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.norm1",                      # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_1",      # Grok
             "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
+            "blk.{bid}.attn_norm",                             # smoldocling
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
@@ -281,6 +290,7 @@ class TensorNameMap:
             "transformer.layers.{bid}.ffn_norm",                             # openelm
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
+            "blk.{bid}.ffn_norm",                                            # smoldocling
         ),
 
         # Post feed-forward norm
@@ -346,6 +356,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
+            "blk.{bid}.ffn_up",                                       # smoldocling                                     
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -383,6 +394,8 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4
+            "blk.{bid}.ffn_gate",                         # smoldocling                                     
+
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -429,6 +442,8 @@ class TensorNameMap:
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
+            "blk.{bid}.ffn_down",                                     # smoldocling                                     
+
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (

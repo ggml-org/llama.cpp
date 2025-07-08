@@ -40,6 +40,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_190M:          return "190M";
         case LLM_TYPE_220M:          return "220M";
         case LLM_TYPE_250M:          return "250M";
+        case LLM_TYPE_256M:          return "256M";
         case LLM_TYPE_270M:          return "270M";
         case LLM_TYPE_335M:          return "335M";
         case LLM_TYPE_410M:          return "410M";
@@ -575,6 +576,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                         case 22: type = LLM_TYPE_1B; break;
                         case 26: type = LLM_TYPE_3B; break;
                         case 28: type = LLM_TYPE_3B; break; // Llama 3.2 3B
+                        case 30: type = LLM_TYPE_256M; break; // smoldocling 256M
                         // granite uses a vocab with len 49152
                         case 32: type = n_vocab == 49152 ? LLM_TYPE_3B : (n_vocab < 40000 ? LLM_TYPE_7B : LLM_TYPE_8B); break;
                         case 36: type = LLM_TYPE_8B; break; // granite
