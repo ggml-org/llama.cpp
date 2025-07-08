@@ -6570,7 +6570,7 @@ class FalconH1Model(Mamba2Model):
         # n_group and d_inner are used during reshape_tensors for mamaba2
         self.d_model = self.find_hparam(["hidden_size", "d_model"])
         self.n_group = self.find_hparam(["n_groups"])
-        self.d_inner = self.find_hparam(["expand"]) * self.d_model
+        self.d_inner = self.find_hparam(["mamba_d_ssm"])
 
         # Initialize any Falcon Mamba2 specific attributes
         self.has_attention = True  # Falcon Mamba2 has attention components
