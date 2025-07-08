@@ -6665,7 +6665,6 @@ class FalconH1Model(Mamba2Model):
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
         self.gguf_writer.add_key_length(self.hparams["head_dim"])
         self.gguf_writer.add_value_length(self.hparams["head_dim"])
-        self.gguf_writer.add_float64("falcon_h1.key_multiplier", self.hparams["key_multiplier"])
 
         ## Validation ##
         assert self.hparams.get("hidden_act") in [None, "silu"], "Only SILU activation supported"
