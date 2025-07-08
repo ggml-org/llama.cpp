@@ -173,7 +173,6 @@ struct llama_layer {
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
     struct ggml_tensor * ssm_norm        = nullptr;
-    struct ggml_tensor * final_norm      = nullptr;
 
     // attention
     struct ggml_tensor * wq        = nullptr;
@@ -365,7 +364,6 @@ struct llama_model {
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
-    struct ggml_tensor * final_norm      = nullptr;
 
     // classifier
     struct ggml_tensor * cls       = nullptr;
