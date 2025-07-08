@@ -833,18 +833,23 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             } break;
         case LLM_FFN_SWIGLU_OAI_MOE:
             {
-                // ref python code: (x_glu = gate ; x_linear = up)
-                // out_glu = x_glu * torch.sigmoid(alpha * x_glu)
-                // return out_glu * (x_linear + 1)
+                // ref python code:
+                // glu = gate * torch.sigmoid(gate * self.alpha)
+                // next_states = torch.bmm(((up + 1) * glu), self.down_proj)
                 constexpr float alpha = 1.702f;
-                ggml_tensor * tmp = ggml_sigmoid(ctx0, ggml_scale(ctx0, cur, alpha));
-                cur = ggml_mul(ctx0, cur, tmp);
-                cb(cur, "ffn_moe_swiglu", il);
+                ggml_tensor * gate = cur;
+                ggml_tensor * glu = ggml_mul(ctx0, gate,
+                                        ggml_sigmoid(ctx0, ggml_scale(ctx0, gate, alpha)));
+                cb(cur, "ffn_moe_oai_glu", il);
 
                 // add extra bias of 1.0 to the up tensor
+                // TODO: replace this with ggml_scale_bias()
                 ggml_tensor * one = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
                 one = ggml_cos(ctx0, ggml_scale(ctx0, one, 0.0f));
-                up = ggml_add(ctx0, up, one);
+                ggml_tensor * up_b = ggml_add(ctx0, up, one);
+
+                cur = ggml_mul(ctx0, glu, up_b);
+                cb(cur, "ffn_moe_oai_swiglu", il);
             } break;
         default:
             GGML_ABORT("fatal error");
