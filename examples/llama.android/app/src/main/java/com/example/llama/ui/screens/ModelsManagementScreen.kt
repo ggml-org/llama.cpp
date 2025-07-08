@@ -160,7 +160,9 @@ fun ModelsManagementScreen(
                     isImporting = false,
                     progress = 0.0f,
                     onConfirm = {
-                        viewModel.importLocalModelFileConfirmed(state.uri, state.fileName, state.fileSize)
+                        viewModel.importLocalModelFileConfirmed(
+                            state.uri, state.fileName, state.fileSize
+                        )
                     },
                     onCancel = { viewModel.resetManagementState() }
                 )
@@ -216,15 +218,28 @@ fun ModelsManagementScreen(
                 LaunchedEffect(state) {
                     onScaffoldEvent(
                         ScaffoldEvent.ShowSnackbar(
-                            message = "Started downloading: ${state.downloadInfo.modelId}.\n" +
-                                // TODO-han.yin: replace this with a broadcast receiver!
-                                "Please come back to import it once completed.",
+                            message = "Started downloading:\n${state.downloadInfo.modelId}",
                             duration = SnackbarDuration.Long,
                         )
                     )
 
                     viewModel.resetManagementState()
                 }
+            }
+
+            is Download.Completed -> {
+                ImportFromLocalFileDialog(
+                    fileName = state.fileName,
+                    fileSize = state.fileSize,
+                    isImporting = false,
+                    progress = 0.0f,
+                    onConfirm = {
+                        viewModel.importLocalModelFileConfirmed(
+                            state.uri, state.fileName, state.fileSize
+                        )
+                    },
+                    onCancel = { viewModel.resetManagementState() }
+                )
             }
 
             is Download.Error -> {

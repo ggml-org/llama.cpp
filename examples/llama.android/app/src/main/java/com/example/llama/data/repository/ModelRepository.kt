@@ -99,12 +99,12 @@ interface ModelRepository {
     suspend fun getHuggingFaceModelFileSize(downloadInfo: HuggingFaceDownloadInfo): Long?
 
     /**
-     * Download and import a HuggingFace model
+     * Download a HuggingFace model via system download manager
      */
-    suspend fun importHuggingFaceModel(
+    suspend fun downloadHuggingFaceModel(
         downloadInfo: HuggingFaceDownloadInfo,
         actualSize: Long,
-    ): Result<Unit>
+    ): Result<Long>
 }
 
 class InsufficientStorageException(message: String) : IOException(message)
@@ -367,10 +367,10 @@ class ModelRepositoryImpl @Inject constructor(
         huggingFaceRemoteDataSource.getFileSize(downloadInfo.modelId, downloadInfo.filename)
     }
 
-    override suspend fun importHuggingFaceModel(
+    override suspend fun downloadHuggingFaceModel(
         downloadInfo: HuggingFaceDownloadInfo,
         actualSize: Long,
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+    ): Result<Long> = withContext(Dispatchers.IO) {
         if (!hasEnoughSpaceForImport(actualSize)) {
             throw InsufficientStorageException(
                 "Not enough storage space! " +

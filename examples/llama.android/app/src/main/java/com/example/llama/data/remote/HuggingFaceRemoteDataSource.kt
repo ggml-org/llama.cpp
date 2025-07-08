@@ -41,7 +41,7 @@ interface HuggingFaceRemoteDataSource {
     suspend fun downloadModelFile(
         context: Context,
         downloadInfo: HuggingFaceDownloadInfo,
-    ): Result<Unit>
+    ): Result<Long>
 }
 
 @Singleton
@@ -94,13 +94,13 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
     override suspend fun downloadModelFile(
         context: Context,
         downloadInfo: HuggingFaceDownloadInfo,
-    ): Result<Unit> = withContext(Dispatchers.IO) {
+    ): Result<Long> = withContext(Dispatchers.IO) {
         try {
             val downloadManager =
                 context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
             val request = DownloadManager.Request(downloadInfo.uri).apply {
-                setTitle("HuggingFace model download")
-                setDescription("Downloading ${downloadInfo.filename}")
+                setTitle(downloadInfo.filename)
+                setDescription("Downloading directly from HuggingFace")
                 setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
                 setDestinationInExternalPublicDir(
                     Environment.DIRECTORY_DOWNLOADS,
@@ -142,18 +142,18 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
                         }
                         else -> {
                             // Download is pending, paused, or running
-                            Result.success(Unit)
+                            Result.success(downloadId)
                         }
                     }
                 } else {
                     // Assume success if we can't check status
                     cursor.close()
-                    Result.success(Unit)
+                    Result.success(downloadId)
                 }
             } else {
                 // Assume success if cursor is empty
                 cursor?.close()
-                Result.success(Unit)
+                Result.success(downloadId)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to enqueue download: ${e.message}")

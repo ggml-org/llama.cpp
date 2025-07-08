@@ -1,6 +1,11 @@
 package com.example.llama.viewmodel
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Context.RECEIVER_EXPORTED
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -132,8 +137,20 @@ class ModelsManagementViewModel @Inject constructor(
         _showImportModelMenu.value = show
     }
 
-    // Ongoing coroutine jobs
+    // HuggingFace: ongoing query jobs
     private var huggingFaceQueryJob: Job? = null
+
+    // HuggingFace: Ongoing download jobs
+    private val activeDownloads = mutableMapOf<Long, HuggingFaceModel>()
+    private val downloadReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1).let { id ->
+                if (id in activeDownloads) {
+                    handleDownloadComplete(id)
+                }
+            }
+        }
+    }
 
     init {
         viewModelScope.launch {
@@ -147,6 +164,9 @@ class ModelsManagementViewModel @Inject constructor(
                 _filteredModels.value = it
             }
         }
+
+        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+        context.registerReceiver(downloadReceiver, filter, RECEIVER_EXPORTED)
     }
 
     // Internal state
@@ -251,8 +271,9 @@ class ModelsManagementViewModel @Inject constructor(
             requireNotNull(actualSize) { "Unknown model file size!" }
             Log.d(TAG, "Model file size: ${formatFileByteSize(actualSize)}")
 
-            modelRepository.importHuggingFaceModel(downloadInfo, actualSize)
-                .onSuccess {
+            modelRepository.downloadHuggingFaceModel(downloadInfo, actualSize)
+                .onSuccess { downloadId ->
+                    activeDownloads[downloadId] = model
                     _managementState.value = Download.Dispatched(downloadInfo)
                 }
                 .onFailure { throw it }
@@ -266,6 +287,23 @@ class ModelsManagementViewModel @Inject constructor(
                 message = e.message ?: "Unknown error downloading ${model.modelId}",
             )
         }
+    }
+
+    private fun handleDownloadComplete(downloadId: Long) = viewModelScope.launch {
+        val model = activeDownloads.remove(downloadId) ?: return@launch
+
+        (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager)
+            .getUriForDownloadedFile(downloadId)?.let { uri ->
+                try {
+                    val fileName = getFileNameFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
+                    val fileSize = getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File name N/A")
+                    _managementState.emit(Download.Completed(model, uri, fileName, fileSize))
+                } catch (e: Exception) {
+                    _managementState.value = Download.Error(
+                        message = e.message ?: "Unknown error downloading ${model.modelId}"
+                    )
+                }
+            }
     }
 
     /**
@@ -324,6 +362,7 @@ sealed class ModelManagementState {
         object Querying : Download()
         data class Ready(val models: List<HuggingFaceModel>) : Download()
         data class Dispatched(val downloadInfo: HuggingFaceDownloadInfo) : Download()
+        data class Completed(val model: HuggingFaceModel, val uri: Uri, val fileName: String, val fileSize: Long) : Download()
         data class Error(val message: String) : Download()
     }
 
