@@ -177,7 +177,6 @@ class TensorNameMap:
             "transformer.layer.{bid}.attention.q_lin",                   # distillbert
             "transformer.h.{bid}.attn.q_proj",                           # gpt-j
             "model.layers.layers.{bid}.self_attn.q_proj",                # plamo
-            "model.layers.layers.{bid}.mixer.q",                         # plamo2
             "model.layers.{bid}.attention.wq",                           # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
@@ -194,7 +193,6 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.k_proj",                         # gpt-j
             "transformer.h.{bid}.attn.k",                              # refact
             "model.layers.layers.{bid}.self_attn.k_proj",              # plamo
-            "model.layers.layers.{bid}.mixer.k",                       # plamo2
             "model.layers.{bid}.attention.wk",                         # internlm2
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
@@ -472,6 +470,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.q_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_q",                # jina-bert-v2
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
+            "model.layers.layers.{bid}.mixer.q",                              # plamo2
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
@@ -481,6 +480,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.k_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_k",                # jina-bert-v2
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
+            "model.layers.layers.{bid}.mixer.k",                              # plamo2
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
