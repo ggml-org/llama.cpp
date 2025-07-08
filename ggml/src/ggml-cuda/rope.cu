@@ -138,20 +138,20 @@ static __global__ void rope_multi(
 
     const int row_dst = blockDim.x*blockIdx.x + threadIdx.x;
 
-    if (i0 >= n_dims) {
-        const int i = row_dst*ne0 + i0;
-
-        dst[i + 0] = x[i + 0];
-        dst[i + 1] = x[i + 1];
-
-        return;
-    }
-
     const int row_x     = row_dst % ne1;
     const int channel_x = row_dst / ne1;
 
     const int idst = row_dst*ne0 + i0/2;
     const int ix   = channel_x*s2 + row_x*s1 + i0/2;
+
+    if (i0 >= n_dims) {
+        const int i = row_dst*ne0 + i0;
+
+        dst[i + 0] = x[ix + i0/2 + 0];
+        dst[i + 1] = x[ix + i0/2 + 1];
+
+        return;
+    }
 
     const int sect_dims = sections.v[0] + sections.v[1] + sections.v[2] + sections.v[3];
     const int sec_w = sections.v[1] + sections.v[0];
