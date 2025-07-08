@@ -36,25 +36,16 @@ static void k_set_rows(
     const int i11 = i02 % ne11;
     const int i10 = i01;
 
-    const int64_t dst_row = *(const int64_t *)((const char *)src1 + i10*nb10 + i11*nb11 + i12*nb12);
+    const int64_t dst_row = *(const int64_t *)((const char *)src1 + calculate_offset<3>({nb10, nb11, nb12}, {i10, i11, i12}));
 
-    const char * src0_row = src0 + i01*nb01 + i02*nb02 + i03*nb03;
+
+    const char * src0_row = src0 + calculate_offset<3>({nb01, nb02, nb03}, {i01, i02, i03});
     char * dst_row_ptr    = dst + dst_row*nb1 + i02*nb2 + i03*nb3;
-    // Optimize for same-type operations: use collective memory copy
-    if (src_type_size == dst_type_size) {
-        // All threads in the work-group cooperatively copy the row
-        const size_t row_bytes = ne00 * src_type_size;
-        // Each thread copies a chunk of the row
-        for (size_t byte_idx = item_ct1.get_local_id(0); byte_idx < row_bytes; byte_idx += item_ct1.get_local_range(0)) {
-            dst_row_ptr[byte_idx] = src0_row[byte_idx];
-        }
-    } else {
-        // Type conversion required, use element-wise approach
-        for (int col = item_ct1.get_local_id(0); col < ne00; col += item_ct1.get_local_range(0)) {
-            const char * src_elem = src0_row + col * src_type_size;
-            char * dst_elem       = dst_row_ptr + col * dst_type_size;
-            set_rows_1(src_elem, dst_elem);
-        }
+
+    for (int col = item_ct1.get_local_id(0); col < ne00; col += item_ct1.get_local_range(0)) {
+        const char * src_elem = src0_row + col * src_type_size;
+        char * dst_elem       = dst_row_ptr + col * dst_type_size;
+        set_rows_1(src_elem, dst_elem);
     }
 }
 
@@ -68,10 +59,10 @@ static void set_rows_sycl(
         const size_t src_type_size, const size_t dst_type_size,
         queue_ptr stream) {
 
-    const int max_threads_per_row = 256; // KEEPING 256 for now
+    constexpr int max_threads_per_row = 64; // KEEPING 64 for now
     const int threads_per_row     = std::min((int)ne00, max_threads_per_row);
 
-    const int max_threads_per_block = 256;
+    constexpr int max_threads_per_block = 64;
     const int rows_per_block        = std::max(1, max_threads_per_block / threads_per_row);
 
     const sycl::range<3> block_size(1, rows_per_block, threads_per_row);
