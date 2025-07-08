@@ -38,6 +38,9 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.FileNotFoundException
+import java.io.IOException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import javax.inject.Inject
 
 @HiltViewModel
@@ -246,11 +249,23 @@ class ModelsManagementViewModel @Inject constructor(
         huggingFaceQueryJob = viewModelScope.launch {
             _managementState.emit(Download.Querying)
             try {
-                val models = modelRepository.searchHuggingFaceModels()
-                Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
-                _managementState.emit(Download.Ready(models))
+                modelRepository.searchHuggingFaceModels().fold(
+                    onSuccess = { models ->
+                        Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
+                        _managementState.emit(Download.Ready(models))
+                    },
+                    onFailure = { throw it }
+                )
             } catch (_: CancellationException) {
                 // no-op
+            } catch (_: UnknownHostException) {
+                _managementState.value = Download.Error(message = "No internet connection")
+            } catch (_: SocketTimeoutException) {
+                _managementState.value = Download.Error(message = "Connection timed out")
+            } catch (e: IOException) {
+                _managementState.value = Download.Error(message = "Network error: ${e.message}")
+            } catch (_: FileNotFoundException) {
+                _managementState.emit(Download.Error(message = "No eligible models"))
             } catch (e: Exception) {
                 _managementState.emit(Download.Error(message = e.message ?: "Unknown error"))
             }
@@ -267,17 +282,24 @@ class ModelsManagementViewModel @Inject constructor(
             val downloadInfo = model.toDownloadInfo()
             requireNotNull(downloadInfo) { "Download URL is missing!" }
 
-            val actualSize = modelRepository.getHuggingFaceModelFileSize(downloadInfo)
-            requireNotNull(actualSize) { "Unknown model file size!" }
-            Log.d(TAG, "Model file size: ${formatFileByteSize(actualSize)}")
-
-            modelRepository.downloadHuggingFaceModel(downloadInfo, actualSize)
-                .onSuccess { downloadId ->
-                    activeDownloads[downloadId] = model
-                    _managementState.value = Download.Dispatched(downloadInfo)
-                }
-                .onFailure { throw it }
-
+            modelRepository.getHuggingFaceModelFileSize(downloadInfo).fold(
+                onSuccess = { actualSize ->
+                    Log.d(TAG, "Model file size: ${formatFileByteSize(actualSize)}")
+                    modelRepository.downloadHuggingFaceModel(downloadInfo, actualSize)
+                        .onSuccess { downloadId ->
+                            activeDownloads[downloadId] = model
+                            _managementState.value = Download.Dispatched(downloadInfo)
+                        }
+                        .onFailure { throw it }
+                },
+                onFailure = { throw it }
+            )
+        } catch (_: UnknownHostException) {
+            _managementState.value = Download.Error(message = "No internet connection")
+        } catch (_: SocketTimeoutException) {
+            _managementState.value = Download.Error(message = "Connection timed out")
+        } catch (e: IOException) {
+            _managementState.value = Download.Error(message = "Network error: ${e.message}")
         } catch (e: InsufficientStorageException) {
             _managementState.value = Download.Error(
                 message = e.message ?: "Insufficient storage space to download ${model.modelId}",
@@ -343,7 +365,6 @@ class ModelsManagementViewModel @Inject constructor(
     companion object {
         private val TAG = ModelsManagementViewModel::class.java.simpleName
 
-        private const val SUBSCRIPTION_TIMEOUT_MS = 5000L
         private const val SUCCESS_RESET_TIMEOUT_MS = 1000L
     }
 }

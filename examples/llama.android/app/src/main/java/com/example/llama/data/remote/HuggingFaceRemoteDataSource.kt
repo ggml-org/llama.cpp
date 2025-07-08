@@ -7,6 +7,8 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import java.io.FileNotFoundException
+import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -26,14 +28,14 @@ interface HuggingFaceRemoteDataSource {
         direction: String? = "-1",
         limit: Int? = SEARCH_RESULT_LIMIT,
         full: Boolean = true,
-    ): List<HuggingFaceModel>
+    ): Result<List<HuggingFaceModel>>
 
     suspend fun getModelDetails(modelId: String): HuggingFaceModelDetails
 
     /**
      * Obtain selected HuggingFace model's GGUF file size from HTTP header
      */
-    suspend fun getFileSize(modelId: String, filePath: String): Long?
+    suspend fun getFileSize(modelId: String, filePath: String): Result<Long>
 
     /**
      * Download selected HuggingFace model's GGUF file via DownloadManager
@@ -57,14 +59,23 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
         limit: Int?,
         full: Boolean,
     ) = withContext(Dispatchers.IO) {
-        apiService.getModels(
-            search = query,
-            filter = filter,
-            sort = sort,
-            direction = direction,
-            limit = limit,
-            full = full,
-        ).filter { it.gated != true && it.private != true && it.getGgufFilename() != null }
+        try {
+            apiService.getModels(
+                search = query,
+                filter = filter,
+                sort = sort,
+                direction = direction,
+                limit = limit,
+                full = full,
+            ).filter {
+                it.gated != true && it.private != true && it.getGgufFilename() != null
+            }.let {
+                if (it.isEmpty()) Result.failure(FileNotFoundException()) else Result.success(it)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error searching for models on HuggingFace: ${e.message}")
+            Result.failure(e)
+        }
     }
 
     override suspend fun getModelDetails(
@@ -76,18 +87,26 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
     override suspend fun getFileSize(
         modelId: String,
         filePath: String
-    ): Long? = withContext(Dispatchers.IO) {
+    ): Result<Long> = withContext(Dispatchers.IO) {
         try {
-            apiService.getModelFileHeader(modelId, filePath).let {
-                if (it.isSuccessful) {
-                    it.headers()[HTTP_HEADER_CONTENT_LENGTH]?.toLongOrNull()
+            apiService.getModelFileHeader(modelId, filePath).let { resp ->
+                if (resp.isSuccessful) {
+                    resp.headers()[HTTP_HEADER_CONTENT_LENGTH]?.toLongOrNull()?.let {
+                        Result.success(it)
+                    } ?: Result.failure(IOException("Content-Length header missing"))
                 } else {
-                    null
+                    Result.failure(
+                        when (resp.code()) {
+                            401 -> SecurityException("Model requires authentication")
+                            404 -> FileNotFoundException("Model file not found")
+                            else -> IOException("Failed to get file info: HTTP ${resp.code()}")
+                        }
+                    )
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error getting file size for $modelId: ${e.message}")
-            null
+            Result.failure(e)
         }
     }
 

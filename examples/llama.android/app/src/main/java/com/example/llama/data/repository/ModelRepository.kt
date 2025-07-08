@@ -86,7 +86,7 @@ interface ModelRepository {
     /**
      * Search models on HuggingFace
      */
-    suspend fun searchHuggingFaceModels(limit: Int = 20): List<HuggingFaceModel>
+    suspend fun searchHuggingFaceModels(limit: Int = 20): Result<List<HuggingFaceModel>>
 
     /**
      * Obtain the model details from HuggingFace
@@ -96,7 +96,7 @@ interface ModelRepository {
     /**
      * Obtain the model's size from HTTP response header
      */
-    suspend fun getHuggingFaceModelFileSize(downloadInfo: HuggingFaceDownloadInfo): Long?
+    suspend fun getHuggingFaceModelFileSize(downloadInfo: HuggingFaceDownloadInfo): Result<Long>
 
     /**
      * Download a HuggingFace model via system download manager
@@ -351,7 +351,7 @@ class ModelRepositoryImpl @Inject constructor(
 
     override suspend fun searchHuggingFaceModels(
         limit: Int
-    ): List<HuggingFaceModel> = withContext(Dispatchers.IO) {
+    ) = withContext(Dispatchers.IO) {
         huggingFaceRemoteDataSource.searchModels(limit = limit)
     }
 
@@ -363,7 +363,7 @@ class ModelRepositoryImpl @Inject constructor(
 
     override suspend fun getHuggingFaceModelFileSize(
         downloadInfo: HuggingFaceDownloadInfo,
-    ): Long? = withContext(Dispatchers.IO) {
+    ): Result<Long> = withContext(Dispatchers.IO) {
         huggingFaceRemoteDataSource.getFileSize(downloadInfo.modelId, downloadInfo.filename)
     }
 
