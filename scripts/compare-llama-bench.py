@@ -56,10 +56,6 @@ TEST_BACKEND_OPS_DB_TYPES = [
     "INTEGER", "INTEGER"
 ]
 
-# Legacy aliases for backward compatibility
-DB_FIELDS = LLAMA_BENCH_DB_FIELDS
-DB_TYPES = LLAMA_BENCH_DB_TYPES
-
 assert len(LLAMA_BENCH_DB_FIELDS) == len(LLAMA_BENCH_DB_TYPES)
 assert len(TEST_BACKEND_OPS_DB_FIELDS) == len(TEST_BACKEND_OPS_DB_TYPES)
 
@@ -75,17 +71,9 @@ TEST_BACKEND_OPS_KEY_PROPERTIES = [
     "backend_name", "op_name", "op_params", "test_mode"
 ]
 
-# Legacy alias for backward compatibility
-KEY_PROPERTIES = LLAMA_BENCH_KEY_PROPERTIES
-
-# Properties that are boolean and are converted to Yes/No for the table (llama-bench):
+# Properties that are boolean and are converted to Yes/No for the table:
 LLAMA_BENCH_BOOL_PROPERTIES = ["embeddings", "cpu_strict", "use_mmap", "no_kv_offload", "flash_attn"]
-
-# Properties that are boolean and are converted to Yes/No for the table (test-backend-ops):
 TEST_BACKEND_OPS_BOOL_PROPERTIES = ["supported", "passed"]
-
-# Legacy alias for backward compatibility
-BOOL_PROPERTIES = LLAMA_BENCH_BOOL_PROPERTIES
 
 # Header names for the table (llama-bench):
 LLAMA_BENCH_PRETTY_NAMES = {
@@ -104,18 +92,12 @@ TEST_BACKEND_OPS_PRETTY_NAMES = {
     "flops": "FLOPS", "bandwidth_gb_s": "Bandwidth (GB/s)", "memory_kb": "Memory (KB)", "n_runs": "Runs"
 }
 
-# Legacy alias for backward compatibility
-PRETTY_NAMES = LLAMA_BENCH_PRETTY_NAMES
-
 DEFAULT_SHOW_LLAMA_BENCH = ["model_type"]  # Always show these properties by default.
 DEFAULT_HIDE_LLAMA_BENCH = ["model_filename"]  # Always hide these properties by default.
 
 DEFAULT_SHOW_TEST_BACKEND_OPS = ["backend_name", "op_name"]  # Always show these properties by default.
 DEFAULT_HIDE_TEST_BACKEND_OPS = ["error_message"]  # Always hide these properties by default.
 
-# Legacy aliases for backward compatibility
-DEFAULT_SHOW = DEFAULT_SHOW_LLAMA_BENCH
-DEFAULT_HIDE = DEFAULT_HIDE_LLAMA_BENCH
 GPU_NAME_STRIP = ["NVIDIA GeForce ", "Tesla ", "AMD Radeon "]  # Strip prefixes for smaller tables.
 MODEL_SUFFIX_REPLACE = {" - Small": "_S", " - Medium": "_M", " - Large": "_L"}
 
@@ -123,19 +105,19 @@ DESCRIPTION = """Creates tables from llama-bench or test-backend-ops data writte
 
 For llama-bench:
 $ git checkout master
-$ make clean && make llama-bench
+$ cmake -B ${BUILD_DIR} ${CMAKE_OPTS} && cmake --build ${BUILD_DIR} -t llama-bench -j $(nproc)
 $ ./llama-bench -o sql | sqlite3 llama-bench.sqlite
 $ git checkout some_branch
-$ make clean && make llama-bench
+$ cmake -B ${BUILD_DIR} ${CMAKE_OPTS} && cmake --build ${BUILD_DIR} -t llama-bench -j $(nproc)
 $ ./llama-bench -o sql | sqlite3 llama-bench.sqlite
 $ ./scripts/compare-llama-bench.py
 
 For test-backend-ops:
 $ git checkout master
-$ make clean && make test-backend-ops
+$ cmake -B ${BUILD_DIR} ${CMAKE_OPTS} && cmake --build ${BUILD_DIR} -t test-backend-ops -j $(nproc)
 $ ./test-backend-ops perf --output sql | sqlite3 test-backend-ops.sqlite
 $ git checkout some_branch
-$ make clean && make test-backend-ops
+$ cmake -B ${BUILD_DIR} ${CMAKE_OPTS} && cmake --build ${BUILD_DIR} -t test-backend-ops -j $(nproc)
 $ ./test-backend-ops perf --output sql | sqlite3 test-backend-ops.sqlite
 $ ./scripts/compare-llama-bench.py --tool test-backend-ops -i test-backend-ops.sqlite
 
@@ -180,7 +162,7 @@ parser.add_argument("-o", "--output", help=help_o, default="pipe")
 help_s = (
     "Columns to add to the table. "
     "Accepts a comma-separated list of values. "
-    f"Legal values: {', '.join(KEY_PROPERTIES[:-3])}. "
+    f"Legal values: {', '.join(LLAMA_BENCH_KEY_PROPERTIES[:-3])}. "
     "Defaults to model name (model_type) and CPU and/or GPU name (cpu_info, gpu_info) "
     "plus any column where not all data points are the same. "
     "If the columns are manually specified, then the results for each unique combination of the "
@@ -245,8 +227,10 @@ class LlamaBenchData:
         # Set schema-specific properties based on tool
         if self.tool == "llama-bench":
             self.check_keys = set(LLAMA_BENCH_KEY_PROPERTIES + ["build_commit", "test_time", "avg_ts"])
-        else:  # test-backend-ops
+        elif self.tool == "test-backend-ops":
             self.check_keys = set(TEST_BACKEND_OPS_KEY_PROPERTIES + ["build_commit", "test_time"])
+        else:
+            assert False
 
     def _builds_init(self):
         self.build_len = self.build_len_min
@@ -343,10 +327,12 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
             self.table_name = "test"
             db_fields = LLAMA_BENCH_DB_FIELDS
             db_types = LLAMA_BENCH_DB_TYPES
-        else:  # test-backend-ops
+        elif self.tool == "test-backend-ops":
             self.table_name = "test_backend_ops"
             db_fields = TEST_BACKEND_OPS_DB_FIELDS
             db_types = TEST_BACKEND_OPS_DB_TYPES
+        else:
+            assert False
 
         self.cursor.execute(f"CREATE TABLE {self.table_name}({', '.join(' '.join(x) for x in zip(db_fields, db_types))});")
 
@@ -372,8 +358,10 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
     def get_rows(self, properties: list[str], hexsha8_baseline: str, hexsha8_compare: str) -> Sequence[tuple]:
         if self.tool == "llama-bench":
             return self._get_rows_llama_bench(properties, hexsha8_baseline, hexsha8_compare)
-        else:  # test-backend-ops
+        elif self.tool == "test-backend-ops":
             return self._get_rows_test_backend_ops(properties, hexsha8_baseline, hexsha8_compare)
+        else:
+            assert False
 
     def _get_rows_llama_bench(self, properties: list[str], hexsha8_baseline: str, hexsha8_compare: str) -> Sequence[tuple]:
         select_string = ", ".join(
@@ -721,12 +709,14 @@ if tool == "llama-bench":
     pretty_names = LLAMA_BENCH_PRETTY_NAMES
     default_show = DEFAULT_SHOW_LLAMA_BENCH
     default_hide = DEFAULT_HIDE_LLAMA_BENCH
-else:  # test-backend-ops
+elif tool == "test-backend-ops":
     key_properties = TEST_BACKEND_OPS_KEY_PROPERTIES
     bool_properties = TEST_BACKEND_OPS_BOOL_PROPERTIES
     pretty_names = TEST_BACKEND_OPS_PRETTY_NAMES
     default_show = DEFAULT_SHOW_TEST_BACKEND_OPS
     default_hide = DEFAULT_HIDE_TEST_BACKEND_OPS
+else:
+    assert False
 
 # If the user provided columns to group the results by, use them:
 if known_args.show is not None:
@@ -756,7 +746,7 @@ else:
                 if row_full[i] != rows_full[0][i]:
                     properties_different.append(kp_i)
                     break
-    else:  # test-backend-ops
+    elif tool == "test-backend-ops":
         # For test-backend-ops, check all key properties
         for i, kp_i in enumerate(key_properties):
             if kp_i in default_show:
@@ -765,6 +755,8 @@ else:
                 if row_full[i] != rows_full[0][i]:
                     properties_different.append(kp_i)
                     break
+    else:
+        assert False
 
     show = []
 
@@ -783,8 +775,10 @@ else:
             if prop in show:
                 index_default += 1
         show = show[:index_default] + default_show + show[index_default:]
-    else:  # test-backend-ops
+    elif tool == "test-backend-ops":
         show = default_show + properties_different
+    else:
+        assert False
 
     for prop in default_hide:
         try:
@@ -825,7 +819,7 @@ if tool == "llama-bench":
         #           Regular columns    test name    avg t/s values              Speedup
         #            VVVVVVVVVVVVV     VVVVVVVVV    VVVVVVVVVVVVVV              VVVVVVV
         table.append(list(row[:-5]) + [test_name] + list(row[-2:]) + [float(row[-1]) / float(row[-2])])
-else:  # test-backend-ops
+elif tool == "test-backend-ops":
     # Determine the primary metric by checking rows until we find one with valid data
     if rows_show:
         primary_metric = "FLOPS"  # Default to FLOPS
@@ -869,9 +863,11 @@ else:  # test-backend-ops
             # Fallback if no valid data is available
             baseline_str = "N/A"
             compare_str = "N/A"
-            speedup = 1.0
+            speedup = float('nan')
 
         table.append(list(row[:-4]) + [baseline_str, compare_str, speedup])
+else:
+    assert False
 
 # Some a-posteriori fixes to make the table contents prettier:
 for bool_property in bool_properties:
@@ -907,8 +903,10 @@ if tool == "llama-bench":
 headers  = [pretty_names.get(p, p) for p in show]
 if tool == "llama-bench":
     headers += ["Test", f"t/s {name_baseline}", f"t/s {name_compare}", "Speedup"]
-else:  # test-backend-ops
+elif tool == "test-backend-ops":
     headers += [f"{primary_metric} {name_baseline}", f"{primary_metric} {name_compare}", "Speedup"]
+else:
+    assert False
 
 if known_args.plot:
     def create_performance_plot(table_data: list[list[str]], headers: list[str], baseline_name: str, compare_name: str, output_file: str, plot_x_param: str, log_scale: bool = False, tool_type: str = "llama-bench", metric_name: str = "t/s"):
@@ -925,7 +923,7 @@ if known_args.plot:
         plot_x_label = plot_x_param
 
         if plot_x_param not in ["n_prompt", "n_gen", "n_depth"]:
-            pretty_name = PRETTY_NAMES.get(plot_x_param, plot_x_param)
+            pretty_name = LLAMA_BENCH_PRETTY_NAMES.get(plot_x_param, plot_x_param)
             if pretty_name in data_headers:
                 plot_x_index = data_headers.index(pretty_name)
                 plot_x_label = pretty_name
@@ -1047,8 +1045,10 @@ if known_args.plot:
             # Determine y-axis label based on tool type
             if tool_type == "llama-bench":
                 y_label = "Tokens per second (t/s)"
-            else:  # test-backend-ops
+            elif tool_type == "test-backend-ops":
                 y_label = metric_name
+            else:
+                assert False
 
             ax.set_xlabel(plot_x_label, fontsize=12, fontweight='bold')
             ax.set_ylabel(y_label, fontsize=12, fontweight='bold')
