@@ -3267,10 +3267,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     {
                         output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
 
-                        output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
                         // if output is NULL, init from the input tok embed, duplicated to allow offloading
                         if (output == NULL) {
-                            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+                            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                         }
                     }
 
@@ -3313,10 +3313,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     {
                         output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
 
-                        output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
                         // if output is NULL, init from the input tok embed, duplicated to allow offloading
                         if (output == NULL) {
-                            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, llama_model_loader::TENSOR_DUPLICATED);
+                            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                         }
                     }
 
@@ -3352,12 +3352,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                             // out_proj
                             layer.ssm_out = create_tensor(tn(LLM_TENSOR_SSM_OUT, "weight", i), {d_inner, n_embd}, 0);
-
-                            layer.wq = nullptr;
-                            layer.wk = nullptr;
-                            layer.wv = nullptr;
-                            layer.wo = nullptr;
-
                         } else {
                             // Attention layers
 
@@ -3365,43 +3359,22 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
                             layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
                             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
-
-                            layer.ssm_in       = nullptr;
-                            layer.ssm_conv1d   = nullptr;
-                            layer.ssm_conv1d_b = nullptr;
-                            layer.ssm_x        = nullptr;
-                            layer.ssm_dt_norm  = nullptr;
-                            layer.ssm_dt       = nullptr;
-                            layer.ssm_dt_b     = nullptr;
-                            layer.ssm_b_norm   = nullptr;
-                            layer.ssm_c_norm   = nullptr;
-                            layer.ssm_a        = nullptr;
-                            layer.ssm_d        = nullptr;
-                            layer.ssm_out      = nullptr;
                         }
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
-                        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, llama_model_loader::TENSOR_NOT_REQUIRED);
+                        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, TENSOR_NOT_REQUIRED);
 
                         if (layer.ffn_gate_inp) {
                             // MoE
                             layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff, n_expert}, 0);
                             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff, n_embd, n_expert}, 0);
                             layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff, n_expert}, 0);
-
-                            layer.ffn_gate = nullptr;
-                            layer.ffn_down = nullptr;
-                            layer.ffn_up   = nullptr;
                         } else {
                             // FFN (no MoE)
                             layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
                             layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
                             layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff}, 0);
-
-                            layer.ffn_gate_exps = nullptr;
-                            layer.ffn_down_exps = nullptr;
-                            layer.ffn_up_exps   = nullptr;
                         }
                     }
                 } break;
@@ -10228,7 +10201,7 @@ struct llm_graph_context_mamba : public virtual llm_graph_context {
             // TODO: skip computing output earlier for unused tokens
 
             y = ggml_add(ctx0, y, ggml_mul(ctx0, cur, layer.ssm_d));
-            y = ggml_mul(ctx0, y, ggml_silu(ctx0, ggml_cont(ctx0, z)));
+            y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
 
             // {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
             cur = build_lora_mm(layer.ssm_out, y);
@@ -10352,7 +10325,7 @@ struct llm_graph_context_mamba : public virtual llm_graph_context {
             // TODO: skip computing output earlier for unused tokens
 
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, model.layers[il].ssm_d));
-            y = ggml_mul(ctx0, y, ggml_silu(ctx0, ggml_cont(ctx0, z)));
+            y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
 
             // grouped RMS norm
             y = ggml_reshape_4d(ctx0, y, d_inner / n_group, n_group, n_seq_tokens, n_seqs);
