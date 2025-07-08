@@ -160,7 +160,6 @@ enum llm_kv {
     // Falcon-H1 specific
     LLM_KV_ATTN_HEAD_DIM,
     LLM_KV_SSM_HEAD_DIM,
-    LLM_KV_MAMBA_D_SSM,
     LLM_KV_N_LAYER,
     LLM_KV_FALCON_H1_MAMBA_RMS_NORM,
 

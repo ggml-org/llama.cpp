@@ -76,12 +76,7 @@ uint32_t llama_hparams::n_embd_r() const {
     // Corresponds to Mamba's conv_states size
     
     // check if the architecture is using d_ssm 
-    if (ssm_mamba_d_ssm > 0) {
-        return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_mamba_d_ssm + 2*ssm_n_group*ssm_d_state);
-    } else {
-        return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
-    }
-
+    return (ssm_d_conv > 0 ? ssm_d_conv - 1 : 0) * (ssm_d_inner + 2*ssm_n_group*ssm_d_state);
 }
 
 uint32_t llama_hparams::n_embd_s() const {
@@ -91,7 +86,7 @@ uint32_t llama_hparams::n_embd_s() const {
     }
 
     // corresponds to Mamba's ssm_states size
-    return (ssm_mamba_d_ssm > 0 ? ssm_d_state * ssm_mamba_d_ssm : ssm_d_state * ssm_d_inner);
+    return ssm_d_state * ssm_d_inner;
 }
 
 bool llama_hparams::is_recurrent(uint32_t il) const {

@@ -219,7 +219,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_TOKENIZER_FIM_SEP_ID,           "tokenizer.ggml.fim_sep_token_id"         },
 
     { LLM_KV_SSM_HEAD_DIM,           "%s.ssm.head_dim"       },
-    { LLM_KV_MAMBA_D_SSM,            "%s.ssm.mamba_d_ssm"    },
 
     { LLM_KV_FALCON_H1_MAMBA_RMS_NORM,           "%s.mamba_rms_norm"           },
 
