@@ -963,6 +963,7 @@ void llama_kv_cache_unified::set_input_kq_mask(ggml_tensor * dst, const llama_ub
     //      xxxxx-----
     //      xxxxx-----
     // To visualize the mask, see https://github.com/ggml-org/llama.cpp/pull/12615
+    // TODO: optimize this section
     for (uint32_t h = 0; h < 1; ++h) {
         for (uint32_t i = 0; i < n_tokens; ++i) {
             const llama_seq_id seq_id = ubatch->seq_id[i][0];

@@ -718,7 +718,14 @@ llm_graph_result_i * llama_context::process_ubatch(const llama_ubatch & ubatch, 
         }
     }
 
-    res->set_inputs(&ubatch);
+    // set the input data for the input tensors
+    {
+        //const auto t_start_us = ggml_time_us();
+
+        res->set_inputs(&ubatch);
+
+        //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+    }
 
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
     if (status != GGML_STATUS_SUCCESS) {
@@ -850,12 +857,6 @@ int llama_context::encode(const llama_batch & batch_inp) {
                     GGML_ABORT("unknown pooling type");
                 }
         }
-    }
-
-    // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
-    // overlap with device computation.
-    if (!cparams.graph_reuse) {
-        ggml_backend_sched_reset(sched.get());
     }
 
     // TODO: hacky solution
@@ -1196,12 +1197,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
-
-    // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
-    // overlap with device computation.
-    if (!cparams.graph_reuse) {
-        ggml_backend_sched_reset(sched.get());
-    }
 
     return 0;
 }

@@ -261,7 +261,6 @@ struct cmd_params {
     std::vector<bool>                use_mmap;
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
-    std::vector<bool>                graph_reuse;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -299,7 +298,6 @@ static const cmd_params cmd_params_defaults = {
     /* use_mmap             */ { true },
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
-    /* graph_reuse          */ { false },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -379,7 +377,6 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;...\n");
     printf("                                            (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
-    printf("  -gr, --graph-reuse <0|1>                  (default: 0)\n");
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -623,13 +620,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_kv_offload.insert(params.no_kv_offload.end(), p.begin(), p.end());
-            } else if (arg == "-gr" || arg == "--graph-reuse") {
-                if (++i >= argc) {
-                    invalid_param = true;
-                    break;
-                }
-                auto p = string_split<bool>(argv[i], split_delim);
-                params.graph_reuse.insert(params.graph_reuse.end(), p.begin(), p.end());
             } else if (arg == "--numa") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -895,9 +885,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_op_offload.empty()) {
         params.no_op_offload = cmd_params_defaults.no_op_offload;
     }
-    if (params.graph_reuse.empty()) {
-        params.graph_reuse = cmd_params_defaults.graph_reuse;
-    }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
     }
@@ -939,7 +926,6 @@ struct cmd_params_instance {
     bool               use_mmap;
     bool               embeddings;
     bool               no_op_offload;
-    bool               graph_reuse;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1012,7 +998,6 @@ struct cmd_params_instance {
         cparams.embeddings   = embeddings;
         cparams.op_offload   = !no_op_offload;
         cparams.swa_full     = false;
-        cparams.graph_reuse  = graph_reuse;
 
         return cparams;
     }
@@ -1033,7 +1018,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & mmp : params.use_mmap)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
-    for (const auto & gr : params.graph_reuse)
     for (const auto & nb : params.n_batch)
     for (const auto & nub : params.n_ubatch)
     for (const auto & tk : params.type_k)
@@ -1075,7 +1059,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
-                /* .graph_reuse  = */ gr,
             };
             instances.push_back(instance);
         }
@@ -1109,7 +1092,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
-                /* .graph_reuse  = */ gr,
             };
             instances.push_back(instance);
         }
@@ -1143,7 +1125,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .use_mmap     = */ mmp,
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
-                /* .graph_reuse  = */ gr,
             };
             instances.push_back(instance);
         }
@@ -1181,7 +1162,6 @@ struct test {
     bool                     use_mmap;
     bool                     embeddings;
     bool                     no_op_offload;
-    bool                     graph_reuse;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1217,7 +1197,6 @@ struct test {
         use_mmap       = inst.use_mmap;
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
-        graph_reuse    = inst.graph_reuse;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1264,8 +1243,8 @@ struct test {
             "cpu_mask",     "cpu_strict",   "poll",           "type_k",     "type_v",       "n_gpu_layers",
             "split_mode",   "main_gpu",     "no_kv_offload",  "flash_attn", "tensor_split", "tensor_buft_overrides",
             "defrag_thold",
-            "use_mmap",     "embeddings",   "no_op_offload",  "graph_reuse", "n_prompt",       "n_gen",      "n_depth",
-            "test_time",    "avg_ns",       "stddev_ns",      "avg_ts",      "stddev_ts",
+            "use_mmap",     "embeddings",   "no_op_offload",   "n_prompt",       "n_gen",      "n_depth",      "test_time",
+            "avg_ns",       "stddev_ns",    "avg_ts",         "stddev_ts",
         };
         return fields;
     }
@@ -1280,7 +1259,7 @@ struct test {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
-            field == "use_mmap" || field == "embeddings" || field == "graph_reuse") {
+            field == "use_mmap" || field == "embeddings") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts" || field == "defrag_thold") {
@@ -1354,7 +1333,6 @@ struct test {
                                             std::to_string(use_mmap),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
-                                            std::to_string(graph_reuse),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
                                             std::to_string(n_depth),
@@ -1540,9 +1518,6 @@ struct markdown_printer : public printer {
         if (field == "no_op_offload") {
             return 4;
         }
-        if (field == "graph_reuse") {
-            return 4;
-        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1576,9 +1551,6 @@ struct markdown_printer : public printer {
         }
         if (field == "no_op_offload") {
             return "nopo";
-        }
-        if (field == "graph_reuse") {
-            return "gr";
         }
         if (field == "tensor_split") {
             return "ts";
@@ -1653,9 +1625,6 @@ struct markdown_printer : public printer {
         }
         if (params.no_op_offload.size() > 1 || params.no_op_offload != cmd_params_defaults.no_op_offload) {
             fields.emplace_back("no_op_offload");
-        }
-        if (params.graph_reuse.size() > 1 || params.graph_reuse != cmd_params_defaults.graph_reuse) {
-            fields.emplace_back("graph_reuse");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");

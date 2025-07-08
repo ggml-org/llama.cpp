@@ -1465,14 +1465,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
-        {"--graph-reuse", "-gr"},
-        string_format("reuse previous compute graphs when possible (default: %s)"
-            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/14482)", params.graph_reuse ? "true" : "false"),
-        [](common_params & params) {
-            params.graph_reuse = true;
-        }
-    ).set_env("LLAMA_ARG_GRAPH_REUSE"));
-    add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
         [](common_params & params) {
