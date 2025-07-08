@@ -4600,7 +4600,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     if (output == NULL) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
-                    
+
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
