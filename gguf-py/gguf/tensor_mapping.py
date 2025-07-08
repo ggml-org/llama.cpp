@@ -99,6 +99,7 @@ class TensorNameMap:
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
             "model.transformer.ln_f",                  # llada
+            "model.norm",                              # cogvlm
         ),
 
         # Rope frequencies
@@ -1157,6 +1158,7 @@ class TensorNameMap:
             "model.mm_projector.mlp.mlp.{bid}",
             "vision_model.vision_adapter.mlp.fc{bid}", # llama 4
             "mlp1.{bid}", # InternVL
+            "model.vision.linear_proj.linear_proj", # cogvlm
         ),
 
         MODEL_TENSOR.V_MMPROJ_PEG: (
@@ -1179,6 +1181,7 @@ class TensorNameMap:
             "vision_model.patch_embedding.linear", # llama 4
             "visual.patch_embed.proj", # qwen2vl
             "vision_tower.patch_embed.proj", # kimi-vl
+            "model.vision.patch_embedding", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -1200,6 +1203,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.attention.wq", # pixtral
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wq", # kimi-vl, generated
+            "model.vision.transformer.layers.{bid}.attention.query", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1217,6 +1221,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.attention.wk", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wk", # kimi-vl, generated
+            "model.vision.transformer.layers.{bid}.attention.key", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1234,6 +1239,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.attention.wv", # pixtral
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
             "vision_tower.encoder.blocks.{bid}.wv", # kimi-vl, generated
+            "model.vision.transformer.layers.{bid}.attention.value", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
@@ -1247,6 +1253,7 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.input_layernorm", # llama4
             "visual.blocks.{bid}.norm1", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm0", # kimi-vl (norm0/norm1)
+            "model.vision.transformer.layers.{bid}.input_layernorm", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_O: (
@@ -1260,6 +1267,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.attention.wo", # pixtral
             "visual.blocks.{bid}.attn.proj", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.wo", # kimi-vl
+            "model.vision.transformer.layers.{bid}.attention.dense", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_POST_ATTN_NORM: (
@@ -1273,6 +1281,7 @@ class TensorNameMap:
             "vision_encoder.transformer.layers.{bid}.ffn_norm", # pixtral
             "visual.blocks.{bid}.norm2", # qwen2vl
             "vision_tower.encoder.blocks.{bid}.norm1", # kimi-vl (norm0/norm1)
+            "model.vision.transformer.layers.{bid}.post_attention_layernorm", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_FFN_UP: (
@@ -1286,6 +1295,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.fc1", # qwen2vl
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc0", # kimi-vl (fc0/fc1)
+            "model.vision.transformer.layers.{bid}.mlp.fc1", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
@@ -1305,6 +1315,7 @@ class TensorNameMap:
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
             "vision_tower.encoder.blocks.{bid}.mlp.fc1", # kimi-vl (fc0/fc1)
+            "model.vision.transformer.layers.{bid}.mlp.fc2", # cogvlm
         ),
 
         MODEL_TENSOR.V_LAYER_SCALE_1: (
@@ -1330,6 +1341,7 @@ class TensorNameMap:
             "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
             "vision_tower.encoder.final_layernorm", # kimi-vl
+            "model.vision.linear_proj.norm1", # cogvlm
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
@@ -1398,6 +1410,18 @@ class TensorNameMap:
         MODEL_TENSOR.V_MM_PATCH_MERGER: (
             "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1 - hf
             "patch_merger.merging_layer", # mistral
+        ),
+
+        MODEL_TENSOR.V_MM_UP: (
+            "model.vision.linear_proj.dense_h_to_4h", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_MM_DOWN: (
+            "model.vision.linear_proj.dense_4h_to_h", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_MM_GATE: (
+            "model.vision.linear_proj.gate_proj", # cogvlm
         ),
 
         # audio (mtmd)

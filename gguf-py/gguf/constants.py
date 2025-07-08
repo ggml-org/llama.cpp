@@ -614,6 +614,9 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_QUERY       = auto() # minicpmv
     V_TOK_EMBD_IMG_BREAK = auto() # pixtral
     V_MM_PATCH_MERGER    = auto() # mistral small 3.1
+    V_MM_UP              = auto() # cogvlm
+    V_MM_DOWN            = auto() # cogvlm
+    V_MM_GATE            = auto() # cogvlm
     # audio (mtmd)
     A_ENC_EMBD_POS       = auto()
     A_ENC_CONV1D         = auto()
