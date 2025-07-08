@@ -64,6 +64,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "bailing",           LLM_CHAT_TEMPLATE_BAILING           },
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
     { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
+    { "openai-moe",        LLM_CHAT_TEMPLATE_OPENAI_MOE        },
 };
 
 llm_chat_template llm_chat_template_from_str(const std::string & name) {
@@ -185,6 +186,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_LLAMA4;
     } else if (tmpl_contains("<|endofuserprompt|>")) {
         return LLM_CHAT_TEMPLATE_DOTS1;
+    } else if (tmpl_contains("<|start|>") && tmpl_contains("<|return|>")) {
+        return LLM_CHAT_TEMPLATE_OPENAI_MOE;
     }
     return LLM_CHAT_TEMPLATE_UNKNOWN;
 }
@@ -664,6 +667,16 @@ int32_t llm_chat_apply_template(
         }
         if (add_ass) {
             ss << "<|response|>";
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_OPENAI_MOE) {
+        // OpenAI MoE (based on Harmony chat template)
+        for (auto message : chat) {
+            std::string role(message->role);
+            ss << "<|start|>" << role << "<|message|>" << message->content;
+            ss << (role == "assistant" ? "<|return|>" : "<|end|>");
+        }
+        if (add_ass) {
+            ss << "<|start|>assistant<|message|>";
         }
     } else {
         // template not supported
