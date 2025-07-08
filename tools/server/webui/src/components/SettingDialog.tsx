@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import { isDev } from '../Config';
@@ -284,6 +284,18 @@ export default function SettingDialog({
     JSON.parse(JSON.stringify(config))
   );
   const { showConfirm, showAlert } = useModals();
+
+  // get default client settings
+  useEffect(() => {
+    StorageUtils.setDefaultConfig().then((wasChanged: boolean) => {
+      if (wasChanged) {
+        console.log('Setting default config');
+        const newConfig = StorageUtils.getConfig();
+        saveConfig(newConfig);
+        setLocalConfig(JSON.parse(JSON.stringify(newConfig)));
+      }
+    });
+  }, []);
 
   const resetConfig = async () => {
     if (await showConfirm('Are you sure you want to reset all settings?')) {
