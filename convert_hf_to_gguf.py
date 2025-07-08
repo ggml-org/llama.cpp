@@ -6645,6 +6645,8 @@ class FalconH1Model(Mamba2Model):
             tensor = tensor * self.hparams["lm_head_multiplier"]
         elif "embed_tokens" in name:
             tensor = tensor * self.hparams["embedding_multiplier"]
+        elif "mamba.norm" in name:
+            tensor = tensor.reshape(self.n_group, self.hparams["mamba_d_ssm"] // self.n_group)
 
         tensors = [(tensors[0][0], tensor)]
         return tensors
