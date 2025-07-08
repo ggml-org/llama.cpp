@@ -134,7 +134,13 @@ private fun DrawerContent(
             icon = Icons.Default.Home,
             label = "Home",
             isSelected = currentRoute == AppDestinations.MODEL_SELECTION_ROUTE,
-            onClick = { onNavigate { navigationActions.navigateToModelSelection() } }
+            onClick = {
+                if (currentRoute != AppDestinations.MODEL_SELECTION_ROUTE) {
+                    onNavigate { navigationActions.navigateToModelSelection() }
+                } else {
+                    onNavigate { /* No-op: simply close drawer */ }
+                }
+            }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
