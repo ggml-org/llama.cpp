@@ -1575,6 +1575,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                         type = LLM_TYPE_3B; break;
                     case 44:
                         type = LLM_TYPE_7B; break;
+                    case 72:
+                        type = LLM_TYPE_34B; break;
                     default:
                         type = LLM_TYPE_UNKNOWN;
                 }
