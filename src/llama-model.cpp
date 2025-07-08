@@ -15426,7 +15426,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
                     cparams.n_ctx = GGML_PAD(cparams.n_ctx, padding);
 
-
                     res = new llama_memory_hybrid(
                         /* model             */ *this,
                         /* attn_type_k       */ params.type_k,
