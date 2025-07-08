@@ -686,14 +686,6 @@ class TextModel(ModelBase):
         if chkhsh == "9d032fcbd5501f4a38150912590928bfb36091efb5df11b8e2124b0390e3fb1e":
             # ref: https://huggingface.co/tiiuae/Falcon3-7B-Base
             res = "falcon3"
-        if (
-            chkhsh == "60476e1243776c4fb1b993dbd7a5f15ac22f83c80afdf425fa5ae01c8d44ef86" or
-            chkhsh == "3eda48b4c4dc7de733d1a8b3e3b4a85243dbbf704da2ee9d42c6beced8897896" or
-            chkhsh == "48f8e02c0359c0bbdd82f26909171fac1c18a457bb47573ed1fe3bbb2c1cfd4b" or
-            chkhsh == "a6b57017d60e6edb4d88ecc2845188e0eb333a70357e45dcc9b53964a73bbae6"
-        ):
-            # ref: https://huggingface.co/collections/tiiuae/falcon-h1-6819f2795bc406da60fab8df
-            res = "falcon_h1"
         if chkhsh == "8e62295832751ca1e8f92f2226f403dea30dc5165e448b5bfa05af5340c64ec7":
             # ref: https://huggingface.co/BAAI/bge-large-zh-v1.5
             res = "bert-bge-large"
@@ -6608,7 +6600,7 @@ class FalconH1Model(Mamba2Model):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         tensors = list(super().modify_tensors(data_torch, name, bid))
-        tensor = tensors[0][1] 
+        tensor = tensors[0][1]
 
         if "down_proj" in name:
             tensor = tensor  * self.mlp_multipliers[1]
@@ -6669,9 +6661,7 @@ class FalconH1Model(Mamba2Model):
         ## Validation ##
         assert self.hparams.get("hidden_act") in [None, "silu"], "Only SILU activation supported"
         assert self.d_inner % d_head == 0, f"SSM inner size {self.d_inner} not a multiple of head dim {d_head}"
-        self.gguf_writer.add_head_count_kv(self.find_hparam(["num_key_value_heads"], optional=True) or 
-            self.find_hparam(["num_attention_heads"]))
-
+        self.gguf_writer.add_head_count_kv(self.find_hparam(["num_key_value_heads"], optional=True) or self.find_hparam(["num_attention_heads"]))
 
         # Add any other Falcon Mamba2 specific configuration
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
