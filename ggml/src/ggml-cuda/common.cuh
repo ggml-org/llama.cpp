@@ -176,17 +176,20 @@ static const char * cu_get_error_str(CUresult err) {
 #endif
 
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
-#define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes) \
-    do { \
-        static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false}; \
-        const int id = ggml_cuda_get_device(); \
-        if (!shared_memory_limit_raised[id]) { \
-            CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes)); \
-            shared_memory_limit_raised[id] = true; \
-        } \
-    } while (0)
+#    define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes)                                                       \
+        do {                                                                                                   \
+            static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = { false };                         \
+            const int   id                                                = ggml_cuda_get_device();            \
+            if (!shared_memory_limit_raised[id]) {                                                             \
+                CUDA_CHECK(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes)); \
+                shared_memory_limit_raised[id] = true;                                                         \
+            }                                                                                                  \
+        } while (0)
 #else
-#define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes) do {} while (0)
+#    define CUDA_SET_SHARED_MEMORY_LIMIT(kernel, nbytes) \
+        do {                                             \
+            GGML_UNUSED(nbytes);                         \
+        } while (0)
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
 
 #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA)

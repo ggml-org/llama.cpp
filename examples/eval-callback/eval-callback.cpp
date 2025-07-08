@@ -136,6 +136,11 @@ static bool run(llama_context * ctx, const common_params & params) {
 
     std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, add_bos);
 
+    if (tokens.empty()) {
+        LOG_ERR("%s : there are not input tokens to process - (try to provide a prompt with '-p')\n", __func__);
+        return false;
+    }
+
     if (llama_decode(ctx, llama_batch_get_one(tokens.data(), tokens.size()))) {
         LOG_ERR("%s : failed to eval\n", __func__);
         return false;

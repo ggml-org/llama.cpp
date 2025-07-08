@@ -360,6 +360,11 @@ llama_memory_context_ptr llama_kv_cache_unified::init_batch(
             ubatches.push_back(std::move(ubatch)); // NOLINT
         }
 
+        if (balloc.get_n_used() < balloc.get_n_tokens()) {
+            // failed to find a suitable split
+            break;
+        }
+
         auto sinfos = prepare(ubatches);
         if (sinfos.empty()) {
             break;
