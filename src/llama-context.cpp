@@ -101,8 +101,7 @@ llama_context::llama_context(
 
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
-    cparams.op_offload  = params.op_offload;
-    cparams.graph_reuse = params.graph_reuse;
+    cparams.op_offload = params.op_offload;
 
     const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
 
@@ -689,9 +688,9 @@ llm_graph_result_i * llama_context::process_ubatch(const llama_ubatch & ubatch, 
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
-    const bool can_reuse = cparams.graph_reuse && res->update(gparams);
-    if (can_reuse) {
-        LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+    if (res->can_reuse(gparams)) {
+        //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+
         n_reused++;
     } else {
         res->reset();
@@ -2186,7 +2185,6 @@ llama_context_params llama_context_default_params() {
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
-        /*.graph_reuse                 =*/ false,
     };
 
     return result;

@@ -27,7 +27,6 @@ bool llama_cparams::is_same(const llama_cparams & other) const {
         no_perf             == other.no_perf             &&
         warmup              == other.warmup              &&
         op_offload          == other.op_offload          &&
-        graph_reuse         == other.graph_reuse         &&
         pooling_type        == other.pooling_type        &&
         cb_eval             == other.cb_eval             &&
         cb_eval_user_data   == other.cb_eval_user_data;
