@@ -6,14 +6,16 @@ import android.llama.cpp.KleidiLlama
 import android.llama.cpp.TierDetection
 import android.llama.cpp.gguf.GgufMetadataReader
 import com.example.llama.data.db.AppDatabase
-import com.example.llama.data.source.remote.GatedTypeAdapter
-import com.example.llama.data.source.remote.HuggingFaceApiService
-import com.example.llama.data.source.remote.HuggingFaceRemoteDataSource
-import com.example.llama.data.source.remote.HuggingFaceRemoteDataSourceImpl
 import com.example.llama.data.repo.ModelRepository
 import com.example.llama.data.repo.ModelRepositoryImpl
 import com.example.llama.data.repo.SystemPromptRepository
 import com.example.llama.data.repo.SystemPromptRepositoryImpl
+import com.example.llama.data.source.local.LocalFileDataSource
+import com.example.llama.data.source.local.LocalFileDataSourceImpl
+import com.example.llama.data.source.remote.GatedTypeAdapter
+import com.example.llama.data.source.remote.HuggingFaceApiService
+import com.example.llama.data.source.remote.HuggingFaceRemoteDataSource
+import com.example.llama.data.source.remote.HuggingFaceRemoteDataSourceImpl
 import com.example.llama.engine.BenchmarkService
 import com.example.llama.engine.ConversationService
 import com.example.llama.engine.InferenceService
@@ -56,15 +58,16 @@ internal abstract class AppModule {
     abstract fun bindConversationService(impl: InferenceServiceImpl) : ConversationService
 
     @Binds
-    abstract fun bindsModelsRepository(impl: ModelRepositoryImpl): ModelRepository
+    abstract fun bindModelsRepository(impl: ModelRepositoryImpl): ModelRepository
 
     @Binds
-    abstract fun bindsSystemPromptRepository(impl: SystemPromptRepositoryImpl): SystemPromptRepository
+    abstract fun bindSystemPromptRepository(impl: SystemPromptRepositoryImpl): SystemPromptRepository
 
     @Binds
-    abstract fun bindHuggingFaceRemoteDataSource(
-        impl: HuggingFaceRemoteDataSourceImpl
-    ): HuggingFaceRemoteDataSource
+    abstract fun bindLocalFileDataSource(impl: LocalFileDataSourceImpl) : LocalFileDataSource
+
+    @Binds
+    abstract fun bindHuggingFaceRemoteDataSource(impl: HuggingFaceRemoteDataSourceImpl): HuggingFaceRemoteDataSource
 
     companion object {
         const val USE_STUB_ENGINE = false

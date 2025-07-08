@@ -9,17 +9,14 @@ import com.example.llama.data.db.dao.ModelDao
 import com.example.llama.data.db.entity.ModelEntity
 import com.example.llama.data.model.GgufMetadata
 import com.example.llama.data.model.ModelInfo
+import com.example.llama.data.repo.ModelRepository.ImportProgressTracker
+import com.example.llama.data.source.local.LocalFileDataSource
 import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.data.source.remote.HuggingFaceModelDetails
 import com.example.llama.data.source.remote.HuggingFaceRemoteDataSource
-import com.example.llama.data.repo.ModelRepository.ImportProgressTracker
 import com.example.llama.monitoring.StorageMetrics
-import com.example.llama.util.copyWithBuffer
-import com.example.llama.util.copyWithChannels
 import com.example.llama.util.formatFileByteSize
-import com.example.llama.util.getFileNameFromUri
-import com.example.llama.util.getFileSizeFromUri
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +29,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileNotFoundException
-import java.io.FileOutputStream
 import java.io.IOException
 import java.util.UUID
 import javax.inject.Inject
@@ -113,6 +109,7 @@ class InsufficientStorageException(message: String) : IOException(message)
 class ModelRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context,
     private val modelDao: ModelDao,
+    private val localFileDataSource: LocalFileDataSource,
     private val huggingFaceRemoteDataSource: HuggingFaceRemoteDataSource,
     private val ggufMetadataReader: GgufMetadataReader,
 ) : ModelRepository {
@@ -174,7 +171,9 @@ class ModelRepositoryImpl @Inject constructor(
             throw IllegalStateException("Another import is already in progress!")
         }
 
-        val fileSize = size ?: getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
+        val fileInfo = localFileDataSource.getFileInfo(uri)
+        val fileSize = size ?: fileInfo?.size ?: throw FileNotFoundException("File size N/A")
+        val fileName = name ?: fileInfo?.name ?: throw FileNotFoundException("File name N/A")
         if (!hasEnoughSpaceForImport(fileSize)) {
             throw InsufficientStorageException(
                 "Not enough storage space! " +
@@ -182,53 +181,24 @@ class ModelRepositoryImpl @Inject constructor(
                     "Available: ${formatFileByteSize(availableSpaceBytes)}"
             )
         }
-
-        val fileName = name ?: getFileNameFromUri(context, uri) ?: throw FileNotFoundException("Filename N/A")
         val modelFile = File(modelsDir, fileName)
 
         importJob = coroutineContext[Job]
         currentModelFile = modelFile
 
         try {
-            val inputStream = context.contentResolver.openInputStream(uri)
-                ?: throw IOException("Failed to open input stream")
-            val outputStream = FileOutputStream(modelFile)
-
-            if (fileSize > LARGE_MODEL_THRESHOLD_SIZE) {
-                Log.i(TAG, "Copying $fileName (size: $fileSize) via NIO...")
-
-                // Use NIO channels for large models
-                copyWithChannels(
-                    input = inputStream,
-                    output = outputStream,
-                    totalSize = fileSize,
-                    bufferSize = NIO_BUFFER_SIZE,
-                    yieldSize = NIO_YIELD_SIZE
-                ) { progress ->
+            localFileDataSource.copyFile(
+                sourceUri = uri,
+                destinationFile = modelFile,
+                fileSize = fileSize,
+                onProgress = { progress ->
                     progressTracker?.let {
                         withContext(Dispatchers.Main) {
                             it.onProgress(progress)
                         }
                     }
                 }
-            } else {
-                Log.i(TAG, "Copying $fileName (size: $fileSize) via buffer...")
-
-                // Default copy with buffer for small models
-                copyWithBuffer(
-                    input = inputStream,
-                    output = outputStream,
-                    totalSize = fileSize,
-                    bufferSize = DEFAULT_BUFFER_SIZE,
-                    yieldSize = DEFAULT_YIELD_SIZE
-                ) { progress ->
-                    progressTracker?.let {
-                        withContext(Dispatchers.Main) {
-                            it.onProgress(progress)
-                        }
-                    }
-                }
-            }
+            ).getOrThrow()
 
             // Extract GGUF metadata if possible
             val metadata = try {
@@ -256,12 +226,12 @@ class ModelRepositoryImpl @Inject constructor(
 
         } catch (e: CancellationException) {
             Log.i(TAG, "Import was cancelled for $fileName: ${e.message}")
-            cleanupPartialFile(modelFile)
+            localFileDataSource.cleanupPartialFile(modelFile)
             throw e
 
         } catch (e: Exception) {
             Log.e(TAG, "Import failed for $fileName: ${e.message}")
-            cleanupPartialFile(modelFile)
+            localFileDataSource.cleanupPartialFile(modelFile)
             throw e
 
         } finally {
@@ -300,8 +270,8 @@ class ModelRepositoryImpl @Inject constructor(
                 // Give the job a moment to clean up
                 delay(CANCEL_LOCAL_MODEL_IMPORT_TIMEOUT)
 
-                // Clean up the partial file (as a safety measure)
-                cleanupPartialFile(file)
+                // Clean up the partial file
+                file?.let { localFileDataSource.cleanupPartialFile(it) }
 
                 // Reset state
                 importJob = null
@@ -312,16 +282,6 @@ class ModelRepositoryImpl @Inject constructor(
                 Log.e(TAG, "Failed to cancel import: ${e.message}")
                 false
             }
-        }
-    }
-
-    private fun cleanupPartialFile(file: File?) {
-        try {
-            if (file?.exists() == true && !file.delete()) {
-                Log.e(TAG, "Failed to delete partial file: ${file.absolutePath}")
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error cleaning up partial file: ${e.message}")
         }
     }
 
@@ -399,11 +359,6 @@ class ModelRepositoryImpl @Inject constructor(
         private const val BYTES_IN_GB = 1024f * 1024f * 1024f
 
         private const val MODEL_IMPORT_SPACE_BUFFER_SCALE = 1.2f
-        private const val LARGE_MODEL_THRESHOLD_SIZE = 1024 * 1024 * 1024
-        private const val NIO_BUFFER_SIZE = 32 * 1024 * 1024
-        private const val NIO_YIELD_SIZE = 128 * 1024 * 1024
-        private const val DEFAULT_BUFFER_SIZE = 4 * 1024 * 1024
-        private const val DEFAULT_YIELD_SIZE = 16 * 1024 * 1024
         private const val CANCEL_LOCAL_MODEL_IMPORT_TIMEOUT = 500L
     }
 }

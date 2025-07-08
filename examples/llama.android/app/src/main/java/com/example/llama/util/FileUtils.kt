@@ -55,20 +55,25 @@ suspend fun copyWithChannels(
 
     val buffer = ByteBuffer.allocateDirect(bufferSize)
     var totalBytesRead = 0L
+    var yieldCounter = 0L
 
     while (inChannel.read(buffer) != -1) {
         buffer.flip()
         while (buffer.hasRemaining()) {
             outChannel.write(buffer)
         }
-        totalBytesRead += buffer.position()
+
+        val bytesRead = buffer.position()
+        totalBytesRead += bytesRead
+        yieldCounter += bytesRead
         buffer.clear()
 
         // Report progress
         onProgress?.invoke(totalBytesRead.toFloat() / totalSize)
 
-        if (totalBytesRead % (yieldSize) == 0L) {
+        if (yieldCounter >= yieldSize) {
             yield()
+            yieldCounter = 0L
         }
     }
 
