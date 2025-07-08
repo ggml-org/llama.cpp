@@ -138,7 +138,7 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
-    // llama4
+    // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;
     uint32_t n_attn_temp_floor_scale = 8192;
@@ -171,6 +171,20 @@ struct llama_hparams {
     //   il == 6: swa
     //   etc ...
     void set_swa_pattern(uint32_t n_pattern);
+
+    // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
+    // note that if n_pattern == 0, all layers are SWA
+    //           if n_pattern == 1, all layers are dense
+    // example: n_pattern = 3
+    //   il == 0: dense
+    //   il == 1: swa
+    //   il == 2: swa
+    //   il == 3: dense
+    //   il == 4: swa
+    //   il == 5: swa
+    //   il == 6: dense
+    //   etc ...
+    void set_dense_start_swa_pattern(uint32_t n_pattern);
 
     // return true if one of the layers is SWA
     bool is_swa_any() const;

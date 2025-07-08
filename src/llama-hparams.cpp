@@ -8,6 +8,12 @@ void llama_hparams::set_swa_pattern(uint32_t n_pattern) {
     }
 }
 
+void llama_hparams::set_dense_start_swa_pattern(uint32_t n_pattern) {
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        swa_layers[il] = n_pattern == 0 || (il % n_pattern != 0);
+    }
+}
+
 bool llama_hparams::is_swa_any() const {
     for (uint32_t il = 0; il < n_layer; ++il) {
         if (swa_layers[il]) {

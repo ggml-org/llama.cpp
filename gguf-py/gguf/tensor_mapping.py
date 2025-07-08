@@ -303,6 +303,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
             "model.layers.{bid}.feed_forward.router",           # llama4
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
+            "model.layers.{bid}.block_sparse_moe.primary_router", # smallthinker
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -346,6 +347,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
+            "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -356,6 +358,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.experts.w3", # phimoe (merged)
             "model.layers.{bid}.feed_forward.experts.up_proj", # llama4
             "encoder.layers.{bid}.mlp.experts.mlp.w1",        # nomic-bert-moe
+            "model.layers.{bid}.block_sparse_moe.experts.up", # smallthinker
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -383,6 +386,7 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4
+            "model.layers.{bid}.block_sparse_moe.gate",   # smallthinker
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -392,6 +396,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.experts.gate_proj",          # qwen2moe olmoe (merged)
             "model.layers.{bid}.block_sparse_moe.experts.w1",    # phimoe (merged)
             "model.layers.{bid}.feed_forward.experts.gate_proj", # llama4
+            "model.layers.{bid}.block_sparse_moe.experts.gate",  # smallthinker
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
@@ -429,6 +434,7 @@ class TensorNameMap:
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
+            "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -440,6 +446,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.experts.w2",    # phimoe (merged)
             "model.layers.{bid}.feed_forward.experts.down_proj", # llama4
             "encoder.layers.{bid}.mlp.experts.mlp.w2",           # nomic-bert-moe
+            "model.layers.{bid}.block_sparse_moe.experts.down",  # smallthinker
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
