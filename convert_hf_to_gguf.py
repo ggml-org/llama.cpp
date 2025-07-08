@@ -6673,17 +6673,16 @@ class FalconH1Model(Mamba2Model):
 
 
         # Add Falcon Mamba2 specific configuration
-        self.gguf_writer.add_uint32("falcon_h1.attention.head_dim", self.hparams["head_dim"])
-        self.gguf_writer.add_uint32("falcon_h1.ssm.mamba_d_inner", self.hparams["mamba_d_ssm"])
+        self.gguf_writer.add_ssm_head_dim(self.hparams["mamba_d_head"])
         self.gguf_writer.add_ssm_inner_size(self.hparams["mamba_d_ssm"])
-        self.gguf_writer.add_uint32("falcon_h1.num_attention_heads", self.find_hparam(["num_attention_heads"]))
-        self.gguf_writer.add_uint32("falcon_h1.num_key_value_heads", 
-                                    self.find_hparam(["num_key_value_heads"], optional=True) or 
-                                    self.find_hparam(["num_attention_heads"]))
+        self.gguf_writer.add_head_count(self.find_hparam(["num_attention_heads"]))
+        self.gguf_writer.add_key_length(self.hparams["head_dim"])
+        self.gguf_writer.add_value_length(self.hparams["head_dim"])
+        self.gguf_writer.add_head_count_kv(self.find_hparam(["num_key_value_heads"], optional=True) or 
+            self.find_hparam(["num_attention_heads"]))
 
 
         # Add any other Falcon Mamba2 specific configuration
-        self.gguf_writer.add_bool("falcon_h1.mamba_rms_norm", self.find_hparam(["mamba_rms_norm"], optional=True))
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
 
 ###### CONVERSION LOGIC ######

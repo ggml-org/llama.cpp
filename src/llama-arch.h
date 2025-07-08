@@ -158,7 +158,6 @@ enum llm_kv {
     LLM_KV_ATTENTION_LAYER_INDICES,
 
     // Falcon-H1 specific
-    LLM_KV_ATTN_HEAD_DIM,
     LLM_KV_SSM_HEAD_DIM,
     LLM_KV_N_LAYER,
     LLM_KV_FALCON_H1_MAMBA_RMS_NORM,
