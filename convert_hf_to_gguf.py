@@ -6669,7 +6669,7 @@ class FalconH1Model(Mamba2Model):
         # Add any other Falcon Mamba2 specific configuration
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
 
-        
+
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
