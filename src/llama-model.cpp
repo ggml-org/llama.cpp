@@ -4600,7 +4600,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     if (output == NULL) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
                     }
-                    
+
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
@@ -14738,7 +14738,7 @@ struct llm_build_falcon_h1 : public llm_graph_context {
             inpSA = ggml_add(ctx0, cur, inpSA);
             cb(cur, "layer_out", il);
 
-            if (il == n_layer - 1 && inp_out_ids) {            
+            if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
