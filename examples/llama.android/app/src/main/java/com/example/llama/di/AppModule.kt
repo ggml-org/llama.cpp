@@ -6,6 +6,7 @@ import android.llama.cpp.KleidiLlama
 import android.llama.cpp.TierDetection
 import android.llama.cpp.gguf.GgufMetadataReader
 import com.example.llama.data.local.AppDatabase
+import com.example.llama.data.remote.GatedTypeAdapter
 import com.example.llama.data.remote.HuggingFaceApiService
 import com.example.llama.data.remote.HuggingFaceRemoteDataSource
 import com.example.llama.data.remote.HuggingFaceRemoteDataSourceImpl
@@ -21,6 +22,7 @@ import com.example.llama.engine.ModelLoadingService
 import com.example.llama.engine.StubInferenceEngine
 import com.example.llama.engine.StubTierDetection
 import com.example.llama.monitoring.PerformanceMonitor
+import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import dagger.Binds
 import dagger.Module
@@ -34,7 +36,8 @@ import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import javax.inject.Singleton
 
-private const val HUGGINGFACE_DATETIME_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
+const val HUGGINGFACE_HOST = "https://huggingface.co/"
+const val HUGGINGFACE_DATETIME_FORMAT = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -110,13 +113,21 @@ internal abstract class AppModule {
 
         @Provides
         @Singleton
-        fun provideHuggingFaceApiService(okHttpClient: OkHttpClient): HuggingFaceApiService =
+        fun provideGson(): Gson = GsonBuilder()
+            .setDateFormat(HUGGINGFACE_DATETIME_FORMAT)
+            .registerTypeAdapter(Boolean::class.java, GatedTypeAdapter())
+            .create()
+
+        @Provides
+        @Singleton
+        fun provideHuggingFaceApiService(
+            okHttpClient: OkHttpClient,
+            gson: Gson,
+        ): HuggingFaceApiService =
             Retrofit.Builder()
-                .baseUrl("https://huggingface.co/")
+                .baseUrl(HUGGINGFACE_HOST)
                 .client(okHttpClient)
-                .addConverterFactory(GsonConverterFactory.create(
-                    GsonBuilder().setDateFormat(HUGGINGFACE_DATETIME_FORMAT).create()
-                ))
+                .addConverterFactory(GsonConverterFactory.create(gson))
                 .build()
                 .create(HuggingFaceApiService::class.java)
     }
