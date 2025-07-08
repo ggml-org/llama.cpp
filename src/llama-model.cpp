@@ -4530,7 +4530,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // output
                     {
                         output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {hidden_size, n_vocab}, TENSOR_NOT_REQUIRED);
-                        final_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {hidden_size}, 0);
+                        output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {hidden_size}, 0);
                     }
 
                     for (int i = 0; i < n_layer; ++i) {
@@ -14740,7 +14740,7 @@ struct llm_build_falcon_h1 : public llm_graph_context {
         cur = inpL;
 
         cur = build_norm(cur,
-                model.final_norm, NULL,
+                model.output_norm, NULL,
                 LLM_NORM_RMS, -1);
 
         cb(cur, "result_norm", -1);
