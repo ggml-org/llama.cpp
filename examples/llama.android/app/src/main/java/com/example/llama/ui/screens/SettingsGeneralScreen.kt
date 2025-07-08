@@ -31,7 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.example.llama.APP_NAME
-import com.example.llama.data.preferences.UserPreferences
+import com.example.llama.data.source.prefs.UserPreferences
 import com.example.llama.ui.components.ArmFeaturesVisualizer
 import com.example.llama.viewmodel.SettingsViewModel
 

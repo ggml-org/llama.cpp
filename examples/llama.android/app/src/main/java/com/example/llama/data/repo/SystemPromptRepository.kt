@@ -1,7 +1,7 @@
-package com.example.llama.data.repository
+package com.example.llama.data.repo
 
-import com.example.llama.data.local.dao.SystemPromptDao
-import com.example.llama.data.local.entity.SystemPromptEntity
+import com.example.llama.data.db.dao.SystemPromptDao
+import com.example.llama.data.db.entity.SystemPromptEntity
 import com.example.llama.data.model.SystemPrompt
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first

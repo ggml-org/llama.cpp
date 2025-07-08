@@ -1,4 +1,4 @@
-package com.example.llama.data.remote
+package com.example.llama.data.source.remote
 
 import com.google.gson.JsonDeserializationContext
 import com.google.gson.JsonDeserializer

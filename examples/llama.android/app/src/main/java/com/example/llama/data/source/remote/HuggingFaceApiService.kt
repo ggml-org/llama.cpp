@@ -1,4 +1,4 @@
-package com.example.llama.data.remote
+package com.example.llama.data.source.remote
 
 import okhttp3.ResponseBody
 import retrofit2.Response

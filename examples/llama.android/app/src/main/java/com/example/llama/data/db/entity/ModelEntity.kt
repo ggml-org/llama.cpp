@@ -1,9 +1,9 @@
-package com.example.llama.data.local.entity
+package com.example.llama.data.db.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.TypeConverters
-import com.example.llama.data.local.converter.GgufMetadataConverters
+import com.example.llama.data.db.converter.GgufMetadataConverters
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.model.GgufMetadata
 

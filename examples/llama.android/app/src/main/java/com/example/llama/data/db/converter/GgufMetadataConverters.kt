@@ -1,4 +1,4 @@
-package com.example.llama.data.local.converter
+package com.example.llama.data.db.converter
 
 import androidx.room.TypeConverter
 import com.example.llama.data.model.GgufMetadata

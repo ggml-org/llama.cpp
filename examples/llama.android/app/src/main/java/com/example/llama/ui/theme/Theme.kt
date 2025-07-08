@@ -13,7 +13,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
-import com.example.llama.data.preferences.UserPreferences
+import com.example.llama.data.source.prefs.UserPreferences
 import com.google.accompanist.systemuicontroller.rememberSystemUiController
 
 // TODO-han.yin: support more / custom color palettes?

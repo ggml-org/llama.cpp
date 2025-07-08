@@ -11,7 +11,7 @@ import com.example.llama.data.model.ModelSortOrder
 import com.example.llama.data.model.filterBy
 import com.example.llama.data.model.queryBy
 import com.example.llama.data.model.sortByOrder
-import com.example.llama.data.repository.ModelRepository
+import com.example.llama.data.repo.ModelRepository
 import com.example.llama.engine.InferenceService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.FlowPreview

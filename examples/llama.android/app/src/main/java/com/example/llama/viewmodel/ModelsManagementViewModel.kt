@@ -15,10 +15,10 @@ import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.model.ModelSortOrder
 import com.example.llama.data.model.filterBy
 import com.example.llama.data.model.sortByOrder
-import com.example.llama.data.remote.HuggingFaceDownloadInfo
-import com.example.llama.data.remote.HuggingFaceModel
-import com.example.llama.data.repository.InsufficientStorageException
-import com.example.llama.data.repository.ModelRepository
+import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
+import com.example.llama.data.source.remote.HuggingFaceModel
+import com.example.llama.data.repo.InsufficientStorageException
+import com.example.llama.data.repo.ModelRepository
 import com.example.llama.util.formatFileByteSize
 import com.example.llama.util.getFileNameFromUri
 import com.example.llama.util.getFileSizeFromUri

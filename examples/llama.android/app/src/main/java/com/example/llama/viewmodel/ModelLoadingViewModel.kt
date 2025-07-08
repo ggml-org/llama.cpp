@@ -2,8 +2,8 @@ package com.example.llama.viewmodel
 
 import androidx.lifecycle.viewModelScope
 import com.example.llama.data.model.SystemPrompt
-import com.example.llama.data.repository.ModelRepository
-import com.example.llama.data.repository.SystemPromptRepository
+import com.example.llama.data.repo.ModelRepository
+import com.example.llama.data.repo.SystemPromptRepository
 import com.example.llama.engine.ModelLoadingMetrics
 import com.example.llama.engine.ModelLoadingService
 import dagger.hilt.android.lifecycle.HiltViewModel

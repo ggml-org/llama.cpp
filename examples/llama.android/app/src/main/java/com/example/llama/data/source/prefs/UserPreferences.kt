@@ -1,4 +1,4 @@
-package com.example.llama.data.preferences
+package com.example.llama.data.source.prefs
 
 import android.content.Context
 import androidx.datastore.core.DataStore

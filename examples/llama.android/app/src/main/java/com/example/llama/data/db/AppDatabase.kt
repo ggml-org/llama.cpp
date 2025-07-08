@@ -1,13 +1,13 @@
-package com.example.llama.data.local
+package com.example.llama.data.db
 
 import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
-import com.example.llama.data.local.dao.ModelDao
-import com.example.llama.data.local.dao.SystemPromptDao
-import com.example.llama.data.local.entity.ModelEntity
-import com.example.llama.data.local.entity.SystemPromptEntity
+import com.example.llama.data.db.dao.ModelDao
+import com.example.llama.data.db.dao.SystemPromptDao
+import com.example.llama.data.db.entity.ModelEntity
+import com.example.llama.data.db.entity.SystemPromptEntity
 import javax.inject.Singleton
 
 /**

@@ -1,19 +1,19 @@
-package com.example.llama.data.repository
+package com.example.llama.data.repo
 
 import android.content.Context
 import android.llama.cpp.gguf.GgufMetadataReader
 import android.net.Uri
 import android.os.StatFs
 import android.util.Log
-import com.example.llama.data.local.dao.ModelDao
-import com.example.llama.data.local.entity.ModelEntity
+import com.example.llama.data.db.dao.ModelDao
+import com.example.llama.data.db.entity.ModelEntity
 import com.example.llama.data.model.GgufMetadata
 import com.example.llama.data.model.ModelInfo
-import com.example.llama.data.remote.HuggingFaceDownloadInfo
-import com.example.llama.data.remote.HuggingFaceModel
-import com.example.llama.data.remote.HuggingFaceModelDetails
-import com.example.llama.data.remote.HuggingFaceRemoteDataSource
-import com.example.llama.data.repository.ModelRepository.ImportProgressTracker
+import com.example.llama.data.source.remote.HuggingFaceDownloadInfo
+import com.example.llama.data.source.remote.HuggingFaceModel
+import com.example.llama.data.source.remote.HuggingFaceModelDetails
+import com.example.llama.data.source.remote.HuggingFaceRemoteDataSource
+import com.example.llama.data.repo.ModelRepository.ImportProgressTracker
 import com.example.llama.monitoring.StorageMetrics
 import com.example.llama.util.copyWithBuffer
 import com.example.llama.util.copyWithChannels

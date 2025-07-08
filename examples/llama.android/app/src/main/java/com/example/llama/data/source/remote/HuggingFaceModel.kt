@@ -1,4 +1,4 @@
-package com.example.llama.data.remote
+package com.example.llama.data.source.remote
 
 import android.net.Uri
 import androidx.core.net.toUri

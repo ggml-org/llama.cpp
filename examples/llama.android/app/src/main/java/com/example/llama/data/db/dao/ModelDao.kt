@@ -1,11 +1,11 @@
-package com.example.llama.data.local.dao
+package com.example.llama.data.db.dao
 
 import androidx.room.Dao
 import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import com.example.llama.data.local.entity.ModelEntity
+import com.example.llama.data.db.entity.ModelEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao

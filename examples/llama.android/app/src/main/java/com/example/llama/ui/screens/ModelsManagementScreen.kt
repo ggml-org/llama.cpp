@@ -52,7 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
 import com.example.llama.data.model.ModelInfo
-import com.example.llama.data.remote.HuggingFaceModel
+import com.example.llama.data.source.remote.HuggingFaceModel
 import com.example.llama.ui.components.InfoView
 import com.example.llama.ui.components.ModelCardFullExpandable
 import com.example.llama.ui.scaffold.ScaffoldEvent
