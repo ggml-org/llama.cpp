@@ -118,15 +118,6 @@ struct llama_hparams {
     uint32_t ssm_head_dim   = 0;
     uint32_t ssm_mamba_d_ssm = 0;
 
-    uint32_t attn_head_dim            = 0;
-    bool     mamba_rms_norm           = false;
-    uint32_t vocab_size               = 0;
-    uint32_t intermediate_size        = 0;
-    float     mamba_expand             = 0.0f;
-    bool     ssm_rms_norm   = false;
-    bool     ssm_conv_bias  = false;
-    bool     ssm_proj_bias  = false;
-
     // for hybrid state space models
     std::array<bool, LLAMA_MAX_LAYERS> recurrent_layer_arr;
 
