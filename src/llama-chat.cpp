@@ -680,9 +680,6 @@ int32_t llm_chat_apply_template(
                 ss << "<|startoftext|>" << message->content << "<|extra_0|>";
             }
         }
-        if (add_ass) {
-            ss << "<|startoftext|>";
-        }
     } else {
         // template not supported
         return -1;
