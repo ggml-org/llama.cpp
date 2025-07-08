@@ -1575,6 +1575,8 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                         type = LLM_TYPE_3B; break;
                     case 44:
                         type = LLM_TYPE_7B; break;
+                    default:
+                        type = LLM_TYPE_UNKNOWN;
                 }
             } break;
         case LLM_ARCH_HUNYUAN_MOE:
