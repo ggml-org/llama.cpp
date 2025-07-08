@@ -421,11 +421,38 @@ struct llm_graph_params {
     // TODO: temporary
     llm_graph_result_i * res;
 
-    bool is_same(const llm_graph_params & other) const {
+    // return true if the "other" params would result in a graph with the same topology as with the current params
+    //   having the same topology allows us to reuse the graph in some cases
+    bool allow_reuse(const llm_graph_params & other) const {
+        // first check the ubatch
+        bool can_reuse_ubatch =
+            ubatch.equal_seqs   == other.ubatch.equal_seqs &&
+            ubatch.n_tokens     == other.ubatch.n_tokens &&
+            ubatch.n_seq_tokens == other.ubatch.n_seq_tokens &&
+            ubatch.n_seqs       == other.ubatch.n_seqs &&
+            ubatch.n_seqs_unq   == other.ubatch.n_seqs_unq &&
+            (
+                (!ubatch.token && !other.ubatch.token) ||
+                (!ubatch.embd  && !other.ubatch.embd)
+            );
+
+        // TODO: this won't work because seq_id_unq ptr can point to an old balloc that has
+        //       been freed by this point. find a way to fix this
+        //for (uint32_t s = 0; s < n_seqs_unq; ++s) {
+        //    can_reuse_ubatch &= seq_id_unq[s] == other.seq_id_unq[s];
+        //}
+
+        // for now conservatively disallow, until the issue above is resolved
+        // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        can_reuse_ubatch = can_reuse_ubatch && !ubatch.equal_seqs;
+
+        if (!can_reuse_ubatch) {
+            return false;
+        }
+
         return
-            hparams.is_same(other.hparams) &&
-            cparams.is_same(other.cparams) &&
-            ubatch .is_same(other.ubatch)  &&
+            cparams.embeddings  == other.cparams.embeddings  &&
+            cparams.causal_attn == other.cparams.causal_attn &&
             arch      == other.arch  &&
             gtype     == other.gtype &&
             cvec      == other.cvec  &&
@@ -488,7 +515,7 @@ public:
     //   contexts of the input tensors of the graph and we can reuse it for another computation
     // return true if the graph was updated and can be reused
     bool can_reuse(const llm_graph_params & params) override {
-        if (!this->params.is_same(params)) {
+        if (!this->params.allow_reuse(params)) {
             return false;
         }
 
