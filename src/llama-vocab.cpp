@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cctype>
 #include <cfloat>
+#include <cmath>
 #include <cstdarg>
 #include <cstring>
 #include <forward_list>
