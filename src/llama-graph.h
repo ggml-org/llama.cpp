@@ -83,7 +83,7 @@ public:
 
     // return true if the resulting input tensors using the provided graph parameters would be
     //   the same as the previous input tensors that we have currently stored in the object
-    virtual bool update(const llm_graph_params & params) {
+    virtual bool can_reuse(const llm_graph_params & params) {
         // returning false here by default will prevent from reusing the graph if the check
         //   for the input type has not been implemented yet
         GGML_UNUSED(params);
@@ -100,7 +100,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    bool update(const llm_graph_params & params) override;
+    bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * tokens = nullptr; // I32 [n_batch]
     ggml_tensor * embd   = nullptr; // F32 [n_embd, n_batch]
@@ -113,7 +113,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    bool update(const llm_graph_params & params) override;
+    bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * pos = nullptr; // I32 [n_batch]
 
@@ -173,7 +173,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    bool update(const llm_graph_params & params) override;
+    bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * out_ids; // I32 [n_outputs]
 
@@ -265,7 +265,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    bool update(const llm_graph_params & params) override;
+    bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * get_k_idxs() const { return self_k_idxs; }
     ggml_tensor * get_v_idxs() const { return self_v_idxs; }
@@ -298,7 +298,7 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    bool update(const llm_graph_params & params) override;
+    bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * get_k_idxs()     const { return self_k_idxs; }
     ggml_tensor * get_v_idxs()     const { return self_v_idxs; }
@@ -388,7 +388,7 @@ public:
 
     virtual void set_inputs(const llama_ubatch * ubatch) = 0;
 
-    virtual bool update(const llm_graph_params & params) = 0;
+    virtual bool can_reuse(const llm_graph_params & params) = 0;
 };
 
 using llm_graph_result_ptr = std::unique_ptr<llm_graph_result_i>;
@@ -482,12 +482,12 @@ public:
         }
     }
 
-    // try to update the existing graph result using the new graph parameters
+    // try to update the existing graph result using the new graph parameters in order to reuse it
     // this can only be done if we determine that the resulting graph using the new graph parameters
     //   would be identical to the existing graph. in that case, we simply have to update the memory
     //   contexts of the input tensors of the graph and we can reuse it for another computation
     // return true if the graph was updated and can be reused
-    bool update(const llm_graph_params & params) override {
+    bool can_reuse(const llm_graph_params & params) override {
         if (!this->params.is_same(params)) {
             return false;
         }
@@ -495,7 +495,7 @@ public:
         bool res = true;
 
         for (auto & input : inputs) {
-            res &= input->update(params);
+            res &= input->can_reuse(params);
         }
 
         return res;

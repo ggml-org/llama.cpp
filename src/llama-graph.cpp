@@ -28,7 +28,7 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_embd::update(const llm_graph_params & params) {
+bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
     res &= (!tokens && !params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
@@ -59,7 +59,7 @@ void llm_graph_input_pos::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_pos::update(const llm_graph_params & params) {
+bool llm_graph_input_pos::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
     res &= pos->ne[0] == params.ubatch.n_tokens;
@@ -135,7 +135,7 @@ void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
     }
 }
 
-bool llm_graph_input_out_ids::update(const llm_graph_params & params) {
+bool llm_graph_input_out_ids::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
     res &= n_outputs == params.n_outputs;
@@ -312,7 +312,7 @@ void llm_graph_input_attn_kv_unified::set_input(const llama_ubatch * ubatch) {
     mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
 }
 
-bool llm_graph_input_attn_kv_unified::update(const llm_graph_params & params) {
+bool llm_graph_input_attn_kv_unified::can_reuse(const llm_graph_params & params) {
     const auto * mctx = static_cast<const llama_kv_cache_unified_context *>(params.mctx);
 
     this->mctx = mctx;
@@ -342,7 +342,7 @@ void llm_graph_input_attn_kv_unified_iswa::set_input(const llama_ubatch * ubatch
     mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
 }
 
-bool llm_graph_input_attn_kv_unified_iswa::update(const llm_graph_params & params) {
+bool llm_graph_input_attn_kv_unified_iswa::can_reuse(const llm_graph_params & params) {
     const auto * mctx = static_cast<const llama_kv_cache_unified_iswa_context *>(params.mctx);
 
     this->mctx = mctx;
