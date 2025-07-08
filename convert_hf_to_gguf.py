@@ -6647,9 +6647,6 @@ class FalconH1Model(Mamba2Model):
         self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 0))
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
 
-        ## Mamba mixer params ##
-        self.gguf_writer.add_ssm_head_dim(self.d_head)
-
         ## Attention params ##
         self.gguf_writer.add_head_count(self.hparams["num_attention_heads"]) # Override value 0 from Mamba2
         self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"])

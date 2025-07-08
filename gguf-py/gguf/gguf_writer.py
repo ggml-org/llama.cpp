@@ -867,9 +867,6 @@ class GGUFWriter:
     def add_ssm_dt_b_c_rms(self, value: bool) -> None:
         self.add_bool(Keys.SSM.DT_B_C_RMS.format(arch=self.arch), value)
 
-    def add_ssm_head_dim(self, value: int) -> None:
-        self.add_uint32(Keys.SSM.HEAD_DIM.format(arch=self.arch), value)
-
     def add_tokenizer_model(self, model: str) -> None:
         self.add_string(Keys.Tokenizer.MODEL, model)
 
