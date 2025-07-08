@@ -6568,7 +6568,6 @@ class FalconH1Model(Mamba2Model):
         self._transformer_model_class = LlamaModel
 
         # n_group and d_inner are used during reshape_tensors for mamaba2
-        self.d_model = self.find_hparam(["hidden_size", "d_model"])
         self.n_group = self.find_hparam(["n_groups"])
         self.d_inner = self.find_hparam(["mamba_d_ssm"])
 
@@ -6597,21 +6596,6 @@ class FalconH1Model(Mamba2Model):
 
     def set_vocab(self):
         self._set_vocab_gpt2()
-
-    def _generate_mup_vector(self, block_id: int) -> torch.Tensor:
-        zxbcdt_multipliers = self.hparams["ssm_multipliers"]
-        intermediate_size = self.hparams["mamba_d_ssm"]
-        groups_time_state_size = self.hparams["mamba_n_groups"] * self.hparams["mamba_d_state"]
-        vector_shape = (2 * intermediate_size + 2 * groups_time_state_size + self.hparams["mamba_n_heads"])
-
-        mup_vector = torch.ones(1, 1, vector_shape, dtype=torch.float64)
-        mup_vector[:, :, :intermediate_size] *= zxbcdt_multipliers[0]
-        mup_vector[:, :, intermediate_size:2 * intermediate_size] *= zxbcdt_multipliers[1]
-        mup_vector[:, :, 2 * intermediate_size:2 * intermediate_size + groups_time_state_size] *= zxbcdt_multipliers[2]
-        mup_vector[:, :, 2 * intermediate_size + groups_time_state_size:2 * intermediate_size + 2 * groups_time_state_size] *= zxbcdt_multipliers[3]
-        mup_vector[:, :, 2 * intermediate_size + 2 * groups_time_state_size:] *= zxbcdt_multipliers[4]
-
-        return mup_vector
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         tensors = list(super().modify_tensors(data_torch, name, bid))
@@ -6646,7 +6630,7 @@ class FalconH1Model(Mamba2Model):
         elif "embed_tokens" in name:
             tensor = tensor * self.hparams["embedding_multiplier"]
         elif "mamba.norm" in name:
-            tensor = tensor.reshape(self.n_group, self.hparams["mamba_d_ssm"] // self.n_group)
+            tensor = tensor.reshape(self.n_group, self.d_inner // self.n_group)
 
         tensors = [(tensors[0][0], tensor)]
         return tensors
