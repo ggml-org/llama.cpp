@@ -583,6 +583,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.mamba.norm", # falcon-h1
             "backbone.layers.{bid}.mixer.norm",  # mamba2
         ),
 
@@ -1177,10 +1178,6 @@ class TensorNameMap:
             "resampler.attn.out_proj",
         ),
         
-        MODEL_TENSOR.SSM_NORM: (
-            "model.layers.{bid}.mamba.norm",
-        ),
-
         MODEL_TENSOR.V_RESMPL_KV: (
             "resampler.kv_proj",
         ),
