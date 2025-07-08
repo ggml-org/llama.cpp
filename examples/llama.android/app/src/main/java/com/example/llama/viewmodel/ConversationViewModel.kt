@@ -43,7 +43,7 @@ class ConversationViewModel @Inject constructor(
     // UI state: Input text field
     val inputFieldState = TextFieldState()
 
-    // Token generation job
+    // Ongoing coroutine jobs
     private var tokenCollectionJob: Job? = null
 
     /**

@@ -108,6 +108,7 @@ fun ModelsManagementScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         if (filteredModels.isEmpty()) {
+            // Import model prompt
             val message = when (activeFiltersCount) {
                 0 -> "Tap the \"+\" button to import a model!"
                 1 -> "No models match the selected filter"
@@ -121,10 +122,9 @@ fun ModelsManagementScreen(
         } else {
             // Model cards
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = 16.dp),
+                modifier = Modifier.fillMaxSize(),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
             ) {
                 items(items = filteredModels, key = { it.id }) { model ->
                     val isSelected =

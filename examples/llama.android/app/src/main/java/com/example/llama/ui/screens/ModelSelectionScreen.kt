@@ -126,7 +126,7 @@ fun ModelSelectionScreen(
             ) {
                 if (queryResults.isEmpty()) {
                     if (searchQuery.isNotBlank()) {
-                        // Show "no results" message
+                        // If no results under current query, show "no results" message
                         EmptySearchResultsView(
                             onClearSearch = {
                                 textFieldState.clearText()
@@ -136,7 +136,7 @@ fun ModelSelectionScreen(
                     }
                 } else {
                     LazyColumn(
-                        Modifier.fillMaxSize(),
+                        modifier = Modifier.fillMaxSize(),
                         verticalArrangement = Arrangement.spacedBy(12.dp),
                         contentPadding = PaddingValues(vertical = 12.dp, horizontal = 16.dp),
                     ) {
@@ -164,8 +164,10 @@ fun ModelSelectionScreen(
             }
         } else {
             if (filteredModels.isEmpty()) {
+                // Empty model prompt
                 EmptyModelsView(activeFiltersCount, onManageModelsClicked)
             } else {
+                // Model cards
                 LazyColumn(
                     Modifier.fillMaxSize(), // .padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
