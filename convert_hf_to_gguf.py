@@ -6655,7 +6655,7 @@ class FalconH1Model(Mamba2Model):
         ## Mamba mixer params ##
         self.gguf_writer.add_ssm_conv_kernel(self.find_hparam(["conv_kernel", "d_conv"]))
         self.gguf_writer.add_ssm_group_count(self.n_group)
-        self.gguf_writer.add_ssm_inner_size(self.d_inner)
+        self.gguf_writer.add_ssm_inner_size(self.find_hparam(["mamba_d_ssm"]))
         self.gguf_writer.add_ssm_head_dim(d_head := self.find_hparam(["d_head"]))
         self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads"]))
 

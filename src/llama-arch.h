@@ -390,7 +390,6 @@ enum llm_tensor {
     LLM_TENSOR_POS_NET_ATTN_K,
     LLM_TENSOR_POS_NET_ATTN_V,
     LLM_TENSOR_POS_NET_ATTN_OUT,
-    LLM_TENSOR_FINAL_NORM,
 };
 
 enum llm_tensor_layer {
