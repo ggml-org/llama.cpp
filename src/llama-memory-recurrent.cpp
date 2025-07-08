@@ -374,7 +374,7 @@ llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr &
                 // if all tokens are output, split by sequence
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                ubatch = balloc.split_equal(n_ubatch);
+                ubatch = balloc.split_equal(n_ubatch, false);
             }
 
             if (ubatch.n_tokens == 0) {
@@ -382,6 +382,11 @@ llama_memory_context_ptr llama_memory_recurrent::init_batch(llama_batch_allocr &
             }
 
             ubatches.push_back(std::move(ubatch)); // NOLINT
+        }
+
+        if (balloc.get_n_used() < balloc.get_n_tokens()) {
+            // failed to find a suitable split
+            break;
         }
 
         if (!prepare(ubatches)) {
