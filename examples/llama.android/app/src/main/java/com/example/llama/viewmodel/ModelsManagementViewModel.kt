@@ -10,12 +10,15 @@ import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.model.ModelSortOrder
 import com.example.llama.data.model.filterBy
 import com.example.llama.data.model.sortByOrder
+import com.example.llama.data.remote.HuggingFaceDownloadInfo
 import com.example.llama.data.remote.HuggingFaceModel
 import com.example.llama.data.repository.InsufficientStorageException
 import com.example.llama.data.repository.ModelRepository
+import com.example.llama.util.formatFileByteSize
 import com.example.llama.util.getFileNameFromUri
 import com.example.llama.util.getFileSizeFromUri
 import com.example.llama.viewmodel.ModelManagementState.Deletion
+import com.example.llama.viewmodel.ModelManagementState.Download
 import com.example.llama.viewmodel.ModelManagementState.Importation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -130,6 +133,10 @@ class ModelsManagementViewModel @Inject constructor(
         _showImportModelMenu.value = show
     }
 
+    // UI state: HuggingFace models query result
+    private val _huggingFaceModels = MutableSharedFlow<List<HuggingFaceModel>>()
+    val huggingFaceModels: SharedFlow<List<HuggingFaceModel>> = _huggingFaceModels
+
     init {
         viewModelScope.launch {
             combine(
@@ -152,13 +159,8 @@ class ModelsManagementViewModel @Inject constructor(
         _managementState.value = ModelManagementState.Idle
     }
 
-    fun viewModelDetails(model: ModelInfo) {
-        // TODO-han.yin: print logs for now. Would navigate to model details screen or show dialog
-        Log.i(TAG, "${model.name} metadata: \n" + model.metadata.toString())
-    }
-
     /**
-     * First show confirmation instead of starting import immediately
+     * First show confirmation instead of starting import local file immediately
      */
     fun localModelFileSelected(uri: Uri) = viewModelScope.launch {
         try {
@@ -216,18 +218,56 @@ class ModelsManagementViewModel @Inject constructor(
         }
     }
 
-    // TODO-han.yin: UI TO BE IMPLEMENTED
-    private val _huggingFaceModels = MutableSharedFlow<List<HuggingFaceModel>>()
-    val huggingFaceModels: SharedFlow<List<HuggingFaceModel>> = _huggingFaceModels
-
-    fun importFromHuggingFace() = viewModelScope.launch {
+    /**
+     * Query models on HuggingFace available for download even without signing in
+     */
+    fun queryModelsFromHuggingFace() = viewModelScope.launch {
         modelRepository.searchHuggingFaceModels().let { models ->
             _huggingFaceModels.emit(models)
-
             Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
-            models.forEachIndexed { index, model ->
-                Log.d(TAG, "#$index: $model")
-            }
+
+            // TODO-han.yin: remove these logs
+//            models.forEachIndexed { index, model ->
+//                Log.d(TAG, "#$index: $model")
+//            }
+        }
+    }
+
+    /**
+     * First show confirmation instead of dispatch download immediately
+     */
+    fun downloadHuggingFaceModelSelected(model: HuggingFaceModel) {
+        _managementState.value = Download.Confirming(model)
+    }
+
+    /**
+     * Dispatch download request to [DownloadManager] and update UI
+     */
+    fun downloadHuggingFaceModel(model: HuggingFaceModel) = viewModelScope.launch {
+        try {
+            require(!model.gated) { "Model is gated!" }
+            require(!model.private) { "Model is private!" }
+            val downloadInfo = model.toDownloadInfo()
+            requireNotNull(downloadInfo) { "Download URL is missing!" }
+
+            val actualSize = modelRepository.getHuggingFaceModelFileSize(downloadInfo)
+            requireNotNull(actualSize) { "Unknown model file size!" }
+            Log.d(TAG, "Model file size: ${formatFileByteSize(actualSize)}")
+
+            modelRepository.importHuggingFaceModel(downloadInfo, actualSize)
+                .onSuccess {
+                    _managementState.value = Download.Dispatched(downloadInfo)
+                }
+                .onFailure { throw it }
+
+        } catch (e: InsufficientStorageException) {
+            _managementState.value = Download.Error(
+                message = e.message ?: "Insufficient storage space to download ${model.modelId}",
+            )
+        } catch (e: Exception) {
+            _managementState.value = Download.Error(
+                message = e.message ?: "Unknown error downloading ${model.modelId}",
+            )
         }
     }
 
@@ -281,6 +321,12 @@ sealed class ModelManagementState {
         data class Importing(val progress: Float = 0f, val fileName: String, val fileSize: Long, val isCancelling: Boolean = false) : Importation()
         data class Success(val model: ModelInfo) : Importation()
         data class Error(val message: String) : Importation()
+    }
+
+    sealed class Download: ModelManagementState() {
+        data class Confirming(val model: HuggingFaceModel) : Download()
+        data class Dispatched(val downloadInfo: HuggingFaceDownloadInfo) : Download()
+        data class Error(val message: String) : Download()
     }
 
     sealed class Deletion : ModelManagementState() {

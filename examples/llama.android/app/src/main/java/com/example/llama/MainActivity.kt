@@ -390,7 +390,7 @@ fun AppContent(
                         modelsManagementViewModel.toggleImportMenu(false)
                     },
                     importFromHuggingFace = {
-                        modelsManagementViewModel.importFromHuggingFace()
+                        modelsManagementViewModel.queryModelsFromHuggingFace()
                         modelsManagementViewModel.toggleImportMenu(false)
                     }
                 )

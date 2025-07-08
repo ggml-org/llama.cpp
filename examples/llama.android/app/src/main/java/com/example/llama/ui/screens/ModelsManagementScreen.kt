@@ -219,6 +219,8 @@ fun ModelsManagementScreen(
             }
 
             is ModelManagementState.Idle -> { /* Idle state, nothing to show */ }
+
+            else -> TODO()
         }
     }
 
