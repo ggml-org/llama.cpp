@@ -14738,7 +14738,7 @@ struct llm_build_falcon_h1 : public llm_graph_context {
             inpSA = ggml_add(ctx0, cur, inpSA);
             cb(cur, "layer_out", il);
 
-            if (il == n_layer - 1 && inp_out_ids) {            
+            if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
