@@ -6570,6 +6570,7 @@ class FalconH1Model(Mamba2Model):
         # n_group and d_inner are used during reshape_tensors for mamaba2
         self.n_group = self.find_hparam(["n_groups"])
         self.d_inner = self.find_hparam(["mamba_d_ssm"])
+        self.d_head = self.find_hparam(["d_head"])
 
         # Initialize any Falcon Mamba2 specific attributes
         self.has_attention = True  # Falcon Mamba2 has attention components
@@ -6639,30 +6640,25 @@ class FalconH1Model(Mamba2Model):
         super().set_gguf_parameters()
 
         ## General Params ##
-        self.gguf_writer.add_block_count(self.block_count)
-        self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 0))
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         self.gguf_writer.add_add_bos_token(False)
+        # Override some Mamba2 defaults
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 0))
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
 
         ## Mamba mixer params ##
-        self.gguf_writer.add_ssm_conv_kernel(self.find_hparam(["conv_kernel", "d_conv"]))
-        self.gguf_writer.add_ssm_group_count(self.n_group)
-        self.gguf_writer.add_ssm_inner_size(self.find_hparam(["mamba_d_ssm"]))
-        self.gguf_writer.add_ssm_head_dim(d_head := self.find_hparam(["d_head"]))
-        self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads"]))
+        self.gguf_writer.add_ssm_head_dim(self.d_head)
 
         ## Attention params ##
-        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
-        self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"] if "num_key_value_heads" in self.hparams else self.hparams["num_attention_heads"])
-        self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
+        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"]) # Override value 0 from Mamba2
+        self.gguf_writer.add_head_count_kv(self.hparams["num_key_value_heads"])
         self.gguf_writer.add_key_length(self.hparams["head_dim"])
         self.gguf_writer.add_value_length(self.hparams["head_dim"])
 
         ## Validation ##
         assert self.hparams.get("hidden_act") in [None, "silu"], "Only SILU activation supported"
-        assert self.d_inner % d_head == 0, f"SSM inner size {self.d_inner} not a multiple of head dim {d_head}"
-        self.gguf_writer.add_head_count_kv(self.find_hparam(["num_key_value_heads"], optional=True) or self.find_hparam(["num_attention_heads"]))
+        assert self.d_inner % self.d_head == 0, f"SSM inner size {self.d_inner} not a multiple of head dim {self.d_head}"
 
         # Add any other Falcon Mamba2 specific configuration
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
