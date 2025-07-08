@@ -2735,6 +2735,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STATIC_PATH"));
     add_opt(common_arg(
+        {"--api-prefix"}, "PREFIX",
+        string_format("prefix path the server serves from, without the trailing slash (default: %s)", params.api_prefix.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.api_prefix = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_API_PREFIX"));
+    add_opt(common_arg(
         {"--no-webui"},
         string_format("Disable the Web UI (default: %s)", params.webui ? "enabled" : "disabled"),
         [](common_params & params) {

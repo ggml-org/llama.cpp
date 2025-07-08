@@ -5323,12 +5323,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (bool fw : {true, false}) { // fw == forward
         bool all = true;
 
-        for (float v : { 0, 1 }) {
-            for (float fs : { 1.0f, 1.4245f }) {
-                for (float ef : { 0.0f, 0.7465f }) {
-                    for (float af : { 1.0f, 1.4245f }) {
-                        for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
-                            for (bool ff : {false, true}) { // freq_factors
+        for (float fs : { 1.0f, 1.4245f }) {
+            for (float ef : { 0.0f, 0.7465f }) {
+                for (float af : { 1.0f, 1.4245f }) {
+                    for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+                        for (bool ff : {false, true}) { // freq_factors
+                            for (float v : { 0, 1 }) {
                                 test_cases.emplace_back(new test_rope(type, {128,  32, 2, 1}, 128, 0, 512, fs, ef, af, ff, v, fw)); // llama 7B
 
                                 if (all) {
@@ -5341,13 +5341,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                     test_cases.emplace_back(new test_rope(type, { 64,   1, 2, 1},  64, 2, 512, fs, ef, af, ff, v, fw)); // neox (falcon 7B)
                                     test_cases.emplace_back(new test_rope(type, { 64,  71, 2, 1},  64, 2, 512, fs, ef, af, ff, v, fw)); // neox (falcon 7B)
                                     test_cases.emplace_back(new test_rope(type, { 64,   8, 2, 1},  64, 2, 512, fs, ef, af, ff, v, fw)); // neox (falcon 40B)
+
+                                    test_cases.emplace_back(new test_rope(type, { 80,  32, 2, 1},  20, 0, 512, fs, ef, af, ff, v, fw));
+                                    test_cases.emplace_back(new test_rope(type, { 80,  32, 2, 1},  32, 0, 512, fs, ef, af, ff, v, fw));
+                                    test_cases.emplace_back(new test_rope(type, { 80,  32, 4, 1},  32, 0, 512, fs, ef, af, ff, v, fw));
+
                                     test_cases.emplace_back(new test_rope(type, { 80,  32, 2, 1},  20, 2, 512, fs, ef, af, ff, v, fw)); // neox (stablelm)
                                     test_cases.emplace_back(new test_rope(type, { 80,  32, 2, 1},  32, 2, 512, fs, ef, af, ff, v, fw)); // neox (phi-2)
+                                    test_cases.emplace_back(new test_rope(type, { 80,  32, 4, 1},  32, 2, 512, fs, ef, af, ff, v, fw)); // neox (phi-2)
                                 }
 
                                 if (all) {
                                     test_cases.emplace_back(new test_rope(type, {128,  12, 2, 1}, 128, GGML_ROPE_TYPE_MROPE,  512, fs, ef, af, ff, v, fw)); // rope_multi,m-rope (qwen2vl 2B)
                                     test_cases.emplace_back(new test_rope(type, {128,  28, 2, 1}, 128, GGML_ROPE_TYPE_MROPE,  512, fs, ef, af, ff, v, fw)); // rope_multi,m-rope (qwen2vl 7B)
+                                    test_cases.emplace_back(new test_rope(type, {128,  12, 2, 1},  20, GGML_ROPE_TYPE_MROPE,  512, fs, ef, af, ff, v, fw));
+                                    test_cases.emplace_back(new test_rope(type, {128,  28, 2, 1},  32, GGML_ROPE_TYPE_MROPE,  512, fs, ef, af, ff, v, fw));
                                     test_cases.emplace_back(new test_rope(type, { 80,  16, 2, 1},  80, GGML_ROPE_TYPE_VISION, 512, fs, ef, af, ff, v, fw)); // rope_multi,m-rope (qwen2vl ViT)
                                 }
 
