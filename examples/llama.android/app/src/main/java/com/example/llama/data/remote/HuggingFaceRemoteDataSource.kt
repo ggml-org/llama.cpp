@@ -64,7 +64,7 @@ class HuggingFaceRemoteDataSourceImpl @Inject constructor(
             direction = direction,
             limit = limit,
             full = full,
-        ).filter { it.gated != true && it.private != true }
+        ).filter { it.gated != true && it.private != true && it.getGgufFilename() != null }
     }
 
     override suspend fun getModelDetails(

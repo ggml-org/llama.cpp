@@ -35,7 +35,7 @@ data class HuggingFaceModel(
     )
 
     fun getGgufFilename(): String? =
-        siblings.map { it.rfilename }.first { it.endsWith(FILE_EXTENSION_GGUF) }
+        siblings.map { it.rfilename }.firstOrNull { it.endsWith(FILE_EXTENSION_GGUF) }
 
     fun toDownloadInfo() = getGgufFilename()?.let { HuggingFaceDownloadInfo(_id, modelId, it) }
 }

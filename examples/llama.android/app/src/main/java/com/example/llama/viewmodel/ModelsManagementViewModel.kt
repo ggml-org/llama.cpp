@@ -22,10 +22,10 @@ import com.example.llama.viewmodel.ModelManagementState.Download
 import com.example.llama.viewmodel.ModelManagementState.Importation
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -34,7 +34,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.FileNotFoundException
 import javax.inject.Inject
-import kotlin.collections.set
 
 @HiltViewModel
 class ModelsManagementViewModel @Inject constructor(
@@ -133,9 +132,8 @@ class ModelsManagementViewModel @Inject constructor(
         _showImportModelMenu.value = show
     }
 
-    // UI state: HuggingFace models query result
-    private val _huggingFaceModels = MutableSharedFlow<List<HuggingFaceModel>>()
-    val huggingFaceModels: SharedFlow<List<HuggingFaceModel>> = _huggingFaceModels
+    // Ongoing coroutine jobs
+    private var huggingFaceQueryJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -156,13 +154,16 @@ class ModelsManagementViewModel @Inject constructor(
     val managementState: StateFlow<ModelManagementState> = _managementState.asStateFlow()
 
     fun resetManagementState() {
+        huggingFaceQueryJob?.let {
+            if (it.isActive) { it.cancel() }
+        }
         _managementState.value = ModelManagementState.Idle
     }
 
     /**
      * First show confirmation instead of starting import local file immediately
      */
-    fun localModelFileSelected(uri: Uri) = viewModelScope.launch {
+    fun importLocalModelFileSelected(uri: Uri) = viewModelScope.launch {
         try {
             val fileName = getFileNameFromUri(context, uri) ?: throw FileNotFoundException("File size N/A")
             val fileSize = getFileSizeFromUri(context, uri) ?: throw FileNotFoundException("File name N/A")
@@ -177,7 +178,7 @@ class ModelsManagementViewModel @Inject constructor(
     /**
      * Import a local model file from device storage while updating UI states with realtime progress
      */
-    fun importLocalModelFile(uri: Uri, fileName: String, fileSize: Long) = viewModelScope.launch {
+    fun importLocalModelFileConfirmed(uri: Uri, fileName: String, fileSize: Long) = viewModelScope.launch {
         try {
             _managementState.value = Importation.Importing(0f, fileName, fileSize)
             val model = modelRepository.importModel(uri, fileName, fileSize) { progress ->
@@ -221,29 +222,25 @@ class ModelsManagementViewModel @Inject constructor(
     /**
      * Query models on HuggingFace available for download even without signing in
      */
-    fun queryModelsFromHuggingFace() = viewModelScope.launch {
-        modelRepository.searchHuggingFaceModels().let { models ->
-            _huggingFaceModels.emit(models)
-            Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
-
-            // TODO-han.yin: remove these logs
-//            models.forEachIndexed { index, model ->
-//                Log.d(TAG, "#$index: $model")
-//            }
+    fun queryModelsFromHuggingFace() {
+        huggingFaceQueryJob = viewModelScope.launch {
+            _managementState.emit(Download.Querying)
+            try {
+                val models = modelRepository.searchHuggingFaceModels()
+                Log.d(TAG, "Fetched ${models.size} models from HuggingFace:")
+                _managementState.emit(Download.Ready(models))
+            } catch (_: CancellationException) {
+                // no-op
+            } catch (e: Exception) {
+                _managementState.emit(Download.Error(message = e.message ?: "Unknown error"))
+            }
         }
-    }
-
-    /**
-     * First show confirmation instead of dispatch download immediately
-     */
-    fun downloadHuggingFaceModelSelected(model: HuggingFaceModel) {
-        _managementState.value = Download.Confirming(model)
     }
 
     /**
      * Dispatch download request to [DownloadManager] and update UI
      */
-    fun downloadHuggingFaceModel(model: HuggingFaceModel) = viewModelScope.launch {
+    fun downloadHuggingFaceModelConfirmed(model: HuggingFaceModel) = viewModelScope.launch {
         try {
             require(!model.gated) { "Model is gated!" }
             require(!model.private) { "Model is private!" }
@@ -324,7 +321,8 @@ sealed class ModelManagementState {
     }
 
     sealed class Download: ModelManagementState() {
-        data class Confirming(val model: HuggingFaceModel) : Download()
+        object Querying : Download()
+        data class Ready(val models: List<HuggingFaceModel>) : Download()
         data class Dispatched(val downloadInfo: HuggingFaceDownloadInfo) : Download()
         data class Error(val message: String) : Download()
     }

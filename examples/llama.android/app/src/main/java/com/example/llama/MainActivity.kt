@@ -351,7 +351,7 @@ fun AppContent(
             // Create file launcher for importing local models
             val fileLauncher = rememberLauncherForActivityResult(
                 contract = ActivityResultContracts.OpenDocument()
-            ) { uri -> uri?.let { modelsManagementViewModel.localModelFileSelected(it) } }
+            ) { uri -> uri?.let { modelsManagementViewModel.importLocalModelFileSelected(it) } }
 
             val bottomBarConfig = BottomBarConfig.ModelsManagement(
                 sorting = BottomBarConfig.ModelsManagement.SortingConfig(
