@@ -289,7 +289,7 @@ class MODEL_ARCH(IntEnum):
     LLAMA4           = auto()
     DECI             = auto()
     FALCON           = auto()
-    FALCON_H1           = auto()
+    FALCON_H1        = auto()
     BAICHUAN         = auto()
     GROK             = auto()
     GPT2             = auto()
@@ -662,7 +662,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DOTS1:            "dots1",
     MODEL_ARCH.ARCEE:            "arcee",
     MODEL_ARCH.ERNIE4_5:         "ernie4_5",
-    MODEL_ARCH.FALCON_H1:         "falcon_h1",
+    MODEL_ARCH.FALCON_H1:        "falcon_h1",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
