@@ -1,20 +1,13 @@
 #include "set_rows.hpp"
 
-typedef void (*set_rows_kernel_t)(const char * src, char * dst);
-
-static void set_rows_1_f32_f32(const char * src, char * dst) {
-    const float * src_f = (const float *) src;
-    float * dst_f = (float *) dst;
-    *dst_f = *src_f;
+template<typename TIn, typename TOut>
+static inline void convert(const char* src, char* dst) {
+    auto src_val = *reinterpret_cast<const TIn*>(src);
+    auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut>()[0];
+    *reinterpret_cast<TOut*>(dst) = dst_val;
 }
 
-static void set_rows_1_f32_f16(const char * src, char * dst) {
-    const float * src_f = (const float *) src;
-    sycl::half * dst_h = (sycl::half *) dst;
-    *dst_h = sycl::vec<float, 1>(*src_f).convert<sycl::half, sycl::rounding_mode::automatic>()[0];
-}
-
-template<set_rows_kernel_t set_rows_1>
+template<typename TIn, typename TOut>
 static void k_set_rows(
         const char * __restrict__ src0, const int64_t * __restrict__ src1, char * __restrict__ dst,
         const int64_t ne00, const int64_t ne01, const int64_t ne11, const int64_t ne12,
@@ -38,18 +31,17 @@ static void k_set_rows(
 
     const int64_t dst_row = *(const int64_t *)((const char *)src1 + calculate_offset<3>({nb10, nb11, nb12}, {i10, i11, i12}));
 
-
     const char * src0_row = src0 + calculate_offset<3>({nb01, nb02, nb03}, {i01, i02, i03});
     char * dst_row_ptr    = dst + dst_row*nb1 + i02*nb2 + i03*nb3;
 
     for (int col = item_ct1.get_local_id(0); col < ne00; col += item_ct1.get_local_range(0)) {
         const char * src_elem = src0_row + col * src_type_size;
         char * dst_elem       = dst_row_ptr + col * dst_type_size;
-        set_rows_1(src_elem, dst_elem);
+        convert<TIn, TOut>(src_elem, dst_elem);
     }
 }
 
-template<set_rows_kernel_t set_rows_1>
+template<typename TIn, typename TOut>
 static void set_rows_sycl(
         const char * src0_d, const int64_t * src1_d, char * dst_d,
         const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
@@ -73,7 +65,7 @@ static void set_rows_sycl(
             stream,
             sycl::nd_range<3>(grid_size * block_size, block_size),
             [=](sycl::nd_item<3> item_ct1) {
-                k_set_rows<set_rows_1>(
+                k_set_rows<TIn, TOut>(
                     src0_d, src1_d, dst_d,
                     ne00, ne01, ne11, ne12,
                     nb01, nb02, nb03,
@@ -103,7 +95,7 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     dpct::queue_ptr stream = ctx.stream();
     switch (dst->type) {
         case GGML_TYPE_F32:
-            set_rows_sycl<set_rows_1_f32_f32>(
+            set_rows_sycl<float, float>(
                 (const char *)dst->src[0]->data, src1_dd, (char *)dst->data,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
@@ -116,7 +108,7 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             break;
         case GGML_TYPE_F16:
             dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
-            set_rows_sycl<set_rows_1_f32_f16>(
+            set_rows_sycl<float, sycl::half>(
                 (const char *)dst->src[0]->data, src1_dd, (char *)dst->data,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
