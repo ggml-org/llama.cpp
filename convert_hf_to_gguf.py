@@ -6538,13 +6538,25 @@ class GraniteMoeModel(GraniteModel):
                 (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid), up),
             ]
 
+        has_experts = bool(self.hparams.get('num_local_experts'))
+
         if name.endswith("shared_mlp.input_linear.weight"):
             ffn_dim = self.hparams["shared_intermediate_size"]
             assert data_torch.shape[-2] == 2 * ffn_dim, "Merged FFN tensor size must be 2 * shared_intermediate_size"
             gate, up = data_torch.split(ffn_dim, dim=-2)
+            if has_experts:
+                return [
+                    (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
+                    (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), up),
+                ]
             return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE_SHEXP, bid), gate),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_SHEXP, bid), up),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_GATE, bid), gate),
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP, bid), up),
+            ]
+
+        if not has_experts and name.endswith("shared_mlp.output_linear.weight"):
+            return [
+                (self.format_tensor_name(gguf.MODEL_TENSOR.FFN_DOWN, bid), data_torch)
             ]
 
         return super().modify_tensors(data_torch, name, bid)
@@ -6569,7 +6581,7 @@ class GraniteMoeHybridModel(BambaModel, GraniteMoeModel):
     ) -> Iterable[tuple[str, Tensor]]:
         if (
             name.endswith("block_sparse_moe.input_linear.weight")
-            or name.endswith("shared_mlp.input_linear.weight")
+            or "shared_mlp" in name
         ):
             return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
         return super().modify_tensors(data_torch, name, bid)
