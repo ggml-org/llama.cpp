@@ -1504,6 +1504,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EMBEDDING_SCALE,             hparams.f_embedding_scale);
                 ml.get_key(LLM_KV_ATTENTION_SCALE,             hparams.f_attention_scale);
 
+                // Granite uses rope_finetuned as a switch for rope, so default to true
+                bool rope_finetuned = true;
+                ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
+                hparams.rope_finetuned = rope_finetuned;
+
                 switch (hparams.n_layer) {
                     case 32: type = LLM_TYPE_3B; break;
                     case 40: type = LLM_TYPE_3B; break;
@@ -1514,8 +1519,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 // For Granite MoE Shared
                 ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, /* required */ false);
             } break;
-        case LLM_ARCH_BAMBA:
-        case LLM_ARCH_GRANITE_MOE_HYBRID:
+        case LLM_ARCH_GRANITE_HYBRID:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale, /* required */ false);
@@ -1528,6 +1532,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
                 ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
                 ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                // Granite uses rope_finetuned as a switch for rope, so default to true
+                bool rope_finetuned = true;
+                ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
+                hparams.rope_finetuned = rope_finetuned;
 
                 // Zero-out n_head_arr and n_head_kv_arr since SSM layers don't
                 // have attention heads. We'll set them correctly below once we
@@ -3409,8 +3418,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         }
                     }
                 } break;
-            case LLM_ARCH_BAMBA:
-            case LLM_ARCH_GRANITE_MOE_HYBRID:
+            case LLM_ARCH_GRANITE_HYBRID:
                 {
                     // mamba2 Mixer SSM params
                     // NOTE: int64_t for tensor dimensions
@@ -5222,8 +5230,7 @@ void llama_model::print_info() const {
     if (arch == LLM_ARCH_MINICPM ||
         arch == LLM_ARCH_GRANITE ||
         arch == LLM_ARCH_GRANITE_MOE ||
-        arch == LLM_ARCH_GRANITE_MOE_HYBRID ||
-        arch == LLM_ARCH_BAMBA) {
+        arch == LLM_ARCH_GRANITE_HYBRID) {
         LLAMA_LOG_INFO("%s: f_embedding_scale = %f\n", __func__, hparams.f_embedding_scale);
         LLAMA_LOG_INFO("%s: f_residual_scale  = %f\n", __func__, hparams.f_residual_scale);
         LLAMA_LOG_INFO("%s: f_attention_scale = %f\n", __func__, hparams.f_attention_scale);
@@ -13961,7 +13968,6 @@ struct llm_graph_context_granite : public virtual llm_graph_context {
               llm_graph_input_attn_kv_unified * inp_attn,
         const llama_model                     & model,
         const int64_t                           n_embd_head,
-        const bool                              use_rope,
         const int                               il) {
 
         // compute Q and K and (optionally) RoPE them
@@ -13990,6 +13996,7 @@ struct llm_graph_context_granite : public virtual llm_graph_context {
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, hparams.n_head_kv(il), n_tokens);
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, hparams.n_head_kv(il), n_tokens);
 
+        const bool use_rope = hparams.rope_finetuned;
         if (use_rope) {
             ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
             Qcur = ggml_rope_ext(
@@ -14101,8 +14108,7 @@ struct llm_build_granite : public llm_graph_context_granite {
     llm_build_granite(
         const llama_model & model,
         const llm_graph_params & params,
-        ggml_cgraph * gf,
-        const bool use_rope = true)
+        ggml_cgraph * gf)
         : llm_graph_context(params), llm_graph_context_granite(params) {
 
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -14117,7 +14123,7 @@ struct llm_build_granite : public llm_graph_context_granite {
 
         // inp_pos - built only if rope enabled
         ggml_tensor * inp_pos = nullptr;
-        if (use_rope) {
+        if (hparams.rope_finetuned) {
             inp_pos = build_inp_pos();
         }
 
@@ -14137,7 +14143,7 @@ struct llm_build_granite : public llm_graph_context_granite {
             // self-attention
             cur = build_attention_layer(
                 gf, cur, inp_pos, inp_attn,
-                model, n_embd_head, use_rope, il);
+                model, n_embd_head, il);
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
@@ -14177,8 +14183,7 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba, public llm_gra
     llm_build_granite_hybrid(
                  const llama_model & model,
             const llm_graph_params & params,
-                       ggml_cgraph * gf,
-               const bool use_rope = true) :
+                       ggml_cgraph * gf) :
         llm_graph_context(params),
         llm_graph_context_mamba(params),
         llm_graph_context_granite(params) {
@@ -14197,7 +14202,7 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba, public llm_gra
 
         // Positional embeddings populated if rope enabled
         ggml_tensor * inp_pos = nullptr;
-        if (use_rope) {
+        if (hparams.rope_finetuned) {
             inp_pos = build_inp_pos();
         }
 
@@ -14217,7 +14222,7 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba, public llm_gra
                 // attention layer //
                 cur = build_attention_layer(
                     gf, cur, inp_pos, inp->get_attn(), model,
-                    n_embd_head, use_rope, il);
+                    n_embd_head, il);
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
@@ -16104,15 +16109,9 @@ llm_graph_result_ptr llama_model::build_graph(
             {
                 llm = std::make_unique<llm_build_granite>(*this, params, gf);
             } break;
-        case LLM_ARCH_GRANITE_MOE_HYBRID:
+        case LLM_ARCH_GRANITE_HYBRID:
             {
-                llm = std::make_unique<llm_build_granite_hybrid>(*this, params, gf,
-                    /* use_rope   */ false);
-            } break;
-        case LLM_ARCH_BAMBA:
-            {
-                llm = std::make_unique<llm_build_granite_hybrid>(*this, params, gf,
-                    /* use_rope   */ true);
+                llm = std::make_unique<llm_build_granite_hybrid>(*this, params, gf);
             } break;
         case LLM_ARCH_CHAMELEON:
             {
@@ -16303,8 +16302,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_GLM4:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
-        case LLM_ARCH_GRANITE_MOE_HYBRID:
-        case LLM_ARCH_BAMBA:
+        case LLM_ARCH_GRANITE_HYBRID:
         case LLM_ARCH_CHAMELEON:
         case LLM_ARCH_BAILINGMOE:
         case LLM_ARCH_NEO_BERT:
