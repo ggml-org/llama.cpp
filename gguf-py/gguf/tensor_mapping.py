@@ -359,6 +359,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
+            "blk.{bid}.ffn_up",                                       # smoldocling
             "blk.{bid}.ffn_up",                                       # smoldocling                                     
         ),
 
