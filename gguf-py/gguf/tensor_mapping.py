@@ -566,13 +566,13 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_IN: (
             "model.layers.{bid}.in_proj",           # mamba-hf
             "backbone.layers.{bid}.mixer.in_proj",  # mamba
-            "model.layers.{bid}.mamba.in_proj",     # falcon-h1, jamba, bamba
+            "model.layers.{bid}.mamba.in_proj",     # jamba falcon-h1 bamba
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
             "model.layers.{bid}.conv1d",           # mamba-hf
             "backbone.layers.{bid}.mixer.conv1d",  # mamba
-            "model.layers.{bid}.mamba.conv1d",     # falcon-h1, jamba, bamba
+            "model.layers.{bid}.mamba.conv1d",     # jamba falcon-h1 bamba
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -584,7 +584,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_DT: (
             "model.layers.{bid}.dt_proj",           # mamba-hf
             "backbone.layers.{bid}.mixer.dt_proj",  # mamba
-            "model.layers.{bid}.mamba.dt_proj",     # falcon-h1, jamba, bamba
+            "model.layers.{bid}.mamba.dt_proj",     # jamba falcon-h1 bamba
         ),
 
         MODEL_TENSOR.SSM_DT_NORM: (
@@ -594,7 +594,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_A: (
             "model.layers.{bid}.A_log",           # mamba-hf
             "backbone.layers.{bid}.mixer.A_log",  # mamba
-            "model.layers.{bid}.mamba.A_log",     # falcon-h1, jamba, bamba
+            "model.layers.{bid}.mamba.A_log",     # jamba falcon-h1 bamba
         ),
 
         MODEL_TENSOR.SSM_B_NORM: (
@@ -610,7 +610,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_D: (
             "model.layers.{bid}.D",           # mamba-hf
             "backbone.layers.{bid}.mixer.D",  # mamba
-            "model.layers.{bid}.mamba.D",     # falcon-h1, jamba, bamba
+            "model.layers.{bid}.mamba.D",     # jamba falcon-h1 bamba
         ),
 
         MODEL_TENSOR.SSM_NORM: (
@@ -622,7 +622,7 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_OUT: (
             "model.layers.{bid}.out_proj",           # mamba-hf
             "backbone.layers.{bid}.mixer.out_proj",  # mamba
-            "model.layers.{bid}.mamba.out_proj",     # falcon-h1, jamba, bamba
+            "model.layers.{bid}.mamba.out_proj",     # jamba falcon-h1 bamba
         ),
 
         MODEL_TENSOR.TIME_MIX_W0: (
