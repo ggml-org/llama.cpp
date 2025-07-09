@@ -1673,10 +1673,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "smoldocling") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SMOLDOCLING;
                 clean_spaces = false;
-            } else if (
-                tokenizer_pre == "smoldocling") {
-                pre_type = LLAMA_VOCAB_PRE_TYPE_SMOLDOCLING;
-                clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
             }
