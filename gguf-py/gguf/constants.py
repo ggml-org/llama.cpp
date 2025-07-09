@@ -603,7 +603,6 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.LLAMA4:             "llama4",
     MODEL_ARCH.DECI:               "deci",
     MODEL_ARCH.FALCON:             "falcon",
-    MODEL_ARCH.FALCON_H1:          "falcon-h1",
     MODEL_ARCH.BAICHUAN:           "baichuan",
     MODEL_ARCH.GROK:               "grok",
     MODEL_ARCH.GPT2:               "gpt2",
@@ -676,6 +675,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DOTS1:              "dots1",
     MODEL_ARCH.ARCEE:              "arcee",
     MODEL_ARCH.ERNIE4_5:           "ernie4_5",
+    MODEL_ARCH.FALCON_H1:          "falcon-h1",
     MODEL_ARCH.HUNYUAN_MOE:        "hunyuan-moe",
     MODEL_ARCH.SMOLLM3:            "smollm3",
 }
