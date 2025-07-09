@@ -425,6 +425,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1}| ?[^\\s\\p{L}\\p{N}\\r\\n]+|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_SMOLDOCLING:
+                // uses digits and byte level pre tokenizers defined in the pre_tokenizer section of
+                // https://huggingface.co/ds4sd/SmolDocling-256M-preview/raw/main/tokenizer.json 
+                regex_exprs = {
+                        "[0-9]",
+                        "[a-zA-Z0-9_]+|[^a-zA-Z0-9_\\s]+",
+                    };
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
@@ -1658,8 +1665,13 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_SEED_CODER;
                 clean_spaces = false;
             } else if (
+<<<<<<< HEAD
                 tokenizer_pre == "hunyuan") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_HUNYUAN;
+=======
+                tokenizer_pre == "smoldocling") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_SMOLDOCLING;
+>>>>>>> 61cfad02 (support for smoldocling)
                 clean_spaces = false;
             } else {
                 throw std::runtime_error(format("unknown pre-tokenizer type: '%s'", tokenizer_pre.c_str()));
@@ -1844,6 +1856,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<EOT>"
                         || t.first == "_<EOT>"
                         || t.first == "<｜end▁of▁sentence｜>" // DeepSeek
+                        || t.first == "<end_of_utterance>" // smoldocling
                    ) {
                     special_eot_id = t.second;
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -2003,6 +2016,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<EOT>"
                     || t.first == "_<EOT>"
                     || t.first == "<|end_of_text|>"
+                    || t.first == "<end_of_utterance>" // smoldocling
                ) {
                 special_eog_ids.insert(t.second);
                 if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
