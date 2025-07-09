@@ -60,7 +60,8 @@ kernel void kernel_upscale_bilinear(
     float sf0,
     float sf1,
     float sf2,
-    float sf3
+    float sf3,
+    float pixel_offset
 ) {
     global const char * src_base = (global const char *)p_src0 + off_src0;
     global float * dst_base = (global float *)((global char *)p_dst + off_dst);
@@ -79,8 +80,6 @@ kernel void kernel_upscale_bilinear(
 
     int i02_src = (int)(i12_dst / sf2);
     int i03_src = (int)(i13_dst / sf3);
-
-    const float pixel_offset = 0.5f;
 
     float y_src_f = ((float)i11_dst + pixel_offset) / sf1 - pixel_offset;
     long y0_src = (long)floor(y_src_f);

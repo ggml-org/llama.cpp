@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # ./examples/ts-type-to-grammar.sh "{a:string,b:string,c?:string}"
 # python examples/json_schema_to_grammar.py https://json.schemastore.org/tsconfig.json
