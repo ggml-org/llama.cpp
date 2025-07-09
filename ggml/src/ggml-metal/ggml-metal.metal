@@ -858,6 +858,163 @@ kernel void kernel_add(
     }
 }
 
+kernel void kernel_add_fuse_2(
+        constant ggml_metal_kargs_bin & args,
+        device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i03 = tgpig.z;
+    const int i02 = tgpig.y;
+    const int i01 = tgpig.x;
+
+    const int i13 = i03%args.ne13;
+    const int i12 = i02%args.ne12;
+    const int i11 = i01%args.ne11;
+
+    device const char * src0_ptr   = src0   + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + args.offs;
+    device const char * src1_0_ptr = src1_0 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_1_ptr = src1_1 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device       char * dst_ptr    = dst    + i03*args.nb3  + i02*args.nb2  + i01*args.nb1  + args.offs;
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        const int i10 = i0%args.ne10;
+        *((device float *)(dst_ptr + i0*args.nb0)) = *((device float *)(src0_ptr + i0*args.nb00))
+            + *((device float *)(src1_0_ptr + i10*args.nb10))
+            + *((device float *)(src1_1_ptr + i10*args.nb10));
+    }
+}
+
+kernel void kernel_add_fuse_4(
+        constant ggml_metal_kargs_bin & args,
+        device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
+        device const char * src1_2,
+        device const char * src1_3,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i03 = tgpig.z;
+    const int i02 = tgpig.y;
+    const int i01 = tgpig.x;
+
+    const int i13 = i03%args.ne13;
+    const int i12 = i02%args.ne12;
+    const int i11 = i01%args.ne11;
+
+    device const char * src0_ptr   = src0   + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + args.offs;
+    device const char * src1_0_ptr = src1_0 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_1_ptr = src1_1 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_2_ptr = src1_2 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_3_ptr = src1_3 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device       char * dst_ptr    = dst    + i03*args.nb3  + i02*args.nb2  + i01*args.nb1  + args.offs;
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        const int i10 = i0%args.ne10;
+        *((device float *)(dst_ptr + i0*args.nb0)) = *((device float *)(src0_ptr + i0*args.nb00))
+            + *((device float *)(src1_0_ptr + i10*args.nb10))
+            + *((device float *)(src1_1_ptr + i10*args.nb10))
+            + *((device float *)(src1_2_ptr + i10*args.nb10))
+            + *((device float *)(src1_3_ptr + i10*args.nb10));
+    }
+}
+
+kernel void kernel_add_fuse_6(
+        constant ggml_metal_kargs_bin & args,
+        device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
+        device const char * src1_2,
+        device const char * src1_3,
+        device const char * src1_4,
+        device const char * src1_5,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i03 = tgpig.z;
+    const int i02 = tgpig.y;
+    const int i01 = tgpig.x;
+
+    const int i13 = i03%args.ne13;
+    const int i12 = i02%args.ne12;
+    const int i11 = i01%args.ne11;
+
+    device const char * src0_ptr   = src0   + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + args.offs;
+    device const char * src1_0_ptr = src1_0 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_1_ptr = src1_1 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_2_ptr = src1_2 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_3_ptr = src1_3 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_4_ptr = src1_4 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_5_ptr = src1_5 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device       char * dst_ptr    = dst    + i03*args.nb3  + i02*args.nb2  + i01*args.nb1  + args.offs;
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        const int i10 = i0%args.ne10;
+        *((device float *)(dst_ptr + i0*args.nb0)) = *((device float *)(src0_ptr + i0*args.nb00))
+            + *((device float *)(src1_0_ptr + i10*args.nb10))
+            + *((device float *)(src1_1_ptr + i10*args.nb10))
+            + *((device float *)(src1_2_ptr + i10*args.nb10))
+            + *((device float *)(src1_3_ptr + i10*args.nb10))
+            + *((device float *)(src1_4_ptr + i10*args.nb10))
+            + *((device float *)(src1_5_ptr + i10*args.nb10));
+    }
+}
+
+kernel void kernel_add_fuse_8(
+        constant ggml_metal_kargs_bin & args,
+        device const char * src0,
+        device const char * src1_0,
+        device const char * src1_1,
+        device const char * src1_2,
+        device const char * src1_3,
+        device const char * src1_4,
+        device const char * src1_5,
+        device const char * src1_6,
+        device const char * src1_7,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i03 = tgpig.z;
+    const int i02 = tgpig.y;
+    const int i01 = tgpig.x;
+
+    const int i13 = i03%args.ne13;
+    const int i12 = i02%args.ne12;
+    const int i11 = i01%args.ne11;
+
+    device const char * src0_ptr   = src0   + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + args.offs;
+    device const char * src1_0_ptr = src1_0 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_1_ptr = src1_1 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_2_ptr = src1_2 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_3_ptr = src1_3 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_4_ptr = src1_4 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_5_ptr = src1_5 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_6_ptr = src1_6 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device const char * src1_7_ptr = src1_7 + i13*args.nb13 + i12*args.nb12 + i11*args.nb11;
+    device       char * dst_ptr    = dst    + i03*args.nb3  + i02*args.nb2  + i01*args.nb1  + args.offs;
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        const int i10 = i0%args.ne10;
+        *((device float *)(dst_ptr + i0*args.nb0)) = *((device float *)(src0_ptr + i0*args.nb00))
+            + *((device float *)(src1_0_ptr + i10*args.nb10))
+            + *((device float *)(src1_1_ptr + i10*args.nb10))
+            + *((device float *)(src1_2_ptr + i10*args.nb10))
+            + *((device float *)(src1_2_ptr + i10*args.nb10))
+            + *((device float *)(src1_3_ptr + i10*args.nb10))
+            + *((device float *)(src1_4_ptr + i10*args.nb10))
+            + *((device float *)(src1_5_ptr + i10*args.nb10))
+            + *((device float *)(src1_6_ptr + i10*args.nb10))
+            + *((device float *)(src1_7_ptr + i10*args.nb10));
+    }
+}
+
 kernel void kernel_sub(
         constant ggml_metal_kargs_bin & args,
         device const char * src0,
@@ -978,6 +1135,62 @@ kernel void kernel_add_row(
         uint tpig[[thread_position_in_grid]]) {
     const uint nb = args.ne00/4;
     dst[tpig] = src0[tpig] + src1[tpig % nb];
+}
+
+kernel void kernel_add_row_fuse_2(
+        constant ggml_metal_kargs_bin & args,
+        device const float4 * src0,
+        device const float4 * src1_0,
+        device const float4 * src1_1,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    const uint nb = args.ne00/4;
+    dst[tpig] = src0[tpig] + src1_0[tpig % nb] + src1_1[tpig % nb];
+}
+
+kernel void kernel_add_row_fuse_4(
+        constant ggml_metal_kargs_bin & args,
+        device const float4 * src0,
+        device const float4 * src1_0,
+        device const float4 * src1_1,
+        device const float4 * src1_2,
+        device const float4 * src1_3,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    const uint nb = args.ne00/4;
+    dst[tpig] = src0[tpig] + src1_0[tpig % nb] + src1_1[tpig % nb] + src1_2[tpig % nb] + src1_3[tpig % nb];
+}
+
+kernel void kernel_add_row_fuse_6(
+        constant ggml_metal_kargs_bin & args,
+        device const float4 * src0,
+        device const float4 * src1_0,
+        device const float4 * src1_1,
+        device const float4 * src1_2,
+        device const float4 * src1_3,
+        device const float4 * src1_4,
+        device const float4 * src1_5,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    const uint nb = args.ne00/4;
+    dst[tpig] = src0[tpig] + src1_0[tpig % nb] + src1_1[tpig % nb] + src1_2[tpig % nb] + src1_3[tpig % nb] + src1_4[tpig % nb] + src1_5[tpig % nb];
+}
+
+kernel void kernel_add_row_fuse_8(
+        constant ggml_metal_kargs_bin & args,
+        device const float4 * src0,
+        device const float4 * src1_0,
+        device const float4 * src1_1,
+        device const float4 * src1_2,
+        device const float4 * src1_3,
+        device const float4 * src1_4,
+        device const float4 * src1_5,
+        device const float4 * src1_6,
+        device const float4 * src1_7,
+        device       float4 * dst,
+        uint tpig[[thread_position_in_grid]]) {
+    const uint nb = args.ne00/4;
+    dst[tpig] = src0[tpig] + src1_0[tpig % nb] + src1_1[tpig % nb] + src1_2[tpig % nb] + src1_3[tpig % nb] + src1_4[tpig % nb] + src1_5[tpig % nb] + src1_6[tpig % nb] + src1_7[tpig % nb];
 }
 
 kernel void kernel_sub_row(
