@@ -43,12 +43,8 @@ OutputVector translate_soft_max(const NodeContext& context) {
     const float slope =
         (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2 * (h - n_head_log2) + 1) : 1.0f;
 
-    std::shared_ptr<ov::Node> scaled_input;
-    if (scale != 1.0f) {
-        auto scale_node =
-            std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
-        scaled_input = std::make_shared<ov::op::v1::Multiply>(input_node, scale_node);
-    }
+    auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
+    auto scaled_input = std::make_shared<ov::op::v1::Multiply>(input_node, scale_node);
 
     auto mask_node = context.get_input(1);
 
