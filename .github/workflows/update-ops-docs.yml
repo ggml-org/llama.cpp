@@ -1,0 +1,45 @@
+name: Update Operations Documentation
+
+on:
+    push:
+        paths:
+            - 'docs/ops/**'
+            - 'scripts/create_ops_docs.py'
+    pull_request:
+        paths:
+            - 'docs/ops/**'
+            - 'scripts/create_ops_docs.py'
+
+jobs:
+    update-ops-docs:
+        runs-on: ubuntu-latest
+
+        steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Set up Python
+          uses: actions/setup-python@v5
+          with:
+              python-version: '3.x'
+
+        - name: Generate operations documentation
+          run: ./scripts/create_ops_docs.py
+
+        - name: Check if docs/ops.md was updated
+          id: check_changes
+          run: |
+              if git diff --quiet docs/ops.md; then
+                  echo "changed=false" >> $GITHUB_OUTPUT
+              else
+                  echo "changed=true" >> $GITHUB_OUTPUT
+              fi
+
+        - name: Commit updated documentation
+          if: steps.check_changes.outputs.changed == 'true' && github.event_name == 'push'
+          run: |
+              git config --local user.email "action@github.com"
+              git config --local user.name "GitHub Action"
+              git add docs/ops.md
+              git commit -m "Update operations documentation from CSV files"
+              git push
