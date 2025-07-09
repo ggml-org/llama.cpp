@@ -342,7 +342,7 @@ jobs:
           cd build
           export GGML_VK_VISIBLE_DEVICES=0
           # This is using llvmpipe and runs slower than other backends
-          ctest -L main --verbose --timeout 3600
+          ctest -L main --verbose --timeout 4200
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
