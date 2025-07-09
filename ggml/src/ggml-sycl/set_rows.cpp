@@ -60,7 +60,6 @@ static void set_rows_sycl(
     const sycl::range<3> block_size(1, rows_per_block, threads_per_row);
     const sycl::range<3> grid_size(ne03, ne02, (ne01 + rows_per_block - 1) / rows_per_block);
 
-    if (ne01 > 0 && ne00 > 0) {
         sycl_parallel_for(
             stream,
             sycl::nd_range<3>(grid_size * block_size, block_size),
@@ -76,7 +75,6 @@ static void set_rows_sycl(
                 );
             }
         );
-    }
 }
 
 
@@ -96,7 +94,7 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     switch (dst->type) {
         case GGML_TYPE_F32:
             set_rows_sycl<float, float>(
-                (const char *)dst->src[0]->data, src1_dd, (char *)dst->data,
+                (const char *)src0->data, src1_dd, (char *)dst->data,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
@@ -109,7 +107,7 @@ void ggml_sycl_op_set_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
         case GGML_TYPE_F16:
             dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
             set_rows_sycl<float, sycl::half>(
-                (const char *)dst->src[0]->data, src1_dd, (char *)dst->data,
+                (const char *)src0->data, src1_dd, (char *)dst->data,
                 ne00, ne01, ne02, ne03,
                 ne11, ne12,
                 nb01, nb02, nb03,
