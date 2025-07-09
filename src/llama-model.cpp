@@ -4557,7 +4557,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     
                     // if output is NULL, init from the input tok embed
                     if (output == NULL) {
-                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {hidden_size, n_vocab}, TENSOR_DUPLICATED);
                     }
 
                     for (int i = 0; i < n_layer; ++i) {
