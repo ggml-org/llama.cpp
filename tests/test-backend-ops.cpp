@@ -2368,22 +2368,24 @@ struct test_scale : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     float scale;
+    float bias;
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, scale);
+        return VARS_TO_STR4(type, ne, scale, bias);
     }
 
     test_scale(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 10, 10},
-            float scale = 2.0f)
-        : type(type), ne(ne), scale(scale) {}
+            float scale = 2.0f,
+            float bias = 0.0f)
+        : type(type), ne(ne), scale(scale), bias(bias) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
 
-        ggml_tensor * out = ggml_scale(ctx, a, scale);
+        ggml_tensor * out = ggml_scale_bias(ctx, a, scale, bias);
         ggml_set_name(out, "out");
 
         return out;
@@ -5044,6 +5046,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_add1());
     test_cases.emplace_back(new test_scale());
+    test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
     test_cases.emplace_back(new test_silu_back());
 
     for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f}) {
