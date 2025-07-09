@@ -279,11 +279,10 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
-            "model.layers.{bid}.pre_ff_layernorm",                           # jamba
+            "model.layers.{bid}.pre_ff_layernorm",                           # jamba bamba
             "model.layers.{bid}.pre_moe_layernorm",                          # mini-jamba
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
-            "model.layers.{bid}.pre_ff_layernorm",                           # bamba
         ),
 
         # Post feed-forward norm
@@ -305,9 +304,8 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.gate",                      # qwen2moe olmoe
             "transformer.decoder_layer.{bid}.router",           # Grok
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
-            "model.layers.{bid}.feed_forward.router",           # jamba
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
-            "model.layers.{bid}.feed_forward.router",           # llama4
+            "model.layers.{bid}.feed_forward.router",           # llama4 jamba
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
             "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
         ),
@@ -349,12 +347,10 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.gated_layers",                   # jina-bert-v2 (GEGLU)
             "encoder.layer.{bid}.mlp.up_gated_layer",                 # jina-v2-code (GEGLU)
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
-            "model.layers.{bid}.feed_forward.up_proj",                # jamba
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
-            "model.layers.{bid}.feed_forward.up_proj",                # llama4
+            "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba bamba
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
-            "model.layers.{bid}.feed_forward.up_proj",                # bamba
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -392,10 +388,8 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2 (split up/gate, no longer used)
             "transformer.h.{bid}.mlp.linear_1",           # refact
             "model.layers.{bid}.residual_mlp.w1",         # arctic
-            "model.layers.{bid}.feed_forward.gate_proj",  # jamba
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
-            "language_model.model.layers.{bid}.feed_forward.gate_proj", # llama4
-            "model.layers.{bid}.feed_forward.gate_proj",  # bamba
+            "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba bamba
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -439,12 +433,10 @@ class TensorNameMap:
             "transformer.layers.{bid}.ffn.proj_2",                    # openelm
             "model.layers.{bid}.residual_mlp.w2",                     # arctic
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
-            "model.layers.{bid}.feed_forward.down_proj",              # jamba
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
-            "model.layers.{bid}.feed_forward.down_proj",              # llama4
+            "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba bamba
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
-            "model.layers.{bid}.feed_forward.down_proj",              # bamba
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -614,9 +606,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_NORM: (
-            "model.layers.{bid}.mamba.norm", # falcon-h1
+            "model.layers.{bid}.mamba.norm", # falcon-h1 bamba
             "backbone.layers.{bid}.mixer.norm",  # mamba2
-            "model.layers.{bid}.mamba.norm",     # bamba
         ),
 
         MODEL_TENSOR.SSM_OUT: (
