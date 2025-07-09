@@ -447,8 +447,7 @@ class TensorNameMap:
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
-            "blk.{bid}.ffn_down",                                     # smoldocling                                     
-
+            "blk.{bid}.ffn_down",                                     # smoldocling
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
