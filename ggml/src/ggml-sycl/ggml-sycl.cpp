@@ -83,7 +83,7 @@ static ggml_sycl_device_info ggml_sycl_init() {
 
         info.devices[i].cc =
             100 * prop.get_major_version() + 10 * prop.get_minor_version();
-        info.devices[i].opt_feature.reorder = !device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
+        info.devices[i].opt_feature.reorder = device.ext_oneapi_architecture_is(syclex::arch_category::intel_gpu);
         info.max_work_group_sizes[i] = prop.get_max_work_group_size();
     }
 
@@ -3676,6 +3676,27 @@ static bool ggml_sycl_compute_forward(ggml_backend_sycl_context & ctx, struct gg
                     return false;
             }
             break;
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(dst)) {
+                case GGML_GLU_OP_REGLU:
+                    ggml_sycl_reglu(ctx, dst);
+                    break;
+                case GGML_GLU_OP_GEGLU:
+                    ggml_sycl_geglu(ctx, dst);
+                    break;
+                case GGML_GLU_OP_SWIGLU:
+                    ggml_sycl_swiglu(ctx, dst);
+                    break;
+                case GGML_GLU_OP_GEGLU_ERF:
+                    ggml_sycl_geglu_erf(ctx, dst);
+                    break;
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    ggml_sycl_geglu_quick(ctx, dst);
+                    break;
+                default:
+                    return false;
+            }
+            break;
         case GGML_OP_NORM:
             ggml_sycl_norm(ctx, dst);
             break;
@@ -4212,6 +4233,18 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 default:
                     return false;
             }
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_REGLU:
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    return ggml_is_contiguous_1(op->src[0]);
+                default:
+                    return false;
+            }
+            break;
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
@@ -4260,6 +4293,12 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                         return false;
                 }
             }
+        case GGML_OP_SET_ROWS:
+            {
+                // TODO: add support
+                // ref: https://github.com/ggml-org/llama.cpp/pull/14274
+                return false;
+            } break;
         case GGML_OP_CPY:
             {
                 ggml_type src0_type = op->src[0]->type;
@@ -4370,9 +4409,15 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             return true;
         case GGML_OP_CONT:
             return op->src[0]->type != GGML_TYPE_BF16;
-        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
-            return true;
+            // TODO: support batching
+            if (op->src[0]->ne[3] != 1) {
+                return false;
+            }
+            // TODO: support broadcast
+            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
+            return !op->src[1] || (op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1);
+        case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_ROPE:
         case GGML_OP_IM2COL:
             return true;

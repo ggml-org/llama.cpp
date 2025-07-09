@@ -181,7 +181,6 @@ option(GGML_VULKAN_MEMORY_DEBUG             "ggml: enable Vulkan memory debug ou
 option(GGML_VULKAN_SHADER_DEBUG_INFO        "ggml: enable Vulkan shader debug info"           OFF)
 option(GGML_VULKAN_VALIDATE                 "ggml: enable Vulkan validation"                  OFF)
 option(GGML_VULKAN_RUN_TESTS                "ggml: run Vulkan tests"                          OFF)
-option(GGML_KOMPUTE                         "ggml: use Kompute"                               OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
 option(GGML_METAL_USE_BF16                  "ggml: use bfloat if available"                   OFF)
 option(GGML_METAL_NDEBUG                    "ggml: disable Metal debugging"                   OFF)
@@ -266,7 +265,6 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-cann.h
     include/ggml-cpp.h
     include/ggml-cuda.h
-    include/ggml-kompute.h
     include/ggml-opt.h
     include/ggml-metal.h
     include/ggml-rpc.h
@@ -359,6 +357,13 @@ write_basic_package_version_file(
         ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake
     VERSION ${GGML_INSTALL_VERSION}
     COMPATIBILITY SameMajorVersion)
+
+target_compile_definitions(ggml-base PRIVATE
+    GGML_VERSION="${GGML_INSTALL_VERSION}"
+    GGML_COMMIT="${GGML_BUILD_COMMIT}"
+)
+message(STATUS "ggml version: ${GGML_INSTALL_VERSION}")
+message(STATUS "ggml commit:  ${GGML_BUILD_COMMIT}")
 
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/ggml-config.cmake
               ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.cmake

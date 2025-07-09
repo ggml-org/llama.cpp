@@ -49,7 +49,8 @@ jobs:
         run: |
           sysctl -a
           cmake -B build \
-            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL_USE_BF16=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
@@ -103,7 +104,8 @@ jobs:
           # Metal is disabled due to intermittent failures with Github runners not having a GPU:
           # https://github.com/ggml-org/llama.cpp/actions/runs/8635935781/job/23674807267#step:5:2313
           cmake -B build \
-            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL=OFF \
             -DGGML_RPC=ON
@@ -160,6 +162,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \
@@ -211,6 +215,8 @@ jobs:
         id: cmake_build
         run: |
           cmake -B build \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DGGML_BACKEND_DL=ON \
             -DGGML_NATIVE=OFF \
             -DGGML_CPU_ALL_VARIANTS=ON \

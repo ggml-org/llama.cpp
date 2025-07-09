@@ -163,49 +163,49 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
 
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
-            ay1 = GGML_F32_VEC_FMA(ax1, vx, ay1);
+            ay1 = GGML_F32_VEC_FMA(ay1, ax1, vx);
 
             GGML_F32_VEC_STORE(y + i, ay1);
 
             ax2 = GGML_F32_VEC_LOAD(x + i + 1*ggml_f32_epr);
             ay2 = GGML_F32_VEC_LOAD(y + i + 1*ggml_f32_epr);
-            ay2 = GGML_F32_VEC_FMA(ax2, vx, ay2);
+            ay2 = GGML_F32_VEC_FMA(ay2, ax2, vx);
 
             GGML_F32_VEC_STORE(y + i + 1*ggml_f32_epr, ay2);
 
             ax3 = GGML_F32_VEC_LOAD(x + i + 2*ggml_f32_epr);
             ay3 = GGML_F32_VEC_LOAD(y + i + 2*ggml_f32_epr);
-            ay3 = GGML_F32_VEC_FMA(ax3, vx, ay3);
+            ay3 = GGML_F32_VEC_FMA(ay3, ax3, vx);
 
             GGML_F32_VEC_STORE(y + i + 2*ggml_f32_epr, ay3);
 
             ax4 = GGML_F32_VEC_LOAD(x + i + 3*ggml_f32_epr);
             ay4 = GGML_F32_VEC_LOAD(y + i + 3*ggml_f32_epr);
-            ay4 = GGML_F32_VEC_FMA(ax4, vx, ay4);
+            ay4 = GGML_F32_VEC_FMA(ay4, ax4, vx);
 
             GGML_F32_VEC_STORE(y + i + 3*ggml_f32_epr, ay4);
 
             ax5 = GGML_F32_VEC_LOAD(x + i + 4*ggml_f32_epr);
             ay5 = GGML_F32_VEC_LOAD(y + i + 4*ggml_f32_epr);
-            ay5 = GGML_F32_VEC_FMA(ax5, vx, ay5);
+            ay5 = GGML_F32_VEC_FMA(ay5, ax5, vx);
 
             GGML_F32_VEC_STORE(y + i + 4*ggml_f32_epr, ay5);
 
             ax6 = GGML_F32_VEC_LOAD(x + i + 5*ggml_f32_epr);
             ay6 = GGML_F32_VEC_LOAD(y + i + 5*ggml_f32_epr);
-            ay6 = GGML_F32_VEC_FMA(ax6, vx, ay6);
+            ay6 = GGML_F32_VEC_FMA(ay6, ax6, vx);
 
             GGML_F32_VEC_STORE(y + i + 5*ggml_f32_epr, ay6);
 
             ax7 = GGML_F32_VEC_LOAD(x + i + 6*ggml_f32_epr);
             ay7 = GGML_F32_VEC_LOAD(y + i + 6*ggml_f32_epr);
-            ay7 = GGML_F32_VEC_FMA(ax7, vx, ay7);
+            ay7 = GGML_F32_VEC_FMA(ay7, ax7, vx);
 
             GGML_F32_VEC_STORE(y + i + 6*ggml_f32_epr, ay7);
 
             ax8 = GGML_F32_VEC_LOAD(x + i + 7*ggml_f32_epr);
             ay8 = GGML_F32_VEC_LOAD(y + i + 7*ggml_f32_epr);
-            ay8 = GGML_F32_VEC_FMA(ax8, vx, ay8);
+            ay8 = GGML_F32_VEC_FMA(ay8, ax8, vx);
 
             GGML_F32_VEC_STORE(y + i + 7*ggml_f32_epr, ay8);
         }
@@ -215,7 +215,7 @@ inline static void ggml_vec_mad_f32(const int n, float * GGML_RESTRICT y, const 
         for (int i = np; i < np2; i += ggml_f32_epr) {
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
-            ay1 = GGML_F32_VEC_FMA(ax1, vx, ay1);
+            ay1 = GGML_F32_VEC_FMA(ay1, ax1, vx);
 
             GGML_F32_VEC_STORE(y + i, ay1);
         }
@@ -902,6 +902,100 @@ inline static void ggml_vec_silu_backward_f32(const int n, float * dx, const flo
 inline static void ggml_vec_silu_backward_f16(const int n, ggml_fp16_t * dx, const ggml_fp16_t * x, const ggml_fp16_t * dy) {
     for (int i = 0; i < n; ++i) {
         dx[i] = ggml_silu_backward_f16(x[i], dy[i]);
+    }
+}
+
+inline static void ggml_vec_reglu_f32 (const int n, float * y, const float * x, const float * g) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = (x[i] > 0.f) ? x[i] * g[i] : 0.f;
+    }
+}
+
+inline static void ggml_vec_reglu_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        float v = GGML_CPU_FP16_TO_FP32(x[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16((v > 0.f) ? v * GGML_CPU_FP16_TO_FP32(g[i]) : 0.f);
+    }
+}
+
+#ifdef GGML_GELU_FP16
+inline static void ggml_vec_geglu_f32(const int n, float * y, const float * x, const float * g) {
+    uint16_t t;
+    for (int i = 0; i < n; ++i) {
+        if (x[i] <= -10.0f) {
+            y[i] = 0.0f;
+        } else if (x[i] >= 10.0f) {
+            y[i] = x[i] * g[i];
+        } else {
+            ggml_fp16_t fp16 = GGML_CPU_FP32_TO_FP16(x[i]);
+            memcpy(&t, &fp16, sizeof(uint16_t));
+            y[i] = GGML_CPU_FP16_TO_FP32(ggml_table_gelu_f16[t]) * g[i];
+        }
+    }
+}
+#else
+inline static void ggml_vec_geglu_f32(const int n, float * y, const float * x, const float * g) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = ggml_gelu_f32(x[i]) * g[i];
+    }
+}
+#endif
+
+inline static void ggml_vec_geglu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
+    const uint16_t * i16 = (const uint16_t *) x;
+    for (int i = 0; i < n; ++i) {
+        float v = GGML_CPU_FP16_TO_FP32(g[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(ggml_table_gelu_f16[i16[i]]) * v);
+    }
+}
+
+void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * g);
+
+inline static void ggml_vec_swiglu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        float v = GGML_CPU_FP16_TO_FP32(x[i]);
+        float w = GGML_CPU_FP16_TO_FP32(g[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16((v/(1.0f + expf(-v))) * w);
+    }
+}
+
+inline static void ggml_vec_geglu_erf_f32(const int n, float * y, const float * x, const float * g) {
+    for (int i = 0; i < n; ++i) {
+        float xi = x[i];
+        y[i] = 0.5f * xi * (1.0f + erff(xi*SQRT_2_INV)) * g[i];
+    }
+}
+
+inline static void ggml_vec_geglu_erf_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
+    for (int i = 0; i < n; ++i) {
+        float xi = GGML_CPU_FP16_TO_FP32(x[i]);
+        float gi = GGML_CPU_FP16_TO_FP32(g[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16(0.5f * xi * (1.0f + erff(xi*SQRT_2_INV)) * gi);
+    }
+}
+
+#ifdef GGML_GELU_QUICK_FP16
+inline static void ggml_vec_geglu_quick_f32(const int n, float * y, const float * x, const float * g) {
+    uint16_t t;
+    for (int i = 0; i < n; ++i) {
+        ggml_fp16_t fp16 = GGML_CPU_FP32_TO_FP16(x[i]);
+        memcpy(&t, &fp16, sizeof(uint16_t));
+        y[i] = GGML_CPU_FP16_TO_FP32(ggml_table_gelu_quick_f16[t]) * g[i];
+    }
+}
+#else
+inline static void ggml_vec_geglu_quick_f32(const int n, float * y, const float * x, const float * g) {
+    for (int i = 0; i < n; ++i) {
+        y[i] = ggml_gelu_quick_f32(x[i]) * g[i];
+    }
+}
+#endif
+
+inline static void ggml_vec_geglu_quick_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
+    const uint16_t * i16 = (const uint16_t *) x;
+    for (int i = 0; i < n; ++i) {
+        float v = GGML_CPU_FP16_TO_FP32(g[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(ggml_table_gelu_quick_f16[i16[i]]) * v);
     }
 }
 
