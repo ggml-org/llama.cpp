@@ -8693,6 +8693,32 @@ class KimiVLModel(MmprojModel):
 
         return [] # skip other tensors
 
+
+@ModelBase.register("CogVLMForCausalLM")
+class CogVLMModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.COGVLM
+    
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+
+        # block vision tensors
+        if name.startswith("model.vision."):
+            return []
+        
+        if "query_key_value" in name:
+            # Slice tensor into three along first axis
+            q, k, v = data_torch.split(data_torch.shape[0] // 3, dim=0)
+            return [
+                (self.map_tensor_name(name.replace("query_key_value", "query")), q),
+                (self.map_tensor_name(name.replace("query_key_value", "key")), k),
+                (self.map_tensor_name(name.replace("query_key_value", "value")), v),
+            ]
+
+        return [(self.map_tensor_name(name), data_torch)]
+
 ###### CONVERSION LOGIC ######
 
 
