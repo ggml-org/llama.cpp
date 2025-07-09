@@ -436,7 +436,6 @@ class MODEL_TENSOR(IntEnum):
     SSM_B_NORM           = auto()
     SSM_C_NORM           = auto()
     SSM_D                = auto()
-    SSM_BCDT             = auto() # PLaMo-2
     SSM_NORM             = auto()
     SSM_OUT              = auto()
     TIME_MIX_W0          = auto()
@@ -1379,7 +1378,6 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_A,
         MODEL_TENSOR.SSM_D,
         MODEL_TENSOR.SSM_OUT,
-        MODEL_TENSOR.SSM_BCDT,
         MODEL_TENSOR.SSM_DT_NORM,
         MODEL_TENSOR.SSM_B_NORM,
         MODEL_TENSOR.SSM_C_NORM,

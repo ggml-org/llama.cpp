@@ -249,7 +249,6 @@ struct llama_layer {
     // mamba proj
     struct ggml_tensor * ssm_in   = nullptr;
     struct ggml_tensor * ssm_x    = nullptr;
-    struct ggml_tensor * ssm_bcdt = nullptr; // PLaMo-2
     struct ggml_tensor * ssm_dt   = nullptr;
     struct ggml_tensor * ssm_out  = nullptr;
 
