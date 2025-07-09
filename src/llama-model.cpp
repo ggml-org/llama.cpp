@@ -15239,7 +15239,7 @@ struct llm_build_falcon_h1 : public llm_graph_context {
             cb(Kcur, "Kcur-post-rope", il);
             cb(Vcur, "Vcur-post-rope", il);
 
-            ggml_tensor * attn_out = build_attn(inp, gf,
+            ggml_tensor * attn_out = build_attn(inp->get_attn(), gf,
                     model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
             cb(attn_out, "attn_out", il);
@@ -15334,7 +15334,7 @@ struct llm_build_falcon_h1 : public llm_graph_context {
         ggml_tensor * conv_states_all = kv_state->get_r_l(il);
         ggml_tensor * ssm_states_all  = kv_state->get_s_l(il);
 
-        ggml_tensor * conv = build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = build_rs(inp->get_recr(), gf, conv_states_all, hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2*n_group*d_state, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -15407,7 +15407,7 @@ struct llm_build_falcon_h1 : public llm_graph_context {
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = build_rs(inp->get_recr(), gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
 
             // store last states
             ggml_build_forward_expand(gf,
