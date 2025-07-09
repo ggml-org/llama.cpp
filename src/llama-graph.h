@@ -341,17 +341,6 @@ public:
     const llama_memory_hybrid_context * mctx;
 };
 
-// TODO: remove this when ggml_scale_add is implemented
-class llm_graph_input_one : public llm_graph_input_i {
-public:
-    llm_graph_input_one() {}
-    virtual ~llm_graph_input_one() = default;
-
-    void set_input(const llama_ubatch * ubatch) override;
-
-    ggml_tensor * one = nullptr; // F32
-};
-
 //
 // llm_graph_result
 //

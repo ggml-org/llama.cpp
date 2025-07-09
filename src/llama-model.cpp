@@ -9636,8 +9636,6 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
     const int     n_layer_sparsity = 10; // number of layers using activation sparsity
     const float   f_sparsity_std_mul = 1.6448533535003662f; // std_multiplier = normal_dist.icdf(0.95)
 
-    ggml_tensor * one; // containing single element 1.0f
-
     llm_build_gemma3n_iswa(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf)
             : llm_graph_context(params),
               model(model),
@@ -9648,14 +9646,6 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
               i_altup_act(model.hparams.i_altup_act) {
         ggml_tensor * cur;
         ggml_tensor * inpL;
-
-        // TODO: remove this when ggml_scale_add is implemented
-        one = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-        {
-            auto inp = std::make_unique<llm_graph_input_one>();
-            inp->one = one;
-            res->add_input(std::move(inp));
-        }
 
         inpL = build_inp_embd(model.tok_embd);
 
@@ -10046,7 +10036,7 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
         cb(innovation, "innovation", il);
 
         ggml_tensor * all_coefs = build_lora_mm(model.layers[il].altup_correct_coef, modalities); // [n_altup, n_tokens]
-        all_coefs = ggml_add(ctx0, all_coefs, one);
+        all_coefs = ggml_scale_bias(ctx0, all_coefs, 1.0f, 1.0f); // + 1.0
         cb(all_coefs, "all_coefs", il);
         all_coefs = ggml_cont(ctx0, ggml_transpose(ctx0, all_coefs)); // [n_tokens, n_altup]
         all_coefs = ggml_reshape_3d(ctx0, all_coefs, 1, n_tokens, n_altup); // [1, n_tokens, n_altup]
