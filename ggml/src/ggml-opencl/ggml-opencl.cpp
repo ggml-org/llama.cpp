@@ -4787,6 +4787,17 @@ static void ggml_cl_mul_mat_f16_f32_tiled(ggml_backend_t backend, const ggml_ten
     CL_CHECK(clSetKernelArg(kernel, 7, sizeof(cl_mem),   &extrad->data_device));
     CL_CHECK(clSetKernelArg(kernel, 8, sizeof(cl_ulong), &offsetd));
 
+    // Tiling parameters. These need to be tuned for optimal performance.
+    // They must match the #defines in the kernel mul_mat_f16_f32.cl.
+    //
+    // OPWM / OPWN: Output tile size per Work-Group. A work-group computes a tile of size OPWM x OPWN.
+    // TPWM / TPWN: Threads per Work-group. This is the work-group size.
+    // OPTM / OPTN: Output elements per Thread. Each thread computes OPTM x OPTN elements.
+    //
+    // The following relationships must hold:
+    //   OPWM = TPWM * OPTM
+    //   OPWN = TPWN * OPTN
+    //
     const int OPWM = 64;
     const int OPWN = 64;
     const int TPWM = 16;
