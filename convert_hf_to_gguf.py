@@ -3594,18 +3594,7 @@ class Plamo2Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 
-        if name.endswith(".embed_tokens.weight"):
-            # If there is no lm_head, we need to map the token embedding to the output layer
-            assert self.tensor_names is not None
-            if all(['lm_head' not in name for name in self.tensor_names]):
-                name_base = name.replace(".embed_tokens.weight", "")
-                output_name = "lm_head"
-
-                embed_tokens_mapped = self.map_tensor_name(name)
-                output_mapped = self.map_tensor_name(output_name) + ".weight"
-
-                return [(embed_tokens_mapped, data_torch), (output_mapped, data_torch)]
-        elif name.endswith(".A_log"):
+        if name.endswith(".A_log"):
             data_torch = -torch.exp(data_torch)
         elif name.endswith(".dt_bias"):
             name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
