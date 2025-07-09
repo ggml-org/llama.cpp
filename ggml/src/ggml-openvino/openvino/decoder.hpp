@@ -61,6 +61,7 @@ public:
     virtual int get_num_heads() const = 0;
     virtual int get_num_heads_kv() const = 0;
     virtual int get_head_size() const = 0;
+    virtual int32_t* get_rope_params() const = 0;
     virtual std::map<std::string, std::string> get_kv_param_res_names() const = 0;
 
     virtual bool is_static() const = 0;
