@@ -450,6 +450,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cb_func          (params.cb),
     res              (static_cast<llm_graph_result *>(params.res)),
     ctx0             (res->get_ctx()) {
+        res->params = params;
     }
 
 void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
