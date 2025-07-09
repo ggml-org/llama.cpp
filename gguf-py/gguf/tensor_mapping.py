@@ -216,7 +216,6 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
             "blk.{bid}.attn_v",                                          # smoldocling
-
         ),
 
         # Attention output
