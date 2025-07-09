@@ -385,6 +385,7 @@ class MODEL_ARCH(IntEnum):
     DREAM            = auto()
     SMALLTHINKER     = auto()
     LLADA            = auto()
+    COGVLM           = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -395,6 +396,7 @@ class VISION_PROJECTOR_TYPE(IntEnum):
     GLM_EDGE  = auto()
     MERGER    = auto()
     GEMMA3    = auto()
+    COGVLM    = auto()
 
 
 class MODEL_TENSOR(IntEnum):
@@ -727,6 +729,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DREAM:            "dream",
     MODEL_ARCH.SMALLTHINKER:     "smallthinker",
     MODEL_ARCH.LLADA:            "llada",
+    MODEL_ARCH.COGVLM:           "cogvlm",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -902,6 +905,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
     MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
     MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
+    MODEL_TENSOR.VISEXP_ATTN_Q:             "blk.{bid}.vis_attn_q",
+    MODEL_TENSOR.VISEXP_ATTN_K:             "blk.{bid}.vis_attn_k",
+    MODEL_TENSOR.VISEXP_ATTN_V:             "blk.{bid}.vis_attn_v",
+    MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
+    MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
+    MODEL_TENSOR.VISEXP_DOWN:               "blk.{bid}.vis_down",
+    MODEL_TENSOR.VISEXP_UP:                 "blk.{bid}.vis_up",
     # vision
     MODEL_TENSOR.V_MMPROJ:                  "mm.{bid}",
     MODEL_TENSOR.V_MMPROJ_FC:               "mm.model.fc",
@@ -2618,6 +2628,27 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_EXP,
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
+    ],
+    MODEL_ARCH.COGVLM: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.VISEXP_ATTN_Q,
+        MODEL_TENSOR.VISEXP_ATTN_K,
+        MODEL_TENSOR.VISEXP_ATTN_V,
+        MODEL_TENSOR.VISEXP_ATTN_OUT,
+        MODEL_TENSOR.VISEXP_GATE,
+        MODEL_TENSOR.VISEXP_UP,
+        MODEL_TENSOR.VISEXP_DOWN,
     ],
     # TODO
 }
