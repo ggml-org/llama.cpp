@@ -10,7 +10,7 @@ import sqlite3
 import sys
 from collections.abc import Iterator, Sequence
 from glob import glob
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 try:
     import git
@@ -140,10 +140,10 @@ help_c = (
 parser.add_argument("-c", "--compare", help=help_c)
 help_t = (
     "The tool whose data is being compared. "
-    "Either 'llama-bench' (default) or 'test-backend-ops'. "
+    "Either 'llama-bench' or 'test-backend-ops'. "
     "This determines the database schema and comparison logic used."
 )
-parser.add_argument("-t", "--tool", help=help_t, default="llama-bench", choices=["llama-bench", "test-backend-ops"])
+parser.add_argument("-t", "--tool", help=help_t, default=None, choices=[None, "llama-bench", "test-backend-ops"])
 help_i = (
     "JSON/JSONL/SQLite/CSV files for comparing commits. "
     "Specify multiple times to use multiple input files (JSON/CSV only). "
@@ -394,7 +394,7 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
 
 
 class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
-    def __init__(self, data_file: str, tool: str = "llama-bench"):
+    def __init__(self, data_file: str, tool: Any):
         super().__init__(tool)
 
         self.connection.close()
@@ -405,18 +405,30 @@ class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
         tables = self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()
         table_names = [table[0] for table in tables]
 
-        if "test_backend_ops" in table_names and tool == "test-backend-ops":
-            self.table_name = "test_backend_ops"
-        elif "test" in table_names and tool == "llama-bench":
-            self.table_name = "test"
-        elif "test" in table_names:
-            # Fallback to test table for backward compatibility
-            self.table_name = "test"
-            if tool == "test-backend-ops":
-                logger.warning("test-backend-ops tool specified but only 'test' table found. Assuming llama-bench data.")
+        # Tool selection logic
+        if tool is None:
+            if "test" in table_names:
+                self.table_name = "test"
                 self.tool = "llama-bench"
+            elif "test_backend_ops" in table_names:
+                self.table_name = "test_backend_ops"
+                self.tool = "test-backend-ops"
+            else:
+                raise RuntimeError(f"No suitable table found in database. Available tables: {table_names}")
+        elif tool == "llama-bench":
+            if "test" in table_names:
+                self.table_name = "test"
+                self.tool = "llama-bench"
+            else:
+                raise RuntimeError(f"Table 'test' not found for tool 'llama-bench'. Available tables: {table_names}")
+        elif tool == "test-backend-ops":
+            if "test_backend_ops" in table_names:
+                self.table_name = "test_backend_ops"
+                self.tool = "test-backend-ops"
+            else:
+                raise RuntimeError(f"Table 'test_backend_ops' not found for tool 'test-backend-ops'. Available tables: {table_names}")
         else:
-            raise RuntimeError(f"No suitable table found for tool '{tool}' in database. Available tables: {table_names}")
+            raise RuntimeError(f"Unknown tool: {tool}")
 
         self._builds_init()
 
