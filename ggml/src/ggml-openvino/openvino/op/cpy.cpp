@@ -28,12 +28,6 @@ OutputVector translate_cpy(const NodeContext& context) {
 
     auto src0 = context.get_input(0);
     auto src1 = context.get_input(1);
-    auto token_len = context.get_input("token_len");
-    auto past_token_len = context.get_input("past_token_len");
-
-    auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-    auto token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(token_len, zero);
-    auto past_token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(past_token_len, zero);
 
     src0 = std::make_shared<ov::op::v0::Convert>(src0, context.get_input_type(1));
     ov::Output<Node> res;
@@ -42,12 +36,6 @@ OutputVector translate_cpy(const NodeContext& context) {
         res = src0;
         return rename_outputs_with_suffix({res}, context.get_name());
     }
-
-    auto src0_shape = context.get_input_shape(0).to_shape();
-    auto output_shape = context.get_output_shape(0).to_shape();
-
-    std::vector<size_t> input0_strides = context.get_input_stride(0);
-    std::vector<size_t> output_strides = context.get_output_stride(0);
 
     if (op_case == 1) {
         // Write K to cache_k
@@ -60,6 +48,7 @@ OutputVector translate_cpy(const NodeContext& context) {
             std::make_shared<ov::op::v1::Reshape>(src0,
                                                   ov::op::v0::Constant::create(element::i64, Shape{1}, {-1}),
                                                   false);
+        auto src0_shape = context.get_input_shape(0).to_shape();
         int64_t total_head_size = src0_shape[1];
         auto reshaped_src1 = std::make_shared<ov::op::v1::Reshape>(
             src1,

@@ -72,7 +72,6 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
     // cache_v layout: [N, H, S] (num_heads, head_size, seq)
     // When writing to cache_v, cache should be reshaped to [N*H, S] and v-curr should be flattened
     auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-    auto past_token_len = tensor_map.at("past_token_len").get_node_shared_ptr();
     auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
 
     std::shared_ptr<ov::Node> update_indices_k;
@@ -84,12 +83,8 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
     auto one_scalar = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {1});
     auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
 
-    if (ggml_model_decoder.is_static()) {
-        update_indices_k = past_token_len;
-    } else {
-        update_indices_k =
-            std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
-    }
+    update_indices_k =
+        std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
     update_indices_k = std::make_shared<ov::op::v0::Unsqueeze>(update_indices_k, one);
     update_indices_k->set_friendly_name("update_indices_k");
     tensor_map.insert({"update_indices_k", update_indices_k->output(0)});
@@ -108,14 +103,8 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
         std::make_shared<ov::op::v0::Concat>(ov::OutputVector{total_head_size_node, token_len, one}, 0));
 
     // 1D tensor of shape [token_len], values starting from past_token_len
-    std::shared_ptr<ov::Node> range_col;
-    if (ggml_model_decoder.is_static()) {
-        // aka inp_pos
-        range_col = past_token_len;
-    } else {
-        range_col =
-            std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
-    }
+    auto range_col =
+        std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
     auto range_col_reshaped =
         std::make_shared<ov::op::v0::Unsqueeze>(range_col, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 2}));
     auto col_indices = std::make_shared<ov::op::v3::Broadcast>(
@@ -233,10 +222,9 @@ void TranslateSession::apply_transformations(const std::shared_ptr<Model>& model
         const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
         const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
         manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
-
-        manager.register_pass<pass::FuseToSDPA>();
     }
 
+    manager.register_pass<pass::FuseToSDPA>();
     manager.run_passes(model);
 }
 
