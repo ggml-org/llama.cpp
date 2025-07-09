@@ -249,26 +249,16 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
 }
 
 void GgmlOvDecoder::add_extra_inputs() {
-    int64_t past_token_len = -1;
     // attention_size not used for NPU
     int64_t attention_size = -1;
 
+    int64_t past_token_len = -1;
     for (const auto& node : m_nodes) {
         if (node->op == GGML_OP_CPY && ggml_is_contiguous(node)) {
             assert(std::string(node->view_src->name).find("cache_k") == 0);
             int64_t head_size = node->src[0]->ne[0];
             int64_t num_heads = node->src[0]->ne[1];
-            past_token_len = (int64_t)(node->src[1]->op_params[0] / node->src[1]->nb[0] / head_size / num_heads);
-
-            std::string name = "past_token_len";
-            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
-            param_node->set_friendly_name(name);
-            param_node->output(0).get_tensor().set_names({name});
-            m_model_extra_inputs[name] = param_node;
-
-            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
-            *tensor->data<int64_t>() = past_token_len;
-            m_model_extra_input_values[name] = tensor;
+            past_token_len = (int64_t) (node->src[1]->op_params[0] / node->src[1]->nb[0] / head_size / num_heads);
             break;
         }
     }
