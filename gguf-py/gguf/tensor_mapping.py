@@ -399,8 +399,7 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4
-            "blk.{bid}.ffn_gate",                         # smoldocling                                     
-
+            "blk.{bid}.ffn_gate",                         # smoldocling
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
