@@ -1,10 +1,17 @@
 #include "set_rows.hpp"
 
+namespace utils {
+template<typename T>
+static constexpr bool is_arithmetic_v() {
+    return std::is_arithmetic_v<T> || std::is_same_v<T, sycl::half> || std::is_same_v<T, sycl::ext::oneapi::bfloat16>;
+}
+}
 template<typename TIn, typename TOut>
-static inline void convert(const char* src, char* dst) {
+static inline std::enable_if_t<utils::is_arithmetic_v<TIn>() && utils::is_arithmetic_v<TOut>(), void>
+convert (const char* src, char* dst) {
     auto src_val = *reinterpret_cast<const TIn*>(src);
-    auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut>()[0];
-    *reinterpret_cast<TOut*>(dst) = dst_val;
+    auto dst_val = sycl::vec<TIn, 1>(src_val).template convert<TOut, sycl::rounding_mode::automatic>()[0];
+   *reinterpret_cast<TOut*>(dst) = dst_val;;
 }
 
 template<typename TIn, typename TOut>
