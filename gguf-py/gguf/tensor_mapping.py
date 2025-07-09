@@ -32,7 +32,7 @@ class TensorNameMap:
             "model.word_embeddings",                     # bailingmoe
             "language_model.model.embed_tokens",         # llama4
             "encoder",                                   # neobert
-            "model.text_model.embed_tokens.weight",      # smoldocling
+            "model.text_model.embed_tokens",             # smoldocling
         ),
 
         # Token type embeddings
@@ -64,7 +64,7 @@ class TensorNameMap:
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox
             "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe
-            "output",                    # llama-pth bloom internlm2 smoldocling
+            "output",                    # llama-pth bloom internlm2
             "word_embeddings_for_head",  # persimmon
             "lm_head.linear",            # phi2
             "output_layer",              # chatglm
@@ -94,7 +94,6 @@ class TensorNameMap:
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
-            "output_norm",                             # smoldocling
         ),
 
         # Rope frequencies
@@ -138,7 +137,7 @@ class TensorNameMap:
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
             "transformer_encoder.{bid}.attention_norm",             # neobert
-            "blk.{bid}.attn_norm",                                  # smoldocling
+            "model.text_model.layers.{bid}.input_layernorm",        # smoldocling
         ),
 
         # Attention norm 2
@@ -182,7 +181,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
-            "blk.{bid}.attn_q",                                          # smoldocling
+            "model.text_model.layers.{bid}.self_attn.q_proj",            # smoldocling
         ),
 
         # Attention key
@@ -199,7 +198,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
-            "blk.{bid}.attn_k",                                        # smoldocling
+            "model.text_model.layers.{bid}.self_attn.k_proj",          # smoldocling
         ),
 
         # Attention value
@@ -215,7 +214,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
-            "blk.{bid}.attn_v",                                          # smoldocling
+            "model.text_model.layers.{bid}.self_attn.v_proj",            # smoldocling
         ),
 
         # Attention output
@@ -246,7 +245,7 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
             "transformer_encoder.{bid}.wo",                                 # neobert
-            "blk.{bid}.attn_output",                                        # smoldocling
+            "model.text_model.layers.{bid}.self_attn.o_proj",               # smoldocling
         ),
 
         # Attention output norm
@@ -260,8 +259,9 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2    # ge
-            "model.layers.{bid}.post_self_attn_layernorm",     # glm-4-0414
+            "model.layers.{bid}.post_attention_layernorm",                   # gemma2 olmo2    # ge
+            "model.layers.{bid}.post_self_attn_layernorm",                   # glm-4-0414
+            "model.text_model.layers.{bid}.post_attention_layernorm",        # smoldocling
         ),
 
         # Rotary embeddings
@@ -291,7 +291,6 @@ class TensorNameMap:
             "model.layers.{bid}.pre_moe_layernorm",                          # mini-jamba
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
-            "blk.{bid}.ffn_norm",                                            # smoldocling
         ),
 
         # Post feed-forward norm
@@ -360,8 +359,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
-            "blk.{bid}.ffn_up",                                       # smoldocling
-            "blk.{bid}.ffn_up",                                       # smoldocling                                     
+            "model.text_model.layers.{bid}.mlp.up_proj",              # smoldocling
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -389,20 +387,20 @@ class TensorNameMap:
 
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
-            "model.layers.{bid}.mlp.gate_proj",           # llama-hf refact olmo2
-            "layers.{bid}.feed_forward.w1",               # llama-pth
-            "transformer.h.{bid}.mlp.w2",                 # qwen
-            "transformer.h.{bid}.mlp.c_fc2",              # jais
-            "model.layers.layers.{bid}.mlp.gate_proj",    # plamo
-            "model.layers.{bid}.feed_forward.w1",         # internlm2
-            "encoder.layers.{bid}.mlp.fc12",              # nomic-bert
-            "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2 (split up/gate, no longer used)
-            "transformer.h.{bid}.mlp.linear_1",           # refact
-            "model.layers.{bid}.residual_mlp.w1",         # arctic
-            "transformer.h.{bid}.mlp.c_fc_0",             # exaone
-            "model.layers.{bid}.feed_forward.gate_proj",  # llama4
-            "blk.{bid}.ffn_gate",                         # smoldocling                                     
-            "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba
+            "model.layers.{bid}.mlp.gate_proj",                     # llama-hf refact olmo2
+            "layers.{bid}.feed_forward.w1",                         # llama-pth
+            "transformer.h.{bid}.mlp.w2",                           # qwen
+            "transformer.h.{bid}.mlp.c_fc2",                        # jais
+            "model.layers.layers.{bid}.mlp.gate_proj",              # plamo
+            "model.layers.{bid}.feed_forward.w1",                   # internlm2
+            "encoder.layers.{bid}.mlp.fc12",                        # nomic-bert
+            "encoder.layer.{bid}.mlp.gated_layers_w",               # jina-bert-v2 (split up/gate, no longer used)
+            "transformer.h.{bid}.mlp.linear_1",                     # refact
+            "model.layers.{bid}.residual_mlp.w1",                   # arctic
+            "transformer.h.{bid}.mlp.c_fc_0",                       # exaone
+            "model.layers.{bid}.feed_forward.gate_proj",            # llama4
+            "model.layers.{bid}.feed_forward.gate_proj",            # llama4 jamba
+            "model.text_model.layers.{bid}.mlp.gate_proj",          # smoldocling
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -450,7 +448,7 @@ class TensorNameMap:
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
-            "blk.{bid}.ffn_down",                                     # smoldocling
+            "model.text_model.layers.{bid}.mlp.down_proj",            # smoldocling
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -1038,7 +1036,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_MMPROJ_FC: (
-            "model.connector.modality_projection.proj", # SmolVLM
+            "model.connector.modality_projection.proj",        # SmolVLM smoldocling
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
