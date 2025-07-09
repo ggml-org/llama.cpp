@@ -6641,7 +6641,6 @@ class FalconH1Model(Mamba2Model):
 
         ## General Params ##
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
-        self.gguf_writer.add_add_bos_token(False)
         # Override some Mamba2 defaults
         self.gguf_writer.add_block_count(self.block_count)
         self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 0))
