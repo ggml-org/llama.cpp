@@ -4913,7 +4913,7 @@ class Mamba2Model(TextModel):
         d_conv  = self.find_hparam(["conv_kernel",       "d_conv"],  optional=True) or 4
         d_inner = self.find_hparam(["mamba_d_ssm", "intermediate_size", "d_inner"], optional=True) or 2 * d_model
         d_state = self.find_hparam(["state_size",        "d_state"], optional=True) or 128
-        head_dim = self.find_hparam(["head_dim"],                    optional=True) or 64
+        head_dim = self.find_hparam(["mamba_d_head", "head_dim"],    optional=True) or 64
         n_group = self.find_hparam(["n_groups"],                     optional=True) or 1
 
         rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
