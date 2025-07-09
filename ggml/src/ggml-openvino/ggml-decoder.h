@@ -98,6 +98,8 @@ public:
 
     virtual int get_head_size() const override { return m_head_size; }
 
+    virtual int32_t* get_rope_params() const override { return m_rope_params; }
+
     virtual std::map<std::string, std::string> get_kv_param_res_names() const override;
 
     virtual bool is_static() const override { return m_is_static; }
@@ -140,6 +142,7 @@ private:
     int m_num_heads;
     int m_num_heads_kv;
     int m_head_size;
+    int32_t* m_rope_params;
     std::vector<std::string> m_kv_names;
     bool m_is_static;
     bool m_is_first_token;
