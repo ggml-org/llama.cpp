@@ -15720,7 +15720,7 @@ struct llm_build_openai_moe_iswa : public llm_graph_context {
             q = ggml_permute(ctx0, q, 0, 2, 1, 3);
             k = ggml_permute(ctx0, k, 0, 2, 1, 3);
             v = ggml_permute(ctx0, v, 0, 2, 1, 3);
-            
+
             ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
             ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
 
