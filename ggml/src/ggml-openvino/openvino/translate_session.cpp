@@ -1,16 +1,23 @@
 #include "translate_session.hpp"
 
+#include <cstdint>
 #include <cstdlib>
 #include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
+#include <openvino/op/convert.hpp>
+#include <openvino/op/cos.hpp>
+#include <openvino/op/divide.hpp>
+#include <openvino/op/multiply.hpp>
 #include <openvino/op/parameter.hpp>
 #include <openvino/op/range.hpp>
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/result.hpp>
+#include <openvino/op/sin.hpp>
 #include <openvino/op/squeeze.hpp>
+#include <openvino/op/transpose.hpp>
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
@@ -119,10 +126,95 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
     tensor_map.insert({"update_indices_v", update_indices_v->output(0)});
 }
 
+float ggml_rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float n_rot, float base) {
+#ifndef M_PI
+#    define M_PI 3.14159265358979323846
+#endif
+    return n_dims * logf(n_ctx_orig / (n_rot * 2 * (float) M_PI)) / (2 * logf(base));
+}
+
+void ggml_rope_yarn_corr_dims(int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow,
+                              float dims[2]) {
+    float start = floorf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
+    float end = ceilf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
+    dims[0] = std::max(0.0f, start);
+    dims[1] = std::min(static_cast<float>(n_dims - 1), end);
+}
+
+void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
+    int32_t* rope_params = ggml_model_decoder.get_rope_params();
+    auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
+    std::shared_ptr<ov::Node> rope_freqs_weight;
+
+    inp_pos = std::make_shared<ov::op::v0::Convert>(inp_pos, ov::element::f32);
+    auto pos_perm =
+        std::make_shared<ov::op::v0::Constant>(ov::element::i64, ov::Shape{3}, std::vector<int64_t>{2, 1, 0});
+    inp_pos = std::make_shared<ov::op::v1::Transpose>(inp_pos, pos_perm);
+    if (tensor_map.find("rope_freqs_weight") != tensor_map.end()) {
+        rope_freqs_weight = tensor_map.at("rope_freqs.weight").get_node_shared_ptr();
+    }
+
+    float freq_base;
+    float freq_scale;
+    float ext_factor;
+    float attn_factor;
+    float beta_fast;
+    float beta_slow;
+    const int n_dims = rope_params[1];
+    const int n_ctx_orig = rope_params[4];
+    memcpy(&freq_base, rope_params + 5, sizeof(float));
+    memcpy(&freq_scale, rope_params + 6, sizeof(float));
+    memcpy(&ext_factor, rope_params + 7, sizeof(float));
+    memcpy(&attn_factor, rope_params + 8, sizeof(float));
+    memcpy(&beta_fast, rope_params + 9, sizeof(float));
+    memcpy(&beta_slow, rope_params + 10, sizeof(float));
+
+    const float theta_scale = powf(freq_base, -2.0f / n_dims);
+
+    // TODO: corr_dims is not used in the current implementation
+    float corr_dims[2];
+    ggml_rope_yarn_corr_dims(n_dims, n_ctx_orig, freq_base, beta_fast, beta_slow, corr_dims);
+
+    // TODO: GGML_OP_ROPE_BACK -> false
+    // bool forward = true;
+    // const float sin_sign = forward ? 1.0f : -1.0f;
+
+    const int64_t half_head_size = ggml_model_decoder.get_head_size() / 2;
+    std::vector<float> factor(half_head_size);
+    factor[0] = freq_scale;
+    for (int64_t i = 1; i < half_head_size; i++) {
+        factor[i] = theta_scale * factor[i - 1];
+    }
+
+    Output<Node> factor_node =
+        std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{1, 1, factor.size()}, factor);
+    if (rope_freqs_weight) {
+        factor_node = std::make_shared<ov::op::v1::Divide>(factor_node, rope_freqs_weight);
+    }
+
+    auto half_head_size_node = ov::op::v0::Constant::create(ov::element::i64, Shape{1}, {half_head_size});
+    Output<Node> cos_factor =
+        std::make_shared<ov::op::v0::Cos>(std::make_shared<ov::op::v1::Multiply>(factor_node, inp_pos));
+    Output<Node> sin_factor =
+        std::make_shared<ov::op::v0::Sin>(std::make_shared<ov::op::v1::Multiply>(factor_node, inp_pos));
+
+    float mscale = attn_factor;
+    Output<Node> mscale_node =
+        std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{mscale});
+
+    auto cos_theta = std::make_shared<ov::op::v1::Multiply>(cos_factor, mscale_node);
+    auto sin_theta = std::make_shared<ov::op::v1::Multiply>(sin_factor, mscale_node);
+    cos_theta->set_friendly_name("rope_cos");
+    sin_theta->set_friendly_name("rope_sin");
+    tensor_map.insert({"rope_cos", cos_theta->output(0)});
+    tensor_map.insert({"rope_sin", sin_theta->output(0)});
+}
+
 // Create common patterns
 void preprocess(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     add_token_len(tensor_map);
     add_kv_update_indices(tensor_map, ggml_model_decoder);
+    add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 
 }  // namespace
