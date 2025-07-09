@@ -3582,7 +3582,7 @@ struct server_context {
                 llama_decode(ctx, slot.batch_spec);
 
                 // the accepted tokens from the speculation
-                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, draft);
+                const auto ids = common_sampler_sample_and_accept_n(slot.smpl, ctx, draft, false, slot.n_remaining);
 
                 slot.n_past    += ids.size();
                 slot.n_decoded += ids.size();
