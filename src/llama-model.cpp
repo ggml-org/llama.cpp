@@ -16479,9 +16479,6 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     // add on pooling layer
     llm->build_pooling(gf, cls, cls_b, cls_out, cls_out_b);
 
-    // TODO: updating the graph parameters here is a little bit obscure - figure out something better
-    llm->res->params = params;
-
     return llm->res->get_gf();
 }
 
