@@ -38,10 +38,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -61,11 +63,17 @@ import com.example.llama.ui.components.ModelUnloadDialogHandler
 import com.example.llama.util.formatMilliSeconds
 import com.example.llama.viewmodel.ConversationViewModel
 import com.example.llama.viewmodel.Message
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
+
+private const val AUTO_REPOSITION_INTERVAL = 150L
 
 /**
  * Screen for LLM conversation with user.
  */
+@OptIn(FlowPreview::class)
 @Composable
 fun ConversationScreen(
     loadingMetrics: ModelLoadingMetrics,
@@ -90,25 +98,70 @@ fun ConversationScreen(
     var isModelCardExpanded by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    // Auto-scroll to bottom when messages change or when typing
-    val shouldScrollToBottom by remember(messages.size, isGenerating) {
-        derivedStateOf { true }
+    // Track the actual rendered size of the last message bubble
+    var lastMessageBubbleHeight by remember { mutableIntStateOf(0) }
+
+    // Track if user has manually scrolled up
+    var userHasScrolledUp by remember { mutableStateOf(false) }
+
+    // Detect if user is at the very bottom
+    val isAtBottom = remember {
+        derivedStateOf {
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+
+            // At bottom if we can see the bottom spacer
+            lastVisibleItem != null && lastVisibleItem.index == messages.size
+        }
     }
 
-    LaunchedEffect(shouldScrollToBottom, messages.size) {
-        if (messages.isNotEmpty()) {
-            listState.animateScrollToItem(messages.size - 1)
+    // Reset scroll flag when user returns to bottom
+    LaunchedEffect(Unit) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index == messages.size
+        }
+            .distinctUntilChanged()
+            .filter { it }
+            .collect { userHasScrolledUp = false }
+    }
+
+    // Then scroll to bottom spacer instead
+    LaunchedEffect(isGenerating) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.find {
+                it.index == messages.size - 1
+            }?.size ?: 0
+        }
+            .distinctUntilChanged()
+            .collect { currentHeight ->
+                // Only reposition if:
+                if (currentHeight > lastMessageBubbleHeight     // 1. Height increased (new line)
+                    && !userHasScrolledUp                       // 2. User hasn't scrolled up
+                    && isAtBottom.value                         // 3. User is at bottom
+                ) {
+                    lastMessageBubbleHeight = currentHeight
+                    listState.scrollToItem(index = messages.size, scrollOffset = 0)
+                } else if (currentHeight > 0) {
+                    lastMessageBubbleHeight = currentHeight
+                }
+            }
+    }
+
+    // Detect manual scrolling
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress && !isAtBottom.value) {
+            userHasScrolledUp = true
         }
     }
 
     // Set up lifecycle-aware message monitoring
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
+            // Scroll to bottom when returning to the screen
             if (event == Lifecycle.Event.ON_RESUME) {
-                // Scroll to bottom when returning to the screen
                 if (messages.isNotEmpty()) {
                     coroutineScope.launch {
-                        listState.scrollToItem(messages.size - 1)
+                        listState.scrollToItem(messages.size)
                     }
                 }
             }
@@ -229,8 +282,10 @@ private fun ConversationMessageList(
             MessageBubble(message = message)
         }
 
-        // Add extra space at the bottom for better UX
-        item { Spacer(modifier = Modifier.height(16.dp)) }
+        // Add extra space at the bottom for better UX and a scroll target
+        item(key = "bottom-spacer") {
+            Spacer(modifier = Modifier.height(36.dp))
+        }
     }
 }
 
