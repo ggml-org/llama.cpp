@@ -2084,7 +2084,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     const int64_t q_lora_rank  = hparams.n_lora_q;
                     const int64_t kv_lora_rank = hparams.n_lora_kv;
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
-
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
                     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
