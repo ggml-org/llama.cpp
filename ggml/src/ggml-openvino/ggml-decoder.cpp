@@ -209,6 +209,7 @@ void GgmlOvDecoder::set_llm_params() {
         } else if (node->op == GGML_OP_ROPE && std::string(node->name) == "Qcur-0") {
             m_head_size = node->ne[0];
             m_num_heads = node->ne[1];
+            m_rope_params = node->op_params;
         } else if (node->op == GGML_OP_ROPE && std::string(node->name) == "Kcur-0") {
             m_num_heads_kv = node->ne[1];
         }
