@@ -52,10 +52,10 @@ bool common_chat_msg_parser::add_tool_call(const std::string & name, const std::
 
     return true;
 }
-bool common_chat_msg_parser::add_tool_call(const json & tool_call) {
+bool common_chat_msg_parser::add_tool_call(const json & tool_call, const char * arguments_name) {
     std::string name = tool_call.contains("name") ? tool_call.at("name") : "";
     std::string id = tool_call.contains("id") ? tool_call.at("id") : "";
-    std::string arguments = tool_call.contains("arguments") ? tool_call.at("arguments") : "";
+    std::string arguments = tool_call.contains(arguments_name) ? tool_call.at(arguments_name) : "";
     return add_tool_call(name, id, arguments);
 }
 
