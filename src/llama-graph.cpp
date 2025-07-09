@@ -822,10 +822,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cb(cur, "ffn_moe_oai_glu", il);
 
                 // add extra bias of 1.0 to the up tensor
-                // TODO: replace this with ggml_scale_bias()
-                ggml_tensor * one = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-                one = ggml_cos(ctx0, ggml_scale(ctx0, one, 0.0f));
-                ggml_tensor * up_b = ggml_add(ctx0, up, one);
+                ggml_tensor * up_b = ggml_scale_bias(ctx0, up, 1.0f, 1.0f);
 
                 cur = ggml_mul(ctx0, glu, up_b);
                 cb(cur, "ffn_moe_oai_swiglu", il);
