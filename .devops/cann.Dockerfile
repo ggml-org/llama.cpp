@@ -2,42 +2,41 @@
 # ARGUMENTS
 # ==============================================================================
 
-# 定义CANN基础镜像，方便后续统一更新版本
+# Define the CANN base image for easier version updates later
 ARG CANN_BASE_IMAGE=quay.io/ascend/cann:8.1.rc1-910b-openeuler22.03-py3.10
-
 
 # ==============================================================================
 # BUILD STAGE
-# 编译所有二进制文件和库
+# Compile all binary files and libraries
 # ==============================================================================
 FROM ${CANN_BASE_IMAGE} AS build
 
-# 定义昇腾芯片型号，用于编译。默认为 Ascend910B3
+# Define the Ascend chip model for compilation. Default is Ascend910B3
 ARG ASCEND_SOC_TYPE=Ascend910B3
 
-# -- 安装构建依赖 --
+# -- Install build dependencies --
 RUN yum install -y gcc g++ cmake make git libcurl-devel python3 python3-pip && \
     yum clean all && \
     rm -rf /var/cache/yum
 
-# -- 设置工作目录 --
+# -- Set the working directory --
 WORKDIR /app
 
-# -- 拷贝项目文件 --
+# -- Copy project files --
 COPY . .
 
-# -- 设置CANN环境变量 (编译时需要) --
-# 相比于 `source`，使用 ENV 可以让环境变量在整个镜像层中持久生效
+# -- Set CANN environment variables (required for compilation) --
+# Using ENV instead of `source` allows environment variables to persist across the entire image layer
 ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit/latest
 ENV LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/lib64:${LD_LIBRARY_PATH}
 ENV PATH=${ASCEND_TOOLKIT_HOME}/bin:${PATH}
 ENV ASCEND_OPP_PATH=${ASCEND_TOOLKIT_HOME}/opp
 ENV LD_LIBRARY_PATH=${ASCEND_TOOLKIT_HOME}/runtime/lib64/stub:$LD_LIBRARY_PATH
-# ... 您可以根据需要添加原始文件中其他的环境变量 ...
-# 为了简洁，这里只列出核心变量，您可以将原始的ENV列表粘贴于此
+# ... You can add other environment variables from the original file as needed ...
+# For brevity, only core variables are listed here. You can paste the original ENV list here.
 
-# -- 编译 llama.cpp --
-# 使用传入的 ASCEND_SOC_TYPE 参数，并增加通用编译选项
+# -- Build llama.cpp --
+# Use the passed ASCEND_SOC_TYPE argument and add general build options
 RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
     && \
     cmake -B build \
@@ -47,90 +46,84 @@ RUN source /usr/local/Ascend/ascend-toolkit/set_env.sh --force \
         . && \
     cmake --build build --config Release -j$(nproc)
 
-# -- 整理编译产物，方便后续阶段拷贝 --
-# 创建一个lib目录存放所有.so文件
+# -- Organize build artifacts for copying in later stages --
+# Create a lib directory to store all .so files
 RUN mkdir -p /app/lib && \
     find build -name "*.so" -exec cp {} /app/lib \;
 
-# 创建一个full目录存放所有可执行文件和Python脚本
+# Create a full directory to store all executables and Python scripts
 RUN mkdir -p /app/full && \
     cp build/bin/* /app/full/ && \
     cp *.py /app/full/ && \
     cp -r gguf-py /app/full/ && \
     cp -r requirements /app/full/ && \
     cp requirements.txt /app/full/
-    # 如果您有 tools.sh 脚本，也请确保它在此处被拷贝
+    # If you have a tools.sh script, make sure it is copied here
     # cp .devops/tools.sh /app/full/tools.sh
-
 
 # ==============================================================================
 # BASE STAGE
-# 创建一个包含CANN运行时和通用库的最小基础镜像
+# Create a minimal base image with CANN runtime and common libraries
 # ==============================================================================
 FROM ${CANN_BASE_IMAGE} AS base
 
-# -- 安装运行时依赖 --
+# -- Install runtime dependencies --
 RUN yum install -y libgomp curl && \
     yum clean all && \
     rm -rf /var/cache/yum
 
-# -- 设置CANN环境变量 (运行时需要) --
+# -- Set CANN environment variables (required for runtime) --
 ENV ASCEND_TOOLKIT_HOME=/usr/local/Ascend/ascend-toolkit/latest
 ENV LD_LIBRARY_PATH=/app:${ASCEND_TOOLKIT_HOME}/lib64:${LD_LIBRARY_PATH}
 ENV PATH=${ASCEND_TOOLKIT_HOME}/bin:${PATH}
 ENV ASCEND_OPP_PATH=${ASCEND_TOOLKIT_HOME}/opp
-# ... 您可以根据需要添加原始文件中其他的环境变量 ...
+# ... You can add other environment variables from the original file as needed ...
 
 WORKDIR /app
 
-# 从build阶段拷贝编译好的.so文件
+# Copy compiled .so files from the build stage
 COPY --from=build /app/lib/ /app
-
 
 # ==============================================================================
 # FINAL STAGES (TARGETS)
 # ==============================================================================
 
 ### Target: full
-# 包含所有工具、Python绑定和依赖的完整镜像
+# Complete image with all tools, Python bindings, and dependencies
 # ==============================================================================
 FROM base AS full
 
 COPY --from=build /app/full /app
 
-# 安装Python依赖
+# Install Python dependencies
 RUN yum install -y git python3 python3-pip && \
     pip3 install --no-cache-dir --upgrade pip setuptools wheel && \
     pip3 install --no-cache-dir -r requirements.txt && \
     yum clean all && \
     rm -rf /var/cache/yum
 
-# 您需要提供一个 tools.sh 脚本作为入口点
+# You need to provide a tools.sh script as the entrypoint
 ENTRYPOINT ["/app/tools.sh"]
-# 如果没有 tools.sh，可以设置默认启动 server
+# If there is no tools.sh, you can set the default to start the server
 # ENTRYPOINT ["/app/llama-server"]
 
-
 ### Target: light
-# 仅包含 llama-cli 的轻量级镜像
+# Lightweight image containing only llama-cli
 # ==============================================================================
 FROM base AS light
 
 COPY --from=build /app/full/llama-cli /app
 
-
 ENTRYPOINT [ "/app/llama-cli" ]
 
-
 ### Target: server
-# 仅包含 llama-server 的专用服务器镜像
+# Dedicated server image containing only llama-server
 # ==============================================================================
 FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
 
 COPY --from=build /app/full/llama-server /app
-
 
 HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
 
