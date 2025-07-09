@@ -9,6 +9,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_LLAMA4,             "llama4"           },
     { LLM_ARCH_DECI,               "deci"             },
     { LLM_ARCH_FALCON,             "falcon"           },
+    { LLM_ARCH_FALCON_H1,          "falcon-h1"        },
     { LLM_ARCH_GROK,               "grok"             },
     { LLM_ARCH_GPT2,               "gpt2"             },
     { LLM_ARCH_GPTJ,               "gptj"             },
@@ -359,6 +360,30 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_ATTN_NORM_2,     "blk.%d.attn_norm_2" },
             { LLM_TENSOR_ATTN_QKV,        "blk.%d.attn_qkv" },
             { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+        },
+    },
+    {
+        LLM_ARCH_FALCON_H1,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
+            { LLM_TENSOR_OUTPUT,          "output" },
+            { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },
+            { LLM_TENSOR_ATTN_NORM,       "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_Q,          "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,          "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,          "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,        "blk.%d.attn_output" },
+            { LLM_TENSOR_SSM_IN,          "blk.%d.ssm_in" },
+            { LLM_TENSOR_SSM_CONV1D,      "blk.%d.ssm_conv1d" },
+            { LLM_TENSOR_SSM_DT,          "blk.%d.ssm_dt" },
+            { LLM_TENSOR_SSM_A,           "blk.%d.ssm_a" },
+            { LLM_TENSOR_SSM_D,           "blk.%d.ssm_d" },
+            { LLM_TENSOR_SSM_NORM,        "blk.%d.ssm_norm" },
+            { LLM_TENSOR_SSM_OUT,         "blk.%d.ssm_out" },
+            { LLM_TENSOR_FFN_NORM,        "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
             { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
             { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
         },
@@ -2074,6 +2099,7 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
 
 bool llm_arch_is_hybrid(const llm_arch & arch) {
     switch (arch) {
+        case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_BAMBA:
         case LLM_ARCH_GRANITE_MOE_HYBRID:
