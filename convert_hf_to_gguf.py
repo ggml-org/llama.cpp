@@ -6971,7 +6971,10 @@ class LFM2Model(TextModel):
 
     def set_gguf_parameters(self):
         # set num_key_value_heads only for attention layers
-        self.hparams["num_key_value_heads"] = [(self.hparams["num_key_value_heads"] if x in self.hparams["full_attn_idxs"] else 0) for x in range(self.block_count)]
+        self.hparams["num_key_value_heads"] = [
+            self.hparams["num_key_value_heads"] if layer_type == "full_attention" else 0
+            for layer_type in self.hparams["layer_types"]
+        ]
 
         super().set_gguf_parameters()
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
