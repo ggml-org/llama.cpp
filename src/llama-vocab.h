@@ -165,9 +165,6 @@ public:
     // Encode text to token IDs
     std::vector<llama_token> encode(const std::string & text) const;
 
-    // Encode text to token strings
-    std::vector<std::string> encode_as_tokens(const std::string & text) const;
-
     // Get token text by ID
     const std::string & get_token_text(llama_token id) const;
 
@@ -191,8 +188,5 @@ private:
     std::vector<std::vector<int32_t>> table_;
 
     // Helper functions
-    void build_suffix_map(const std::vector<vocab_entry> & vocab);
-    void build_trie_table(const std::vector<vocab_entry> & vocab);
-    std::vector<int32_t> utf8_to_unicode(const std::string & text) const;
-    std::vector<llama_token> encode_unicode(const std::vector<int32_t> & unicode_data) const;
+    std::vector<llama_token> encode_unicode(const std::vector<uint32_t> & unicode_data) const;
 };
