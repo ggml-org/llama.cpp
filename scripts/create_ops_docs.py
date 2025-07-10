@@ -5,15 +5,17 @@ This script parses docs/ops/*.csv and creates the ops.md, which is a table docum
 """
 import csv
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Set
 from collections import defaultdict
 
 
 class DocsGenerator:
-    def __init__(self, ggml_root: str):
+    def __init__(self, ggml_root: str, output_filename: str = "ops.md"):
         self.ggml_root = Path(ggml_root)
         self.ops_dir = self.ggml_root / "docs" / "ops"
+        self.output_filename = output_filename
         self.backend_support: Dict[str, Dict[str, List[bool]]] = defaultdict(
             lambda: defaultdict(list)
         )
@@ -170,7 +172,7 @@ class DocsGenerator:
         docs_dir = self.ggml_root / "docs"
         docs_dir.mkdir(exist_ok=True)
 
-        ops_file = docs_dir / "ops.md"
+        ops_file = docs_dir / self.output_filename
         with open(ops_file, "w") as f:
             f.write(markdown_content)
 
@@ -180,10 +182,14 @@ class DocsGenerator:
 
 
 def main():
-    # Configure logging
     logging.basicConfig(level=logging.INFO)
 
-    generator = DocsGenerator(".")
+    if len(sys.argv) > 1:
+        output_filename = sys.argv[1]
+    else:
+        output_filename = "ops.md"
+
+    generator = DocsGenerator(".", output_filename)
     generator.run()
 
 

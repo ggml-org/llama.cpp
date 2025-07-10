@@ -819,9 +819,9 @@ struct console_printer : public printer {
         fflush(stdout);
 
         if (result.supported) {
-            printf("\033[1;32myes\033[0m\n");
+            printf("\033[1;32mSUPPORTED\033[0m\n");
         } else {
-            printf("\033[1;31mno\033[0m\n");
+            printf("\033[1;31mNOT SUPPORTED\033[0m\n");
         }
     }
 };
@@ -1342,9 +1342,7 @@ struct test_case {
         test_result result(ggml_backend_name(backend), current_op_name, vars(), "support", supported, supported,
                            supported ? "yes" : "no", 0.0, 0.0, 0.0, 0, 0, device_desc, backend_reg_name);
 
-        if (output_printer) {
-            output_printer->print_test_result(result);
-        }
+        output_printer->print_test_result(result);
 
         return true;
     }
@@ -5691,7 +5689,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op>] [-b <backend>] [-p <params regex>] [--output <console|sql>]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>]\n", argv[0]);
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
