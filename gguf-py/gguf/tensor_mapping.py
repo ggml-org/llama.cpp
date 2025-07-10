@@ -398,7 +398,6 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.linear_1",                     # refact
             "model.layers.{bid}.residual_mlp.w1",                   # arctic
             "transformer.h.{bid}.mlp.c_fc_0",                       # exaone
-            "model.layers.{bid}.feed_forward.gate_proj",            # llama4
             "model.layers.{bid}.feed_forward.gate_proj",            # llama4 jamba
             "model.text_model.layers.{bid}.mlp.gate_proj",          # smoldocling
         ),
