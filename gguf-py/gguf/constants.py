@@ -173,9 +173,6 @@ class Keys:
         GROUP_COUNT    = "{arch}.ssm.group_count"
         DT_B_C_RMS     = "{arch}.ssm.dt_b_c_rms"
 
-    class HybridAttention:
-        ATTN_LAYER_INDICES = "{arch}.attention.layer_indices"
-
     class WKV:
         HEAD_SIZE = "{arch}.wkv.head_size"
 

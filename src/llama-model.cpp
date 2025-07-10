@@ -1538,26 +1538,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
                 hparams.rope_finetuned = rope_finetuned;
 
-                // Zero-out n_head_arr and n_head_kv_arr since SSM layers don't
-                // have attention heads. We'll set them correctly below once we
-                // know which layers are attention layers
-                // NOTE: It's important that this happens after n_embd_head_[kv]
-                //  are set above!
-                const auto n_head_attn = hparams.n_head();
-                const auto n_head_kv_attn = hparams.n_head_kv();
-                std::fill(hparams.n_head_arr.begin(), hparams.n_head_arr.end(), 0);
-                std::fill(hparams.n_head_kv_arr.begin(), hparams.n_head_kv_arr.end(), 0);
-
-                // Attention params
-                std::fill(hparams.recurrent_layer_arr.begin(), hparams.recurrent_layer_arr.end(), true);
-                std::vector<uint32_t> attn_layer_indices;
-                ml.get_arr(LLM_KV_ATTENTION_LAYER_INDICES, attn_layer_indices);
-                for (const auto attn_idx : attn_layer_indices) {
-                    GGML_ASSERT(attn_idx < hparams.n_layer);
-                    hparams.recurrent_layer_arr[attn_idx] = false;
-                    // Correctly set n_head and n_head_kv for attention layers
-                    hparams.n_head_arr[attn_idx] = n_head_attn;
-                    hparams.n_head_kv_arr[attn_idx] = n_head_kv_attn;
+                // A layer is recurrent IFF the n_head_kv value is set to 0
+                for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                    hparams.recurrent_layer_arr[i] = hparams.n_head_kv(i) == 0;
                 }
 
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);

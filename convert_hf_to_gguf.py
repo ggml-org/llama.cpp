@@ -6570,11 +6570,14 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads"]))
 
         ## Attention params ##
-        self.gguf_writer.add_attn_layer_indices(self._attn_layers)
+        head_count_kv = self.find_hparam(["num_key_value_heads", "n_head_kv"])
+        head_count_kv_vec = [
+            head_count_kv if i in self._attn_layers else 0 for i in range(self.block_count)
+        ]
         if rope_dim := self.hparams.get("attn_rotary_emb"):
             self.gguf_writer.add_rope_dimension_count(rope_dim)
         self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
-        self.gguf_writer.add_head_count_kv(self.find_hparam(["num_key_value_heads", "n_head_kv"]))
+        self.gguf_writer.add_head_count_kv(head_count_kv_vec)
 
         ## Feed Forward Params ##
         self.gguf_writer.add_layer_norm_rms_eps(
