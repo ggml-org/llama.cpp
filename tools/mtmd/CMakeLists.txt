@@ -11,6 +11,8 @@ add_library(mtmd
             clip-impl.h
             mtmd-helper.cpp
             mtmd-helper.h
+            mtmd-ios.cpp
+            mtmd-ios.h
             )
 
 # 在Apple平台上添加ANE相关文件
@@ -53,6 +55,7 @@ endif()
 set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd.h
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-helper.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-ios.h
     )
 
 # 在Apple平台上添加ANE公共头文件
