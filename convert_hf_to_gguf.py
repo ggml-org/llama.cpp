@@ -6553,7 +6553,6 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         ## General Params ##
         self.gguf_writer.add_embedding_length(self.d_model)
         self.gguf_writer.add_block_count(self.block_count)
-        self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 0))
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
 
@@ -6584,6 +6583,8 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         ## If Bamba, use rope, otherwise don't
         use_rope = "BambaForCausalLM" in self.hparams["architectures"]
         self.gguf_writer.add_rope_scaling_finetuned(use_rope)
+        if not use_rope:
+            self.gguf_writer.add_context_length(2**20)
 
         ## Validation ##
         d_head = self.find_hparam(["d_head"], optional=True) or 64
