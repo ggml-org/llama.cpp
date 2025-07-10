@@ -833,9 +833,6 @@ class TextModel(ModelBase):
         if chkhsh == "48f8e02c0359c0bbdd82f26909171fac1c18a457bb47573ed1fe3bbb2c1cfd4b":
             # ref: https://huggingface.co/tiiuae/Falcon-H1-34B-Base
             res = "falcon-h1"
-        if chkhsh == "855059429035d75a914d1eda9f10a876752e281a054a7a3d421ef0533e5b6249":
-            # ref: https://huggingface.co/ds4sd/SmolDocling-256M-preview
-            res = "smoldocling"
 
         if res is None:
             logger.warning("\n")
