@@ -118,7 +118,6 @@ extern "C" {
         LLAMA_VOCAB_PRE_TYPE_PIXTRAL        = 34,
         LLAMA_VOCAB_PRE_TYPE_SEED_CODER     = 35,
         LLAMA_VOCAB_PRE_TYPE_HUNYUAN        = 36,
-        LLAMA_VOCAB_PRE_TYPE_SMOLDOCLING    = 37,
     };
 
     enum llama_rope_type {
