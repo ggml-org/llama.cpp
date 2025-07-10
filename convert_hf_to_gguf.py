@@ -6552,22 +6552,10 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         specific to this model. The result is some duplication of how the params
         get set. The following warnings are expected during conversion:
 
-        WARNING:Duplicated key name 'granitehybrid.embedding_length'
-        WARNING:Duplicated key name 'granitehybrid.block_count'
-        WARNING:Duplicated key name 'granitehybrid.vocab_size'
-        WARNING:Duplicated key name 'granitehybrid.feed_forward_length'
-        WARNING:Duplicated key name 'granitehybrid.attention.head_count'
         WARNING:Duplicated key name 'granitehybrid.attention.head_count_kv'
-        WARNING:Duplicated key name 'granitehybrid.attention.layer_norm_rms_epsilon'
         WARNING:Duplicated key name 'granitehybrid.context_length'
         """
         GraniteMoeModel.set_gguf_parameters(self)
-
-        ## General Params ##
-        self.gguf_writer.add_embedding_length(self.d_model)
-        self.gguf_writer.add_block_count(self.block_count)
-        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
-        self.gguf_writer.add_feed_forward_length(self.hparams["intermediate_size"])
 
         ## Mamba mixer params ##
         self.gguf_writer.add_ssm_conv_kernel(self.find_hparam(["conv_kernel", "d_conv"]))
@@ -6585,13 +6573,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         ]
         if rope_dim := self.hparams.get("attn_rotary_emb"):
             self.gguf_writer.add_rope_dimension_count(rope_dim)
-        self.gguf_writer.add_head_count(self.hparams["num_attention_heads"])
         self.gguf_writer.add_head_count_kv(head_count_kv_vec)
-
-        ## Feed Forward Params ##
-        self.gguf_writer.add_layer_norm_rms_eps(
-            self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
-        )
 
         ## If Bamba, use rope, otherwise don't
         use_rope = "BambaForCausalLM" in self.hparams["architectures"]
