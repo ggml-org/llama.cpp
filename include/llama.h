@@ -204,6 +204,15 @@ extern "C" {
 
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
 
+    // Diffusion step callback - called after each diffusion step
+    // step: current step number (0-based)
+    // total_steps: total number of diffusion steps
+    // tokens: current token array state
+    // n_tokens: number of tokens in the array
+    // user_data: user-provided context data
+    // Returns: true to continue, false to cancel
+    typedef bool (*llama_diffusion_step_callback)(int32_t step, int32_t total_steps, const llama_token * tokens, int32_t n_tokens, void * user_data);
+
     // Input data for llama_encode/llama_decode
     // A llama_batch object can contain input about one or many sequences
     // The provided arrays (i.e. token, embd, pos, etc.) must have size of n_tokens
@@ -917,6 +926,40 @@ extern "C" {
             struct llama_context * ctx,
               struct llama_batch   batch);
 
+    // Diffusion generation parameters for Dream7B models
+    typedef struct llama_diffusion_params {
+        int32_t steps;                  // number of diffusion steps (default: 512)
+        float eps;                      // epsilon for timesteps (default: 1e-3f)
+        float temperature;              // sampling temperature (default: 0.0f)
+        float top_p;                    // top-p sampling (default: 1.0f)
+        int32_t top_k;                  // top-k sampling (default: 0 = disabled)
+        llama_token mask_token_id;      // mask token id
+        enum {
+            LLAMA_DIFFUSION_ALG_ORIGIN = 0,
+            LLAMA_DIFFUSION_ALG_MASKGIT_PLUS = 1,
+            LLAMA_DIFFUSION_ALG_TOPK_MARGIN = 2,
+            LLAMA_DIFFUSION_ALG_ENTROPY = 3,
+        } algorithm;                    // diffusion algorithm (default: ORIGIN)
+        float alg_temp;                 // algorithm temperature (default: 0.0f)
+        int32_t seed;                   // seed for random number generator (default: 0)
+        llama_diffusion_step_callback step_callback;  // called after each diffusion step
+        void * step_callback_user_data;               // user data for step callback
+    } llama_diffusion_params;
+
+    // Get default diffusion parameters
+    LLAMA_API struct llama_diffusion_params llama_diffusion_default_params(void);
+
+    // Diffusion generation for Dream7B models
+    // Returns the generated tokens, or NULL on error
+    // The caller is responsible for freeing the returned array
+    LLAMA_API llama_token * llama_diffusion_generate(
+            struct llama_context * ctx,
+            const llama_token * input_tokens,
+            int32_t n_input,
+            int32_t max_length,
+            struct llama_diffusion_params params,
+            int32_t * n_generated);
+
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
@@ -1005,6 +1048,7 @@ extern "C" {
     LLAMA_API llama_token llama_vocab_sep(const struct llama_vocab * vocab); // sentence separator
     LLAMA_API llama_token llama_vocab_nl (const struct llama_vocab * vocab); // next-line
     LLAMA_API llama_token llama_vocab_pad(const struct llama_vocab * vocab); // padding
+    LLAMA_API llama_token llama_vocab_mask(const struct llama_vocab * vocab); // mask
 
     LLAMA_API bool llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_eos(const struct llama_vocab * vocab);

@@ -81,6 +81,7 @@ enum llama_example {
     LLAMA_EXAMPLE_LOOKUP,
     LLAMA_EXAMPLE_PARALLEL,
     LLAMA_EXAMPLE_TTS,
+    LLAMA_EXAMPLE_DIFFUSION,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -217,6 +218,15 @@ struct common_params_vocoder {
     bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy            // NOLINT
 };
 
+struct common_params_diffusion {
+    int32_t steps       = 64;     // number of diffusion steps
+    float   eps         = 1e-3f;  // epsilon for timesteps
+    int32_t algorithm   = 0;      // diffusion algorithm (0=ORIGIN, 1=MASKGIT_PLUS, 2=TOPK_MARGIN, 3=ENTROPY)
+    float   alg_temp    = 0.0f;   // algorithm temperature
+    int32_t max_length  = 512;    // maximum generation length
+    bool    visual_mode = false;  // show progressive diffusion on screen
+};
+
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
     COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY, // Extract thinking tag contents and return as `message.reasoning_content`, or leave inline in <think> tags in stream mode
@@ -268,6 +278,7 @@ struct common_params {
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_vocoder     vocoder;
+    struct common_params_diffusion   diffusion;
 
     struct common_params_model model;
 
