@@ -79,8 +79,8 @@ int main(int argc, char ** argv) {
                    tokenizer_model_reader.llama_gguf_reader_get_metadata_str("general.name", "N/A").c_str());
             printf("  Tokenizer Model Architecture: %s\n",
                    tokenizer_model_reader.llama_gguf_reader_get_metadata_str("general.architecture", "N/A").c_str());
-            printf("  Tokenizer Model Tensor Count: %ld\n",
-                   tokenizer_model_reader.llama_gguf_reader_get_tensor_count());
+            printf("  Tokenizer Model Tensor Count: %llu\n",
+                   static_cast<long long>(tokenizer_model_reader.llama_gguf_reader_get_tensor_count()));
             printf("  Diagnostic Test: Tokenizer Model GGUF read successful.\n");
         } else {
             fprintf(stderr, "error: Diagnostic Test: Tokenizer Model GGUF read failed to initialize.\n");
@@ -100,12 +100,10 @@ int main(int argc, char ** argv) {
     llama_gguf_converter converter;
     bool success = converter.llama_gguf_converter_convert(params, model);
 
-    // Clean up llama model
-    llama_model_free(model);
-    llama_backend_free();
-
     if (!success) {
         fprintf(stderr, "error: GGUF conversion failed.\n");
+        llama_model_free(model); // Free model on conversion failure
+        llama_backend_free();
         return 1;
     }
 
@@ -120,12 +118,14 @@ int main(int argc, char ** argv) {
 
             if (!reader.llama_gguf_reader_is_initialized()) {
                 fprintf(stderr, "error: llama_gguf_reader failed to initialize for preview.\n");
+                llama_model_free(model); // Free model before exiting
+                llama_backend_free();
                 return 1;
             }
 
             printf("  Dataset Name: %s\n",
                    reader.llama_gguf_reader_get_metadata_str("training.dataset.name", "N/A").c_str());
-            printf("  Sequence Count: %lu\n", reader.llama_gguf_reader_get_metadata_u64("training.sequence.count", 0));
+            printf("  Sequence Count: %llu\n", static_cast<long long>(reader.llama_gguf_reader_get_metadata_u64("training.sequence.count", 0)));
             printf("  Tokenizer Model: %s\n",
                    reader.llama_gguf_reader_get_metadata_str("training.tokenizer.gguf.model", "N/A").c_str());
 
@@ -153,14 +153,19 @@ int main(int argc, char ** argv) {
                             std::string detokenized_text = "";
                             // Buffer for a single token
                             std::array<char, 256> piece_buf;  // Large enough buffer for a single token
-                            for (llama_token token : sequence_tokens) {
-                                int n_chars = llama_token_to_piece(llama_model_get_vocab(model), token,
-                                                                   piece_buf.data(), piece_buf.size(), 1, false);
-                                if (n_chars > 0) {
-                                    detokenized_text.append(piece_buf.data(), n_chars);
+                            // Ensure model is valid before calling llama_model_get_vocab
+                            if (model != nullptr) {
+                                for (llama_token token : sequence_tokens) {
+                                    int n_chars = llama_token_to_piece(llama_model_get_vocab(model), token,
+                                                                       piece_buf.data(), piece_buf.size(), 1, false);
+                                    if (n_chars > 0) {
+                                        detokenized_text.append(piece_buf.data(), n_chars);
+                                    }
                                 }
+                                printf("    Detokenized: \"%s\"\n", detokenized_text.c_str());
+                            } else {
+                                fprintf(stderr, "    Warning: Cannot detokenize preview, model is null.\n");
                             }
-                            printf("    Detokenized: \"%s\"\n", detokenized_text.c_str());
                         }
 
                     } else {
@@ -173,10 +178,16 @@ int main(int argc, char ** argv) {
 
         } catch (const std::runtime_error & e) {
             fprintf(stderr, "error: GGUF preview failed: %s\n", e.what());
+            llama_model_free(model); // Free model before exiting
+            llama_backend_free();
             return 1;
         }
         printf("--- End of GGUF file preview ---\n");
     }
+
+    // Clean up llama model and backend after all usage
+    llama_model_free(model);
+    llama_backend_free();
 
     return 0;
 }

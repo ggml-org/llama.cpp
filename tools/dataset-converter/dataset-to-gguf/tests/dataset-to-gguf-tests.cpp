@@ -28,6 +28,27 @@ static std::string   g_test_model_path = "../../gte-small.Q2_K.gguf";  // Specif
             return false;                                                                                            \
         }                                                                                                            \
     } while (0)
+bool SetUpLlamaBackend();
+bool Testllama_gguf_file_DefaultConstructorInitializesContext();
+bool Testllama_gguf_file_ConstructorFromFileThrowsOnError();
+bool Testllama_gguf_file_SetAndGetMetadataString();
+bool Testllama_gguf_file_SetAndGetMetadataU64();
+bool Testllama_gguf_file_SetAndGetMetadataStringArray();
+bool CreateTestllama_gguf_file(const std::string & path, llama_model * model_ptr);
+bool Testllama_gguf_reader_ConstructorInitializesFromFile();
+bool Testllama_gguf_reader_GetMetadata();
+bool Testllama_gguf_reader_GetTensorCount();
+bool Testllama_gguf_reader_GetTensorNameAndTypeAndSize();
+bool Testllama_gguf_reader_ReadTensorData();
+bool Testllama_gguf_reader_ReadTensorDataInvalidIndex();
+bool TestTextDataReader_OpenFile();
+bool TestTextDataReader_ReadNextSequenceTextMode();
+bool TestTextDataReader_ReadNextSequencePreTokenizedMode();
+bool TestTextDataReader_ResetFunctionality();
+bool TestTextDataReader_GetTotalSequences();
+bool Testllama_gguf_converter_ConvertTextFileSuccess();
+void TearDownLlamaBackend();
+
 
 // Global setup for llama.cpp backend
 bool SetUpLlamaBackend() {
@@ -419,9 +440,10 @@ bool Testllama_gguf_converter_ConvertTextFileSuccess() {
     params.max_seq_len           = 128;
     params.pre_tokenized         = false;
     params.dataset_format        = "text";
+#ifdef LLAMA_PARQUET
     params.parquet_text_column   = "text";    // Not used for text, but for completeness
     params.parquet_tokens_column = "tokens";  // Not used for text, but for completeness
-
+#endif
     llama_gguf_converter converter;
     TEST_ASSERT(converter.llama_gguf_converter_convert(params, g_llama_model), "GGUF conversion failed");
 
@@ -448,7 +470,7 @@ bool Testllama_gguf_converter_ConvertTextFileSuccess() {
 // Main function to run all tests
 // =============================================================================
 
-int main(int argc, char ** argv) {
+int main() {
     printf("Running dataset-to-gguf tests...\n\n");
 
     // Global setup for llama.cpp backend

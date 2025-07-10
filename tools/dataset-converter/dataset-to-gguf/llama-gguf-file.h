@@ -108,7 +108,6 @@ struct llama_gguf_file {
 
   private:
     struct gguf_context * m_ctx;       // The underlying GGUF context
-    struct ggml_context * m_ggml_ctx;  // ggml_context for tensor data when reading
 
     // Private helper function to find a key by name.
     // key: The key name to find.
