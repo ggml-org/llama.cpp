@@ -270,14 +270,7 @@ class GGUFWriter:
         self.state = WriterState.TI_DATA
 
     def add_key_value(self, key: str, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> None:
-        # Warn about duplicate keys if they differ by value or type
-        if any(
-            (
-                key in kv_data
-                and (kv_data[key].value != val or kv_data[key].type != vtype)
-            )
-            for kv_data in self.kv_data
-        ):
+        if any(key in kv_data for kv_data in self.kv_data):
             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')
 
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
