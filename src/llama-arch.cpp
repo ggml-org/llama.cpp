@@ -191,8 +191,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
 
     { LLM_KV_SHORTCONV_L_CACHE, "%s.shortconv.l_cache" },
 
-    { LLM_KV_IS_RECURRENT_LAYER, "%s.is_recurrent_layer" },
-
     { LLM_KV_TOKENIZER_MODEL,                "tokenizer.ggml.model"                    },
     { LLM_KV_TOKENIZER_PRE,                  "tokenizer.ggml.pre"                      },
     { LLM_KV_TOKENIZER_LIST,                 "tokenizer.ggml.tokens"                   },

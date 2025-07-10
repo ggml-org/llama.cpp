@@ -498,7 +498,6 @@ void llama_model::load_hparams(llama_model_loader & ml) {
     hparams.n_head_kv_arr = hparams.n_head_arr;
 
     ml.get_key_or_arr(LLM_KV_ATTENTION_HEAD_COUNT_KV, hparams.n_head_kv_arr, hparams.n_layer, false);
-    ml.get_key_or_arr(LLM_KV_IS_RECURRENT_LAYER, hparams.recurrent_layer_arr, hparams.n_layer, false);
 
     bool rope_finetuned = false;
     ml.get_key(LLM_KV_ROPE_SCALING_FINETUNED, rope_finetuned, false);
@@ -1630,6 +1629,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_SHORTCONV_L_CACHE,           hparams.n_shortconv_l_cache);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                for (uint32_t il = 0; il < hparams.n_layer; ++il) {
+                    hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
+                }
                 switch (hparams.n_embd) {
                     case 1024: type = LLM_TYPE_350M; break;
                     case 1536: type = LLM_TYPE_700M; break;

@@ -230,8 +230,6 @@ enum llm_kv {
 
     LLM_KV_SHORTCONV_L_CACHE,
 
-    LLM_KV_IS_RECURRENT_LAYER,
-
     // deprecated:
     LLM_KV_TOKENIZER_PREFIX_ID,
     LLM_KV_TOKENIZER_SUFFIX_ID,

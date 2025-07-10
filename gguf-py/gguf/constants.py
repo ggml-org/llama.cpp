@@ -122,7 +122,6 @@ class Keys:
         ALTUP_ACTIVE_IDX                  = "{arch}.altup.active_idx"
         ALTUP_NUM_INPUTS                  = "{arch}.altup.num_inputs"
         EMBD_LENGTH_PER_LAYER_INP         = "{arch}.embedding_length_per_layer_input"
-        IS_RECURRENT_LAYER                = "{arch}.is_recurrent_layer"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -2335,6 +2334,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
     MODEL_ARCH.LFM2: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.TOKEN_EMBD_NORM,

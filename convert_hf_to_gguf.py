@@ -6970,13 +6970,12 @@ class LFM2Model(TextModel):
 
 
     def set_gguf_parameters(self):
-        # set only for attention layers before calling super().set_gguf_parameters()
+        # set num_key_value_heads only for attention layers
         self.hparams["num_key_value_heads"] = [(self.hparams["num_key_value_heads"] if x in self.hparams["full_attn_idxs"] else 0) for x in range(self.block_count)]
 
         super().set_gguf_parameters()
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
         self.gguf_writer.add_shortconv_l_cache(self.hparams["conv_L_cache"])
-        self.gguf_writer.add_is_recurrent_layer([x not in self.hparams["full_attn_idxs"] for x in range(self.block_count)])
         self.gguf_writer.add_layer_norm_rms_eps(self.hparams["norm_eps"])
         self._add_feed_forward_length()
 
