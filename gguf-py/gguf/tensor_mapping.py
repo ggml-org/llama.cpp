@@ -1024,7 +1024,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_MMPROJ_FC: (
-            "model.connector.modality_projection.proj",        # SmolVLM
+            "model.connector.modality_projection.proj", # SmolVLM
         ),
 
         MODEL_TENSOR.V_MMPROJ_MLP: (
