@@ -425,14 +425,6 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1}| ?[^\\s\\p{L}\\p{N}\\r\\n]+|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
-            case LLAMA_VOCAB_PRE_TYPE_SMOLDOCLING:
-                // uses digits and byte level pre tokenizers defined in the pre_tokenizer section of
-                // https://huggingface.co/ds4sd/SmolDocling-256M-preview/raw/main/tokenizer.json 
-                regex_exprs = {
-                    "[0-9]",
-                    "[a-zA-Z0-9_]+|[^a-zA-Z0-9_\\s]+",
-                };
-                break;
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
