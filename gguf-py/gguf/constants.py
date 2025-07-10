@@ -366,6 +366,7 @@ class MODEL_ARCH(IntEnum):
     HUNYUAN_MOE      = auto()
     SMOLLM3          = auto()
     LFM2             = auto()
+    DREAM            = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -681,6 +682,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.HUNYUAN_MOE:      "hunyuan-moe",
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.LFM2:             "lfm2",
+    MODEL_ARCH.DREAM:            "dream",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1273,6 +1275,21 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP,
     ],
     MODEL_ARCH.QWEN2: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.DREAM: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
