@@ -3182,7 +3182,7 @@ static __global__ void mul_mat_q(
     __syncthreads();
 
     // On AMD or old CUDA the performance with stream-k was worse, use conventional tiling instead:
-#if (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
+#if (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__) && !defined(AMD_MMA_AVAILABLE)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
     {
         const int wt = blockIdx.z / nchannels_y;
         const int zt = blockIdx.z - wt*nchannels_y;
@@ -3236,7 +3236,7 @@ static __global__ void mul_mat_q(
              tile_x_max_i, tile_y_max_j, 0, ncols_x/qk);
         return;
     }
-#endif // (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
+#endif // (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__) && !defined(AMD_MMA_AVAILABLE)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
 
     const     int64_t blocks_per_ne00 = ncols_x / qk;
     constexpr int     blocks_per_iter = MMQ_ITER_K / qk;
