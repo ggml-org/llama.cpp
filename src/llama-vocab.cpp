@@ -429,9 +429,10 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                 // uses digits and byte level pre tokenizers defined in the pre_tokenizer section of
                 // https://huggingface.co/ds4sd/SmolDocling-256M-preview/raw/main/tokenizer.json 
                 regex_exprs = {
-                        "[0-9]",
-                        "[a-zA-Z0-9_]+|[^a-zA-Z0-9_\\s]+",
-                    };
+                    "[0-9]",
+                    "[a-zA-Z0-9_]+|[^a-zA-Z0-9_\\s]+",
+                };
+                break;
             default:
                 // default regex for BPE tokenization pre-processing
                 regex_exprs = {
