@@ -7,7 +7,6 @@ import csv
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Set
 from collections import defaultdict
 
 
@@ -16,11 +15,11 @@ class DocsGenerator:
         self.ggml_root = Path(ggml_root)
         self.ops_dir = self.ggml_root / "docs" / "ops"
         self.output_filename = output_filename
-        self.backend_support: Dict[str, Dict[str, List[bool]]] = defaultdict(
+        self.backend_support: dict[str, dict[str, list[bool]]] = defaultdict(
             lambda: defaultdict(list)
         )
-        self.all_operations: Set[str] = set()
-        self.all_backends: Set[str] = set()
+        self.all_operations: set[str] = set()
+        self.all_backends: set[str] = set()
         self.logger = logging.getLogger(__name__)
 
     def parse_support_files(self) -> None:
