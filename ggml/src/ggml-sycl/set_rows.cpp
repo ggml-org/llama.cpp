@@ -41,7 +41,7 @@ static void k_set_rows(
     const int64_t i11 = i02 % ne11;
     const int64_t i10 = i01;
 
-    const int64_t dst_row = *(const int64_t *)((const char *)src1 + calculate_offset<3>({nb10, nb11, nb12}, {i10, i11, i12})); // i10*nb10 + i11*nb11 + i12*nb12);
+    const int64_t dst_row = *(const int64_t *)((const char *)src1 + calculate_offset<3>({nb10, nb11, nb12}, {i10, i11, i12}));
 
     const char * src0_row = src0 + calculate_offset<3>({nb01, nb02, nb03}, {i01, i02, i03});
     const char * src_elem = src0_row + i00 * src_type_size;
