@@ -149,21 +149,29 @@ export default function Sidebar() {
                       navigate('/');
                     }
                   }}
-                  onDownload={() => {
+                  onDownload={async () => {
                     if (isGenerating(conv.id)) {
                       toast.error(
                         'Cannot download conversation while generating'
                       );
                       return;
                     }
-                    const conversationJson = JSON.stringify(conv, null, 2);
-                    const blob = new Blob([conversationJson], {
-                      type: 'application/json',
+                    const messages = await StorageUtils.getMessages(conv.id);
+                    const messageChain = StorageUtils.filterByLeafNodeId(
+                      messages,
+                      conv.currNode,
+                      false
+                    );
+                    const conversationText = messageChain
+                      .map((msg) => `${msg.role}: ${msg.content}`)
+                      .join('\n\n');
+                    const blob = new Blob([conversationText], {
+                      type: 'text/plain',
                     });
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `conversation_${conv.id}.json`;
+                    a.download = `conversation_${conv.id}.txt`;
                     document.body.appendChild(a);
                     a.click();
                     document.body.removeChild(a);
