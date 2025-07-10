@@ -378,18 +378,18 @@ class TensorNameMap:
 
         # Feed-forward gate
         MODEL_TENSOR.FFN_GATE: (
-            "model.layers.{bid}.mlp.gate_proj",                     # llama-hf refact olmo2
-            "layers.{bid}.feed_forward.w1",                         # llama-pth
-            "transformer.h.{bid}.mlp.w2",                           # qwen
-            "transformer.h.{bid}.mlp.c_fc2",                        # jais
-            "model.layers.layers.{bid}.mlp.gate_proj",              # plamo
-            "model.layers.{bid}.feed_forward.w1",                   # internlm2
-            "encoder.layers.{bid}.mlp.fc12",                        # nomic-bert
-            "encoder.layer.{bid}.mlp.gated_layers_w",               # jina-bert-v2 (split up/gate, no longer used)
-            "transformer.h.{bid}.mlp.linear_1",                     # refact
-            "model.layers.{bid}.residual_mlp.w1",                   # arctic
-            "transformer.h.{bid}.mlp.c_fc_0",                       # exaone
-            "model.layers.{bid}.feed_forward.gate_proj",            # llama4 jamba
+            "model.layers.{bid}.mlp.gate_proj",           # llama-hf refact olmo2
+            "layers.{bid}.feed_forward.w1",               # llama-pth
+            "transformer.h.{bid}.mlp.w2",                 # qwen
+            "transformer.h.{bid}.mlp.c_fc2",              # jais
+            "model.layers.layers.{bid}.mlp.gate_proj",    # plamo
+            "model.layers.{bid}.feed_forward.w1",         # internlm2
+            "encoder.layers.{bid}.mlp.fc12",              # nomic-bert
+            "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2 (split up/gate, no longer used)
+            "transformer.h.{bid}.mlp.linear_1",           # refact
+            "model.layers.{bid}.residual_mlp.w1",         # arctic
+            "transformer.h.{bid}.mlp.c_fc_0",             # exaone
+            "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
