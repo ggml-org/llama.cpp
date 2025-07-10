@@ -15532,11 +15532,8 @@ struct llm_build_lfm2 : public llm_graph_context {
 
         ggml_tensor * inp_pos = build_inp_pos();
 
-        auto *inp = build_inp_mem_hybrid();
+        auto *inp_hybrid = build_inp_mem_hybrid();
         ggml_tensor * inp_out_ids = build_inp_out_ids();
-
-        // add s_copy to graph
-        ggml_build_forward_expand(gf, inp->s_copy);
 
         for (int il = 0; il < n_layer; ++il) {
             auto *prev_cur = cur;
@@ -15544,8 +15541,8 @@ struct llm_build_lfm2 : public llm_graph_context {
             cb(cur, "model.layers.{}.operator_norm", il);
 
             cur = hparams.is_recurrent(il) ?
-                build_shortconv_block(gf, cur, il) :
-                build_attn_block(gf, cur, inp_pos, inp, il) ;
+                build_shortconv_block(gf, cur, inp_hybrid->get_recr(), il) :
+                build_attn_block(gf, cur, inp_pos, inp_hybrid->get_attn(), il) ;
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur      = ggml_get_rows(ctx0,      cur, inp_out_ids);
@@ -15589,12 +15586,11 @@ struct llm_build_lfm2 : public llm_graph_context {
         return cur;
     }
 
-    ggml_tensor *build_attn_block(
-             ggml_cgraph                    *gf,
-             ggml_tensor                    *cur,
-             ggml_tensor                    *inp_pos,
-             llm_graph_input_mem_hybrid     *inp,
-             int                            il) const {
+    ggml_tensor *build_attn_block(ggml_cgraph                     *gf,
+                                  ggml_tensor                     *cur,
+                                  ggml_tensor                     *inp_pos,
+                                  llm_graph_input_attn_kv_unified *inp_attn,
+                                  int                             il) const {
         GGML_ASSERT(hparams.n_embd_v_gqa(il) == hparams.n_embd_k_gqa(il));
         auto const n_embd_head = hparams.n_embd_head_v;
         auto const n_head_kv = hparams.n_head_kv(il);
@@ -15628,8 +15624,7 @@ struct llm_build_lfm2 : public llm_graph_context {
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
 
-        cur = build_attn(inp, gf,
-                model.layers[il].wo, NULL,
+        cur = build_attn(inp_attn, gf, model.layers[il].wo, NULL,
                 q, k, v, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
 
         cb(cur, "model.layers.{}.self_attn.out_proj", il);
@@ -15637,10 +15632,10 @@ struct llm_build_lfm2 : public llm_graph_context {
         return cur;
     }
 
-    ggml_tensor * build_shortconv_block(
-            ggml_cgraph                * gf,
-            ggml_tensor                * cur,
-            int                        il) {
+    ggml_tensor * build_shortconv_block(ggml_cgraph        * gf,
+                                        ggml_tensor        * cur,
+                                        llm_graph_input_rs *inp_recr,
+                                        int                il) {
         const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx)->get_recr();
 
         auto *bcx = ggml_mul_mat(ctx0, model.layers[il].shortconv.in_proj, cur);
@@ -15656,9 +15651,10 @@ struct llm_build_lfm2 : public llm_graph_context {
         auto *bx = ggml_transpose(ctx0, ggml_mul(ctx0, b, x));
 
         // read conv state directly, with build_rs generation is slower
-        const int64_t n_seqs  = ubatch.n_seqs;
         ggml_tensor * conv_state = mctx_cur->get_r_l(il);
-        auto *conv = ggml_reshape_3d(ctx0, conv_state, hparams.n_shortconv_l_cache - 1, hparams.n_embd, n_seqs);
+        const int64_t n_seqs  = ubatch.n_seqs;
+        ggml_tensor * conv = build_rs(inp_recr, gf, conv_state, hparams.n_embd_r(), n_seqs);
+        conv = ggml_reshape_3d(ctx0, conv_state, hparams.n_shortconv_l_cache - 1, hparams.n_embd, n_seqs);
 
         bx = ggml_concat(ctx0, conv, bx, 0);
         GGML_ASSERT(bx->ne[0] > conv->ne[0]);
