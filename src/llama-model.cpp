@@ -5174,7 +5174,8 @@ void llama_model::print_info() const {
     if (arch == LLM_ARCH_MAMBA ||
         arch == LLM_ARCH_MAMBA2 ||
         arch == LLM_ARCH_JAMBA ||
-        arch == LLM_ARCH_FALCON_H1) {
+        arch == LLM_ARCH_FALCON_H1 ||
+        arch == LLM_ARCH_GRANITE_HYBRID) {
         LLAMA_LOG_INFO("%s: ssm_d_conv       = %u\n",     __func__, hparams.ssm_d_conv);
         LLAMA_LOG_INFO("%s: ssm_d_inner      = %u\n",     __func__, hparams.ssm_d_inner);
         LLAMA_LOG_INFO("%s: ssm_d_state      = %u\n",     __func__, hparams.ssm_d_state);
