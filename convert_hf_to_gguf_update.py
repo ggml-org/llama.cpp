@@ -129,7 +129,6 @@ models = [
     {"name": "pixtral",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/mistral-community/pixtral-12b", },
     {"name": "seed-coder",       "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ByteDance-Seed/Seed-Coder-8B-Base", },
     {"name": "a.x-4.0",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/skt/A.X-4.0", },
-    {"name": "smoldocling",      "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/ds4sd/SmolDocling-256M-preview", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
