@@ -176,9 +176,6 @@ struct llama_hparams {
     // return true if one of the layers is SWA
     bool is_swa_any() const;
 
-    // return true if all layers are SWA
-    bool is_swa_all() const;
-
     uint32_t n_head(uint32_t il = 0) const;
 
     uint32_t n_head_kv(uint32_t il = 0) const;
