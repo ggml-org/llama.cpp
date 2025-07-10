@@ -13,12 +13,36 @@ add_library(mtmd
             mtmd-helper.h
             )
 
+# 在Apple平台上添加ANE相关文件
+if(APPLE)
+    target_sources(mtmd PRIVATE
+        ane.h
+        ane.mm
+        ane_minicpm4v3b_vision_f16_b1.h
+        ane_minicpm4v3b_vision_f16_b1.m
+    )
+    
+    # 为Objective-C文件启用ARC
+    set_source_files_properties(ane.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(ane_minicpm4v3b_vision_f16_b1.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+endif()
+
 target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads)
 target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+
+# 在Apple平台上链接CoreML和Accelerate框架
+if(APPLE)
+    target_link_libraries(mtmd PRIVATE 
+        "-framework Foundation" 
+        "-framework CoreML" 
+        "-framework Accelerate"
+        "-ObjC"
+    )
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -30,6 +54,13 @@ set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd.h
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-helper.h
     )
+
+# 在Apple平台上添加ANE公共头文件
+if(APPLE)
+    list(APPEND MTMD_PUBLIC_HEADERS
+        ${CMAKE_CURRENT_SOURCE_DIR}/ane.h
+    )
+endif()
 
 set_target_properties(mtmd
     PROPERTIES
