@@ -253,6 +253,8 @@ static int mmq_get_granularity_host(ggml_type type, const int mmq_x, const int c
             case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
             case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
                 return mmq_x >= 192 ? 64 : 32;
+            default:
+                return 0;
         }
     } else if (new_mma_available(cc) && mmq_x >= 48) {
         return 16;
@@ -285,6 +287,8 @@ static constexpr __device__ int mmq_get_granularity_device(ggml_type type, const
         case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
         case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
             return mmq_x >= 192 ? 64 : 32;
+        default:
+            return 0;
     }
 }
 #elif defined(NEW_MMA_AVAILABLE)
@@ -323,6 +327,8 @@ static int get_mmq_nwarps_host(ggml_type type, const int cc) {
             case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
             case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
                 return 4;
+            default:
+                return 0;
         }
     } else {
         return 8;
@@ -355,6 +361,8 @@ static constexpr __device__ int get_mmq_nwarps_device(ggml_type type) {
         case GGML_TYPE_IQ2_XS: // vec_dot_q8_0_16_q8_1_mma
         case GGML_TYPE_IQ2_S:  // vec_dot_q8_0_16_q8_1_mma
             return 4;
+        default:
+            return 0;
     }
 }
 #else
@@ -3123,16 +3131,16 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 
-template <ggml_type type, int mmq_x, int warp_size, bool need_check>
+template <ggml_type type, int mmq_x, bool need_check>
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
-#if defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA3) || defined(CDNA2) || defined(CDNA1) || defined(GCN)
-    __launch_bounds__(warp_size*get_mmq_nwarps_device(type), 2)
+#if defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA) || defined(GCN)
+    __launch_bounds__(ggml_cuda_get_physical_warp_size()*get_mmq_nwarps_device(type), 2)
 #endif // defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA) || defined(GCN)
 #else
 #if __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
-    __launch_bounds__(warp_size*get_mmq_nwarps_device(type), 1)
+    __launch_bounds__(ggml_cuda_get_physical_warp_size()*get_mmq_nwarps_device(type), 1)
 #else
-    __launch_bounds__(warp_size*get_mmq_nwarps_device(type), 2)
+    __launch_bounds__(ggml_cuda_get_physical_warp_size()*get_mmq_nwarps_device(type), 2)
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 static __global__ void mul_mat_q(
@@ -3149,6 +3157,7 @@ static __global__ void mul_mat_q(
     }
 
     constexpr int nwarps = get_mmq_nwarps_device(type);
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     constexpr int qk    = ggml_cuda_type_traits<type>::qk;
     constexpr int mmq_y = get_mmq_y_device();
@@ -3373,7 +3382,7 @@ static __global__ void mul_mat_q(
 }
 
 
-template <ggml_type type, int mmq_x, int warp_size, bool need_check>
+template <ggml_type type, int mmq_x, bool need_check>
 static __global__ void mul_mat_q_stream_k_fixup(
         const int32_t * ids_dst, const int32_t * expert_bounds, float * __restrict__ dst, const float * __restrict__ tmp_last_tile,
         const int ncols_x, const int nrows_x, const int ncols_dst, const int stride_col_dst,
@@ -3384,6 +3393,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const     int64_t blocks_per_ne00 = ncols_x / qk;
 
     constexpr int nwarps = get_mmq_nwarps_device(type);
+    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
 
     float sum[mmq_x*mmq_y / (nwarps*warp_size)] = {0.0f};
 
@@ -3531,8 +3541,8 @@ struct mmq_args {
     bool use_stream_k;
 };
 
-template<ggml_type type, int warp_size>
-static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int cc, const int nwarps) {
+template<ggml_type type>
+static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int cc, const int warp_size, const int nwarps) {
     const tile_x_sizes txs = mmq_get_dp4a_tile_x_sizes(type, mmq_y);
     const int mmq_tile_x_k = mmq_get_mma_tile_x_k(type);
     const size_t nbs_ids = mmq_x*sizeof(int);
@@ -3546,19 +3556,19 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
-    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
+    const int warp_size = ggml_cuda_info().devices[id].warp_size;
     const int nwarps = get_mmq_nwarps_host(type, cc);
     const int mmq_y = get_mmq_y_host(cc);
 
     const dim3 block_dims(warp_size, nwarps, 1);
 
-    const int nbytes_shared = mmq_get_nbytes_shared<type, warp_size>(mmq_x, mmq_y, cc, nwarps);
+    const int nbytes_shared = mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps);
 
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
     static bool shared_memory_limit_raised[GGML_CUDA_MAX_DEVICES] = {false};
     if (!shared_memory_limit_raised[id]) {
-        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, warp_size, false>, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared));
-        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, warp_size, true>,  cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared));
+        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, false>, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared));
+        CUDA_CHECK(cudaFuncSetAttribute(mul_mat_q<type, mmq_x, true>,  cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared));
         shared_memory_limit_raised[id] = true;
     }
 #endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && !defined(GGML_USE_MUSA)
@@ -3576,14 +3586,14 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     if (!args.use_stream_k) {
         if (args.nrows_x % mmq_y == 0) {
             constexpr bool need_check = false;
-            mul_mat_q<type, mmq_x, warp_size, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
                  channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
                  sample_ratio, args.nsamples_y, args.stride_sample_x, args.stride_sample_y, args.stride_sample_dst);
         } else {
             constexpr bool need_check = true;
-            mul_mat_q<type, mmq_x, warp_size, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
                  channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
@@ -3603,7 +3613,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     if (args.nrows_x % mmq_y == 0) {
         constexpr bool need_check = false;
-        mul_mat_q<type, mmq_x, warp_size, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+        mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
             (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr,
              args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
@@ -3613,12 +3623,12 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
             return;
         }
 
-        mul_mat_q_stream_k_fixup<type, mmq_x, warp_size, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
+        mul_mat_q_stream_k_fixup<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
             (args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr, args.ncols_x, args.nrows_x, args.ncols_dst,
              args.nrows_dst, args.nchannels_y, args.stride_channel_dst, args.nsamples_y, args.stride_sample_dst);
     } else {
         constexpr bool need_check = true;
-        mul_mat_q<type, mmq_x, warp_size, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+        mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
             (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr,
              args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
@@ -3628,7 +3638,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
             return;
         }
 
-        mul_mat_q_stream_k_fixup<type, mmq_x, warp_size, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
+        mul_mat_q_stream_k_fixup<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
             (args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr, args.ncols_x, args.nrows_x, args.ncols_dst,
              args.nrows_dst, args.nchannels_y, args.stride_channel_dst, args.nsamples_y, args.stride_sample_dst);
     }
@@ -3636,11 +3646,11 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
 template <ggml_type type>
 void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
-    const int    id    = ggml_cuda_get_device();
-    const int    cc    = ggml_cuda_info().devices[id].cc;
-    const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
-    constexpr int warp_size = ggml_cuda_get_physical_warp_size();
-    const int nwarps = get_mmq_nwarps_host(type, cc);
+    const int    id     = ggml_cuda_get_device();
+    const int    cc     = ggml_cuda_info().devices[id].cc;
+    const size_t smpbo  = ggml_cuda_info().devices[id].smpbo;
+    const int warp_size = ggml_cuda_info().devices[id].warp_size;
+    const int nwarps    = get_mmq_nwarps_host(type, cc);
 
     const int mmq_x_max = get_mmq_x_max_host(cc);
     const int mmq_y = get_mmq_y_host(cc);
@@ -3651,7 +3661,7 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     for (int mmq_x = 8; mmq_x <= mmq_x_max && ntiles_x_best > 1; mmq_x += 8) {
         const int granularity = mmq_get_granularity_host(type, mmq_x, cc);
 
-        if (mmq_x % granularity != 0 || mmq_get_nbytes_shared<type, warp_size>(mmq_x, mmq_y, cc, nwarps) > smpbo) {
+        if (mmq_x % granularity != 0 || mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps) > smpbo) {
             continue;
         }
 

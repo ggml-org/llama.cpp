@@ -64,71 +64,70 @@ namespace ggml_cuda_mma {
 
     template <int I_, int J_, typename T>
     struct tile {
-        static constexpr int warp_size = ggml_cuda_get_physical_warp_size();
         static constexpr int I  = I_;
         static constexpr int J  = J_;
-        static constexpr int ne = I * J / warp_size;
+
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
+        static constexpr int ne = I * J / 64;
         T x[ne] = {0};
 
         static __device__ __forceinline__ int get_i(const int l) {
-            if constexpr (warp_size == 32) {
-                if constexpr (I == 8 && (J == 4 || J == 8)) {
-                    return threadIdx.x / 4;
-                } else if constexpr (I == 16 && J == 8) {
-                    return (l / 2) * 8 + threadIdx.x / 4;
-                } else if constexpr (I == 16 && J == 16) {
-                    return ((l / 2) % 2) * 8 + threadIdx.x / 4;
-                } else {
-                    static_assert(I == -1 && J == -1, "template specialization not implemented");
-                }
-            } else if constexpr (warp_size == 64) {
-                if constexpr (I == 8 && (J == 4 || J == 8)) { // Remove this case
-                    return threadIdx.x / 4;
-                } else if constexpr (I == 16 && J == 8) {
-                    return threadIdx.x % 16;
-                } else if constexpr (I == 32 && J == 4) {
-                    return threadIdx.x % 32;
-                } else if constexpr (I == 16 && J == 16) {
-                    return 4 * (threadIdx.x / 16) + l;
-                } else if constexpr (I == 32 && J == 32) {
-                    return 4 * (threadIdx.x / 32) + 8 * (l / 4) + (l % 4);
-                } else {
-                    static_assert(I == -1 && J == -1, "template specialization not implemented");
-                }
+            if constexpr (I == 16 && J == 8) {
+                return threadIdx.x % 16;
+            } else if constexpr (I == 32 && J == 4) {
+                return threadIdx.x % 32;
+            } else if constexpr (I == 16 && J == 16) {
+                return 4 * (threadIdx.x / 16) + l;
+            } else if constexpr (I == 32 && J == 32) {
+                return 4 * (threadIdx.x / 32) + 8 * (l / 4) + (l % 4);
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
             }
         }
 
         static __device__ __forceinline__ int get_j(const int l) {
-            if constexpr (warp_size == 32) {
-                if constexpr (I == 8 && J == 4) {
-                    return threadIdx.x % 4;
-                } else if constexpr (I == 8 && J == 8) {
-                    return 4 * l + threadIdx.x % 4;
-                } else if constexpr (I == 16 && J == 8) {
-                    return 2 * (threadIdx.x % 4) + l % 2;
-                } else if constexpr (I == 16 && J == 16) {
-                    return 8 * (l / 4) + 2 * (threadIdx.x % 4) + l % 2;
-                } else {
-                    static_assert(I == -1 && J == -1, "template specialization not implemented");
-                }
-            } else if constexpr (warp_size == 64) {
-                if constexpr (I == 8 && J == 4) { // Remove this case
-                    return threadIdx.x % 4;
-                } else if constexpr (I == 8 && J == 8) { // Remove this case
-                    return 4 * l + threadIdx.x % 4;
-                } else if constexpr (I == 16 && J == 8) {
-                    return 2 * (threadIdx.x / 16) + l;
-                } else if constexpr (I == 32 && J == 4) {
-                    return 2 * (threadIdx.x / 32) + l;
-                } else if constexpr (I == 16 && J == 16) {
-                    return threadIdx.x % 16;
-                } else if constexpr (I == 32 && J == 32) {
-                    return threadIdx.x % 32;
-                } else {
-                    static_assert(I == -1 && J == -1, "template specialization not implemented");
-                }
+            if constexpr (I == 16 && J == 8) {
+                return 2 * (threadIdx.x / 16) + l;
+            } else if constexpr (I == 32 && J == 4) {
+                return 2 * (threadIdx.x / 32) + l;
+            } else if constexpr (I == 16 && J == 16) {
+                return threadIdx.x % 16;
+            } else if constexpr (I == 32 && J == 32) {
+                return threadIdx.x % 32;
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
             }
         }
+#else
+        static constexpr int ne = I * J / 32;
+        T x[ne] = {0};
+
+        static __device__ __forceinline__ int get_i(const int l) {
+            if constexpr (I == 8 && (J == 4 || J == 8)) {
+                return threadIdx.x / 4;
+            } else if constexpr (I == 16 && J == 8) {
+                return (l / 2) * 8 + threadIdx.x / 4;
+            } else if constexpr (I == 16 && J == 16) {
+                return ((l / 2) % 2) * 8 + threadIdx.x / 4;
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            }
+        }
+
+        static __device__ __forceinline__ int get_j(const int l) {
+            if constexpr (I == 8 && J == 4) {
+                return threadIdx.x % 4;
+            } else if constexpr (I == 8 && J == 8) {
+                return 4 * l + threadIdx.x % 4;
+            } else if constexpr (I == 16 && J == 8) {
+                return 2 * (threadIdx.x % 4) + l % 2;
+            } else if constexpr (I == 16 && J == 16) {
+                return 8 * (l / 4) + 2 * (threadIdx.x % 4) + l % 2;
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            }
+        }
+#endif
     };
 
     template <int I_, int J_>
