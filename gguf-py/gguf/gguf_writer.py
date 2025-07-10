@@ -648,6 +648,12 @@ class GGUFWriter:
     def add_convnext_block_count(self, length: int) -> None:
         self.add_uint32(Keys.ConvNext.BLOCK_COUNT.format(arch=self.arch), length)
 
+    def add_shortconv_l_cache(self, length: int) -> None:
+        self.add_uint32(Keys.ShortConv.L_CACHE.format(arch=self.arch), length)
+
+    def add_is_recurrent_layer(self, value: Sequence[bool]) -> None:
+        self.add_array(Keys.LLM.IS_RECURRENT_LAYER.format(arch=self.arch), value)
+
     def add_block_count(self, length: int) -> None:
         self.add_uint32(Keys.LLM.BLOCK_COUNT.format(arch=self.arch), length)
 
