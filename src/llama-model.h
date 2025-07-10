@@ -261,7 +261,6 @@ struct llama_layer {
     // mamba bias
     struct ggml_tensor * ssm_conv1d_b = nullptr;
     struct ggml_tensor * ssm_dt_b     = nullptr;
-    struct ggml_tensor * ssm_in_b     = nullptr;
 
     // rwkv
     struct ggml_tensor * time_mix_w1         = nullptr;
