@@ -1,3 +1,17 @@
+function(ggml_add_cpu_backend_features cpu_name arch)
+    # The feature detection code is compiled as a separate target so that
+    # it can be built without the architecture flags
+    # Since multiple variants of the CPU backend may be included in the same
+    # build, using set_source_files_properties() to set the arch flags is not possible
+    set(GGML_CPU_FEATS_NAME ${cpu_name}-feats)
+    add_library(${GGML_CPU_FEATS_NAME} OBJECT ggml-cpu/arch/${arch}/cpu-feats.cpp)
+    target_include_directories(${GGML_CPU_FEATS_NAME} PRIVATE . ../include)
+    target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE ${ARGN})
+    target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE GGML_BACKEND_DL GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
+    set_target_properties(${GGML_CPU_FEATS_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    target_link_libraries(${cpu_name} PRIVATE ${GGML_CPU_FEATS_NAME})
+endfunction()
+
 function(ggml_add_cpu_backend_variant_impl tag_name)
     if (tag_name)
         set(GGML_CPU_NAME ggml-cpu-${tag_name})
@@ -143,6 +157,49 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             else()
                 if (GGML_CPU_ARM_ARCH)
                     list(APPEND ARCH_FLAGS -march=${GGML_CPU_ARM_ARCH})
+                elseif(GGML_CPU_ALL_VARIANTS)
+                    # Begin with the lowest baseline
+                    set(ARM_MCPU "armv8-a")
+                    set(ARCH_TAGS "")
+                    set(ARCH_DEFINITIONS "")
+
+                    # When a feature is selected, bump the MCPU to the first
+                    # version that supported it
+                    if (GGML_INTERNAL_DOTPROD)
+                        set(ARM_MCPU "armv8.2-a")
+                        set(ARCH_TAGS "${ARCH_TAGS}+dotprod")
+                        list(APPEND ARCH_DEFINITIONS GGML_USE_DOTPROD)
+                    endif()
+                    if (GGML_INTERNAL_FP16_VECTOR_ARITHMETIC)
+                        set(ARM_MCPU "armv8.2-a")
+                        set(ARCH_TAGS "${ARCH_TAGS}+fp16")
+                        list(APPEND ARCH_DEFINITIONS GGML_USE_FP16_VECTOR_ARITHMETIC)
+                    endif()
+                    if (GGML_INTERNAL_SVE)
+                        set(ARM_MCPU "armv8.2-a")
+                        set(ARCH_TAGS "${ARCH_TAGS}+sve")
+                        list(APPEND ARCH_DEFINITIONS GGML_USE_SVE)
+                    endif()
+                    if (GGML_INTERNAL_MATMUL_INT8)
+                        set(ARM_MCPU "armv8.6-a")
+                        set(ARCH_TAGS "${ARCH_TAGS}+i8mm")
+                        list(APPEND ARCH_DEFINITIONS GGML_USE_MATMUL_INT8)
+                    endif()
+                    if (GGML_INTERNAL_SVE2)
+                        set(ARM_MCPU "armv8.6-a")
+                        set(ARCH_TAGS "${ARCH_TAGS}+sve2")
+                        list(APPEND ARCH_DEFINITIONS GGML_USE_SVE2)
+                    endif()
+                    if (GGML_INTERNAL_NOSVE)
+                        set(ARCH_TAGS "${ARCH_TAGS}+nosve")
+                    endif()
+                    if (GGML_INTERNAL_SME)
+                        set(ARM_MCPU "armv9.2-a")
+                        set(ARCH_TAGS "${ARCH_TAGS}+sme")
+                        list(APPEND ARCH_DEFINITIONS GGML_USE_SME)
+                    endif()
+                    list(APPEND ARCH_FLAGS "-march=${ARM_MCPU}${ARCH_TAGS}")
+                    ggml_add_cpu_backend_features(${GGML_CPU_NAME} arm ${ARCH_DEFINITIONS})
                 endif()
             endif()
 
@@ -306,18 +363,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
                 # the feature check relies on ARCH_DEFINITIONS, but it is not set with GGML_NATIVE
                 message(FATAL_ERROR "GGML_NATIVE is not compatible with GGML_BACKEND_DL, consider using GGML_CPU_ALL_VARIANTS")
             endif()
-
-            # The feature detection code is compiled as a separate target so that
-            # it can be built without the architecture flags
-            # Since multiple variants of the CPU backend may be included in the same
-            # build, using set_source_files_properties() to set the arch flags is not possible
-            set(GGML_CPU_FEATS_NAME ${GGML_CPU_NAME}-feats)
-            add_library(${GGML_CPU_FEATS_NAME} OBJECT ggml-cpu/arch/x86/cpu-feats.cpp)
-            target_include_directories(${GGML_CPU_FEATS_NAME} PRIVATE . .. ../include)
-            target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE ${ARCH_DEFINITIONS})
-            target_compile_definitions(${GGML_CPU_FEATS_NAME} PRIVATE GGML_BACKEND_DL GGML_BACKEND_BUILD GGML_BACKEND_SHARED)
-            set_target_properties(${GGML_CPU_FEATS_NAME} PROPERTIES POSITION_INDEPENDENT_CODE ON)
-            target_link_libraries(${GGML_CPU_NAME} PRIVATE ${GGML_CPU_FEATS_NAME})
+            ggml_add_cpu_backend_features(${GGML_CPU_NAME} x86 ${ARCH_DEFINITIONS})
         endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "PowerPC")
         message(STATUS "PowerPC detected")
@@ -342,6 +388,27 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             else()
                 list(APPEND ARCH_FLAGS -mcpu=native -mtune=native -mpowerpc64)
             endif()
+        elseif(GGML_CPU_ALL_VARIANTS)
+            # Begin with the lowest baseline
+            set(ARCH_DEFINITIONS "")
+
+            # When a feature is selected, bump the MCPU to the first
+            # version that supported it
+            foreach(PVER RANGE 7 11)
+                if(DEFINED GGML_INTERNAL_POWER${PVER})
+                    set(POWERPC_MCPU "power${PVER}")
+                    list(APPEND ARCH_DEFINITIONS GGML_USE_POWER${PVER})
+                endif()
+            endforeach()
+            if (GGML_INTERNAL_VSX)
+                list(APPEND ARCH_DEFINITIONS GGML_USE_VSX)
+                list(APPEND ARCH_FLAGS -mvsx)
+            endif()
+
+            if (DEFINED POWERPC_MCPU)
+                list(APPEND ARCH_FLAGS -mcpu=${POWERPC_MCPU})
+            endif()
+            ggml_add_cpu_backend_features(${GGML_CPU_NAME} powerpc ${ARCH_DEFINITIONS})
         else()
             if (GGML_CPU_POWERPC_CPUTYPE)
                 list(APPEND ARCH_FLAGS -mcpu=${GGML_CPU_POWERPC_CPUTYPE})
@@ -381,6 +448,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # TODO: Separation to determine activation of VX/VXE/VXE2
         if (${S390X_M} MATCHES "8561|8562")
+            set(GGML_NNPA OFF)
             message(STATUS "z15 target")
             list(APPEND ARCH_FLAGS -march=z15)
         elseif (${S390X_M} MATCHES "3931")
@@ -397,7 +465,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         endif()
 
         if (GGML_VXE)
+            message(STATUS "VX/VXE/VXE2 enabled")
             list(APPEND ARCH_FLAGS -mvx -mzvector)
+            list(APPEND ARCH_DEFINITIONS GGML_VXE)
+        endif()
+
+        if (GGML_NNPA)
+            message(STATUS "NNPA enabled")
+            list(APPEND ARCH_DEFINITIONS GGML_NNPA)
         endif()
     elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "wasm")
         message(STATUS "Wasm detected")
@@ -419,9 +494,9 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.6.0")
+        set(KLEIDIAI_COMMIT_TAG "v1.9.0")
         set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/archive/refs/tags/${KLEIDIAI_COMMIT_TAG}.tar.gz")
-        set(KLEIDIAI_ARCHIVE_MD5  "75b4ad68f25ab673dcc01065e5a0b05f")
+        set(KLEIDIAI_ARCHIVE_MD5  "2a8e1bb55d201557553545536489a017")
 
         if (POLICY CMP0135)
             cmake_policy(SET CMP0135 NEW)
@@ -513,5 +588,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
     if (EMSCRIPTEN)
         set_target_properties(${GGML_CPU_NAME} PROPERTIES COMPILE_FLAGS "-msimd128")
+    endif()
+
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "IntelLLVM")
+        # The compiler automatically enables "-ffast-math" which can cause NaNs in tests due to "-fassociative-math"
+        target_compile_options(${GGML_CPU_NAME} PRIVATE "-fno-associative-math")
     endif()
 endfunction()

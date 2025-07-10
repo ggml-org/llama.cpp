@@ -501,7 +501,10 @@ struct mtmd_tokenizer {
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_MINICPMV_2_6
                 || ctx->slice_tmpl == MTMD_SLICE_TMPL_LLAMA4
             ) {
+                const int n_col = batch_f32.grid_x;
+                const int n_row = batch_f32.grid_y;
                 // split batch into chunks of single images
+                // NOTE: batch_f32 will be invalidated after this call
                 auto chunks = split_batch_to_chunk(std::move(batch_f32), bitmap->id);
                 GGML_ASSERT(chunks.size() > 0);
 
@@ -521,8 +524,7 @@ struct mtmd_tokenizer {
 
                 // add slices (or tiles)
                 if (!chunks.empty()) {
-                    const int n_col = batch_f32.grid_x;
-                    const int n_row = batch_f32.grid_y;
+                    GGML_ASSERT((int)chunks.size() == n_row * n_col);
                     if (ctx->tok_slices_start != LLAMA_TOKEN_NULL) {
                         add_text({ctx->tok_slices_start});
                     }

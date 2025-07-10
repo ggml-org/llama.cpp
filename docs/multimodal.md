@@ -107,3 +107,7 @@ NOTE: some models may require large context window, for example: `-c 8192`
 (tool_name) -hf ggml-org/Qwen2.5-Omni-3B-GGUF
 (tool_name) -hf ggml-org/Qwen2.5-Omni-7B-GGUF
 ```
+
+## Finding more models:
+
+GGUF models on Huggingface with vision capabilities can be found here: https://huggingface.co/models?pipeline_tag=image-text-to-text&sort=trending&search=gguf

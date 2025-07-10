@@ -65,6 +65,9 @@ public:
 
         dnnl::primitive_attr primitive_attr;
         primitive_attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+#ifdef GGML_SYCL_F16
+        primitive_attr.set_fpmath_mode(dnnl::fpmath_mode::f16);
+#endif
 
         auto a_mem = dnnl::memory(a_in_md, eng, const_cast<void*>(a));
         auto b_mem = dnnl::memory(b_in_md, eng, const_cast<void*>(b));
