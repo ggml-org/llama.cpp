@@ -255,7 +255,6 @@ class TensorNameMap:
             "encoder.layers.{bid}.norm1",                      # nomic-bert
             "transformer.decoder_layer.{bid}.rms_norm_1",      # Grok
             "transformer.blocks.{bid}.norm_attn_norm.norm_2",  # dbrx
-            "blk.{bid}.attn_norm",                             # smoldocling
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
