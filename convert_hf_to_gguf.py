@@ -6488,22 +6488,19 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 
         super().__init__(*args, **kwargs)
 
-        # Use Granite conversion for attention
-        self._transformer_model_class: type[TextModel] = GraniteModel
-
         # Lists of which layers use ssm vs attention
-        self._attn_layers = self.get_attn_layres()
+        self._attn_layers = self.get_attn_layers()
         self._ssm_layers = [
             i for i in range(self.block_count)
             if i not in self._attn_layers
         ]
 
-        # n_group and d_inner are used during reshape_tensors for mamaba2
+        # n_group and d_inner are used during reshape_tensors for mamba2
         self.d_model = self.find_hparam(["hidden_size", "d_model"])
         self.n_group = self.find_hparam(["n_groups"])
         self.d_inner = self.find_hparam(["expand"]) * self.d_model
 
-    def get_attn_layres(self):
+    def get_attn_layers(self):
         # Explicit list of layer type names
         if layer_types := self.hparams.get("layer_types"):
             return [
@@ -6532,7 +6529,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
                 for k in keys
             )
         keys = list(keys) + prefixed
-        return super().find_hparam(keys, *args, **kwargs)
+        return Mamba2Model.find_hparam(self, keys, *args, **kwargs)
 
     def modify_tensors(
         self, data_torch: Tensor, name: str, bid: int | None
@@ -6543,11 +6540,11 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         ):
             return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
 
-        # Determine whether this is a mamaba layer or an attention layer
+        # Determine whether this is a mamba layer or an attention layer
         if bid in self._ssm_layers:
-            return super().modify_tensors(data_torch, name, bid)
+            return Mamba2Model.modify_tensors(self, data_torch, name, bid)
         elif bid in self._attn_layers:
-            return self._transformer_model_class.modify_tensors(self, data_torch, name, bid)
+            return GraniteMoeModel.modify_tensors(self, data_torch, name, bid)
         return [(self.map_tensor_name(name), data_torch)]
 
     def set_gguf_parameters(self):
@@ -6595,7 +6592,7 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 
     def set_vocab(self):
         self.hparams["pad_vocab_size_multiple"] = 8
-        super().set_vocab()
+        Mamba2Model.set_vocab(self)
 
 
 @ModelBase.register("BailingMoeForCausalLM")
@@ -6821,7 +6818,7 @@ class FalconH1Model(Mamba2Model):
         # Use Llama conversion for attention
         self._transformer_model_class = LlamaModel
 
-        # n_group and d_inner are used during reshape_tensors for mamaba2
+        # n_group and d_inner are used during reshape_tensors for mamba2
         self.n_group = self.find_hparam(["n_groups"])
         self.d_inner = self.find_hparam(["mamba_d_ssm"])
         self.d_head = self.find_hparam(["d_head"])
