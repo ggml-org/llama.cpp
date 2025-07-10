@@ -6548,6 +6548,19 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         return [(self.map_tensor_name(name), data_torch)]
 
     def set_gguf_parameters(self):
+        """This method merges params from both parents and some that are
+        specific to this model. The result is some duplication of how the params
+        get set. The following warnings are expected during conversion:
+
+        WARNING:Duplicated key name 'granitehybrid.embedding_length'
+        WARNING:Duplicated key name 'granitehybrid.block_count'
+        WARNING:Duplicated key name 'granitehybrid.vocab_size'
+        WARNING:Duplicated key name 'granitehybrid.feed_forward_length'
+        WARNING:Duplicated key name 'granitehybrid.attention.head_count'
+        WARNING:Duplicated key name 'granitehybrid.attention.head_count_kv'
+        WARNING:Duplicated key name 'granitehybrid.attention.layer_norm_rms_epsilon'
+        WARNING:Duplicated key name 'granitehybrid.context_length'
+        """
         GraniteMoeModel.set_gguf_parameters(self)
 
         ## General Params ##
