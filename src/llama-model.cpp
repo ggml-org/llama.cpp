@@ -15671,11 +15671,7 @@ struct llm_build_lfm2 : public llm_graph_context {
         GGML_ASSERT(hparams.n_shortconv_l_cache > 0);
 
         // construct ssm_conv op
-        struct ggml_tensor * conv_out = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, bx->ne[1], bx->ne[0] - conv->ne[0], bx->ne[2]);
-        conv_out->op     = GGML_OP_SSM_CONV;
-        conv_out->src[0] = bx;
-        conv_out->src[1] = conv_kernel;
-
+        ggml_tensor * conv_out = ggml_ssm_conv(ctx0, bx, conv_kernel);
         cb(conv_out, "model.layers.{}.conv.conv", il);
 
         auto *y = ggml_mul(ctx0, c, conv_out);

@@ -111,7 +111,7 @@ static void ssm_conv_f32_cuda(const float * src0, const float * src1, const int 
             ssm_conv_f32<threads, 3><<<blocks, threads, 0, stream>>>(src0, src1, src0_nb0, src0_nb1, src0_nb2, src1_nb1,
                                                                      dst, dst_nb0, dst_nb1, dst_nb2, n_t);
         } else {
-            GGML_ABORT("Only support kernel size = 4  now.");
+            GGML_ABORT("Only support kernel size = 3 or size = 4 right now.");
         }
     } else {
         if (nc == 4) {
@@ -125,7 +125,7 @@ static void ssm_conv_f32_cuda(const float * src0, const float * src1, const int 
             ssm_conv_long_token_f32<threads, 3, split_n_t><<<blocks, threads, 0, stream>>>(
                 src0, src1, src0_nb0, src0_nb1, src0_nb2, src1_nb1, dst, dst_nb0, dst_nb1, dst_nb2, n_t);
         } else {
-            GGML_ABORT("Only support kernel size = 4 right now.");
+            GGML_ABORT("Only support kernel size = 3 or size = 4 right now.");
         }
     }
 }
