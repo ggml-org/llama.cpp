@@ -6947,6 +6947,7 @@ class SmolLM3Model(LlamaModel):
             chat_template = tokenizer.chat_template.replace("[:]", "")
             self.gguf_writer.add_chat_template(chat_template)
 
+
 @ModelBase.register("LFM2ForCausalLM")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
@@ -6967,7 +6968,6 @@ class LFM2Model(TextModel):
             ff_dim = multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
 
         self.gguf_writer.add_feed_forward_length(ff_dim)
-
 
     def set_gguf_parameters(self):
         # set num_key_value_heads only for attention layers
