@@ -118,7 +118,7 @@ if (LLAMA_LLGUIDANCE)
         SOURCE_DIR ${LLGUIDANCE_SRC}
         BUILD_IN_SOURCE TRUE
         CONFIGURE_COMMAND ""
-        BUILD_COMMAND cargo build --release
+        BUILD_COMMAND cargo build --release --package llguidance
         INSTALL_COMMAND ""
         BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
         UPDATE_COMMAND ""
