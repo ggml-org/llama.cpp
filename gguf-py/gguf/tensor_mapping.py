@@ -252,8 +252,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",                   # gemma2 olmo2    # ge
-            "model.layers.{bid}.post_self_attn_layernorm",                   # glm-4-0414
+            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2    # ge
+            "model.layers.{bid}.post_self_attn_layernorm",     # glm-4-0414
         ),
 
         # Rotary embeddings
