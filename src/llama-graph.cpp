@@ -340,13 +340,6 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
     inp_rs->set_input(ubatch);
 }
 
-void llm_graph_input_one::set_input(const llama_ubatch * ubatch) {
-    GGML_UNUSED(ubatch);
-    GGML_ASSERT(one && ggml_nelements(one) == 1);
-    float f_one = 1.0f;
-    ggml_backend_tensor_set(one, &f_one, 0, sizeof(float));
-}
-
 //
 // llm_graph_context
 //

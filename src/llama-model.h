@@ -94,6 +94,7 @@ enum llm_type {
     LLM_TYPE_57B_A14B,
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
+    LLM_TYPE_A13B,
     LLM_TYPE_30B_A3B,
     LLM_TYPE_235B_A22B,
     LLM_TYPE_E2B,
@@ -247,10 +248,10 @@ struct llama_layer {
     struct ggml_tensor * ffn_exp_probs_b = nullptr;
 
     // mamba proj
-    struct ggml_tensor * ssm_in   = nullptr;
-    struct ggml_tensor * ssm_x    = nullptr;
-    struct ggml_tensor * ssm_dt   = nullptr;
-    struct ggml_tensor * ssm_out  = nullptr;
+    struct ggml_tensor * ssm_in  = nullptr;
+    struct ggml_tensor * ssm_x   = nullptr;
+    struct ggml_tensor * ssm_dt  = nullptr;
+    struct ggml_tensor * ssm_out = nullptr;
 
     // mamba
     struct ggml_tensor * ssm_conv1d = nullptr;

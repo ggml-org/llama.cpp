@@ -1014,16 +1014,18 @@ kernel void kernel_scale(
         device const float * src0,
         device       float * dst,
         constant     float & scale,
+        constant     float & bias,
         uint tpig[[thread_position_in_grid]]) {
-    dst[tpig] = src0[tpig] * scale;
+    dst[tpig] = src0[tpig] * scale + bias;
 }
 
 kernel void kernel_scale_4(
         device const float4 * src0,
         device       float4 * dst,
         constant     float  & scale,
+        constant     float  & bias,
         uint tpig[[thread_position_in_grid]]) {
-    dst[tpig] = src0[tpig] * scale;
+    dst[tpig] = src0[tpig] * scale + bias;
 }
 
 kernel void kernel_clamp(

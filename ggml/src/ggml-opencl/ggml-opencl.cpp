@@ -5587,7 +5587,9 @@ static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, cons
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
     float scale;
-    memcpy(&scale, dst->op_params, sizeof(scale));
+    float bias;
+    memcpy(&scale, ((int32_t *) dst->op_params) + 0, sizeof(float));
+    memcpy(&bias,  ((int32_t *) dst->op_params) + 1, sizeof(float));
 
     ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
@@ -5602,6 +5604,7 @@ static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, cons
     CL_CHECK(clSetKernelArg(kernel, 2, sizeof(cl_mem),   &extrad->data_device));
     CL_CHECK(clSetKernelArg(kernel, 3, sizeof(cl_ulong), &offsetd));
     CL_CHECK(clSetKernelArg(kernel, 4, sizeof(float),    &scale));
+    CL_CHECK(clSetKernelArg(kernel, 5, sizeof(float),    &bias));
 
     int n = ggml_nelements(dst)/4;
 
