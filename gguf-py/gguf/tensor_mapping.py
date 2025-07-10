@@ -1143,6 +1143,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_ENC_EMBD_CLS: (
             "vision_tower.vision_model.embeddings.class_embedding",
             "vision_model.class_embedding", # llama 4
+            "model.vision.patch_embedding.cls_embedding", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_PATCH: (
@@ -1152,7 +1153,7 @@ class TensorNameMap:
             "vision_tower.patch_conv", # pixtral
             "vision_model.patch_embedding.linear", # llama 4
             "visual.patch_embed.proj", # qwen2vl
-            "model.vision.patch_embedding", # cogvlm
+            "model.vision.patch_embedding.proj", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_EMBD_POS: (
@@ -1160,6 +1161,7 @@ class TensorNameMap:
             "vpm.embeddings.position_embedding",
             "model.vision_model.embeddings.position_embedding", # SmolVLM
             "vision_model.positional_embedding_vlm", # llama 4
+            "model.vision.patch_embedding.position_embedding", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q: (
@@ -1356,6 +1358,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_GATE: (
             "model.vision.linear_proj.gate_proj", # cogvlm
+        ),
+
+        MODEL_TENSOR.V_TOK_BOI: (
+            "model.vision.boi", # cogvlm
+        ),
+        
+        MODEL_TENSOR.V_TOK_EOI: (
+            "model.vision.eoi", # cogvlm
         ),
 
         # audio (mtmd)
