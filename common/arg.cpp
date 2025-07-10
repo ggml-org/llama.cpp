@@ -1470,14 +1470,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.ctx_shift = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
         [](common_params & params, int value) {
             params.n_chunks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_RETRIEVAL}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
         {"-fa", "--flash-attn"},
         string_format("enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled"),
@@ -1539,7 +1539,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.in_files.push_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-bf", "--binary-file"}, "FNAME",
         "binary file containing the prompt (default: none)",
@@ -2115,70 +2115,70 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.hellaswag = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--hellaswag-tasks"}, "N",
         string_format("number of tasks to use when computing the HellaSwag score (default: %zu)", params.hellaswag_tasks),
         [](common_params & params, int value) {
             params.hellaswag_tasks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--winogrande"},
         "compute Winogrande score over random tasks from datafile supplied with -f",
         [](common_params & params) {
             params.winogrande = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--winogrande-tasks"}, "N",
         string_format("number of tasks to use when computing the Winogrande score (default: %zu)", params.winogrande_tasks),
         [](common_params & params, int value) {
             params.winogrande_tasks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--multiple-choice"},
         "compute multiple choice score over random tasks from datafile supplied with -f",
         [](common_params & params) {
             params.multiple_choice = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--multiple-choice-tasks"}, "N",
         string_format("number of tasks to use when computing the multiple choice score (default: %zu)", params.multiple_choice_tasks),
         [](common_params & params, int value) {
             params.multiple_choice_tasks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--kl-divergence"},
         "computes KL-divergence to logits provided via --kl-divergence-base",
         [](common_params & params) {
             params.kl_divergence = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--save-all-logits", "--kl-divergence-base"}, "FNAME",
         "set logits file",
         [](common_params & params, const std::string & value) {
             params.logits_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--ppl-stride"}, "N",
         string_format("stride for perplexity calculation (default: %d)", params.ppl_stride),
         [](common_params & params, int value) {
             params.ppl_stride = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--ppl-output-type"}, "<0|1>",
         string_format("output type for perplexity calculation (default: %d)", params.ppl_output_type),
         [](common_params & params, int value) {
             params.ppl_output_type = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-dt", "--defrag-thold"}, "N",
         string_format("KV cache defragmentation threshold (default: %.1f, < 0 - disabled)", (double)params.defrag_thold),
@@ -2609,9 +2609,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-o", "--output", "--output-file"}, "FNAME",
         string_format("output file (default: '%s')", params.out_file.c_str()),
         [](common_params & params, const std::string & value) {
-            params.out_file = value;
+          params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -3423,5 +3423,73 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    add_opt(common_arg(
+        {"--dataset-format"}, " ",
+        string_format("type of input data (e.g., 'text', 'parquet') (default: %s)", params.dataset_format.c_str()),
+        [](common_params & params, const std::string & format) {
+            params.dataset_format = format; //TODO ENUM CLASS
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--max-seq-len"}, " ",
+        string_format("max sequence length (default: %d)", params.max_seq_len),
+        [](common_params & params, int32_t max_seq_len) {
+            params.max_seq_len = max_seq_len;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--pre-tokenized"},
+        string_format("input file contains pre-tokenized data (space-separated token IDs)"),
+        [](common_params & params) {
+            params.pre_tokenized = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--preview"},
+        string_format("read and print metadata and first sequence from the output GGUF file (enables preview)"),
+        [](common_params & params) {
+            params.do_preview = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+   add_opt(common_arg(
+        {"--preview-count"}, "<N>",
+        string_format("input file contains pre-tokenized data (space-separated token IDs)"),
+        [](common_params & params, int preview_count) {
+            params.preview_count = preview_count;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--detokenize-preview"},
+        string_format("detokenize previewed sequences (implies --preview)"),
+        [](common_params & params) {
+            params.detokenize_preview = params.do_preview = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+#ifdef LLAMA_PARQUET
+
+
+    add_opt(common_arg(
+        {"--parquet-text-column"}, "<name>",
+        string_format("column name for raw text in Parquet files (default: 'text')"),
+        [](common_params & params, const std::string &parquet_text_column) {
+            params.parquet_text_column = parquet_text_column;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--parquet-tokens-column"}, "<name>",
+        string_format("column name for pre-tokenized data (list<int32>) in Parquet files (default: 'tokens')"),
+        [](common_params & params, const std::string &parquet_tokens_column) {
+            params.parquet_tokens_column = parquet_tokens_column;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+#endif
     return ctx_arg;
 }
