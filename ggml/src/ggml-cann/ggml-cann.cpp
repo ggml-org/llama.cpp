@@ -2188,7 +2188,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_RMS_NORM:
-        case GGML_OP_SCALE:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
@@ -2210,6 +2209,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_SCALE:
+            float bias;
+            memcpy(&bias, (float*)op->op_params + 1, sizeof(float));
+            return bias == 0.0f; // TODO: support bias != 0.0f
         case GGML_OP_SOFT_MAX:
             // TODO: support broadcast
             // ref: https://github.com/ggml-org/llama.cpp/pull/14435
