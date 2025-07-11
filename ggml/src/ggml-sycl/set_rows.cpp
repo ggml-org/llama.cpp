@@ -64,7 +64,7 @@ static void set_rows_sycl(
     const int64_t total_elements = ne00 * ne01 * ne02 * ne03;
 
     constexpr int block_size = 64;
-    const int64_t grid_size = (total_elements + block_size - 1) / block_size;
+    const int64_t grid_size = ceil_div(total_elements, block_size);
 
     sycl_parallel_for(
         stream,
