@@ -109,7 +109,6 @@ bool llama_gguf_reader::llama_gguf_reader_read_tensor_data(int64_t index, std::v
         return false;
     }
 
-    // Получаем ggml_type напрямую и сравниваем с GGML_TYPE_I32
     ggml_type tensor_ggml_type = gguf_get_tensor_type(ctx_internal, index);
     if (tensor_ggml_type != GGML_TYPE_I32) {
         std::cerr << "Error (GGUFReader::read_tensor_data): Tensor type for '"
@@ -120,7 +119,6 @@ bool llama_gguf_reader::llama_gguf_reader_read_tensor_data(int64_t index, std::v
 
     size_t expected_bytes = gguf_get_tensor_size(ctx_internal, index);
     if (expected_bytes == 0) {
-        // Если тензор пустой, просто возвращаем пустой вектор токенов
         tokens.clear();
         return true;
     }
@@ -136,7 +134,6 @@ bool llama_gguf_reader::llama_gguf_reader_read_tensor_data(int64_t index, std::v
 
     size_t data_offset_in_file = gguf_get_data_offset(ctx_internal) + gguf_get_tensor_offset(ctx_internal, index);
 
-    // Открываем файл для чтения данных, используя сохраненный путь
     std::ifstream file(m_file_path, std::ios::binary);
     if (!file.is_open()) {
         std::cerr << "Error (GGUFReader::read_tensor_data): Could not open GGUF file '" << m_file_path

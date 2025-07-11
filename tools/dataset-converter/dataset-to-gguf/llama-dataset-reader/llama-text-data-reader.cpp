@@ -16,7 +16,7 @@ llama_text_dataset_reader::llama_text_dataset_reader(const struct llama_model * 
 
 // Destructor
 llama_text_dataset_reader::~llama_text_dataset_reader() {
-    close();
+    llama_text_dataset_reader::close();
 }
 
 // Opens the text file for reading.

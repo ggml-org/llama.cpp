@@ -440,10 +440,7 @@ bool Testllama_gguf_converter_ConvertTextFileSuccess() {
     params.max_seq_len           = 128;
     params.pre_tokenized         = false;
     params.dataset_format        = "text";
-#ifdef LLAMA_PARQUET
-    params.parquet_text_column   = "text";    // Not used for text, but for completeness
-    params.parquet_tokens_column = "tokens";  // Not used for text, but for completeness
-#endif
+    params.dataset_column   = "data";    // Not used for text, but for completeness
     llama_gguf_converter converter;
     TEST_ASSERT(converter.llama_gguf_converter_convert(params, g_llama_model), "GGUF conversion failed");
 

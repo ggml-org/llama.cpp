@@ -1,4 +1,4 @@
-include_directories(.)
+include_directories(. ../../common)
 
 if(LLAMA_PARQUET)
     find_package(Arrow REQUIRED)

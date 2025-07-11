@@ -24,7 +24,7 @@ struct llama_parquet_dataset_reader : public llama_dataset_reader {
     // text_column_name: Name of the column containing raw text data.
     // tokens_column_name: Name of the column containing pre-tokenized data (list<int32>).
     llama_parquet_dataset_reader(const struct llama_model * model, int32_t max_seq_len, bool pre_tokenized,
-                                 const std::string & text_column_name, const std::string & tokens_column_name);
+                                 const std::string & dataset_column_name);
 
     // Destructor.
     ~llama_parquet_dataset_reader();
@@ -67,8 +67,7 @@ struct llama_parquet_dataset_reader : public llama_dataset_reader {
     int         current_column_index_;  // Index of the column containing text/tokens
     std::string m_file_path;            // Path to the Parquet file
 
-    std::string text_column_name_;      // Configurable name for the text column
-    std::string tokens_column_name_;    // Configurable name for the tokens column
+    std::string dataset_column_name_;      // Configurable name for column
 
     // Private helper to get the next batch of data (now a row group)
     bool llama_parquet_dataset_reader_get_next_batch();

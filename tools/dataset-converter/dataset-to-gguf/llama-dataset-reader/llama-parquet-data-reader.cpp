@@ -6,21 +6,18 @@
 
 // Constructor
 llama_parquet_dataset_reader::llama_parquet_dataset_reader(const struct llama_model * model, int32_t max_seq_len,
-                                                           bool pre_tokenized, const std::string & text_column_name,
-                                                           const std::string & tokens_column_name) :
+                                                           bool pre_tokenized, const std::string & dataset_column_name) :
     model_(model),
     max_seq_len_(max_seq_len),
     pre_tokenized_(pre_tokenized),
     current_row_group_index_(0),  // Initialize row group index
     current_row_in_table_(0),
     current_column_index_(-1),    // Initialize to -1, will be set in open
-    text_column_name_(text_column_name),
-    tokens_column_name_(tokens_column_name) {}
+    dataset_column_name_(dataset_column_name) {}
 
 // Destructor
 llama_parquet_dataset_reader::~llama_parquet_dataset_reader() {
-    close();
-    m_file_path.clear();  // Clear the stored path only on destruction
+    llama_parquet_dataset_reader::close();
 }
 
 // Opens the Parquet file for reading.
@@ -63,16 +60,16 @@ bool llama_parquet_dataset_reader::open(const std::string & path) {
 
     // Determine the column index based on pre_tokenized_ flag
     if (pre_tokenized_) {
-        current_column_index_ = schema->GetFieldIndex(tokens_column_name_);  // Use configurable name
+        current_column_index_ = schema->GetFieldIndex(dataset_column_name_);  // Use configurable name
         if (current_column_index_ == -1) {
             std::cerr << "Error (llama_parquet_dataset_reader::open): Pre-tokenized mode selected, but column '"
-                      << tokens_column_name_ << "' not found in Parquet schema." << std::endl;
+                      << dataset_column_name_ << "' not found in Parquet schema." << std::endl;
             close();
             return false;
         }
         // Validate column type: should be List<Int32>
         if (schema->field(current_column_index_)->type()->id() != arrow::Type::LIST) {
-            std::cerr << "Error (llama_parquet_dataset_reader::open): Column '" << tokens_column_name_
+            std::cerr << "Error (llama_parquet_dataset_reader::open): Column '" << dataset_column_name_
                       << "' is not of LIST type as expected for pre-tokenized data. Actual type: "
                       << schema->field(current_column_index_)->type()->ToString() << std::endl;
             close();
@@ -80,7 +77,7 @@ bool llama_parquet_dataset_reader::open(const std::string & path) {
         }
         auto list_type = std::static_pointer_cast<arrow::ListType>(schema->field(current_column_index_)->type());
         if (list_type->value_type()->id() != arrow::Type::INT32) {
-            std::cerr << "Error (llama_parquet_dataset_reader::open): List items in column '" << tokens_column_name_
+            std::cerr << "Error (llama_parquet_dataset_reader::open): List items in column '" << dataset_column_name_
                       << "' are not of INT32 type as expected. Actual value type: "
                       << list_type->value_type()->ToString() << std::endl;
             close();
@@ -88,16 +85,16 @@ bool llama_parquet_dataset_reader::open(const std::string & path) {
         }
 
     } else {
-        current_column_index_ = schema->GetFieldIndex(text_column_name_);  // Use configurable name
+        current_column_index_ = schema->GetFieldIndex(dataset_column_name_);  // Use configurable name
         if (current_column_index_ == -1) {
             std::cerr << "Error (llama_parquet_dataset_reader::open): Raw text mode selected, but column '"
-                      << text_column_name_ << "' not found in Parquet schema." << std::endl;
+                      << dataset_column_name_ << "' not found in Parquet schema." << std::endl;
             close();
             return false;
         }
         // Validate column type: should be String
         if (schema->field(current_column_index_)->type()->id() != arrow::Type::STRING) {
-            std::cerr << "Error (llama_parquet_dataset_reader::open): Column '" << text_column_name_
+            std::cerr << "Error (llama_parquet_dataset_reader::open): Column '" << dataset_column_name_
                       << "' is not of STRING type as expected for raw text. Actual type: "
                       << schema->field(current_column_index_)->type()->ToString() << std::endl;
             close();

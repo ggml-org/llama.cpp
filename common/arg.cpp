@@ -1470,7 +1470,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.ctx_shift = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
@@ -3455,41 +3455,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
 
-   add_opt(common_arg(
-        {"--preview-count"}, "<N>",
-        string_format("input file contains pre-tokenized data (space-separated token IDs)"),
-        [](common_params & params, int preview_count) {
-            params.preview_count = preview_count;
-        }
-    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
-
     add_opt(common_arg(
-        {"--detokenize-preview"},
-        string_format("detokenize previewed sequences (implies --preview)"),
-        [](common_params & params) {
-            params.detokenize_preview = params.do_preview = true;
+        {"--dataset-column"}, "<name>",
+        string_format("column name for data in dataset files"),
+        [](common_params & params, const std::string &dataset_column) {
+            params.dataset_column = dataset_column;
         }
     ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
 
-#ifdef LLAMA_PARQUET
-
-
-    add_opt(common_arg(
-        {"--parquet-text-column"}, "<name>",
-        string_format("column name for raw text in Parquet files (default: 'text')"),
-        [](common_params & params, const std::string &parquet_text_column) {
-            params.parquet_text_column = parquet_text_column;
-        }
-    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
-
-    add_opt(common_arg(
-        {"--parquet-tokens-column"}, "<name>",
-        string_format("column name for pre-tokenized data (list<int32>) in Parquet files (default: 'tokens')"),
-        [](common_params & params, const std::string &parquet_tokens_column) {
-            params.parquet_tokens_column = parquet_tokens_column;
-        }
-    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
-
-#endif
     return ctx_arg;
 }

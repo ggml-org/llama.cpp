@@ -34,8 +34,7 @@ bool llama_gguf_converter::llama_gguf_converter_convert(const struct common_para
         reader = std::make_unique<llama_text_dataset_reader>(model, params.max_seq_len, params.pre_tokenized);
 #ifdef LLAMA_PARQUET
     } else if (params.dataset_format == "parquet") {
-        reader = std::make_unique<llama_parquet_dataset_reader>(
-            model, params.max_seq_len, params.pre_tokenized, params.parquet_text_column, params.parquet_tokens_column);
+        reader = std::make_unique<llama_parquet_dataset_reader>(model, params.max_seq_len, params.pre_tokenized, params.dataset_column);
 #endif
     } else {
         fprintf(stderr, "error: Unsupported input type: %s\n", params.dataset_format.c_str());

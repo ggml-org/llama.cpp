@@ -449,12 +449,7 @@ struct common_params {
     int32_t max_seq_len = 2048;
     bool do_preview = false;
     bool pre_tokenized = false;
-    bool detokenize_preview = false;
-    int preview_count = 1;
-#ifdef LLAMA_PARQUET
-    std::string parquet_text_column = "text";
-    std::string parquet_tokens_column = "tokens";
-#endif
+    std::string dataset_column = "data";
 };
 
 // call once at the start of a program if it uses libcommon
