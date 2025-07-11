@@ -833,6 +833,9 @@ class TextModel(ModelBase):
         if chkhsh == "48f8e02c0359c0bbdd82f26909171fac1c18a457bb47573ed1fe3bbb2c1cfd4b":
             # ref: https://huggingface.co/tiiuae/Falcon-H1-34B-Base
             res = "falcon-h1"
+        if chkhsh == "f6791d196f87ce6b56a7d234be618e0d58f8cda3549416635b2bebcd22cd95c4":
+            # ref: https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct
+            res = "midm-2.0"
 
         if res is None:
             logger.warning("\n")
