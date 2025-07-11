@@ -3423,5 +3423,88 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    add_opt(common_arg(
+        {"--chat-llama3-8b-default"},
+        string_format("use default Llama3 8B model for chat server (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/Llama-3-8B-Q8_0-GGUF";
+            params.model.hf_file = "llama-3-8b-q8_0.gguf";
+            params.port = 8080;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 512;
+            params.n_batch = 512;
+            params.n_ctx = 4096;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--rerank-bge-default"},
+        string_format("use default BGE reranker model for reranking server (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/bge-reranker-base-Q8_0-GGUF";
+            params.model.hf_file = "bge-reranker-base-q8_0.gguf";
+            params.port = 8090;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ctx = 512;
+            params.reranking = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--fim-server-qwen-1.5b"},
+        string_format("use Qwen 2.5 Coder 1.5B model for a FIM server (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-1.5B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-1.5b-q8_0.gguf";
+            params.port = 8012;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--embedding-server-bge"},
+        string_format("use BGE Small EN model for an embedding server (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/bge-small-en-v1.5-Q8_0-GGUF";
+            params.model.hf_file = "bge-small-en-v1.5-q8_0.gguf";
+            params.port = 8033;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+            params.embd_normalize = 2;
+            params.n_ctx = 512;
+            params.embedding = true;
+            params.n_batch = 512;
+            params.n_ubatch = 512;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--spec-server-qwen-7b"},
+        string_format("use Qwen2.5 Coder 7B with 0.5B draft for speculative decoding (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/Qwen2.5-Coder-7B-Q8_0-GGUF";
+            params.model.hf_file = "qwen2.5-coder-7b-q8_0.gguf";
+            params.speculative.model.hf_repo = "ggml-org/Qwen2.5-Coder-0.5B-Q8_0-GGUF";
+            params.speculative.model.hf_file = "qwen2.5-coder-0.5b-q8_0.gguf";
+            params.speculative.n_gpu_layers = 99;
+            params.port = 8080;
+            params.n_gpu_layers = 99;
+            params.flash_attn = true;
+            params.n_ubatch = 1024;
+            params.n_batch = 1024;
+            params.n_ctx = 0;
+            params.n_cache_reuse = 256;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
     return ctx_arg;
 }
