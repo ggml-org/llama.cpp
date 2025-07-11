@@ -4,6 +4,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import com.example.llama.data.model.ModelFilter
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.model.ModelSortOrder
+import com.example.llama.viewmodel.Preselection
 
 /**
  * [BottomAppBar] configurations
@@ -42,8 +43,8 @@ sealed class BottomBarConfig {
         )
 
         data class RunActionConfig(
-            val selectedModel: ModelInfo?,
-            val onRun: (ModelInfo) -> Unit
+            val preselection: Preselection?,
+            val onClickRun: (Preselection) -> Unit,
         )
     }
 

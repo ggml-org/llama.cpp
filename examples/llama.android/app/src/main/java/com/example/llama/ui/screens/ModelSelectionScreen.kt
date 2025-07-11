@@ -20,6 +20,8 @@ import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DockedSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -27,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SearchBarDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -40,20 +43,24 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.example.llama.data.model.ModelInfo
 import com.example.llama.ui.components.InfoAction
 import com.example.llama.ui.components.InfoView
 import com.example.llama.ui.components.ModelCardFullExpandable
+import com.example.llama.util.formatFileByteSize
 import com.example.llama.viewmodel.ModelSelectionViewModel
+import com.example.llama.viewmodel.Preselection.RamWarning
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelSelectionScreen(
     onManageModelsClicked: () -> Unit,
+    onConfirmSelection: (ModelInfo, RamWarning) -> Unit,
     viewModel: ModelSelectionViewModel,
 ) {
     // Data: models
     val filteredModels by viewModel.filteredModels.collectAsState()
-    val preselectedModel by viewModel.preselectedModel.collectAsState()
+    val preselection by viewModel.preselection.collectAsState()
 
     // Query states
     val textFieldState = viewModel.searchFieldState
@@ -83,7 +90,7 @@ fun ModelSelectionScreen(
     }
 
     // Handle back button press
-    BackHandler(preselectedModel != null || isSearchActive) {
+    BackHandler(preselection != null || isSearchActive) {
         if (isSearchActive) {
             viewModel.toggleSearchState(false)
         } else {
@@ -143,7 +150,7 @@ fun ModelSelectionScreen(
                         items(items = queryResults, key = { it.id }) { model ->
                             ModelCardFullExpandable(
                                 model = model,
-                                isSelected = if (model == preselectedModel) true else null,
+                                isSelected = if (model == preselection?.modelInfo) true else null,
                                 onSelected = { selected ->
                                     if (selected) {
                                         toggleSearchFocusAndIme(false)
@@ -152,7 +159,7 @@ fun ModelSelectionScreen(
                                         toggleSearchFocusAndIme(true)
                                     }
                                 },
-                                isExpanded = model == preselectedModel,
+                                isExpanded = model == preselection?.modelInfo,
                                 onExpanded = { expanded ->
                                     viewModel.preselectModel(model, expanded)
                                     toggleSearchFocusAndIme(!expanded)
@@ -176,16 +183,29 @@ fun ModelSelectionScreen(
                     items(items = filteredModels, key = { it.id }) { model ->
                         ModelCardFullExpandable(
                             model = model,
-                            isSelected = if (model == preselectedModel) true else null,
+                            isSelected = if (model == preselection?.modelInfo) true else null,
                             onSelected = { selected ->
                                 if (!selected) viewModel.resetSelection()
                             },
-                            isExpanded = model == preselectedModel,
+                            isExpanded = model == preselection?.modelInfo,
                             onExpanded = { expanded ->
                                 viewModel.preselectModel(model, expanded)
                             }
                         )
                     }
+                }
+            }
+        }
+
+        // Show insufficient RAM warning
+        preselection?.let {
+            it.ramWarning?.let { warning ->
+                if (warning.showing) {
+                    RamErrorDialog(
+                        warning,
+                        onDismiss = { viewModel.dismissRamWarning() },
+                        onConfirm = { onConfirmSelection(it.modelInfo, warning) }
+                    )
                 }
             }
         }
@@ -203,6 +223,7 @@ private fun EmptyModelsView(
         else -> "No models match the selected filters"
     }
     InfoView(
+        modifier = Modifier.fillMaxSize(),
         title = "No Models Available",
         icon = Icons.Default.FolderOpen,
         message = message,
@@ -252,4 +273,43 @@ private fun EmptySearchResultsView(
             Text("Clear Search")
         }
     }
+}
+
+@Composable
+private fun RamErrorDialog(
+    ramError: RamWarning,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val requiredRam = formatFileByteSize(ramError.requiredRam)
+    val availableRam = formatFileByteSize(ramError.availableRam)
+
+    AlertDialog(
+        text = {
+            InfoView(
+                modifier = Modifier.fillMaxWidth(),
+                title = "Insufficient RAM",
+                icon = Icons.Default.Warning,
+                message = "You are trying to run a $requiredRam size model, " +
+                    "but currently there's only $availableRam memory available!",
+            )
+       },
+        containerColor = MaterialTheme.colorScheme.errorContainer,
+        titleContentColor = MaterialTheme.colorScheme.onErrorContainer,
+        textContentColor = MaterialTheme.colorScheme.onErrorContainer,
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = "Proceed",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    )
 }

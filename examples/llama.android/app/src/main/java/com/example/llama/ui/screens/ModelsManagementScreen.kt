@@ -115,6 +115,7 @@ fun ModelsManagementScreen(
                 else -> "No models match the selected filters"
             }
             InfoView(
+                modifier = Modifier.fillMaxSize(),
                 title = "No Models Available",
                 icon = Icons.Default.FolderOpen,
                 message = message,

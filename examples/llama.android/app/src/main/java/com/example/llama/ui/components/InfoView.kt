@@ -3,7 +3,6 @@ package com.example.llama.ui.components
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,13 +26,14 @@ data class InfoAction(
 
 @Composable
 fun InfoView(
+    modifier: Modifier = Modifier,
     title: String,
     icon: ImageVector,
     message: String? = null,
     action: InfoAction? = null
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(16.dp),
+        modifier = modifier.padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -62,10 +62,9 @@ fun InfoView(
             )
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-
         action?.let {
+            Spacer(modifier = Modifier.height(24.dp))
+
             Button(onClick = action.onAction) {
                 Icon(
                     imageVector = action.icon,

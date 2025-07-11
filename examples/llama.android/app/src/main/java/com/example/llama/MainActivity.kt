@@ -193,7 +193,7 @@ fun AppContent(
             val showSortMenu by modelSelectionViewModel.showSortMenu.collectAsState()
             val activeFilters by modelSelectionViewModel.activeFilters.collectAsState()
             val showFilterMenu by modelSelectionViewModel.showFilterMenu.collectAsState()
-            val preselectedModel by modelSelectionViewModel.preselectedModel.collectAsState()
+            val preselection by modelSelectionViewModel.preselection.collectAsState()
 
             ScaffoldConfig(
                 topBarConfig =
@@ -230,11 +230,12 @@ fun AppContent(
                         toggleMenu = modelSelectionViewModel::toggleFilterMenu
                     ),
                     runAction = BottomBarConfig.ModelSelection.RunActionConfig(
-                        selectedModel = preselectedModel,
-                        onRun = { model ->
-                            modelSelectionViewModel.confirmSelectedModel(model)
-                            navigationActions.navigateToModelLoading()
-                            modelSelectionViewModel.toggleSearchState(false)
+                        preselection = preselection,
+                        onClickRun = { preselection ->
+                            if (modelSelectionViewModel.selectModel(preselection)) {
+                                navigationActions.navigateToModelLoading()
+                                modelSelectionViewModel.toggleSearchState(false)
+                            }
                         }
                     )
                 )
@@ -436,6 +437,12 @@ fun AppContent(
                     ModelSelectionScreen(
                         onManageModelsClicked = {
                             navigationActions.navigateToModelsManagement()
+                        },
+                        onConfirmSelection = { modelInfo, ramWarning ->
+                            if (modelSelectionViewModel.confirmSelectedModel(modelInfo, ramWarning)) {
+                                navigationActions.navigateToModelLoading()
+                                modelSelectionViewModel.toggleSearchState(false)
+                            }
                         },
                         viewModel = modelSelectionViewModel
                     )

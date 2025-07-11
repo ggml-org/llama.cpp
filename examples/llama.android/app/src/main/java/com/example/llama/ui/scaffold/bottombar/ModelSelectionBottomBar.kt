@@ -173,12 +173,12 @@ fun ModelSelectionBottomBar(
         floatingActionButton = {
             // Only show FAB if a model is selected
             AnimatedVisibility(
-                visible = runAction.selectedModel != null,
+                visible = runAction.preselection != null,
                 enter = scaleIn() + fadeIn(),
                 exit = scaleOut() + fadeOut()
             ) {
                 FloatingActionButton(
-                    onClick = { runAction.selectedModel?.let { runAction.onRun(it) } },
+                    onClick = { runAction.preselection?.let { runAction.onClickRun(it) } },
                     containerColor = MaterialTheme.colorScheme.primary
                 ) {
                     Icon(
