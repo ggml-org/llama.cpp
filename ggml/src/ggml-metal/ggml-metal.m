@@ -147,7 +147,15 @@ struct ggml_metal_kernel {
 
 enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_ADD,
+    GGML_METAL_KERNEL_TYPE_ADD_FUSE_2,
+    GGML_METAL_KERNEL_TYPE_ADD_FUSE_4,
+    GGML_METAL_KERNEL_TYPE_ADD_FUSE_6,
+    GGML_METAL_KERNEL_TYPE_ADD_FUSE_8,
     GGML_METAL_KERNEL_TYPE_ADD_ROW,
+    GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_2,
+    GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_4,
+    GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_6,
+    GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_8,
     GGML_METAL_KERNEL_TYPE_SUB,
     GGML_METAL_KERNEL_TYPE_SUB_ROW,
     GGML_METAL_KERNEL_TYPE_MUL,
@@ -1129,7 +1137,15 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         // simd_sum and simd_max requires MTLGPUFamilyApple7
 
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD,                             add,                             true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_FUSE_2,                      add_fuse_2,                      true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_FUSE_4,                      add_fuse_4,                      true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_FUSE_6,                      add_fuse_6,                      true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_FUSE_8,                      add_fuse_8,                      true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_ROW,                         add_row,                         true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_2,                  add_row_fuse_2,                  true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_4,                  add_row_fuse_4,                  true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_6,                  add_row_fuse_6,                  true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_8,                  add_row_fuse_8,                  true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SUB,                             sub,                             true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SUB_ROW,                         sub_row,                         true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL,                             mul,                             true);
@@ -1875,7 +1891,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
     }
 }
 
-static bool ggml_metal_encode_node(
+static int ggml_metal_encode_node(
                         ggml_backend_t   backend,
                                    int   idx,
           id<MTLComputeCommandEncoder>   encoder,
@@ -1885,7 +1901,12 @@ static bool ggml_metal_encode_node(
 
     struct ggml_cgraph * gf = ctx->gf;
 
-    struct ggml_tensor * node = ggml_graph_node(gf, idx);
+    enum ggml_op ops[8];
+
+    struct ggml_tensor ** nodes = ggml_graph_nodes(gf);
+    struct ggml_tensor *  node  = nodes[idx];
+
+    struct ggml_tensor ** fuse = nodes + idx + 1;
 
     //GGML_LOG_INFO("%s: encoding node %3d, op = %8s\n", __func__, idx, ggml_op_name(node->op));
 
@@ -1895,7 +1916,7 @@ static bool ggml_metal_encode_node(
     struct ggml_tensor * dst  = node;
 
     if (ggml_is_empty(dst)) {
-        return true;
+        return 1;
     }
 
     switch (dst->op) {
@@ -1906,7 +1927,7 @@ static bool ggml_metal_encode_node(
         case GGML_OP_PERMUTE:
             {
                 // noop -> next node
-            } return true;
+            } return 1;
         default:
             {
             } break;
@@ -1972,6 +1993,8 @@ static bool ggml_metal_encode_node(
     id<MTLBuffer> id_src1 = src1 ? ggml_metal_get_buffer(src1, &offs_src1) : nil;
     id<MTLBuffer> id_src2 = src2 ? ggml_metal_get_buffer(src2, &offs_src2) : nil;
     id<MTLBuffer> id_dst  = dst  ? ggml_metal_get_buffer(dst,  &offs_dst)  : nil;
+
+    int n_fuse = 1;
 
 #if 0
     GGML_LOG_INFO("%s: op - %s\n", __func__, ggml_op_name(dst->op));
@@ -2050,6 +2073,29 @@ static bool ggml_metal_encode_node(
 
                 id<MTLComputePipelineState> pipeline = nil;
 
+                {
+                    ops[0] = GGML_OP_ADD;
+                    ops[1] = GGML_OP_ADD;
+                    ops[2] = GGML_OP_ADD;
+                    ops[3] = GGML_OP_ADD;
+                    ops[4] = GGML_OP_ADD;
+                    ops[5] = GGML_OP_ADD;
+                    ops[6] = GGML_OP_ADD;
+                    ops[7] = GGML_OP_ADD;
+
+                    for (n_fuse = 8; n_fuse > 1; --n_fuse) {
+                        if (n_fuse % 2 == 1) {
+                            continue;
+                        }
+                        if (ggml_can_fuse(gf, idx, ops, n_fuse)) {
+                            if (ggml_are_same_layout(node->src[1], fuse[0]->src[1]) &&
+                                ggml_are_same_layout(node->src[1], fuse[n_fuse - 2]->src[1])) {
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 if (ggml_nelements(src1) == ne10 && ggml_is_contiguous(src1) && ne00 % 4 == 0 && ne10 % 4 == 0) {
                     GGML_ASSERT(ggml_is_contiguous(src0));
 
@@ -2057,7 +2103,20 @@ static bool ggml_metal_encode_node(
                     GGML_ASSERT(ne11 == 1);
 
                     switch (dst->op) {
-                        case GGML_OP_ADD: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_ROW].pipeline; break;
+                        case GGML_OP_ADD:
+                            {
+                                switch (n_fuse) {
+                                    case 2: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_2].pipeline; break;
+                                    case 4: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_4].pipeline; break;
+                                    case 6: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_6].pipeline; break;
+                                    case 8: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_ROW_FUSE_8].pipeline; break;
+                                    default:
+                                            {
+                                                GGML_ASSERT(n_fuse == 1);
+                                                pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_ROW].pipeline;
+                                            }
+                                }
+                            } break;
                         case GGML_OP_SUB: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SUB_ROW].pipeline; break;
                         case GGML_OP_MUL: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_ROW].pipeline; break;
                         case GGML_OP_DIV: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_DIV_ROW].pipeline; break;
@@ -2067,7 +2126,21 @@ static bool ggml_metal_encode_node(
                     bcast_row = true;
                 } else {
                     switch (dst->op) {
-                        case GGML_OP_ADD: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD].pipeline; break;
+                        case GGML_OP_ADD:
+                            {
+                                //GGML_LOG_INFO("XXXXXXXXXXXXXXXXXXXXXXXXX n_fuse = %d\n", n_fuse);
+                                switch (n_fuse) {
+                                    case 2: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_FUSE_2].pipeline; break;
+                                    case 4: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_FUSE_4].pipeline; break;
+                                    case 6: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_FUSE_6].pipeline; break;
+                                    case 8: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD_FUSE_8].pipeline; break;
+                                    default:
+                                            {
+                                                GGML_ASSERT(n_fuse == 1);
+                                                pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_ADD].pipeline; break;
+                                            }
+                                }
+                            } break;
                         case GGML_OP_SUB: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SUB].pipeline; break;
                         case GGML_OP_MUL: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL].pipeline; break;
                         case GGML_OP_DIV: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_DIV].pipeline; break;
@@ -2107,7 +2180,16 @@ static bool ggml_metal_encode_node(
                 [encoder setBytes:&args length:sizeof(args) atIndex:0];
                 [encoder setBuffer:id_src0 offset:offs_src0 atIndex:1];
                 [encoder setBuffer:id_src1 offset:offs_src1 atIndex:2];
-                [encoder setBuffer:id_dst  offset:offs_dst  atIndex:3];
+                for (int f = 0; f < n_fuse - 1; ++f) {
+                    id_src1 = ggml_metal_get_buffer(fuse[f]->src[1], &offs_src1);
+
+                    [encoder setBuffer:id_src1 offset:offs_src1 atIndex:3 + f];
+
+                    if (f + 1 == n_fuse - 1) {
+                        id_dst = ggml_metal_get_buffer(fuse[f], &offs_dst);
+                    }
+                }
+                [encoder setBuffer:id_dst  offset:offs_dst  atIndex:2 + n_fuse];
 
                 if (bcast_row) {
                     const int64_t n = ggml_nelements(dst)/4;
@@ -2674,7 +2756,7 @@ static bool ggml_metal_encode_node(
                 id<MTLBuffer> h_src0 = h_src0 = ggml_metal_mem_pool_alloc(mem_pool, ggml_nbytes(src0));
                 if (!h_src0) {
                     GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, ggml_nbytes(src0));
-                    return false;
+                    return 0;
                 }
 
                 offs_src0 = 0;
@@ -3550,7 +3632,7 @@ static bool ggml_metal_encode_node(
                     id<MTLBuffer> h_src1 = ggml_metal_mem_pool_alloc(mem_pool, s_src1);
                     if (!h_src1) {
                         GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_src1);
-                        return false;
+                        return 0;
                     }
 
                     const int64_t neh0 = ne0;
@@ -3566,7 +3648,7 @@ static bool ggml_metal_encode_node(
                     id<MTLBuffer> h_dst = ggml_metal_mem_pool_alloc(mem_pool, s_dst);
                     if (!h_dst) {
                         GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_dst);
-                        return false;
+                        return 0;
                     }
 
                     // tokens per expert
@@ -3574,7 +3656,7 @@ static bool ggml_metal_encode_node(
                     id<MTLBuffer> h_tpe = ggml_metal_mem_pool_alloc(mem_pool, s_tpe);
                     if (!h_tpe) {
                         GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_tpe);
-                        return false;
+                        return 0;
                     }
 
                     // id map
@@ -3583,7 +3665,7 @@ static bool ggml_metal_encode_node(
                     id<MTLBuffer> h_ids = ggml_metal_mem_pool_alloc(mem_pool, s_ids);
                     if (!h_ids) {
                         GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_ids);
-                        return false;
+                        return 0;
                     }
 
                     {
@@ -5442,7 +5524,7 @@ static bool ggml_metal_encode_node(
             }
     }
 
-    return true;
+    return n_fuse;
 }
 
 static enum ggml_status ggml_metal_graph_compute(
@@ -5948,20 +6030,22 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
         struct ggml_metal_mem_pool * mem_pool = ctx->cmd_bufs[cb_idx].mem_pool;
         ggml_metal_mem_pool_reset(mem_pool);
 
-        for (int idx = node_start; idx < node_end; ++idx) {
+        for (int idx = node_start; idx < node_end;) {
             if (should_capture) {
                 [encoder pushDebugGroup:[NSString stringWithCString:ggml_op_desc(ggml_graph_node(ctx->gf, idx)) encoding:NSUTF8StringEncoding]];
             }
 
-            const bool res = ggml_metal_encode_node(backend, idx, encoder, mem_pool);
+            const int res = ggml_metal_encode_node(backend, idx, encoder, mem_pool);
 
             if (should_capture) {
                 [encoder popDebugGroup];
             }
 
-            if (!res) {
+            if (res == 0) {
                 break;
             }
+
+            idx += res;
         }
 
         [encoder endEncoding];
