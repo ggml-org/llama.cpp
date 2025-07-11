@@ -113,6 +113,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_CONV_TRANSPOSE_1D
     false,  // GGML_OP_IM2COL
     false,  // GGML_OP_IM2COL_BACK
+    false,  // GGML_OP_CONV_2D
     false,  // GGML_OP_CONV_2D_DW
     false,  // GGML_OP_CONV_TRANSPOSE_2D
     false,  // GGML_OP_POOL_1D

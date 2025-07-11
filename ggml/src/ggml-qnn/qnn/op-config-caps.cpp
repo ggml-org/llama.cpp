@@ -158,6 +158,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_CONV_TRANSPOSE_1D
     {}, // GGML_OP_IM2COL
     {}, // GGML_OP_IM2COL_BACK
+    {}, // GGML_OP_CONV_2D
     {}, // GGML_OP_CONV_2D_DW
     {}, // GGML_OP_CONV_TRANSPOSE_2D
     {}, // GGML_OP_POOL_1D
@@ -335,6 +336,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_CONV_TRANSPOSE_1D
     nullptr,  // GGML_OP_IM2COL
     nullptr,  // GGML_OP_IM2COL_BACK
+    nullptr,  // GGML_OP_CONV_2D
     nullptr,  // GGML_OP_CONV_2D_DW
     nullptr,  // GGML_OP_CONV_TRANSPOSE_2D
     nullptr,  // GGML_OP_POOL_1D
@@ -389,7 +391,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_UNARY_OP_HARDSWISH
     nullptr,  // GGML_UNARY_OP_HARDSIGMOID
     nullptr,  // GGML_UNARY_OP_EXP
-    nullptr, // GGML_UNARY_OP_GELU_ERF
+    nullptr,  // GGML_UNARY_OP_GELU_ERF
 };
 
 static_assert(kOpConstructors[GGML_OP_NONE] == nullptr, "GGML_OP_NONE does not match the nullptr function");
