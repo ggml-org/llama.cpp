@@ -7078,6 +7078,7 @@ class SmolLM3Model(LlamaModel):
             self.gguf_writer.add_chat_template(chat_template)
 
 
+@ModelBase.register("Lfm2ForCausalLM")
 @ModelBase.register("LFM2ForCausalLM")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
