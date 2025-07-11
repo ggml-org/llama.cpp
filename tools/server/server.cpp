@@ -4761,6 +4761,8 @@ int main(int argc, char ** argv) {
                 {"id", i},
                 {"path", lora.path},
                 {"scale", lora.scale},
+                {"task_name", lora.task_name},
+                {"prompt_prefix", lora.prompt_prefix},
             });
         }
         res_ok(res, result);
