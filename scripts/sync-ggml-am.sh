@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Synchronize ggml changes to llama.cpp
 #
@@ -83,7 +83,6 @@ while read c; do
         src/ggml-cpu/* \
         src/ggml-cuda/* \
         src/ggml-hip/* \
-        src/ggml-kompute/* \
         src/ggml-metal/* \
         src/ggml-musa/* \
         src/ggml-opencl/* \
@@ -141,7 +140,6 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
     # src/ggml-cpu/*       -> ggml/src/ggml-cpu/*
     # src/ggml-cuda/*      -> ggml/src/ggml-cuda/*
     # src/ggml-hip/*       -> ggml/src/ggml-hip/*
-    # src/ggml-kompute/*   -> ggml/src/ggml-kompute/*
     # src/ggml-metal/*     -> ggml/src/ggml-metal/*
     # src/ggml-musa/*      -> ggml/src/ggml-musa/*
     # src/ggml-opencl/*    -> ggml/src/ggml-opencl/*
@@ -174,7 +172,6 @@ if [ -f $SRC_LLAMA/ggml-src.patch ]; then
         -e 's/([[:space:]]| [ab]\/)src\/ggml-cpu\//\1ggml\/src\/ggml-cpu\//g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-cuda\//\1ggml\/src\/ggml-cuda\//g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-hip\//\1ggml\/src\/ggml-hip\//g' \
-        -e 's/([[:space:]]| [ab]\/)src\/ggml-kompute\//\1ggml\/src\/ggml-kompute\//g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-metal\//\1ggml\/src\/ggml-metal\//g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-opencl\//\1ggml\/src\/ggml-opencl\//g' \
         -e 's/([[:space:]]| [ab]\/)src\/ggml-rpc\//\1ggml\/src\/ggml-rpc\//g' \

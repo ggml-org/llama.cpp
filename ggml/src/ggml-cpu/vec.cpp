@@ -37,35 +37,35 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         for (int i = 0; i < np; i += ggml_f32_step) {
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
-            sum1 = GGML_F32_VEC_FMA(ax1, ay1, sum1);
+            sum1 = GGML_F32_VEC_FMA(sum1, ax1, ay1);
 
             ax2 = GGML_F32_VEC_LOAD(x + i + 1*ggml_f32_epr);
             ay2 = GGML_F32_VEC_LOAD(y + i + 1*ggml_f32_epr);
-            sum2 = GGML_F32_VEC_FMA(ax2, ay2, sum2);
+            sum2 = GGML_F32_VEC_FMA(sum2, ax2, ay2);
 
             ax3 = GGML_F32_VEC_LOAD(x + i + 2*ggml_f32_epr);
             ay3 = GGML_F32_VEC_LOAD(y + i + 2*ggml_f32_epr);
-            sum3 = GGML_F32_VEC_FMA(ax3, ay3, sum3);
+            sum3 = GGML_F32_VEC_FMA(sum3, ax3, ay3);
 
             ax4 = GGML_F32_VEC_LOAD(x + i + 3*ggml_f32_epr);
             ay4 = GGML_F32_VEC_LOAD(y + i + 3*ggml_f32_epr);
-            sum4 = GGML_F32_VEC_FMA(ax4, ay4, sum4);
+            sum4 = GGML_F32_VEC_FMA(sum4, ax4, ay4);
 
             ax5 = GGML_F32_VEC_LOAD(x + i + 4*ggml_f32_epr);
             ay5 = GGML_F32_VEC_LOAD(y + i + 4*ggml_f32_epr);
-            sum5 = GGML_F32_VEC_FMA(ax5, ay5, sum5);
+            sum5 = GGML_F32_VEC_FMA(sum5, ax5, ay5);
 
             ax6 = GGML_F32_VEC_LOAD(x + i + 5*ggml_f32_epr);
             ay6 = GGML_F32_VEC_LOAD(y + i + 5*ggml_f32_epr);
-            sum6 = GGML_F32_VEC_FMA(ax6, ay6, sum6);
+            sum6 = GGML_F32_VEC_FMA(sum6, ax6, ay6);
 
             ax7 = GGML_F32_VEC_LOAD(x + i + 6*ggml_f32_epr);
             ay7 = GGML_F32_VEC_LOAD(y + i + 6*ggml_f32_epr);
-            sum7 = GGML_F32_VEC_FMA(ax7, ay7, sum7);
+            sum7 = GGML_F32_VEC_FMA(sum7, ax7, ay7);
 
             ax8 = GGML_F32_VEC_LOAD(x + i + 7*ggml_f32_epr);
             ay8 = GGML_F32_VEC_LOAD(y + i + 7*ggml_f32_epr);
-            sum8 = GGML_F32_VEC_FMA(ax8, ay8, sum8);
+            sum8 = GGML_F32_VEC_FMA(sum8, ax8, ay8);
         }
         // leftovers
         // Since 8 unrolls are done in above loop, leftovers lie in range [0, ggml_f32_step] which is handled in below loop
@@ -73,7 +73,7 @@ void ggml_vec_dot_f32(int n, float * GGML_RESTRICT s, size_t bs, const float * G
         for (int i = np; i < np2; i += ggml_f32_epr) {
             ax1 = GGML_F32_VEC_LOAD(x + i);
             ay1 = GGML_F32_VEC_LOAD(y + i);
-            sum1 = GGML_F32_VEC_FMA(ax1, ay1, sum1);
+            sum1 = GGML_F32_VEC_FMA(sum1, ax1, ay1);
         }
         // maximum number of leftover elements will be less that ggml_f32_epr. Apply predicated svmad on available elements only
         if (np2 < n) {
