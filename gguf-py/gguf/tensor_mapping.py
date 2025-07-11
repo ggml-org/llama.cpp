@@ -1015,6 +1015,18 @@ class TensorNameMap:
             "backbone.posnet.{bid}.proj_out", # wavtokenizer
         ),
 
+        MODEL_TENSOR.SHORTCONV_CONV: (
+            "model.layers.{bid}.conv.conv",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_INPROJ: (
+            "model.layers.{bid}.conv.in_proj",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_OUTPROJ: (
+            "model.layers.{bid}.conv.out_proj",
+        ),
+
         #############################################################################
         ## Vision encoder
 
