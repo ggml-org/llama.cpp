@@ -761,9 +761,6 @@ class TextModel(ModelBase):
         if chkhsh == "4e2b24cc4770243d65a2c9ec19770a72f08cffc161adbb73fcbb6b7dd45a0aae":
             # ref: https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct
             res = "exaone"
-        if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
-            # ref: temporary model
-            res = "exaone4"
         if chkhsh == "fcace8b9cac38ce847670c970cd5892031a753a1ef381abd1d9af00f713da085":
             # ref: https://huggingface.co/microsoft/phi-2
             res = "phi-2"
@@ -839,6 +836,9 @@ class TextModel(ModelBase):
         if chkhsh == "f6791d196f87ce6b56a7d234be618e0d58f8cda3549416635b2bebcd22cd95c4":
             # ref: https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct
             res = "midm-2.0"
+        if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
+            # ref: temporary model
+            res = "exaone4"
 
         if res is None:
             logger.warning("\n")
@@ -6403,7 +6403,6 @@ class Exaone4Model(TextModel):
         self.gguf_writer.add_token_types(toktypes)
 
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        special_vocab.chat_template = "exaone4"
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
@@ -6425,7 +6424,18 @@ class Exaone4Model(TextModel):
 
         if hparams.get("sliding_window") is not None:
             self.gguf_writer.add_sliding_window(hparams["sliding_window"])
-            # sliding window pattern 어떻게?
+            if "layer_types" in hparams:
+                self.gguf_writer.add_sliding_window_pattern([t == "sliding_attention" for t in hparams["layer_types"]])
+            elif "sliding_window_pattern" in hparams:
+                sliding_window_pattern = []
+                if isinstance(hparams["sliding_window_pattern"], str):  # e.g. LLLG
+                    for i in range(hparams["num_hidden_layers"]):
+                        sliding_window_pattern.append(hparams["sliding_window_pattern"][i % len(hparams["sliding_window_pattern"])] == "L")
+                if isinstance(hparams["sliding_window_pattern"], int):  # e.g. 4
+                    for i in range(hparams["num_hidden_layers"]):
+                        sliding_window_pattern.append((i+1) % hparams["sliding_window_pattern"] != 0)
+                if len(sliding_window_pattern) == hparams["num_hidden_layers"]:
+                    self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
         
         rope_scaling = self.hparams.get("rope_scaling") or {}
         if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
