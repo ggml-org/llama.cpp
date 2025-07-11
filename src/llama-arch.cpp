@@ -74,6 +74,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_ARWKV7,           "arwkv7"           },
     { LLM_ARCH_GRANITE,          "granite"          },
     { LLM_ARCH_GRANITE_MOE,      "granitemoe"       },
+    { LLM_ARCH_GRANITE_HYBRID,   "granitehybrid"    },
     { LLM_ARCH_CHAMELEON,        "chameleon"        },
     { LLM_ARCH_WAVTOKENIZER_DEC, "wavtokenizer-dec" },
     { LLM_ARCH_PLM,              "plm"              },
@@ -155,7 +156,6 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_SCALE,                        "%s.attention.scale"                        },
     { LLM_KV_ATTENTION_KEY_LENGTH_MLA,               "%s.attention.key_length_mla"               },
     { LLM_KV_ATTENTION_VALUE_LENGTH_MLA,             "%s.attention.value_length_mla"             },
-    { LLM_KV_ATTENTION_LAYER_INDICES,                "%s.attention.layer_indices"                },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,      "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_SECTIONS,   "%s.rope.dimension_sections"              },
@@ -1674,6 +1674,43 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
+        LLM_ARCH_GRANITE_HYBRID,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,     "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,    "output_norm" },
+            { LLM_TENSOR_OUTPUT,         "output" },
+            { LLM_TENSOR_ATTN_NORM,      "blk.%d.attn_norm" },
+            // mamba(2) ssm layers
+            { LLM_TENSOR_SSM_IN,         "blk.%d.ssm_in" },
+            { LLM_TENSOR_SSM_CONV1D,     "blk.%d.ssm_conv1d" },
+            { LLM_TENSOR_SSM_DT,         "blk.%d.ssm_dt" },
+            { LLM_TENSOR_SSM_A,          "blk.%d.ssm_a" },
+            { LLM_TENSOR_SSM_D,          "blk.%d.ssm_d" },
+            { LLM_TENSOR_SSM_NORM,       "blk.%d.ssm_norm" },
+            { LLM_TENSOR_SSM_OUT,        "blk.%d.ssm_out" },
+            // attention layers
+            { LLM_TENSOR_ATTN_Q,         "blk.%d.attn_q" },
+            { LLM_TENSOR_ATTN_K,         "blk.%d.attn_k" },
+            { LLM_TENSOR_ATTN_V,         "blk.%d.attn_v" },
+            { LLM_TENSOR_ATTN_OUT,       "blk.%d.attn_output" },
+            // dense FFN
+            { LLM_TENSOR_FFN_NORM,       "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,       "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,       "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,         "blk.%d.ffn_up" },
+            // moe FFN
+            { LLM_TENSOR_FFN_NORM,       "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE_INP,   "blk.%d.ffn_gate_inp" },
+            { LLM_TENSOR_FFN_GATE_EXPS,  "blk.%d.ffn_gate_exps" },
+            { LLM_TENSOR_FFN_DOWN_EXPS,  "blk.%d.ffn_down_exps" },
+            { LLM_TENSOR_FFN_UP_EXPS,    "blk.%d.ffn_up_exps" },
+            // shared expert
+            { LLM_TENSOR_FFN_GATE_SHEXP, "blk.%d.ffn_gate_shexp" },
+            { LLM_TENSOR_FFN_DOWN_SHEXP, "blk.%d.ffn_down_shexp" },
+            { LLM_TENSOR_FFN_UP_SHEXP,   "blk.%d.ffn_up_shexp" },
+        },
+    },
+    {
         LLM_ARCH_CHAMELEON,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -2059,11 +2096,11 @@ bool llm_arch_is_recurrent(const llm_arch & arch) {
 }
 
 bool llm_arch_is_hybrid(const llm_arch & arch) {
-    // List all mamba-attention hybrid models here
     switch (arch) {
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_PLAMO2:
+        case LLM_ARCH_GRANITE_HYBRID:
             return true;
         default:
             return false;
