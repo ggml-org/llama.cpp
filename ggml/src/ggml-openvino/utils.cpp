@@ -9,10 +9,8 @@
 #include <memory>
 #include <openvino/core/any.hpp>
 #include <openvino/core/graph_util.hpp>
-#include <openvino/core/partial_shape.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/frontend/manager.hpp>
-#include <openvino/op/parameter.hpp>
 #include <openvino/openvino.hpp>
 #include <openvino/runtime/compiled_model.hpp>
 #include <openvino/runtime/infer_request.hpp>
@@ -89,7 +87,6 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     if (cache_dir && !is_static) {
         core.set_property(ov::cache_dir(cache_dir));
     }
-    // core.set_property(ov::enable_profiling(true));
 
     static std::unordered_map<struct ggml_cgraph*, std::shared_ptr<ov::InferRequest>> infer_request_cache;
     static std::unordered_map<struct ggml_cgraph*, std::vector<std::string>> ov_input_names_cache;
@@ -157,6 +154,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
             auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
             model = ov::frontend::ggml::FrontEnd::convert(input_model);
+            ggml_decoder->clear_model_weights();
             conversion_end_time = ggml_time_us();
 
             auto compiled_model = core.compile_model(model, device, config);

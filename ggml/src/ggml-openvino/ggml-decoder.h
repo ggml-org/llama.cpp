@@ -108,6 +108,8 @@ public:
 
     ov::PartialShape get_graph_input_shape(const ggml_tensor* src) const;
 
+    void clear_model_weights() { m_model_weights.clear(); }
+
 private:
     void set_input_output(ggml_tensor* node);
     void add_extra_inputs();
