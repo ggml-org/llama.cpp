@@ -761,6 +761,9 @@ class TextModel(ModelBase):
         if chkhsh == "4e2b24cc4770243d65a2c9ec19770a72f08cffc161adbb73fcbb6b7dd45a0aae":
             # ref: https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct
             res = "exaone"
+        if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
+            # ref: temporary model
+            res = "exaone4"
         if chkhsh == "fcace8b9cac38ce847670c970cd5892031a753a1ef381abd1d9af00f713da085":
             # ref: https://huggingface.co/microsoft/phi-2
             res = "phi-2"
@@ -6373,6 +6376,77 @@ class ExaoneModel(TextModel):
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
                 assert low_freq_wavelen != high_freq_wavelen
+
+                rope_factors = []
+                for freq in freqs:
+                    wavelen = 2 * math.pi / freq
+                    if wavelen < high_freq_wavelen:
+                        rope_factors.append(1)
+                    elif wavelen > low_freq_wavelen:
+                        rope_factors.append(factor)
+                    else:
+                        smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+                        rope_factors.append(1 / ((1 - smooth) / factor + smooth))
+
+                yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
+
+
+@ModelBase.register("Exaone4ForCausalLM")
+class Exaone4Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.EXAONE4
+
+    def set_vocab(self):
+        tokens, toktypes, tokpre = self.get_vocab_base()
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.chat_template = "exaone4"
+        special_vocab.add_to_gguf(self.gguf_writer)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+        
+        self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 131072))
+        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
+        self.gguf_writer.add_feed_forward_length(hparams.get("intermediate_size", 4 * hparams["hidden_size"]))
+        self.gguf_writer.add_block_count(hparams["num_hidden_layers"])
+        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
+        self.gguf_writer.add_head_count_kv(hparams.get("num_key_value_heads", hparams["num_attention_heads"]))
+        self.gguf_writer.add_layer_norm_rms_eps(hparams.get("layer_norm_epsilon", 1e-5))
+        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 1_000_000.0))
+        self.gguf_writer.add_key_length(hparams["head_dim"])
+        self.gguf_writer.add_value_length(hparams["head_dim"])
+        self.gguf_writer.add_file_type(self.ftype)
+
+        if hparams.get("sliding_window") is not None:
+            self.gguf_writer.add_sliding_window(hparams["sliding_window"])
+            # sliding window pattern 어떻게?
+        
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
+            if rope_scaling.get("rope_type", '').lower() == "llama3":
+                base = self.hparams.get("rope_theta", 1_000_000.0)
+                if (dim := self.hparams.get("head_dim")) is None:
+                    dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+                freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))
+
+                factor = rope_scaling.get("factor", 16.0)
+                low_freq_factor = rope_scaling.get("low_freq_factor", 1.0)
+                high_freq_factor = rope_scaling.get("high_freq_factor", 4.0)
+                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+
+                low_freq_wavelen = old_context_len / low_freq_factor
+                high_freq_wavelen = old_context_len / high_freq_factor
 
                 rope_factors = []
                 for freq in freqs:
