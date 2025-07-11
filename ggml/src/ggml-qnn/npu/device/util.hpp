@@ -54,6 +54,8 @@ inline constexpr const char * op_get_name(npu_device_tensor_op op) {
             return "RMS_NORM";
         case NPU_OP_FLASH_ATTN:
             return "FLASH_ATTN_EXT";
+        case NPU_OP_ROPE:
+            return "ROPE";
         default:
             return "UNKNOWN";
     }
@@ -62,6 +64,20 @@ inline constexpr const char * op_get_name(npu_device_tensor_op op) {
 inline bool is_transposed_or_permuted(const npu_device_nb_type & nb) {
     // Check if the tensor is transposed or permuted
     return (nb[0] > nb[1]) || (nb[1] > nb[2]) || (nb[2] > nb[3]);
+}
+
+inline bool is_same_shape(const npu_device_ne_type & src, const npu_device_ne_type & dst) {
+    for (size_t i = 0; i < DEVICE_TENSOR_MAX_DIMS; ++i) {
+        if (src[i] != dst[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+inline bool is_same_shape(const npu_device_tensor_spec & src, const npu_device_tensor_spec & dst) {
+    return is_same_shape(src.ne, dst.ne);
 }
 
 class power_utils {

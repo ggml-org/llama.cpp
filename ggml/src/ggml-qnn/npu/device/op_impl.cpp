@@ -6,6 +6,7 @@
 
 #include "op_flash_attn.hpp"
 #include "op_mul_mat.hpp"
+#include "op_rope.hpp"
 #include "type_traits.hpp"
 #include "vec_ops.hpp"
 
@@ -62,7 +63,7 @@ inline void vec_op_impl(const _TyData * src0, const _TyData * src1, size_t count
             (leftover_bytes + hexagon::unaligned_bytes(iptr1) > hexagon::kBytesPerVector) ? *iptr1 : prev1;
         curr1 = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
 
-        q6op_vstu_variable_ARV(optr, leftover_bytes, _OpIntrinsic(curr0, curr1));
+        hexagon::q6op_vstu_variable_ARV(optr, leftover_bytes, _OpIntrinsic(curr0, curr1));
     }
 }
 
@@ -179,16 +180,6 @@ template <auto _RowFunc> bool element_wise_op(hexagon::tensor * out, hexagon::co
     return true;
 }
 
-bool is_same_shape(const npu_device_tensor_spec & src, const npu_device_tensor_spec & dst) {
-    for (size_t i = 0; i < DEVICE_TENSOR_MAX_DIMS; ++i) {
-        if (src.ne[i] != dst.ne[i]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 bool is_element_wise_op_supported(npu_device_tensor_op op, const npu_device_tensor_spec * dst,
                                   const npu_device_tensor_spec * srcs, size_t src_len) {
     if (op != NPU_OP_ADD && op != NPU_OP_SUB && op != NPU_OP_MUL) {
@@ -228,7 +219,7 @@ bool is_element_wise_op_supported(npu_device_tensor_op op, const npu_device_tens
         return false;
     }
 
-    if (!is_same_shape(src0, *dst)) {
+    if (!hexagon::is_same_shape(src0, *dst)) {
         DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", hexagon::op_get_name(op));
         return false;
     }
@@ -271,7 +262,7 @@ void rms_norm_vec_f32(const float * src, size_t count, float eps, float * dst) {
                                         Q6_V_valign_VVR(Q6_Vqf32_vmpy_VsfVsf(curr, curr), Q6_V_vzero(), leftover_bytes));
     }
 
-    const float mean  = hexagon::vec_reduction_qf32_f32(sum) / count;  // TODO: figure out how to do division in vector
+    const float mean  = hexagon::vec_reduction_f32_qf32(sum) / count;  // TODO: figure out how to do division in vector
     const float scale = 1.0f / sqrtf(mean + eps);                      // TODO: use buildin blas sqrtf?
     hexagon::vec_scale_f32(src, scale, dst, count);
 }
@@ -354,7 +345,7 @@ bool is_unary_op_supported(npu_device_tensor_op op, const npu_device_tensor_spec
         return false;
     }
 
-    if (!is_same_shape(src0, *dst)) {
+    if (!hexagon::is_same_shape(src0, *dst)) {
         DEVICE_LOG_DEBUG("[%s]src0 and dst have different shape\n", hexagon::op_get_name(op));
         return false;
     }
@@ -396,7 +387,7 @@ constexpr const op_capabilities kOpCapabilities[] = {
      {
             element_wise_op<vec_op_f32_f32<vmul_f32_f32>>,  // NPU_DATA_TYPE_F32
             element_wise_op<vec_op_f16_f16<vmul_f16_f16>>,  // NPU_DATA_TYPE_F16
-        },                                                      false,                                              // requires_thread_barrier
+        },                                                      false,                                                                                                             // requires_thread_barrier
     },
     {
      NPU_OP_RMS_NORM,                                                                     is_unary_op_supported,
@@ -412,6 +403,13 @@ constexpr const op_capabilities kOpCapabilities[] = {
             nullptr,                  // NPU_DATA_TYPE_F16
         }, true,                         // requires_thread_barrier
     },
+    {
+     NPU_OP_ROPE,                                                        hexagon::is_rope_supported,
+     {
+            hexagon::rope_f32,  // NPU_DATA_TYPE_F32
+            nullptr,            // NPU_DATA_TYPE_F16
+        }, false,                  // requires_thread_barrier
+    },
 };
 
 static_assert(kOpCapabilities[NPU_OP_MUL_MAT].compute_funcs[NPU_DATA_TYPE_F32] == hexagon::mul_mat_f32,
@@ -424,6 +422,7 @@ static_assert(kOpCapabilities[NPU_OP_RMS_NORM].op == NPU_OP_RMS_NORM,
               "kOpArray[NPU_OP_RMS_NORM].op != NPU_OP_RMS_NORM");
 static_assert(kOpCapabilities[NPU_OP_FLASH_ATTN].op == NPU_OP_FLASH_ATTN,
               "kOpArray[NPU_OP_FLASH_ATTN].op != NPU_OP_FLASH_ATTN");
+static_assert(kOpCapabilities[NPU_OP_ROPE].op == NPU_OP_ROPE, "kOpArray[NPU_OP_ROPE].op != NPU_OP_ROPE");
 
 hexagon::compute_func_type get_compute_func_impl(npu_device_tensor_op op, npu_device_tensor_data_type type) {
     if (op >= NPU_OP_COUNT) {
@@ -451,14 +450,15 @@ bool requires_thread_barrier(npu_device_tensor_op op) {
 
 bool support_op(npu_device_tensor_op op, const npu_device_tensor_spec * dst, const npu_device_tensor_spec * srcs,
                 size_t src_len) {
-    if (get_compute_func_impl(op, dst->type) == nullptr) {
-        DEVICE_LOG_ERROR("[%s]unsupported, get_compute_func failed\n", op_get_name(op));
-        return false;
-    }
-
     auto is_supported_func = kOpCapabilities[op].is_supported;
     if (!is_supported_func || !is_supported_func(op, dst, srcs, src_len)) {
         DEVICE_LOG_DEBUG("[%s]unsupported, is_supported_func return false\n", op_get_name(op));
+        return false;
+    }
+
+    if (get_compute_func_impl(op, dst->type) == nullptr) {
+        DEVICE_LOG_DEBUG("[%s]unsupported, get_compute_func failed, type: %s\n", op_get_name(op),
+                         get_type_name(dst->type));
         return false;
     }
 

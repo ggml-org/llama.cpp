@@ -48,10 +48,14 @@ class host_tensor {
 
         tensor->extra = this;
         _ggml_tensor  = tensor;
-        LOG_DEBUG("host_tensor(%p), ggml_tensor(%s[%ldx%ldx%ldx%ld], nb[%ld][%ld][%ld][%ld], %s, %p), handle(%p)\n",
-                  (void *) this, tensor->name, (long) tensor->ne[0], (long) tensor->ne[1], (long) tensor->ne[2],
-                  (long) tensor->ne[3], (long) tensor->nb[0], (long) tensor->nb[1], (long) tensor->nb[2],
-                  (long) tensor->nb[3], ggml_type_name(tensor->type), (void *) tensor, (void *) _device_tensor_handle);
+
+#ifndef NDEBUG
+        {
+            char desc[1024];
+            get_desc(desc, sizeof(desc));
+            LOG_DEBUG("host_tensor(%s)\n", desc);
+        }
+#endif
     }
 
     ~host_tensor() {
@@ -99,7 +103,11 @@ class host_tensor {
             auto * ggml_src       = _ggml_tensor->src[j];
             auto * src            = host_tensor::from_ggml_tensor(ggml_src);
             src_tensor_handles[j] = src->get_device_tensor_handle();
-            LOG_DEBUG("host_tensor(%p) set_src[%zu]: %p(%s)\n", (void *) this, j, (void *) src, ggml_src->name);
+#ifndef NDEBUG
+            char desc[1024];
+            src->get_desc(desc, sizeof(desc));
+            LOG_DEBUG("host_tensor(%p) set_src[%zu]: (%s)\n", (void *) this, j, desc);
+#endif
         }
 
         if (memcmp(_info_update.src_handles, src_tensor_handles, sizeof(_info_update.src_handles)) != 0) {
@@ -136,7 +144,11 @@ class host_tensor {
             auto * ggml_src             = _ggml_tensor->src[j];
             auto * src                  = host_tensor::from_ggml_tensor(ggml_src);
             _info_update.src_handles[j] = src->get_device_tensor_handle();
-            LOG_DEBUG("host_tensor(%p) set_src[%zu]: %p(%s)\n", (void *) this, j, (void *) src, ggml_src->name);
+#ifndef NDEBUG
+            char desc[1024];
+            src->get_desc(desc, sizeof(desc));
+            LOG_DEBUG("host_tensor(%p) set_src[%zu]: (%s)\n", (void *) this, j, desc);
+#endif
         }
 
         LOG_DEBUG("host_tensor(%p) update_params, op: %s, params: [%x, %x, %x, %x]\n", (void *) this,
@@ -154,6 +166,15 @@ class host_tensor {
         }
 
         return _info.ne[index];
+    }
+
+    int get_desc(char * buffer, size_t size) const {
+        return snprintf(buffer, size, "%s[%ldx%ldx%ldx%ld], nb[%ld,%ld,%ld,%ld], %s, addr: %p, ggml: %p, handle:%p",
+                        _ggml_tensor->name, (long) _ggml_tensor->ne[0], (long) _ggml_tensor->ne[1],
+                        (long) _ggml_tensor->ne[2], (long) _ggml_tensor->ne[3], (long) _ggml_tensor->nb[0],
+                        (long) _ggml_tensor->nb[1], (long) _ggml_tensor->nb[2], (long) _ggml_tensor->nb[3],
+                        ggml_type_name(_ggml_tensor->type), (void *) this, (void *) _ggml_tensor,
+                        (void *) _device_tensor_handle);
     }
 
   private:

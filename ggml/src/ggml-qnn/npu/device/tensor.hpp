@@ -110,6 +110,15 @@ class tensor {
         return _data + _info.offset;
     }
 
+    template <typename _Ty> const _Ty * get_read_buffer_as() const {
+        const auto * buffer = get_read_buffer();
+        if (!buffer) {
+            return nullptr;
+        }
+
+        return reinterpret_cast<const _Ty *>(buffer);
+    }
+
     uint8_t * get_write_buffer() const {
         if (_info.is_constant) {
             DEVICE_LOG_ERROR("Attempt to write to a constant tensor: %p", (void *) this);

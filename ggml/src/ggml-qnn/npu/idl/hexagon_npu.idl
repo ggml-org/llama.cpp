@@ -4,10 +4,14 @@
 
 const uint32_t DEVICE_TENSOR_MAX_DIMS = 4;
 const uint32_t DEVICE_TENSOR_MAX_SRC = 4;
-const uint32_t DEVICE_TENSOR_MAX_OP_PARAMS = 4;
+const uint32_t DEVICE_TENSOR_MAX_OP_PARAMS = 16;
 const uint32_t QUANT_BLOCK_SIZE = 32;
 const uint32_t QUANT_K_BLOCK_SIZE = 256;
 const uint32_t QUANT_K_SCALE_SIZE = 12;
+
+const uint32_t NPU_ROPE_TYPE_NEOX = 2;
+const uint32_t NPU_ROPE_TYPE_MROPE = 8;
+const uint32_t NPU_ROPE_TYPE_VISION = 24;
 
 interface npu_device : remote_handle64{
 
@@ -42,12 +46,14 @@ interface npu_device : remote_handle64{
         NPU_OP_MUL,
         NPU_OP_RMS_NORM,
         NPU_OP_FLASH_ATTN,
+        NPU_OP_ROPE,
         NPU_OP_COUNT
     };
 
     enum tensor_data_type {
         NPU_DATA_TYPE_F32,
         NPU_DATA_TYPE_F16,
+        NPU_DATA_TYPE_I32,
         NPU_DATA_TYPE_Q8_0,
         NPU_DATA_TYPE_Q4_0,
         NPU_DATA_TYPE_Q4_K,

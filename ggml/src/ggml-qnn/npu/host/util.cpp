@@ -13,6 +13,10 @@ static_assert(QUANT_K_SCALE_SIZE == K_SCALE_SIZE, "QUANT_K_SCALE_SIZE size misma
 static_assert(QUANT_K_BLOCK_SIZE == QK_K, "QUANT_K_BLOCK_SIZE size mismatch");
 static_assert(QUANT_BLOCK_SIZE == QK4_0, "QUANT_BLOCK_SIZE size mismatch");
 
+static_assert(NPU_ROPE_TYPE_NEOX == GGML_ROPE_TYPE_NEOX, "NPU_ROPE_TYPE_NEOX mismatch");
+static_assert(NPU_ROPE_TYPE_MROPE == GGML_ROPE_TYPE_MROPE, "NPU_ROPE_TYPE_MROPE mismatch");
+static_assert(NPU_ROPE_TYPE_VISION == GGML_ROPE_TYPE_VISION, "NPU_ROPE_TYPE_VISION mismatch");
+
 namespace hexagon {
 
 enum npu_device_tensor_op op_to_npu_op(ggml_op op) {
@@ -29,6 +33,8 @@ enum npu_device_tensor_op op_to_npu_op(ggml_op op) {
             return NPU_OP_RMS_NORM;
         case GGML_OP_FLASH_ATTN_EXT:
             return NPU_OP_FLASH_ATTN;
+        case GGML_OP_ROPE:
+            return NPU_OP_ROPE;
         default:
             return NPU_OP_COUNT;
     }
@@ -48,6 +54,8 @@ const char * get_npu_op_desc(enum npu_device_tensor_op op) {
             return ggml_op_name(GGML_OP_RMS_NORM);
         case NPU_OP_FLASH_ATTN:
             return ggml_op_name(GGML_OP_FLASH_ATTN_EXT);
+        case NPU_OP_ROPE:
+            return ggml_op_name(GGML_OP_ROPE);
         default:
             return "UNKNOWN";
     }
@@ -59,6 +67,8 @@ enum npu_device_tensor_data_type type_to_npu_type(ggml_type type) {
             return NPU_DATA_TYPE_F32;
         case GGML_TYPE_F16:
             return NPU_DATA_TYPE_F16;
+        case GGML_TYPE_I32:
+            return NPU_DATA_TYPE_I32;
         case GGML_TYPE_Q4_K:
             return NPU_DATA_TYPE_Q4_K;
         case GGML_TYPE_Q4_0:

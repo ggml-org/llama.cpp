@@ -1,7 +1,6 @@
 #pragma once
 
 #include <hexagon_types.h>
-#include <HTP/core/intrinsics.h>
 
 #include <cstdint>
 
@@ -12,8 +11,20 @@ namespace hexagon {
 constexpr const size_t kBytesPerVector = sizeof(HVX_Vector);  // 128 for v73
 constexpr const size_t kAlignMask      = kBytesPerVector - 1;
 
+inline size_t get_aligned_size(size_t size) {
+    return (size + kAlignMask) & ~kAlignMask;
+}
+
 inline size_t unaligned_bytes(const void * addr) {
     return ((size_t) addr) & kAlignMask;
+}
+
+template <typename _TyData> inline const _TyData * align_down(const _TyData * addr) {
+    return reinterpret_cast<const _TyData *>(reinterpret_cast<const uint8_t *>(addr) - unaligned_bytes(addr));
+}
+
+inline size_t bytes_to_vector_boundary(const void * addr) {
+    return kBytesPerVector - unaligned_bytes(addr);
 }
 
 inline bool is_addr_aligned(const void * addr) {
@@ -109,6 +120,50 @@ inline HVX_VectorPair qhmath_hvx_vqf32_convert_vqf16(HVX_Vector vxl) {
     return Q6_W_vcombine_VV(vxh_w, vxl_w);
 }
 
+template <uint32_t _TyBytes> inline void q6op_vstu_variable_ARV(void * addr, HVX_Vector vin) {
+    vin                      = Q6_V_vlalign_VVR(vin, vin, (size_t) addr);  //rotate as needed.
+    uint32_t       left_off  = unaligned_bytes(addr);
+    uint32_t       right_off = left_off + _TyBytes;
+    HVX_VectorPred qL_not    = Q6_Q_vsetq_R((size_t) addr);
+    HVX_VectorPred qR        = Q6_Q_vsetq2_R(right_off);
+    if (right_off > 128) {
+        Q6_vmaskedstoreq_QAV(qR, (HVX_Vector *) addr + 1, vin);
+        qR = Q6_Q_vcmp_eq_VbVb(vin, vin);  // all 1's
+    }
+    qL_not = Q6_Q_or_QQn(qL_not, qR);
+    Q6_vmaskedstorenq_QAV(qL_not, (HVX_Vector *) addr, vin);
+}
+
+template <uint32_t _TyBytes> inline void q6op_vstu_variable_aligned(void * addr, HVX_Vector vin) {
+    HVX_VectorPred qR = Q6_Q_vsetq2_R(_TyBytes);
+    Q6_vmaskedstorenq_QAV(qR, (HVX_Vector *) addr, vin);
+}
+
+inline void q6op_vstu_variable_ARV(void * addr, int n, HVX_Vector vin) {
+    vin                      = Q6_V_vlalign_VVR(vin, vin, (size_t) addr);  //rotate as needed.
+    unsigned       left_off  = unaligned_bytes(addr);
+    unsigned       right_off = left_off + n;
+    HVX_VectorPred qL_not    = Q6_Q_vsetq_R((size_t) addr);
+    HVX_VectorPred qR        = Q6_Q_vsetq2_R(right_off);
+    if (right_off > 128) {
+        Q6_vmaskedstoreq_QAV(qR, (HVX_Vector *) addr + 1, vin);
+        qR = Q6_Q_vcmp_eq_VbVb(vin, vin);  // all 1's
+    }
+    qL_not = Q6_Q_or_QQn(qL_not, qR);
+    Q6_vmaskedstorenq_QAV(qL_not, (HVX_Vector *) addr, vin);
+}
+
+inline HVX_VectorPair hvx_vqf32_convert_vhf(HVX_Vector vxl) {
+    return qhmath_hvx_vqf32_convert_vqf16(qhmath_hvx_vqf16_convert_vhf(vxl));
+}
+
+inline HVX_VectorPair hvx_vsf_convert_vhf(HVX_Vector vxl, HVX_Vector one) {
+    HVX_VectorPair res   = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vxl), one);
+    HVX_Vector     vxl_w = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(res));
+    HVX_Vector     vxh_w = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(res));
+    return Q6_W_vcombine_VV(vxh_w, vxl_w);
+}
+
 inline HVX_Vector vec_reduction_qf32(HVX_Vector sums) {
     constexpr const size_t kFloatsPerVector = hexagon::kBytesPerVector / sizeof(float);
     static_assert(kFloatsPerVector == 32 || kFloatsPerVector == 16, "kFloatsPerVector should be 16 or 32");
@@ -130,7 +185,7 @@ inline HVX_Vector vec_reduction_qf32(HVX_Vector sums) {
     return sums;
 }
 
-inline float vec_reduction_qf32_f32(HVX_Vector sums) {
+inline float vec_reduction_f32_qf32(HVX_Vector sums) {
     return get_flt0_from_fltv(Q6_Vsf_equals_Vqf32(vec_reduction_qf32(sums)));
 }
 
@@ -265,10 +320,41 @@ inline void vec_mad_f16(const npu_device_fp16_t * src, float scale, npu_device_f
     vec_scale_impl<hvx_vec_mad_f16_f16, hvx_scale_f16, npu_device_fp16_t>(src, scale, dst, count);
 }
 
+template <typename _TElem0, typename _TElem1>
+inline bool is_dot_product_aligned(const _TElem0 * src0, const _TElem1 * src1, size_t count) {
+    static_assert(sizeof(_TElem0) <= sizeof(_TElem1), "src0 should be smaller than src1");
+
+    if (!hexagon::is_addr_aligned(src0) || !hexagon::is_addr_aligned(src1)) {
+        return false;
+    }
+
+    if (count % (hexagon::kBytesPerVector / sizeof(_TElem0)) != 0) {
+        return false;
+    }
+
+    return true;
+}
+
 float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count);
 float vec_dot_product_aligned_f32_f32(const float * src0, const float * src1, size_t count);
 
+inline bool is_f32_f32_dot_product_aligned(const float * src0, const float * src1, size_t count) {
+    return is_dot_product_aligned<float, float>(src0, src1, count);
+}
+
 float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count);
 float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count);
+
+inline bool is_f16_f16_dot_product_aligned(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1,
+                                           size_t count) {
+    return is_dot_product_aligned<npu_device_fp16_t, npu_device_fp16_t>(src0, src1, count);
+}
+
+float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
+float vec_dot_product_aligned_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
+
+inline bool is_f16_f32_dot_product_aligned(const npu_device_fp16_t * src0, const float * src1, size_t count) {
+    return is_dot_product_aligned<npu_device_fp16_t, float>(src0, src1, count);
+}
 
 }  // namespace hexagon

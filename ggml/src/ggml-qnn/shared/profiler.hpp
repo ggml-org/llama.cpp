@@ -56,6 +56,8 @@ inline scoped_timer make_scope_perf_timer(const char * format, ...) {
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
 #    define SCOPED_PERFORMANCE_TRACKER(fmt, ...) \
         auto __scoped_timer_##__LINE__ = profiler::make_scope_perf_timer(fmt, __VA_ARGS__)
+#    define PROFILER_LOG_DEBUG(fmt, ...) GGML_LOG_INFO("[profiler]" fmt, __VA_ARGS__)
 #else
 #    define SCOPED_PERFORMANCE_TRACKER(fmt, ...) ((void) 0)
+#    define PROFILER_LOG_DEBUG(...)              ((void) 0)
 #endif

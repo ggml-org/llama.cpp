@@ -5,10 +5,12 @@
 
 namespace hexagon {
 
+using dequant_target_type = npu_device_fp16_t;
+
 bool init_f16_f32_table(float * table, size_t count);
 
-typedef void (*quantize_row_type)(const float * src, void * dst, size_t count, const float * f16_to_f32_table);
-typedef void (*dequantize_row_type)(const void * src, float * dst, size_t count, const float * f16_to_f32_table);
+typedef void (*quantize_row_type)(const float * src, void * dst, size_t count);
+typedef void (*dequantize_row_type)(const void * src, dequant_target_type * dst, size_t count);
 typedef float (*vec_dot_type)(const void * src0, const void * src1, size_t count);
 
 struct device_type_traits {
@@ -29,15 +31,13 @@ inline bool is_quantized_type(npu_device_tensor_data_type type) {
     return get_type_traits(type).is_quantized;
 }
 
-using dequantized_element_type = float;
-
 inline size_t get_dequantized_row_size(const tensor * tensor) {
     if (!is_quantized_type(tensor->get_type())) {
         return tensor->get_nb(1);  // for f32 and f16
     }
 
     auto row_elems_count = tensor->get_ne(0);
-    return row_elems_count * sizeof(dequantized_element_type);  // currently only f32 is supported
+    return row_elems_count * sizeof(dequant_target_type);  // currently only f32 is supported
 }
 
 inline const char * get_type_name(npu_device_tensor_data_type type) {
@@ -77,14 +77,14 @@ inline auto make_scoped_op_perf_timer(tensor * op, size_t tidx) {
 
 #    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_SUB_PROC(sub_prefix)                             \
         hexagon::npu_sub_process_scoped_timer<decltype(__npu_op_timer_##sub_prefix)::kBufferCount, 0> \
-            __npu_op_sub_timer##sub_prefix(__npu_op_timer_##sub_prefix, #sub_prefix)
+        __npu_op_sub_timer##sub_prefix(__npu_op_timer_##sub_prefix, #sub_prefix)
 
 #    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_MULTI_SUB_PROC(op, tidx, tracker_name) \
         auto __npu_op_timer_##tracker_name = hexagon::make_scoped_op_perf_timer(op, tidx)
 
 #    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(tracker_name, idx, sub_prefix)          \
         hexagon::npu_sub_process_scoped_timer<decltype(__npu_op_timer_##tracker_name)::kBufferCount, idx> \
-            __npu_op_sub_timer##sub_prefix(__npu_op_timer_##tracker_name, #sub_prefix)
+        __npu_op_sub_timer##sub_prefix(__npu_op_timer_##tracker_name, #sub_prefix)
 
 #else
 #    define DEVICE_SCOPED_OP_PERFORMANCE_TRACKER(op, tidx)                                       ((void) 0)
