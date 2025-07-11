@@ -7113,17 +7113,9 @@ class LFM2Model(TextModel):
         self._add_feed_forward_length()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if 'operator_norm' in name:
-            name = name.replace('operator_norm', 'norm')
-        elif 'attention.k_layernorm' in name or 'attention.q_layernorm' in name:
-            name = name.replace('attention', 'self_attn')
-        elif name.startswith("model.embedding_norm"):
-            name = name.replace("model.embedding_norm", 'word_embeddings_layernorm')
-        elif 'conv.conv' in name:
-            # conv op requires 2d tensor
+        # conv op requires 2d tensor
+        if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
-        elif 'self_attn.out_proj' in name:
-            name = name.replace('out_proj', 'o_proj')
 
         return [(self.map_tensor_name(name), data_torch)]
 

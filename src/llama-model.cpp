@@ -15917,14 +15917,13 @@ struct llm_build_lfm2 : public llm_graph_context {
         ggml_tensor * cur = build_inp_embd(model.tok_embd);
         cb(cur, "model.embed_tokens", -1);
 
-        ggml_tensor * inp_pos = build_inp_pos();
-
-        auto *inp_hybrid = build_inp_mem_hybrid();
+        ggml_tensor * inp_pos     = build_inp_pos();
+        auto        * inp_hybrid  = build_inp_mem_hybrid();
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
         for (int il = 0; il < n_layer; ++il) {
-            auto *prev_cur = cur;
-            cur = lfm2_rms_norm(cur, model.layers[il].attn_norm);
+            auto * prev_cur = cur;
+            cur = build_norm(cur, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "model.layers.{}.operator_norm", il);
 
             cur = hparams.is_recurrent(il) ?
@@ -15940,12 +15939,12 @@ struct llm_build_lfm2 : public llm_graph_context {
             cur = ggml_add(ctx0, cur, build_feed_forward(cur, il));
         }
 
-        cur = lfm2_rms_norm(cur, model.tok_norm);
+        cur = build_norm(cur, model.tok_norm, NULL, LLM_NORM_RMS, -1);
         cb(cur, "model.embedding_norm", -1);
         res->t_embd = cur;
 
         // lm_head is tied with embeddings
-        cur = ggml_mul_mat(ctx0, model.tok_embd, cur);
+        cur = build_lora_mm(model.tok_embd, cur);
         cb(cur, "lm_head", -1);
 
         res->t_logits = cur;
@@ -15953,10 +15952,9 @@ struct llm_build_lfm2 : public llm_graph_context {
         ggml_build_forward_expand(gf, cur);
     }
 
-    ggml_tensor *build_feed_forward(
-             ggml_tensor * cur,
-             int   il) const {
-        cur = lfm2_rms_norm(cur, model.layers[il].ffn_norm);
+    ggml_tensor * build_feed_forward(ggml_tensor * cur,
+                                     int           il) const {
+        cur = build_norm(cur, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "model.layers.{}.ffn_norm", il);
 
         GGML_ASSERT(!model.layers[il].ffn_up_b);
@@ -15973,20 +15971,20 @@ struct llm_build_lfm2 : public llm_graph_context {
         return cur;
     }
 
-    ggml_tensor *build_attn_block(ggml_cgraph                     *gf,
-                                  ggml_tensor                     *cur,
-                                  ggml_tensor                     *inp_pos,
-                                  llm_graph_input_attn_kv_unified *inp_attn,
-                                  int                             il) const {
+    ggml_tensor * build_attn_block(ggml_cgraph                     * gf,
+                                   ggml_tensor                     * cur,
+                                   ggml_tensor                     * inp_pos,
+                                   llm_graph_input_attn_kv_unified * inp_attn,
+                                   int                               il) const {
         GGML_ASSERT(hparams.n_embd_v_gqa(il) == hparams.n_embd_k_gqa(il));
         auto const n_embd_head = hparams.n_embd_head_v;
         auto const n_head_kv = hparams.n_head_kv(il);
 
-        auto *q = build_lora_mm(model.layers[il].wq, cur);
+        auto * q = build_lora_mm(model.layers[il].wq, cur);
         cb(q, "model.layers.{}.self_attn.q_proj", il);
-        auto *k = build_lora_mm(model.layers[il].wk, cur);
+        auto * k = build_lora_mm(model.layers[il].wk, cur);
         cb(k, "model.layers.{}.self_attn.k_proj", il);
-        auto *v = build_lora_mm(model.layers[il].wv, cur);
+        auto * v = build_lora_mm(model.layers[il].wv, cur);
         cb(v, "model.layers.{}.self_attn.v_proj", il);
 
         q = ggml_reshape_3d(ctx0, q, n_embd_head, n_head,    n_tokens);
@@ -15994,9 +15992,9 @@ struct llm_build_lfm2 : public llm_graph_context {
         v = ggml_reshape_3d(ctx0, v, n_embd_head, n_head_kv, n_tokens);
 
         // qk norm
-        q = lfm2_rms_norm(q, model.layers[il].attn_q_norm);
+        q = build_norm(q, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
         cb(q, "model.layers.{}.self_attn.q_layernorm", il);
-        k = lfm2_rms_norm(k, model.layers[il].attn_k_norm);
+        k = build_norm(k, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
         cb(k, "model.layers.{}.self_attn.k_layernorm", il);
 
         // RoPE
@@ -16021,21 +16019,21 @@ struct llm_build_lfm2 : public llm_graph_context {
 
     ggml_tensor * build_shortconv_block(ggml_cgraph        * gf,
                                         ggml_tensor        * cur,
-                                        llm_graph_input_rs *inp_recr,
+                                        llm_graph_input_rs * inp_recr,
                                         int                il) {
         const auto * mctx_cur = static_cast<const llama_memory_hybrid_context *>(mctx)->get_recr();
 
-        auto *bcx = ggml_mul_mat(ctx0, model.layers[il].shortconv.in_proj, cur);
+        auto * bcx = build_lora_mm(model.layers[il].shortconv.in_proj, cur);
         cb(bcx, "model.layers.{}.conv.in_proj", il);
 
         constexpr auto n_chunks = 3;
         GGML_ASSERT(bcx->ne[0] % n_chunks == 0);
         auto const chunk_size = bcx->ne[0] / n_chunks;
-        auto *b = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 0 * chunk_size * ggml_element_size(bcx));
-        auto *c = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 1 * chunk_size * ggml_element_size(bcx));
-        auto *x = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 2 * chunk_size * ggml_element_size(bcx));
+        auto * b = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 0 * chunk_size * ggml_element_size(bcx));
+        auto * c = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 1 * chunk_size * ggml_element_size(bcx));
+        auto * x = ggml_view_2d(ctx0, bcx, chunk_size, bcx->ne[1], bcx->nb[1], 2 * chunk_size * ggml_element_size(bcx));
 
-        auto *bx = ggml_transpose(ctx0, ggml_mul(ctx0, b, x));
+        auto * bx = ggml_transpose(ctx0, ggml_mul(ctx0, b, x));
 
         // read conv state directly, with build_rs generation is slower
         ggml_tensor * conv_state = mctx_cur->get_r_l(il);
@@ -16046,40 +16044,25 @@ struct llm_build_lfm2 : public llm_graph_context {
         bx = ggml_concat(ctx0, conv, bx, 0);
         GGML_ASSERT(bx->ne[0] > conv->ne[0]);
 
-        auto *new_conv = ggml_view_2d(ctx0, bx, conv->ne[0], bx->ne[1], bx->nb[1], (bx->ne[0] - conv->ne[0]) * ggml_element_size(bx));
+        auto * new_conv = ggml_view_2d(ctx0, bx, conv->ne[0], bx->ne[1], bx->nb[1], (bx->ne[0] - conv->ne[0]) * ggml_element_size(bx));
         GGML_ASSERT(ggml_are_same_shape(conv, new_conv));
 
         // write conv state
         ggml_build_forward_expand(gf, ggml_cpy(ctx0, new_conv, conv_state));
 
-        auto *conv_kernel = model.layers[il].shortconv.conv;
+        auto * conv_kernel = model.layers[il].shortconv.conv;
         GGML_ASSERT(hparams.n_shortconv_l_cache > 0);
 
         // construct ssm_conv op
         ggml_tensor * conv_out = ggml_ssm_conv(ctx0, bx, conv_kernel);
         cb(conv_out, "model.layers.{}.conv.conv", il);
 
-        auto *y = ggml_mul(ctx0, c, conv_out);
+        auto * y = ggml_mul(ctx0, c, conv_out);
 
         y = build_lora_mm(model.layers[il].shortconv.out_proj, y);
         cb(y, "model.layers.{}.conv.out_proj", il);
 
         return y;
-    }
-
-    // upcast to f32 before rms norm
-    ggml_tensor *lfm2_rms_norm(ggml_tensor *t, ggml_tensor *w) const {
-        auto *t_float = t;
-        if (t_float->type != GGML_TYPE_F32) {
-            t_float = ggml_cast(ctx0, t, GGML_TYPE_F32);
-        }
-
-        auto *output = ggml_rms_norm(ctx0, t_float, hparams.f_norm_rms_eps);
-        if (output->type != t->type) {
-            output = ggml_cast(ctx0, output, t->type);
-        }
-
-        return ggml_mul(ctx0, output, w);
     }
 };
 
