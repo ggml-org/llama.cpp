@@ -73,7 +73,7 @@ bool llama_text_dataset_reader::read_next_sequence(std::vector<llama_token> & to
         if (n_tokens < 0) {
             std::cerr << "Error: Tokenization failed for line: " << line << std::endl;
             // Return an empty sequence in case of tokenization error
-            return true;
+            return false;
         }
         tokens.assign(m_tokens_buffer.begin(), m_tokens_buffer.begin() + n_tokens);
     }

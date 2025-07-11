@@ -20,7 +20,7 @@ GGUF Structure for Training Data
 
 The generated GGUF files follow a specific structure for training data:
 
-*   **Metadata (KV-pairs)**: All metadata keys are prefixed with `training.` to avoid conflicts with model metadata.
+*   **Metadata (KV pairs)**: All metadata keys are prefixed with `training.` to avoid conflicts with model metadata.
 
     *   `training.format.version`: `string` (e.g., "1.0") - Specification version.
 
@@ -36,13 +36,13 @@ The generated GGUF files follow a specific structure for training data:
 
     *   `training.tokenizer.gguf.merges`: `array[string]` (optional) - Tokenizer merges (for BPE).
 
-    *   `training.tokenizer.gguf.pre`: `string` (optional) - Pre-tokenization architecture.
+    *   `training.tokenizer.gguf.pre`: `string` (optional) - Architecture of the pre-tokenizer.
 
     *   `training.sequence.count`: `uint64` - Total number of sequences in the file.
 
 *   **Tensors**: Each training sequence is stored as a separate tensor.
 
-    *   **Naming**: `training.tensor.{index}` (e.g., `training.tensor.0`, `training.tensor.1`, ...).
+    *   **Naming**: `training.tensor.{index}` (e.g., `training.tensor.0`, `training.tensor.1`, ...). No leading zeros.
 
     *   **Data type**: `GGML_TYPE_I32` (standard for tokens in `llama.cpp`).
 
@@ -52,7 +52,7 @@ The generated GGUF files follow a specific structure for training data:
 Building
 --------
 
-It is assumed that you have already set up the `llama.cpp` build environment (e.g., using CMake).
+It is assumed that you have already set up the `llama.cpp` build environment (e.g., using CMake) and installed Arrow and Parquet on your system.
 
 1.  **Clone the `llama.cpp` repository**:
 
@@ -85,13 +85,13 @@ Usage
 
 *   `-h`, `--help`: Show this help message and exit.
 
-*   `-m <path>` : Path to the GGUF model used for the tokenizer (default: `models/7B/ggml-model-f16.gguf`).
+*   `-m <path>, --model <path>` : Path to the GGUF model used for the tokenizer (default: `models/7B/ggml-model-f16.gguf`).
 
-*   `--in-file <path>`: Path to the input dataset file. For text input, this is a single file. For Parquet, this is the path to the Parquet file (default: `input.txt`).
+*   `--in-file <path>`: Path to the input dataset file, either a plain text file or a Parquet file (default: `input.txt`).
 
-*   `-o <path>`, `--output <path>`: Path to save the output GGUF file (default: `output.gguf`).
+*   `-o <path>`, `--output <path>`: Path to save the output GGUF file to (default: `output.gguf`).
 
-*   ``--max-seq-len <length>`: Maximum sequence length in tokens (default: `2048`). Sequences exceeding this length will be truncated.
+*   `--max-seq-len <length>`: Maximum sequence length in tokens (default: `2048`). Sequences exceeding this length will be truncated.
 
 *   `--pre-tokenized`: Specifies that the input file contains pre-tokenized data (space-separated token IDs) rather than raw text.
 
@@ -110,7 +110,7 @@ Usage
 
 ### Usage Examples
 
-1.  **Converting a regular text file**:
+1.  **Converting a plain text file**:
 
         ./bin/convert-to-train-gguf -m models/7B/ggml-model-f16.gguf -i my_dataset.txt -o my_training_data.gguf -l 1024
 
