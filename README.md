@@ -17,7 +17,7 @@ LLM inference in C/C++
 
 ## Hot topics
 
-- [Hot PRs](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+label%3Ahot+)
+- Hot PRs: [All](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+label%3Ahot+) / [Open](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+label%3Ahot+is%3Aopen)
 - Multimodal support arrived in `llama-server`: [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) | [documentation](./docs/multimodal.md)
 - VS Code extension for FIM completions: https://github.com/ggml-org/llama.vscode
 - Vim/Neovim plugin for FIM completions: https://github.com/ggml-org/llama.vim
