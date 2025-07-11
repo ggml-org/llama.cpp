@@ -262,10 +262,10 @@ class ModelsManagementViewModel @Inject constructor(
                 _managementState.value = Download.Error(message = "No internet connection")
             } catch (_: SocketTimeoutException) {
                 _managementState.value = Download.Error(message = "Connection timed out")
-            } catch (e: IOException) {
-                _managementState.value = Download.Error(message = "Network error: ${e.message}")
             } catch (_: FileNotFoundException) {
                 _managementState.emit(Download.Error(message = "No eligible models"))
+            } catch (e: IOException) {
+                _managementState.value = Download.Error(message = "Network error: ${e.message}")
             } catch (e: Exception) {
                 _managementState.emit(Download.Error(message = e.message ?: "Unknown error"))
             }
