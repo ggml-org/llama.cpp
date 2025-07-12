@@ -88,6 +88,7 @@ enum llm_arch {
     LLM_ARCH_HUNYUAN_MOE,
     LLM_ARCH_SMOLLM3,
     LLM_ARCH_LFM2,
+    LLM_ARCH_DREAM,
     LLM_ARCH_UNKNOWN,
 };
 
@@ -478,3 +479,4 @@ const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
 
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid   (const llm_arch & arch);
+bool llm_arch_is_diffusion(const llm_arch & arch);

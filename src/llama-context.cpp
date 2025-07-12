@@ -1,16 +1,20 @@
 #include "llama-context.h"
 
+#include <algorithm>
+#include <cinttypes>
+#include <cmath>
+#include <cstring>
+#include <limits>
+#include <random>
+#include <stdexcept>
+#include <vector>
+
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
-
-#include <cinttypes>
-#include <cstring>
-#include <limits>
-#include <stdexcept>
 
 //
 // llama_context
@@ -731,7 +735,8 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
     const auto & hparams = model.hparams;
 
-    const int64_t n_embd = hparams.n_embd;
+    const int64_t n_embd  = hparams.n_embd;
+    const int32_t n_vocab = model.vocab.n_tokens();
 
     // note: during encode, we always pass the full sequence starting from pos = 0
     if (!balloc->init(batch_inp, model.vocab, nullptr, n_embd, true)) {
@@ -791,10 +796,22 @@ int llama_context::encode(const llama_batch & batch_inp) {
         }
     }
 
+    auto * t_logits = res->get_logits();
     auto * t_embd = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
 
+    // extract logits
+   if (t_logits && n_outputs > 0) {
+        ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
+        GGML_ASSERT(backend_res != nullptr);
+        GGML_ASSERT(logits != nullptr);
+
+        if (n_outputs) {
+            ggml_backend_tensor_get_async(backend_res, t_logits, logits, 0, n_outputs*n_vocab*sizeof(float));
+        }
+    }
+
     // extract embeddings
-    if (t_embd) {
+    if (cparams.embeddings && t_embd) {
         ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
         GGML_ASSERT(backend_embd != nullptr);
 
