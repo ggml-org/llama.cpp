@@ -52,7 +52,7 @@ For faster computation, make sure to use GPU offloading via the `-ngl | --n-gpu-
 
 ```bash
 # analyse imatrix file and display summary statistics instead of running inference
-./llama-imatrix --imatrix imatrix.dat --show-statistics
+./llama-imatrix --in-file imatrix.dat --show-statistics
 ```
 
 `--show-statistics` will display the following statistics:
