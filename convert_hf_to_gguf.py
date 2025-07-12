@@ -3551,14 +3551,21 @@ class Plamo2Model(TextModel):
         self.gguf_writer.add_token_types(toktypes)
 
         # Add special tokens from config
-        if "bos_token_id" in tokenizer_config:
-            self.gguf_writer.add_bos_token_id(tokenizer_config["bos_token_id"])
-        if "eos_token_id" in tokenizer_config:
-            self.gguf_writer.add_eos_token_id(tokenizer_config["eos_token_id"])
-        if "pad_token_id" in tokenizer_config:
-            self.gguf_writer.add_pad_token_id(tokenizer_config["pad_token_id"])
-        if "unk_token_id" in tokenizer_config:
-            self.gguf_writer.add_unk_token_id(tokenizer_config["unk_token_id"])
+        if "bos_token" in tokenizer_config and tokenizer_config["bos_token"] is not None:
+            token_id = tokens.index(tokenizer_config["bos_token"].encode("utf-8"))
+            self.gguf_writer.add_bos_token_id(token_id)
+        if "eos_token" in tokenizer_config and tokenizer_config["eos_token"] is not None:
+            token_id = tokens.index(tokenizer_config["eos_token"].encode("utf-8"))
+            self.gguf_writer.add_eos_token_id(token_id)
+        if "pad_token" in tokenizer_config and tokenizer_config["pad_token"] is not None:
+            token_id = tokens.index(tokenizer_config["pad_token"].encode("utf-8"))
+            self.gguf_writer.add_pad_token_id(token_id)
+        if "sep_token" in tokenizer_config and tokenizer_config["sep_token"] is not None:
+            token_id = tokens.index(tokenizer_config["sep_token"].encode("utf-8"))
+            self.gguf_writer.add_sep_token_id(token_id)
+        if "unk_token" in tokenizer_config and tokenizer_config["unk_token"] is not None:
+            token_id = tokens.index(tokenizer_config["unk_token"].encode("utf-8"))
+            self.gguf_writer.add_unk_token_id(token_id)
 
         self.gguf_writer.add_add_space_prefix(False)
 
