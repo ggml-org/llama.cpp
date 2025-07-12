@@ -1477,7 +1477,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_chunks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_RETRIEVAL}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
         {"-fa", "--flash-attn"},
         string_format("enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled"),
@@ -1539,7 +1539,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.in_files.push_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-bf", "--binary-file"}, "FNAME",
         "binary file containing the prompt (default: none)",
@@ -2609,9 +2609,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-o", "--output", "--output-file"}, "FNAME",
         string_format("output file (default: '%s')", params.out_file.c_str()),
         [](common_params & params, const std::string & value) {
-            params.out_file = value;
+          params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -3422,6 +3422,46 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = 256;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        {"--dataset-format"}, " ",
+        string_format("type of input data (e.g., 'text', 'parquet') (default: %s)", params.dataset_format.c_str()),
+        [](common_params & params, const std::string & format) {
+            params.dataset_format = format; //TODO ENUM CLASS
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--max-seq-len"}, " ",
+        string_format("max sequence length (default: %d)", params.max_seq_len),
+        [](common_params & params, int32_t max_seq_len) {
+            params.max_seq_len = max_seq_len;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--pre-tokenized"},
+        string_format("input file contains pre-tokenized data (space-separated token IDs)"),
+        [](common_params & params) {
+            params.pre_tokenized = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--preview"},
+        string_format("read and print metadata and first sequence from the output GGUF file (enables preview)"),
+        [](common_params & params) {
+            params.do_preview = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--dataset-column"}, "<name>",
+        string_format("column name for data in dataset files"),
+        [](common_params & params, const std::string &dataset_column) {
+            params.dataset_column = dataset_column;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
 
     return ctx_arg;
 }
