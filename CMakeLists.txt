@@ -7,6 +7,30 @@ set(CMAKE_WARN_UNUSED_CLI YES)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+    set(CMAKE_VERBOSE_MAKEFILE      ON)
+    if(DEFINED HTP_ARCH_VERSION)
+        if (${HTP_ARCH_VERSION} STREQUAL "v75" OR ${HTP_ARCH_VERSION} STREQUAL "v79")
+            #works fine on Snapdragon 8Gen3 & 8Elite
+            set(OPT_FLAG " -O3 -march=armv8.7-a+dotprod+fp16+i8mm -mcpu=cortex-x1 -mtune=cortex-x1 -ffp-model=fast -fno-finite-math-only")
+        else()
+            #should be works fine with mainstream mobile SoC
+            set(OPT_FLAG " -O3 -march=armv8.2-a+dotprod+fp16 -ffp-model=fast -fno-finite-math-only")
+        endif()
+    else()
+        #should be works fine with mainstream mobile SoC
+        set(OPT_FLAG " -O3 -march=armv8.2-a+dotprod+fp16 -ffp-model=fast -fno-finite-math-only")
+    endif()
+
+    message("OPT_FLAG:${OPT_FLAG}")
+    #ensure the same toolchain optimization for ggml-opencl, ggml-vulkan, ggml-hexagon on Android phone
+    set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS}   ${DEBUG_FLAG} ${OPT_FLAG}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${DEBUG_FLAG} ${OPT_FLAG}")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_RELEASE} ${DEBUG_FLAG} ${OPT_FLAG}")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${DEBUG_FLAG} ${OPT_FLAG}")
+
+endif()
+
 if (NOT XCODE AND NOT MSVC AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
     set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS "Debug" "Release" "MinSizeRel" "RelWithDebInfo")
@@ -127,6 +151,7 @@ llama_option_depr(WARNING     LLAMA_RPC                 GGML_RPC)
 llama_option_depr(WARNING     LLAMA_SYCL                GGML_SYCL)
 llama_option_depr(WARNING     LLAMA_SYCL_F16            GGML_SYCL_F16)
 llama_option_depr(WARNING     LLAMA_CANN                GGML_CANN)
+llama_option_depr(WARNING     LLAMA_HEXAGON             GGML_HEXAGON)
 
 if (NOT MSVC)
     if (LLAMA_SANITIZE_THREAD)
