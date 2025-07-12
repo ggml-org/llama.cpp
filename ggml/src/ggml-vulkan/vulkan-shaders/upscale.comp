@@ -42,7 +42,7 @@ float fetch_bilinear(ivec2 c0, ivec2 c1, vec2 d, uint i12, uint i13) {
     const float v10 = data_a[base + c1.y * p.nb01 + c0.x * p.nb00];
     const float v11 = data_a[base + c1.y * p.nb01 + c1.x * p.nb00];
 
-    return 
+    return
         v00 * (1.0-d.x) * (1.0-d.y) +
         v01 * d.x       * (1.0-d.y) +
         v10 * (1.0-d.x) * d.y +
@@ -57,7 +57,7 @@ float interpolate_bilinear(uint i10, uint i11, uint i12, uint i13) {
     const vec2 d = c - c0f;
     const ivec2 c0 = max(ivec2(c0f), 0);
     const ivec2 c1 = min(ivec2(c0f + 1), ne0 - 1);
-    
+
     return fetch_bilinear(c0, c1, d, i12, i13);
 }
 

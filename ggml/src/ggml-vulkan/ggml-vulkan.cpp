@@ -721,7 +721,7 @@ static vk_op_unary_push_constants vk_op_unary_push_constants_init(const ggml_ten
     p.nb11 = (uint32_t)(dst->nb[1] / dst_tsize);
     p.nb12 = (uint32_t)(dst->nb[2] / dst_tsize);
     p.nb13 = (uint32_t)(dst->nb[3] / dst_tsize);
-    
+
     return p; // fastdiv values and offsets are initialized later in ggml_vk_op
 }
 
@@ -7615,9 +7615,6 @@ static void ggml_vk_repeat_back(ggml_backend_vk_context * ctx, vk_context& subct
 }
 
 static void ggml_vk_cpy(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    const uint32_t src0_type_size = ggml_type_size(src0->type);
-    const uint32_t dst_type_size = ggml_type_size(dst->type);
-
     uint32_t ne = (uint32_t)ggml_nelements(src0);
     if (ggml_is_quantized(src0->type) && ggml_is_quantized(dst->type)) {
         // Convert from number of logical elements to 2- or 4-byte units.
