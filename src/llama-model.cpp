@@ -15838,11 +15838,8 @@ private:
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, D));
             cb(y, "mamba_y_add_d", il);
 
-            ggml_tensor * z_silu = ggml_silu(ctx0, ggml_cont(ctx0, z));
-            cb(z_silu, "mamba_z_silu", il);
-
-            y = ggml_mul(ctx0, y, z_silu);
-            cb(y, "mamba_y_gated", il);
+            y = ggml_swiglu_split(ctx0, ggml_cont(ctx0, z), y);
+            cb(y, "mamba_y_swiglu_z", il);
 
             // out_proj: {d_inner, n_embd} @ {d_inner, n_seq_tokens, n_seqs} => {n_embd, n_seq_tokens, n_seqs}
             y = ggml_view_3d(ctx0, y, head_dim * n_heads, n_seq_tokens, n_seqs, y->nb[2], y->nb[3], 0);
