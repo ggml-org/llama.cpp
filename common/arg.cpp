@@ -1196,6 +1196,7 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             common_params_print_completion(ctx_arg);
             exit(0);
         }
+        params.lr.init();
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
         ctx_arg.params = params_org;
@@ -2609,9 +2610,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-o", "--output", "--output-file"}, "FNAME",
         string_format("output file (default: '%s')", params.out_file.c_str()),
         [](common_params & params, const std::string & value) {
-            params.out_file = value;
+          params.out_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-ofreq", "--output-frequency"}, "N",
         string_format("output the imatrix every N iterations (default: %d)", params.n_out_freq),
@@ -3422,6 +3423,52 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = 256;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(
+        common_arg({ "-lr", "--learning-rate-initial" }, "ALPHA",
+                   string_format(
+                       "adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)",
+                       (double) params.lr.lr0),
+                   [](common_params & params, const std::string & value) { params.lr.lr0 = std::stof(value); })
+            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(
+        common_arg({ "-lr-min", "--learning-rate-min" }, "ALPHA",
+                   string_format(
+                       "(if >0) final learning rate (default=%.2g)",
+                       (double) params.lr.lr_min),
+                   [](common_params & params, const std::string & value) { params.lr.lr_min = std::stof(value); })
+            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(
+        common_arg({ "-min-epochs", "--learning-rate-min-epochs" }, "ALPHA",
+                   string_format(
+                       "(if >0) reach -lr-min after this many epochs (instead of only at the last) (default=%.2g)",
+                       (double) params.lr.min_epochs),
+                   [](common_params & params, const std::string & value) { params.lr.min_epochs = std::stof(value); })
+            .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg(
+                { "-wd", "--weight-decay" }, "WD",
+                string_format(
+                    "adamw or sgd optimizer weight decay (0 is off; recommend very small e.g. 1e-9) (default: %.2g).",
+                    (double) params.lr.wd),
+                [](common_params & params, const std::string & value) { params.lr.wd = std::stof(value); })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-val", "--val-split" }, "FRACTION",
+                       string_format("fraction of data to use as validation set for training (default: %.2g).",
+                                     (double) params.val_split),
+                       [](common_params & params, const std::string & value) { params.val_split = std::stof(value); })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-epochs", "--epochs" }, "N",
+                       string_format("optimizer max # of epochs (default: %d)", params.lr.epochs),
+                       [](common_params & params, int epochs) { params.lr.epochs = epochs; })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
+    add_opt(common_arg({ "-opt", "--optimizer" }, "sgd|adamw", "adamw or sgd",
+                       [](common_params & params, const std::string & name) {
+                           params.optimizer = common_opt_get_optimizer(name.c_str());
+                           if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
+                               throw std::invalid_argument("invalid --optimizer, valid options: adamw, sgd");
+                           }
+                       })
+                .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
 
     return ctx_arg;
 }

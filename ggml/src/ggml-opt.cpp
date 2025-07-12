@@ -64,9 +64,15 @@ struct ggml_opt_context {
     int32_t opt_i              = 0;
     bool    loss_per_datapoint = false;
 
+
     ggml_opt_get_optimizer_params get_opt_pars = nullptr;
-    void * get_opt_pars_ud                     = nullptr;
-    struct ggml_tensor * adamw_params          = nullptr;
+    void *                        get_opt_pars_ud = nullptr;
+
+    enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    struct ggml_opt_optimizer_params opt_pars() const { return get_opt_pars(get_opt_pars_ud); }
+
+    // tensor to store the optimizer parameters retrieved from get_opt_pars
+    struct ggml_tensor * adamw_params = nullptr;
 };
 
 struct ggml_opt_result {
@@ -223,14 +229,18 @@ struct ggml_opt_optimizer_params ggml_opt_get_default_optimizer_params(void * us
 
     ggml_opt_optimizer_params result;
 
-    result.adamw.alpha = 0.001f;
+    result.adamw.alpha  = 0.001f;
     result.adamw.beta1 = 0.9f;
     result.adamw.beta2 = 0.999f;
     result.adamw.eps   = 1e-8f;
-    result.adamw.wd    = 0.0f;
+    result.adamw.wd     = 0.0f;
+
+    result.sgd.alpha = 1e-3f;
+    result.sgd.wd = 0.f;
 
     return result;
 }
+
 
 struct ggml_opt_optimizer_params ggml_opt_get_constant_optimizer_params(void * userdata) {
     return *((struct ggml_opt_optimizer_params *) userdata);
@@ -249,6 +259,7 @@ struct ggml_opt_params ggml_opt_default_params(
         /*opt_period      =*/ 1,
         /*get_opt_pars    =*/ ggml_opt_get_default_optimizer_params,
         /*get_opt_pars_ud =*/ nullptr,
+        /*optimizer       =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
     };
 }
 
@@ -316,8 +327,16 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     GGML_ASSERT(opt_ctx->ctx_compute && "no compute context set, either use static graphs or set one with ggml_opt_prepare_alloc");
     GGML_ASSERT((!opt_ctx->static_graphs || opt_ctx->inputs->data) && "when using static graphs the inputs must be allocated statically");
 
-    const bool accumulate = opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_GRAD &&
+    const enum ggml_opt_optimizer_type optimizer = opt_ctx->optimizer;
+
+    const bool moment = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
+        opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+
+    const bool accumulate =
+        opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_GRAD &&
         !(opt_ctx->static_graphs && opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period == 1);
+    if (0)
+    GGML_LOG_DEBUG("%s static=%d accumulate=%d opt_period=%d optimizer=%d\n", __func__, (int32_t)opt_ctx->static_graphs, (int32_t)accumulate, (int32_t)opt_ctx->opt_period, (int32_t)optimizer);
 
     ggml_set_input(opt_ctx->inputs);
     ggml_set_output(opt_ctx->outputs);
@@ -340,8 +359,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         //   - pred (if using static graphs)
         //   - ncorrect (if using static graphs, 2 tensors).
         constexpr size_t n_loss = 1;
-        const size_t tensors_per_param = (accumulate ? 1 : 0) +
-            (opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT ? 2 : 0);
+        const size_t            tensors_per_param = (accumulate ? 1 : 0) + (moment ? 2 : 0);
         const size_t tensors_const = opt_ctx->static_graphs ? 9 : 0;
         const size_t size_meta = (n_loss + tensors_per_param*n_param + tensors_const) * ggml_tensor_overhead();
         struct ggml_init_params params = {
@@ -349,6 +367,9 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             /*.mem_buffer =*/ nullptr,
             /*.no_alloc   =*/ true,
         };
+        GGML_LOG_INFO("%s static %d per param * %zu params, n_loss=%d tensors_const=%d=> %zu\n", __func__,
+                      (int32_t) tensors_per_param, (size_t) n_param, (int32_t) n_loss, (int32_t) tensors_const,
+                      (size_t) size_meta);
         opt_ctx->ctx_static = ggml_init(params);
     }
     GGML_ASSERT(opt_ctx->build_type <= opt_ctx->build_type_alloc);
@@ -458,7 +479,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             }
         }
 
-        if (opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
+        if (moment && opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
             opt_ctx->grad_m.resize(n_nodes);
             opt_ctx->grad_v.resize(n_nodes);
             for (int i = 0; i < n_nodes; ++i) {
@@ -492,23 +513,39 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     // gb_opt == graph backward optimize, forward pass, then backward pass to calculate gradients, then optimizer step.
     opt_ctx->gb_opt = ggml_graph_dup(opt_ctx->ctx_compute, opt_ctx->gb_grad, /*force_grads =*/ true);
 
-    opt_ctx->adamw_params = ggml_new_tensor_1d(opt_ctx->ctx_cpu, GGML_TYPE_F32, 7);
-    ggml_set_input(opt_ctx->adamw_params);
-    ggml_set_name(opt_ctx->adamw_params, "adamw_params");
-
+    opt_ctx->adamw_params = ggml_new_tensor_1d(opt_ctx->ctx_cpu, GGML_TYPE_F32, moment ? 7 : 2);
+    ggml_tensor * adamw_params = opt_ctx->adamw_params;
+    ggml_set_input(adamw_params);
+    ggml_set_name(adamw_params, "adamw_params");
+    std::string step_prefix     = moment ? "AdamW step for " : "SGD step for ";
+    unsigned    step_prefix_len_orig = step_prefix.size();
     for (int i = opt_ctx->gf->n_nodes-1; i >= 0; --i) {
         struct ggml_tensor * node = opt_ctx->gb_opt->nodes[i];
         struct ggml_tensor * grad = ggml_graph_get_grad(opt_ctx->gb_opt, node);
 
         if (grad && (node->flags & GGML_TENSOR_FLAG_PARAM)) {
-            struct ggml_tensor * m        = opt_ctx->grad_m[i];
-            struct ggml_tensor * v        = opt_ctx->grad_v[i];
-            struct ggml_tensor * opt_step = ggml_opt_step_adamw(opt_ctx->ctx_compute, node, grad, m, v, opt_ctx->adamw_params);
-
-            ggml_set_name(m,        (std::string("AdamW m for ")    + std::string(node->name)).c_str());
-            ggml_set_name(v,        (std::string("AdamW v for ")    + std::string(node->name)).c_str());
-            ggml_set_name(opt_step, (std::string("AdamW step for ") + std::string(node->name)).c_str());
-
+            struct ggml_tensor * m = nullptr;
+            struct ggml_tensor * v = nullptr;
+            if (moment) {
+                m = opt_ctx->grad_m[i];
+                v = opt_ctx->grad_v[i];
+                ggml_set_name(m, (std::string("AdamW m for ") + std::string(node->name)).c_str());
+                ggml_set_name(v, (std::string("AdamW v for ") + std::string(node->name)).c_str());
+            }
+            struct ggml_tensor * opt_step;
+            switch (optimizer) {
+                case GGML_OPT_OPTIMIZER_TYPE_ADAMW:
+                    opt_step = ggml_opt_step_adamw(opt_ctx->ctx_compute, node, grad, m, v, adamw_params);
+                    break;
+                case GGML_OPT_OPTIMIZER_TYPE_SGD:
+                    opt_step = ggml_opt_step_sgd(opt_ctx->ctx_compute, node, grad, adamw_params);
+                    break;
+                default:
+                    GGML_ABORT("fatal error");
+            }
+            step_prefix.resize(
+                step_prefix_len_orig);  // to avoid recreating a new step_prefix string temp n_nodes times
+            ggml_set_name(opt_step, (step_prefix += node->name).c_str());
             ggml_build_forward_expand(opt_ctx->gb_opt, opt_step);
         }
     }
@@ -534,10 +571,11 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
     result->opt_period       = params.opt_period;
     result->get_opt_pars     = params.get_opt_pars;
     result->get_opt_pars_ud  = params.get_opt_pars_ud;
-
+    result->optimizer        = params.optimizer;
     GGML_ASSERT(result->opt_period >= 1);
 
     result->static_graphs = result->ctx_compute;
+    GGML_LOG_DEBUG("%s opt_period=%d\n", __func__, (int32_t)result->opt_period);
 
     if (!result->static_graphs) {
         GGML_ASSERT(!result->inputs);
@@ -756,29 +794,46 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
 void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
     GGML_ASSERT(opt_ctx->eval_ready);
     if (opt_ctx->allocated_graph == opt_ctx->gb_opt) {
-        struct ggml_opt_optimizer_params opt_pars = opt_ctx->get_opt_pars(opt_ctx->get_opt_pars_ud);
+        const ggml_opt_optimizer_params & opt_pars = opt_ctx->opt_pars();
 
-        GGML_ASSERT(opt_pars.adamw.alpha >  0.0f);
-        GGML_ASSERT(opt_pars.adamw.beta1 >= 0.0f);
-        GGML_ASSERT(opt_pars.adamw.beta1 <= 1.0f);
-        GGML_ASSERT(opt_pars.adamw.beta2 >= 0.0f);
-        GGML_ASSERT(opt_pars.adamw.beta2 <= 1.0f);
-        GGML_ASSERT(opt_pars.adamw.eps   >= 0.0f);
-        GGML_ASSERT(opt_pars.adamw.wd    >= 0.0f);
-        GGML_ASSERT(opt_pars.adamw.wd    <= 1.0f);
+        switch (opt_ctx->optimizer) {
+            case GGML_OPT_OPTIMIZER_TYPE_ADAMW:
+                {
+                    GGML_ASSERT(opt_pars.adamw.alpha > 0.0f);
+                    GGML_ASSERT(opt_pars.adamw.beta1 >= 0.0f);
+                    GGML_ASSERT(opt_pars.adamw.beta1 <= 1.0f);
+                    GGML_ASSERT(opt_pars.adamw.beta2 >= 0.0f);
+                    GGML_ASSERT(opt_pars.adamw.beta2 <= 1.0f);
+                    GGML_ASSERT(opt_pars.adamw.eps >= 0.0f);
+                    GGML_ASSERT(opt_pars.adamw.wd >= 0.0f);
+                    GGML_ASSERT(opt_pars.adamw.wd <= 1.0f);
+                    // beta1, beta2 after applying warmup
+                    const float beta1h         = 1.0f / (1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));
+                    const float beta2h         = 1.0f / (1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));
+                    float *     adamw_par_data = ggml_get_data_f32(opt_ctx->adamw_params);
+                    adamw_par_data[0]          = opt_pars.adamw.alpha;
+                    adamw_par_data[1]          = opt_pars.adamw.beta1;
+                    adamw_par_data[2]          = opt_pars.adamw.beta2;
+                    adamw_par_data[3]          = opt_pars.adamw.eps;
+                    adamw_par_data[4]          = opt_pars.adamw.wd;
+                    adamw_par_data[5]          = beta1h;
+                    adamw_par_data[6]          = beta2h;
+                }
+                break;
 
-        // beta1, beta2 after applying warmup
-        const float beta1h = 1.0f/(1.0f - powf(opt_pars.adamw.beta1, opt_ctx->iter));
-        const float beta2h = 1.0f/(1.0f - powf(opt_pars.adamw.beta2, opt_ctx->iter));
+            case GGML_OPT_OPTIMIZER_TYPE_SGD:
+                {
+                    GGML_ASSERT(opt_pars.sgd.alpha > 0.0f);
+                    GGML_ASSERT(opt_pars.sgd.wd >= 0.0f);
+                    GGML_ASSERT(opt_pars.sgd.wd <= 1.0f);
+                    float * sgd = ggml_get_data_f32(opt_ctx->adamw_params);
+                    sgd[1]      = 1. - (sgd[0] = opt_pars.sgd.alpha) * opt_pars.sgd.wd;
+                }
+                break;
 
-        float * adamw_par_data = ggml_get_data_f32(opt_ctx->adamw_params);
-        adamw_par_data[0] = opt_pars.adamw.alpha;
-        adamw_par_data[1] = opt_pars.adamw.beta1;
-        adamw_par_data[2] = opt_pars.adamw.beta2;
-        adamw_par_data[3] = opt_pars.adamw.eps;
-        adamw_par_data[4] = opt_pars.adamw.wd;
-        adamw_par_data[5] = beta1h;
-        adamw_par_data[6] = beta2h;
+            default:
+                GGML_ABORT("fatal error");
+        }
     }
 
     ggml_backend_sched_graph_compute(opt_ctx->backend_sched, opt_ctx->allocated_graph_copy);
@@ -864,6 +919,7 @@ void ggml_opt_epoch(
 
     int64_t ibatch = 0;
     int64_t t_loop_start = ggml_time_us();
+
     for (; ibatch < ibatch_split; ++ibatch) {
         ggml_opt_alloc(opt_ctx, /*backward =*/ true);
         ggml_opt_dataset_get_batch(dataset, inputs, labels, ibatch);
@@ -963,6 +1019,7 @@ void ggml_opt_fit(
         ggml_tensor                   * outputs,
         ggml_opt_dataset_t              dataset,
         enum ggml_opt_loss_type         loss_type,
+        enum ggml_opt_optimizer_type    optimizer,
         ggml_opt_get_optimizer_params   get_opt_pars,
         int64_t                         nepoch,
         int64_t                         nbatch_logical,
@@ -993,6 +1050,7 @@ void ggml_opt_fit(
     params.opt_period      = opt_period;
     params.get_opt_pars    = get_opt_pars;
     params.get_opt_pars_ud = &epoch;
+    params.optimizer       = optimizer;
     ggml_opt_context_t opt_ctx = ggml_opt_init(params);
 
     // Shuffling the data is generally useful but there is only a point if not all data is used in a single batch.
@@ -1034,4 +1092,19 @@ void ggml_opt_fit(
     ggml_opt_free(opt_ctx);
     ggml_opt_result_free(result_train);
     ggml_opt_result_free(result_val);
+}
+
+enum ggml_opt_optimizer_type ggml_opt_context_optimizer_type(ggml_opt_context_t c) {
+    return c->optimizer;
+}
+
+GGML_API const char * ggml_opt_optimizer_name(enum ggml_opt_optimizer_type o) {
+    switch (o) {
+        case GGML_OPT_OPTIMIZER_TYPE_ADAMW:
+            return "adamw";
+        case GGML_OPT_OPTIMIZER_TYPE_SGD:
+            return "sgd";
+        default:
+            return "undefined";
+    };
 }
