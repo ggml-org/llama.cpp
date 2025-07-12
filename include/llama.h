@@ -1389,6 +1389,7 @@ extern "C" {
 
         int32_t n_p_eval;
         int32_t n_eval;
+        int32_t n_reused;
     };
 
     struct llama_perf_sampler_data {
