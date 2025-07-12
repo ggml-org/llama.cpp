@@ -27,7 +27,7 @@ static void print_usage(int, char ** argv) {
     LOG("\n    %s -m model.gguf -f some-text.txt [-o imatrix.dat] [--process-output]\n"
             "       [--chunk 123] [--output-frequency 10] [--save-frequency 0] [--show-statistics]\n"
             "       [--no-ppl] [--in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat ...]\n"
-            "       [--parse-special]\n" , argv[0]);
+            "       [--parse-special] [...]\n" , argv[0]);
     LOG("\n");
 }
 
