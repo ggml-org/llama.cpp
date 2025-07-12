@@ -39,10 +39,11 @@ export interface Message {
   convId: string;
   type: 'text' | 'root';
   timestamp: number; // timestamp from Date.now()
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   timings?: TimingReport;
   extra?: MessageExtra[];
+  tool_calls?: ToolCallRequest[];
   // node based system for branching
   parent: Message['id'];
   children: Message['id'][];
@@ -95,6 +96,7 @@ export type APIMessageContentPart =
 
 export type APIMessage = {
   role: Message['role'];
+  tool_calls?: ToolCallRequest[];
   content: string | APIMessageContentPart[];
 };
 
@@ -124,6 +126,44 @@ export interface CanvasPyInterpreter {
 }
 
 export type CanvasData = CanvasPyInterpreter;
+
+// The request for a tool call, which is received from the model.
+export interface ToolCallRequest {
+  id: string;
+  type: 'function';
+  call_id: string;
+  function: {
+    name: string;
+    arguments: string; // JSON string of arguments
+  };
+}
+
+// The specification of a tool call, which is sent to the model.
+export interface ToolCallSpec {
+  type: 'function';
+  function: {
+    name: string;
+    description: string;
+    parameters: ToolCallParameters;
+  };
+}
+
+// The parameters for a tool call, which defines the structure of the arguments.
+export interface ToolCallParameters {
+  type: 'object';
+  properties: object;
+  required: string[];
+}
+
+// The output of a tool call, which is returned to the model.
+export interface ToolCallOutput {
+  type: 'function_call_output';
+  call_id: string;
+  output: string;
+}
+
+// A list of available builtin tool IDs.
+export type AvailableToolId = 'javascript_interpreter';
 
 // a non-complete list of props, only contains the ones we need
 export interface LlamaCppServerProps {

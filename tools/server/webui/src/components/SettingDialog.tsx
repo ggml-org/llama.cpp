@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { ReactElement, useState } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import { isDev } from '../Config';
@@ -11,6 +11,7 @@ import {
   FunnelIcon,
   HandRaisedIcon,
   SquaresPlusIcon,
+  WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
 import { useModals } from './ModalProvider';
@@ -51,8 +52,8 @@ enum SettingInputType {
 
 interface SettingFieldInput {
   type: Exclude<SettingInputType, SettingInputType.CUSTOM>;
-  label: string | React.ReactElement;
-  help?: string | React.ReactElement;
+  label: string | ReactElement;
+  help?: string | ReactElement;
   key: SettKey;
 }
 
@@ -173,6 +174,31 @@ const SETTING_SECTIONS: SettingSection[] = [
   {
     title: (
       <>
+        <WrenchScrewdriverIcon className={ICON_CLASSNAME} />
+        Tool Calling
+      </>
+    ),
+    fields: [
+      {
+        type: SettingInputType.CHECKBOX,
+        label: (
+          <>
+            <span className="font-semibold">JavaScript Interpreter</span>
+            <small className="text-xs block mt-1 opacity-70">
+              <strong>Agent tool description: </strong>
+              Executes JavaScript code in a sandboxed iframe. The code should be
+              self-contained valid javascript. Only console.log(variable) and
+              final result are included in response content.
+            </small>
+          </>
+        ),
+        key: 'toolJsReplEnabled',
+      },
+    ],
+  },
+  {
+    title: (
+      <>
         <SquaresPlusIcon className={ICON_CLASSNAME} />
         Advanced
       </>
@@ -185,10 +211,7 @@ const SETTING_SECTIONS: SettingSection[] = [
           const debugImportDemoConv = async () => {
             const res = await fetch('/demo-conversation.json');
             const demoConv = await res.json();
-            StorageUtils.remove(demoConv.id);
-            for (const msg of demoConv.messages) {
-              StorageUtils.appendMsg(demoConv.id, msg);
-            }
+            await StorageUtils.importDemoConversation(demoConv);
           };
           return (
             <button className="btn" onClick={debugImportDemoConv}>
