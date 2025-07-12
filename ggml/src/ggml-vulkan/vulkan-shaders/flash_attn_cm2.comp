@@ -131,8 +131,8 @@ void main() {
     }
 
     uint32_t m_offset = 0;
-    if (p.nem2 != 1) {
-        m_offset = (iq3 % p.nem2) * p.nem1 * KV * 2 /*sizeof(float16_t)*/;
+    if (p.nem2 != 1 || p.nem3 != 1) {
+        m_offset = ((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 * KV * 2 /*sizeof(float16_t)*/;
     }
 
     [[dont_unroll]]
@@ -153,7 +153,7 @@ void main() {
             }
         }
 
-        if (p.mask != 0) {
+        if ((p.mask_n_head_log2 & MASK_ENABLE_BIT) != 0) {
             tensorLayoutNV<2, Clamp> tensorLayoutM = createTensorLayoutNV(2, Clamp);
             tensorLayoutM = setTensorLayoutDimensionNV(tensorLayoutM, p.nem1, KV);
             tensorLayoutM = setTensorLayoutStrideNV(tensorLayoutM, m_stride, 1);

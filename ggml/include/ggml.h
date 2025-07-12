@@ -495,7 +495,7 @@ extern "C" {
         GGML_OP_POOL_1D,
         GGML_OP_POOL_2D,
         GGML_OP_POOL_2D_BACK,
-        GGML_OP_UPSCALE, // nearest interpolate
+        GGML_OP_UPSCALE,
         GGML_OP_PAD,
         GGML_OP_PAD_REFLECT_1D,
         GGML_OP_ROLL,
@@ -557,6 +557,8 @@ extern "C" {
         GGML_GLU_OP_REGLU,
         GGML_GLU_OP_GEGLU,
         GGML_GLU_OP_SWIGLU,
+        GGML_GLU_OP_GEGLU_ERF,
+        GGML_GLU_OP_GEGLU_QUICK,
 
         GGML_GLU_OP_COUNT,
     };
@@ -1147,6 +1149,22 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 
+    GGML_API struct ggml_tensor * ggml_geglu_erf(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_erf_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick_swapped(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
     // A: n columns, r rows,
     // B: n columns, r rows,
     GGML_API struct ggml_tensor * ggml_glu_split(
@@ -1166,6 +1184,16 @@ extern "C" {
             struct ggml_tensor  * b);
 
     GGML_API struct ggml_tensor * ggml_swiglu_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_geglu_erf_split(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    GGML_API struct ggml_tensor * ggml_geglu_quick_split(
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
@@ -1268,6 +1296,19 @@ extern "C" {
             struct ggml_context * ctx,
             struct ggml_tensor  * a,
             float                 s);
+
+    // x = s * a + b
+    GGML_API struct ggml_tensor * ggml_scale_bias(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b);
+
+    GGML_API struct ggml_tensor * ggml_scale_bias_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b);
 
     // b -> view(a,offset,nb1,nb2,3), return modified a
     GGML_API struct ggml_tensor * ggml_set(

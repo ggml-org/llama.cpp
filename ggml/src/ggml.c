@@ -1140,9 +1140,11 @@ static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
     "GEGLU",
     "SWIGLU",
+    "GEGLU_ERF",
+    "GEGLU_QUICK",
 };
 
-static_assert(GGML_GLU_OP_COUNT == 3, "GGML_GLU_OP_COUNT != 3");
+static_assert(GGML_GLU_OP_COUNT == 5, "GGML_GLU_OP_COUNT != 5");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
@@ -2768,6 +2770,48 @@ struct ggml_tensor * ggml_swiglu_split(
     return ggml_glu_impl(ctx, a, b, GGML_GLU_OP_SWIGLU, false);
 }
 
+// ggml_geglu_erf
+
+struct ggml_tensor * ggml_geglu_erf(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_glu_impl(ctx, a, NULL, GGML_GLU_OP_GEGLU_ERF, false);
+}
+
+struct ggml_tensor * ggml_geglu_erf_swapped(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_glu_impl(ctx, a, NULL, GGML_GLU_OP_GEGLU_ERF, true);
+}
+
+struct ggml_tensor * ggml_geglu_erf_split(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    return ggml_glu_impl(ctx, a, b, GGML_GLU_OP_GEGLU_ERF, false);
+}
+
+// ggml_geglu_quick
+
+struct ggml_tensor * ggml_geglu_quick(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_glu_impl(ctx, a, NULL, GGML_GLU_OP_GEGLU_QUICK, false);
+}
+
+struct ggml_tensor * ggml_geglu_quick_swapped(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    return ggml_glu_impl(ctx, a, NULL, GGML_GLU_OP_GEGLU_QUICK, true);
+}
+
+struct ggml_tensor * ggml_geglu_quick_split(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    return ggml_glu_impl(ctx, a, b, GGML_GLU_OP_GEGLU_QUICK, false);
+}
+
 // ggml_norm
 
 static struct ggml_tensor * ggml_norm_impl(
@@ -3025,12 +3069,14 @@ static struct ggml_tensor * ggml_scale_impl(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         float                 s,
+        float                 b,
         bool                  inplace) {
     GGML_ASSERT(ggml_is_padded_1d(a));
 
     struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
 
-    ggml_set_op_params(result, &s, sizeof(s));
+    float params[2] = { s, b };
+    ggml_set_op_params(result, &params, sizeof(params));
 
     result->op     = GGML_OP_SCALE;
     result->src[0] = a;
@@ -3042,14 +3088,30 @@ struct ggml_tensor * ggml_scale(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         float                 s) {
-    return ggml_scale_impl(ctx, a, s, false);
+    return ggml_scale_impl(ctx, a, s, 0.0, false);
 }
 
 struct ggml_tensor * ggml_scale_inplace(
         struct ggml_context * ctx,
         struct ggml_tensor  * a,
         float                 s) {
-    return ggml_scale_impl(ctx, a, s, true);
+    return ggml_scale_impl(ctx, a, s, 0.0, true);
+}
+
+struct ggml_tensor * ggml_scale_bias(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b) {
+    return ggml_scale_impl(ctx, a, s, b, false);
+}
+
+struct ggml_tensor * ggml_scale_bias_inplace(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        float                 s,
+        float                 b) {
+    return ggml_scale_impl(ctx, a, s, b, true);
 }
 
 // ggml_set
@@ -5733,7 +5795,7 @@ static void ggml_compute_backward(
         } break;
         case GGML_OP_MEAN: {
             if (src0_needs_grads) {
-                ggml_add1_or_set(ctx, cgraph, isrc0, ggml_scale_impl(ctx, grad, 1.0f/src0->ne[0], false));
+                ggml_add1_or_set(ctx, cgraph, isrc0, ggml_scale_impl(ctx, grad, 1.0f/src0->ne[0], 0.0, false));
             }
         } break;
         case GGML_OP_REPEAT: {
@@ -5810,7 +5872,7 @@ static void ggml_compute_backward(
             if (src0_needs_grads) {
                 float s;
                 memcpy(&s, tensor->op_params, sizeof(float));
-                ggml_add_or_set(ctx, cgraph, isrc0, ggml_scale_impl(ctx, grad, s, false));
+                ggml_add_or_set(ctx, cgraph, isrc0, ggml_scale_impl(ctx, grad, s, 0.0, false));
             }
         } break;
         case GGML_OP_SET: {
