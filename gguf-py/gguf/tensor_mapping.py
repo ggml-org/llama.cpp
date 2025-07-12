@@ -311,6 +311,7 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.router",           # llama4 jamba
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
             "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
+            "model.layers.{bid}.mlp.ffn_gate_inp.weight",       # ernie4.5-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -318,7 +319,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_EXP_PROBS_B: (
-            "model.layers.{bid}.mlp.gate.e_score_correction", # deepseek-v3 dots1
+            "model.layers.{bid}.mlp.gate.e_score_correction",               # deepseek-v3 dots1
+            "model.layers.{bid}.mlp.moe_statics.e_score_correction",        # ernie4.5-moe
         ),
 
         # Feed-forward up
@@ -357,13 +359,14 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
-            "layers.{bid}.feed_forward.experts.w3",           # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear_v",   # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.v1",    # dbrx
-            "model.layers.{bid}.mlp.experts.up_proj",         # qwen2moe olmoe (merged)
-            "model.layers.{bid}.block_sparse_moe.experts.w3", # phimoe (merged)
-            "model.layers.{bid}.feed_forward.experts.up_proj", # llama4
-            "encoder.layers.{bid}.mlp.experts.mlp.w1",        # nomic-bert-moe
+            "layers.{bid}.feed_forward.experts.w3",                 # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear_v",         # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.v1",          # dbrx
+            "model.layers.{bid}.mlp.experts.up_proj",               # qwen2moe olmoe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w3",       # phimoe (merged)
+            "model.layers.{bid}.feed_forward.experts.up_proj",      # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w1",              # nomic-bert-moe
+            "layers.{bid}.mlp.experts.up_proj.weight",              # ernie4.5-moe
         ),
 
         MODEL_TENSOR.FFN_UP_SHEXP: (
@@ -396,12 +399,13 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
-            "layers.{bid}.feed_forward.experts.w1",              # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear",        # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.w1",       # dbrx
-            "model.layers.{bid}.mlp.experts.gate_proj",          # qwen2moe olmoe (merged)
-            "model.layers.{bid}.block_sparse_moe.experts.w1",    # phimoe (merged)
-            "model.layers.{bid}.feed_forward.experts.gate_proj", # llama4
+            "layers.{bid}.feed_forward.experts.w1",                     # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear",               # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.w1",              # dbrx
+            "model.layers.{bid}.mlp.experts.gate_proj",                 # qwen2moe olmoe (merged)
+            "model.layers.{bid}.block_sparse_moe.experts.w1",           # phimoe (merged)
+            "model.layers.{bid}.feed_forward.experts.gate_proj",        # llama4
+            "layers.{bid}.mlp.experts.gate_proj.weight",                # ernie4.5-moe
         ),
 
         MODEL_TENSOR.FFN_GATE_SHEXP: (
@@ -443,14 +447,15 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
-            "layers.{bid}.feed_forward.experts.w2",              # mixtral (merged)
-            "transformer.decoder_layer.{bid}.moe.linear_1",      # Grok (merged)
-            "transformer.blocks.{bid}.ffn.experts.mlp.w2",       # dbrx
-            "model.layers.{bid}.mlp.experts.down_proj",          # qwen2moe olmoe (merged)
-            "model.layers.{bid}.block_sparse_moe.output_linear", # granitemoe
-            "model.layers.{bid}.block_sparse_moe.experts.w2",    # phimoe (merged)
-            "model.layers.{bid}.feed_forward.experts.down_proj", # llama4
-            "encoder.layers.{bid}.mlp.experts.mlp.w2",           # nomic-bert-moe
+            "layers.{bid}.feed_forward.experts.w2",                 # mixtral (merged)
+            "transformer.decoder_layer.{bid}.moe.linear_1",         # Grok (merged)
+            "transformer.blocks.{bid}.ffn.experts.mlp.w2",          # dbrx
+            "model.layers.{bid}.mlp.experts.down_proj",             # qwen2moe olmoe (merged)
+            "model.layers.{bid}.block_sparse_moe.output_linear",    # granitemoe
+            "model.layers.{bid}.block_sparse_moe.experts.w2",       # phimoe (merged)
+            "model.layers.{bid}.feed_forward.experts.down_proj",    # llama4
+            "encoder.layers.{bid}.mlp.experts.mlp.w2",              # nomic-bert-moe
+            "layers.{bid}.mlp.experts.down_proj.weight",            # ernie4.5-moe
         ),
 
         MODEL_TENSOR.FFN_DOWN_SHEXP: (
