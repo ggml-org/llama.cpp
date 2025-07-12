@@ -300,6 +300,7 @@ class ModelBase:
                             gguf.MODEL_TENSOR.POS_EMBD,
                             gguf.MODEL_TENSOR.TOKEN_TYPES,
                             gguf.MODEL_TENSOR.SSM_CONV1D,
+                            gguf.MODEL_TENSOR.SHORTCONV_CONV,
                             gguf.MODEL_TENSOR.TIME_MIX_FIRST,
                             gguf.MODEL_TENSOR.TIME_MIX_W1,
                             gguf.MODEL_TENSOR.TIME_MIX_W2,
@@ -836,6 +837,9 @@ class TextModel(ModelBase):
         if chkhsh == "f6791d196f87ce6b56a7d234be618e0d58f8cda3549416635b2bebcd22cd95c4":
             # ref: https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct
             res = "midm-2.0"
+        if chkhsh == "169bf0296a13c4d9b7672313f749eb36501d931022de052aad6e36f2bf34dd51":
+            # ref: https://huggingface.co/LiquidAI/LFM2-Tokenizer
+            res = "lfm2"
         if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
             # ref: temporary model
             res = "exaone4"
@@ -7156,6 +7160,50 @@ class SmolLM3Model(LlamaModel):
         if tokenizer.chat_template is not None:
             chat_template = tokenizer.chat_template.replace("[:]", "")
             self.gguf_writer.add_chat_template(chat_template)
+
+
+@ModelBase.register("Lfm2ForCausalLM")
+@ModelBase.register("LFM2ForCausalLM")
+class LFM2Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.LFM2
+
+    def _add_feed_forward_length(self):
+        ff_dim = self.hparams["block_ff_dim"]
+
+        auto_adjust_ff_dim = self.hparams["block_auto_adjust_ff_dim"]
+        ff_dim = self.hparams["block_ff_dim"]
+        ffn_dim_multiplier = self.hparams["block_ffn_dim_multiplier"]
+        multiple_of = self.hparams["block_multiple_of"]
+
+        if auto_adjust_ff_dim:
+            ff_dim = int(2 * ff_dim / 3)
+            # custom dim factor multiplier
+            if ffn_dim_multiplier is not None:
+                ff_dim = int(ffn_dim_multiplier * ff_dim)
+            ff_dim = multiple_of * ((ff_dim + multiple_of - 1) // multiple_of)
+
+        self.gguf_writer.add_feed_forward_length(ff_dim)
+
+    def set_gguf_parameters(self):
+        # set num_key_value_heads only for attention layers
+        self.hparams["num_key_value_heads"] = [
+            self.hparams["num_key_value_heads"] if layer_type == "full_attention" else 0
+            for layer_type in self.hparams["layer_types"]
+        ]
+
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        self.gguf_writer.add_shortconv_l_cache(self.hparams["conv_L_cache"])
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams["norm_eps"])
+        self._add_feed_forward_length()
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # conv op requires 2d tensor
+        if 'conv.conv' in name:
+            data_torch = data_torch.squeeze(1)
+
+        return [(self.map_tensor_name(name), data_torch)]
+
 
 ###### CONVERSION LOGIC ######
 

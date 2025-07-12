@@ -844,6 +844,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         // do not quantize Mamba's small yet 2D weights
         // NOTE: can't use LLM_TN here because the layer number is not known
         quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
+        quantize &= name.find("shortconv.conv.weight") == std::string::npos;
 
         // do not quantize RWKV's small yet 2D weights
         quantize &= name.find("time_mix_first.weight") == std::string::npos;

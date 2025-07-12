@@ -50,6 +50,7 @@ class TensorNameMap:
             "model.pre_ln",               # rwkv7
             "model.layers.0.pre_norm",    # rwkv7
             "backbone.norm",              # wavtokenizer
+            "model.embedding_norm",       # lfm2
         ),
 
         # Position embeddings
@@ -136,6 +137,7 @@ class TensorNameMap:
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
             "transformer_encoder.{bid}.attention_norm",             # neobert
+            "model.layers.{bid}.operator_norm",                     # lfm2
         ),
 
         # Attention norm 2
@@ -220,6 +222,7 @@ class TensorNameMap:
             "transformer.h.{bid}.self_attention.dense",                     # falcon
             "h.{bid}.self_attention.dense",                                 # bloom
             "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2 phimoe
+            "model.layers.{bid}.self_attn.out_proj",                        # lfm2
             "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
@@ -1013,6 +1016,18 @@ class TensorNameMap:
 
         MODEL_TENSOR.POSNET_ATTN_OUT: (
             "backbone.posnet.{bid}.proj_out", # wavtokenizer
+        ),
+
+        MODEL_TENSOR.SHORTCONV_CONV: (
+            "model.layers.{bid}.conv.conv",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_INPROJ: (
+            "model.layers.{bid}.conv.in_proj",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_OUTPROJ: (
+            "model.layers.{bid}.conv.out_proj",
         ),
 
         #############################################################################
