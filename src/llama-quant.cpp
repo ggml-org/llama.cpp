@@ -884,8 +884,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                         if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
                             if  (qtype != new_type) {
                                 LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
-                                new_type = qtype;
-                                break; // if two or more types are specified for the tensor, first match wins
+                                new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
                             }
                         }
                     }
