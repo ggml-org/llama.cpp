@@ -3423,20 +3423,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
-    add_opt(common_arg(
-        {"--fim-falcon-7b-spec"},
-        string_format("use quantized Falcon 7B model (note: can download weights from the internet)"),
-        [](common_params & params) {
-            params.model.hf_repo = "maddes8cht/tiiuae-falcon-7b-gguf";
-            params.model.hf_file = "tiiuae-falcon-7b-Q6_K.gguf";
-            params.n_gpu_layers = 40;
-            params.flash_attn = true;
-            params.n_ubatch = 1024;
-            params.n_batch = 1024;
-            params.n_ctx = 2048;
-            params.n_cache_reuse = 256;
-        }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg
+            ({ "--chat-smollm-3b-default" },
+            string_format("use default SmolLM-v3 3B model (note: can download weights from the internet)"),
+            [](common_params & params) {
+                params.model.hf_repo = "ggml-org/SmolLM3-3B-GGUF";
+                params.model.hf_file = "SmolLM3-Q8_0.gguf";
+                params.n_gpu_layers  = 40;
+                params.flash_attn    = true;
+                params.n_ubatch      = 1024;
+                params.n_batch       = 1024;
+                params.n_ctx         = 65536;
+                params.n_cache_reuse = 256;
+            }
+        ).set_examples({ LLAMA_EXAMPLE_SERVER }));
 
 
     return ctx_arg;
