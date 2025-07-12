@@ -6413,7 +6413,7 @@ class Exaone4Model(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
-        
+
         self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 131072))
         self.gguf_writer.add_embedding_length(hparams["hidden_size"])
         self.gguf_writer.add_feed_forward_length(hparams.get("intermediate_size", 4 * hparams["hidden_size"]))
@@ -6421,7 +6421,7 @@ class Exaone4Model(TextModel):
         self.gguf_writer.add_head_count(hparams["num_attention_heads"])
         self.gguf_writer.add_head_count_kv(hparams.get("num_key_value_heads", hparams["num_attention_heads"]))
         self.gguf_writer.add_layer_norm_rms_eps(hparams.get("layer_norm_epsilon", 1e-5))
-        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 1_000_000.0))
+        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10_000.0))
         self.gguf_writer.add_key_length(hparams["head_dim"])
         self.gguf_writer.add_value_length(hparams["head_dim"])
         self.gguf_writer.add_file_type(self.ftype)
@@ -6437,10 +6437,10 @@ class Exaone4Model(TextModel):
                         sliding_window_pattern.append(hparams["sliding_window_pattern"][i % len(hparams["sliding_window_pattern"])] == "L")
                 if isinstance(hparams["sliding_window_pattern"], int):  # e.g. 4
                     for i in range(hparams["num_hidden_layers"]):
-                        sliding_window_pattern.append((i+1) % hparams["sliding_window_pattern"] != 0)
+                        sliding_window_pattern.append((i + 1) % hparams["sliding_window_pattern"] != 0)
                 if len(sliding_window_pattern) == hparams["num_hidden_layers"]:
                     self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
-        
+
         rope_scaling = self.hparams.get("rope_scaling") or {}
         if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
@@ -6449,7 +6449,7 @@ class Exaone4Model(TextModel):
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         if rope_scaling := self.find_hparam(["rope_scaling"], optional=True):
             if rope_scaling.get("rope_type", '').lower() == "llama3":
-                base = self.hparams.get("rope_theta", 1_000_000.0)
+                base = self.hparams.get("rope_theta", 10_000.0)
                 if (dim := self.hparams.get("head_dim")) is None:
                     dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
                 freqs = 1.0 / (base ** (torch.arange(0, dim, 2, dtype=torch.float32) / dim))

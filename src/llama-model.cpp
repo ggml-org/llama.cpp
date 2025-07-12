@@ -1453,10 +1453,10 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.n_swa = 4096;
                     hparams.set_swa_pattern(4);
                 }
-                
+
                 ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
-                
+
                 switch (hparams.n_layer) {
                     case 30: type = LLM_TYPE_1_2B; break;
                     case 64: type = LLM_TYPE_32B; break;
@@ -4275,7 +4275,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
                         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
                         layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
-                        
+
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
@@ -13308,7 +13308,7 @@ struct llm_build_exaone4 : public llm_graph_context {
         }
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
-        
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
