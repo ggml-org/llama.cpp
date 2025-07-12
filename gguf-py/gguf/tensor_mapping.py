@@ -390,7 +390,6 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.w2",                 # qwen
             "transformer.h.{bid}.mlp.c_fc2",              # jais
             "model.layers.layers.{bid}.mlp.gate_proj",    # plamo
-            "model.layers.layers.{bid}.mlp.ffn_gate" ,    # plamo2
             "model.layers.{bid}.feed_forward.w1",         # internlm2
             "encoder.layers.{bid}.mlp.fc12",              # nomic-bert
             "encoder.layer.{bid}.mlp.gated_layers_w",     # jina-bert-v2 (split up/gate, no longer used)
