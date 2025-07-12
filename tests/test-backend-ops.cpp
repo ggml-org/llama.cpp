@@ -4114,6 +4114,32 @@ struct test_pad_reflect_1d : public test_case {
     }
 };
 
+// GGML_OP_ROLL
+struct test_roll : public test_case {
+    const int shift0;
+    const int shift1;
+    const int shift3;
+    const int shift4;
+
+    std::string vars() override {
+        return VARS_TO_STR4(shift0, shift1, shift3, shift4);
+    }
+
+    test_roll(int shift0 = 3, int shift1 = -2, int shift3 = 1, int shift4 = -1)
+        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        int64_t ne[4] = {10, 5, 4, 3};
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_roll(ctx, a, shift0, shift1, shift3, shift4);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_ARANGE
 struct test_arange : public test_case {
     const ggml_type type;
@@ -5484,6 +5510,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_acc());
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad_reflect_1d());
+    test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
