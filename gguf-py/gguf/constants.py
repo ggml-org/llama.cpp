@@ -233,6 +233,11 @@ class Keys:
         TYPE       = "adapter.type"
         LORA_ALPHA = "adapter.lora.alpha"
 
+    class IMatrix:
+        CHUNK_COUNT = "imatrix.chunk_count"
+        CHUNK_SIZE  = "imatrix.chunk_size"
+        DATASETS    = "imatrix.datasets"
+
     class Clip:
         PROJECTOR_TYPE      = "clip.projector_type"
         HAS_VISION_ENCODER  = "clip.has_vision_encoder"
@@ -282,6 +287,7 @@ class Keys:
 class GGUFType:
     MODEL   = "model"
     ADAPTER = "adapter"
+    IMATRIX = "imatrix"
     MMPROJ  = "mmproj" # dummy, unused for now
 
 
