@@ -15677,28 +15677,7 @@ private:
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
 
-            // Store original K and V for KV cache (before GQA expansion)
-            ggml_tensor * Kcur_cache = Kcur;
-            ggml_tensor * Vcur_cache = Vcur;
-
-            // PLaMo-2 GQA: expand K and V heads to match Q heads (equivalent to _expand_kv)
-            if (n_head_kv < n_head) {
-                // const int n_group = n_head / n_head_kv;
-
-                // manually expand K and V tensors to repeat each head n_group times
-                // create expanded tensors with target dimensions
-                ggml_tensor * Kcur_expanded = ggml_new_tensor_3d(ctx0, Kcur->type, n_embd_head_k, n_head, n_tokens);
-                ggml_tensor * Vcur_expanded = ggml_new_tensor_3d(ctx0, Vcur->type, n_embd_head_v, n_head, n_tokens);
-
-                // repeat each head n_group times
-                Kcur = ggml_repeat(ctx0, Kcur, Kcur_expanded);
-                Vcur = ggml_repeat(ctx0, Vcur, Vcur_expanded);
-
-                cb(Kcur, "Kcur_expanded", il);
-                cb(Vcur, "Vcur_expanded", il);
-            }
-
-            cur = build_attn(inp, gf, model.layers[il].wo, NULL, Qcur, Kcur_cache, Vcur_cache, NULL, NULL, 1.0f, il);
+            cur = build_attn(inp, gf, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f, il);
         }
 
         cb(cur, "attn_out", il);

@@ -3593,8 +3593,6 @@ class Plamo2Model(TextModel):
         self.gguf_writer.add_block_count(block_count)
         self.gguf_writer.add_head_count(hparams.get("num_attention_heads", 32))
         self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-06))
-        self.gguf_writer.add_group_norm_eps(hparams.get("rms_norm_eps", 1e-06))
-        self.gguf_writer.add_layer_norm_eps(hparams.get("rms_norm_eps", 1e-06))
         self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 1000000.0))
 
         # Mamba parameters
