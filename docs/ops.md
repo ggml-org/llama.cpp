@@ -9,7 +9,7 @@ Legend:
 
 | Operation | BLAS | CPU | CUDA | Metal |
 |-----------|------|------|------|------|
-|                              ABS | ❌ | ✅ | 🟡 | ❌ |
+|                              ABS | ❌ | ✅ | ✅ | ❌ |
 |                              ACC | ❌ | ✅ | ✅ | ✅ |
 |                              ADD | ❌ | ✅ | ✅ | 🟡 |
 |                             ADD1 | ❌ | ✅ | ✅ | ❌ |
@@ -31,20 +31,20 @@ Legend:
 |                              DIV | ❌ | ✅ | ✅ | 🟡 |
 |                              DUP | ❌ | ✅ | 🟡 | 🟡 |
 |                              ELU | ❌ | ✅ | ❌ | 🟡 |
-|                              EXP | ❌ | ✅ | 🟡 | ❌ |
+|                              EXP | ❌ | ✅ | ✅ | ❌ |
 |                   FLASH_ATTN_EXT | ❌ | ✅ | 🟡 | 🟡 |
 |                GATED_LINEAR_ATTN | ❌ | ✅ | ✅ | ❌ |
 |                            GEGLU | ❌ | ✅ | ✅ | 🟡 |
 |                        GEGLU_ERF | ❌ | ✅ | ✅ | 🟡 |
 |                      GEGLU_QUICK | ❌ | ✅ | ✅ | 🟡 |
-|                             GELU | ❌ | ✅ | 🟡 | 🟡 |
-|                         GELU_ERF | ❌ | ✅ | 🟡 | 🟡 |
-|                       GELU_QUICK | ❌ | ✅ | 🟡 | 🟡 |
+|                             GELU | ❌ | ✅ | ✅ | 🟡 |
+|                         GELU_ERF | ❌ | ✅ | ✅ | 🟡 |
+|                       GELU_QUICK | ❌ | ✅ | ✅ | 🟡 |
 |                         GET_ROWS | ❌ | ✅ | 🟡 | ✅ |
 |                    GET_ROWS_BACK | ❌ | 🟡 | 🟡 | ❌ |
 |                       GROUP_NORM | ❌ | ✅ | ✅ | ✅ |
-|                      HARDSIGMOID | ❌ | ✅ | 🟡 | ❌ |
-|                        HARDSWISH | ❌ | ✅ | 🟡 | ❌ |
+|                      HARDSIGMOID | ❌ | ✅ | ✅ | ❌ |
+|                        HARDSWISH | ❌ | ✅ | ✅ | ❌ |
 |                           IM2COL | ❌ | ✅ | ✅ | 🟡 |
 |                          L2_NORM | ❌ | ✅ | ✅ | ✅ |
 |                       LEAKY_RELU | ❌ | ✅ | ✅ | ✅ |
@@ -53,7 +53,7 @@ Legend:
 |                              MUL | ❌ | ✅ | ✅ | 🟡 |
 |                          MUL_MAT | 🟡 | 🟡 | 🟡 | 🟡 |
 |                       MUL_MAT_ID | ❌ | ✅ | ✅ | ✅ |
-|                              NEG | ❌ | ✅ | 🟡 | 🟡 |
+|                              NEG | ❌ | ✅ | ✅ | 🟡 |
 |                             NORM | ❌ | ✅ | ✅ | 🟡 |
 |                   OPT_STEP_ADAMW | ❌ | ✅ | ✅ | ❌ |
 |                         OUT_PROD | 🟡 | 🟡 | 🟡 | ❌ |
@@ -61,7 +61,7 @@ Legend:
 |                   PAD_REFLECT_1D | ❌ | ✅ | ❌ | ✅ |
 |                          POOL_2D | ❌ | ✅ | ✅ | ✅ |
 |                            REGLU | ❌ | ✅ | ✅ | 🟡 |
-|                             RELU | ❌ | ✅ | 🟡 | 🟡 |
+|                             RELU | ❌ | ✅ | ✅ | 🟡 |
 |                           REPEAT | ❌ | ✅ | 🟡 | ✅ |
 |                      REPEAT_BACK | ❌ | ✅ | ✅ | ❌ |
 |                         RMS_NORM | ❌ | ✅ | ✅ | 🟡 |
@@ -74,9 +74,9 @@ Legend:
 |                            SCALE | ❌ | ✅ | ✅ | ✅ |
 |                              SET | ❌ | ✅ | ❌ | ✅ |
 |                         SET_ROWS | ❌ | 🟡 | ❌ | 🟡 |
-|                              SGN | ❌ | ✅ | 🟡 | ❌ |
-|                          SIGMOID | ❌ | ✅ | 🟡 | 🟡 |
-|                             SILU | ❌ | ✅ | 🟡 | 🟡 |
+|                              SGN | ❌ | ✅ | ✅ | ❌ |
+|                          SIGMOID | ❌ | ✅ | ✅ | 🟡 |
+|                             SILU | ❌ | ✅ | ✅ | 🟡 |
 |                        SILU_BACK | ❌ | ✅ | ✅ | ❌ |
 |                              SIN | ❌ | ✅ | ✅ | 🟡 |
 |                         SOFT_MAX | ❌ | ✅ | ✅ | ✅ |
@@ -85,11 +85,11 @@ Legend:
 |                             SQRT | ❌ | ✅ | ✅ | 🟡 |
 |                         SSM_CONV | ❌ | ✅ | ✅ | ✅ |
 |                         SSM_SCAN | ❌ | ✅ | ✅ | ✅ |
-|                             STEP | ❌ | ✅ | 🟡 | ❌ |
+|                             STEP | ❌ | ✅ | ✅ | ❌ |
 |                              SUB | ❌ | ✅ | ✅ | 🟡 |
 |                              SUM | ❌ | ✅ | ✅ | ❌ |
 |                         SUM_ROWS | ❌ | ✅ | ✅ | ✅ |
 |                           SWIGLU | ❌ | ✅ | ✅ | 🟡 |
-|                             TANH | ❌ | ✅ | 🟡 | 🟡 |
+|                             TANH | ❌ | ✅ | ✅ | 🟡 |
 |               TIMESTEP_EMBEDDING | ❌ | ✅ | ✅ | ✅ |
 |                          UPSCALE | ❌ | ✅ | ✅ | 🟡 |
