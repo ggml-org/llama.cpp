@@ -11,6 +11,7 @@
 #include "common.h"
 #include "llama.h"
 #include "log.h"
+#include "diffusion.h"
 
 static std::string format_input_text(const std::string & prompt, bool use_chat_template, llama_model * model) {
     if (!use_chat_template) {
@@ -151,13 +152,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    llama_diffusion_params ldiff_params = llama_diffusion_default_params();
+    struct diffusion_params ldiff_params = diffusion_default_params();
     ldiff_params.steps                  = params.diffusion.steps;
     ldiff_params.eps                    = params.diffusion.eps;
     ldiff_params.temperature            = params.sampling.temp;
     ldiff_params.top_p                  = params.sampling.top_p;
     ldiff_params.top_k                  = params.sampling.top_k;
-    ldiff_params.algorithm              = static_cast<decltype(ldiff_params.algorithm)>(params.diffusion.algorithm);
+    ldiff_params.algorithm              = static_cast<enum diffusion_algorithm>(params.diffusion.algorithm);
     ldiff_params.alg_temp               = params.diffusion.alg_temp;
     ldiff_params.seed                   = params.sampling.seed;
 
@@ -179,8 +180,8 @@ int main(int argc, char ** argv) {
     ldiff_params.step_callback_user_data = &cb_data;
 
     int32_t       n_generated = 0;
-    llama_token * generated   = llama_diffusion_generate(ctx, input_tokens.data(), n_input, params.diffusion.max_length,
-                                                         ldiff_params, &n_generated);
+    llama_token * generated   = diffusion_generate(ctx, input_tokens.data(), n_input, params.diffusion.max_length,
+                                                   ldiff_params, &n_generated);
 
     if (params.diffusion.visual_mode) {
         std::cerr << "\033[2J\033[H";  // Clear screen and move cursor to top-left
