@@ -15570,24 +15570,12 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
             cb(cur, "ffn_pre_norm", il);
 
             // feed-forward network
-            {
-                cur = build_ffn(
-                    cur,
-                    model.layers[il].ffn_up,
+            cur = build_ffn(cur,
+                    model.layers[il].ffn_up,   NULL, NULL,
+                    NULL,                      NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
                     NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    NULL,
-                    model.layers[il].ffn_down,
-                    NULL,
-                    NULL,
-                    NULL,
-                    LLM_FFN_SWIGLU,
-                    LLM_FFN_PAR,
-                    il
-                );
-            }
+                    LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
             cb(cur, "ffn_out", il);
 
             // post ffn norm
