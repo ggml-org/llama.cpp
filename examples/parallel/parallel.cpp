@@ -224,6 +224,7 @@ int main(int argc, char ** argv) {
         auto & client = clients[i];
         client.id = i;
         client.smpl = common_sampler_init(model, params.sampling);
+        //params.sampling.seed++;
     }
 
     std::vector<llama_token> tokens_system;
@@ -345,7 +346,7 @@ int main(int argc, char ** argv) {
                     client.n_decoded = 0;
                     client.i_batch   = batch.n_tokens - 1;
 
-                    LOG_INF("\033[31mClient %3d, seq %4d, junk = %4d, started decoding ...\033[0m\n", client.id, client.seq_id, n_junk_cur);
+                    LOG_INF("\033[31mClient %3d, seq %4d, junk = %4d, prompt = %d, started decoding ...\033[0m\n", client.id, client.seq_id, n_junk_cur, client.n_prompt);
 
                     g_seq_id += 1;
 

@@ -127,10 +127,9 @@ int main(int argc, char ** argv) {
 
                 for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
                     for (int i = 0; i < pp; ++i) {
-                        common_batch_add(batch, 0, i, { j }, false);
+                        common_batch_add(batch, 0, i, { j }, i == pp - 1);
                     }
                 }
-                batch.logits[batch.n_tokens - 1] = true;
 
                 const auto t_pp_start = ggml_time_us();
 
