@@ -92,9 +92,6 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
             }
         }
 
-        // Clear KV cache, TODO: can we configure to not use kv-cache?
-        llama_memory_clear(llama_get_memory(ctx), true);
-
         llama_batch batch = llama_batch_init(max_length, 0, 1);
         batch.n_tokens    = max_length;
         for (int32_t i = 0; i < max_length; i++) {
