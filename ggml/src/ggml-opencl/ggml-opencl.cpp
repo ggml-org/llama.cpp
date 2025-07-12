@@ -331,6 +331,8 @@ struct ggml_backend_opencl_context {
 
     cl_int alignment;
     size_t max_alloc_size;
+    size_t max_image_width;
+    size_t max_image_height;
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
     ggml_cl_compiler_version adreno_cl_compiler_version;
@@ -369,6 +371,10 @@ struct ggml_backend_opencl_context {
     cl_program program_mul_mv_f32_f32;
     cl_program program_mul;
     cl_program program_mul_mat_f16_f32_tiled;
+    cl_program program_mul_mat_f16_f32_image;
+    cl_program program_pack_a_for_image;
+    cl_program program_pack_b_for_image;
+    cl_ulong global_mem_size;
     cl_program program_div;
     cl_program program_sub;
     cl_program program_norm;
@@ -424,6 +430,9 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_mul_mat_f16_f32;
     cl_kernel kernel_mul_mat_f16_f32_l4;
     cl_kernel kernel_mul_mat_f16_f32_tiled;
+    cl_kernel kernel_mul_mat_f16_f32_image;
+    cl_kernel kernel_pack_a_for_image;
+    cl_kernel kernel_pack_b_for_image;
     cl_kernel kernel_mul_mat_q4_0_f32, kernel_mul_mat_q4_0_f32_v;
     cl_kernel kernel_convert_block_q4_0, kernel_restore_block_q4_0;
     cl_kernel kernel_mul_mat_q4_0_f32_8x_flat;
@@ -1030,6 +1039,54 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_tiled = clCreateKernel(backend_ctx->program_mul_mat_f16_f32_tiled, "mul_mat_f16_f32", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mat_f16_f32_image
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src{
+#include "mul_mat_f16_f32_image.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mat_f16_f32_image.cl");
+#endif
+        backend_ctx->program_mul_mat_f16_f32_image =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mat_f16_f32_image = clCreateKernel(backend_ctx->program_mul_mat_f16_f32_image, "mul_mat_f16_f32_image", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // pack_a_for_image
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src{
+#include "pack_a_for_image.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("pack_a_for_image.cl");
+#endif
+        backend_ctx->program_pack_a_for_image =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_pack_a_for_image = clCreateKernel(backend_ctx->program_pack_a_for_image, "pack_a_for_image", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // pack_b_for_image
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src{
+#include "pack_b_for_image.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("pack_b_for_image.cl");
+#endif
+        backend_ctx->program_pack_b_for_image =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_pack_b_for_image = clCreateKernel(backend_ctx->program_pack_b_for_image, "pack_b_for_image", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -1986,6 +2043,11 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
 
     clGetDeviceInfo(device, CL_DEVICE_MAX_MEM_ALLOC_SIZE, sizeof(size_t), &backend_ctx->max_alloc_size, NULL);
     GGML_LOG_INFO("ggml_opencl: max mem alloc size: %zu MB\n", backend_ctx->max_alloc_size/1024/1024);
+
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_GLOBAL_MEM_SIZE, sizeof(cl_ulong), &backend_ctx->global_mem_size, NULL));
+
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_WIDTH, sizeof(size_t), &backend_ctx->max_image_width, NULL));
+    CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_IMAGE2D_MAX_HEIGHT, sizeof(size_t), &backend_ctx->max_image_height, NULL));
 
     // Check SVM.
     cl_device_svm_capabilities svm_caps;
@@ -4997,6 +5059,93 @@ static void ggml_cl_mul_mat_f16_f32_tiled(ggml_backend_t backend, const ggml_ten
     backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
 }
 
+static void ggml_cl_mul_mat_f16_f32_image(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+    cl_context context = backend_ctx->context;
+    cl_command_queue queue = backend_ctx->queue;
+    cl_int err = 0;
+
+    const int M = src0->ne[1];
+    const int N = src1->ne[1];
+    const int K = src0->ne[0];
+    const int K_4 = (K + 3) / 4;
+    const int N_4 = (N + 3) / 4;
+
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
+    ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
+    ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
+
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
+    cl_ulong offsetd = extrad->offset + dst->view_offs;
+
+    cl_mem a_image = NULL, b_image = NULL;
+    cl_event pack_events[2];
+    cl_event matmul_event;
+
+    // Create image for A
+    cl_image_format format_A = {CL_RGBA, CL_HALF_FLOAT};
+    cl_image_desc desc_A = {};
+    desc_A.image_type = CL_MEM_OBJECT_IMAGE2D;
+    desc_A.image_width = K_4;
+    desc_A.image_height = M;
+    a_image = clCreateImage(context, CL_MEM_READ_WRITE, &format_A, &desc_A, NULL, &err);
+    CL_CHECK(err);
+
+    // Create image for B
+    cl_image_format format_B = {CL_RGBA, CL_HALF_FLOAT};
+    cl_image_desc desc_B = {};
+    desc_B.image_type = CL_MEM_OBJECT_IMAGE2D;
+    desc_B.image_width = N_4;
+    desc_B.image_height = K;
+    b_image = clCreateImage(context, CL_MEM_READ_WRITE, &format_B, &desc_B, NULL, &err);
+    CL_CHECK(err);
+
+    // Launch packing kernel for A
+    cl_kernel pack_a_kernel = backend_ctx->kernel_pack_a_for_image;
+    CL_CHECK(clSetKernelArg(pack_a_kernel, 0, sizeof(cl_mem),   &extra0->data_device));
+    CL_CHECK(clSetKernelArg(pack_a_kernel, 1, sizeof(cl_ulong), &offset0));
+    CL_CHECK(clSetKernelArg(pack_a_kernel, 2, sizeof(cl_mem),   &a_image));
+    CL_CHECK(clSetKernelArg(pack_a_kernel, 3, sizeof(int),      &M));
+    CL_CHECK(clSetKernelArg(pack_a_kernel, 4, sizeof(int),      &K));
+    const size_t pack_a_gws[2] = { (size_t)K_4, (size_t)M };
+    CL_CHECK(clEnqueueNDRangeKernel(queue, pack_a_kernel, 2, NULL, pack_a_gws, NULL, 0, NULL, &pack_events[0]));
+
+    // Launch packing kernel for B
+    cl_kernel pack_b_kernel = backend_ctx->kernel_pack_b_for_image;
+    CL_CHECK(clSetKernelArg(pack_b_kernel, 0, sizeof(cl_mem),   &extra1->data_device));
+    CL_CHECK(clSetKernelArg(pack_b_kernel, 1, sizeof(cl_ulong), &offset1));
+    CL_CHECK(clSetKernelArg(pack_b_kernel, 2, sizeof(cl_mem),   &b_image));
+    CL_CHECK(clSetKernelArg(pack_b_kernel, 3, sizeof(int),      &K));
+    CL_CHECK(clSetKernelArg(pack_b_kernel, 4, sizeof(int),      &N));
+    const size_t pack_b_gws[2] = { (size_t)N_4, (size_t)K };
+    CL_CHECK(clEnqueueNDRangeKernel(queue, pack_b_kernel, 2, NULL, pack_b_gws, NULL, 0, NULL, &pack_events[1]));
+
+    // Launch matmul kernel
+    cl_kernel matmul_kernel = backend_ctx->kernel_mul_mat_f16_f32_image;
+    CL_CHECK(clSetKernelArg(matmul_kernel, 0, sizeof(cl_mem),   &a_image));
+    CL_CHECK(clSetKernelArg(matmul_kernel, 1, sizeof(cl_mem),   &b_image));
+    CL_CHECK(clSetKernelArg(matmul_kernel, 2, sizeof(cl_mem),   &extrad->data_device));
+    CL_CHECK(clSetKernelArg(matmul_kernel, 3, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(matmul_kernel, 4, sizeof(int),      &M));
+    CL_CHECK(clSetKernelArg(matmul_kernel, 5, sizeof(int),      &N));
+    CL_CHECK(clSetKernelArg(matmul_kernel, 6, sizeof(int),      &K));
+
+    const int OPWM = 64;
+    const int OPWN = 64;
+    const size_t lws[2] = { 16, 8 }; // WG_M, WG_N
+    const size_t gws[2] = { (size_t)ceil((float)M / OPWM) * lws[0], (size_t)ceil((float)N / OPWN) * lws[1] };
+    CL_CHECK(clEnqueueNDRangeKernel(queue, matmul_kernel, 2, NULL, gws, lws, 2, pack_events, &matmul_event));
+
+    // Wait for matmul to finish and release resources
+    CL_CHECK(clWaitForEvents(1, &matmul_event));
+    CL_CHECK(clReleaseEvent(pack_events[0]));
+    CL_CHECK(clReleaseEvent(pack_events[1]));
+    CL_CHECK(clReleaseEvent(matmul_event));
+    CL_CHECK(clReleaseMemObject(a_image));
+    CL_CHECK(clReleaseMemObject(b_image));
+}
+
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -5009,6 +5158,35 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     const enum ggml_type src1t = src1 ? src1->type : GGML_TYPE_COUNT;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+
+    if (src0t == GGML_TYPE_F16 && src1t == GGML_TYPE_F32 &&
+        backend_ctx->gpu_family == ADRENO && backend_ctx->kernel_mul_mat_f16_f32_image != NULL &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(src1) &&
+        src0->ne[2] == 1 && src0->ne[3] == 1 &&
+        src1->ne[2] == 1 && src1->ne[3] == 1) {
+
+        const int M = src0->ne[1];
+        const int N = src1->ne[1];
+        const int K = src0->ne[0];
+
+        // Performance thresholds: only use for reasonably large matrices
+        // where the GPU speedup can outweigh the CPU-side transpose/packing overhead.
+        if (M > 32 && N > 32 && K > 32) {
+            const size_t n_padded_4 = (size_t)((N + 3) / 4);
+            const size_t temp_a_size = (size_t)M * K * sizeof(ggml_fp16_t);
+            const size_t temp_b_size = n_padded_4 * K * 4 * sizeof(ggml_fp16_t); // RGBA
+            const size_t total_temp_image_size = temp_a_size + temp_b_size;
+
+            // Safety checks for memory and device limits
+            if ((size_t)K <= backend_ctx->max_image_width &&
+                (size_t)M <= backend_ctx->max_image_height &&
+                n_padded_4 <= backend_ctx->max_image_height &&
+                total_temp_image_size < (backend_ctx->global_mem_size / 4)) { // Ensure temp images use < 25% of total VRAM
+                ggml_cl_mul_mat_f16_f32_image(backend, src0, src1, dst);
+                return;
+            }
+        }
+    }
 
      if (src0t == GGML_TYPE_F16 && src1t == GGML_TYPE_F32 &&
         src0->ne[1] > 32 &&   // M > 32
