@@ -1470,14 +1470,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.ctx_shift = false;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}).set_env("LLAMA_ARG_NO_CONTEXT_SHIFT"));
     add_opt(common_arg(
         {"--chunks"}, "N",
         string_format("max number of chunks to process (default: %d, -1 = all)", params.n_chunks),
         [](common_params & params, int value) {
             params.n_chunks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_RETRIEVAL}));
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_RETRIEVAL}));
     add_opt(common_arg(
         {"-fa", "--flash-attn"},
         string_format("enable Flash Attention (default: %s)", params.flash_attn ? "enabled" : "disabled"),
@@ -2115,70 +2115,70 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.hellaswag = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--hellaswag-tasks"}, "N",
         string_format("number of tasks to use when computing the HellaSwag score (default: %zu)", params.hellaswag_tasks),
         [](common_params & params, int value) {
             params.hellaswag_tasks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--winogrande"},
         "compute Winogrande score over random tasks from datafile supplied with -f",
         [](common_params & params) {
             params.winogrande = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--winogrande-tasks"}, "N",
         string_format("number of tasks to use when computing the Winogrande score (default: %zu)", params.winogrande_tasks),
         [](common_params & params, int value) {
             params.winogrande_tasks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--multiple-choice"},
         "compute multiple choice score over random tasks from datafile supplied with -f",
         [](common_params & params) {
             params.multiple_choice = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--multiple-choice-tasks"}, "N",
         string_format("number of tasks to use when computing the multiple choice score (default: %zu)", params.multiple_choice_tasks),
         [](common_params & params, int value) {
             params.multiple_choice_tasks = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--kl-divergence"},
         "computes KL-divergence to logits provided via --kl-divergence-base",
         [](common_params & params) {
             params.kl_divergence = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--save-all-logits", "--kl-divergence-base"}, "FNAME",
         "set logits file",
         [](common_params & params, const std::string & value) {
             params.logits_file = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--ppl-stride"}, "N",
         string_format("stride for perplexity calculation (default: %d)", params.ppl_stride),
         [](common_params & params, int value) {
             params.ppl_stride = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"--ppl-output-type"}, "<0|1>",
         string_format("output type for perplexity calculation (default: %d)", params.ppl_output_type),
         [](common_params & params, int value) {
             params.ppl_output_type = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY}));
+    ).set_examples({LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
         {"-dt", "--defrag-thold"}, "N",
         string_format("KV cache defragmentation threshold (default: %.1f, < 0 - disabled)", (double)params.defrag_thold),
@@ -3422,6 +3422,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = 256;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+#ifdef LLAMA_PARQUET
+    add_opt(common_arg(
+        {"--dataset-format"}, "text",
+        string_format("Dataset format: text or parquet (requires LLAMA_PARQUET)"),
+        [](common_params & params, const std::string & format) {
+            params.dataset_format = format; //or parquet//TODO ENUM CLASS
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
 
+    add_opt(common_arg(
+        {"--parquet-path"}, "parquet.parquet",
+        string_format("Parquet path"),
+        [](common_params & params, const std::string & filepath) {//TODO -read dir
+            params.parquet_path = filepath;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+
+    add_opt(common_arg(
+        {"--tokens-column"}, "tokens",
+        string_format("Name of tokens column (list<int32>) in Parquet file"),
+        [](common_params & params, const std::string & column) {
+            params.tokens_column = column;
+        }
+    ).set_examples({LLAMA_EXAMPLE_FINETUNE}));
+#endif
     return ctx_arg;
 }
