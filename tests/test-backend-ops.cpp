@@ -5642,6 +5642,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, {256, 256, 3, 1}));
 
+    test_cases.emplace_back(new test_unary((ggml_unary_op) GGML_UNARY_OP_ABS, GGML_TYPE_F32, {256, 256, 3, 1}, 0));
+    test_cases.emplace_back(new test_unary((ggml_unary_op) GGML_UNARY_OP_ABS, GGML_TYPE_F32, {256, 256, 3, 1}, 1));
+
     return test_cases;
 }
 
