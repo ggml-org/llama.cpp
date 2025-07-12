@@ -345,7 +345,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.fc1",                             # phi2
             "model.layers.{bid}.mlp.gate_up_proj",                    # phi3 glm-4-0414
             "model.layers.layers.{bid}.mlp.up_proj",                  # plamo
-            "model.layers.layers.{bid}.mlp.ffn_up",                   # plamo2
+            "model.layers.layers.{bid}.mlp.gate_up_proj",             # plamo2
             "model.layers.{bid}.feed_forward.w3",                     # internlm2
             "encoder.layers.{bid}.mlp.fc11",                          # nomic-bert
             "encoder.layers.{bid}.mlp.fc1",                           # nomic-bert-moe

@@ -3010,9 +3010,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         // All layers have post-attention norm, FFN norm, and FFN tensors
                         layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, i), {n_embd}, 0);
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
-                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff * 2}, 0);
                         layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, i), {n_embd}, 0);
                     }
                 } break;
@@ -15572,8 +15571,22 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
 
             // feed-forward network
             {
-                cur = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                            model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cur = build_ffn(
+                    cur,
+                    model.layers[il].ffn_up,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    NULL,
+                    model.layers[il].ffn_down,
+                    NULL,
+                    NULL,
+                    NULL,
+                    LLM_FFN_SWIGLU,
+                    LLM_FFN_PAR,
+                    il
+                );
             }
             cb(cur, "ffn_out", il);
 

@@ -3639,21 +3639,6 @@ class Plamo2Model(TextModel):
             data_torch += 1.0 / (5**1.5)
         elif name.endswith(".norm.weight"):
             data_torch += 1.0
-        elif name.endswith(".gate_up_proj.weight"):
-            # Split the combined gate_up tensor
-            split_size = data_torch.shape[0] // 2
-            gate_tensor = data_torch[:split_size, :]
-            up_tensor = data_torch[split_size:, :]
-
-            # Return both tensors - remove .weight suffix if present
-            name_base = name.replace(".gate_up_proj.weight", "")
-            gate_name = name_base + ".ffn_gate.weight"
-            up_name = name_base + ".ffn_up.weight"
-
-            gate_mapped = self.map_tensor_name(gate_name)
-            up_mapped = self.map_tensor_name(up_name)
-
-            return [(gate_mapped, gate_tensor), (up_mapped, up_tensor)]
 
         new_name = self.map_tensor_name(name)
 
