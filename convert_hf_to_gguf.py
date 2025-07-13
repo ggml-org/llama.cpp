@@ -5588,7 +5588,7 @@ class DeepseekV2Model(TextModel):
             tokens: list[str] = []
             toktypes: list[int] = []
             
-            for i in range(tokenizer.vocab_size):
+            for i in range(vocab_size):
                 if i not in reverse_vocab:
                     tokens.append(f"[PAD{i}]")
                     toktypes.append(gguf.TokenType.UNUSED)
