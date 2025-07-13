@@ -41,7 +41,7 @@ For faster computation, make sure to use GPU offloading via the `-ngl | --n-gpu-
 ```
 
 ```bash
-# combine Existing imatrices
+# combine existing imatrices
 ./llama-imatrix --in-file imatrix-prev-0.dat --in-file imatrix-prev-1.dat -o imatrix-combined.dat
 ```
 
@@ -76,5 +76,4 @@ Weighted averages of Σ(Act²), ZD Score and CosSim are also calculated.
 #### Important note on the computed Statistics
 
 When using these statistics, please note that they are computed on the squared activations, **not on the actual (raw) activations**.
-Whilst the results are still useful, they're less accurate than using the raw values, and in the case of the cosine similarity, could be misleading if the tensor contains opposite vectors.
-This limitation is due to the current implementation of the importance matrix, but a pull request ([use GGUF to store importance matrices](https://github.com/ggml-org/llama.cpp/pull/9400)) aims to address this.
+Whilst the results are still useful, they're less reliable than using the raw values, and in the case of the cosine similarity, could be misleading if the tensor contains opposite vectors.
