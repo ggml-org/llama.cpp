@@ -1082,7 +1082,14 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
-        special_vocab.chat_template = "rwkv-world"
+        if special_vocab.chat_template is None:
+            template_path = Path(sys.path[0]) / "models" / "templates" / "llama-cpp-rwkv-world.jinja"
+            if template_path.exists():
+                with open(template_path, "r", encoding="utf-8") as f:
+                    template = f.read()
+            else:
+                template = "rwkv-world"
+            special_vocab.chat_template = template
         # hack: Add '\n\n' as the EOT token to make it chat normally
         special_vocab._set_special_token("eot", 261)
         # hack: Override these as they have already been set (incorrectly)
