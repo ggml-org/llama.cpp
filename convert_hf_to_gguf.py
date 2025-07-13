@@ -2880,7 +2880,7 @@ class Ernie4_5MoeModel(Ernie4_5Model):
                         del self._experts[bid][ename_to_retrieve]
 
                     data_torch = torch.stack(datas, dim=0)
-                    merged_name = f"layers.{bid}.mlp.experts.{w_name}.weight"
+                    merged_name = f"model.layers.{bid}.mlp.experts.{w_name}.weight"
                     new_name = self.map_tensor_name(merged_name)
                     tensors.append((new_name, data_torch))
 
