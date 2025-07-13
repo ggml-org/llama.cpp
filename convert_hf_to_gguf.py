@@ -2829,25 +2829,30 @@ class Ernie4_5MoeModel(Ernie4_5Model):
         self.gguf_writer.add_expert_used_count(self.hparams["moe_k"])
         self.gguf_writer.add_moe_every_n_layers(self.hparams["moe_layer_interval"])
 
+    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
+        if "experts" in new_name:
+            return gguf.GGMLQuantizationType.F16
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Modify correction bias name as in DeepseekV2
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")
-                        
+
         # skip Multi-Token Prediction (MTP) layers (again, same as DeepseekV2)
         match = re.match(r"model.mtp_block.(\d+)", name)
         if match:
             return []
-        
+
         # skip all other MTP tensors for now
         match = re.match(r"model.mtp_emb_norm.(\d+)", name)
         if match:
             return []
-        
+
         match = re.match(r"model.mtp_hidden_norm.(\d+)", name)
         if match:
             return []
-        
+
         match = re.match(r"model.mtp_linear_proj.(\d+)", name)
         if match:
             return []
@@ -2874,16 +2879,16 @@ class Ernie4_5MoeModel(Ernie4_5Model):
                         datas.append(self._experts[bid][ename_to_retrieve])
                         del self._experts[bid][ename_to_retrieve]
 
-                    data_torch = torch.stack(datas, dim=0)                    
+                    data_torch = torch.stack(datas, dim=0)
                     merged_name = f"layers.{bid}.mlp.experts.{w_name}.weight"
                     new_name = self.map_tensor_name(merged_name)
                     tensors.append((new_name, data_torch))
-                                        
+
                 return tensors
             else:
                 return []
         return [(self.map_tensor_name(name), data_torch)]
-    
+
     def prepare_tensors(self):
         super().prepare_tensors()
 
