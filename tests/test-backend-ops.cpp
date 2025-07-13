@@ -37,6 +37,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <map>
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
@@ -1266,12 +1267,12 @@ struct test_case {
         // duplicate the op
         for (int i = 1; i < n_runs; i++) {
             ggml_graph_add_node(gf, out);
-            
+
             if(op_desc(out) == "CONV_2D_INDIRECT_IMPL"){
                 /*
-                TODO: add a permanent solution! E.g. return the list of tensors 
+                TODO: add a permanent solution! E.g. return the list of tensors
                 needed to add for computing the op in build_graph().
-                
+
                 Adds the full ggml_conv_2d() computation graph, not just the output!
                     * cont      (out)
                     * cont      (out->src[0])
@@ -1630,13 +1631,13 @@ struct test_case {
     }
 };
 
-// This can be useful to compare the output/performance of 
+// This can be useful to compare the output/performance of
 // different graphs implementing the same op.
 // Possible use cases:
-// * no CPU implementation exists for the op, but the op 
+// * no CPU implementation exists for the op, but the op
 // can be built by combining elementary ops already having implementation
 // and the user wants to compare the results.
-// * comparing the performance of different implementations 
+// * comparing the performance of different implementations
 // of the op: graph revwriting/operation fusion. E.g. basic attention
 // compared to flash attention or conv compared with im2col->matmul.
 struct test_case_ref : public test_case {
@@ -1652,7 +1653,7 @@ public:
         {"input", "input"},
         {"kernel", "kernel"}
     };
-    
+
     // Copies the inputs of the graph built using build_graph() to the reference graph
     virtual void copy_data_to_ref(ggml_context * ctx, ggml_context * ctx_ref){
         std::map<std::string, ggml_tensor*> inputs;
@@ -1665,7 +1666,7 @@ public:
                 }
             }
         }
-        
+
         for (ggml_tensor * t = ggml_get_first_tensor(ctx_ref); t != nullptr; t = ggml_get_next_tensor(ctx_ref, t)) {
             for(auto e : input_names){
                 if(e.second == t->name){
@@ -1679,7 +1680,7 @@ public:
             GGML_ASSERT(inputs_ref.count(e.second) == 1);
             std::vector<uint8_t> buf(ggml_nbytes(inputs[e.first]));
             ggml_backend_tensor_get(inputs[e.first], buf.data(), 0, ggml_nbytes(inputs[e.first]));
-            ggml_backend_tensor_set(inputs_ref[e.second], buf.data(), 0, buf.size());            
+            ggml_backend_tensor_set(inputs_ref[e.second], buf.data(), 0, buf.size());
         }
     }
 
@@ -1860,9 +1861,9 @@ public:
             GGML_UNUSED(index);
         };
 
-        
+
         const bool cmp_ok = ggml_backend_compare_graph_backend_node(backend1, backend2, gf, gf_ref, callback, &ud, const_cast<char*>(output_node_name), const_cast<char*>(output_node_name_ref));
-        
+
         if (!cmp_ok) {
             printf("compare failed ");
         }
@@ -1884,7 +1885,7 @@ public:
         }
 
         return test_passed;
-    }    
+    }
 };
 
 // ###################################
@@ -3984,13 +3985,13 @@ struct test_conv_2d : public test_case_ref {
     const bool cwhn;
     // If true, the direct CONV_2D will be used in the graph, otherwise it
     // uses ggml_conv_2d:
-    // * if the program is called with -o CONV_2D_DIRECT_IMPL, the 
+    // * if the program is called with -o CONV_2D_DIRECT_IMPL, the
     // CONV_2D graph will be built, while
     // * if the program is called with -o CONV_2D_INDIRECT_IMPL, the
     // IM2COL -> MUL_MM graph will be built.
     const bool direct_impl;
 
-    virtual std::string op_desc(ggml_tensor * t) {
+    virtual std::string op_desc(ggml_tensor * t) override {
         (void) t;
         if(direct_impl){
             return std::string("CONV_2D_DIRECT_IMPL");
@@ -4026,7 +4027,7 @@ struct test_conv_2d : public test_case_ref {
         int64_t K = Cout;
         int64_t CRS = Cin*KH*KW;
         int64_t NPQ = N*OH*OW;
-        
+
         return K*NPQ*(2*CRS-1);
     }
 
@@ -4062,7 +4063,7 @@ struct test_conv_2d : public test_case_ref {
             stride0, stride1, padding0, padding1, dilation0, dilation1);
 
         ggml_tensor * out = ggml_cont(ctx, conv2d_out);
-        
+
         ggml_set_name(out, "out");
         return out;
     }
@@ -5475,7 +5476,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for(auto act_case : cases){
         test_cases.emplace_back(new test_conv_2d({act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx]}, {act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx]}, 1, 1, 0, 0, 1, 1, false, true));
-    }    
+    }
 
     // sycl backend will limit task global_range < MAX_INT
     // test cases for 2D im2col with large input W and H (occurs in stable-diffusion)

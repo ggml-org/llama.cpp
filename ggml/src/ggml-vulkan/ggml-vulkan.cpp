@@ -880,7 +880,7 @@ struct vk_op_conv2d_push_constants {
     uint32_t Cout;
     uint32_t Cin;
     uint32_t N;
-    
+
     uint32_t KW;
     uint32_t KH;
     uint32_t W;
@@ -1041,7 +1041,7 @@ public:
         }
 
         timings.clear();
-        flops.clear();        
+        flops.clear();
     }
 
     void log_timing(const ggml_tensor * node, uint64_t time) {
@@ -1082,7 +1082,7 @@ public:
             flops[name].push_back(n_flops);
             timings[name].push_back(time);
             return;
-        }        
+        }
         timings[ggml_op_name(node->op)].push_back(time);
     }
 private:
@@ -2190,6 +2190,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             }
             compile_count++;
         }
+
         compiles.push_back(std::async(ggml_vk_create_pipeline_func, std::ref(device), std::ref(pipeline), spv_size, spv_data, entrypoint,
                                       parameter_count, wg_denoms, specialization_constants, disable_robustness, require_full_subgroups, required_subgroup_size));
     };
@@ -3037,14 +3038,27 @@ static void ggml_vk_load_shaders(vk_device& device) {
     uint32_t conv2d_WG_SIZE = 256;
     uint32_t conv2d_BS_K = 128;
     uint32_t conv2d_BS_CRS = 16;
+    // Enables subgroup ops for preventing the re-calculation of indices.
+    uint32_t use_collectives = 0;
+    // CRS block size should be capped at sugroup size for correctness when shuffle is used.
+    if(device->subgroup_shuffle){
+        use_collectives = 1;
+        conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
+    }
     uint32_t conv2d_BS_NPQ = 128;
     uint32_t conv2d_TS_K = 8;
     uint32_t conv2d_shmem_req = (conv2d_BS_K*(conv2d_BS_CRS+1) + conv2d_BS_CRS*(conv2d_BS_NPQ+1))*sizeof(float);
     if(device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req){
         conv2d_BS_CRS = 8;
-        conv2d_TS_K = 8;
-    }    
-    ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K}, 1);
+        if(device->subgroup_shuffle){
+            conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
+        }
+    }
+    if(device->subgroup_shuffle){
+        ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true, true);
+    }else{
+        ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true);
+    }
 
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_cwhn_f32, "conv2d_dw_cwhn_f32", conv2d_dw_cwhn_f32_len, conv2d_dw_cwhn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -6895,11 +6909,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_CONV_2D:
-        if (src0->type == GGML_TYPE_F32 && 
-                src1->type == GGML_TYPE_F32 && 
-                dst->type == GGML_TYPE_F32 && 
-                ggml_is_contiguous(src0) && 
-                ggml_is_contiguous(src1) && 
+        if (src0->type == GGML_TYPE_F32 &&
+                src1->type == GGML_TYPE_F32 &&
+                dst->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(src0) &&
+                ggml_is_contiguous(src1) &&
                 ggml_is_contiguous(dst)) {
             return ctx->device->pipeline_conv2d_f32;
         }
@@ -7231,7 +7245,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             // src0 - kernel:   [KW, KH, Cin, Cout]
             // src1 - input:    [W, H, Cin, N]
             // dst - result:    [OW, OH, Cout, N]
-            
+
             // Copied from ggml.c: int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d)
             auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
                 return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
@@ -7246,9 +7260,9 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
             int64_t OH = calc_conv_output_size(H, KH, dst->op_params[1], dst->op_params[3], dst->op_params[5]);
             int64_t OW = calc_conv_output_size(W, KW, dst->op_params[0], dst->op_params[2], dst->op_params[4]);
             int64_t NPQ = N*OW*OH;
-            
+
             // Tile output matrix to (K/NB_K, NPQ/NB_NPQ, 1) workgroups
-            elements = {static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1}; 
+            elements = {static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1};
         } break;
     case GGML_OP_ADD:
     case GGML_OP_SUB:
@@ -8131,14 +8145,14 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context& subctx, c
     p.Cout = static_cast<uint32_t>(ne03);
     p.Cin = static_cast<uint32_t>(ne02);
     p.N = static_cast<uint32_t>(ne13);
-    
+
     p.KW = static_cast<uint32_t>(ne00);
     p.KH = static_cast<uint32_t>(ne01);
     p.W = static_cast<uint32_t>(ne10);
     p.H = static_cast<uint32_t>(ne11);
     p.OW = static_cast<uint32_t>(ne0);
     p.OH = static_cast<uint32_t>(ne1);
-    
+
     p.s0 = static_cast<uint32_t>(dst->op_params[0]);
     p.s1 = static_cast<uint32_t>(dst->op_params[1]);
     p.p0 = static_cast<uint32_t>(dst->op_params[2]);
@@ -8162,7 +8176,7 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context& subctx, c
     GGML_ASSERT(ne02 == ne12);
 
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_CONV_2D, std::move(p), dryrun);
-    
+
 }
 
 static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -10805,11 +10819,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
             // Channel-contiguous format is not supported yet.
-            return (op->src[0]->type == GGML_TYPE_F32 && 
-                op->src[1]->type == GGML_TYPE_F32 && 
-                op->type == GGML_TYPE_F32 && 
-                ggml_is_contiguous(op->src[0]) && 
-                ggml_is_contiguous(op->src[1]) && 
+            return (op->src[0]->type == GGML_TYPE_F32 &&
+                op->src[1]->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1]) &&
                 ggml_is_contiguous(op));
         default:
             return false;

@@ -1883,12 +1883,12 @@ bool ggml_backend_compare_graph_backend(ggml_backend_t backend1, ggml_backend_t 
 }
 
 bool ggml_backend_compare_graph_backend_node(
-    ggml_backend_t backend1, 
-    ggml_backend_t backend2, 
-    struct ggml_cgraph * graph1, 
-    struct ggml_cgraph * graph2, 
+    ggml_backend_t backend1,
+    ggml_backend_t backend2,
+    struct ggml_cgraph * graph1,
+    struct ggml_cgraph * graph2,
     ggml_backend_eval_callback callback, void * user_data, char* op_name_out_1, char* op_name_out_2) {
-    
+
     ggml_tensor * out1 = NULL;
     ggml_tensor * out2 = NULL;
 
