@@ -1083,8 +1083,8 @@ class TextModel(ModelBase):
         self.gguf_writer.add_token_types(toktypes)
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
         if special_vocab.chat_template is None:
-            template_path = Path(sys.path[0]) / "models" / "templates" / "llama-cpp-rwkv-world.jinja"
-            if template_path.exists():
+            template_path = Path(__file__).parent / "models" / "templates" / "llama-cpp-rwkv-world.jinja"
+            if template_path.is_file():
                 with open(template_path, "r", encoding="utf-8") as f:
                     template = f.read()
             else:
