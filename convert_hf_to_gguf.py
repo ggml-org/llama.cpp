@@ -2828,6 +2828,8 @@ class Ernie4_5MoeModel(Ernie4_5Model):
         self.gguf_writer.add_expert_count(self.hparams["moe_num_experts"])
         self.gguf_writer.add_expert_used_count(self.hparams["moe_k"])
         self.gguf_writer.add_interleave_moe_layer_step(self.hparams["moe_layer_interval"])
+        if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
 
     def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
         if "exps" in new_name:
