@@ -21,14 +21,12 @@ static std::string format_input_text(const std::string & prompt, bool use_chat_t
     auto chat_templates = common_chat_templates_init(model, "");
 
     common_chat_templates_inputs inputs;
-    // Create user message
     common_chat_msg              user_msg;
     user_msg.role                = "user";
     user_msg.content             = prompt;
     inputs.add_generation_prompt = true;
     inputs.messages.push_back(user_msg);
 
-    // Apply chat template
     auto result = common_chat_templates_apply(chat_templates.get(), inputs);
 
     return result.prompt;
@@ -90,12 +88,10 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
-    // Use the standard common_params_parse with LLAMA_EXAMPLE_DIFFUSION
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DIFFUSION)) {
         return 1;
     }
 
-    // Print diffusion parameters
     const char * alg_names[] = { "ORIGIN", "MASKGIT_PLUS", "TOPK_MARGIN", "ENTROPY" };
     const char * alg_name    = (params.diffusion.algorithm >= 0 && params.diffusion.algorithm <= 3) ?
                                    alg_names[params.diffusion.algorithm] :
@@ -117,7 +113,6 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Create context
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx                = params.n_ctx;
     ctx_params.n_batch              = params.n_batch;

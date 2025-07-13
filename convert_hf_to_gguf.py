@@ -2801,7 +2801,7 @@ class DreamModel(TextModel):
         for i in range(vocab_size):
             if i not in reverse_vocab:
                 tokens.append(f"[PAD{i}]")
-                toktypes.append(gguf.TokenType.USER_DEFINED)
+                toktypes.append(gguf.TokenType.UNUSED)
             elif reverse_vocab[i] in added_vocab:
                 tokens.append(reverse_vocab[i])
                 # Check if it's a special token - treat special tokens as CONTROL tokens

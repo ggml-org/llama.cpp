@@ -36,8 +36,8 @@ llama_token * diffusion_generate(
     const llama_token *          input_tokens,
     int32_t                      n_input,
     int32_t                      max_length,
-    struct diffusion_params     params,
-    int32_t *                   n_generated);
+    struct diffusion_params      params,
+    int32_t *                    n_generated);
 
 #ifdef __cplusplus
 }
