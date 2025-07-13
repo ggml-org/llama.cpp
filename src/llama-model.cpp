@@ -1611,8 +1611,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 if (arch == LLM_ARCH_ERNIE4_5_MOE) {
-                    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
-                    ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,   hparams.n_moe_layer_step);
+                    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                    ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                    ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
                 }
                 switch (hparams.n_layer) {
                     case 18: type = LLM_TYPE_0_3B; break;
@@ -4787,7 +4788,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             int n_ff_exp = hparams.n_ff_exp;
 
                             layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
-                            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+                            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, TENSOR_NOT_REQUIRED);
                             layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff_exp, n_embd, n_expert}, 0);
                             layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
 
@@ -8433,7 +8435,9 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
             cb(ffn_inp, "ffn_inp", il);
 
             // feed-forward network
-            if (model.layers[il].ffn_gate_inp == nullptr) {
+            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0 && (il + 1) % hparams.n_moe_layer_step == 0;
+
+            if (!is_moe_layer) {
                 cur = build_norm(ffn_inp,
                         model.layers[il].ffn_norm, NULL,
                         LLM_NORM_RMS, il);
@@ -8458,7 +8462,7 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
                         model.layers[il].ffn_up_exps,
                         model.layers[il].ffn_gate_exps,
                         model.layers[il].ffn_down_exps,
-                        nullptr,
+                        model.layers[il].ffn_exp_probs_b,
                         n_expert, n_expert_used,
                         LLM_FFN_SILU, true,
                         false, 0.0,
