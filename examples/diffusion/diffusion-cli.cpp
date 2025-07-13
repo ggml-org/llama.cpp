@@ -177,7 +177,6 @@ int main(int argc, char ** argv) {
     int32_t       n_generated = 0;
     llama_token * generated   = diffusion_generate(ctx, input_tokens.data(), n_input, params.diffusion.max_length,
                                                    ldiff_params, &n_generated);
-
     if (params.diffusion.visual_mode) {
         std::cerr << "\033[2J\033[H";  // Clear screen and move cursor to top-left
     } else {

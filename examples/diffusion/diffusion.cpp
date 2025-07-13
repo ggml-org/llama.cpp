@@ -64,10 +64,11 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
 
     int32_t n_vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
 
-    std::vector<llama_token_data> candidates;
-    candidates.reserve(n_vocab);
+    std::vector<llama_token_data> candidates(n_vocab);
+
     std::vector<llama_token_data> conf_candidates;
     conf_candidates.reserve(max_length);
+
     std::vector<int32_t> mask_positions;
     mask_positions.reserve(max_length);
 
@@ -124,18 +125,9 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
             return nullptr;
         }
 
-        std::vector<float> shifted_logits(max_length * n_vocab);
-
-        //Move logits to left, because decode path will shift logits to right
-        // Position 0 keeps its own logits: shifted_logits[0] = raw_logits[0]
-        std::copy(raw_logits, raw_logits + n_vocab, shifted_logits.data());
-
-        // Positions 1+ get logits from previous position: shifted_logits[i] = raw_logits[i-1]
-        for (int32_t i = 1; i < max_length; i++) {
-            std::copy(raw_logits + (i - 1) * n_vocab, raw_logits + i * n_vocab, shifted_logits.data() + i * n_vocab);
-        }
-
-        float * logits = shifted_logits.data();
+        auto get_logits_for_pos = [&](int32_t pos) -> const float* {
+            return pos == 0 ? raw_logits : raw_logits + (pos - 1) * n_vocab;
+        };
 
         mask_positions.clear();
         for (int32_t i = 0; i < max_length; i++) {
@@ -156,14 +148,16 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
 
             for (int32_t pos : mask_positions) {
                 if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < p_transfer) {
-                    candidates.clear();
+                    const float* pos_logits = get_logits_for_pos(pos);
                     for (int32_t token_id = 0; token_id < n_vocab; token_id++) {
-                        candidates.emplace_back(llama_token_data{ token_id, logits[pos * n_vocab + token_id], 0.0f });
+                        candidates[token_id].id = token_id;
+                        candidates[token_id].logit = pos_logits[token_id];
+                        candidates[token_id].p = 0.0f;
                     }
 
                     llama_token_data_array cur_p = {
                         /* .data       = */ candidates.data(),
-                        /* .size       = */ candidates.size(),
+                        /* .size       = */ (size_t)n_vocab,  // Reset size to full vocab
                         /* .selected   = */ -1,
                         /* .sorted     = */ false,
                     };
@@ -173,19 +167,17 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
                 }
             }
         } else {
-            candidates.clear();
-            candidates.shrink_to_fit();
-
             std::vector<std::pair<float, int32_t>> confidences;
             std::vector<llama_token>               sampled_tokens(mask_positions.size());
 
             for (size_t i = 0; i < mask_positions.size(); i++) {
                 int32_t pos        = mask_positions[i];
-                float * pos_logits = logits + pos * n_vocab;
+                const float * pos_logits = get_logits_for_pos(pos);
 
-                candidates.clear();
                 for (int32_t token_id = 0; token_id < n_vocab; token_id++) {
-                    candidates.emplace_back(llama_token_data{ token_id, pos_logits[token_id], 0.0f });
+                    candidates[token_id].logit = pos_logits[token_id];
+                    candidates[token_id].p = 0.0f;
+                    candidates[token_id].id = token_id;
                 }
 
                 llama_token_data_array cur_p = {
@@ -207,8 +199,6 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
                         confidence += prob * logf(prob + epsilon);
                     }
                 } else if (params.algorithm == DIFFUSION_ALG_TOPK_MARGIN) {
-                    std::partial_sort(cur_p.data, cur_p.data + 2, cur_p.data + cur_p.size,
-                                      [](const llama_token_data & a, const llama_token_data & b) { return a.p > b.p; });
                     confidence = cur_p.data[0].p - cur_p.data[1].p;
                 } else {
                     confidence = cur_p.data[cur_p.selected].p;
@@ -216,6 +206,7 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
 
                 sampled_tokens[i] = sampled_token;
                 confidences.emplace_back(confidence, i);
+
             }
 
             int32_t num_transfer =
