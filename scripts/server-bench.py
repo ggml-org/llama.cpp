@@ -7,22 +7,27 @@ from time import sleep, time
 from typing import Optional
 
 import datasets
+import logging
 import matplotlib.pyplot as plt
 import numpy as np
 import requests
 from tqdm.contrib.concurrent import thread_map
 
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("server-bench")
+
+
 def get_prompts(n_prompts: int) -> list[str]:
-    print("Loading MMLU dataset...")
-    ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]
+    logger.info(" Loading MMLU dataset...")
+    ret = datasets.load_dataset("cais/mmlu", "all")["test"]["question"]  # type: ignore
     if n_prompts >= 0:
         ret = ret[:n_prompts]
     return ret
 
 
 def get_server(path_server: str, path_model: str, path_log: Optional[str], port: int, n_gpu_layers: int, parallel: int, ctx_size: int) -> dict:
-    print("Starting the llama.cpp server...")
+    logger.info(" Starting the llama.cpp server...")
     address = f"http://localhost:{port}"
 
     popen_args: list[str] = [
@@ -78,7 +83,7 @@ def get_prompt_length(data: dict) -> int:
     return len(tokens)
 
 
-def send_prompt(data: dict) -> tuple[int, float, list[float]]:
+def send_prompt(data: dict) -> tuple[float, list[float]]:
     session = data["session"]
     server_address: str = data["server_address"]
 
@@ -93,6 +98,7 @@ def send_prompt(data: dict) -> tuple[int, float, list[float]]:
     json_data: dict = {"prompt": prompt, "seed": data["seed"], "n_predict": data["n_predict"], "stream": True}
     response = session.post(f"{server_address}/completion", json=json_data, stream=True)
 
+    last_valid_line: str = ""
     token_arrival_times: list[float] = []
     for line in response.iter_lines(decode_unicode=True):
         if not line.startswith("data: "):
@@ -111,9 +117,9 @@ def send_prompt(data: dict) -> tuple[int, float, list[float]]:
 def benchmark(path_server: str, path_model: str, path_log: Optional[str], port: int, n_gpu_layers: int, parallel: int, ctx_size: int, n_prompts: int, n_predict: int):
     prompts: list[str] = get_prompts(n_prompts)
 
-    server = None
+    server: Optional[dict] = None
     try:
-        server: dict = get_server(path_server, path_model, path_log, port, n_gpu_layers, parallel, ctx_size)
+        server = get_server(path_server, path_model, path_log, port, n_gpu_layers, parallel, ctx_size)
         server_address: str = server["address"]
 
         with requests.Session() as session:
@@ -121,11 +127,10 @@ def benchmark(path_server: str, path_model: str, path_log: Optional[str], port: 
             for i, p in enumerate(prompts):
                 data.append({"session": session, "server_address": server_address, "prompt": p, "n_predict": n_predict, "seed": i})
 
-            print("Getting the prompt lengths...")
-            prompt_n: list[int] = [get_prompt_length(d) for d in data]
+            logger.info(" Getting the prompt lengths...")
+            prompt_n = [get_prompt_length(d) for d in data]
 
-            print("Starting the benchmark...")
-            print()
+            logger.info(" Starting the benchmark...\n")
             t0 = time()
             results: list[tuple[int, list[float]]] = thread_map(send_prompt, data, max_workers=parallel + 1, chunksize=1)
     finally:
@@ -149,17 +154,17 @@ def benchmark(path_server: str, path_model: str, path_log: Optional[str], port: 
     token_t -= t0
     token_t_last = np.max(token_t)
 
-    print()
-    print(f"Benchmark duration:                {token_t_last:.2f} s")
-    print(f"Request throughput:                {n_prompts / token_t_last:.2f} requests/s = {n_prompts / (token_t_last/60):.2f} requests/min")
-    print(f"Total prompt length:               {np.sum(prompt_n)} tokens")
-    print(f"Average prompt length:             {np.mean(prompt_n):.2f} tokens")
-    print(f"Average prompt latency:            {np.mean(prompt_ms):.2f} ms")
-    print(f"Average prompt speed:              {np.sum(prompt_n) / (1e-3 * np.sum(prompt_ms)):.2f} tokens/s")
-    print(f"Total generated tokens:            {token_t.shape[0]}")
-    print(f"Average generation depth:          {depth_sum / token_t.shape[0]:.2f} tokens")
-    print(f"Average total generation speed:    {token_t.shape[0] / token_t_last:.2f} tokens/s")
-    print(f"Average generation speed per slot: {token_t.shape[0] / (parallel * token_t_last):.2f} tokens/s / slot")
+    logger.info("")
+    logger.info(f" Benchmark duration:                {token_t_last:.2f} s")
+    logger.info(f" Request throughput:                {n_prompts / token_t_last:.2f} requests/s = {n_prompts / (token_t_last/60):.2f} requests/min")
+    logger.info(f" Total prompt length:               {np.sum(prompt_n)} tokens")
+    logger.info(f" Average prompt length:             {np.mean(prompt_n):.2f} tokens")
+    logger.info(f" Average prompt latency:            {np.mean(prompt_ms):.2f} ms")
+    logger.info(f" Average prompt speed:              {np.sum(prompt_n) / (1e-3 * np.sum(prompt_ms)):.2f} tokens/s")
+    logger.info(f" Total generated tokens:            {token_t.shape[0]}")
+    logger.info(f" Average generation depth:          {depth_sum / token_t.shape[0]:.2f} tokens")
+    logger.info(f" Average total generation speed:    {token_t.shape[0] / token_t_last:.2f} tokens/s")
+    logger.info(f" Average generation speed per slot: {token_t.shape[0] / (parallel * token_t_last):.2f} tokens/s / slot")
 
     plt.figure()
     plt.scatter(prompt_n, prompt_ms, s=10.0, marker=".", alpha=0.25)
