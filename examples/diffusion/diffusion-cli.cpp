@@ -43,14 +43,18 @@ static bool diffusion_step_callback(int32_t step, int32_t total_steps, const lla
                                     void * user_data) {
     callback_data * data = static_cast<callback_data *>(user_data);
 
+    auto print_progress_bar = [](int32_t step, int32_t total_steps) {
+        int progress_percent = (step * 100) / total_steps;
+        int progress_bars    = (step * 50) / total_steps;
+        std::cerr << "diffusion step: " << step << "/" << total_steps << " [" << std::string(progress_bars, '=')
+                  << std::string(50 - progress_bars, ' ') << "] " << progress_percent << "%\n";
+    };
+
     if (data->diff_params->visual_mode) {
         // Visual mode: clear
         std::cerr << "\033[2J\033[H";  // Clear screen and move cursor to top-left
 
-        int progress_percent = (step * 100) / total_steps;
-        int progress_bars    = (step * 50) / total_steps;
-        std::cerr << "Diffusion Step " << step << "/" << total_steps << " [" << std::string(progress_bars, '=')
-                  << std::string(50 - progress_bars, ' ') << "] " << progress_percent << "%\n";
+        print_progress_bar(step, total_steps);
 
         std::string current_text = " ";
 
@@ -73,11 +77,7 @@ static bool diffusion_step_callback(int32_t step, int32_t total_steps, const lla
         std::cerr << current_text << "\n";
         std::cerr << std::flush;
     } else {
-        int progress_percent = (step * 100) / total_steps;
-        int progress_bars    = (step * 50) / total_steps;
-
-        std::cerr << "\rDiffusion Step " << step << "/" << total_steps << " [" << std::string(progress_bars, '=')
-                  << std::string(50 - progress_bars, ' ') << "] " << progress_percent << "%" << std::flush;
+        print_progress_bar(step, total_steps);
     }
 
     return true;  // Continue generation
@@ -175,8 +175,11 @@ int main(int argc, char ** argv) {
     ldiff_params.step_callback_user_data = &cb_data;
 
     int32_t       n_generated = 0;
+
+    int64_t t1 = ggml_time_us();
     llama_token * generated   = diffusion_generate(ctx, input_tokens.data(), n_input, params.diffusion.max_length,
                                                    ldiff_params, &n_generated);
+    int64_t t2 = ggml_time_us();
     if (params.diffusion.visual_mode) {
         std::cerr << "\033[2J\033[H";  // Clear screen and move cursor to top-left
     } else {
@@ -196,6 +199,8 @@ int main(int argc, char ** argv) {
         llama_model_free(model);
         return 1;
     }
+
+    std::cerr << "diffusion time: " << (t2 - t1)/1000.0 << "ms time per step: " << (t2 - t1)/1000.0/params.diffusion.steps << "ms" << std::endl;
 
     llama_free(ctx);
     llama_model_free(model);
