@@ -8367,7 +8367,6 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
-
             // norm
             {
                 cur = build_norm(inpL,
@@ -8404,15 +8403,17 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
+                const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+                const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
                 Kcur = ggml_rope_ext(
                         ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
@@ -8435,7 +8436,7 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
             cb(ffn_inp, "ffn_inp", il);
 
             // feed-forward network
-            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0 && (il + 1) % hparams.n_moe_layer_step == 0;
+            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0 && il >= hparams.n_moe_layer_step;
 
             if (!is_moe_layer) {
                 cur = build_norm(ffn_inp,
@@ -16828,6 +16829,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SMOLLM3:
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
+        case LLM_ARCH_ERNIE4_5_MOE:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
