@@ -3423,5 +3423,33 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    add_opt(common_arg(
+        {"--rerank-bge-v2-m3-default"},
+        string_format("use default bge-reranker-v2-m3 (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "gpustack/bge-reranker-v2-m3-GGUF";
+            params.model.hf_file = "bge-reranker-v2-m3-Q8_0.gguf";
+            params.n_ctx = 512;
+            params.flash_attn = true;
+            params.verbose_prompt = false;
+            params.reranking = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_CLS;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
+
+    add_opt(common_arg(
+        {"--rerank-jina-v1-turbo-en-default"},
+        string_format("use default jina-reranker-v1-turbo-en (note: can download weights from the internet)"),
+        [](common_params & params) {
+            params.model.hf_repo = "ggml-org/jina-reranker-v1-turbo-en-GGUF";
+            params.model.hf_file = "Jina-Bert-Implementation-38M-F16.gguf";
+            params.n_ctx = 512;
+            params.flash_attn = true;
+            params.verbose_prompt = false;
+            params.reranking = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_CLS;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_RERANKING"));
+
     return ctx_arg;
 }
