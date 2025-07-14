@@ -1166,7 +1166,7 @@ static std::unique_ptr<llm_graph_input_attn_kv_unified> build_attn_inp_kv_unifie
 
         const auto n_kv     = mctx_cur->get_n_kv();
         const auto n_tokens = ubatch.n_tokens;
-        const auto n_stream = cparams.attn_streams ? ubatch.n_seqs_unq : 1;
+        const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
 
         inp->self_k_idxs = mctx_cur->build_input_k_idxs(ctx0, ubatch);
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
@@ -1371,7 +1371,7 @@ llm_graph_input_attn_kv_unified_iswa * llm_graph_context::build_attn_inp_kv_unif
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_unified_iswa>(hparams, cparams, mctx_cur);
 
-    const auto n_stream = cparams.attn_streams ? ubatch.n_seqs_unq : 1;
+    const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
 
     {
         const auto n_kv = mctx_cur->get_base()->get_n_kv();

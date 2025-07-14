@@ -1465,13 +1465,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
-        {"--attn-streams", "-as"},
+        {"--kv-split", "-kvs"},
         string_format("use multiple streams when computing the attention (default: %s)\n"
-            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/14363)", params.attn_streams ? "true" : "false"),
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/14363)", params.kv_split ? "true" : "false"),
         [](common_params & params) {
-            params.attn_streams = true;
+            params.kv_split = true;
         }
-    ).set_env("LLAMA_ARG_ATTN_STREAMS"));
+    ).set_env("LLAMA_ARG_KV_SPLIT"));
     add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),

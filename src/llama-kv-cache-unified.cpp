@@ -195,6 +195,11 @@ llama_kv_cache_unified::llama_kv_cache_unified(
     const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
     supports_set_rows = LLAMA_SET_ROWS ? atoi(LLAMA_SET_ROWS) : 0;
 
+    if (!supports_set_rows && !unified) {
+        LLAMA_LOG_WARN("%s: non-unified KV cache requires ggml_set_rows() - forcing LLAMA_SET_ROWS=1\n", __func__);
+        supports_set_rows = 1;
+    }
+
     if (!supports_set_rows) {
         LLAMA_LOG_WARN("%s: LLAMA_SET_ROWS=0, using old ggml_cpy() method for backwards compatibility\n", __func__);
     }
