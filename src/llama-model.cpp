@@ -4789,7 +4789,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
-                        if (static_cast<uint32_t>(i) >= hparams.n_layer_dense_lead) { // MoE layers
+                        if (arch == LLM_ARCH_ERNIE4_5_MOE && static_cast<uint32_t>(i) >= hparams.n_layer_dense_lead) { // MoE layers
                             int n_ff_exp = hparams.n_ff_exp;
 
                             layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
