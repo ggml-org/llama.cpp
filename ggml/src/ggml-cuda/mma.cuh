@@ -453,12 +453,12 @@ namespace ggml_cuda_mma {
             tile<16, 16, int> & D, const tile<16, 8, int> & A, const tile<16, 8, int> & B) {
 #if defined(AMD_MMA_AVAILABLE)
 #if defined(CDNA3)
-        using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;                          
+        using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
         int32x4_t* acc = (int32x4_t*) D.x;
-        acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(((int64_t*) A.x)[0], 
-                                                       ((int64_t*) B.x)[0], 
-                                                       acc[0], 
-                                                       0, 0, 0);    
+        acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(((int64_t*) A.x)[0],
+                                                       ((int64_t*) B.x)[0],
+                                                       acc[0],
+                                                       0, 0, 0);
 #elif defined(CDNA2) || defined(CDNA)
 #endif
 #else
@@ -473,12 +473,12 @@ namespace ggml_cuda_mma {
             tile<32, 32, int> & D, const tile<32, 4, int> & A, const tile<32, 4, int> & B) {
 #if defined(AMD_MMA_AVAILABLE)
 #if defined(CDNA3)
-        using int32x16_t = __attribute__((__vector_size__(16 * sizeof(int)))) int;                          
+        using int32x16_t = __attribute__((__vector_size__(16 * sizeof(int)))) int;
         int32x16_t* acc = (int32x16_t*) D.x;
-        acc[0] = __builtin_amdgcn_mfma_i32_32x32x16_i8(((int64_t*) A.x)[0], 
-                                                       ((int64_t*) B.x)[0], 
-                                                       acc[0], 
-                                                       0, 0, 0);    
+        acc[0] = __builtin_amdgcn_mfma_i32_32x32x16_i8(((int64_t*) A.x)[0],
+                                                       ((int64_t*) B.x)[0],
+                                                       acc[0],
+                                                       0, 0, 0);
 #elif defined(CDNA2) || defined(CDNA)
 #endif
 #else
