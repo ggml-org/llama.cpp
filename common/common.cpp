@@ -988,7 +988,7 @@ struct common_init_result common_init_from_params(common_params & params) {
 
         for (auto & la : params.lora_adapters) {
             llama_adapter_lora_ptr lora;
-            lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
+            lora.reset(llama_adapter_lora_init(model, la.path.c_str(), params.lora_layer_start, params.lora_layer_end));
             if (lora == nullptr) {
                 LOG_ERR("%s: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
                 llama_free(lctx);
