@@ -608,7 +608,12 @@ static std::vector<size_t> unicode_regex_split_custom_kimi_k2(const std::string 
             // Pattern 2 & 3: Letter words excluding Han characters with optional contractions
             // [^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?:'s|'t|'re|'ve|'m|'ll|'d)?
             // [^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?:'s|'t|'re|'ve|'m|'ll|'d)?
-            if (flags.is_letter && !unicode_cpt_is_han(cpt)) {
+            // Check if current char is a letter OR if current char could be a leading char and next char is a letter
+            bool is_letter_pattern = (flags.is_letter && !unicode_cpt_is_han(cpt)) ||
+                                     (!(cpt == '\r' || cpt == '\n' || flags.is_letter || flags.is_number) && 
+                                      _get_flags(pos + 1).is_letter && !unicode_cpt_is_han(_get_cpt(pos + 1)));
+            
+            if (is_letter_pattern) {
                 // Handle optional leading non-letter/non-number character
                 bool has_leading_char = false;
                 if (!(cpt == '\r' || cpt == '\n' || flags.is_letter || flags.is_number)) {
