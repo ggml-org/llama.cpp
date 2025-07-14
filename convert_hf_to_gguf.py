@@ -5582,7 +5582,6 @@ class DeepseekV2Model(TextModel):
                 merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
                 if len(merged) == 2:
                     merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
-            
 
             # Build token list
             vocab_size = self.hparams["vocab_size"]
@@ -5590,7 +5589,7 @@ class DeepseekV2Model(TextModel):
             reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []
-            
+
             for i in range(vocab_size):
                 if i not in reverse_vocab:
                     tokens.append(f"[PAD{i}]")
@@ -5602,13 +5601,13 @@ class DeepseekV2Model(TextModel):
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
                         toktypes.append(gguf.TokenType.NORMAL)
-            
+
             self.gguf_writer.add_tokenizer_model("gpt2")
             self.gguf_writer.add_tokenizer_pre(tokpre)
             self.gguf_writer.add_token_list(tokens)
             self.gguf_writer.add_token_types(toktypes)
             self.gguf_writer.add_token_merges(merges)
-            
+
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
         else:
