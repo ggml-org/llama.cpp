@@ -983,8 +983,8 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     // load and optionally apply lora adapters
     if (!params.lora_adapters.empty()) {
-        if (params.lora_layer_start <= 0) params.lora_layer_start = 1;
-        if (params.lora_layer_end   <= 0) params.lora_layer_end   = llama_model_n_layer(model);
+        if (params.lora_layer_start < 0) params.lora_layer_start = 0;
+        if (params.lora_layer_end   < 0) params.lora_layer_end   = llama_model_n_layer(model);
 
         for (auto & la : params.lora_adapters) {
             llama_adapter_lora_ptr lora;
