@@ -5,7 +5,6 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <unordered_map>
 
 struct LLM_KV;
 struct llama_model_loader;
@@ -130,63 +129,4 @@ struct llama_vocab {
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
-};
-
-// PLaMo-2 Aho-Corasick tokenizer
-class llama_vocab_plamo2 {
-public:
-    // Constants for table structure
-    static constexpr int32_t TABLE_PIECE_LENGTH = 0;
-    static constexpr int32_t TABLE_TOKEN_ID     = 1;
-    static constexpr int32_t TABLE_SCORE        = 2;
-    static constexpr int32_t TABLE_PIECE_ID     = 3;
-
-    // Constants for path array
-    static constexpr int32_t PATH_TOKEN_LENGTH  = 0;
-    static constexpr int32_t PATH_TOKEN_ID      = 1;
-    static constexpr int32_t PATH_NUM_TOKENS    = 2;
-
-    // Score constants
-    static constexpr int32_t INVALID_SCORE = -20000000;
-    static constexpr int32_t UNKNOWN_SCORE = -10000000;
-
-    struct vocab_entry {
-        std::string text;
-        float score;
-        std::string type; // "BYTE" for byte tokens, empty for normal tokens
-    };
-
-    llama_vocab_plamo2();
-    ~llama_vocab_plamo2();
-
-    // Build the Aho-Corasick automaton from vocabulary
-    void build(const std::vector<vocab_entry> & vocab);
-
-    // Encode text to token IDs
-    std::vector<llama_token> encode(const std::string & text) const;
-
-    // Get token text by ID
-    const std::string & get_token_text(llama_token id) const;
-
-    // Get vocabulary size
-    size_t vocab_size() const;
-
-private:
-    // Internal structures for Aho-Corasick automaton
-
-    // List of tokens in the vocabulary
-    std::vector<std::string> tokens_;
-
-    // Mapping from byte code point to token ID (for byte fallback)
-    std::vector<llama_token> bytes_;
-
-    // Mapping from piece code to suffix ID
-    std::unordered_map<int64_t, int32_t> to_suffix_id_;
-
-    // Flattened table representing the Trie structure
-    // Each row contains: [piece_length, token_id, score, piece_id]
-    std::vector<std::vector<int32_t>> table_;
-
-    // Helper functions
-    std::vector<llama_token> encode_unicode(const std::vector<uint32_t> & unicode_data) const;
 };
