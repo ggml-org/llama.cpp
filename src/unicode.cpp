@@ -557,7 +557,7 @@ static std::vector<size_t> unicode_regex_split_stl(const std::string & text, con
     return bpe_offsets;
 }
 
-// K2 system regex patterns (from tokenization_kimi.py): 
+// K2 system regex patterns (from tokenization_kimi.py):
 // [\p{Han}]+|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+
 static std::vector<size_t> unicode_regex_split_custom_kimi_k2(const std::string & text, const std::vector<size_t> & offsets) {
     std::vector<size_t> bpe_offsets;
@@ -610,7 +610,7 @@ static std::vector<size_t> unicode_regex_split_custom_kimi_k2(const std::string 
             // [^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]+[\p{Ll}\p{Lm}\p{Lo}\p{M}&&[^\p{Han}]]*(?:'s|'t|'re|'ve|'m|'ll|'d)?
             // Check if current char is a letter OR if current char could be a leading char and next char is a letter
             bool is_letter_pattern = (flags.is_letter && !unicode_cpt_is_han(cpt)) ||
-                                     (!(cpt == '\r' || cpt == '\n' || flags.is_letter || flags.is_number) && 
+                                     (!(cpt == '\r' || cpt == '\n' || flags.is_letter || flags.is_number) &&
                                       _get_flags(pos + 1).is_letter && !unicode_cpt_is_han(_get_cpt(pos + 1)));
             
             if (is_letter_pattern) {
@@ -861,7 +861,7 @@ bool unicode_cpt_is_han(uint32_t cpt) {
     // CJK Extension C
     if (cpt >= 0x2A700 && cpt <= 0x2B73F) return true;
     
-    // CJK Extension D  
+    // CJK Extension D
     if (cpt >= 0x2B740 && cpt <= 0x2B81F) return true;
     
     // CJK Extension E
