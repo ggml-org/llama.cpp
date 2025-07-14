@@ -612,7 +612,7 @@ static std::vector<size_t> unicode_regex_split_custom_kimi_k2(const std::string 
             bool is_letter_pattern = (flags.is_letter && !unicode_cpt_is_han(cpt)) ||
                                      (!(cpt == '\r' || cpt == '\n' || flags.is_letter || flags.is_number) &&
                                       _get_flags(pos + 1).is_letter && !unicode_cpt_is_han(_get_cpt(pos + 1)));
-            
+
             if (is_letter_pattern) {
                 // Handle optional leading non-letter/non-number character
                 bool has_leading_char = false;
@@ -620,23 +620,23 @@ static std::vector<size_t> unicode_regex_split_custom_kimi_k2(const std::string 
                     has_leading_char = true;
                     pos++;
                 }
-                
+
                 // Match letter sequence (excluding Han characters)
                 bool has_letters = false;
                 while (_get_flags(pos).is_letter && !unicode_cpt_is_han(_get_cpt(pos))) {
                     has_letters = true;
                     pos++;
                 }
-                
+
                 // Only proceed if we found letters (after potentially skipping leading char)
                 if (has_letters || (!has_leading_char && _get_flags(pos).is_letter && !unicode_cpt_is_han(_get_cpt(pos)))) {
                     if (!has_letters) pos++; // consume the first letter if we didn't already
-                    
+
                     // Continue consuming letters
                     while (_get_flags(pos).is_letter && !unicode_cpt_is_han(_get_cpt(pos))) {
                         pos++;
                     }
-                    
+
                     // Check for optional contractions (?:'s|'t|'re|'ve|'m|'ll|'d)
                     if (_get_cpt(pos) == '\'' && pos + 1 < offset_end) {
                         uint32_t cpt_next = unicode_tolower(_get_cpt(pos + 1));
@@ -651,7 +651,7 @@ static std::vector<size_t> unicode_regex_split_custom_kimi_k2(const std::string 
                             }
                         }
                     }
-                    
+
                     _add_token(pos);
                     continue;
                 } else if (has_leading_char) {
@@ -851,31 +851,31 @@ bool unicode_cpt_is_han(uint32_t cpt) {
     // Han character ranges (Chinese/CJK characters)
     // CJK Unified Ideographs (most common)
     if (cpt >= 0x4E00 && cpt <= 0x9FFF) return true;
-    
+
     // CJK Extension A
     if (cpt >= 0x3400 && cpt <= 0x4DBF) return true;
-    
+
     // CJK Extension B
     if (cpt >= 0x20000 && cpt <= 0x2A6DF) return true;
-    
+
     // CJK Extension C
     if (cpt >= 0x2A700 && cpt <= 0x2B73F) return true;
-    
+
     // CJK Extension D
     if (cpt >= 0x2B740 && cpt <= 0x2B81F) return true;
-    
+
     // CJK Extension E
     if (cpt >= 0x2B820 && cpt <= 0x2CEAF) return true;
-    
+
     // CJK Extension F
     if (cpt >= 0x2CEB0 && cpt <= 0x2EBEF) return true;
-    
+
     // CJK Compatibility Ideographs
     if (cpt >= 0xF900 && cpt <= 0xFAFF) return true;
-    
+
     // CJK Compatibility Ideographs Supplement
     if (cpt >= 0x2F800 && cpt <= 0x2FA1F) return true;
-    
+
     return false;
 }
 
