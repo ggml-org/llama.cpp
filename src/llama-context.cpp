@@ -796,14 +796,12 @@ int llama_context::encode(const llama_batch & batch_inp) {
     auto * t_embd = res->get_embd_pooled() ? res->get_embd_pooled() : res->get_embd();
 
     // extract logits
-   if (t_logits && n_outputs > 0) {
+   if (logits && t_logits) {
         ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
         GGML_ASSERT(backend_res != nullptr);
         GGML_ASSERT(logits != nullptr);
 
-        if (n_outputs) {
-            ggml_backend_tensor_get_async(backend_res, t_logits, logits, 0, n_outputs*n_vocab*sizeof(float));
-        }
+        ggml_backend_tensor_get_async(backend_res, t_logits, logits, 0, n_tokens*n_vocab*sizeof(float));
     }
 
     // extract embeddings
