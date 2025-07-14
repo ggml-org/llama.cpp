@@ -82,6 +82,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--override-kv KEY=TYPE:VALUE` | advanced option to override model metadata by key. may be specified multiple times.<br/>types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false |
 | `--lora FNAME` | path to LoRA adapter (can be repeated to use multiple adapters) |
 | `--lora-scaled FNAME SCALE` | path to LoRA adapter with user defined scaling (can be repeated to use multiple adapters) |
+| `--lora-layer-range START END` | layer range to apply the LoRA(s) to, start and end inclusive |
 | `--control-vector FNAME` | add a control vector<br/>note: this argument can be repeated to add multiple control vectors |
 | `--control-vector-scaled FNAME SCALE` | add a control vector with user defined scaling SCALE<br/>note: this argument can be repeated to add multiple scaled control vectors |
 | `--control-vector-layer-range START END` | layer range to apply the control vector(s) to, start and end inclusive |
