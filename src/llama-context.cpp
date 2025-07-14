@@ -805,7 +805,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
     }
 
     // extract embeddings
-    if (cparams.embeddings && t_embd) {
+    if (embd && t_embd) {
         ggml_backend_t backend_embd = ggml_backend_sched_get_tensor_backend(sched.get(), t_embd);
         GGML_ASSERT(backend_embd != nullptr);
 
