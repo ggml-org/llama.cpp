@@ -5566,11 +5566,17 @@ class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
     def set_vocab(self):
-        if(self.hparams["vocab_size"]==163840): # Kimi-K2 model
-            from transformers import AutoTokenizer
-            tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-            tokpre = self.get_vocab_base_pre(tokenizer)
+        try:
+            self._set_vocab_gpt2()
+            return
+        except:
+            pass
 
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        if tokpre == "kimi-k2":
             # Build merges list using the approach similar to HunYuanMoE
             merges = []
             vocab = {}
@@ -5611,7 +5617,7 @@ class DeepseekV2Model(TextModel):
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
         else:
-            self._set_vocab_gpt2()
+            raise NotImplementedError(f"{self.dir_model} is not supported yet!")
 
     def set_gguf_parameters(self):
 
