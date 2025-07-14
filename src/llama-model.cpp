@@ -8436,7 +8436,7 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
             cb(ffn_inp, "ffn_inp", il);
 
             // feed-forward network
-            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0 && il >= hparams.n_moe_layer_step;
+            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0 && static_cast<uint32_t>(il) >= hparams.n_moe_layer_step;
 
             if (!is_moe_layer) {
                 cur = build_norm(ffn_inp,
