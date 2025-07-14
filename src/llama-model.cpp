@@ -1618,7 +1618,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
                     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
                 }
-                
+
                 switch (hparams.n_layer) {
                     case 18: type = LLM_TYPE_0_3B; break;
                     case 28: type = LLM_TYPE_21B_A3B; break;
@@ -15470,7 +15470,7 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
             cb(ffn_inp, "ffn_inp", il);
 
             // feed-forward network
-            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0 
+            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0
                                 && static_cast<uint32_t>(il) >= hparams.n_layer_dense_lead;
 
             if (!is_moe_layer) {
