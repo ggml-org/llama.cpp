@@ -2781,7 +2781,8 @@ class Ernie4_5Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         num_heads = self.hparams["num_attention_heads"]
         num_kv_heads = self.hparams["num_key_value_heads"]
-        head_dim = self.hparams["hidden_size"] // num_heads
+        if (head_dim := self.hparams.get("head_dim")) is None:
+            head_dim = self.hparams["hidden_size"] // num_heads
 
         if "ernie." in name:
             name = name.replace("ernie.", "model.")
@@ -2834,11 +2835,6 @@ class Ernie4_5MoeModel(Ernie4_5Model):
         if (shared_expert_intermediate_size := self.hparams.get('intermediate_size')) is not None and (num_key_value_heads := self.hparams.get('num_key_value_heads')) is not None:
             self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size // num_key_value_heads)
 
-    def tensor_force_quant(self, name: str, new_name: str, bid: int | None, n_dims: int) -> gguf.GGMLQuantizationType | bool:
-        if "exps" in new_name:
-            return gguf.GGMLQuantizationType.F16
-        return super().tensor_force_quant(name, new_name, bid, n_dims)
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Modify correction bias name as in DeepseekV2
         if name.endswith("e_score_correction_bias"):
@@ -2863,7 +2859,7 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             return []
 
         # process the experts separately
-        if name.find("experts.") != -1 and name.find("shared") == -1:
+        if name.find("mlp.experts") != -1:
             n_experts = self.hparams["moe_num_experts"]
             assert bid is not None
 

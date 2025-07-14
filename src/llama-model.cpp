@@ -8365,6 +8365,7 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Ernie 4.5 MoE requires n_moe_layer_step > 0");
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
             // norm
@@ -8403,17 +8404,15 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-                const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
                 Qcur = ggml_rope_ext(
                         ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
                 Kcur = ggml_rope_ext(
                         ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
