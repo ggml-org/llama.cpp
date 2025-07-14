@@ -2829,6 +2829,7 @@ class Ernie4_5MoeModel(Ernie4_5Model):
         self.gguf_writer.add_expert_count(self.hparams["moe_num_experts"])
         self.gguf_writer.add_expert_used_count(self.hparams["moe_k"])
         self.gguf_writer.add_interleave_moe_layer_step(self.hparams["moe_layer_interval"])
+        self.gguf_writer.add_leading_dense_block_count(self.hparams["moe_layer_start_index"])
         self.gguf_writer.add_rope_freq_base(self.hparams["rope_theta"])
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
             self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
@@ -2889,16 +2890,6 @@ class Ernie4_5MoeModel(Ernie4_5Model):
             else:
                 return []
         return [(self.map_tensor_name(name), data_torch)]
-
-    def prepare_tensors(self):
-        super().prepare_tensors()
-
-        if self._experts is not None:
-            # flatten `list[dict[str, Tensor]]` into `list[str]`
-            experts = [k for d in self._experts for k in d.keys()]
-            if len(experts) > 0:
-                logger.warning(f"Unprocessed experts: {experts}")
-                raise ValueError(f"Unprocessed experts: {experts}")
 
 
 @ModelBase.register(
