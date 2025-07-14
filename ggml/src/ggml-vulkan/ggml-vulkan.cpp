@@ -3041,7 +3041,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     // Enables subgroup ops for preventing the re-calculation of indices.
     uint32_t use_collectives = 0;
     // CRS block size should be capped at sugroup size for correctness when shuffle is used.
-    if(device->subgroup_shuffle){
+    if(getenv("GGML_VK_USE_COLLECTIVES") != nullptr && device->subgroup_shuffle){
         use_collectives = 1;
         conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
     }
@@ -3050,10 +3050,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
     uint32_t conv2d_shmem_req = (conv2d_BS_K*(conv2d_BS_CRS+1) + conv2d_BS_CRS*(conv2d_BS_NPQ+1))*sizeof(float);
     if(device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req){
         conv2d_BS_CRS = 8;
-        if(device->subgroup_shuffle){
+        if(getenv("GGML_VK_USE_COLLECTIVES") != nullptr && device->subgroup_shuffle){
             conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
         }
     }
+    
+    std::cerr << " --> BS_CRS=" << conv2d_BS_CRS << " use_collectives=" << use_collectives << std::endl;
+
     if(device->subgroup_shuffle){
         ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true, true);
     }else{
