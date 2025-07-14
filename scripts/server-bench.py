@@ -124,7 +124,7 @@ def benchmark(path_server: str, path_model: str, path_log: Optional[str], port: 
         server = get_server(path_server, path_model, path_log, port, n_gpu_layers, parallel, ctx_size)
         server_address: str = server["address"]
 
-        adapter = requests.adapters.HTTPAdapter(pool_connections=num_workers, pool_maxsize=num_workers)
+        adapter = requests.adapters.HTTPAdapter(pool_connections=num_workers, pool_maxsize=num_workers)  # type: ignore
         session = requests.Session()
         session.mount("http://", adapter)
         session.mount("https://", adapter)
