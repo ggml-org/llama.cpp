@@ -982,18 +982,23 @@ struct common_init_result common_init_from_params(common_params & params) {
     }
 
     // load and optionally apply lora adapters
-    for (auto & la : params.lora_adapters) {
-        llama_adapter_lora_ptr lora;
-        lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
-        if (lora == nullptr) {
-            LOG_ERR("%s: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
-            llama_free(lctx);
-            llama_model_free(model);
-            return iparams;
-        }
+    if (!params.lora_adapters.empty()) {
+        if (params.lora_layer_start <= 0) params.lora_layer_start = 1;
+        if (params.lora_layer_end   <= 0) params.lora_layer_end   = llama_model_n_layer(model);
 
-        la.ptr = lora.get();
-        iparams.lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
+        for (auto & la : params.lora_adapters) {
+            llama_adapter_lora_ptr lora;
+            lora.reset(llama_adapter_lora_init(model, la.path.c_str()));
+            if (lora == nullptr) {
+                LOG_ERR("%s: failed to apply lora adapter '%s'\n", __func__, la.path.c_str());
+                llama_free(lctx);
+                llama_model_free(model);
+                return iparams;
+            }
+
+            la.ptr = lora.get();
+            iparams.lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
+        }
     }
 
     if (!params.lora_init_without_apply) {

@@ -544,9 +544,12 @@ extern "C" {
     //
 
     // Load a LoRA adapter from file
+    // il_start and il_end are the layer range the lora should apply to (both inclusive)
     LLAMA_API struct llama_adapter_lora * llama_adapter_lora_init(
             struct llama_model * model,
-            const char * path_lora);
+                    const char * path_lora,
+                       int32_t   il_start,
+                       int32_t   il_end);
 
     // Manually free a LoRA adapter
     // Note: loaded adapters will be free when the associated model is deleted

@@ -145,7 +145,12 @@ llama_adapter_lora_weight * llama_adapter_lora::get_weight(ggml_tensor * w) {
     return nullptr;
 }
 
-static void llama_adapter_lora_init_impl(llama_model & model, const char * path_lora, llama_adapter_lora & adapter) {
+static void llama_adapter_lora_init_impl(
+        llama_model & model,
+        const char * path_lora,
+        llama_adapter_lora & adapter,
+        int32_t il_start,
+        int32_t il_end) {
     LLAMA_LOG_INFO("%s: loading lora adapter from '%s' ...\n", __func__, path_lora);
 
     ggml_context * ctx_init;
@@ -224,6 +229,22 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
 
     for (ggml_tensor * cur = ggml_get_first_tensor(ctx.get()); cur; cur = ggml_get_next_tensor(ctx.get(), cur)) {
         std::string name(cur->name);
+
+        // check if this tensor has a layer number and is outside our range
+        size_t blk_pos = name.find("blk.");
+        if (blk_pos != std::string::npos) {
+            size_t start = blk_pos + 4; // skip "blk."
+            size_t end = name.find('.', start);
+            try {
+                int layer_num = std::stoi(name.substr(start, end - start));
+                if (layer_num < il_start || layer_num > il_end) {
+                    continue; // skip this tensor
+                }
+            } catch (const std::exception & err) {
+                LLAMA_LOG_ERROR("%s: failed to parse layer number from tensor '%s': %s\n", __func__, name.c_str(), err.what());
+            }
+        }
+
         if (str_endswith(name, ".lora_a")) {
             replace_all(name, ".lora_a", "");
             if (ab_map.find(name) == ab_map.end()) {
@@ -368,11 +389,15 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
     LLAMA_LOG_INFO("%s: loaded %zu tensors from lora file\n", __func__, adapter.ab_map.size()*2);
 }
 
-llama_adapter_lora * llama_adapter_lora_init(llama_model * model, const char * path_lora) {
+llama_adapter_lora * llama_adapter_lora_init(
+        llama_model * model,
+        const char * path_lora,
+        int32_t il_start,
+        int32_t il_end) {
     llama_adapter_lora * adapter = new llama_adapter_lora();
 
     try {
-        llama_adapter_lora_init_impl(*model, path_lora, *adapter);
+        llama_adapter_lora_init_impl(*model, path_lora, *adapter, il_start, il_end);
         return adapter;
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: failed to apply lora adapter: %s\n", __func__, err.what());
