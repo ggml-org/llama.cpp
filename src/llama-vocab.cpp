@@ -2434,7 +2434,7 @@ std::string llama_vocab::impl::type_name() const{
         case LLAMA_VOCAB_TYPE_UGM:    return "UGM";
         case LLAMA_VOCAB_TYPE_RWKV:   return "RWKV";
         case LLAMA_VOCAB_TYPE_PLAMO2: return "PLaMo2";
-        default:                    return "unknown";
+        default:                      return "unknown";
     }
 }
 
