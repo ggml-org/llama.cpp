@@ -840,6 +840,9 @@ class TextModel(ModelBase):
         if chkhsh == "169bf0296a13c4d9b7672313f749eb36501d931022de052aad6e36f2bf34dd51":
             # ref: https://huggingface.co/LiquidAI/LFM2-Tokenizer
             res = "lfm2"
+        if chkhsh == "81212dc7cdb7e0c1074ca62c5aeab0d43c9f52b8a737be7b12a777c953027890":
+            # ref: https://huggingface.co/moonshotai/Kimi-K2-Base
+            res = "kimi-k2"
 
         if res is None:
             logger.warning("\n")
@@ -5566,7 +5569,7 @@ class DeepseekV2Model(TextModel):
         if(self.hparams["vocab_size"]==163840): # Kimi-K2 model
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-            tokpre = "kimi-k2" # TODO: add identifier hash
+            tokpre = self.get_vocab_base_pre(tokenizer)
 
             # Build merges list using the approach similar to HunYuanMoE
             merges = []
