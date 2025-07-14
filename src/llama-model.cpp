@@ -8349,7 +8349,7 @@ struct llm_build_phi2 : public llm_graph_context {
 
         ggml_build_forward_expand(gf, cur);
     }
-    };
+};
 
 template<bool iswa>
 struct llm_build_phi3 : public llm_graph_context {
@@ -15470,8 +15470,7 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
             cb(ffn_inp, "ffn_inp", il);
 
             // feed-forward network
-            bool is_moe_layer = arch == LLM_ARCH_ERNIE4_5_MOE && hparams.n_moe_layer_step > 0
-                                && static_cast<uint32_t>(il) >= hparams.n_layer_dense_lead;
+            bool is_moe_layer = static_cast<uint32_t>(il) >= hparams.n_layer_dense_lead && (il + 1) % hparams.n_moe_layer_step == 0;
 
             if (!is_moe_layer) {
                 cur = build_norm(ffn_inp,
