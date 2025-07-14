@@ -293,10 +293,13 @@ static constexpr __device__ int mmq_get_granularity_device(ggml_type type, const
 }
 #elif defined(NEW_MMA_AVAILABLE)
 static constexpr __device__ int mmq_get_granularity_device(ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
     return mmq_x >= 48 ? 16 : 8;
 }
 #else
 static constexpr __device__ int mmq_get_granularity_device(ggml_type type, const int mmq_x) {
+    GGML_UNUSED(type);
+    GGML_UNUSED(mmq_x);
     return 8;
 }
 #endif // AMD_MMA_AVAILABLE
@@ -367,6 +370,7 @@ static constexpr __device__ int get_mmq_nwarps_device(ggml_type type) {
 }
 #else
 static constexpr __device__ int get_mmq_nwarps_device(ggml_type type) {
+    GGML_UNUSED(type);
     return 8;
 }
 #endif // AMD_MMA_AVAILABLE
@@ -3564,8 +3568,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     const int nbytes_shared = mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps);
 
-    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x, MMQ_NWARPS, false>), nbytes_shared);
-    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x, MMQ_NWARPS, true>),  nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x, false>), nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x,  true>), nbytes_shared);
 
     const int nty  = (args.nrows_x   + mmq_y - 1) / mmq_y;
     const int ntx  = (args.ncols_dst + mmq_x - 1) / mmq_x;
