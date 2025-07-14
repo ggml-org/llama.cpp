@@ -1,12 +1,13 @@
 #include "diffusion.h"
-#include "llama.h"
-#include "log.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <random>
 #include <vector>
+
+#include "llama.h"
+#include "log.h"
 
 struct diffusion_params diffusion_default_params(void) {
     struct diffusion_params params = {};
@@ -24,30 +25,15 @@ struct diffusion_params diffusion_default_params(void) {
     return params;
 }
 
-llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_tokens, int32_t n_input,
-                                 int32_t max_length, struct diffusion_params params, int32_t * n_generated) {
-    if (!ctx || !input_tokens || n_input <= 0 || max_length <= n_input) {
+void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, llama_token * output_tokens,
+                        int32_t n_input, int32_t max_length, struct diffusion_params params, int32_t * n_generated) {
+    if (!ctx || !input_tokens || !output_tokens || n_input <= 0 || max_length <= n_input) {
         if (n_generated) {
             *n_generated = 0;
         }
-        return nullptr;
     }
 
     const llama_model * model = llama_get_model(ctx);
-    if (!model) {
-        if (n_generated) {
-            *n_generated = 0;
-        }
-        return nullptr;
-    }
-
-    llama_token * output_tokens = new llama_token[max_length];
-    if (!output_tokens) {
-        if (n_generated) {
-            *n_generated = 0;
-        }
-        return nullptr;
-    }
 
     // Initialize with input and pad with mask tokens
     std::copy(input_tokens, input_tokens + n_input, output_tokens);
@@ -107,25 +93,20 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
         if (ret != 0) {
             LOG_ERR("%s: failed to decode at step %d, ret = %d\n", __func__, step, ret);
             llama_batch_free(batch);
-            delete[] output_tokens;
-            if (n_generated) {
-                *n_generated = 0;
-            }
-            return nullptr;
+            return;
         }
 
         float * raw_logits = llama_get_logits(ctx);
         if (!raw_logits) {
             LOG_ERR("%s: failed to get logits at step %d\n", __func__, step);
             llama_batch_free(batch);
-            delete[] output_tokens;
             if (n_generated) {
                 *n_generated = 0;
             }
-            return nullptr;
+            return;
         }
 
-        auto get_logits_for_pos = [&](int32_t pos) -> const float* {
+        auto get_logits_for_pos = [&](int32_t pos) -> const float * {
             return pos == 0 ? raw_logits : raw_logits + (pos - 1) * n_vocab;
         };
 
@@ -148,16 +129,16 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
 
             for (int32_t pos : mask_positions) {
                 if (std::uniform_real_distribution<float>(0.0f, 1.0f)(rng) < p_transfer) {
-                    const float* pos_logits = get_logits_for_pos(pos);
+                    const float * pos_logits = get_logits_for_pos(pos);
                     for (int32_t token_id = 0; token_id < n_vocab; token_id++) {
-                        candidates[token_id].id = token_id;
+                        candidates[token_id].id    = token_id;
                         candidates[token_id].logit = pos_logits[token_id];
-                        candidates[token_id].p = 0.0f;
+                        candidates[token_id].p     = 0.0f;
                     }
 
                     llama_token_data_array cur_p = {
                         /* .data       = */ candidates.data(),
-                        /* .size       = */ (size_t)n_vocab,  // Reset size to full vocab
+                        /* .size       = */ (size_t) n_vocab,  // Reset size to full vocab
                         /* .selected   = */ -1,
                         /* .sorted     = */ false,
                     };
@@ -171,13 +152,13 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
             std::vector<llama_token>               sampled_tokens(mask_positions.size());
 
             for (size_t i = 0; i < mask_positions.size(); i++) {
-                int32_t pos        = mask_positions[i];
+                int32_t       pos        = mask_positions[i];
                 const float * pos_logits = get_logits_for_pos(pos);
 
                 for (int32_t token_id = 0; token_id < n_vocab; token_id++) {
                     candidates[token_id].logit = pos_logits[token_id];
-                    candidates[token_id].p = 0.0f;
-                    candidates[token_id].id = token_id;
+                    candidates[token_id].p     = 0.0f;
+                    candidates[token_id].id    = token_id;
                 }
 
                 llama_token_data_array cur_p = {
@@ -206,7 +187,6 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
 
                 sampled_tokens[i] = sampled_token;
                 confidences.emplace_back(confidence, i);
-
             }
 
             int32_t num_transfer =
@@ -284,6 +264,4 @@ llama_token * diffusion_generate(llama_context * ctx, const llama_token * input_
     if (n_generated) {
         *n_generated = max_length;
     }
-
-    return output_tokens;
 }

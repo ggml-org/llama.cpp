@@ -6,13 +6,14 @@
 extern "C" {
 #endif
 
-typedef bool (*diffusion_step_callback_t)(int32_t step, int32_t total_steps, const llama_token * tokens, int32_t n_tokens, void * user_data);
+typedef bool (*diffusion_step_callback_t)(int32_t step, int32_t total_steps, const llama_token * tokens,
+                                          int32_t n_tokens, void * user_data);
 
 enum diffusion_algorithm {
-    DIFFUSION_ALG_ORIGIN = 0,
+    DIFFUSION_ALG_ORIGIN       = 0,
     DIFFUSION_ALG_MASKGIT_PLUS = 1,
-    DIFFUSION_ALG_TOPK_MARGIN = 2,
-    DIFFUSION_ALG_ENTROPY = 3,
+    DIFFUSION_ALG_TOPK_MARGIN  = 2,
+    DIFFUSION_ALG_ENTROPY      = 3,
 };
 
 struct diffusion_params {
@@ -31,13 +32,8 @@ struct diffusion_params {
 
 struct diffusion_params diffusion_default_params(void);
 
-llama_token * diffusion_generate(
-    llama_context *              ctx,
-    const llama_token *          input_tokens,
-    int32_t                      n_input,
-    int32_t                      max_length,
-    struct diffusion_params      params,
-    int32_t *                    n_generated);
+void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, llama_token * output_tokens,
+                        int32_t n_input, int32_t max_length, struct diffusion_params params, int32_t * n_generated);
 
 #ifdef __cplusplus
 }

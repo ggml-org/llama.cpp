@@ -9,9 +9,9 @@
 #include "arg.h"
 #include "chat.h"
 #include "common.h"
+#include "diffusion.h"
 #include "llama.h"
 #include "log.h"
-#include "diffusion.h"
 
 static std::string format_input_text(const std::string & prompt, bool use_chat_template, llama_model * model) {
     if (!use_chat_template) {
@@ -36,7 +36,6 @@ struct callback_data {
     const common_params_diffusion * diff_params;
     const llama_vocab *             vocab;
     int32_t                         n_input;
-    llama_token                     mask_token_id;  // Store mask token separately since it's not in diffusion params
 };
 
 static bool diffusion_step_callback(int32_t step, int32_t total_steps, const llama_token * tokens, int32_t n_tokens,
@@ -46,8 +45,8 @@ static bool diffusion_step_callback(int32_t step, int32_t total_steps, const lla
     auto print_progress_bar = [](int32_t step, int32_t total_steps) {
         int progress_percent = (step * 100) / total_steps;
         int progress_bars    = (step * 50) / total_steps;
-        std::cerr << "diffusion step: " << step << "/" << total_steps << " [" << std::string(progress_bars, '=')
-                  << std::string(50 - progress_bars, ' ') << "] " << progress_percent << "%\n";
+        std::cerr << "\rdiffusion step: " << step << "/" << total_steps << " [" << std::string(progress_bars, '=')
+                  << std::string(50 - progress_bars, ' ') << "] " << progress_percent << "%";
     };
 
     if (data->diff_params->visual_mode) {
@@ -56,11 +55,13 @@ static bool diffusion_step_callback(int32_t step, int32_t total_steps, const lla
 
         print_progress_bar(step, total_steps);
 
+        std::cerr << "\n";
+
         std::string current_text = " ";
 
         for (int32_t i = data->n_input; i < n_tokens; i++) {
             std::string token_str;
-            if (tokens[i] != data->mask_token_id) {
+            if (tokens[i] != llama_vocab_mask(data->vocab)) {
                 char piece[256];
                 int  n_chars = llama_token_to_piece(data->vocab, tokens[i], piece, sizeof(piece), 0, false);
                 if (n_chars > 0) {
@@ -135,9 +136,8 @@ int main(int argc, char ** argv) {
     std::string         formatted_prompt = format_input_text(params.prompt, params.enable_chat_template, model);
 
     std::vector<llama_token> input_tokens = common_tokenize(vocab, formatted_prompt,
-                                                            true,  // add_special tokens
-                                                            true   // parse_special
-    );
+                                                            /*add special tokens*/ true,
+                                                            /*parse special*/ true);
     int                      n_input      = input_tokens.size();
 
     if (n_input >= params.n_ctx) {
@@ -148,14 +148,14 @@ int main(int argc, char ** argv) {
     }
 
     struct diffusion_params ldiff_params = diffusion_default_params();
-    ldiff_params.steps                  = params.diffusion.steps;
-    ldiff_params.eps                    = params.diffusion.eps;
-    ldiff_params.temperature            = params.sampling.temp;
-    ldiff_params.top_p                  = params.sampling.top_p;
-    ldiff_params.top_k                  = params.sampling.top_k;
-    ldiff_params.algorithm              = static_cast<enum diffusion_algorithm>(params.diffusion.algorithm);
-    ldiff_params.alg_temp               = params.diffusion.alg_temp;
-    ldiff_params.seed                   = params.sampling.seed;
+    ldiff_params.steps                   = params.diffusion.steps;
+    ldiff_params.eps                     = params.diffusion.eps;
+    ldiff_params.temperature             = params.sampling.temp;
+    ldiff_params.top_p                   = params.sampling.top_p;
+    ldiff_params.top_k                   = params.sampling.top_k;
+    ldiff_params.algorithm               = static_cast<enum diffusion_algorithm>(params.diffusion.algorithm);
+    ldiff_params.alg_temp                = params.diffusion.alg_temp;
+    ldiff_params.seed                    = params.sampling.seed;
 
     llama_token mask_token_id = llama_vocab_mask(vocab);
     GGML_ASSERT(mask_token_id != LLAMA_TOKEN_NULL);
@@ -169,38 +169,36 @@ int main(int argc, char ** argv) {
 
     ldiff_params.mask_token_id = mask_token_id;
 
-    callback_data cb_data = { &params.diffusion, vocab, n_input, mask_token_id };
+    callback_data cb_data = { &params.diffusion, vocab, n_input };
 
     ldiff_params.step_callback           = diffusion_step_callback;
     ldiff_params.step_callback_user_data = &cb_data;
 
-    int32_t       n_generated = 0;
+    int32_t n_generated = 0;
 
-    int64_t t1 = ggml_time_us();
-    llama_token * generated   = diffusion_generate(ctx, input_tokens.data(), n_input, params.diffusion.max_length,
-                                                   ldiff_params, &n_generated);
+    int64_t                  t1 = ggml_time_us();
+    std::vector<llama_token> output_tokens(params.diffusion.max_length);
+    diffusion_generate(ctx, input_tokens.data(), output_tokens.data(), n_input, params.diffusion.max_length,
+                       ldiff_params, &n_generated);
     int64_t t2 = ggml_time_us();
-    if (params.diffusion.visual_mode) {
-        std::cerr << "\033[2J\033[H";  // Clear screen and move cursor to top-left
-    } else {
-        std::cerr << "\r" << std::string(80, ' ') << "\r" << std::flush;
-    }
 
-    if (generated && n_generated > 0) {
-        std::vector<llama_token> output_tokens(generated + n_input, generated + n_generated);
-
+    if (n_generated > 0) {
+        if (params.diffusion.visual_mode) {
+            //clear screen and move cursor to top-left
+            std::cerr << "\033[2J\033[H";
+        }
+        output_tokens.erase(output_tokens.begin(), output_tokens.begin() + n_input);
         std::string output_data = common_detokenize(vocab, output_tokens, false);
-        std::cout << output_data << std::endl;
-
-        delete[] generated;
+        std::cout << "\n" << output_data << "\n";
     } else {
-        std::cerr << "Error: diffusion generation failed" << std::endl;
+        std::cerr << "Error: diffusion generation failed\n";
         llama_free(ctx);
         llama_model_free(model);
         return 1;
     }
 
-    std::cerr << "diffusion time: " << (t2 - t1)/1000.0 << "ms time per step: " << (t2 - t1)/1000.0/params.diffusion.steps << "ms" << std::endl;
+    std::cerr << "diffusion time: " << (t2 - t1) / 1000.0
+              << "ms time per step: " << (t2 - t1) / 1000.0 / params.diffusion.steps << "ms" << std::endl;
 
     llama_free(ctx);
     llama_model_free(model);
