@@ -358,7 +358,7 @@ static __global__ void cpy_q_f32(const char * cx, char * cdst_direct, const int 
 // Copy destination pointers to GPU to be available when pointer indirection is in use
 
 void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_dest_ptrs, const int host_dest_ptrs_size, cudaStream_t stream) {
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
     if (cuda_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate GPU memory for destination pointers
         CUDA_CHECK(cudaStreamSynchronize(stream));
         if (cuda_graph->dest_ptrs_d != nullptr) {
@@ -590,7 +590,7 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     char ** dest_ptrs_d = nullptr;
     int graph_cpynode_index = -1;
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
     if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection_for_this_node) {
         dest_ptrs_d = ctx.cuda_graph->dest_ptrs_d;
         graph_cpynode_index = ctx.cuda_graph->graph_cpynode_index;
@@ -647,7 +647,7 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         GGML_ABORT("%s: unsupported type combination (%s to %s)\n", __func__,
                 ggml_type_name(src0->type), ggml_type_name(src1->type));
     }
-#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)
+#if defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS) || defined(GGML_MUSA_GRAPHS)
     if(ctx.cuda_graph->use_cpy_indirection && !disable_indirection_for_this_node) {
         ctx.cuda_graph->graph_cpynode_index = graph_cpynode_index;
     }
