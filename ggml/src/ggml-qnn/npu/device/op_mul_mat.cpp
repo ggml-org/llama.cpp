@@ -3,7 +3,6 @@
 #include "thread_pool.hpp"  // TODO: remove this dependency
 #include "type_traits.hpp"
 #include "vec_ops.hpp"
-#include "vtcm_mem.hpp"
 
 namespace {
 

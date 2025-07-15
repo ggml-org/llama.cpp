@@ -2,6 +2,7 @@
 
 #include <qurt.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -237,8 +238,8 @@ template <size_t _ThreadCount> class thread_pool {
         DEVICE_LOG_DEBUG("thread_func_impl.end: %zu", param->tidx);
     }
 
-    std::atomic_bool                                _thread_exit = false;
-    std::array<qurt_thread_ptr, kMaxSubThreadCount> _threads;
+    std::atomic_bool                                _thread_exit                    = false;
+    std::array<qurt_thread_ptr, kMaxSubThreadCount> _threads                        = {};
     qurt_barrier_t                                  _pending                        = {};
     qurt_barrier_t                                  _completed                      = {};
     thread_params                                   _thread_params[kMaxThreadCount] = {};

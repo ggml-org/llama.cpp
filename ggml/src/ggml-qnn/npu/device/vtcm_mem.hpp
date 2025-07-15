@@ -1,5 +1,6 @@
 #pragma once
 
+#include <HAP_compute_res.h>
 #include <HAP_vtcm_mgr.h>
 
 #include "util.hpp"
@@ -9,15 +10,28 @@ namespace hexagon {
 class vtcm_mem {
   public:
     explicit vtcm_mem(size_t size, bool single_page) {
+        constexpr const unsigned int kTimeoutUs = 10000;  // 10ms timeout
+
         size_t avail_size = single_page ? get_avail_page_size() : get_avail_block_size();
         if (size > avail_size) {
             DEVICE_LOG_ERROR("Requested VTCM size %zu exceeds available size %zu\n", size, avail_size);
             return;
         }
 
-        _vtcm_mem = HAP_request_VTCM((unsigned int) size, single_page ? 1 : 0);
+        compute_res_attr_t compute_res;
+        HAP_compute_res_attr_init(&compute_res);
+        HAP_compute_res_attr_set_serialize(&compute_res, false);
+        HAP_compute_res_attr_set_vtcm_param(&compute_res, size, single_page ? 1 : 0);
+
+        _vtcm_context_id = HAP_compute_res_acquire(&compute_res, kTimeoutUs);  // 10ms timeout
+        if (_vtcm_context_id == 0) {
+            DEVICE_LOG_ERROR("Failed to acquire VTCM context: %zu bytes, timeout %zu us\n", size, kTimeoutUs);
+            return;
+        }
+
+        _vtcm_mem = HAP_compute_res_attr_get_vtcm_ptr(&compute_res);
         if (_vtcm_mem == nullptr) {
-            DEVICE_LOG_ERROR("Failed to allocate VTCM memory: %zu bytes\n", size);
+            DEVICE_LOG_ERROR("Failed to allocate VTCM memory: %zu bytes, timeout %zu us\n", size, kTimeoutUs);
             return;
         }
 
@@ -26,7 +40,18 @@ class vtcm_mem {
     }
 
     explicit vtcm_mem(size_t size, bool single_page, size_t timeout_us) {
-        _vtcm_mem = HAP_request_async_VTCM((unsigned int) size, single_page ? 1 : 0, (unsigned int) timeout_us);
+        compute_res_attr_t compute_res;
+        HAP_compute_res_attr_init(&compute_res);
+        HAP_compute_res_attr_set_serialize(&compute_res, false);
+        HAP_compute_res_attr_set_vtcm_param(&compute_res, size, single_page ? 1 : 0);
+
+        _vtcm_context_id = HAP_compute_res_acquire(&compute_res, timeout_us);
+        if (_vtcm_context_id == 0) {
+            DEVICE_LOG_ERROR("Failed to acquire VTCM context: %zu bytes, timeout %zu us\n", size, timeout_us);
+            return;
+        }
+
+        _vtcm_mem = HAP_compute_res_attr_get_vtcm_ptr(&compute_res);
         if (_vtcm_mem == nullptr) {
             DEVICE_LOG_ERROR("Failed to allocate VTCM memory: %zu bytes, timeout %zu us\n", size, timeout_us);
             return;
@@ -37,8 +62,8 @@ class vtcm_mem {
     }
 
     ~vtcm_mem() {
-        if (is_valid()) {
-            auto ret = HAP_release_VTCM(_vtcm_mem);
+        if (_vtcm_context_id != 0) {
+            auto ret = HAP_compute_res_release(_vtcm_context_id);
             if (ret != AEE_SUCCESS) {
                 DEVICE_LOG_ERROR("Failed to release VTCM memory: %d\n", ret);
             }
@@ -94,6 +119,8 @@ class vtcm_mem {
   private:
     void * _vtcm_mem  = nullptr;
     size_t _vtcm_size = 0;
+
+    unsigned int _vtcm_context_id = 0;
 
     DISABLE_COPY_AND_MOVE(vtcm_mem);
 };

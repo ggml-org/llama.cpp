@@ -10,6 +10,15 @@ else()
     message(FATAL_ERROR "HEXAGON_SDK_ROOT not defined")
 endif()
 
+if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
+    set(PREBUILT_LIB_DIR "android_aarch64")
+elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+    set(PREBUILT_LIB_DIR "UbuntuARM_aarch64")
+elseif(${CMAKE_SYSTEM_NAME} MATCHES "Windows")
+    # Windows
+    set(PREBUILT_LIB_DIR "windows_aarch64")
+endif()
+
 if(HEXAGON_SDK_ROOT)
     include(${HEXAGON_SDK_ROOT}/build/cmake/hexagon_fun.cmake)
 else()
@@ -138,21 +147,13 @@ if(${CMAKE_SYSTEM_NAME} MATCHES "Android|Linux|Windows")
 
     link_options(hexagon-npu-host)
 
-    if(${CMAKE_SYSTEM_NAME} MATCHES "Android")
-        set(PREBUILT_LIB_DIR "android_aarch64")
-    elseif(${CMAKE_SYSTEM_NAME} MATCHES "Linux")
-        set(PREBUILT_LIB_DIR "UbuntuARM_aarch64")
-    else()
-        # Windows
-        set(PREBUILT_LIB_DIR "windows_aarch64")
-    endif()
-
     choose_dsprpc("3" dsprpc) # cdsprpc
     link_custom_library(hexagon-npu-host ${dsprpc})
 
     cmake_host_system_information(RESULT BUILD_CPU_COUNT QUERY NUMBER_OF_PHYSICAL_CORES)
     add_dsp_targets_for_host(hexagon-npu-host "v73" ${BUILD_CPU_COUNT})
     add_dsp_targets_for_host(hexagon-npu-host "v75" ${BUILD_CPU_COUNT})
+    add_dsp_targets_for_host(hexagon-npu-host "v79" ${BUILD_CPU_COUNT})
 
     list(APPEND NPU_RUNTIME_LIBS "${HEXAGON_SDK_ROOT}/tools/utils/sysmon/sysMonApp")
     list(APPEND NPU_RUNTIME_LIBS "${HEXAGON_SDK_ROOT}/tools/utils/sysmon/sysMonAppLE")
@@ -249,6 +250,7 @@ else()
     target_link_libraries(hexagon_npu_skel
         ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++abi.a
         ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc++.a
+        ${HEXAGON_LIB_DIR}/${HEXAGON_ARCH}/G0/pic/libc.a
     )
     set_target_properties(hexagon_npu_skel PROPERTIES OUTPUT_NAME "hexagon_npu_skel_${HEXAGON_ARCH}")
     target_link_libraries(hexagon_npu_skel qprintf_static)
