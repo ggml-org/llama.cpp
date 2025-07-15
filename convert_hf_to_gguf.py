@@ -3598,6 +3598,7 @@ class Plamo2Model(TextModel):
     def set_gguf_parameters(self):
         hparams = self.hparams
         block_count = hparams["num_hidden_layers"]
+        self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
 
         # Which layers are Mamba layers
         # PLaMo 2 uses mamba_step to indicate the pattern (e.g., 2 means every other layer)
