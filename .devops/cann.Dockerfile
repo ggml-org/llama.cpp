@@ -125,6 +125,6 @@ ENV LLAMA_ARG_HOST=0.0.0.0
 
 COPY --from=build /app/full/llama-server /app
 
-HEALTHCHECK CMD [ "curl", "-f", "http://localhost:8080/health" ]
+HEALTHCHECK --interval=5m CMD [ "curl", "-f", "http://localhost:8080/health" ]
 
 ENTRYPOINT [ "/app/llama-server" ]
