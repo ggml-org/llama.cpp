@@ -2986,6 +2986,7 @@ static bool ggml_metal_encode_node(
                     /*.n_group      =*/ n_group,
                     /*.n_seq_tokens =*/ n_seq_tokens,
                     /*.n_seqs       =*/ n_seqs,
+                    /*.s_off        =*/ ggml_nelements(src1) * sizeof(float),
                     /*.nb01         =*/ nb01,
                     /*.nb02         =*/ nb02,
                     /*.nb03         =*/ nb03,
@@ -3016,7 +3017,8 @@ static bool ggml_metal_encode_node(
 
                 if (ne30 == 1) {
                     // Mamba-2
-                    [encoder dispatchThreadgroups:MTLSizeMake(d_inner, n_head, n_seqs) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                    [encoder setThreadgroupMemoryLength:32*sizeof(float) atIndex:0]; // SIMD size
+                    [encoder dispatchThreadgroups:MTLSizeMake(d_inner, n_head, n_seqs) threadsPerThreadgroup:MTLSizeMake(d_state, 1, 1)];
                 } else {
                     GGML_ASSERT(d_inner == 1);
                     [encoder dispatchThreadgroups:MTLSizeMake(n_head, n_seqs, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
