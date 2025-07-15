@@ -1,0 +1,37 @@
+{% if tools -%}
+    {{ '<|im_system|>tool_declare<|im_middle|>' -}}
+    {{- tools | tojson -}}
+    {{ '<|im_end|>' -}}
+{%- endif -%}
+
+{%- for message in messages -%}
+  {%- if loop.first and messages[0]['role'] != 'system' -%}
+    {{ '<|im_system|>system<|im_middle|>You are a helpful assistant<|im_end|>' }}
+  {%- endif -%}
+  {%- if message['role'] == 'system' -%}
+    {{ '<|im_system|>system<|im_middle|>' }}
+  {%- elif message['role'] == 'user' -%}
+    {{ '<|im_user|>user<|im_middle|>' }}
+  {%- elif message['role'] == 'assistant' -%}
+    {{ '<|im_assistant|>assistant<|im_middle|>' }}
+  {%- elif message['role'] == 'tool' -%}
+    {{ '<|im_system|>tool<|im_middle|>' }}
+  {%- endif -%}
+
+  {%- if message['content'] is string -%}
+    {{- message['content'] + '<|im_end|>' -}}
+  {%- else -%}
+    {%- for content in message['content'] -%}
+      {%- if content['type'] == 'image' or 'image' in content or 'image_url' in content -%}
+        {{ '<|media_start|>image<|media_content|><|media_pad|><|media_end|>' }}
+      {%- else -%}
+        {{ content['text'] }}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ '<|im_end|>' }}
+  {%- endif -%}
+{%- endfor -%}
+
+{%- if add_generation_prompt -%}
+  {{ '<|im_assistant|>assistant<|im_middle|>' }}
+{%- endif -%}
