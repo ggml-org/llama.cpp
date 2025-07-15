@@ -25,12 +25,17 @@ struct diffusion_params diffusion_default_params(void) {
     return params;
 }
 
-void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, llama_token * output_tokens,
-                        int32_t n_input, int32_t max_length, struct diffusion_params params, int32_t * n_generated) {
+void diffusion_generate(llama_context * ctx
+                      , const llama_token * input_tokens
+                      , llama_token * output_tokens
+                      , int32_t n_input
+                      , int32_t max_length
+                      , struct diffusion_params params
+                      , int32_t & n_generated) {
+
+    n_generated = 0;
     if (!ctx || !input_tokens || !output_tokens || n_input <= 0 || max_length <= n_input) {
-        if (n_generated) {
-            *n_generated = 0;
-        }
+        return;
     }
 
     const llama_model * model = llama_get_model(ctx);
@@ -72,6 +77,13 @@ void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, l
 
     struct llama_sampler * dist_sampler = llama_sampler_init_dist(params.seed);
 
+    llama_batch batch = llama_batch_init(max_length, 0, 1);
+    batch.n_tokens    = max_length;
+
+    int64_t total_sampling_time = 0;
+    int64_t total_time = 0;
+
+    int64_t time_start = ggml_time_us();
     for (int32_t step = 0; step < params.steps; step++) {
         if (params.step_callback) {
             if (!params.step_callback(step, params.steps, output_tokens, max_length, params.step_callback_user_data)) {
@@ -79,8 +91,7 @@ void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, l
             }
         }
 
-        llama_batch batch = llama_batch_init(max_length, 0, 1);
-        batch.n_tokens    = max_length;
+
         for (int32_t i = 0; i < max_length; i++) {
             batch.token[i]     = output_tokens[i];
             batch.pos[i]       = i;
@@ -92,23 +103,20 @@ void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, l
         int ret = llama_decode(ctx, batch);
         if (ret != 0) {
             LOG_ERR("%s: failed to decode at step %d, ret = %d\n", __func__, step, ret);
-            llama_batch_free(batch);
-            return;
+            break;
         }
 
         float * raw_logits = llama_get_logits(ctx);
         if (!raw_logits) {
             LOG_ERR("%s: failed to get logits at step %d\n", __func__, step);
-            llama_batch_free(batch);
-            if (n_generated) {
-                *n_generated = 0;
-            }
-            return;
+            break;
         }
 
         auto get_logits_for_pos = [&](int32_t pos) -> const float * {
             return pos == 0 ? raw_logits : raw_logits + (pos - 1) * n_vocab;
         };
+
+        int64_t time_start_sampling = ggml_time_us();
 
         mask_positions.clear();
         for (int32_t i = 0; i < max_length; i++) {
@@ -254,14 +262,19 @@ void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, l
                 }
             }
         }
-
-        llama_batch_free(batch);
+        int64_t time_end_sampling = ggml_time_us();
+        total_sampling_time += time_end_sampling - time_start_sampling;
     }
+    int64_t time_end = ggml_time_us();
+    total_time += time_end - time_start;
 
+    LOG_INF("\ntotal time: %0.2fms, time per step: %0.2fms, sampling time per step: %0.2fms",
+            total_time / 1000.0, total_time / 1000.0 / params.steps, total_sampling_time / 1000.0 / params.steps);
+
+
+    llama_batch_free(batch);
     llama_sampler_free(sampler);
     llama_sampler_free(dist_sampler);
 
-    if (n_generated) {
-        *n_generated = max_length;
-    }
+    n_generated = max_length;
 }

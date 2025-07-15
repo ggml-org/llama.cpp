@@ -223,7 +223,6 @@ struct common_params_diffusion {
     float   eps         = 1e-3f;  // epsilon for timesteps
     int32_t algorithm   = 0;      // diffusion algorithm (0=ORIGIN, 1=MASKGIT_PLUS, 2=TOPK_MARGIN, 3=ENTROPY)
     float   alg_temp    = 0.0f;   // algorithm temperature
-    int32_t max_length  = 512;    // maximum generation length
     bool    visual_mode = false;  // show progressive diffusion on screen
 };
 

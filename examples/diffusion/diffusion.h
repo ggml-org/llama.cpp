@@ -32,8 +32,13 @@ struct diffusion_params {
 
 struct diffusion_params diffusion_default_params(void);
 
-void diffusion_generate(llama_context * ctx, const llama_token * input_tokens, llama_token * output_tokens,
-                        int32_t n_input, int32_t max_length, struct diffusion_params params, int32_t * n_generated);
+void diffusion_generate(llama_context * ctx
+                      , const llama_token * input_tokens
+                      , llama_token * output_tokens
+                      , int32_t n_input
+                      , int32_t max_length
+                      , struct diffusion_params params
+                      , int32_t & n_generated);
 
 #ifdef __cplusplus
 }

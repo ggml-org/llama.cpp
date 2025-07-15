@@ -1,17 +1,13 @@
-#include <limits.h>
-
-#include <iomanip>
-#include <iostream>
-#include <random>
-#include <string>
-#include <vector>
-
 #include "arg.h"
 #include "chat.h"
 #include "common.h"
 #include "diffusion.h"
 #include "llama.h"
 #include "log.h"
+
+#include <limits.h>
+#include <string>
+#include <vector>
 
 static std::string format_input_text(const std::string & prompt, bool use_chat_template, llama_model * model) {
     if (!use_chat_template) {
@@ -38,24 +34,33 @@ struct callback_data {
     int32_t                         n_input;
 };
 
-static bool diffusion_step_callback(int32_t step, int32_t total_steps, const llama_token * tokens, int32_t n_tokens,
-                                    void * user_data) {
+static bool diffusion_step_callback(int32_t step
+                                  , int32_t total_steps
+                                  , const llama_token * tokens
+                                  , int32_t n_tokens
+                                  , void * user_data) {
+    (void)user_data;
+
     callback_data * data = static_cast<callback_data *>(user_data);
 
     auto print_progress_bar = [](int32_t step, int32_t total_steps) {
         int progress_percent = (step * 100) / total_steps;
         int progress_bars    = (step * 50) / total_steps;
-        std::cerr << "\rdiffusion step: " << step << "/" << total_steps << " [" << std::string(progress_bars, '=')
-                  << std::string(50 - progress_bars, ' ') << "] " << progress_percent << "%";
+        LOG_INF("\rdiffusion step: %d/%d [%s%s] %d%%"
+            , step
+            , total_steps
+            , std::string(progress_bars, '=').c_str()
+            , std::string(50 - progress_bars, ' ').c_str()
+            , progress_percent);
     };
 
     if (data->diff_params->visual_mode) {
         // Visual mode: clear
-        std::cerr << "\033[2J\033[H";  // Clear screen and move cursor to top-left
+        LOG_INF("\033[2J\033[H");  // Clear screen and move cursor to top-left
 
         print_progress_bar(step, total_steps);
 
-        std::cerr << "\n";
+        LOG_INF("\n");
 
         std::string current_text = " ";
 
@@ -75,13 +80,12 @@ static bool diffusion_step_callback(int32_t step, int32_t total_steps, const lla
             current_text += token_str;
         }
 
-        std::cerr << current_text << "\n";
-        std::cerr << std::flush;
+        LOG_INF("%s\n", current_text.c_str());
     } else {
         print_progress_bar(step, total_steps);
     }
 
-    return true;  // Continue generation
+    return true;
 }
 
 int main(int argc, char ** argv) {
@@ -176,29 +180,21 @@ int main(int argc, char ** argv) {
 
     int32_t n_generated = 0;
 
-    int64_t                  t1 = ggml_time_us();
-    std::vector<llama_token> output_tokens(params.diffusion.max_length);
-    diffusion_generate(ctx, input_tokens.data(), output_tokens.data(), n_input, params.diffusion.max_length,
-                       ldiff_params, &n_generated);
-    int64_t t2 = ggml_time_us();
+    std::vector<llama_token> output_tokens(params.n_ubatch);
+    diffusion_generate(ctx, input_tokens.data(), output_tokens.data(), n_input, params.n_ubatch,
+                       ldiff_params, n_generated);
 
     if (n_generated > 0) {
         if (params.diffusion.visual_mode) {
             //clear screen and move cursor to top-left
-            std::cerr << "\033[2J\033[H";
+            LOG_INF("\033[2J\033[H");
         }
         output_tokens.erase(output_tokens.begin(), output_tokens.begin() + n_input);
         std::string output_data = common_detokenize(vocab, output_tokens, false);
-        std::cout << "\n" << output_data << "\n";
+        LOG_INF("\n%s\n", output_data.c_str());
     } else {
-        std::cerr << "Error: diffusion generation failed\n";
-        llama_free(ctx);
-        llama_model_free(model);
-        return 1;
+        LOG_INF("Error: diffusion generation failed\n");
     }
-
-    std::cerr << "diffusion time: " << (t2 - t1) / 1000.0
-              << "ms time per step: " << (t2 - t1) / 1000.0 / params.diffusion.steps << "ms" << std::endl;
 
     llama_free(ctx);
     llama_model_free(model);
