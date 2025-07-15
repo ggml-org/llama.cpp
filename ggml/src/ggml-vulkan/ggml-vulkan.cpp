@@ -3038,29 +3038,25 @@ static void ggml_vk_load_shaders(vk_device& device) {
     uint32_t conv2d_WG_SIZE = 256;
     uint32_t conv2d_BS_K = 128;
     uint32_t conv2d_BS_CRS = 16;
-    // Enables subgroup ops for preventing the re-calculation of indices.
-    uint32_t use_collectives = 0;
-    // CRS block size should be capped at sugroup size for correctness when shuffle is used.
-    if(getenv("GGML_VK_USE_COLLECTIVES") != nullptr && device->subgroup_shuffle){
+    uint32_t use_collectives = 0;   // Enables subgroup ops for preventing the re-calculation of indices.
+    if(device->subgroup_shuffle){
         use_collectives = 1;
-        conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
+        conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS); // CRS block size should be capped at sugroup size for correctness when shuffle is used.
     }
     uint32_t conv2d_BS_NPQ = 128;
     uint32_t conv2d_TS_K = 8;
     uint32_t conv2d_shmem_req = (conv2d_BS_K*(conv2d_BS_CRS+1) + conv2d_BS_CRS*(conv2d_BS_NPQ+1))*sizeof(float);
     if(device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req){
         conv2d_BS_CRS = 8;
-        if(getenv("GGML_VK_USE_COLLECTIVES") != nullptr && device->subgroup_shuffle){
+        if(device->subgroup_shuffle){
             conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
         }
     }
-    
-    std::cerr << " --> BS_CRS=" << conv2d_BS_CRS << " use_collectives=" << use_collectives << std::endl;
 
-    if(device->subgroup_shuffle){
+    if(use_collectives){
         ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true, true);
     }else{
-        ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true);
+        ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true, false);
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -10820,14 +10816,20 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return true;
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
-        case GGML_OP_CONV_2D:
-            // Channel-contiguous format is not supported yet.
-            return (op->src[0]->type == GGML_TYPE_F32 &&
-                op->src[1]->type == GGML_TYPE_F32 &&
-                op->type == GGML_TYPE_F32 &&
-                ggml_is_contiguous(op->src[0]) &&
-                ggml_is_contiguous(op->src[1]) &&
-                ggml_is_contiguous(op));
+        case GGML_OP_CONV_2D: 
+            {
+                // Op is disabled for Intel
+                ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
+                const vk_device& device = ggml_vk_get_device(ctx->device);            
+                bool is_Intel = ggml_vk_get_device(ctx->device)->vendor_id == VK_VENDOR_ID_INTEL;
+                // Channel-contiguous format is not supported yet.
+                return (op->src[0]->type == GGML_TYPE_F32 &&
+                    op->src[1]->type == GGML_TYPE_F32 &&
+                    op->type == GGML_TYPE_F32 &&
+                    ggml_is_contiguous(op->src[0]) &&
+                    ggml_is_contiguous(op->src[1]) &&
+                    ggml_is_contiguous(op)) && !is_Intel;
+            }
         default:
             return false;
     }
