@@ -1523,7 +1523,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "llama-v3" ||
                     tokenizer_pre == "llama-bpe"||
                     tokenizer_pre == "falcon3"  ||
-                    tokenizer_pre == "pixtral") {
+                    tokenizer_pre == "falcon-h1" ||
+                    tokenizer_pre == "pixtral"  ||
+                    tokenizer_pre == "midm-2.0" ||
+                    tokenizer_pre == "lfm2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_LLAMA3;
                 ignore_merges = true;
                 add_bos = true;
@@ -1555,7 +1558,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     tokenizer_pre == "jina-de" ||
                     tokenizer_pre == "gigachat"   ||
                     tokenizer_pre == "jina-v2-es" ||
-                    tokenizer_pre == "jina-v2-de") {
+                    tokenizer_pre == "jina-v2-de" ||
+                    tokenizer_pre == "a.x-4.0") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT2;
             } else if (
                     tokenizer_pre == "jina-v1-en" ||
@@ -1844,6 +1848,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                         || t.first == "<EOT>"
                         || t.first == "_<EOT>"
                         || t.first == "<｜end▁of▁sentence｜>" // DeepSeek
+                        || t.first == "<end_of_utterance>" // smoldocling
                    ) {
                     special_eot_id = t.second;
                     if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -2003,6 +2008,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<EOT>"
                     || t.first == "_<EOT>"
                     || t.first == "<|end_of_text|>"
+                    || t.first == "<end_of_utterance>" // smoldocling
                ) {
                 special_eog_ids.insert(t.second);
                 if ((id_to_token[t.second].attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {

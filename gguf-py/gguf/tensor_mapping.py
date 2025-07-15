@@ -13,7 +13,7 @@ class TensorNameMap:
             "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
             "transformer.word_embeddings",               # falcon
             "word_embeddings",                           # bloom
-            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414
+            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 granite-hybrid
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
             "language_model.embedding.word_embeddings",  # persimmon
@@ -50,6 +50,7 @@ class TensorNameMap:
             "model.pre_ln",               # rwkv7
             "model.layers.0.pre_norm",    # rwkv7
             "backbone.norm",              # wavtokenizer
+            "model.embedding_norm",       # lfm2
         ),
 
         # Position embeddings
@@ -118,7 +119,7 @@ class TensorNameMap:
             "transformer.h.{bid}.input_layernorm",                  # falcon7b
             "h.{bid}.input_layernorm",                              # bloom
             "transformer.h.{bid}.ln_mlp",                           # falcon40b
-            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe
+            "model.layers.{bid}.input_layernorm",                   # llama-hf nemotron olmoe phimoe granite-hybrid
             "layers.{bid}.attention_norm",                          # llama-pth
             "language_model.encoder.layers.{bid}.input_layernorm",  # persimmon
             "model.layers.{bid}.ln1",                               # yi
@@ -136,6 +137,7 @@ class TensorNameMap:
             "model.layers.{bid}.ln1",                               # rwkv7
             "model.layers.{bid}.input_layernorm",                   # llama4
             "transformer_encoder.{bid}.attention_norm",             # neobert
+            "model.layers.{bid}.operator_norm",                     # lfm2
         ),
 
         # Attention norm 2
@@ -220,6 +222,7 @@ class TensorNameMap:
             "transformer.h.{bid}.self_attention.dense",                     # falcon
             "h.{bid}.self_attention.dense",                                 # bloom
             "model.layers.{bid}.self_attn.o_proj",                          # llama-hf nemotron olmoe olmo2 phimoe
+            "model.layers.{bid}.self_attn.out_proj",                        # lfm2
             "model.layers.{bid}.self_attn.linear_attn",                     # deci
             "layers.{bid}.attention.wo",                                    # llama-pth
             "encoder.layer.{bid}.attention.output.dense",                   # bert
@@ -279,6 +282,8 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.rms_norm_2",                    # Grok
             "encoder.layers.{bid}.post_attention_layernorm",                 # chatglm
             "transformer.layers.{bid}.ffn_norm",                             # openelm
+            "model.layers.{bid}.pre_ff_layernorm",                           # jamba granite-hybrid
+            "model.layers.{bid}.pre_moe_layernorm",                          # mini-jamba
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
         ),
@@ -286,12 +291,14 @@ class TensorNameMap:
         # Post feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
+            "model.layers.{bid}.pre_ff_layernorm.weight",
         ),
 
         # Post feed-forward norm
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
             "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
+            "model.layers.{bid}.feed_forward.up_proj",
         ),
 
         MODEL_TENSOR.FFN_GATE_INP: (
@@ -301,7 +308,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.router",           # Grok
             "transformer.blocks.{bid}.ffn.router.layer",        # dbrx
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
-            "model.layers.{bid}.feed_forward.router",           # llama4
+            "model.layers.{bid}.feed_forward.router",           # llama4 jamba
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
             "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
         ),
@@ -345,7 +352,7 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w3",                     # arctic
             "encoder.layers.{bid}.mlp.dense_h_to_4h",                 # chatglm
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
-            "model.layers.{bid}.feed_forward.up_proj",                # llama4
+            "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
         ),
 
@@ -363,6 +370,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_expert.up_proj",          # qwen2moe
             "model.layers.{bid}.mlp.shared_experts.up_proj",         # deepseek deepseek2
             "model.layers.{bid}.feed_forward.shared_expert.up_proj", # llama4
+            "model.layers.{bid}.feed_forward.down_proj",
             "model.layers.{bid}.mlp.shared_mlp.up_proj",             # hunyuan
         ),
 
@@ -384,7 +392,7 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.linear_1",           # refact
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
-            "model.layers.{bid}.feed_forward.gate_proj",  # llama4
+            "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba granite-hybrid
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -430,7 +438,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.mlp.down_layer",                     # jina-bert-v2
             "encoder.layers.{bid}.mlp.dense_4h_to_h",                 # chatglm
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
-            "model.layers.{bid}.feed_forward.down_proj",              # llama4
+            "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
         ),
 
@@ -551,42 +559,64 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_IN: (
-            "model.layers.{bid}.in_proj",
-            "backbone.layers.{bid}.mixer.in_proj",
+            "model.layers.{bid}.in_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.in_proj",  # mamba
+            "model.layers.{bid}.mamba.in_proj",     # jamba falcon-h1 granite-hybrid
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
-            "model.layers.{bid}.conv1d",
-            "backbone.layers.{bid}.mixer.conv1d",
+            "model.layers.{bid}.conv1d",           # mamba-hf
+            "backbone.layers.{bid}.mixer.conv1d",  # mamba
+            "model.layers.{bid}.mamba.conv1d",     # jamba falcon-h1 granite-hybrid
         ),
 
         MODEL_TENSOR.SSM_X: (
-            "model.layers.{bid}.x_proj",
-            "backbone.layers.{bid}.mixer.x_proj",
+            "model.layers.{bid}.x_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.x_proj",  # mamba
+            "model.layers.{bid}.mamba.x_proj",     # jamba
         ),
 
         MODEL_TENSOR.SSM_DT: (
-            "model.layers.{bid}.dt_proj",
-            "backbone.layers.{bid}.mixer.dt_proj",
+            "model.layers.{bid}.dt_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.dt_proj",  # mamba
+            "model.layers.{bid}.mamba.dt_proj",     # jamba falcon-h1 granite-hybrid
+        ),
+
+        MODEL_TENSOR.SSM_DT_NORM: (
+            "model.layers.{bid}.mamba.dt_layernorm",  # jamba
         ),
 
         MODEL_TENSOR.SSM_A: (
-            "model.layers.{bid}.A_log",
-            "backbone.layers.{bid}.mixer.A_log",
+            "model.layers.{bid}.A_log",           # mamba-hf
+            "backbone.layers.{bid}.mixer.A_log",  # mamba
+            "model.layers.{bid}.mamba.A_log",     # jamba falcon-h1 granite-hybrid
+        ),
+
+        MODEL_TENSOR.SSM_B_NORM: (
+            "model.layers.{bid}.mamba.b_layernorm",  # jamba
+            "model.layers.{bid}.mamba.B_layernorm",  # mini-jamba
+        ),
+
+        MODEL_TENSOR.SSM_C_NORM: (
+            "model.layers.{bid}.mamba.c_layernorm",  # jamba
+            "model.layers.{bid}.mamba.C_layernorm",  # mini-jamba
         ),
 
         MODEL_TENSOR.SSM_D: (
-            "model.layers.{bid}.D",
-            "backbone.layers.{bid}.mixer.D",
+            "model.layers.{bid}.D",           # mamba-hf
+            "backbone.layers.{bid}.mixer.D",  # mamba
+            "model.layers.{bid}.mamba.D",     # jamba falcon-h1 granite-hybrid
         ),
 
         MODEL_TENSOR.SSM_NORM: (
+            "model.layers.{bid}.mamba.norm", # falcon-h1 granite-hybrid
             "backbone.layers.{bid}.mixer.norm",  # mamba2
         ),
 
         MODEL_TENSOR.SSM_OUT: (
-            "model.layers.{bid}.out_proj",
-            "backbone.layers.{bid}.mixer.out_proj",
+            "model.layers.{bid}.out_proj",           # mamba-hf
+            "backbone.layers.{bid}.mixer.out_proj",  # mamba
+            "model.layers.{bid}.mamba.out_proj",     # jamba falcon-h1 granite-hybrid
         ),
 
         MODEL_TENSOR.TIME_MIX_W0: (
@@ -986,6 +1016,18 @@ class TensorNameMap:
 
         MODEL_TENSOR.POSNET_ATTN_OUT: (
             "backbone.posnet.{bid}.proj_out", # wavtokenizer
+        ),
+
+        MODEL_TENSOR.SHORTCONV_CONV: (
+            "model.layers.{bid}.conv.conv",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_INPROJ: (
+            "model.layers.{bid}.conv.in_proj",
+        ),
+
+        MODEL_TENSOR.SHORTCONV_OUTPROJ: (
+            "model.layers.{bid}.conv.out_proj",
         ),
 
         #############################################################################

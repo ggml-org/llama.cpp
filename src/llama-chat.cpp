@@ -170,7 +170,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         // ref: https://huggingface.co/LGAI-EXAONE/EXAONE-3.0-7.8B-Instruct/discussions/8#66bae61b1893d14ee8ed85bb
         // EXAONE-3.0-7.8B-Instruct
         return LLM_CHAT_TEMPLATE_EXAONE_3;
-    } else if (tmpl_contains("rwkv-world")) {
+    } else if (tmpl_contains("rwkv-world") || tmpl_contains("{{- 'User: ' + message['content']|trim + '\\n\\n' -}}")) {
         return LLM_CHAT_TEMPLATE_RWKV_WORLD;
     } else if (tmpl_contains("<|start_of_role|>")) {
         return LLM_CHAT_TEMPLATE_GRANITE;

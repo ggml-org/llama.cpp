@@ -32,17 +32,21 @@ enum llm_type {
     LLM_TYPE_190M,
     LLM_TYPE_220M,
     LLM_TYPE_250M,
+    LLM_TYPE_256M,
     LLM_TYPE_270M,
     LLM_TYPE_335M,
+    LLM_TYPE_350M,
     LLM_TYPE_410M,
     LLM_TYPE_450M,
     LLM_TYPE_475M,
+    LLM_TYPE_700M,
     LLM_TYPE_770M,
     LLM_TYPE_780M,
     LLM_TYPE_0_3B,
     LLM_TYPE_0_5B,
     LLM_TYPE_0_6B,
     LLM_TYPE_1B,
+    LLM_TYPE_1_2B,
     LLM_TYPE_1_3B,
     LLM_TYPE_1_4B,
     LLM_TYPE_1_5B,
@@ -154,6 +158,12 @@ struct llama_layer_convnext {
     struct ggml_tensor * gamma = nullptr;
 };
 
+struct llama_layer_shortconv {
+    struct ggml_tensor * in_proj  = nullptr;
+    struct ggml_tensor * conv     = nullptr;
+    struct ggml_tensor * out_proj = nullptr;
+};
+
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
@@ -174,6 +184,9 @@ struct llama_layer {
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
     struct ggml_tensor * ssm_norm        = nullptr;
+    struct ggml_tensor * ssm_dt_norm     = nullptr;
+    struct ggml_tensor * ssm_b_norm      = nullptr;
+    struct ggml_tensor * ssm_c_norm      = nullptr;
 
     // attention
     struct ggml_tensor * wq        = nullptr;
@@ -337,6 +350,8 @@ struct llama_layer {
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
+
+    struct llama_layer_shortconv shortconv;
 };
 
 struct llama_model {
