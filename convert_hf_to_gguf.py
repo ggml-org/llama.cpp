@@ -5617,7 +5617,7 @@ class DeepseekV2Model(TextModel):
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
         else:
-            raise NotImplementedError(f"{self.dir_model} is not supported yet!")
+            raise NotImplementedError(f"Deepseek pre-tokenizer {tokpre!r} is not supported yet!")
 
     def set_gguf_parameters(self):
 
