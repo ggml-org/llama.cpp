@@ -616,6 +616,7 @@ class MODEL_TENSOR(IntEnum):
     V_RESMPL_QUERY       = auto() # minicpmv
     V_TOK_EMBD_IMG_BREAK = auto() # pixtral
     V_MM_PATCH_MERGER    = auto() # mistral small 3.1
+    V_MM_POST_FC_NORM    = auto() # cogvlm
     V_MM_UP              = auto() # cogvlm
     V_MM_DOWN            = auto() # cogvlm
     V_MM_GATE            = auto() # cogvlm
@@ -965,6 +966,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_RESMPL_QUERY:            "resampler.query",
     MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK:      "v.token_embd.img_break", # pixtral
     MODEL_TENSOR.V_MM_PATCH_MERGER:         "mm.patch_merger", # mistral small 3.1
+    MODEL_TENSOR.V_MM_POST_FC_NORM:         "mm.post_fc_norm", # cogvlm
     MODEL_TENSOR.V_MM_UP:                   "mm.up",
     MODEL_TENSOR.V_MM_DOWN:                 "mm.down",
     MODEL_TENSOR.V_MM_GATE:                 "mm.gate",
@@ -1038,6 +1040,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_RESMPL_QUERY,
         MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK,
         MODEL_TENSOR.V_MM_PATCH_MERGER,
+        MODEL_TENSOR.V_MM_POST_FC_NORM,
         MODEL_TENSOR.V_MM_UP,
         MODEL_TENSOR.V_MM_DOWN,
         MODEL_TENSOR.V_MM_GATE,
