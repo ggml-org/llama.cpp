@@ -846,7 +846,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
 
     static ggml_backend_webgpu_device_context device_ctx;
     device_ctx.webgpu_ctx = ctx;
-    device_ctx.device_name = std::string(info.device.data);
+    device_ctx.device_name = GGML_WEBGPU_NAME;
     device_ctx.device_desc = std::string(info.description.data);
 
     GGML_LOG_INFO("ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | device_desc: %s\n",
