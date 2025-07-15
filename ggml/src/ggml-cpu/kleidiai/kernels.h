@@ -96,4 +96,3 @@ struct ggml_kleidiai_kernels {
 
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor);
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features);
-const char* cpu_feature_to_string(cpu_feature features);

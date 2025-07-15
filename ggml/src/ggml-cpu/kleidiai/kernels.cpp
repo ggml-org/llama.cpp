@@ -31,13 +31,6 @@ static const size_t INT4_BITS     = 4;
 static const int Q4_0_ZERO_POINT  = 8;
 const size_t INT4_PER_UINT16      = 4;
 
-static inline float compute_fp16_to_fp32(ggml_fp16_t h) {
-    static_assert(sizeof(ggml_fp16_t) == sizeof(__fp16), "ggml_fp16_t and __fp16 must be the same size");
-    __fp16 tmp;
-    memcpy(&tmp, &h, sizeof(ggml_fp16_t));
-    return (float)tmp;
-}
-
 static void dequantize_row_qsi4c32pscalef16(
     const void *packed_data,
     int32_t row_idx,
@@ -57,7 +50,7 @@ static void dequantize_row_qsi4c32pscalef16(
 
     for (size_t b = 0; b < num_blocks; ++b) {
         uint16_t scale_f16 = *((const uint16_t *)(block_ptr + row_in_group * num_bytes_multiplier));
-        float scale = compute_fp16_to_fp32(scale_f16);
+        float scale = ggml_fp16_to_fp32(scale_f16);
 
         const uint8_t *segment_ptr = block_ptr + nr_pack * num_bytes_multiplier;
         size_t num_segments = bl / kr;
@@ -101,7 +94,7 @@ static void dequantize_row_qsi4c32ps1s0scalef16(
 
     for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint16_t scale_f16 = scales[row_in_group + block_idx * nr];
-        float scale = compute_fp16_to_fp32(scale_f16);
+        float scale = ggml_fp16_to_fp32(scale_f16);
 
         for (size_t bl4_idx = 0; bl4_idx < bl4; ++bl4_idx) {
             uint16_t q = qdata[(block_idx * bl4 + bl4_idx) * nr + row_in_group];
@@ -406,17 +399,6 @@ static ggml_kleidiai_kernels gemm_gemv_kernels[] = {
 #endif
 #endif
 };
-
-const char* cpu_feature_to_string(cpu_feature f) {
-    switch (f) {
-        case CPU_FEATURE_NONE:    return "NONE";
-        case CPU_FEATURE_DOTPROD: return "DOTPROD";
-        case CPU_FEATURE_I8MM:    return "I8MM";
-        case CPU_FEATURE_SVE:     return "SVE";
-        case CPU_FEATURE_SME:     return "SME";
-        default:                  return "UNKNOWN";
-    }
-}
 
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor) {
     ggml_kleidiai_kernels * kernel = nullptr;

@@ -40,6 +40,17 @@ struct ggml_kleidiai_context {
     ggml_kleidiai_kernels * kernels;
 } static ctx = { CPU_FEATURE_NONE, NULL };
 
+static const char* cpu_feature_to_string(cpu_feature f) {
+    switch (f) {
+        case CPU_FEATURE_NONE:    return "NONE";
+        case CPU_FEATURE_DOTPROD: return "DOTPROD";
+        case CPU_FEATURE_I8MM:    return "I8MM";
+        case CPU_FEATURE_SVE:     return "SVE";
+        case CPU_FEATURE_SME:     return "SME";
+        default:                  return "UNKNOWN";
+    }
+}
+
 static void init_kleidiai_context(void) {
 
     ggml_critical_section_start();
@@ -282,6 +293,8 @@ class tensor_traits : public ggml::cpu::tensor_traits {
     }
 
     bool compute_forward_q4_0(struct ggml_compute_params * params, struct ggml_tensor * dst) {
+        GGML_ASSERT(dst->src[0]->type == GGML_TYPE_Q4_0);
+
         const ggml_tensor * src0 = dst->src[0];
         const ggml_tensor * src1 = dst->src[1];
 
@@ -355,6 +368,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
     }
 
     bool compute_forward_get_rows(struct ggml_compute_params * params, struct ggml_tensor * dst) {
+        GGML_ASSERT(dst->src[0]->type == GGML_TYPE_Q4_0);
         GGML_ASSERT(ctx.kernels);
 
         const ggml_tensor * src0 = dst->src[0];
@@ -382,11 +396,11 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         const int ir1 = MIN(ir0 + dr, nr);
 
         for (int64_t i = ir0; i < ir1; ++i) {
-            int32_t row_idx = ((const int32_t *)src1->data)[i];
-            GGML_ASSERT(row_idx >= 0 && row_idx < (int32_t)src0->ne[1]);
+            GGML_ASSERT(src1->type == GGML_TYPE_I32);
+            int64_t row_idx = ((const int32_t *)src1->data)[i];
+            GGML_ASSERT(row_idx >= 0 && row_idx < src0->ne[1]);
 
             float *out = (float *)((char *)dst->data + i * nb1);
-
             rhs_info->to_float(src0->data, row_idx, nc, out, block_rows, packed_stride, kr, QK4_0, num_bytes_multiplier);
         }
 
@@ -395,6 +409,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
 public:
     int repack(struct ggml_tensor * tensor, const void * data, size_t data_size) {
+        GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0);
         GGML_ASSERT(ctx.kernels);
         const size_t n = tensor->ne[1];
         const size_t k = tensor->ne[0];
@@ -465,11 +480,13 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alignment(ggml_backend_b
 }
 
 static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
+    GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0);
     GGML_ASSERT(ctx.kernels);
-    const size_t n = tensor->ne[1];
-    const size_t k = tensor->ne[0];
-    size_t nr      = ctx.kernels->gemm.get_nr();
-    size_t kr      = ctx.kernels->gemm.get_kr();
+
+    const size_t n  = tensor->ne[1];
+    const size_t k  = tensor->ne[0];
+    const size_t nr = ctx.kernels->gemm.get_nr();
+    const size_t kr = ctx.kernels->gemm.get_kr();
 
     return variant_call<size_t>(ctx.kernels->rhs_info.packed_size, n, k, nr, kr, QK4_0);
 
