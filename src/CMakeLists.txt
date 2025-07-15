@@ -32,6 +32,7 @@ add_library(llama
             llama-quant.cpp
             llama-sampling.cpp
             llama-vocab.cpp
+            parquet_dataset.cpp
             unicode-data.cpp
             unicode.cpp
             unicode.h
@@ -41,7 +42,12 @@ target_include_directories(llama PRIVATE .)
 target_include_directories(llama PUBLIC ../include)
 target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
-target_link_libraries(llama PUBLIC ggml)
+
+if(LLAMA_PARQUET)
+    target_link_libraries(llama PUBLIC ggml Arrow::arrow_shared Parquet::parquet_shared)
+else()
+    target_link_libraries(llama PUBLIC ggml)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
