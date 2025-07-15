@@ -15647,7 +15647,7 @@ private:
 
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head_v, n_head_kv, n_tokens);
 
-            Qcur = build_norm(Qcur, model.layers[il].wq, NULL, LLM_NORM_RMS, il);
+            Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
             Qcur = ggml_rope_ext(
@@ -15656,7 +15656,7 @@ private:
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
 
-            Kcur = build_norm(Kcur, model.layers[il].wk, NULL, LLM_NORM_RMS, il);
+            Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
 
             Kcur = ggml_rope_ext(
