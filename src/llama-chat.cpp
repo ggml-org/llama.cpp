@@ -698,6 +698,10 @@ int32_t llm_chat_apply_template(
             }
 
             ss << message->content << "<|im_end|>";
+
+            if (add_ass) {
+                ss << "<|im_assistant|>assistant<|im_middle|>";
+            }
         }
     } else {
         // template not supported
