@@ -70,12 +70,10 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     if (GGML_OPENMP)
         find_package(OpenMP)
         if (OpenMP_FOUND)
-            set(GGML_OPENMP_ENABLED "ON" CACHE INTERNAL "")
             target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_OPENMP)
 
             target_link_libraries(${GGML_CPU_NAME} PRIVATE OpenMP::OpenMP_C OpenMP::OpenMP_CXX)
         else()
-            set(GGML_OPENMP_ENABLED "OFF" CACHE INTERNAL "")
             message(WARNING "OpenMP not found")
         endif()
     endif()
@@ -458,9 +456,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             list(APPEND ARCH_FLAGS -march=z16)
         elseif (${S390X_M} MATCHES "9175|9176")
             # NOTE: Only available from GCC 15.1.0 onwards. Any z17 machine with compile issues must first verify their GCC version.
-            #       binutils must also be updated to the latest for the -march=z17 flag to work. Otherwise, use -march=arch15.
             message(STATUS "z17 target")
-            list(APPEND ARCH_FLAGS -march=arch15)
+            list(APPEND ARCH_FLAGS -march=z17)
         else()
             message(STATUS "Unknown target")
             message(WARNING "Unknown target. If you are compiling for z14 and earlier, you might have to add -DGGML_VXE=OFF.")
@@ -489,7 +486,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_REPACK)
     endif()
 
-    if (GGML_CPU_KLEIDIAI)
+    if (GGML_CPU_KLEIDIAI AND GGML_CPU_AARCH64 AND (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64"))
         message(STATUS "Using KleidiAI optimized kernels if applicable")
 
         # Disable the KleidiAI tests
@@ -497,18 +494,18 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_COMMIT_TAG "v1.11.0")
-        set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/archive/refs/tags/${KLEIDIAI_COMMIT_TAG}.tar.gz")
-        set(KLEIDIAI_ARCHIVE_MD5  "3fe9e5ab964c375c53839296eb71eaa2")
+        set(KLEIDIAI_COMMIT_TAG "v1.9.0")
+        set(KLEIDIAI_DOWNLOAD_URL "https://git.gitlab.arm.com/kleidi/kleidiai/-/archive/${KLEIDIAI_COMMIT_TAG}/kleidiai-${KLEIDIAI_COMMIT_TAG}.tar.gz")
+        set(KLEIDIAI_ARCHIVE_MD5  "e4c9fcb5de397ba3532d593672d56e95")
 
         if (POLICY CMP0135)
             cmake_policy(SET CMP0135 NEW)
         endif()
 
         FetchContent_Declare(KleidiAI_Download
-            URL ${KLEIDIAI_DOWNLOAD_URL}
-            DOWNLOAD_EXTRACT_TIMESTAMP NEW
-            URL_HASH MD5=${KLEIDIAI_ARCHIVE_MD5})
+            GIT_REPOSITORY https://git.gitlab.arm.com/kleidi/kleidiai.git
+            GIT_TAG ${KLEIDIAI_COMMIT_TAG}
+            GIT_SHALLOW TRUE)
 
         FetchContent_MakeAvailable(KleidiAI_Download)
         FetchContent_GetProperties(KleidiAI_Download
