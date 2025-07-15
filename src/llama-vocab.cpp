@@ -1197,13 +1197,12 @@ private:
     const llm_tokenizer_rwkv & tokenizer;
 };
 
-
 struct llm_tokenizer_plamo2 : llm_tokenizer {
-    llm_tokenizer_plamo2(const llama_vocab & /*vocab*/) {}
-};
+    llm_tokenizer_plamo2(const llama_vocab & vocab) {
+        build(vocab);
+    }
 
-struct llm_tokenizer_plamo2_session {
-    llm_tokenizer_plamo2_session(const llama_vocab & vocab) {
+    void build(const llama_vocab & vocab) {
         // Reset internal structures
         tokens_.clear();
         bytes_.assign(256, 0);
@@ -1337,7 +1336,7 @@ struct llm_tokenizer_plamo2_session {
         }
     }
 
-    std::vector<llama_token> encode(const std::string & text) {
+    std::vector<llama_token> encode(const std::string & text) const {
         std::vector<uint32_t> unicode_data = unicode_cpts_from_utf8(text);
         // Skip the first code point if it is a BOM (Byte Order Mark)
         if (!unicode_data.empty() && unicode_data[0] == 0xFEFF) {
@@ -1434,12 +1433,6 @@ struct llm_tokenizer_plamo2_session {
 
         return token_ids;
     }
-
-    void tokenize(const std::string & text, std::vector<llama_token> & output) {
-        std::vector<llama_token> tokens = encode(text);
-        output.insert(output.end(), tokens.begin(), tokens.end());
-    }
-
 private:
     // Constants for table structure
     static constexpr int32_t TABLE_PIECE_LENGTH = 0;
@@ -1468,6 +1461,18 @@ private:
     // Flattened table representing the Trie structure
     // Each row contains: [piece_length, token_id, score, piece_id]
     std::vector<std::vector<int32_t>> table_;
+};
+
+struct llm_tokenizer_plamo2_session {
+    llm_tokenizer_plamo2_session(const llm_tokenizer_plamo2 & tokenizer) : tokenizer(tokenizer) {}
+
+    void tokenize(const std::string & text, std::vector<llama_token> & output) {
+        std::vector<llama_token> tokens = tokenizer.encode(text);
+        output.insert(output.end(), tokens.begin(), tokens.end());
+    }
+
+private:
+    const llm_tokenizer_plamo2 & tokenizer;
 };
 
 //
@@ -2866,7 +2871,7 @@ std::vector<llama_token> llama_vocab::impl::tokenize(
             } break;
         case LLAMA_VOCAB_TYPE_PLAMO2:
             {
-                llm_tokenizer_plamo2_session session(vocab);
+                llm_tokenizer_plamo2_session session(*static_cast<const llm_tokenizer_plamo2 *>(tokenizer.get()));
                 for (const auto & fragment : fragment_buffer) {
                     if (fragment.type == FRAGMENT_BUFFER_VARIANT_TYPE_RAW_TEXT) {
                         std::string text = fragment.raw_text.substr(fragment.offset, fragment.length);
