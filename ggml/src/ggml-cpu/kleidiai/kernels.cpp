@@ -22,6 +22,8 @@
 
 #include "kai_common.h"
 
+#include "simd-mappings.h"
+
 #include "kernels.h"
 
 #define NELEMS(x) sizeof(x) / sizeof(*x)
@@ -50,7 +52,7 @@ static void dequantize_row_qsi4c32pscalef16(
 
     for (size_t b = 0; b < num_blocks; ++b) {
         uint16_t scale_f16 = *((const uint16_t *)(block_ptr + row_in_group * num_bytes_multiplier));
-        float scale = ggml_fp16_to_fp32(scale_f16);
+        float scale = GGML_CPU_FP16_TO_FP32(scale_f16);
 
         const uint8_t *segment_ptr = block_ptr + nr_pack * num_bytes_multiplier;
         size_t num_segments = bl / kr;
@@ -94,7 +96,7 @@ static void dequantize_row_qsi4c32ps1s0scalef16(
 
     for (size_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         uint16_t scale_f16 = scales[row_in_group + block_idx * nr];
-        float scale = ggml_fp16_to_fp32(scale_f16);
+        float scale = GGML_CPU_FP16_TO_FP32(scale_f16);
 
         for (size_t bl4_idx = 0; bl4_idx < bl4; ++bl4_idx) {
             uint16_t q = qdata[(block_idx * bl4 + bl4_idx) * nr + row_in_group];
