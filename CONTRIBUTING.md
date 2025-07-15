@@ -9,7 +9,7 @@
 - Create separate PRs for each feature or fix. Avoid combining unrelated changes in a single PR
 - Consider allowing write access to your branch for faster reviews, as reviewers can push commits directly
 - If your PR becomes stale, don't hesitate to ping the maintainers in the comments
-- Hard forks of other people's original PRs are not allowed unless the hard fork PR with real breakthrough progress can be approved within a week
+- Opening a hard-forked PR of other people's original PRs are not allowed unless the opening hard-forked PR with real breakthrough progress can be approved within a week
 
 # Pull requests (for collaborators)
 
