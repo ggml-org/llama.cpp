@@ -240,11 +240,6 @@ for model in [*all_models, *pre_computed_hashes]:
     if tokt == TOKENIZER_TYPE.SPM or tokt == TOKENIZER_TYPE.UGM:
         continue
 
-    # Skip if the tokenizer folder does not exist or there are other download issues previously
-    if not os.path.exists(f"models/tokenizers/{name}"):
-        logger.warning(f"Directory for tokenizer {name} not found. Skipping...")
-        continue
-
     # create the tokenizer
     if chkhsh is not None:
         # if the model has a pre-computed hash, use it
@@ -254,6 +249,12 @@ for model in [*all_models, *pre_computed_hashes]:
         chkhsh = existing_models[name]
     else:
         # otherwise, compute the hash of the tokenizer
+
+        # Skip if the tokenizer folder does not exist or there are other download issues previously
+        if not os.path.exists(f"models/tokenizers/{name}"):
+            logger.warning(f"Directory for tokenizer {name} not found. Skipping...")
+            continue
+
         try:
             logger.info(f"Loading tokenizer from {f'models/tokenizers/{name}'}...")
             if name == "t5":
