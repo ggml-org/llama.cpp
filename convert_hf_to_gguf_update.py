@@ -232,7 +232,7 @@ for model in models:
 # generate the source code for the convert_hf_to_gguf.py:get_vocab_base_pre() function:
 
 src_ifs = ""
-for model in [*all_models, *pre_computed_hashes]:
+for model in [*pre_computed_hashes, *all_models]:
     name = model["name"]
     tokt = model["tokt"]
     chkhsh = model.get("chkhsh")
