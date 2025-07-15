@@ -3567,6 +3567,9 @@ class Plamo2Model(TextModel):
             token_id = tokens.index(tokenizer_config["unk_token"].encode("utf-8"))
             self.gguf_writer.add_unk_token_id(token_id)
 
+        # Add <|plamo:op|> as EOT to ensure appropriate end of generation
+        self.gguf_writer.add_eot_token_id(4)
+
         self.gguf_writer.add_add_space_prefix(False)
 
     def set_gguf_parameters(self):
