@@ -41,7 +41,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let src02_idx = dst2_idx / params.broadcast2; // src0 may also be broadcast along the second dimension
     let src12_idx = dst2_idx; // src1 is not broadcast
 
-    let dst2_rem = dst3_rem % dst2_stride; 
+    let dst2_rem = dst3_rem % dst2_stride;
 
     let row = dst2_rem / params.n; // output row
     let col = dst2_rem % params.n; // output column

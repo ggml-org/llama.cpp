@@ -7,7 +7,9 @@
 
 #include "ggml-wgsl-shaders.hpp"
 
+#include <cstring>
 #include <iostream>
+#include <mutex>
 #include <vector>
 
 #ifdef GGML_WEBGPU_DEBUG
@@ -131,7 +133,7 @@ static void ggml_webgpu_create_buffer(wgpu::Device &device, wgpu::Buffer &buffer
     buffer_desc.size = size;
     buffer_desc.usage = usage;
     buffer_desc.label = label;
-    buffer_desc.mappedAtCreation = false; 
+    buffer_desc.mappedAtCreation = false;
     // TODO: error handling
     buffer = device.CreateBuffer(&buffer_desc);
 }
@@ -161,7 +163,7 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_context ctx, wgpu::Buffer b
     uint32_t * params = (uint32_t *) ctx->memset_params_host_buf.GetMappedRange();
 
     params[0] = (uint32_t)offset;
-    params[1] = (uint32_t)size; 
+    params[1] = (uint32_t)size;
     params[2] = value;
     ctx->memset_params_host_buf.Unmap();
 
@@ -184,8 +186,8 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_context ctx, wgpu::Buffer b
 
     wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
     encoder.CopyBufferToBuffer(
-        ctx->memset_params_host_buf, 0, 
-        ctx->memset_params_dev_buf, 0, 
+        ctx->memset_params_host_buf, 0,
+        ctx->memset_params_dev_buf, 0,
         ctx->memset_params_dev_buf.GetSize()
     );
     wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
@@ -206,7 +208,7 @@ static void ggml_backend_webgpu_wait_on_submission(webgpu_context ctx) {
             if (status != wgpu::QueueWorkDoneStatus::Success) {
                 GGML_LOG_ERROR("ggml_webgpu: Failed to wait on queue: %s\n", message.data);
             }
-        }), 
+        }),
         UINT64_MAX
     );
 }
@@ -243,7 +245,7 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
             return false;
-        
+
         case GGML_OP_CPY: {
             std::lock_guard<std::mutex> lock(ctx->mutex);
             const ggml_tensor * src = node->src[0];
@@ -259,7 +261,7 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
             dst_offset &= ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
 
             wgpu::Device device = ctx->device;
-            ggml_backend_webgpu_map_buffer(ctx, ctx->cpy_params_host_buf, 
+            ggml_backend_webgpu_map_buffer(ctx, ctx->cpy_params_host_buf,
                 wgpu::MapMode::Write, 0, ctx->cpy_params_host_buf.GetSize());
             uint32_t * params = (uint32_t *) ctx->cpy_params_host_buf.GetMappedRange();
             uint32_t ne = (uint32_t)ggml_nelements(node);
@@ -309,8 +311,8 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
 
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
             encoder.CopyBufferToBuffer(
-                ctx->cpy_params_host_buf, 0, 
-                ctx->cpy_params_dev_buf, 0, 
+                ctx->cpy_params_host_buf, 0,
+                ctx->cpy_params_dev_buf, 0,
                 ctx->cpy_params_dev_buf.GetSize()
             );
             wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
@@ -343,7 +345,7 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
             wgpu::Device device = ctx->device;
 
             // map the host parameters buffer
-            ggml_backend_webgpu_map_buffer(ctx, ctx->mul_mat_params_host_buf, 
+            ggml_backend_webgpu_map_buffer(ctx, ctx->mul_mat_params_host_buf,
                 wgpu::MapMode::Write, 0, ctx->mul_mat_params_host_buf.GetSize());
             uint32_t * params = (uint32_t *) ctx->mul_mat_params_host_buf.GetMappedRange();
 
@@ -371,7 +373,7 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
             entries[0].offset = src0_offset;
             entries[0].size = ggml_nbytes(src0);
 
-            entries[1].binding = 1; 
+            entries[1].binding = 1;
             entries[1].buffer = src1_ctx->buffer;
             entries[1].offset = src1_offset;
             entries[1].size = ggml_nbytes(src1);
@@ -395,8 +397,8 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
 
             wgpu::CommandEncoder encoder = device.CreateCommandEncoder();
             encoder.CopyBufferToBuffer(
-                ctx->mul_mat_params_host_buf, 0, 
-                ctx->mul_mat_params_dev_buf, 0, 
+                ctx->mul_mat_params_host_buf, 0,
+                ctx->mul_mat_params_dev_buf, 0,
                 ctx->mul_mat_params_dev_buf.GetSize()
             );
             wgpu::ComputePassEncoder pass = encoder.BeginComputePass();
@@ -417,7 +419,7 @@ static bool ggml_webgpu_encode_node(webgpu_context ctx, ggml_tensor * node){
             return false;
     }
 }
- 
+
 static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_graph_compute(" << cgraph->n_nodes << " nodes)");
 
@@ -517,13 +519,13 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer, 
 
     std::lock_guard<std::mutex> lock(webgpu_ctx->mutex);
 
-    if (webgpu_ctx->get_tensor_staging_buf == nullptr || 
+    if (webgpu_ctx->get_tensor_staging_buf == nullptr ||
         webgpu_ctx->get_tensor_staging_buf.GetSize() < final_size) {
         // Create a new staging buffer if it doesn't exist or is too small
         if (webgpu_ctx->get_tensor_staging_buf) {
             webgpu_ctx->get_tensor_staging_buf.Destroy();
         }
-        ggml_webgpu_create_buffer(device, webgpu_ctx->get_tensor_staging_buf, final_size, 
+        ggml_webgpu_create_buffer(device, webgpu_ctx->get_tensor_staging_buf, final_size,
             wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead, "get_tensor_staging_buf");
     }
 
@@ -577,7 +579,7 @@ static ggml_backend_buffer_t ggml_backend_webgpu_buffer_type_alloc_buffer(ggml_b
     ggml_backend_webgpu_device_context * ctx = static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
 
     wgpu::Buffer buf;
-    ggml_webgpu_create_buffer(ctx->webgpu_ctx->device, buf, size, 
+    ggml_webgpu_create_buffer(ctx->webgpu_ctx->device, buf, size,
         wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst, "allocated_buffer");
 
     ggml_backend_webgpu_buffer_context * buf_ctx = new ggml_backend_webgpu_buffer_context(ctx->webgpu_ctx, buf);
@@ -652,7 +654,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context webgpu_ctx) {
     constants[1].key = "bytes_per_thread";
     constants[1].value = webgpu_ctx->memset_bytes_per_thread;
     ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->memset_pipeline, wgsl_memset, "memset", constants);
-    ggml_webgpu_create_buffer(webgpu_ctx->device, webgpu_ctx->memset_params_dev_buf, 
+    ggml_webgpu_create_buffer(webgpu_ctx->device, webgpu_ctx->memset_params_dev_buf,
         3 * sizeof(uint32_t), // 3 parameters: buffer size, offset, value
         wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst, "memset_params_dev_buf");
     ggml_webgpu_create_buffer(webgpu_ctx->device, webgpu_ctx->memset_params_host_buf,
@@ -679,7 +681,7 @@ static void ggml_webgpu_init_cpy_pipeline(webgpu_context webgpu_ctx) {
         wgpu::BufferUsage::MapWrite | wgpu::BufferUsage::CopySrc, "cpy_params_host_buf");
 }
 
-// TODO: Does this need to be thread safe? Is it only called once?
+// TODO: Make thread safe if multiple devices are used
 static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, const char * params) {
     GGML_UNUSED(params);
 
@@ -696,7 +698,7 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
         dev_desc.requiredLimits = &webgpu_ctx->limits;
         dev_desc.requiredFeatures = webgpu_ctx->features.features;
         dev_desc.requiredFeatureCount = webgpu_ctx->features.featureCount;
-        dev_desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous, 
+        dev_desc.SetDeviceLostCallback(wgpu::CallbackMode::AllowSpontaneous,
             [](const wgpu::Device& device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
                 GGML_UNUSED(device);
                 GGML_LOG_ERROR("ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
@@ -847,7 +849,7 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     device_ctx.device_name = std::string(info.device.data);
     device_ctx.device_desc = std::string(info.description.data);
 
-    GGML_LOG_INFO("ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | device_desc: %s\n", 
+    GGML_LOG_INFO("ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | device_desc: %s\n",
         info.vendorID, info.vendor.data, info.architecture.data, info.deviceID, info.device.data, info.description.data);
 
     // See GGML Backend Device Interface section

@@ -1,12 +1,15 @@
 import os
 import argparse
 
+
 def escape_triple_quotes(wgsl):
     # Simple defense in case of embedded """
     return wgsl.replace('"""', '\\"""')
 
+
 def to_cpp_string_literal(varname, content):
     return f'const char* wgsl_{varname} = R"({content})";\n'
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -26,6 +29,7 @@ def main():
             content = escape_triple_quotes(content)
             out.write(to_cpp_string_literal(varname, content))
             out.write('\n')
+
 
 if __name__ == '__main__':
     main()
