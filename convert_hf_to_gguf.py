@@ -3557,6 +3557,15 @@ class Plamo2Model(TextModel):
                         else:
                             toktypes.append(gguf.TokenType.NORMAL)
 
+        vocab_size = self.hparams["vocab_size"]
+        if vocab_size > len(tokens):
+            pad_count = vocab_size - len(tokens)
+            logger.debug(f"Padding vocab with {pad_count} token(s) - [PAD1] through [PAD{pad_count}]")
+            for i in range(1, pad_count + 1):
+                tokens.append(bytes(f"[PAD{i}]", encoding="utf-8"))
+                scores.append(-1000.0)
+                toktypes.append(gguf.TokenType.UNUSED)
+
         # Use "plamo2" tokenizer type for PLaMo-2's custom Aho-Corasick tokenizer
         self.gguf_writer.add_tokenizer_model("plamo2")
         self.gguf_writer.add_tokenizer_pre("default")
