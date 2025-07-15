@@ -6414,18 +6414,6 @@ class Exaone4Model(TextModel):
         hparams = self.hparams
         self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
-        self.gguf_writer.add_context_length(hparams.get("max_position_embeddings", 131072))
-        self.gguf_writer.add_embedding_length(hparams["hidden_size"])
-        self.gguf_writer.add_feed_forward_length(hparams.get("intermediate_size", 4 * hparams["hidden_size"]))
-        self.gguf_writer.add_block_count(hparams["num_hidden_layers"])
-        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
-        self.gguf_writer.add_head_count_kv(hparams.get("num_key_value_heads", hparams["num_attention_heads"]))
-        self.gguf_writer.add_layer_norm_rms_eps(hparams.get("layer_norm_epsilon", 1e-5))
-        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10_000.0))
-        self.gguf_writer.add_key_length(hparams["head_dim"])
-        self.gguf_writer.add_value_length(hparams["head_dim"])
-        self.gguf_writer.add_file_type(self.ftype)
-
         if hparams.get("sliding_window") is not None:
             self.gguf_writer.add_sliding_window(hparams["sliding_window"])
             if "layer_types" in hparams:
