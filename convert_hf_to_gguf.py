@@ -5569,7 +5569,7 @@ class DeepseekV2Model(TextModel):
         try:
             self._set_vocab_gpt2()
             return
-        except:
+        except Exception:
             pass
 
         from transformers import AutoTokenizer
