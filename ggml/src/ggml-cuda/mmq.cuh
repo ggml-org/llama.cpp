@@ -90,7 +90,7 @@ struct tile_x_sizes {
 };
 
 static int get_mmq_x_max_host(const int cc) {
-    return amd_mma_available(cc) ? 64 : new_mma_available(cc) ? 128 :
+    return (amd_mma_available(cc) || new_mma_available(cc)) ? 128 :
         GGML_CUDA_CC_IS_NVIDIA(cc) && ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_VOLTA ?
 #ifdef GGML_CUDA_FORCE_MMQ
             128                     : 64;
@@ -100,12 +100,9 @@ static int get_mmq_x_max_host(const int cc) {
 }
 
 static constexpr __device__ int get_mmq_x_max_device() {
-#if defined(AMD_MMA_AVAILABLE)
-    return 64;
-#else
-#if defined(NEW_MMA_AVAILABLE)
+#if defined(AMD_MMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE)
     return 128;
-#else // defined(NEW_MMA_AVAILABLE)
+#else // defined(AMD_MMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE)
 
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
     return 64;
@@ -122,8 +119,7 @@ static constexpr __device__ int get_mmq_x_max_device() {
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_VOLTA
 
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
-#endif // defined(NEW_MMA_AVAILABLE)
-#endif // defined(AMD_MMA_AVAILABLE)
+#endif // defined(AMD_MMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE)
 }
 
 static int get_mmq_y_host(const int cc) {
@@ -1666,37 +1662,35 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
         int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/4;
 
-        if (i < mmq_y) {
-            if (need_check) {
-                i = min(i, i_max);
-            }
+        if (need_check) {
+            i = min(i, i_max);
+        }
 
-            const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
+        const block_q3_K * bxi = (const block_q3_K *) x + kbx0 + i*stride;
 
-            const int ksc = threadIdx.x % 4;
+        const int ksc = threadIdx.x % 4;
 
-            const int ksc_low = ksc % (QI3_K/8);
-            const int shift_low = 4 * (ksc / (QI3_K/8));
-            const int sc_low = (get_int_b2(bxi->scales, ksc_low) >> shift_low) & 0x0F0F0F0F;
+        const int ksc_low = ksc % (QI3_K/8);
+        const int shift_low = 4 * (ksc / (QI3_K/8));
+        const int sc_low = (get_int_b2(bxi->scales, ksc_low) >> shift_low) & 0x0F0F0F0F;
 
-            const int ksc_high = QI3_K/8;
-            const int shift_high = 2 * ksc;
-            const int sc_high = ((get_int_b2(bxi->scales, ksc_high) >> shift_high) << 4) & 0x30303030;
+        const int ksc_high = QI3_K/8;
+        const int shift_high = 2 * ksc;
+        const int sc_high = ((get_int_b2(bxi->scales, ksc_high) >> shift_high) << 4) & 0x30303030;
 
-            const int sc = __vsubss4(sc_low | sc_high, 0x20202020);
+        const int sc = __vsubss4(sc_low | sc_high, 0x20202020);
 
 #if defined(AMD_MMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE)
-            const int8_t * sc8 = (const int8_t *) &sc;
-            const float d = bxi->d;
+        const int8_t * sc8 = (const int8_t *) &sc;
+        const float d = bxi->d;
 
 #pragma unroll
-            for (int l = 0; l < int(sizeof(int)); ++l) {
-                x_df[i*MMQ_MMA_TILE_X_K_Q3_K + sizeof(int)*ksc + l] = d*sc8[l];
-            }
-#else
-            x_sc[i*4 + i/8 + ksc] = sc;
-#endif // NEW_MMA_AVAILABLE
+        for (int l = 0; l < int(sizeof(int)); ++l) {
+            x_df[i*MMQ_MMA_TILE_X_K_Q3_K + sizeof(int)*ksc + l] = d*sc8[l];
         }
+#else
+        x_sc[i*4 + i/8 + ksc] = sc;
+#endif // NEW_MMA_AVAILABLE
     }
 
 #if !(defined(AMD_MMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE))
@@ -1802,9 +1796,15 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     constexpr int rows_per_warp = warp_size / 2;
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
+#if defined(AMD_MMA_AVAILABLE)
+        // Need if on AMD instead of % because warp_size == 64
+        // This causes double work and throughput loss (MI300X)
+        // H100 loses about 100 t/s with 'if' condition over '%'
         int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/2;
-
         if (i < mmq_y) {
+#else
+        int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % mmq_y;
+#endif // defined(AMD_MMA_AVAILABLE)
             if (need_check) {
                 i = min(i, i_max);
             }
@@ -1826,7 +1826,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             for (int l = 0; l < sizeof(int); ++l) {
                 x_dm[i*MMQ_MMA_TILE_X_K_Q8_1 + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
             }
+#if defined(AMD_MMA_AVAILABLE)
         }
+#endif // defined(AMD_MMA_AVAILABLE)
     }
 #else
 #pragma unroll
@@ -1951,9 +1953,15 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     constexpr int rows_per_warp = warp_size / 2;
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
+#if defined(AMD_MMA_AVAILABLE)
+        // Need if on AMD instead of % because warp_size == 64
+        // This causes double work and throughput loss (MI300X)
+        // H100 loses about 100 t/s with 'if' condition over '%'
         int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/2;
-
         if (i < mmq_y) {
+#else
+        int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/2) % mmq_y;
+#endif // defined(AMD_MMA_AVAILABLE)
             if (need_check) {
                 i = min(i, i_max);
             }
@@ -1975,7 +1983,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
             for (int l = 0; l < int(sizeof(int)); ++l) {
                 x_dm[i*MMQ_MMA_TILE_X_K_Q8_1 + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
             }
+#if defined(AMD_MMA_AVAILABLE)
         }
+#endif // defined(AMD_MMA_AVAILABLE)
     }
 #else
 #pragma unroll
@@ -2117,21 +2127,19 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     constexpr int rows_per_warp = warp_size / 4;
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps*rows_per_warp) {
-        int i = i0 + threadIdx.y*rows_per_warp + threadIdx.x/4;
+        int i = (i0 + threadIdx.y*rows_per_warp + threadIdx.x/4) % mmq_y;
 
-        if (i < mmq_y) {
-            if (need_check) {
-                i = min(i, i_max);
-            }
+        if (need_check) {
+            i = min(i, i_max);
+        }
 
-            const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride + (threadIdx.x % 4) / 4;
+        const block_q6_K * bxi = (const block_q6_K *) x + kbx0 + i*stride + (threadIdx.x % 4) / 4;
 
 #if defined(AMD_MMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE)
-            x_sc[i*MMQ_MMA_TILE_X_K_Q6_K + threadIdx.x%4] = get_int_b2(bxi->scales, threadIdx.x%4);
+        x_sc[i*MMQ_MMA_TILE_X_K_Q6_K + threadIdx.x%4] = get_int_b2(bxi->scales, threadIdx.x%4);
 #else
-            x_sc[i*4 + i/8 + threadIdx.x%4]               = get_int_b2(bxi->scales, threadIdx.x%4);
+        x_sc[i*4 + i/8 + threadIdx.x%4]               = get_int_b2(bxi->scales, threadIdx.x%4);
 #endif // NEW_MMA_AVAILABLE
-        }
     }
 }
 
@@ -3096,7 +3104,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             const int * by0 = y + ncols_y*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + 0*sizeof(block_q8_1_mmq)/sizeof(int));
 #pragma unroll
             for (int l0 = 0; l0 < mmq_x*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
-                int l = (l0 + threadIdx.y*warp_size + threadIdx.x) % (mmq_x*MMQ_TILE_Y_K);
+                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
 
                 tile_y[l] = by0[l];
             }
@@ -3112,7 +3120,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
             const int * by0 = y + ncols_y*(kb0*(qk*sizeof(block_q8_1_mmq) / (4*QK8_1*sizeof(int))) + 1*sizeof(block_q8_1_mmq)/sizeof(int));
 #pragma unroll
             for (int l0 = 0; l0 < mmq_x*MMQ_TILE_Y_K; l0 += nwarps*warp_size) {
-                int l = (l0 + threadIdx.y*warp_size + threadIdx.x) % (mmq_x*MMQ_TILE_Y_K);
+                int l = l0 + threadIdx.y*warp_size + threadIdx.x;
 
                 tile_y[l] = by0[l];
             }
@@ -3186,7 +3194,7 @@ static __global__ void mul_mat_q(
     __syncthreads();
 
     // On AMD or old CUDA the performance with stream-k was worse, use conventional tiling instead:
-#if (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__) && !defined(AMD_MMA_AVAILABLE)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
+#if (defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__) && !defined(CDNA3)) || __CUDA_ARCH__ < GGML_CUDA_CC_VOLTA
     {
         const int wt = blockIdx.z / nchannels_y;
         const int zt = blockIdx.z - wt*nchannels_y;
