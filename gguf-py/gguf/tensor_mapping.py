@@ -1302,7 +1302,6 @@ class TensorNameMap:
             "model.vision_model.post_layernorm", # SmolVLM
             "vision_model.layernorm_post", # llama4
             "visual.merger.ln_q", # qwen2vl
-            "model.vision.linear_proj.norm1", # cogvlm
         ),
 
         MODEL_TENSOR.V_MM_INP_PROJ: (
@@ -1311,6 +1310,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_INP_NORM: (
             "multi_modal_projector.norm",
+            "model.vision.linear_proj.norm1", # cogvlm
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
