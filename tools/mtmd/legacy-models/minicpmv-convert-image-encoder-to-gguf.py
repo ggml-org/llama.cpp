@@ -497,8 +497,8 @@ ap.add_argument("--projector-type", help="Type of projector. Possible values: ml
 ap.add_argument("-o", "--output-dir", help="Directory to save GGUF files. Default is the original model directory", default=None)
 # Example --image_mean 0.48145466 0.4578275 0.40821073 --image_std 0.26862954 0.26130258 0.27577711
 # Example --image_mean 0.5 0.5 0.5 --image_std 0.5 0.5 0.5
-default_image_mean = [0.48145466, 0.4578275, 0.40821073]
-default_image_std = [0.26862954, 0.26130258, 0.27577711]
+default_image_mean = [0.5, 0.5, 0.5]
+default_image_std = [0.5, 0.5, 0.5]
 ap.add_argument('--image-mean', type=float, nargs='+', help='Mean of the images for normalization (overrides processor) ', default=None)
 ap.add_argument('--image-std', type=float, nargs='+', help='Standard deviation of the images for normalization (overrides processor)', default=None)
 ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4', default=2)
