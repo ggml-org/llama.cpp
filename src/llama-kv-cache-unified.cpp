@@ -68,8 +68,6 @@ llama_kv_cache_unified::llama_kv_cache_unified(
 
     cells.resize(kv_size);
 
-    gf_res.reset(new llm_graph_result(32768)); // note: the max nodes will be updated later
-
     for (uint32_t il = 0; il < n_layer_cache; il++) {
         if (filter && !filter(il)) {
             LLAMA_LOG_DEBUG("%s: layer %3d: skipped\n", __func__, il);
@@ -471,6 +469,10 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
 
     auto * sched = lctx->get_sched();
 
+    if (!gf_res || gf_res->get_max_nodes() != lctx->graph_max_nodes()) {
+        gf_res.reset(new llm_graph_result(lctx->graph_max_nodes()));
+    }
+
     if (do_shift) {
         if (!get_can_shift()) {
             GGML_ABORT("The current KV cache / model configuration does not support K-shift");
@@ -484,7 +486,6 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
 
             auto * res = gf_res.get();
 
-            res->set_max_nodes(lctx->graph_max_nodes());
             res->reset();
 
             auto * gf = build_graph_shift(res, lctx);
@@ -531,7 +532,6 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
 
         auto * res = gf_res.get();
 
-        res->set_max_nodes(lctx->graph_max_nodes());
         res->reset();
 
         auto * gf = build_graph_defrag(res, lctx, dinfo);

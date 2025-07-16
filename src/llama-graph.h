@@ -478,8 +478,8 @@ public:
     ggml_cgraph  * get_gf()  override { return gf; }
     ggml_context * get_ctx() override { return ctx_compute.get(); }
 
-    void set_max_nodes(int64_t max_nodes) {
-        this->max_nodes = max_nodes;
+    int64_t get_max_nodes() const {
+        return max_nodes;
     }
 
     void reset() override {
