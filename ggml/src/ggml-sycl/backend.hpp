@@ -30,6 +30,7 @@
 #include "outprod.hpp"
 #include "quants.hpp"
 #include "rope.hpp"
+#include "set_rows.hpp"
 #include "softmax.hpp"
 #include "tsembd.hpp"
 #include "wkv.hpp"
