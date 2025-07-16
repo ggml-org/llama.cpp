@@ -98,11 +98,20 @@ llama_context::llama_context(
         LLAMA_LOG_WARN("%s: n_batch is less than GGML_KQ_MASK_PAD - increasing to %d\n", __func__, GGML_KQ_MASK_PAD);
         cparams.n_batch = GGML_KQ_MASK_PAD;
     }
-
     cparams.n_ubatch = std::min(cparams.n_batch, params.n_ubatch == 0 ? params.n_batch : params.n_ubatch);
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+
+    {
+        const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
+        const bool supports_set_rows = LLAMA_SET_ROWS ? atoi(LLAMA_SET_ROWS) : 0;
+
+        if (!supports_set_rows && !cparams.kv_unified) {
+            LLAMA_LOG_WARN("%s: non-unified KV cache requires ggml_set_rows() - forcing unified KV cache\n", __func__);
+            cparams.kv_unified = true;
+        }
+    }
 
     const uint32_t n_ctx_per_seq = cparams.n_ctx / cparams.n_seq_max;
 
@@ -2195,7 +2204,7 @@ llama_context_params llama_context_default_params() {
         /*.no_perf                     =*/ true,
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
-        /*.kv_unified                  =*/ true,
+        /*.kv_unified                  =*/ false,
     };
 
     return result;
