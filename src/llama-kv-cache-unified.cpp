@@ -469,10 +469,6 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
 
     auto * sched = lctx->get_sched();
 
-    if (!gf_res || gf_res->get_max_nodes() != lctx->graph_max_nodes()) {
-        gf_res.reset(new llm_graph_result(lctx->graph_max_nodes()));
-    }
-
     if (do_shift) {
         if (!get_can_shift()) {
             GGML_ABORT("The current KV cache / model configuration does not support K-shift");
@@ -484,7 +480,7 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
         if (hparams.rope_type != LLAMA_ROPE_TYPE_NONE) {
             ggml_backend_sched_reset(sched);
 
-            auto * res = gf_res.get();
+            auto * res = lctx->get_gf_res_reserve();
 
             res->reset();
 
@@ -530,7 +526,7 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
 
         ggml_backend_sched_reset(sched);
 
-        auto * res = gf_res.get();
+        auto * res = lctx->get_gf_res_reserve();
 
         res->reset();
 

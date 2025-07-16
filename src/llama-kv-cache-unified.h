@@ -203,8 +203,6 @@ private:
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;
 
-    std::unique_ptr<llm_graph_result> gf_res;
-
     llama_kv_cells_unified cells;
 
     std::vector<kv_layer> layers;
