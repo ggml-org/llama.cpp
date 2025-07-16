@@ -2518,6 +2518,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
                     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    output_b    = create_tensor(tn(LLM_TENSOR_OUTPUT,      "bias"),   {n_vocab}, TENSOR_NOT_REQUIRED);
                     // if output is NULL, init from the input tok embed
                     if (output == NULL) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
@@ -7170,6 +7171,10 @@ struct llm_build_qwen2 : public llm_graph_context {
 
         // lm_head
         cur = build_lora_mm(model.output, cur);
+
+        if (model.output_b != nullptr) {
+            cur = ggml_add(ctx0, cur, model.output_b);
+        }
 
         cb(cur, "result_output", -1);
         res->t_logits = cur;
