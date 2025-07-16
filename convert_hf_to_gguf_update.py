@@ -7,7 +7,6 @@ import pathlib
 import re
 
 import requests
-import sys
 import json
 import shutil
 import argparse
@@ -249,10 +248,9 @@ for model in [*pre_computed_hashes, *all_models]:
     else:
         # otherwise, compute the hash of the tokenizer
 
-        # Skip if the tokenizer folder does not exist or there are other download issues previously
-        if not os.path.exists(f"models/tokenizers/{name}"):
-            logger.warning(f"Directory for tokenizer {name} not found. Skipping...")
-            continue
+        # Fail if the tokenizer folder with config does not exist or there are other download issues previously
+        if not os.path.isfile(f"models/tokenizers/{name}/tokenizer_config.json"):
+            raise OSError(f"Config for tokenizer {name} not found. The model may not exist or is not accessible with the provided token.")
 
         try:
             logger.info(f"Loading tokenizer from {f'models/tokenizers/{name}'}...")
@@ -260,9 +258,8 @@ for model in [*pre_computed_hashes, *all_models]:
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
             else:
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
-        except OSError as e:
-            logger.error(f"Error loading tokenizer for model {name}. The model may not exist or is not accessible with the provided token. Error: {e}")
-            continue  # Skip to the next model if the tokenizer can't be loaded
+        except Exception as e:
+            raise OSError(f"Error loading tokenizer for model {name}.") from e
 
         chktok = tokenizer.encode(CHK_TXT)
         chkhsh = sha256(str(chktok).encode()).hexdigest()
