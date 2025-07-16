@@ -69,8 +69,7 @@ args = parser.parse_args()
 hf_token = args.hf_token if args.hf_token is not None else hf_token
 
 if hf_token is None:
-    logger.error("HF token is required. Please provide it as an argument or set it in ~/.cache/huggingface/token")
-    sys.exit(1)
+    logger.warning("HF token not found. You can provide it as an argument or set it in ~/.cache/huggingface/token")
 
 # TODO: this string has to exercise as much pre-tokenizer functionality as possible
 #       will be updated with time - contributions welcome
@@ -151,7 +150,7 @@ pre_computed_hashes = [
 
 
 def download_file_with_auth(url, token, save_path):
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}"} if token else None
     response = sess.get(url, headers=headers)
     response.raise_for_status()
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
