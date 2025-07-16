@@ -70,6 +70,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
+                  libc6-dev-riscv64-cross \
                   gcc-14-riscv64-linux-gnu \
                   g++-14-riscv64-linux-gnu \
                   libvulkan-dev:riscv64
@@ -117,6 +118,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
+                  libc6-dev-arm64-cross \
                   crossbuild-essential-arm64 \
                   libvulkan-dev:arm64
 
@@ -207,6 +209,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   glslc \
+                  libc6-dev-ppc64el-cross \
                   gcc-14-powerpc64le-linux-gnu \
                   g++-14-powerpc64le-linux-gnu \
                   libvulkan-dev:ppc64el
