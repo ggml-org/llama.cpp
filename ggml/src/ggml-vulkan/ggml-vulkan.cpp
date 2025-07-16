@@ -3039,7 +3039,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     uint32_t conv2d_BS_K = 128;
     uint32_t conv2d_BS_CRS = 16;
     uint32_t use_collectives = 0;   // Enables subgroup ops for preventing the re-calculation of indices.
-    if(device->subgroup_shuffle){
+    if(device->subgroup_shuffle && device->vendor_id != VK_VENDOR_ID_INTEL){   // Do not enable collectives on Intel, see PR 14316
         use_collectives = 1;
         conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS); // CRS block size should be capped at sugroup size for correctness when shuffle is used.
     }
@@ -3048,7 +3048,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     uint32_t conv2d_shmem_req = (conv2d_BS_K*(conv2d_BS_CRS+1) + conv2d_BS_CRS*(conv2d_BS_NPQ+1))*sizeof(float);
     if(device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req){
         conv2d_BS_CRS = 8;
-        if(device->subgroup_shuffle){
+        if(use_collectives){
             conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
         }
     }
@@ -10816,19 +10816,19 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
             return true;
         case GGML_OP_CONV_TRANSPOSE_1D:
             return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
-        case GGML_OP_CONV_2D: 
+        case GGML_OP_CONV_2D:
             {
-                // Op is disabled for Intel
+                // Op is disabled for Apple because it segfaults at pipeline create time on MoltenVK
                 ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
-                const vk_device& device = ggml_vk_get_device(ctx->device);            
-                bool is_Intel = ggml_vk_get_device(ctx->device)->vendor_id == VK_VENDOR_ID_INTEL;
+                const vk_device& device = ggml_vk_get_device(ctx->device);
+                bool is_Apple = ggml_vk_get_device(ctx->device)->vendor_id == VK_VENDOR_ID_APPLE;
                 // Channel-contiguous format is not supported yet.
                 return (op->src[0]->type == GGML_TYPE_F32 &&
                     op->src[1]->type == GGML_TYPE_F32 &&
                     op->type == GGML_TYPE_F32 &&
                     ggml_is_contiguous(op->src[0]) &&
                     ggml_is_contiguous(op->src[1]) &&
-                    ggml_is_contiguous(op)) && !is_Intel;
+                    ggml_is_contiguous(op)) && !is_Apple;
             }
         default:
             return false;
