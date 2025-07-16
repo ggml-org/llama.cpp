@@ -127,6 +127,9 @@ struct common_chat_templates_inputs {
     bool enable_thinking = true;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
     std::map<std::string, std::string> chat_template_kwargs;
+
+    //If true, the jinja won't concat content parts into single part. That's useful for media parts
+    bool no_part_concat = false;
 };
 
 struct common_chat_params {

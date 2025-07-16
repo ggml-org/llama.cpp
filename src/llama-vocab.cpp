@@ -1265,6 +1265,8 @@ struct llama_vocab::impl {
     llama_token special_fim_pad_id = LLAMA_TOKEN_NULL;
     llama_token special_fim_rep_id = LLAMA_TOKEN_NULL; // repo
     llama_token special_fim_sep_id = LLAMA_TOKEN_NULL; // file separator
+    llama_token special_image_id = LLAMA_TOKEN_NULL;
+    llama_token special_audio_id = LLAMA_TOKEN_NULL;
 
     // tokenizer flags
     bool add_space_prefix           = false;
@@ -1695,6 +1697,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         ml.get_key(LLM_KV_TOKENIZER_REMOVE_EXTRA_WS, remove_extra_whitespaces, false);
     }
 
+    const int image_idx = gguf_find_key(ctx,kv(LLM_KV_TOKENIZER_IMAGE_ID).c_str());
+    if (image_idx != -1) {
+        special_image_id=gguf_get_val_u32(ctx,image_idx);
+    }
+    const int audio_idx = gguf_find_key(ctx,kv(LLM_KV_TOKENIZER_AUDIO_ID).c_str());
+    if (audio_idx != -1) {
+        special_audio_id=gguf_get_val_u32(ctx,audio_idx);
+    }
     const int token_idx = gguf_find_key(ctx, kv(LLM_KV_TOKENIZER_LIST).c_str());
     if (token_idx == -1) {
         throw std::runtime_error("cannot find tokenizer vocab in model file\n");
@@ -1729,6 +1739,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
         token_data.text  = std::move(word);
         token_data.score = scores ? scores[i] : 0.0f;
         token_data.attr  = LLAMA_TOKEN_ATTR_NORMAL;
+
 
         if (toktypes) {  //TODO: remove, required until per token attributes are available from GGUF file
             switch(toktypes[i]) {
@@ -1790,6 +1801,8 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             { LLM_KV_TOKENIZER_FIM_PAD_ID, special_fim_pad_id },
             { LLM_KV_TOKENIZER_FIM_REP_ID, special_fim_rep_id },
             { LLM_KV_TOKENIZER_FIM_SEP_ID, special_fim_sep_id },
+            { LLM_KV_TOKENIZER_IMAGE_ID, special_image_id },
+            { LLM_KV_TOKENIZER_AUDIO_ID, special_audio_id },
 
             // deprecated
             { LLM_KV_TOKENIZER_PREFIX_ID, special_fim_pre_id },
@@ -1865,6 +1878,16 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                                 __func__, t.second, t.first.c_str());
                         id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_CONTROL;
                     }
+                }
+            }
+            if (special_image_id==LLAMA_TOKEN_NULL) {
+                if (t.first=="<|IMAGE|>" || t.first=="<IMAGE>") {
+                    special_image_id=t.second;
+                }
+            }
+            if (special_audio_id==LLAMA_TOKEN_NULL) {
+                if (t.first=="<|AUDIO|>" || t.first=="<AUDIO>") {
+                    special_audio_id=t.second;
                 }
             }
 
@@ -3003,6 +3026,14 @@ llama_token llama_vocab::token_fim_sep() const {
     return pimpl->special_fim_sep_id;
 }
 
+llama_token llama_vocab::token_image() const {
+    return pimpl->special_image_id;
+}
+
+llama_token llama_vocab::token_audio() const {
+    return pimpl->special_audio_id;
+}
+
 bool llama_vocab::get_add_space_prefix() const {
     return pimpl->add_space_prefix;
 }
@@ -3241,6 +3272,14 @@ llama_token llama_vocab_fim_rep(const struct llama_vocab * vocab) {
 
 llama_token llama_vocab_fim_sep(const struct llama_vocab * vocab) {
     return vocab->token_fim_sep();
+}
+
+llama_token llama_vocab_image_token(const struct llama_vocab * vocab) {
+    return vocab->token_image();
+}
+
+llama_token llama_vocab_audio_token(const struct llama_vocab * vocab) {
+    return vocab->token_audio();
 }
 
 // deprecated

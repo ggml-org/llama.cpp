@@ -1727,7 +1727,8 @@ static common_chat_params common_chat_templates_apply_jinja(
         : *tmpls->template_default;
     const auto & src = tmpl.source();
     const auto & caps = tmpl.original_caps();
-    params.messages = common_chat_msgs_to_json_oaicompat<json>(inputs.messages, /* concat_text= */ !tmpl.original_caps().requires_typed_content);
+    bool concat_text = !inputs.no_part_concat && !tmpl.original_caps().requires_typed_content;
+    params.messages = common_chat_msgs_to_json_oaicompat<json>(inputs.messages, concat_text);
     params.add_generation_prompt = inputs.add_generation_prompt;
     params.tool_choice = inputs.tool_choice;
     params.enable_thinking = inputs.enable_thinking;
