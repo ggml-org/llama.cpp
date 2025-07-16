@@ -29,10 +29,14 @@ if(APPLE)
     set_source_files_properties(ane_minicpm4v3b_vision_f16_b1.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 endif()
 
-target_link_libraries     (mtmd PUBLIC ggml llama)
+target_link_libraries     (mtmd PUBLIC ggml llama common)
 target_link_libraries     (mtmd PRIVATE Threads::Threads)
 target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
+target_include_directories(mtmd PRIVATE ../../common)
+target_include_directories(mtmd PRIVATE ../../include)
+target_include_directories(mtmd PRIVATE ../../ggml/include)
+target_include_directories(mtmd PRIVATE ../../src)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
@@ -92,3 +96,33 @@ set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
 install                (TARGETS ${TARGET} RUNTIME)
 target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# iOS接口测试
+set(TARGET_IOS llama-mtmd-ios-test)
+add_executable         (${TARGET_IOS} mtmd-ios-example.cpp)
+set_target_properties  (${TARGET_IOS} PROPERTIES OUTPUT_NAME llama-mtmd-ios-test)
+target_include_directories(${TARGET_IOS} PRIVATE .)
+target_include_directories(${TARGET_IOS} PRIVATE ../..)
+target_include_directories(${TARGET_IOS} PRIVATE ../../common)
+target_include_directories(${TARGET_IOS} PRIVATE ../../include)
+target_include_directories(${TARGET_IOS} PRIVATE ../../ggml/include)
+target_include_directories(${TARGET_IOS} PRIVATE ../../src)
+target_include_directories(${TARGET_IOS} PRIVATE ../../vendor)
+target_link_libraries  (${TARGET_IOS} PRIVATE mtmd common llama ggml Threads::Threads)
+target_compile_features(${TARGET_IOS} PRIVATE cxx_std_17)
+
+# 确保依赖库先构建
+add_dependencies(${TARGET_IOS} mtmd)
+if (TARGET common)
+    add_dependencies(${TARGET_IOS} common)
+endif()
+
+# 在Apple平台上为iOS测试添加额外的链接设置
+if(APPLE)
+    target_link_libraries(${TARGET_IOS} PRIVATE 
+        "-framework Foundation" 
+        "-framework CoreML" 
+        "-framework Accelerate"
+        "-ObjC"
+    )
+endif()

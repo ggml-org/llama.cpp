@@ -3817,7 +3817,7 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     imgs.entries.push_back(std::move(img_copy));
 
     bool ios_ctx = true;
-    if (ios_ctx){   
+    if (ios_ctx){
         printf("clip use ane\n");
         float * vit_embedding1 = (float *)malloc(1100*1152*sizeof(float));
         float * vit_embedding2 = (float *)malloc(1100*1152*sizeof(float));
