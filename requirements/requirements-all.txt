@@ -3,6 +3,7 @@
 -r ../tools/server/tests/requirements.txt
 
 -r ./requirements-compare-llama-bench.txt
+-r ./requirements-server-bench.txt
 -r ./requirements-pydantic.txt
 -r ./requirements-test-tokenizer-random.txt
 

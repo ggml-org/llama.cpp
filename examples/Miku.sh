@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -e
 
 AI_NAME="${AI_NAME:-Miku}"
