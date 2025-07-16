@@ -104,7 +104,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
     bool work_size(int /* n_threads */, const struct ggml_tensor * op, size_t & size) override {
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, op);
         if (!kernels) {
-            return false;  // No suitable kernel available
+            // No suitable KleidiAI kernel available, fallback to standard CPU implementation
+            GGML_LOG_DEBUG("%s: No suitable KleidiAI kernel available for operation, falling back to standard CPU implementation\n", __func__);
+            return false;  // Let the system fallback to standard CPU implementation
         }
         kernel_info * kernel = op->src[1]->ne[1] == 1 ? &kernels->gemv : &kernels->gemm;
 
@@ -151,7 +153,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, dst);
         if (!kernels) {
-            return false;  // No suitable kernel available
+            // No suitable KleidiAI kernel available, fallback to standard CPU implementation
+            GGML_LOG_DEBUG("%s: No suitable KleidiAI kernel available for KV cache operation, falling back to standard CPU implementation\n", __func__);
+            return false;  // Let the system fallback to standard CPU implementation
         }
 
         kernel_info * kernel = src1->ne[1] == 1 ? &kernels->gemv : &kernels->gemm;
@@ -281,7 +285,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         ggml_kleidiai_kernels *kernels = ggml_kleidiai_select_kernels(ctx.features, dst);
         if (!kernels) {
-            return false;  // No suitable kernel available
+            // No suitable KleidiAI kernel available, fallback to standard CPU implementation
+            GGML_LOG_DEBUG("%s: No suitable KleidiAI kernel available for Q4_0 operation, falling back to standard CPU implementation\n", __func__);
+            return false;  // Let the system fallback to standard CPU implementation
         }
 
         kernel_info * kernel = src1->ne[1] == 1 ? &kernels->gemv : &kernels->gemm;
