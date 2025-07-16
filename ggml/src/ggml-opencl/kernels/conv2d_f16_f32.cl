@@ -1,13 +1,4 @@
-#ifdef USE_FP16
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
-#define T_FLOAT half
-#define T_FLOAT4 half4
-#define VSTORE_T_FLOAT4(data, offset, p) vstore_half4_rte(data, offset, p)
-#else
-#define T_FLOAT float
-#define T_FLOAT4 float4
-#define VSTORE_T_FLOAT4(data, offset, p) vstore4(data, offset, p)
-#endif
 
 #if defined(cl_qcom_reqd_sub_group_size)
 #pragma OPENCL EXTENSION cl_qcom_reqd_sub_group_size : enable
@@ -52,9 +43,9 @@ kernel void kernel_conv_2d(
     uint nb11, uint nb12, uint nb13,
     uint nb1, uint nb2, uint nb3
 ) {
-    global T_FLOAT* knl_data = (global T_FLOAT*) ((global char*)p_knl + off_knl);
-    global T_FLOAT* src_data = (global T_FLOAT*) ((global char*)p_src + off_src);
-    global T_FLOAT* dst_data = (global T_FLOAT*) ((global char*)p_dst + off_dst);
+    global half* knl_data = (global half*) ((global char*)p_knl + off_knl);
+    global float* src_data = (global float*) ((global char*)p_src + off_src);
+    global float* dst_data = (global float*) ((global char*)p_dst + off_dst);
 
     const uint K = Cout;
     const uint CRS = Cin*KH*KW;
@@ -70,8 +61,8 @@ kernel void kernel_conv_2d(
     const uint offset_k = B_idx_K * BS_K;
     const uint offset_npq = B_idx_NPQ * BS_NPQ;
 
-    local T_FLOAT* Ash = (local T_FLOAT*)shared;
-    local T_FLOAT4* Bsh = (local T_FLOAT4*) &Ash[BS_K * BS_CRS];
+    local half* Ash = (local half*)shared;
+    local float4* Bsh = (local float4*) &Ash[BS_K * BS_CRS];
 
     T_ACCUM regC[TS_K][TS_NPQ_VEC];
     for (int i = 0; i < TS_K; ++i) {
@@ -98,7 +89,7 @@ kernel void kernel_conv_2d(
                 const uint knl_idx = KW_idx + KH_idx*nb01 + Cin_idx*nb02 + k_g*nb03;
                 Ash[k_l * BS_CRS + crs_l] = knl_data[knl_idx];
             } else {
-                Ash[k_l * BS_CRS + crs_l] = (T_FLOAT)0.0f;
+                Ash[k_l * BS_CRS + crs_l] = (half)0.0f;
             }
         }
 
@@ -107,7 +98,7 @@ kernel void kernel_conv_2d(
             const uint npq_l_vec = i % BS_NPQ_VEC;
             const uint crs_g = offset_crs + crs_l;
 
-            T_FLOAT4 val = (T_FLOAT4)(0.0f);
+            float4 val = (float4)(0.0f);
             if (crs_g < CRS) {
                 const uint Cin_idx = crs_g / (KW * KH);
                 const uint KH_idx = (crs_g - Cin_idx * KW * KH) / KW;
@@ -124,7 +115,7 @@ kernel void kernel_conv_2d(
 
                         if (H_idx >= 0 && H_idx < H && W_idx >= 0 && W_idx < W) {
                             const uint src_idx = W_idx + H_idx * nb11 + Cin_idx * nb12 + N_idx * nb13;
-                            ((T_FLOAT*)&val)[v] = src_data[src_idx];
+                            ((float*)&val)[v] = src_data[src_idx];
                         }
                     }
                 }
@@ -136,15 +127,15 @@ kernel void kernel_conv_2d(
 
         #pragma unroll
         for (uint crs_l = 0; crs_l < BS_CRS; ++crs_l) {
-            T_FLOAT regA[TS_K];
+            half regA[TS_K];
             for (uint k_l_reg = 0; k_l_reg < TS_K; ++k_l_reg) {
                 regA[k_l_reg] = Ash[(lid_k * TS_K + k_l_reg) * BS_CRS + crs_l];
             }
 
             for (uint npq_l_vec_reg = 0; npq_l_vec_reg < TS_NPQ_VEC; ++npq_l_vec_reg) {
-                T_FLOAT4 regB = Bsh[crs_l * BS_NPQ_VEC + lid_npq * TS_NPQ_VEC + npq_l_vec_reg];
+                float4 regB = Bsh[crs_l * BS_NPQ_VEC + lid_npq * TS_NPQ_VEC + npq_l_vec_reg];
                 for (uint k_l_reg = 0; k_l_reg < TS_K; ++k_l_reg) {
-                    regC[k_l_reg][npq_l_vec_reg] = mad(convert_float(regA[k_l_reg]), convert_float4(regB), regC[k_l_reg][npq_l_vec_reg]);
+                    regC[k_l_reg][npq_l_vec_reg] = mad(convert_float(regA[k_l_reg]), regB, regC[k_l_reg][npq_l_vec_reg]);
                 }
             }
         }
@@ -165,7 +156,7 @@ kernel void kernel_conv_2d(
 
             if (nb1 == OW && OW_idx + VEC_SIZE <= OW && npq_g_base + VEC_SIZE <= NPQ) {
                 const uint dst_idx = OW_idx + OH_idx*nb1 + k_g*nb2 + N_idx*nb3;
-                VSTORE_T_FLOAT4(regC[k_l_reg][npq_l_vec_reg], 0, &dst_data[dst_idx]);
+                vstore4(regC[k_l_reg][npq_l_vec_reg], 0, &dst_data[dst_idx]);
             } else {
                 T_ACCUM res = regC[k_l_reg][npq_l_vec_reg];
                 for (int v = 0; v < VEC_SIZE; ++v) {
@@ -176,7 +167,7 @@ kernel void kernel_conv_2d(
                         const uint OH_idx_s = pq_idx_s / OW;
                         const uint OW_idx_s = pq_idx_s % OW;
                         const uint dst_idx_s = OW_idx_s + OH_idx_s*nb1 + k_g*nb2 + N_idx_s*nb3;
-                        dst_data[dst_idx_s] = (T_FLOAT)(((float*)&res)[v]);
+                        dst_data[dst_idx_s] = ((float*)&res)[v];
                     }
                 }
             }
