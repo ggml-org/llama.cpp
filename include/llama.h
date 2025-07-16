@@ -725,7 +725,7 @@ extern "C" {
     //   - lazily on next llama_decode()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    DEPRECATED(void llama_kv_self_seq_div(
+    DEPRECATED(LLAMA_API void llama_kv_self_seq_div(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
