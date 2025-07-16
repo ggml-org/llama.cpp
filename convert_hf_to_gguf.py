@@ -3598,6 +3598,9 @@ class Plamo2Model(TextModel):
 
         self.gguf_writer.add_add_space_prefix(False)
 
+        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab.add_to_gguf(self.gguf_writer)
+
     def set_gguf_parameters(self):
         hparams = self.hparams
         block_count = hparams["num_hidden_layers"]
