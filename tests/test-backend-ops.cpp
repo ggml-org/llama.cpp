@@ -3739,7 +3739,7 @@ struct test_conv_2d : public test_case {
         : ne_input(ne_input), ne_kernel(ne_kernel), stride0(stride0), stride1(stride1), padding0(padding0), padding1(padding1), dilation0(dilation0), dilation1(dilation1), cwhn(cwhn) {
         }
 
-    ggml_tensor * build_graph(ggml_context * ctx) {
+    ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
         ggml_set_name(input, "input");
 
@@ -5078,7 +5078,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     uint32_t kwh_idx = 1;
     uint32_t Cout_idx = 2;
     uint32_t Cin_idx = 3;
-    uint32_t B_idx = 4;    
+    uint32_t B_idx = 4;
 
     std::vector<std::array<int, 5>> cases = {
         //{IWH, KWH, Cout, Cin, B}
@@ -5103,10 +5103,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         // A deep layer of a ConvNet, several images in the batch
         {16, 3, 256, 128, 8}
     };
-    
+
     for(auto act_case : cases){
         test_cases.emplace_back(new test_conv_2d({act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx]}, {act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx]}, 1, 1, 0, 0, 1, 1, false));
-    }    
+    }
     #endif
 
     // CONV_2D:
