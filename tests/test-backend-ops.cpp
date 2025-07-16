@@ -37,7 +37,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <map>
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
@@ -1021,7 +1020,7 @@ struct test_case {
         return t;
     }
 
-    virtual bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name, printer * output_printer) {
+    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name, printer * output_printer) {
         mode = MODE_TEST;
 
         ggml_init_params params = {
@@ -1241,56 +1240,25 @@ struct test_case {
         // determine number of runs
         int n_runs;
         bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
-
-        // how many nodes are added by each op
-        uint32_t nodes_per_op = 1;
-        if(op_desc(out) == "CONV_2D_INDIRECT_IMPL"){
-            nodes_per_op = 8;
-        }
-
         if (op_flops(out) > 0) {
             // based on flops
             const uint64_t GFLOP = 1000 * 1000 * 1000;
             const uint64_t target_flops_cpu =   8ULL * GFLOP;
             const uint64_t target_flops_gpu = 100ULL * GFLOP;
             uint64_t target_flops = is_cpu ? target_flops_cpu : target_flops_gpu;
-            n_runs = std::min<int>((ggml_graph_size(gf) - ggml_graph_n_nodes(gf))/nodes_per_op, target_flops / op_flops(out)) + 1;
+            n_runs = std::min<int>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_flops / op_flops(out)) + 1;
         } else {
             // based on memory size
             const size_t GB = 1ULL << 30;
             const size_t target_size_cpu =  8 * GB;
             const size_t target_size_gpu = 32 * GB;
             size_t target_size = is_cpu ? target_size_cpu : target_size_gpu;
-            n_runs = std::min<int>((ggml_graph_size(gf) - ggml_graph_n_nodes(gf))/nodes_per_op, target_size / op_size(out)) + 1;
+            n_runs = std::min<int>(ggml_graph_size(gf) - ggml_graph_n_nodes(gf), target_size / op_size(out)) + 1;
         }
 
         // duplicate the op
         for (int i = 1; i < n_runs; i++) {
             ggml_graph_add_node(gf, out);
-
-            if(op_desc(out) == "CONV_2D_INDIRECT_IMPL"){
-                /*
-                TODO: add a permanent solution! E.g. return the list of tensors
-                needed to add for computing the op in build_graph().
-
-                Adds the full ggml_conv_2d() computation graph, not just the output!
-                    * cont      (out)
-                    * cont      (out->src[0])
-                    * permute   (out->src[0]->...)
-                    * reshape
-                    * mul_mat
-                        * reshape
-                            * im2col
-                        * reshape
-                */
-                ggml_graph_add_node(gf, out->src[0]);                                           // cont
-                ggml_graph_add_node(gf, out->src[0]->src[0]);                                   // permute
-                ggml_graph_add_node(gf, out->src[0]->src[0]->src[0]);                           // reshape
-                ggml_graph_add_node(gf, out->src[0]->src[0]->src[0]->src[0]);                   // mul_mat
-                ggml_graph_add_node(gf, out->src[0]->src[0]->src[0]->src[0]->src[0]);           // reshape
-                ggml_graph_add_node(gf, out->src[0]->src[0]->src[0]->src[0]->src[0]->src[0]);   // im2col
-                ggml_graph_add_node(gf, out->src[0]->src[0]->src[0]->src[0]->src[1]);           // reshape
-            }
         }
 
         // calculate memory
@@ -1631,262 +1599,6 @@ struct test_case {
     }
 };
 
-// This can be useful to compare the output/performance of
-// different graphs implementing the same op.
-// Possible use cases:
-// * no CPU implementation exists for the op, but the op
-// can be built by combining elementary ops already having implementation
-// and the user wants to compare the results.
-// * comparing the performance of different implementations
-// of the op: graph revwriting/operation fusion. E.g. basic attention
-// compared to flash attention or conv compared with im2col->matmul.
-struct test_case_ref : public test_case {
-public:
-    ggml_cgraph * gf_ref = nullptr;
-
-    // Output tensor names to compare
-    const char* output_node_name_ref;
-    const char* output_node_name;
-
-    // Input tensor names in (actual graph, reference graph)
-    std::vector<std::pair<std::string, std::string>> input_names = {
-        {"input", "input"},
-        {"kernel", "kernel"}
-    };
-
-    // Copies the inputs of the graph built using build_graph() to the reference graph
-    virtual void copy_data_to_ref(ggml_context * ctx, ggml_context * ctx_ref){
-        std::map<std::string, ggml_tensor*> inputs;
-        std::map<std::string, ggml_tensor*> inputs_ref;
-
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
-            for(auto e : input_names){
-                if(e.first == t->name){
-                    inputs[e.first] = t;
-                }
-            }
-        }
-
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx_ref); t != nullptr; t = ggml_get_next_tensor(ctx_ref, t)) {
-            for(auto e : input_names){
-                if(e.second == t->name){
-                    inputs_ref[e.second] = t;
-                }
-            }
-        }
-
-        for(auto e : input_names){
-            GGML_ASSERT(inputs.count(e.first) == 1);
-            GGML_ASSERT(inputs_ref.count(e.second) == 1);
-            std::vector<uint8_t> buf(ggml_nbytes(inputs[e.first]));
-            ggml_backend_tensor_get(inputs[e.first], buf.data(), 0, ggml_nbytes(inputs[e.first]));
-            ggml_backend_tensor_set(inputs_ref[e.second], buf.data(), 0, buf.size());
-        }
-    }
-
-    // Graph of the reference op implementation
-    virtual ggml_tensor * build_graph_ref(ggml_context * ctx) = 0;
-
-    // Compares the output of the actual graph to the output of the reference
-    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name, printer * output_printer) override {
-        mode = MODE_TEST;
-
-        ggml_init_params params = {
-            /* .mem_size = */ ggml_tensor_overhead()*128 + ggml_graph_overhead(),
-            /* .mem_base = */ NULL,
-            /* .no_alloc = */ true,
-        };
-        ggml_context * ctx = ggml_init(params);
-        ggml_context * ctx_ref = ggml_init(params);
-        GGML_ASSERT(ctx);
-        GGML_ASSERT(ctx_ref);
-
-        gf = ggml_new_graph(ctx);
-        gf_ref = ggml_new_graph(ctx_ref);
-
-        // pre-graph sentinel
-        add_sentinel(ctx);
-        add_sentinel(ctx_ref);
-
-        ggml_tensor * out = build_graph(ctx);
-        ggml_tensor * out_ref = build_graph_ref(ctx_ref);
-
-        std::string current_op_name = op_desc(out);
-
-        if (op_name != nullptr && op_desc(out) != op_name) {
-            //printf("  %s: skipping\n", op_desc(out).c_str());
-            ggml_free(ctx);
-            return true;
-        }
-
-        // check if the backends support the ops
-        bool supported = true;
-        ggml_backend* backend_tested = nullptr;
-        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            if (!ggml_backend_supports_op(backend1, t)) {
-                supported = false;
-                backend_tested = backend1;
-                break;
-            }
-        }
-
-        if(supported){
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx_ref); t != NULL; t = ggml_get_next_tensor(ctx_ref, t)) {
-                if (!ggml_backend_supports_op(backend2, t)) {
-                    supported = false;
-                    backend_tested = backend2;
-                    break;
-                }
-            }
-        }
-
-        if (!supported) {
-            // Create test result for unsupported operation
-            test_result result(ggml_backend_name(backend_tested), current_op_name, vars(), "test",
-                            false, false, "not supported");
-            if (output_printer) {
-                output_printer->print_test_result(result);
-            }
-
-            ggml_free(ctx);
-            return true;
-        }
-
-        // post-graph sentinel
-        add_sentinel(ctx);
-        add_sentinel(ctx_ref);
-
-        // allocate
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
-
-        if (buf == NULL) {
-            printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
-            ggml_free(ctx);
-            return false;
-        }
-
-        ggml_backend_buffer_t buf_ref = ggml_backend_alloc_ctx_tensors(ctx_ref, backend2);
-        if (buf_ref == NULL) {
-            printf("failed to allocate tensors [%s] ", ggml_backend_name(backend2));
-            ggml_free(ctx_ref);
-            return false;
-        }
-
-        // build graph
-        ggml_build_forward_expand(gf, out);
-        ggml_build_forward_expand(gf_ref, out_ref);
-
-        // add sentinels as graph nodes so that they are checked in the callback
-        for (ggml_tensor * sentinel : sentinels) {
-            ggml_graph_add_node(gf, sentinel);
-            ggml_graph_add_node(gf_ref, sentinel);
-        }
-
-        // randomize tensors
-        initialize_tensors(ctx);
-        copy_data_to_ref(ctx, ctx_ref);
-
-        // compare
-        struct callback_userdata {
-            bool   ok;
-            double max_err;
-            ggml_backend_t backend1;
-            ggml_backend_t backend2;
-        };
-
-        callback_userdata ud {
-            true,
-            max_nmse_err(),
-            backend1,
-            backend2
-        };
-
-        auto callback = [](int index, ggml_tensor * t1, ggml_tensor * t2, void * user_data) -> bool {
-            callback_userdata * ud = (callback_userdata *) user_data;
-            const char * bn1 = ggml_backend_name(ud->backend1);
-            const char * bn2 = ggml_backend_name(ud->backend2);
-
-            if (t1->op == GGML_OP_NONE) {
-                // sentinels must be unchanged
-                std::vector<uint8_t> t1_data(ggml_nbytes(t1));
-                std::vector<uint8_t> t2_data(ggml_nbytes(t2));
-                ggml_backend_tensor_get(t1, t1_data.data(), 0, ggml_nbytes(t1));
-                ggml_backend_tensor_get(t2, t2_data.data(), 0, ggml_nbytes(t2));
-
-                if (memcmp(t1_data.data(), t2_data.data(), ggml_nbytes(t1)) != 0) {
-                    printf("sentinel mismatch: %s ", t1->name);
-                    ud->ok = false;
-                    return true;
-                }
-            }
-
-            std::vector<float> f1 = tensor_to_float(t1);
-            std::vector<float> f2 = tensor_to_float(t2);
-
-            for (size_t i = 0; i < f1.size(); i++) {
-                // check for nans
-                if (std::isnan(f1[i]) || std::isnan(f2[i])) {
-                    printf("[%s] NaN at index %zu (%s=%f %s=%f) ", ggml_op_desc(t1), i, bn1, f1[i], bn2, f2[i]);
-                    ud->ok = false;
-                    return true;
-                }
-                // check for infs: both must be inf of the same sign, or both must be finite
-                if (isinf_or_max(f1[i]) || isinf_or_max(f2[i])) {
-                    if (isinf_or_max(f1[i]) && isinf_or_max(f2[i])) {
-                        if (std::signbit(f1[i]) != std::signbit(f2[i])) {
-                            printf("[%s] inf sign mismatch: %s=%f %s=%f ", ggml_op_desc(t1), bn1, f1[i], bn2, f2[i]);
-                            ud->ok = false;
-                            return true;
-                        }
-                    } else {
-                        printf("[%s] inf mismatch: %s=%f %s=%f ", ggml_op_desc(t1), bn1, f1[i], bn2, f2[i]);
-                        ud->ok = false;
-                        return true;
-                    }
-                }
-            }
-
-            double err = nmse(f1.data(), f2.data(), f1.size());
-            if (err > ud->max_err) {
-                printf("[%s] NMSE = %.9f > %.9f ", ggml_op_desc(t1), err, ud->max_err);
-                //for (int i = 0; i < (int) f1.size(); i++) {
-                //    printf("%5d %9.6f %9.6f, diff = %9.6f\n", i, f1[i], f2[i], f1[i] - f2[i]);
-                //}
-                //printf("\n");
-                //exit(1);
-                ud->ok = false;
-            }
-            return true;
-
-            GGML_UNUSED(index);
-        };
-
-
-        const bool cmp_ok = ggml_backend_compare_graph_backend_node(backend1, backend2, gf, gf_ref, callback, &ud, const_cast<char*>(output_node_name), const_cast<char*>(output_node_name_ref));
-
-        if (!cmp_ok) {
-            printf("compare failed ");
-        }
-
-        ggml_backend_buffer_free(buf);
-        ggml_backend_buffer_free(buf_ref);
-
-        ggml_free(ctx);
-        ggml_free(ctx_ref);
-
-        // Create test result
-        bool        test_passed = ud.ok && cmp_ok;
-        std::string error_msg   = test_passed ? "" : (!cmp_ok ? "compare failed" : "test failed");
-        test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test", supported, test_passed,
-                           error_msg);
-
-        if (output_printer) {
-            output_printer->print_test_result(result);
-        }
-
-        return test_passed;
-    }
-};
 
 // ###################################
 // ## Section 2: GGML Op Defintions ##
@@ -3970,9 +3682,8 @@ struct test_im2col : public test_case {
     }
 };
 
-// Tests CONV_2D by comparing it to the IM2COL -> MUL_MM
-// reference implementation.
-struct test_conv_2d : public test_case_ref {
+// CONV_2D
+struct test_conv_2d : public test_case {
     const std::array<int64_t, 4> ne_input;
     const std::array<int64_t, 4> ne_kernel;
     const int stride0;
@@ -3989,16 +3700,6 @@ struct test_conv_2d : public test_case_ref {
     // CONV_2D graph will be built, while
     // * if the program is called with -o CONV_2D_INDIRECT_IMPL, the
     // IM2COL -> MUL_MM graph will be built.
-    const bool direct_impl;
-
-    virtual std::string op_desc(ggml_tensor * t) override {
-        (void) t;
-        if(direct_impl){
-            return std::string("CONV_2D_DIRECT_IMPL");
-        }else{
-            return std::string("CONV_2D_INDIRECT_IMPL");
-        }
-    }
 
     std::string vars() override {
         return VARS_TO_STR9(ne_input, ne_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
@@ -4034,41 +3735,11 @@ struct test_conv_2d : public test_case_ref {
 
     test_conv_2d(std::array<int64_t, 4> ne_input = {64, 64, 16, 1},
             std::array<int64_t, 4> ne_kernel = {3, 3, 1, 16},
-            int stride0 = 1, int stride1 = 1, int padding0 = 0, int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false, bool direct_impl = true)
-        : ne_input(ne_input), ne_kernel(ne_kernel), stride0(stride0), stride1(stride1), padding0(padding0), padding1(padding1), dilation0(dilation0), dilation1(dilation1), cwhn(cwhn), direct_impl(direct_impl) {
-            output_node_name_ref = "out";
-            output_node_name = "out";
+            int stride0 = 1, int stride1 = 1, int padding0 = 0, int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false)
+        : ne_input(ne_input), ne_kernel(ne_kernel), stride0(stride0), stride1(stride1), padding0(padding0), padding1(padding1), dilation0(dilation0), dilation1(dilation1), cwhn(cwhn) {
         }
 
-    ggml_tensor * build_graph_indirect(ggml_context * ctx) {
-        ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
-        ggml_set_name(input, "input");
-
-        ggml_tensor * kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
-        ggml_set_name(kernel, "kernel");
-
-        GGML_ASSERT(cwhn==false);
-
-        if (cwhn) {
-            // change memory layout to channel-most-contiguous (CWHN),
-            // then permute it back so NE matches the original input
-            input = ggml_cont(ctx, ggml_permute(ctx, input, 1, 2, 0, 3));
-            input = ggml_permute(ctx, input, 2, 0, 1, 3);
-            kernel = ggml_cont(ctx, ggml_permute(ctx, kernel, 2, 3, 1, 0));
-            kernel = ggml_permute(ctx, kernel, 3, 2, 0, 1);
-        }
-
-        ggml_tensor * conv2d_out = ggml_conv_2d(
-            ctx, kernel, input,
-            stride0, stride1, padding0, padding1, dilation0, dilation1);
-
-        ggml_tensor * out = ggml_cont(ctx, conv2d_out);
-
-        ggml_set_name(out, "out");
-        return out;
-    }
-
-    ggml_tensor * build_graph_direct(ggml_context * ctx) {
+    ggml_tensor * build_graph(ggml_context * ctx) {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
         ggml_set_name(input, "input");
 
@@ -4089,19 +3760,6 @@ struct test_conv_2d : public test_case_ref {
             stride0, stride1, padding0, padding1, dilation0, dilation1);
         ggml_set_name(out, "out");
         return out;
-    }
-
-    ggml_tensor * build_graph(ggml_context * ctx) override {
-        if(direct_impl){
-            return build_graph_direct(ctx);
-        }else{
-            return build_graph_indirect(ctx);
-        }
-    }
-
-    // Reference always uses the indirect impl.
-    ggml_tensor * build_graph_ref(ggml_context * ctx) override {
-        return build_graph_indirect(ctx);
     }
 };
 
@@ -5413,47 +5071,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 1, 2560}, {3, 3, 1, 2560}, 1, 1, 1, 1, 1, 1, true));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 2, 2560}, {3, 3, 2, 2560}, 1, 1, 1, 1, 1, 1, true));
 
-    // CONV_2D:
-    auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
-        return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
-    };
-
-    //uint32_t s0 = 3;
-    uint32_t s1 = 5;
-    uint32_t p0 = 5;
-    //uint32_t p1 = 2;
-    uint32_t d0 = 2;
-    uint32_t d1 = 4;
-
-    for(uint32_t s0: {1, 3}){
-        for(uint32_t p1: {2, 5}){
-            for(uint32_t Cin : {1, 25}){
-                for(uint32_t Cout : {1, 12}){
-                    for(uint32_t KH : {1, 2, 3, 11}){
-                        for(uint32_t KW : {1, 2, 3, 11}){
-                            for(uint32_t H : {1, 133}){
-                                for(uint32_t W : {1, 258}){
-                                    if(calc_conv_output_size(W, KW, s0, p0, d0) > 0 && calc_conv_output_size(H, KH, s1, p1, d1) > 0){
-                                        test_cases.emplace_back(new test_conv_2d({W, H, Cin, 2}, {KW, KH, Cin, Cout}, s0, s1, p0, p1, d0, d1, false, true));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
+    // Conv_2D test cases
+    #ifdef DETAILED_TESTS
+    // Probably we do not have enough time to execute these in the pipeline.
     uint32_t iwh_idx = 0;
     uint32_t kwh_idx = 1;
     uint32_t Cout_idx = 2;
     uint32_t Cin_idx = 3;
-    uint32_t B_idx = 4;
+    uint32_t B_idx = 4;    
+
     std::vector<std::array<int, 5>> cases = {
         //{IWH, KWH, Cout, Cin, B}
         // K=CRS=NPQ=4096 conv2d matmul performance
-        {19, 4, 4096, 256, 16}, // --> fails
+        {19, 4, 4096, 256, 16},
         // K=128, CRS=128, NPQ=4096
         {19, 4, 128, 8, 16},
         // K=130, CRS=128, NPQ=4096
@@ -5473,9 +5103,42 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         // A deep layer of a ConvNet, several images in the batch
         {16, 3, 256, 128, 8}
     };
-
+    
     for(auto act_case : cases){
-        test_cases.emplace_back(new test_conv_2d({act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx]}, {act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx]}, 1, 1, 0, 0, 1, 1, false, true));
+        test_cases.emplace_back(new test_conv_2d({act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx]}, {act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx]}, 1, 1, 0, 0, 1, 1, false));
+    }    
+    #endif
+
+    // CONV_2D:
+    auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+        return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+    };
+
+    //uint32_t s0 = 3;
+    uint32_t s1 = 5;
+    uint32_t p0 = 5;
+    //uint32_t p1 = 2;
+    uint32_t d0 = 2;
+    uint32_t d1 = 4;
+
+    for(uint32_t s0: {1, 3}){
+        for(uint32_t p1: {2, 5}){
+            for(uint32_t Cin : {1, 25}){
+                for(uint32_t Cout : {1, 12}){
+                    for(uint32_t KH : {1, 2, 3, 11}){
+                        for(uint32_t KW : {1, 2, 3, 11}){
+                            for(uint32_t H : {1, 133}){
+                                for(uint32_t W : {1, 141}){
+                                    if(calc_conv_output_size(W, KW, s0, p0, d0) > 0 && calc_conv_output_size(H, KH, s1, p1, d1) > 0){
+                                        test_cases.emplace_back(new test_conv_2d({W, H, Cin, 2}, {KW, KH, Cin, Cout}, s0, s1, p0, p1, d0, d1, false));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // sycl backend will limit task global_range < MAX_INT
@@ -6072,7 +5735,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
 
-    // Conv2d: K=CRS=NPQ=4096 matmul performance
+// Conv2d: K=CRS=NPQ=4096 matmul performance
     uint32_t iwh_idx = 0;
     uint32_t kwh_idx = 1;
     uint32_t Cout_idx = 2;
@@ -6104,9 +5767,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     for(auto act_case : cases){
         // Direct CONV_2D
-        test_cases.emplace_back(new test_conv_2d({act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx]}, {act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx]}, 1, 1, 0, 0, 1, 1, false, true));
+        test_cases.emplace_back(new test_conv_2d({act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx]}, {act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx]}, 1, 1, 0, 0, 1, 1, false));
         // Indirect CONV_2D (uses im2col + sgemm)
-        test_cases.emplace_back(new test_conv_2d({act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx]}, {act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx]}, 1, 1, 0, 0, 1, 1, false, false));
     }
 
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));

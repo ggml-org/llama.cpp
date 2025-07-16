@@ -340,8 +340,6 @@ extern "C" {
 
     // Compare the output of two backends
     GGML_API bool ggml_backend_compare_graph_backend(ggml_backend_t backend1, ggml_backend_t backend2, struct ggml_cgraph * graph, ggml_backend_eval_callback callback, void * user_data, struct ggml_tensor * test_node);
-    // Compare the output of two backends, graphs can be different and only the selected nodes will be compared
-    GGML_API bool ggml_backend_compare_graph_backend_node(ggml_backend_t backend1, ggml_backend_t backend2, struct ggml_cgraph * graph1, struct ggml_cgraph * graph2, ggml_backend_eval_callback callback, void * user_data, char* op_name_out_1, char* op_name_out_2);
 
     // Tensor initialization
     GGML_API enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr);
