@@ -188,8 +188,7 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          sysctl -a
-          export Dawn_DIR=dawn/lib64/cmake/Dawn
+          export CMAKE_PREFIX_PATH=dawn
           cmake -B build -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
