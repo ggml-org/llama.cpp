@@ -467,7 +467,9 @@ bool llm_graph_result::can_reuse(const llm_graph_params & params) {
     for (auto & input : inputs) {
         const bool cur = input->can_reuse(params);
 
-        LLAMA_LOG_DEBUG("  %s: can_reuse = %d\n", "placeholder", cur);
+        if (debug > 1) {
+            LLAMA_LOG_DEBUG("%s: can_reuse = %d\n", "placeholder", cur);
+        }
 
         res = res && cur;
     }
