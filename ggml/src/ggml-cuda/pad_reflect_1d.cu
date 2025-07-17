@@ -1,8 +1,8 @@
 #include "pad_reflect_1d.cuh"
 
 static __global__ void pad_reflect_1d_kernel_f32(
-    const void * src0,
-    void * dst,
+    const void * __restrict__ src0,
+    void * __restrict__ dst,
     const int64_t ne0,
     const int64_t ne00,
     const int64_t ne01,
