@@ -320,7 +320,7 @@ bool llm_graph_input_attn_kv_unified::can_reuse(const llm_graph_params & params)
     bool res = true;
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
-    res &= self_v_idxs->ne[0] == params.ubatch.n_tokens;
+  //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= self_kq_mask->ne[0] == mctx->get_n_kv();
     res &= self_kq_mask->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
@@ -350,10 +350,10 @@ bool llm_graph_input_attn_kv_unified_iswa::can_reuse(const llm_graph_params & pa
     bool res = true;
 
     res &= self_k_idxs->ne[0] == params.ubatch.n_tokens;
-    res &= self_v_idxs->ne[0] == params.ubatch.n_tokens;
+  //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= self_k_idxs_swa->ne[0] == params.ubatch.n_tokens;
-    res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens;
+  //res &= self_v_idxs_swa->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= self_kq_mask->ne[0] == mctx->get_base()->get_n_kv();
     res &= self_kq_mask->ne[1] == GGML_PAD(params.ubatch.n_tokens, GGML_KQ_MASK_PAD);
