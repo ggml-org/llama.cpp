@@ -11,6 +11,8 @@
 
 // increase max payload length to allow use of larger context size
 #define CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH 1048576
+// increase backlog size to avoid connection resets for >> 1 slots
+#define CPPHTTPLIB_LISTEN_BACKLOG 512
 // disable Nagle's algorithm
 #define CPPHTTPLIB_TCP_NODELAY true
 #include <cpp-httplib/httplib.h>
@@ -792,7 +794,13 @@ static json oaicompat_chat_params_parse(
 
     /* Append assistant prefilled message */
     if (prefill_assistant_message) {
-         chat_params.prompt += last_message.content;
+        if (!last_message.content_parts.empty()) {
+            for (auto & p : last_message.content_parts) {
+                chat_params.prompt += p.text;
+            }
+        } else {
+            chat_params.prompt += last_message.content;
+        }
     }
 
     llama_params["chat_format"]      = static_cast<int>(chat_params.format);
