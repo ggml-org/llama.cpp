@@ -1911,7 +1911,7 @@ static bool ggml_backend_cann_cpy_tensor_async(
         (ggml_backend_cann_context*)backend_dst->context;
 
     size_t copy_size = ggml_nbytes(dst);
-    if (copy_size==0){
+    if (copy_size == 0) {
     	return true;
     }
     if (backend_src != backend_dst) {
