@@ -1105,6 +1105,33 @@ static void test_json_schema() {
     );
 
     test_schema(
+        "object property order",
+        // Schema
+        R"""({
+            "type": "object",
+            "properties": {
+                "a": { "type": "integer" },
+                "b": { "type": "integer" },
+                "c": { "type": "integer" },
+                "d": { "type": "integer" }
+            },
+            "required": ["b", "d"]
+        })""",
+        // Passing strings
+        {
+            R"""({ "b": 0, "d": 0 })""",
+            R"""({ "b": 0, "d": 0, "E": -1 })""",
+            R"""({ "a": 0, "b": 0, "c": 0, "d": 0 })""",
+            R"""({ "a": 0, "b": 0, "c": 0, "d": 0, "E": -1 })""",
+        },
+        // Failing strings
+        {
+            R"""({ "E": -1, "b": 0, "d": 0 })""",
+            R"""({ "b": 0, "d": 0, "a": 0 })""",
+        }
+    );
+
+    test_schema(
         "additional properties can't override other properties",
         R"""({
             "properties": {
