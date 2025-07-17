@@ -48,6 +48,7 @@ public:
             const llama_vocab & vocab,
             const llama_memory_i * memory,
             uint32_t n_embd,
+            uint32_t n_seq_max,
             bool output_all);
 
     const llama_batch & get_batch() const;
@@ -100,6 +101,7 @@ private:
     const uint32_t n_pos_per_embd;
 
     uint32_t n_embd;
+    uint32_t n_seq_max;
     uint32_t n_outputs;
 
     std::array<llama_seq_id, 1> seq_id_0 = { 0 }; // default sequence id
@@ -115,7 +117,7 @@ private:
     using seq_cpl_t = std::vector<bool>;
 
     // helper flag to quickly determine if there are any coupled sequences in the batch
-    bool has_cpl;
+    bool has_cpl = false;
 
     std::vector<pos_set_t> seq_pos; // seq_pos[s]: the set of positions in sequence s
     std::vector<seq_cpl_t> seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
