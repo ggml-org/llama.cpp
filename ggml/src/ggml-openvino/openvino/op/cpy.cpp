@@ -39,6 +39,11 @@ OutputVector translate_cpy(const NodeContext& context) {
 
     if (op_case == 1) {
         // Write K to cache_k
+        int64_t head_size = context.get_head_size();
+        int64_t num_heads_kv = context.get_num_heads_kv();
+        auto src0_reshape_shape =
+            ov::op::v0::Constant::create(ov::element::i64, {3}, std::vector<int64_t>{-1, num_heads_kv, head_size});
+        src0 = std::make_shared<ov::op::v1::Reshape>(src0, src0_reshape_shape, false);
         auto indices = context.get_input("update_indices_k");
         auto updated = std::make_shared<ov::op::v3::ScatterNDUpdate>(src1, indices, src0);
         res = std::make_shared<ov::op::v1::Reshape>(updated, std::make_shared<ov::op::v0::ShapeOf>(src1), false);
