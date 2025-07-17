@@ -2910,11 +2910,12 @@ class Ernie4_5MoeModel(Ernie4_5Model):
         self.gguf_writer.add_expert_used_count(self.hparams["moe_k"])
         self.gguf_writer.add_interleave_moe_layer_step(self.hparams["moe_layer_interval"])
         self.gguf_writer.add_leading_dense_block_count(self.hparams["moe_layer_start_index"])
-        self.gguf_writer.add_rope_freq_base(self.hparams["rope_theta"])
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
             self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
-        if (shared_expert_intermediate_size := self.hparams.get('intermediate_size')) is not None and (num_key_value_heads := self.hparams.get('num_key_value_heads')) is not None:
-            self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size // num_key_value_heads)
+        if (shared_expert_count := self.hparams.get('moe_num_shared_experts')) is not None:
+            self.gguf_writer.add_expert_shared_count(shared_expert_count)
+            if shared_expert_count > 0 and (shared_expert_intermediate_size := self.hparams.get('intermediate_size')) is not None and (num_key_value_heads := self.hparams.get('num_key_value_heads')) is not None:
+                self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size // num_key_value_heads)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # Modify correction bias name as in DeepseekV2
