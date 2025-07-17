@@ -604,7 +604,7 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
         if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) {
             CUDA_CHECK(mudnnMemcpyAsync(ctx, src1, src0));
         } else
-#endif // GGML_USE_MUSA
+#endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_COPY
         {
             CUDA_CHECK(cudaMemcpyAsync(src1_ddc, src0_ddc, ggml_nbytes(src0), cudaMemcpyDeviceToDevice, main_stream));
         }
