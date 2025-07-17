@@ -1,8 +1,8 @@
 #include "cpy.cuh"
 #include "dequantize.cuh"
-#ifdef GGML_USE_MUSA
+#if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_COPY)
 #include "ggml-musa/mudnn.cuh"
-#endif // GGML_USE_MUSA
+#endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_COPY
 
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
@@ -600,7 +600,7 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 #endif
     if (src0->type == src1->type && ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
         GGML_ASSERT(ggml_nbytes(src0) == ggml_nbytes(src1));
-#ifdef GGML_USE_MUSA
+#if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_COPY)
         if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) {
             CUDA_CHECK(mudnnMemcpyAsync(ctx, src1, src0));
         } else
