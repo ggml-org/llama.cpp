@@ -436,15 +436,17 @@ struct llm_graph_params {
                 (!ubatch.embd  && !other.ubatch.embd)
             );
 
-        //if (can_reuse_ubatch) {
-        //    for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
-        //        can_reuse_ubatch &= ubatch.seq_id_unq[s] == other.ubatch.seq_id_unq[s];
-        //    }
-        //}
-
-        // for now conservatively disallow, until the issue above is resolved
-        // ref: https://github.com/ggml-org/llama.cpp/pull/14363
-        can_reuse_ubatch = can_reuse_ubatch && !ubatch.equal_seqs();
+        if (can_reuse_ubatch && !ubatch.equal_seqs()) {
+            if (!ubatch.data) {
+                // if the old ubatch does not own it's data, then we cannot guarantee that it is still alive, and
+                //   therefore we cannot perform the sequence id check. normally should never happen
+                can_reuse_ubatch = false;
+            } else {
+                for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+                    can_reuse_ubatch &= ubatch.seq_id_unq[s] == other.ubatch.seq_id_unq[s];
+                }
+            }
+        }
 
         if (!can_reuse_ubatch) {
             return false;
