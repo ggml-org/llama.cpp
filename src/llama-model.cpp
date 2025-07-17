@@ -10494,7 +10494,7 @@ struct llm_graph_context_mamba : public llm_graph_context {
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
@@ -10629,7 +10629,7 @@ struct llm_graph_context_mamba : public llm_graph_context {
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
@@ -16071,7 +16071,7 @@ private:
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
@@ -16760,7 +16760,7 @@ struct llm_build_lfm2 : public llm_graph_context {
         const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
         const int64_t  n_seqs       = ubatch.n_seqs;
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         GGML_ASSERT(hparams.n_shortconv_l_cache > 1);
@@ -16929,10 +16929,10 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     return res;
 }
 
-llm_graph_result_ptr llama_model::build_graph(
-        const llm_graph_params & params,
-                   ggml_cgraph * gf,
-                llm_graph_type   type) const {
+ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
+    // TODO: temporary - will refactor this to keep the "gf" instance in the llm_graph_context and avoid passing it everywhere
+    auto * gf = params.res->get_gf();
+
     std::unique_ptr<llm_graph_context> llm;
 
     switch (arch) {
@@ -17152,7 +17152,7 @@ llm_graph_result_ptr llama_model::build_graph(
             } break;
         case LLM_ARCH_T5:
             {
-                switch (type) {
+                switch (params.gtype) {
                     case LLM_GRAPH_TYPE_ENCODER:
                         llm = std::make_unique<llm_build_t5_enc>(*this, params, gf);
                         break;
@@ -17262,7 +17262,7 @@ llm_graph_result_ptr llama_model::build_graph(
     // add on pooling layer
     llm->build_pooling(gf, cls, cls_b, cls_out, cls_out_b);
 
-    return std::move(llm->res);
+    return llm->res->get_gf();
 }
 
 //

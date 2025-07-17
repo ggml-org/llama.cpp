@@ -1394,6 +1394,7 @@ extern "C" {
 
         int32_t n_p_eval;
         int32_t n_eval;
+        int32_t n_reused; // number of times a ggml compute graph had been reused
     };
 
     struct llama_perf_sampler_data {
