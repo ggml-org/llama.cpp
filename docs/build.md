@@ -387,30 +387,25 @@ docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/ren
 
 **Without docker**:
 
-Firstly, you need to make sure you have installed [Vulkan SDK](https://vulkan.lunarg.com/doc/view/latest/linux/getting_started_ubuntu.html)
+First, follow the the official [Getting Started with the Linux Tarball Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html) guide.
 
-For example, on Ubuntu 22.04 (jammy), use the command below:
+**IMPORTANT**: Make sure that you have used the `source` command on the `setup_env.sh` inside of the Vulkan SDK. Otherwise, it won't work. Additionally, if you close out of your terminal, you must perform this step again if you intend to perform a build. However, there are ways to make this persistent. Refer to the Vulkan SDK guide linked in the first step for more information.
 
+Second, after verifying that you have done everything in the Vulkan SDK guide provided in the first step, run the following command to verify that everything is set up correctly:
 ```bash
-wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add -
-wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
-apt update -y
-apt-get install -y vulkan-sdk
-# To verify the installation, use the command below:
 vulkaninfo
 ```
 
-Alternatively your package manager might be able to provide the appropriate libraries.
-For example for Ubuntu 22.04 you can install `libvulkan-dev` instead.
-For Fedora 40, you can install `vulkan-devel`, `glslc` and `glslang` packages.
-
-Then, build llama.cpp using the cmake command below:
-
+Then, assuming you have `cd` into your llama.cpp folder and there are no errors with running `vulkaninfo`, you can proceed to build llama.cpp using the CMake commands below:
 ```bash
 cmake -B build -DGGML_VULKAN=1
 cmake --build build --config Release
+```
+
+Finally, after finishing your build, you should be able to do this:
+```bash
 # Test the output binary (with "-ngl 33" to offload all layers to GPU)
-./bin/llama-cli -m "PATH_TO_MODEL" -p "Hi you how are you" -n 50 -e -ngl 33 -t 4
+./build/bin/llama-cli -m "PATH_TO_MODEL" -p "Hi you how are you" -n 50 -e -ngl 33 -t 4
 
 # You should see in the output, ggml_vulkan detected your GPU. For example:
 # ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32
