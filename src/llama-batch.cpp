@@ -157,6 +157,8 @@ bool llama_batch_allocr::init(
         n_outputs += batch.logits[i] != 0;
     }
 
+    has_cpl = false;
+
     // determine coupled sequences
     // these are pairs of sequences that have at least one token in the input batch that is assigned to both of them
     for (int32_t i = 0; i < batch.n_tokens; ++i) {

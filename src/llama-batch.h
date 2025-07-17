@@ -117,7 +117,7 @@ private:
     using seq_cpl_t = std::vector<bool>;
 
     // helper flag to quickly determine if there are any coupled sequences in the batch
-    bool has_cpl;
+    bool has_cpl = false;
 
     std::vector<pos_set_t> seq_pos; // seq_pos[s]: the set of positions in sequence s
     std::vector<seq_cpl_t> seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
