@@ -408,6 +408,83 @@ void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
 }
 
 //
+// llm_graph_result
+//
+
+llm_graph_result::llm_graph_result(int64_t max_nodes) : max_nodes(max_nodes) {
+    reset();
+
+    const char * LLAMA_GRAPH_RESULT_DEBUG = getenv("LLAMA_GRAPH_RESULT_DEBUG");
+    debug = LLAMA_GRAPH_RESULT_DEBUG ? atoi(LLAMA_GRAPH_RESULT_DEBUG) : 0;
+}
+
+int64_t llm_graph_result::get_max_nodes() const {
+    return max_nodes;
+}
+
+void llm_graph_result::reset() {
+    t_tokens      = nullptr;
+    t_logits      = nullptr;
+    t_embd        = nullptr;
+    t_embd_pooled = nullptr;
+
+    inputs.clear();
+
+    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ buf_compute_meta.size(),
+        /*.mem_buffer =*/ buf_compute_meta.data(),
+        /*.no_alloc   =*/ true,
+    };
+
+    ctx_compute.reset(ggml_init(params));
+
+    gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
+}
+
+void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
+    for (auto & input : inputs) {
+        input->set_input(ubatch);
+    }
+}
+
+bool llm_graph_result::can_reuse(const llm_graph_params & params) {
+    if (!this->params.allow_reuse(params)) {
+        if (debug > 1) {
+            LLAMA_LOG_DEBUG("%s: cannot reuse graph due to incompatible graph parameters\n", __func__);
+        }
+
+        return false;
+    }
+
+    if (debug > 1) {
+        LLAMA_LOG_DEBUG("%s: checking compatibility of %d inputs:\n", __func__, (int) inputs.size());
+    }
+
+    bool res = true;
+
+    for (auto & input : inputs) {
+        const bool cur = input->can_reuse(params);
+
+        LLAMA_LOG_DEBUG("  %s: can_reuse = %d\n", "placeholder", cur);
+
+        res = res && cur;
+    }
+
+    if (debug > 0) {
+        LLAMA_LOG_DEBUG("%s: can reuse graph = %d\n", __func__, res);
+    }
+
+    return res;
+}
+
+llm_graph_input_i * llm_graph_result::add_input(llm_graph_input_ptr input) {
+    inputs.emplace_back(std::move(input));
+    return inputs.back().get();
+}
+
+//
 // llm_graph_context
 //
 

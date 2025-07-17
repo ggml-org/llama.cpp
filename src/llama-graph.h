@@ -466,9 +466,7 @@ struct llm_graph_params {
 
 class llm_graph_result : public llm_graph_result_i {
 public:
-    llm_graph_result(int64_t max_nodes) : max_nodes(max_nodes) {
-        reset();
-    }
+    llm_graph_result(int64_t max_nodes);
 
     virtual ~llm_graph_result() = default;
 
@@ -480,60 +478,20 @@ public:
     ggml_cgraph  * get_gf()  override { return gf; }
     ggml_context * get_ctx() override { return ctx_compute.get(); }
 
-    int64_t get_max_nodes() const {
-        return max_nodes;
-    }
+    int64_t get_max_nodes() const;
 
-    void reset() override {
-        t_tokens      = nullptr;
-        t_logits      = nullptr;
-        t_embd        = nullptr;
-        t_embd_pooled = nullptr;
+    void reset() override;
 
-        inputs.clear();
-
-        buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
-
-        ggml_init_params params = {
-            /*.mem_size   =*/ buf_compute_meta.size(),
-            /*.mem_buffer =*/ buf_compute_meta.data(),
-            /*.no_alloc   =*/ true,
-        };
-
-        ctx_compute.reset(ggml_init(params));
-
-        gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
-    }
-
-    void set_inputs(const llama_ubatch * ubatch) override {
-        for (auto & input : inputs) {
-            input->set_input(ubatch);
-        }
-    }
+    void set_inputs(const llama_ubatch * ubatch) override;
 
     // try to update the existing graph result using the new graph parameters in order to reuse it
     // this can only be done if we determine that the resulting graph using the new graph parameters
     //   would be identical to the existing graph. in that case, we simply have to update the memory
     //   contexts of the input tensors of the graph and we can reuse it for another computation
     // return true if the graph was updated and can be reused
-    bool can_reuse(const llm_graph_params & params) override {
-        if (!this->params.allow_reuse(params)) {
-            return false;
-        }
+    bool can_reuse(const llm_graph_params & params) override;
 
-        bool res = true;
-
-        for (auto & input : inputs) {
-            res &= input->can_reuse(params);
-        }
-
-        return res;
-    }
-
-    llm_graph_input_i * add_input(llm_graph_input_ptr input) {
-        inputs.emplace_back(std::move(input));
-        return inputs.back().get();
-    }
+    llm_graph_input_i * add_input(llm_graph_input_ptr input);
 
     // important graph nodes
     ggml_tensor * t_tokens      = nullptr;
@@ -556,6 +514,9 @@ public:
     // we will use this to determine whether the graph can be reused by comparing them with the new parameters
     // note: these are updated after constructing the new graph
     llm_graph_params params;
+
+    // env: LLAMA_GRAPH_RESULT_DEBUG
+    int debug = 0;
 };
 
 //
