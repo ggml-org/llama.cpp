@@ -382,7 +382,7 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             common_chat_msg response_message;
-            response_message.role = "system";
+            response_message.role = "assistant";
             response_message.content = response;
             messages.push_back(response_message);
             content.clear();
