@@ -1418,7 +1418,7 @@ static std::unique_ptr<llm_graph_input_attn_kv_unified> build_attn_inp_kv_unifie
         inp->self_v_idxs = mctx_cur->build_input_v_idxs(ctx0, ubatch);
 
         inp->self_kq_mask = ggml_new_tensor_4d(ctx0, GGML_TYPE_F32, n_kv, GGML_PAD(n_tokens/n_stream, GGML_KQ_MASK_PAD), 1, n_stream);
-        cb(inp->self_kq_mask, "KQ_mask", -1);
+        ggml_set_name(inp->self_kq_mask, "KQ_mask");
         ggml_set_input(inp->self_kq_mask);
 
         inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
