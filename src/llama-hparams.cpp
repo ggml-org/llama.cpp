@@ -65,10 +65,55 @@ uint32_t llama_hparams::n_embd_v_gqa(uint32_t il) const {
     return n_embd_head_v * n_head_kv;
 }
 
+bool llama_hparams::is_n_embd_k_gqa_variable() const {
+    const uint32_t val = n_embd_k_gqa();
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (val != n_embd_k_gqa(il)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool llama_hparams::is_n_embd_v_gqa_variable() const {
+    const uint32_t val = n_embd_v_gqa();
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        if (val != n_embd_v_gqa(il)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+uint32_t llama_hparams::n_embd_k_gqa_max() const {
+    uint32_t val = n_embd_k_gqa();
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        val = std::max(val, n_embd_k_gqa(il));
+    }
+
+    return val;
+}
+
+uint32_t llama_hparams::n_embd_v_gqa_max() const {
+    uint32_t val = n_embd_v_gqa();
+    for (uint32_t il = 0; il < n_layer; ++il) {
+        val = std::max(val, n_embd_v_gqa(il));
+    }
+
+    return val;
+}
+
 uint32_t llama_hparams::n_embd_r() const {
     if (wkv_head_size != 0) {
         // for RWKV models
         return token_shift_count * n_embd;
+    }
+
+    if (n_shortconv_l_cache != 0) {
+        // for LFM2 models
+        return n_embd * (n_shortconv_l_cache - 1);
     }
 
     // TODO: maybe support other convolution strides than 1

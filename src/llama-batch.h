@@ -48,6 +48,7 @@ public:
             const llama_vocab & vocab,
             const llama_memory_i * memory,
             uint32_t n_embd,
+            uint32_t n_seq_max,
             bool output_all);
 
     const llama_batch & get_batch() const;
@@ -100,6 +101,7 @@ private:
     const uint32_t n_pos_per_embd;
 
     uint32_t n_embd;
+    uint32_t n_seq_max;
     uint32_t n_outputs;
 
     std::array<llama_seq_id, 1> seq_id_0 = { 0 }; // default sequence id
