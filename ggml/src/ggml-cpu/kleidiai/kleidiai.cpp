@@ -357,6 +357,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 public:
     int repack(struct ggml_tensor * tensor, const void * data, size_t data_size) {
         if (!ctx.kernels) {
+            GGML_LOG_DEBUG("%s: No suitable KleidiAI kernel available, falling back to standard CPU implementation\n", __func__);
             return -1;  // No suitable kernel available
         }
         const size_t n = tensor->ne[1];
