@@ -5719,6 +5719,34 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, 0);
                     }
                 } break;
+            case LLM_ARCH_COGVLM:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.visexp_attn_wq = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_WQ, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.visexp_attn_wk = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_WK, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.visexp_attn_wv = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_WV, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.visexp_attn_wo = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
             default:
                 throw std::runtime_error("unknown architecture");
         }
@@ -18564,6 +18592,120 @@ struct llm_build_smallthinker : public llm_graph_context{
     }
 };
 
+struct llm_build_cogvlm : public llm_graph_context {
+    llm_build_cogvlm(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+        float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * inpL, * cur;
+        inpL = build_inp_embd(model.tok_embd);
+
+        // check ubatch to see if we have input tokens (text)
+        // or an input embedding vector (image)
+        bool is_text;
+        if (ubatch.token) {
+            is_text = true;
+        } else {
+            is_text = false;
+        }
+
+        for (int il = 0; il < n_layer; ++il) {
+            // get either the text or image weight tensors
+            ggml_tensor * wq, * wk, * wv, * wo;
+            ggml_tensor * ffn_gate, * ffn_down, * ffn_up;
+
+            if (is_text) {
+                wq = model.layers[il].wq;
+                wk = model.layers[il].wk;
+                wv = model.layers[il].wv;
+                wo = model.layers[il].wo;
+                ffn_gate = model.layers[il].ffn_gate;
+                ffn_down = model.layers[il].ffn_down;
+                ffn_up = model.layers[il].ffn_up;
+            } else {
+                wq = model.layers[il].visexp_attn_wq;
+                wk = model.layers[il].visexp_attn_wk;
+                wv = model.layers[il].visexp_attn_wv;
+                wo = model.layers[il].visexp_attn_wo;
+                ffn_gate = model.layers[il].visexp_ffn_gate;
+                ffn_down = model.layers[il].visexp_ffn_down;
+                ffn_up = model.layers[il].visexp_ffn_up;
+            }
+
+            ggml_tensor * inpSA = inpL;
+            cur = build_norm(inpSA, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+
+            // build self attention
+            {
+                ggml_tensor * Qcur = build_lora_mm(wq, cur);
+                cb(Qcur, "Qcur", il);
+                if (model.layers[il].bq) {
+                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                    cb(Qcur, "Qcur", il);
+                }
+
+                ggml_tensor * Kcur = build_lora_mm(wk, cur);
+                cb(Kcur, "Kcur", il);
+                if (model.layers[il].bk) {
+                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                    cb(Kcur, "Kcur", il);
+                }
+
+                ggml_tensor * Vcur = build_lora_mm(wv, cur);
+                cb(Vcur, "Vcur", il);
+                if (model.layers[il].bv) {
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                    cb(Vcur, "Vcur", il);
+                }
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                // TODO: Check Rope because this might not be the same as cogvlm
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+
+                cur = build_attn(inp_attn, gf, wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                cb(cur, "attn_out", il);
+            }
+
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "ffn_norm", il);
+
+            // Make a standard ffn without the build_ffn function
+            ggml_tensor * tmp = build_lora_mm(ffn_up, cur);
+            ggml_tensor * gate = build_lora_mm(ffn_gate, cur);
+            gate = ggml_silu(ctx0, gate);
+            cur = ggml_mul(ctx0, gate, tmp);
+            cur = build_lora_mm(ffn_down, cur);
+
+            cur = ggml_add(ctx0, cur, ffn_inp);
+            cb(cur, "ffn_out", il);
+
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        cur = build_lora_mm(model.output, cur);
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+        ggml_build_forward_expand(gf, cur);
+
+    }
+};
+
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, llama_cparams & cparams) const {
     llama_memory_i * res;
 
@@ -19075,6 +19217,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
                 } else {
                     llm = std::make_unique<llm_build_smallthinker<false>>(*this, params);
                 }
+            } break;
+        case LLM_ARCH_COGVLM:
+            {
+                llm = std::make_unique<llm_build_cogvlm>(*this, params, gf);
             } break;
         default:
             GGML_ABORT("fatal error");
