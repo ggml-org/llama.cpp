@@ -210,7 +210,7 @@ bool llama_batch_allocr::init(
         LLAMA_LOG_DEBUG("%s: input batch info:\n", __func__);
 
         llama_ubatch ubatch {
-            /*.equal_seqs   =*/ false,
+            /*.b_equal_seqs =*/ false,
             /*.n_tokens     =*/ (uint32_t) batch.n_tokens,
             /*.n_seq_tokens =*/ (uint32_t) 1,
             /*.n_seqs       =*/ (uint32_t) batch.n_tokens,
@@ -385,7 +385,7 @@ llama_ubatch llama_batch_allocr::ubatch_reserve(uint32_t n_seq_tokens, uint32_t 
     }
 
     llama_ubatch res {
-        /*.equal_seqs   =*/ true,
+        /*.b_equal_seqs =*/ true,
         /*.n_tokens     =*/ n_tokens,
         /*.n_seq_tokens =*/ n_seq_tokens,
         /*.n_seqs       =*/ n_seqs,
@@ -709,7 +709,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
     }
 
     llama_ubatch res {
-        /*.equal_seqs   =*/ equal_seqs,
+        /*.b_equal_seqs =*/ equal_seqs,
         /*.n_tokens     =*/ n_tokens,
         /*.n_seq_tokens =*/ n_tokens/n_seqs,
         /*.n_seqs       =*/ n_seqs,
@@ -736,7 +736,7 @@ llama_ubatch llama_batch_allocr::ubatch_add(const std::vector<int32_t> & idxs, u
 
 void llama_batch_allocr::ubatch_print(const llama_ubatch & ubatch, int debug) {
     if (debug > 0) {
-        LLAMA_LOG_DEBUG("%s:   equal_seqs   = %d\n", __func__, ubatch.equal_seqs);
+        LLAMA_LOG_DEBUG("%s:   equal_seqs   = %d\n", __func__, ubatch.equal_seqs());
         LLAMA_LOG_DEBUG("%s:   n_tokens     = %d\n", __func__, ubatch.n_tokens);
         LLAMA_LOG_DEBUG("%s:   n_seq_tokens = %d\n", __func__, ubatch.n_seq_tokens);
         LLAMA_LOG_DEBUG("%s:   n_seqs       = %d\n", __func__, ubatch.n_seqs);

@@ -13,7 +13,12 @@
 // keep this struct lightweight
 // it points to data in `llama_batch_allocr`
 struct llama_ubatch {
-    bool equal_seqs;
+    bool equal_seqs() const {
+        return b_equal_seqs != 0;
+    }
+
+    uint32_t b_equal_seqs; // note: this is a boolean, but we use an int32_t for alignment
+                           //       otherwise address sanitizer complains
     // TODO: whole_seqs for embeddings?
 
     uint32_t n_tokens;     // total tokens (n_seq_tokens * n_seqs)

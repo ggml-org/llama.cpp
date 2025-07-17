@@ -426,7 +426,7 @@ struct llm_graph_params {
     bool allow_reuse(const llm_graph_params & other) const {
         // first check the ubatch
         bool can_reuse_ubatch =
-            ubatch.equal_seqs   == other.ubatch.equal_seqs &&
+            ubatch.equal_seqs() == other.ubatch.equal_seqs() &&
             ubatch.n_tokens     == other.ubatch.n_tokens &&
             ubatch.n_seq_tokens == other.ubatch.n_seq_tokens &&
             ubatch.n_seqs       == other.ubatch.n_seqs &&
@@ -436,15 +436,15 @@ struct llm_graph_params {
                 (!ubatch.embd  && !other.ubatch.embd)
             );
 
-        // TODO: this won't work because seq_id_unq ptr can point to an old balloc that has
-        //       been freed by this point. find a way to fix this
-        //for (uint32_t s = 0; s < n_seqs_unq; ++s) {
-        //    can_reuse_ubatch &= seq_id_unq[s] == other.seq_id_unq[s];
+        //if (can_reuse_ubatch) {
+        //    for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+        //        can_reuse_ubatch &= ubatch.seq_id_unq[s] == other.ubatch.seq_id_unq[s];
+        //    }
         //}
 
         // for now conservatively disallow, until the issue above is resolved
         // ref: https://github.com/ggml-org/llama.cpp/pull/14363
-        can_reuse_ubatch = can_reuse_ubatch && !ubatch.equal_seqs;
+        can_reuse_ubatch = can_reuse_ubatch && !ubatch.equal_seqs();
 
         if (!can_reuse_ubatch) {
             return false;
