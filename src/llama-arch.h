@@ -90,6 +90,7 @@ enum llm_arch {
     LLM_ARCH_SMOLLM3,
     LLM_ARCH_LFM2,
     LLM_ARCH_DREAM,
+    LLM_ARCH_MISTRAL,
     LLM_ARCH_UNKNOWN,
 };
 
