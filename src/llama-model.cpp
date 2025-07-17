@@ -16559,7 +16559,7 @@ struct llm_build_lfm2 : public llm_graph_context {
         const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
         const int64_t  n_seqs       = ubatch.n_seqs;
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         GGML_ASSERT(hparams.n_shortconv_l_cache > 1);
