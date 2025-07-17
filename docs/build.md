@@ -305,9 +305,8 @@ On Linux it is possible to use unified memory architecture (UMA) to share main m
 
 ## Vulkan
 
-**Windows**
-
-### w64devkit
+### For Windows Users:
+**w64devkit**
 
 Download and extract [`w64devkit`](https://github.com/skeeto/w64devkit/releases).
 
@@ -334,7 +333,7 @@ cmake -B build -DGGML_VULKAN=ON
 cmake --build build --config Release
 ```
 
-### Git Bash MINGW64
+**Git Bash MINGW64**
 
 Download and install [`Git-SCM`](https://git-scm.com/downloads/win) with the default settings
 
@@ -357,7 +356,8 @@ Now you can load the model in conversation mode using `Vulkan`
 build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2 -cnv
 ```
 
-### MSYS2
+**MSYS2**
+
 Install [MSYS2](https://www.msys2.org/) and then run the following commands in a UCRT terminal to install dependencies.
 ```sh
 pacman -S git \
@@ -373,9 +373,9 @@ cmake -B build -DGGML_VULKAN=ON
 cmake --build build --config Release
 ```
 
-**With docker**:
+### For Docker users:
 
-You don't need to install Vulkan SDK. It will be installed inside the container.
+You don't need to install the Vulkan SDK. It will be installed inside the container.
 
 ```sh
 # Build the image
@@ -385,11 +385,12 @@ docker build -t llama-cpp-vulkan --target light -f .devops/vulkan.Dockerfile .
 docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card1:/dev/dri/card1 llama-cpp-vulkan -m "/app/models/YOUR_MODEL_FILE" -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33
 ```
 
-**Without docker**:
+### For Linux users:
 
 First, follow the the official [Getting Started with the Linux Tarball Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html) guide.
 
-**IMPORTANT**: Make sure that you have used the `source` command on the `setup_env.sh` inside of the Vulkan SDK. Otherwise, it won't work. Additionally, if you close out of your terminal, you must perform this step again if you intend to perform a build. However, there are ways to make this persistent. Refer to the Vulkan SDK guide linked in the first step for more information.
+> [!IMPORTANT]
+> After completing the first step, ensure that you have used the `source` command on the `setup_env.sh` file inside of the Vulkan SDK in your current terminal session. Otherwise, the build won't work. Additionally, if you close out of your terminal, you must perform this step again if you intend to perform a build. However, there are ways to make this persistent. Refer to the Vulkan SDK guide linked in the first step for more information about any of this.
 
 Second, after verifying that you have done everything in the Vulkan SDK guide provided in the first step, run the following command to verify that everything is set up correctly:
 ```bash
