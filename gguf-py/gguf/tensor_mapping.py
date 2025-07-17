@@ -13,7 +13,7 @@ class TensorNameMap:
             "transformer.wte",                           # gpt2 gpt-j mpt refact qwen dbrx jais exaone
             "transformer.word_embeddings",               # falcon
             "word_embeddings",                           # bloom
-            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 granite-hybrid
+            "model.embed_tokens",                        # llama-hf nemotron olmoe olmo2 rwkv6qwen2 glm4-0414 plamo2 granite-hybrid
             "tok_embeddings",                            # llama-pth
             "embeddings.word_embeddings",                # bert nomic-bert
             "language_model.embedding.word_embeddings",  # persimmon
@@ -63,7 +63,7 @@ class TensorNameMap:
         # Output
         MODEL_TENSOR.OUTPUT: (
             "embed_out",                 # gptneox
-            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe
+            "lm_head",                   # gpt2 mpt falcon llama-hf baichuan qwen mamba dbrx jais nemotron exaone olmoe olmo2 phimoe plamo2
             "output",                    # llama-pth bloom internlm2
             "word_embeddings_for_head",  # persimmon
             "lm_head.linear",            # phi2
@@ -77,7 +77,7 @@ class TensorNameMap:
         MODEL_TENSOR.OUTPUT_NORM: (
             "gpt_neox.final_layer_norm",               # gptneox
             "transformer.ln_f",                        # gpt2 gpt-j falcon jais exaone
-            "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe
+            "model.norm",                              # llama-hf baichuan internlm2 olmoe olmo2 phimoe plamo2
             "norm",                                    # llama-pth
             "transformer.norm_f",                      # mpt dbrx
             "ln_f",                                    # refact bloom qwen gpt2
@@ -126,6 +126,7 @@ class TensorNameMap:
             "h.{bid}.ln_1",                                         # gpt2
             "transformer.h.{bid}.ln",                               # phi2
             "model.layers.layers.{bid}.norm",                       # plamo
+            "model.layers.layers.{bid}.pre_mixer_norm",             # plamo2
             "model.layers.{bid}.attention_norm",                    # internlm2
             "model.layers.{bid}.norm",                              # mamba-qbert
             "backbone.layers.{bid}.norm",                           # mamba
@@ -163,6 +164,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.attn.Wqkv",                                      # nomic-bert
             "encoder.layers.{bid}.mixer.Wqkv",                                     # jina
             "model.layers.{bid}.self_attn.qkv_proj",                               # phi3
+            "model.layers.layers.{bid}.mixer.qkv_proj",                            # plamo2
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "transformer_encoder.{bid}.qkv",                                       # neobert
@@ -233,6 +235,7 @@ class TensorNameMap:
             "h.{bid}.attn.c_proj",                                          # gpt2
             "transformer.h.{bid}.mixer.out_proj",                           # phi2
             "model.layers.layers.{bid}.self_attn.o_proj",                   # plamo
+            "model.layers.layers.{bid}.mixer.o_proj",                       # plamo2
             "model.layers.{bid}.attention.wo",                              # internlm2
             "encoder.layers.{bid}.attn.out_proj",                           # nomic-bert
             "encoder.layers.{bid}.mixer.out_proj",                          # jina
@@ -255,8 +258,9 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.ATTN_POST_NORM: (
-            "model.layers.{bid}.post_attention_layernorm",     # gemma2 olmo2    # ge
-            "model.layers.{bid}.post_self_attn_layernorm",     # glm-4-0414
+            "model.layers.{bid}.post_attention_layernorm",       # gemma2 olmo2    # ge
+            "model.layers.{bid}.post_self_attn_layernorm",       # glm-4-0414
+            "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
         ),
 
         # Rotary embeddings
@@ -286,6 +290,7 @@ class TensorNameMap:
             "model.layers.{bid}.pre_moe_layernorm",                          # mini-jamba
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
+            "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
         ),
 
         # Post feed-forward norm
@@ -298,6 +303,7 @@ class TensorNameMap:
         MODEL_TENSOR.FFN_POST_NORM: (
             "model.layers.{bid}.post_feedforward_layernorm", # gemma2 olmo2
             "model.layers.{bid}.post_mlp_layernorm", # glm-4-0414
+            "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
             "model.layers.{bid}.feed_forward.up_proj",
         ),
 
@@ -342,6 +348,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.fc1",                             # phi2
             "model.layers.{bid}.mlp.gate_up_proj",                    # phi3 glm-4-0414
             "model.layers.layers.{bid}.mlp.up_proj",                  # plamo
+            "model.layers.layers.{bid}.mlp.gate_up_proj",             # plamo2
             "model.layers.{bid}.feed_forward.w3",                     # internlm2
             "encoder.layers.{bid}.mlp.fc11",                          # nomic-bert
             "encoder.layers.{bid}.mlp.fc1",                           # nomic-bert-moe
@@ -469,6 +476,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.q_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_q",                # jina-bert-v2
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
+            "model.layers.layers.{bid}.mixer.q",                              # plamo2
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
@@ -479,6 +487,7 @@ class TensorNameMap:
             "transformer.blocks.{bid}.attn.k_ln",                             # sea-lion
             "encoder.layer.{bid}.attention.self.layer_norm_k",                # jina-bert-v2
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
+            "model.layers.layers.{bid}.mixer.k",                              # plamo2
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
@@ -559,27 +568,31 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_IN: (
-            "model.layers.{bid}.in_proj",           # mamba-hf
-            "backbone.layers.{bid}.mixer.in_proj",  # mamba
-            "model.layers.{bid}.mamba.in_proj",     # jamba falcon-h1 granite-hybrid
+            "model.layers.{bid}.in_proj",               # mamba-hf
+            "backbone.layers.{bid}.mixer.in_proj",      # mamba
+            "model.layers.{bid}.mamba.in_proj",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.in_proj",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_CONV1D: (
-            "model.layers.{bid}.conv1d",           # mamba-hf
-            "backbone.layers.{bid}.mixer.conv1d",  # mamba
-            "model.layers.{bid}.mamba.conv1d",     # jamba falcon-h1 granite-hybrid
+            "model.layers.{bid}.conv1d",               # mamba-hf
+            "backbone.layers.{bid}.mixer.conv1d",      # mamba
+            "model.layers.{bid}.mamba.conv1d",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.conv1d",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_X: (
-            "model.layers.{bid}.x_proj",           # mamba-hf
-            "backbone.layers.{bid}.mixer.x_proj",  # mamba
-            "model.layers.{bid}.mamba.x_proj",     # jamba
+            "model.layers.{bid}.x_proj",                  # mamba-hf
+            "backbone.layers.{bid}.mixer.x_proj",         # mamba
+            "model.layers.{bid}.mamba.x_proj",            # jamba
+            "model.layers.layers.{bid}.mixer.bcdt_proj",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_DT: (
-            "model.layers.{bid}.dt_proj",           # mamba-hf
-            "backbone.layers.{bid}.mixer.dt_proj",  # mamba
-            "model.layers.{bid}.mamba.dt_proj",     # jamba falcon-h1 granite-hybrid
+            "model.layers.{bid}.dt_proj",               # mamba-hf
+            "backbone.layers.{bid}.mixer.dt_proj",      # mamba
+            "model.layers.{bid}.mamba.dt_proj",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.dt_proj",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_DT_NORM: (
@@ -587,25 +600,33 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_A: (
-            "model.layers.{bid}.A_log",           # mamba-hf
-            "backbone.layers.{bid}.mixer.A_log",  # mamba
-            "model.layers.{bid}.mamba.A_log",     # jamba falcon-h1 granite-hybrid
+            "model.layers.{bid}.A_log",               # mamba-hf
+            "backbone.layers.{bid}.mixer.A_log",      # mamba
+            "model.layers.{bid}.mamba.A_log",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.A_log",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_B_NORM: (
-            "model.layers.{bid}.mamba.b_layernorm",  # jamba
-            "model.layers.{bid}.mamba.B_layernorm",  # mini-jamba
+            "model.layers.{bid}.mamba.b_layernorm",           # jamba
+            "model.layers.{bid}.mamba.B_layernorm",           # mini-jamba
+            "model.layers.layers.{bid}.mixer.B_norm.weight",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_C_NORM: (
-            "model.layers.{bid}.mamba.c_layernorm",  # jamba
-            "model.layers.{bid}.mamba.C_layernorm",  # mini-jamba
+            "model.layers.{bid}.mamba.c_layernorm",           # jamba
+            "model.layers.{bid}.mamba.C_layernorm",           # mini-jamba
+            "model.layers.layers.{bid}.mixer.C_norm.weight",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_D: (
-            "model.layers.{bid}.D",           # mamba-hf
-            "backbone.layers.{bid}.mixer.D",  # mamba
-            "model.layers.{bid}.mamba.D",     # jamba falcon-h1 granite-hybrid
+            "model.layers.{bid}.D",               # mamba-hf
+            "backbone.layers.{bid}.mixer.D",      # mamba
+            "model.layers.{bid}.mamba.D",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.D",  # plamo2
+        ),
+
+        MODEL_TENSOR.SSM_DT_NORM: (
+            "model.layers.layers.{bid}.mixer.dt_norm.weight",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_NORM: (
@@ -614,9 +635,10 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_OUT: (
-            "model.layers.{bid}.out_proj",           # mamba-hf
-            "backbone.layers.{bid}.mixer.out_proj",  # mamba
-            "model.layers.{bid}.mamba.out_proj",     # jamba falcon-h1 granite-hybrid
+            "model.layers.{bid}.out_proj",               # mamba-hf
+            "backbone.layers.{bid}.mixer.out_proj",      # mamba
+            "model.layers.{bid}.mamba.out_proj",         # jamba falcon-h1 granite-hybrid
+            "model.layers.layers.{bid}.mixer.out_proj",  # plamo2
         ),
 
         MODEL_TENSOR.TIME_MIX_W0: (

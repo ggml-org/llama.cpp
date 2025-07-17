@@ -6,7 +6,7 @@
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 256  // DeepSeekV3
+#define LLAMA_MAX_EXPERTS 384  // Kimi-K2
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE    = 0,
@@ -190,6 +190,14 @@ struct llama_hparams {
 
     // dimension of value embeddings across all k-v heads
     uint32_t n_embd_v_gqa(uint32_t il = 0) const;
+
+    // true if any layer has a different n_embd_k_gqa/n_embd_v_gqa
+    bool is_n_embd_k_gqa_variable() const;
+    bool is_n_embd_v_gqa_variable() const;
+
+    // return the maximum n_embd_k_gqa/n_embd_v_gqa across all layers
+    uint32_t n_embd_k_gqa_max() const;
+    uint32_t n_embd_v_gqa_max() const;
 
     // dimension of the rolling state embeddings
     // corresponds to Mamba's conv_states size or RWKV's token_shift states size

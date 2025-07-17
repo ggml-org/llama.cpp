@@ -3,7 +3,10 @@
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
 template<typename src_t, typename dst_t>
-__device__ void set_rows_1(const src_t * src_f, dst_t * dst_f) {}
+__device__ void set_rows_1(const src_t * src_f, dst_t * dst_f) {
+    GGML_UNUSED(src_f);
+    GGML_UNUSED(dst_f);
+}
 
 template<>
 __device__ __forceinline__ void set_rows_1<float, half>(const float * src_f, half * dst_h) {
@@ -53,6 +56,9 @@ static __global__ void k_set_rows(
     const src_t* src_elem = src0_row + i00;
     dst_t* dst_elem = dst_row_ptr + i00;
     set_rows_1(src_elem, dst_elem);
+
+    GGML_UNUSED(ne10);
+    GGML_UNUSED(ne13);
 }
 
 template<typename src_t, typename dst_t>

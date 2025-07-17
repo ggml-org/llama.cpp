@@ -2835,10 +2835,11 @@ static void ggml_vk_load_shaders(vk_device& device) {
         return s;
     };
 
+    bool rte = device->float_controls_rte_fp16;
 #define CREATE_BINARY(name, namemod, spec) \
     for (int s0 : {0,1}) for (int s1 : {0,1}) for (int d : {0,1}) \
         ggml_vk_create_pipeline(device, device->pipeline_ ## name ## namemod[s0][s1][d], \
-                                #name + get_suffix(s0, s1, d) + #namemod, name ## _len[s0][s1][d], name ## _data[s0][s1][d], \
+                                #name + get_suffix(s0, s1, d) + #namemod, name ## _len[s0][s1][d][rte], name ## _data[s0][s1][d][rte], \
                                 "main", 3, sizeof(vk_op_binary_push_constants), {512, 1, 1}, spec, 1);
 
     CREATE_BINARY(add, , {0})
@@ -2890,8 +2891,13 @@ static void ggml_vk_load_shaders(vk_device& device) {
 #undef CREATE_UNARY
 
 #define CREATE_GLU(name)  \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);  \
-    ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);
+    if (device->float_controls_rte_fp16) {  \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32_rte", name ## _f32_rte_len, name ## _f32_rte_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16_rte", name ## _f16_rte_len, name ## _f16_rte_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
+    } else {    \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [0], #name "_f32", name ## _f32_len, name ## _f32_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
+        ggml_vk_create_pipeline(device, device->pipeline_ ## name [1], #name "_f16", name ## _f16_len, name ## _f16_data, "main", 3, sizeof(vk_op_glu_push_constants), {512, 1, 1}, {}, 1, true);   \
+    }
 
     CREATE_GLU(geglu)
     CREATE_GLU(reglu)
@@ -4916,7 +4922,7 @@ static bool ggml_vk_dim01_contiguous(const ggml_tensor * tensor) {
     return
         tensor->nb[0] == ggml_type_size(tensor->type) &&
         tensor->nb[1] == (tensor->nb[0]*tensor->ne[0])/ggml_blck_size(tensor->type) &&
-        tensor->nb[3] == tensor->nb[2]*tensor->ne[2];
+        (tensor->ne[3] == 1 || tensor->nb[3] == tensor->nb[2]*tensor->ne[2]);
 }
 
 static vk_pipeline ggml_vk_get_cpy_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src, const ggml_tensor * dst, ggml_type to) {
@@ -10348,10 +10354,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->op == GGML_OP_MUL_MAT_ID) {
                     if (!device->mul_mat_id_s[src0_type] && !device->mul_mat_id_m[src0_type] && !device->mul_mat_id_l[src0_type]) {
                         // If there's not enough shared memory for row_ids and the result tile, fallback to CPU
-                        return false;
-                    }
-                    // Check against size of shared memory variable
-                    if (op->src[2]->ne[0] > 4096) {
                         return false;
                     }
                 }
