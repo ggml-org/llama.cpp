@@ -137,18 +137,20 @@ struct rpc_server_params {
     bool        use_cache   = false;
     int         n_threads   = std::max(1U, std::thread::hardware_concurrency()/2);
     std::string device;
+    std::string model_file;
 };
 
 static void print_usage(int /*argc*/, char ** argv, rpc_server_params params) {
     fprintf(stderr, "Usage: %s [options]\n\n", argv[0]);
     fprintf(stderr, "options:\n");
-    fprintf(stderr, "  -h, --help                show this help message and exit\n");
-    fprintf(stderr, "  -t,      --threads        number of threads for the CPU backend (default: %d)\n", params.n_threads);
-    fprintf(stderr, "  -d DEV,  --device         device to use\n");
-    fprintf(stderr, "  -H HOST, --host HOST      host to bind to (default: %s)\n", params.host.c_str());
-    fprintf(stderr, "  -p PORT, --port PORT      port to bind to (default: %d)\n", params.port);
-    fprintf(stderr, "  -m MEM,  --mem MEM        backend memory size (in MB)\n");
-    fprintf(stderr, "  -c,      --cache          enable local file cache\n");
+    fprintf(stderr, "  -h,  --help                show this help message and exit\n");
+    fprintf(stderr, "  -t,  --threads N           number of threads for the CPU backend (default: %d)\n", params.n_threads);
+    fprintf(stderr, "  -d,  --device DEV          device to use\n");
+    fprintf(stderr, "  -H,  --host HOST           host to bind to (default: %s)\n", params.host.c_str());
+    fprintf(stderr, "  -p,  --port PORT           port to bind to (default: %d)\n", params.port);
+    fprintf(stderr, "  -mm, --mem MEM             backend memory size (in MB)\n");
+    fprintf(stderr, "  -m,  --model FNAME         model path\n");
+    fprintf(stderr, "  -c,  --cache               enable local file cache\n");
     fprintf(stderr, "\n");
 }
 
@@ -196,11 +198,16 @@ static bool rpc_server_params_parse(int argc, char ** argv, rpc_server_params & 
             }
         } else if (arg == "-c" || arg == "--cache") {
             params.use_cache = true;
-        } else if (arg == "-m" || arg == "--mem") {
+        } else if (arg == "-mm" || arg == "--mem") {
             if (++i >= argc) {
                 return false;
             }
             params.backend_mem = std::stoul(argv[i]) * 1024 * 1024;
+        } else if (arg == "-m" || arg == "--model") {
+            if (++i >= argc) {
+                return false;
+            }
+            params.model_file = argv[i];
         } else if (arg == "-h" || arg == "--help") {
             print_usage(argc, argv, params);
             exit(0);
@@ -302,6 +309,14 @@ int main(int argc, char * argv[]) {
         }
         cache_dir = cache_dir_str.c_str();
     }
+    const char * model_file = nullptr;
+    if (!params.model_file.empty()) {
+        model_file = params.model_file.c_str();
+        if (!fs::exists(model_file)) {
+            fprintf(stderr, "Model file does not exist: %s\n", model_file);
+            return 1;
+        }
+    }
 
     ggml_backend_reg_t reg = ggml_backend_reg_by_name("RPC");
     if (!reg) {
@@ -315,7 +330,7 @@ int main(int argc, char * argv[]) {
         return 1;
     }
 
-    start_server_fn(backend, endpoint.c_str(), cache_dir, free_mem, total_mem);
+    start_server_fn(backend, endpoint.c_str(), model_file, cache_dir, free_mem, total_mem);
 
     ggml_backend_free(backend);
     return 0;
