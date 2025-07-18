@@ -22,6 +22,9 @@
 # # with MUSA support
 # GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with OPENVINO support
+# GG_BUILD_OPENVINO=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -113,6 +116,15 @@ fi
 if [ ! -z ${GG_BUILD_NO_SVE} ]; then
     # arm 9 and newer enables sve by default, adjust these flags depending on the cpu used
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.5-a+fp16+i8mm"
+fi
+
+if [ ! -z ${GG_BUILD_OPENVINO} ]; then
+    if [ -z ${OpenVINO_DIR} ]; then
+        echo "OpenVINO_DIR not found, please install OpenVINO via archives and enable it by:"
+        echo "source /opt/intel/openvino/setupvars.sh"
+        exit 1
+    fi
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 fi
 ## helpers
 
