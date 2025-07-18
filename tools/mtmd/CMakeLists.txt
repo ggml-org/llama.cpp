@@ -93,7 +93,7 @@ add_executable(llama-qwen2vl-cli  deprecation-warning.cpp)
 set(TARGET llama-mtmd-cli)
 add_executable         (${TARGET} mtmd-cli.cpp)
 set_target_properties  (${TARGET} PROPERTIES OUTPUT_NAME llama-mtmd-cli)
-install                (TARGETS ${TARGET} RUNTIME)
+install                (TARGETS ${TARGET} RUNTIME BUNDLE DESTINATION .)
 target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
