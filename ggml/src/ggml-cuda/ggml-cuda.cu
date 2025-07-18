@@ -2621,9 +2621,9 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
             // https://github.com/huggingface/transformers/blob/bda75b4011239d065de84aa3e744b67ebfa7b245/src/transformers/models/gemma3n/modeling_gemma3n.py#L1773,
             // Generally, changes in batch size or context size can cause changes to the grid size of some kernels.
             use_cuda_graph = false;
-            #ifndef NDEBUG
-                GGML_LOG_DEBUG("%s: disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
-            #endif
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+#endif
         }
 
         if (node->op == GGML_OP_CPY) {
