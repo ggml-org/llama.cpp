@@ -22,6 +22,9 @@
 # # with MUSA support
 # GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with OPENVINO support
+# GG_BUILD_OPENVINO=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 
 if [ -z "$2" ]; then
     echo "usage: $0 <output-dir> <mnt-dir>"
@@ -92,6 +95,15 @@ if [ ! -z ${GG_BUILD_MUSA} ]; then
     # Use qy1 by default (MTT S80)
     MUSA_ARCH=${MUSA_ARCH:-21}
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_MUSA=ON -DMUSA_ARCHITECTURES=${MUSA_ARCH}"
+fi
+
+if [ ! -z ${GG_BUILD_OPENVINO} ]; then
+    if [ -z ${OpenVINO_DIR} ]; then
+        echo "OpenVINO_DIR not found, please install OpenVINO via archives and enable it by:"
+        echo "source /opt/intel/openvino/setupvars.sh"
+        exit 1
+    fi
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
 fi
 ## helpers
 
