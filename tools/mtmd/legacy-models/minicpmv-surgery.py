@@ -16,6 +16,8 @@ mm_tensors = [k for k, v in checkpoint.items() if k.startswith("resampler")]
 
 # store these tensors in a new dictionary and torch.save them
 projector = {name: checkpoint[name].float() for name in mm_tensors}
+if 'resampler.proj' in projector.keys() and hasattr(model.llm.config,'scale_emb') is True:
+    projector['resampler.proj'] = projector['resampler.proj'] / model.llm.config.scale_emb
 torch.save(projector, f"{args.model}/minicpmv.projector")
 
 clip_tensors = [k for k, v in checkpoint.items() if k.startswith("vpm")]
