@@ -15908,6 +15908,7 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
 
             // pre_mixer_norm
             cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "pre_mixer_norm", il);
 
             // check if this layer is Mamba or Attention
             bool is_mamba_layer = hparams.is_recurrent(il);
@@ -16103,8 +16104,8 @@ private:
             ggml_build_forward_expand(gf,
                 ggml_cpy(ctx0, last_conv,
                     ggml_view_1d(ctx0, conv_states_all,
-                        (d_conv - 1)*(d_inner)*(n_seqs),
-                        kv_head*(d_conv - 1)*(d_inner)*ggml_element_size(conv_states_all))));
+                        (d_conv - 1)*(d_inner + 2*n_group*d_state)*(n_seqs),
+                        kv_head*(d_conv - 1)*(d_inner + 2*n_group*d_state)*ggml_element_size(conv_states_all))));
 
             // 1D convolution
             x = ggml_ssm_conv(ctx0, conv_x, model.layers[il].ssm_conv1d);
@@ -16158,6 +16159,7 @@ private:
                 // Custom operator to optimize the parallel associative scan
                 // as described in the Annex D of the Mamba paper.
                 // => {d_inner, n_seq_tokens, n_seqs} and {d_state, d_inner, n_seqs}
+                cb(ids, "mamba_ssm_scan_ids", il);
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
@@ -16167,9 +16169,8 @@ private:
             // store last states
             ggml_build_forward_expand(gf,
                 ggml_cpy(ctx0,
-                    ggml_view_1d(ctx0, y_ssm, d_state*d_inner*n_seqs, x->nb[3]*x->ne[3]),
-                    ggml_view_1d(ctx0, ssm_states_all, d_state*d_inner*n_seqs,
-                            kv_head*d_state*d_inner*ggml_element_size(ssm_states_all))));
+                    ggml_view_1d(ctx0, y_ssm, d_state*d_inner*n_seqs, ggml_nelements(x)*x->nb[0]),
+                    ggml_view_1d(ctx0, ssm_states_all, d_state*d_inner*n_seqs, kv_head*d_state*d_inner*ggml_element_size(ssm_states_all))));
 
             ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_heads, n_seq_tokens, n_seqs, head_dim * ggml_element_size(x), head_dim * n_heads * ggml_element_size(x), head_dim * n_heads * n_seq_tokens * ggml_element_size(x), 0);
             cb(y, "mamba_y_view", il);
@@ -16177,6 +16178,7 @@ private:
             // Add D parameter and apply gating with z
             // {d_inner, n_seq_tokens, n_seqs} * {d_inner} => {d_inner, n_seq_tokens, n_seqs}
             ggml_tensor * D = ggml_reshape_2d(ctx0, model.layers[il].ssm_d, 1, n_heads);
+            cb(D, "mamba_D", il);
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, D));
             cb(y, "mamba_y_add_d", il);
 
