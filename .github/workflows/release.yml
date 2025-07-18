@@ -240,6 +240,63 @@ jobs:
           path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-vulkan-x64.zip
           name: llama-bin-ubuntu-vulkan-x64.zip
 
+  ubuntu-24-openvino:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-24-cmake-openvino-release-no-preset-v1 
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        run: |
+          export OPENVINO_VERSION_MAJOR=2025.2
+          export OPENVINO_VERSION_FULL=2025.2.0.19140.c01cd93e24d
+          sudo apt-get update
+          sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
+          sudo mkdir -p /opt/intel
+          wget -O openvino_${OPENVINO_VERSION_MAJOR}.tgz https://storage.openvinotoolkit.org/repositories/openvino/packages/${OPENVINO_VERSION_MAJOR}/linux/openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64.tgz
+          tar -xf openvino_${OPENVINO_VERSION_MAJOR}.tgz
+          sudo mv openvino_toolkit_ubuntu24_${OPENVINO_VERSION_FULL}_x86_64 /opt/intel/openvino_${OPENVINO_VERSION_MAJOR}
+          rm openvino_${OPENVINO_VERSION_MAJOR}.tgz
+          cd /opt/intel/openvino_${OPENVINO_VERSION_MAJOR}
+          echo "Y" | sudo -E ./install_dependencies/install_openvino_dependencies.sh && cd -
+          sudo ln -s /opt/intel/openvino_${OPENVINO_VERSION_MAJOR} /opt/intel/openvino
+
+      - name: Build
+        id: cmake_build
+        run: |
+          source /opt/intel/openvino/setupvars.sh
+          cmake -B build/ReleaseOV -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENVINO=ON
+          cmake --build build/ReleaseOV --config Release -j $(nproc)
+
+      - name: Determine tag name
+        id: tag
+        uses: ./.github/actions/get-tag-name
+
+      - name: Pack artifacts
+        id: pack_artifacts
+        run: |
+          cp LICENSE ./build/ReleaseOV/bin/
+          zip -r llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-x64.zip ./build/ReleaseOV/bin/*
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          path: llama-${{ steps.tag.outputs.name }}-bin-ubuntu-openvino-x64.zip
+          name: llama-bin-ubuntu-openvino-x64.zip
+
   windows-cpu:
     runs-on: windows-2025
 
