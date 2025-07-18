@@ -13530,7 +13530,7 @@ struct llm_build_exaone : public llm_graph_context {
 
 template <bool iswa>
 struct llm_build_exaone4 : public llm_graph_context {
-    llm_build_exaone4(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_exaone4(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_k;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v);
@@ -13603,7 +13603,7 @@ struct llm_build_exaone4 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
                 cb(cur, "attn_out", il);
