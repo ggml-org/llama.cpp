@@ -3017,7 +3017,15 @@ static bool ggml_metal_encode_node(
 
                 if (ne30 == 1) {
                     // Mamba-2
-                    [encoder setThreadgroupMemoryLength:32*sizeof(float) atIndex:0]; // SIMD size
+
+                    // One shared memory bucket for each simd group in the threadgroup
+                    const int64_t shmem_size = d_state / 32;
+                    GGML_ASSERT(shmem_size * 32 == d_state);
+
+                    // One thread pre element in d_state
+                    GGML_ASSERT(d_state <= (int64_t)pipeline.maxTotalThreadsPerThreadgroup);
+
+                    [encoder setThreadgroupMemoryLength:(shmem_size)*sizeof(float) atIndex:0];
                     [encoder dispatchThreadgroups:MTLSizeMake(d_inner, n_head, n_seqs) threadsPerThreadgroup:MTLSizeMake(d_state, 1, 1)];
                 } else {
                     GGML_ASSERT(d_inner == 1);
