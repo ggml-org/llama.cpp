@@ -6387,9 +6387,14 @@ class ExaoneModel(TextModel):
                         rope_factors.append(factor)
                     else:
                         smooth = (old_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-                        rope_factors.append(1 / ((1 - smooth) / factor + smooth))
+                rope_factors.append(1 / ((1 - smooth) / factor + smooth))
 
                 yield (self.format_tensor_name(gguf.MODEL_TENSOR.ROPE_FREQS), torch.tensor(rope_factors, dtype=torch.float32))
+
+
+@ModelBase.register("Exaone4ForCausalLM")
+class Exaone4Model(ExaoneModel):
+    model_arch = gguf.MODEL_ARCH.EXAONE4
 
 
 @ModelBase.register("GraniteForCausalLM")
