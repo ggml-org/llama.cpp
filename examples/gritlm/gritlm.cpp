@@ -108,7 +108,7 @@ static std::string generate(llama_context * ctx, llama_sampler * smpl, const std
 
     std::vector<llama_token> inputs = common_tokenize(vocab, prompt, false, true);
     int32_t i_current_token = 0;
-
+    int n_remain = 32;
     while (true) {
         common_batch_clear(bat);
         {
@@ -122,7 +122,7 @@ static std::string generate(llama_context * ctx, llama_sampler * smpl, const std
 
         llama_decode(ctx, bat);
 
-        llama_token token = llama_sampler_sample(smpl, ctx, bat.n_tokens - 1);
+        llama_token token = llama_sampler_sample(smpl, ctx, bat.n_tokens - 1, --n_remain);
 
         if (token == eos_token) {
             break;
