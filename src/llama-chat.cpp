@@ -542,7 +542,7 @@ int32_t llm_chat_apply_template(
                 ss << "[|user|]" << trim(message->content) << "\n";
             } else if (role == "assistant") {
                 ss << "[|assistant|]" << trim(message->content) << "[|endofturn|]\n";
-            } else if (role == "assistant_tool_call") {
+            } else if (role == "tool") {
                 ss << "[|tool|]" << trim(message->content) << "[|endofturn|]\n";
             }
         }
