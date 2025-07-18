@@ -18,7 +18,19 @@ static __device__ __forceinline__ void convert_f16_f16(const half * src, half * 
     *dst = *src;
 }
 
+static __device__ __forceinline__ void convert_f16_bf16(const half * src, nv_bfloat16 * dst) {
+    *dst = float(*src);
+}
+
 static __device__ __forceinline__ void convert_f16_f32(const half * src, float * dst) {
+    *dst = *src;
+}
+
+static __device__ __forceinline__ void convert_bf16_f16(const nv_bfloat16 * src, half * dst) {
+    *dst = __float2half(*src);
+}
+
+static __device__ __forceinline__ void convert_bf16_f32(const nv_bfloat16 * src, float * dst) {
     *dst = *src;
 }
 
@@ -246,6 +258,18 @@ static __device__ void cpy_1_f16_f16(const char * cxi, char * cdsti) {
     convert_f16_f16((const half *)cxi, (half *)cdsti);
 }
 
+static __device__ void cpy_1_f16_bf16(const char * cxi, char * cdsti) {
+    convert_f16_bf16((const half *)cxi, (nv_bfloat16 *)cdsti);
+}
+
 static __device__ void cpy_1_f16_f32(const char * cxi, char * cdsti) {
     convert_f16_f32((const half *)cxi, (float *)cdsti);
+}
+
+static __device__ void cpy_1_bf16_f16(const char * cxi, char * cdsti) {
+    convert_bf16_f16((const nv_bfloat16 *)cxi, (half *)cdsti);
+}
+
+static __device__ void cpy_1_bf16_f32(const char * cxi, char * cdsti) {
+    convert_bf16_f32((const nv_bfloat16 *)cxi, (float *)cdsti);
 }
