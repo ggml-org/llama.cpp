@@ -202,6 +202,15 @@ extern "C" {
         bool sorted;
     } llama_token_data_array;
 
+    // Extended sampling result with candidate tokens and probabilities
+    typedef struct llama_sampling_result {
+        llama_token selected_token;        // the selected token
+        float selected_logit;              // logit of the selected token
+        float selected_prob;               // probability of the selected token
+        bool is_selected;                  // flag indicating if a token was selected
+        llama_token_data_array candidates; // array of candidate tokens with their probabilities
+    } llama_sampling_result;
+
     typedef bool (*llama_progress_callback)(float progress, void * user_data);
 
     // Input data for llama_encode/llama_decode
@@ -1355,6 +1364,26 @@ extern "C" {
     //    return token;
     // Returns the sampled token
     LLAMA_API llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx);
+
+    /// @details Extended sampling function that returns detailed information about the sampling process
+    /// including the selected token and a list of candidate tokens with their probabilities.
+    /// @param smpl The sampler to use
+    /// @param ctx The context containing the model
+    /// @param idx The index of the output to sample from (-1 for the last token)
+    /// @param max_candidates Maximum number of candidate tokens to return (0 for all available)
+    /// @param result Pointer to the result structure to fill
+    /// @return 0 on success, negative value on error
+    LLAMA_API int32_t llama_sampler_sample_with_candidates(
+        struct llama_sampler * smpl, 
+        struct llama_context * ctx, 
+        int32_t idx,
+        size_t max_candidates,
+        struct llama_sampling_result * result
+    );
+
+    /// @details Free the memory allocated for candidate tokens in a sampling result
+    /// @param result The sampling result to free
+    LLAMA_API void llama_sampling_result_free(struct llama_sampling_result * result);
 
     // TODO: extend in the future
     //LLAMA_API void llama_decode_with_sampler(struct llama_context * ctx, struct llama_sampler * smpl, struct llama_batch batch, ...);

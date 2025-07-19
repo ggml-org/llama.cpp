@@ -525,6 +525,109 @@ To learn more about model quantization, [read this documentation](tools/quantize
 - Make sure to read this: [Inference at the edge](https://github.com/ggml-org/llama.cpp/discussions/205)
 - A bit of backstory for those who are interested: [Changelog podcast](https://changelog.com/podcast/532)
 
+## Extended Sampling API
+
+The `llama.cpp` library provides an extended sampling API that allows developers to access detailed information about the sampling process, including candidate tokens and their probabilities. This feature is particularly useful for debugging, analysis, and building applications that need insight into the model's decision-making process.
+
+### New API Functions
+
+#### `llama_sampler_sample_with_candidates`
+
+```c
+int32_t llama_sampler_sample_with_candidates(
+    struct llama_sampler * smpl,
+    struct llama_context * ctx,
+    int32_t idx,
+    size_t max_candidates,
+    struct llama_sampling_result * result
+);
+```
+
+This function extends the standard `llama_sampler_sample` by returning detailed information about the sampling process:
+
+- **Parameters:**
+  - `smpl`: The sampler instance
+  - `ctx`: The context containing the model state
+  - `idx`: Index of the output to sample from (typically -1 for the last output)
+  - `max_candidates`: Maximum number of candidate tokens to return (0 for all candidates)
+  - `result`: Pointer to the result structure
+
+- **Returns:** 0 on success, -1 if result is null, -2 if logits are invalid
+
+#### `llama_sampling_result` Structure
+
+```c
+typedef struct llama_sampling_result {
+    llama_token selected_token;        // The selected token ID
+    float selected_logit;              // Logit value of the selected token
+    float selected_prob;               // Probability of the selected token
+    bool is_selected;                  // True if a token was successfully selected
+    llama_token_data_array candidates; // Array of candidate tokens and their probabilities
+} llama_sampling_result;
+```
+
+#### `llama_sampling_result_free`
+
+```c
+void llama_sampling_result_free(struct llama_sampling_result * result);
+```
+
+Frees the memory allocated within a `llama_sampling_result` structure.
+
+### Usage Example
+
+```c
+#include "llama.h"
+
+// Initialize model and context
+llama_model * model = llama_model_load_from_file("model.gguf", model_params);
+llama_context * ctx = llama_init_from_model(model, ctx_params);
+
+// Create sampler chain
+llama_sampler * smpl = llama_sampler_chain_init(llama_sampler_chain_default_params());
+llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
+llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.8f));
+llama_sampler_chain_add(smpl, llama_sampler_init_dist(42));
+
+// Sample with candidates
+struct llama_sampling_result result;
+int ret = llama_sampler_sample_with_candidates(smpl, ctx, -1, 10, &result);
+
+if (ret == 0 && result.is_selected) {
+    printf("Selected token: %d (Probability: %.3f)\n", 
+           result.selected_token, result.selected_prob);
+    
+    printf("Top candidates:\n");
+    for (size_t i = 0; i < result.candidates.size; i++) {
+        const llama_token_data * candidate = &result.candidates.data[i];
+        printf("  %zu. Token %d (Probability: %.3f, Logit: %.3f)\n", 
+               i + 1, candidate->id, candidate->p, candidate->logit);
+    }
+}
+
+// Clean up
+llama_sampling_result_free(&result);
+llama_sampler_free(smpl);
+llama_free(ctx);
+llama_model_free(model);
+```
+
+### Applications
+
+This extended API is particularly useful for:
+
+- **Debugging sampling strategies**: Understanding why specific tokens were chosen
+- **Analyzing model behavior**: Examining the probability distribution of candidate tokens
+- **Building interactive applications**: Providing users with insight into the model's decision process
+- **Quality control**: Verifying that the model is selecting reasonable candidates
+- **Research and development**: Studying the relationship between different sampling parameters and token selection
+
+### Implementation Details
+
+The API integrates seamlessly with the existing sampling chain architecture in `llama.cpp`. It applies the same sampling steps (Top-K, Temperature, Distribution, etc.) as the standard sampling function but provides additional transparency into the process.
+
+For more information about the implementation, see the source code in `src/llama-sampling.cpp` and the header definitions in `include/llama.h`.
+
 ## Other documentation
 
 - [main (cli)](tools/main/README.md)
