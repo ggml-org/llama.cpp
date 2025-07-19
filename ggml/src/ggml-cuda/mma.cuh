@@ -66,7 +66,40 @@ namespace ggml_cuda_mma {
     struct tile {
         static constexpr int I  = I_;
         static constexpr int J  = J_;
-        static constexpr int ne = I * J / WARP_SIZE;
+
+#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
+        static constexpr int ne = I * J / 64;
+        T x[ne] = {0};
+
+        static __device__ __forceinline__ int get_i(const int l) {
+            if constexpr (I == 16 && J == 8) {
+                return threadIdx.x % 16;
+            } else if constexpr (I == 32 && J == 4) {
+                return threadIdx.x % 32;
+            } else if constexpr (I == 16 && J == 16) {
+                return 4 * (threadIdx.x / 16) + l;
+            } else if constexpr (I == 32 && J == 32) {
+                return 4 * (threadIdx.x / 32) + 8 * (l / 4) + (l % 4);
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            }
+        }
+
+        static __device__ __forceinline__ int get_j(const int l) {
+            if constexpr (I == 16 && J == 8) {
+                return 2 * (threadIdx.x / 16) + l;
+            } else if constexpr (I == 32 && J == 4) {
+                return 2 * (threadIdx.x / 32) + l;
+            } else if constexpr (I == 16 && J == 16) {
+                return threadIdx.x % 16;
+            } else if constexpr (I == 32 && J == 32) {
+                return threadIdx.x % 32;
+            } else {
+                static_assert(I == -1 && J == -1, "template specialization not implemented");
+            }
+        }
+#else
+        static constexpr int ne = I * J / 32;
         T x[ne] = {0};
 
         static __device__ __forceinline__ int get_i(const int l) {
@@ -94,6 +127,7 @@ namespace ggml_cuda_mma {
                 static_assert(I == -1 && J == -1, "template specialization not implemented");
             }
         }
+#endif
     };
 
     template <int I_, int J_>
@@ -186,7 +220,11 @@ namespace ggml_cuda_mma {
     template <typename T>
     static __device__ __forceinline__ void load_ldmatrix(
             tile<16, 8, T> & t, const T * __restrict__ xs0, const int stride) {
-#ifdef NEW_MMA_AVAILABLE
+#if defined(AMD_MMA_AVAILABLE)
+        int64_t* xi = (int64_t*) t.x;
+        const int64_t* xs = (int64_t*) ((const int*) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
+        xi[0] = xs[0];
+#elif defined(NEW_MMA_AVAILABLE)
         int * xi = (int * ) t.x;
         const int * xs = (const int *) xs0 + (threadIdx.x % t.I) * stride + (threadIdx.x / t.I) * (t.J / 2);
         asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
@@ -195,6 +233,23 @@ namespace ggml_cuda_mma {
 #else
         load_generic(t, xs0, stride);
 #endif // NEW_MMA_AVAILABLE
+    }
+
+    template <typename T>
+    static __device__ __forceinline__ void load_ldmatrix(
+            tile<32, 4, T> & t, const T * __restrict__ xs0, const int stride) {
+#if defined(AMD_MMA_AVAILABLE)
+        int64_t* xi = (int64_t*) t.x;
+        const int64_t* xs = (int64_t*) ((const int*) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
+        xi[0] = xs[0];
+#elif defined(NEW_MMA_AVAILABLE)
+        GGML_UNUSED(t);
+        GGML_UNUSED(xs0);
+        GGML_UNUSED(stride);
+        NO_DEVICE_CODE;
+#else
+        load_generic(t, xs0, stride);
+#endif // AMD_MMA_AVAILABLE
     }
 
     template <typename T>
@@ -386,6 +441,46 @@ namespace ggml_cuda_mma {
             : "+r"(Dxi[4]), "+r"(Dxi[5]), "+r"(Dxi[6]), "+r"(Dxi[7])
             : "r"(Axi[2]), "r"(Axi[3]), "r"(Bxi[3]));
 #endif // __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#else
+        GGML_UNUSED(D);
+        GGML_UNUSED(A);
+        GGML_UNUSED(B);
+        NO_DEVICE_CODE;
+#endif // NEW_MMA_AVAILABLE
+    }
+
+    static __device__ __forceinline__ void mma(
+            tile<16, 16, int> & D, const tile<16, 8, int> & A, const tile<16, 8, int> & B) {
+#if defined(AMD_MMA_AVAILABLE)
+#if defined(CDNA3)
+        using int32x4_t = __attribute__((__vector_size__(4 * sizeof(int)))) int;
+        int32x4_t* acc = (int32x4_t*) D.x;
+        acc[0] = __builtin_amdgcn_mfma_i32_16x16x32_i8(((int64_t*) A.x)[0],
+                                                       ((int64_t*) B.x)[0],
+                                                       acc[0],
+                                                       0, 0, 0);
+#elif defined(CDNA2) || defined(CDNA)
+#endif
+#else
+        GGML_UNUSED(D);
+        GGML_UNUSED(A);
+        GGML_UNUSED(B);
+        NO_DEVICE_CODE;
+#endif // NEW_MMA_AVAILABLE
+    }
+
+    static __device__ __forceinline__ void mma(
+            tile<32, 32, int> & D, const tile<32, 4, int> & A, const tile<32, 4, int> & B) {
+#if defined(AMD_MMA_AVAILABLE)
+#if defined(CDNA3)
+        using int32x16_t = __attribute__((__vector_size__(16 * sizeof(int)))) int;
+        int32x16_t* acc = (int32x16_t*) D.x;
+        acc[0] = __builtin_amdgcn_mfma_i32_32x32x16_i8(((int64_t*) A.x)[0],
+                                                       ((int64_t*) B.x)[0],
+                                                       acc[0],
+                                                       0, 0, 0);
+#elif defined(CDNA2) || defined(CDNA)
+#endif
 #else
         GGML_UNUSED(D);
         GGML_UNUSED(A);
