@@ -332,9 +332,9 @@ static std::string format_input_text(const std::string & prompt, bool use_chat_t
 }
 
 struct callback_data {
-    const common_params_diffusion * diff_params;
-    const llama_vocab *             vocab;
-    int32_t                         n_input;
+    const common_params_diffusion_dream * diff_params;
+    const llama_vocab *                   vocab;
+    int32_t                               n_input;
 };
 
 static bool diffusion_step_callback(int32_t step,
@@ -396,13 +396,13 @@ int main(int argc, char ** argv) {
 
     common_params params;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DIFFUSION)) {
+    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_DIFFUSION_DREAM)) {
         return 1;
     }
 
     const char * alg_names[] = { "ORIGIN", "MASKGIT_PLUS", "TOPK_MARGIN", "ENTROPY" };
-    const char * alg_name    = (params.diffusion.algorithm >= 0 && params.diffusion.algorithm <= 3) ?
-                                   alg_names[params.diffusion.algorithm] :
+    const char * alg_name    = (params.diffusion_dream.algorithm >= 0 && params.diffusion_dream.algorithm <= 3) ?
+                                   alg_names[params.diffusion_dream.algorithm] :
                                    "UNKNOWN";
 
     common_init();
@@ -420,6 +420,11 @@ int main(int argc, char ** argv) {
         LOG_ERR("error: failed to load model '%s'\n", params.model.path.c_str());
         return 1;
     }
+
+    // Check if the model architecture is Dream
+    char arch_str[128];
+    GGML_ASSERT(llama_model_meta_val_str(model, "general.architecture", arch_str, 128) >= 0 &&
+                std::string(arch_str) == "dream");
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx                = params.n_ctx;
@@ -445,7 +450,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_token> input_tokens = common_tokenize(vocab, formatted_prompt,
                                                             /*add special tokens*/ true,
                                                             /*parse special*/ true);
-    int                      n_input      = input_tokens.size();
+    int n_input = input_tokens.size();
 
     if (n_input >= params.n_ctx) {
         LOG_ERR("error: input too long (%d tokens), max context is %d\n", n_input, params.n_ctx);
@@ -455,28 +460,28 @@ int main(int argc, char ** argv) {
     }
 
     struct diffusion_params ldiff_params = diffusion_default_params();
-    ldiff_params.steps                   = params.diffusion.steps;
-    ldiff_params.eps                     = params.diffusion.eps;
+    ldiff_params.steps                   = params.diffusion_dream.steps;
+    ldiff_params.eps                     = params.diffusion_dream.eps;
     ldiff_params.temperature             = params.sampling.temp;
     ldiff_params.top_p                   = params.sampling.top_p;
     ldiff_params.top_k                   = params.sampling.top_k;
-    ldiff_params.algorithm               = static_cast<enum diffusion_alg>(params.diffusion.algorithm);
-    ldiff_params.alg_temp                = params.diffusion.alg_temp;
+    ldiff_params.algorithm               = static_cast<enum diffusion_alg>(params.diffusion_dream.algorithm);
+    ldiff_params.alg_temp                = params.diffusion_dream.alg_temp;
     ldiff_params.seed                    = params.sampling.seed;
 
     llama_token mask_token_id = llama_vocab_mask(vocab);
     GGML_ASSERT(mask_token_id != LLAMA_TOKEN_NULL);
 
-    LOG_INF("diffusion_params: - %-25s llama_token      = %d\n", "mask_token_id", mask_token_id);
-    LOG_INF("diffusion_params: - %-25s u32              = %d\n", "steps", params.diffusion.steps);
-    LOG_INF("diffusion_params: - %-25s f32              = %.6f\n", "eps", params.diffusion.eps);
-    LOG_INF("diffusion_params: - %-25s u32              = %d (%s)\n", "algorithm", params.diffusion.algorithm,
+    LOG_INF("dream_diffusion_params: - %-25s llama_token      = %d\n", "mask_token_id", mask_token_id);
+    LOG_INF("dream_diffusion_params: - %-25s u32              = %d\n", "steps", params.diffusion_dream.steps);
+    LOG_INF("dream_diffusion_params: - %-25s f32              = %.6f\n", "eps", params.diffusion_dream.eps);
+    LOG_INF("dream_diffusion_params: - %-25s u32              = %d (%s)\n", "algorithm", params.diffusion_dream.algorithm,
             alg_name);
-    LOG_INF("diffusion_params: - %-25s f32              = %.3f\n", "alg_temp", params.diffusion.alg_temp);
+    LOG_INF("dream_diffusion_params: - %-25s f32              = %.3f\n", "alg_temp", params.diffusion_dream.alg_temp);
 
     ldiff_params.mask_token_id = mask_token_id;
 
-    callback_data cb_data = { &params.diffusion, vocab, n_input };
+    callback_data cb_data = { &params.diffusion_dream, vocab, n_input };
 
     ldiff_params.step_callback           = diffusion_step_callback;
     ldiff_params.step_callback_user_data = &cb_data;
@@ -488,7 +493,7 @@ int main(int argc, char ** argv) {
                        ldiff_params, n_generated);
 
     if (n_generated > 0) {
-        if (params.diffusion.visual_mode) {
+        if (params.diffusion_dream.visual_mode) {
             //clear screen and move cursor to top-left
             LOG_INF("\033[2J\033[H");
         }
