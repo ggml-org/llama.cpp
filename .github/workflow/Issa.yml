@@ -1,0 +1,27 @@
+name: Build llama.cpp
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 استنساخ الكود
+        uses: actions/checkout@v3
+
+      - name: 🛠️ تثبيت المتطلبات
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential
+
+      - name: 🏗️ بناء المشروع
+        run: |
+          mkdir -p build
+          cd build
+          cmake ..
+          make
+
+      - name: ✅ عرض نتيجة البناء
+        run: ls -la build
