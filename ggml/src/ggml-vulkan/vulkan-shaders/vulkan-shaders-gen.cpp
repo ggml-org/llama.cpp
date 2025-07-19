@@ -765,8 +765,8 @@ void write_output_files() {
                 len += "};\n";
             }
         }
-        fprintf(src, data.c_str());
-        fprintf(src, len.c_str());
+        fputs(data.c_str(), src);
+        fputs(len.c_str(), src);
     }
     fclose(hdr);
     fclose(src);

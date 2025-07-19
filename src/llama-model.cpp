@@ -107,8 +107,10 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_17B_16E:       return "17Bx16E (Scout)";
         case LLM_TYPE_17B_128E:      return "17Bx128E (Maverick)";
         case LLM_TYPE_A13B:          return "A13B";
+        case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_235B_A22B:     return "235B.A22B";
+        case LLM_TYPE_300B_A47B:     return "300B.A47B";
         case LLM_TYPE_E2B:           return "E2B";
         case LLM_TYPE_E4B:           return "E4B";
         default:                     return "?B";
@@ -1488,6 +1490,23 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_EXAONE4:
+            {
+                if (hparams.n_layer == 64) {    // 32B
+                    hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
+                    hparams.n_swa = 4096;
+                    hparams.set_swa_pattern(4);
+                }
+
+                ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                switch (hparams.n_layer) {
+                    case 30: type = LLM_TYPE_1_2B; break;
+                    case 64: type = LLM_TYPE_32B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_RWKV6:
         case LLM_ARCH_RWKV6QWEN2:
             {
@@ -1649,10 +1668,20 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 }
             } break;
         case LLM_ARCH_ERNIE4_5:
+        case LLM_ARCH_ERNIE4_5_MOE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                if (arch == LLM_ARCH_ERNIE4_5_MOE) {
+                    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
+                    ml.get_key(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp, false);
+                    ml.get_key(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,         hparams.n_moe_layer_step);
+                    ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,         hparams.n_layer_dense_lead);
+                }
+
                 switch (hparams.n_layer) {
                     case 18: type = LLM_TYPE_0_3B; break;
+                    case 28: type = LLM_TYPE_21B_A3B; break;
+                    case 54: type = LLM_TYPE_300B_A47B; break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
@@ -4343,6 +4372,39 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up     = create_tensor(tn(LLM_TENSOR_FFN_UP,     "weight", i), {n_embd,   n_ff}, 0);
                     }
                 } break;
+            case LLM_ARCH_EXAONE4:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd, n_embd}, 0);
+
+                        layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+
+                        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), {n_embd}, 0);
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
+                    }
+                } break;
             case LLM_ARCH_RWKV6:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -4858,6 +4920,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
                 } break;
             case LLM_ARCH_ERNIE4_5:
+            case LLM_ARCH_ERNIE4_5_MOE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -4886,9 +4949,27 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.bo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "bias", i), {n_embd},     TENSOR_NOT_REQUIRED);
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
-                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
-                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+
+                        if (arch == LLM_ARCH_ERNIE4_5_MOE && static_cast<uint32_t>(i) >= hparams.n_layer_dense_lead) { // MoE layers
+                            int n_ff_exp = hparams.n_ff_exp;
+
+                            layer.ffn_gate_inp  = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,  "weight", i), {n_embd, n_expert}, 0);
+                            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), {n_expert}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, TENSOR_NOT_REQUIRED);
+                            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {  n_ff_exp, n_embd, n_expert}, 0);
+                            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+
+                            // Shared expert (if present)
+                            if (hparams.n_ff_shexp > 0) {
+                                layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {    n_embd, hparams.n_ff_shexp}, 0);
+                                layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd    }, 0);
+                                layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {    n_embd, hparams.n_ff_shexp}, 0);
+                            }
+                        } else { // Dense layers
+                            layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
+                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                        }
                     }
                 } break;
             case LLM_ARCH_FALCON_H1:
@@ -5493,7 +5574,7 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
 }
 
 struct llm_build_llama : public llm_graph_context {
-    llm_build_llama(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_llama(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -5569,7 +5650,7 @@ struct llm_build_llama : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -5649,7 +5730,7 @@ struct llm_build_llama : public llm_graph_context {
 };
 
 struct llm_build_llama_iswa : public llm_graph_context {
-    llm_build_llama_iswa(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_llama_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -5743,7 +5824,7 @@ struct llm_build_llama_iswa : public llm_graph_context {
                     cb(Kcur, "Kcur_normed", il);
                 }
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -5832,7 +5913,7 @@ struct llm_build_llama_iswa : public llm_graph_context {
 };
 
 struct llm_build_deci : public llm_graph_context {
-    llm_build_deci(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_deci(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -5920,7 +6001,7 @@ struct llm_build_deci : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
             }
@@ -5988,7 +6069,7 @@ struct llm_build_deci : public llm_graph_context {
 };
 
 struct llm_build_baichuan : public llm_graph_context {
-    llm_build_baichuan(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_baichuan(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -6052,7 +6133,7 @@ struct llm_build_baichuan : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -6110,7 +6191,7 @@ struct llm_build_baichuan : public llm_graph_context {
 };
 
 struct llm_build_xverse : public llm_graph_context {
-    llm_build_xverse(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_xverse(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -6167,7 +6248,7 @@ struct llm_build_xverse : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -6223,7 +6304,7 @@ struct llm_build_xverse : public llm_graph_context {
 };
 
 struct llm_build_falcon : public llm_graph_context {
-    llm_build_falcon(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_falcon(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -6290,7 +6371,7 @@ struct llm_build_falcon : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -6345,7 +6426,7 @@ struct llm_build_falcon : public llm_graph_context {
 };
 
 struct llm_build_grok : public llm_graph_context {
-    llm_build_grok(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_grok(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -6420,7 +6501,7 @@ struct llm_build_grok : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
             }
@@ -6507,7 +6588,7 @@ struct llm_build_grok : public llm_graph_context {
 };
 
 struct llm_build_dbrx : public llm_graph_context {
-    llm_build_dbrx(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_dbrx(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -6569,7 +6650,7 @@ struct llm_build_dbrx : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -6632,7 +6713,7 @@ struct llm_build_dbrx : public llm_graph_context {
 };
 
 struct llm_build_starcoder : public llm_graph_context {
-    llm_build_starcoder(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_starcoder(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -6683,7 +6764,7 @@ struct llm_build_starcoder : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -6741,7 +6822,7 @@ struct llm_build_starcoder : public llm_graph_context {
 };
 
 struct llm_build_refact : public llm_graph_context {
-    llm_build_refact(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_refact(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -6782,7 +6863,7 @@ struct llm_build_refact : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -6840,7 +6921,7 @@ struct llm_build_refact : public llm_graph_context {
 };
 
 struct llm_build_bert : public llm_graph_context {
-    llm_build_bert(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -6939,7 +7020,7 @@ struct llm_build_bert : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
                 cb(cur, "kqv_out", il);
@@ -7026,7 +7107,7 @@ struct llm_build_bert : public llm_graph_context {
 };
 
 struct llm_build_neo_bert : public llm_graph_context {
-    llm_build_neo_bert(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_neo_bert(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -7084,7 +7165,7 @@ struct llm_build_neo_bert : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, nullptr,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
                 cb(cur, "kqv_out", il);
@@ -7136,7 +7217,7 @@ struct llm_build_neo_bert : public llm_graph_context {
 };
 
 struct llm_build_bloom : public llm_graph_context {
-    llm_build_bloom(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_bloom(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -7184,7 +7265,7 @@ struct llm_build_bloom : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -7242,7 +7323,7 @@ struct llm_build_bloom : public llm_graph_context {
 };
 
 struct llm_build_mpt : public llm_graph_context {
-    llm_build_mpt(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_mpt(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -7331,7 +7412,7 @@ struct llm_build_mpt : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -7390,7 +7471,7 @@ struct llm_build_mpt : public llm_graph_context {
 };
 
 struct llm_build_stablelm : public llm_graph_context {
-    llm_build_stablelm(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_stablelm(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -7477,7 +7558,7 @@ struct llm_build_stablelm : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -7542,7 +7623,7 @@ struct llm_build_stablelm : public llm_graph_context {
 };
 
 struct llm_build_qwen : public llm_graph_context {
-    llm_build_qwen(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_qwen(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -7598,7 +7679,7 @@ struct llm_build_qwen : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -7656,7 +7737,7 @@ struct llm_build_qwen : public llm_graph_context {
 };
 
 struct llm_build_qwen2 : public llm_graph_context {
-    llm_build_qwen2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_qwen2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -7718,7 +7799,7 @@ struct llm_build_qwen2 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -7778,7 +7859,7 @@ struct llm_build_qwen2 : public llm_graph_context {
 };
 
 struct llm_build_dream : public llm_graph_context {
-    llm_build_dream(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) :
+    llm_build_dream(const llama_model & model, const llm_graph_params & params) :
         llm_graph_context(params) {
         //copied from qwen2
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -7834,7 +7915,7 @@ struct llm_build_dream : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur, nullptr,
+                cur = build_attn(inp_attn, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur, nullptr,
                                  nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             }
 
@@ -7881,7 +7962,7 @@ struct llm_build_dream : public llm_graph_context {
 };
 
 struct llm_build_qwen2vl : public llm_graph_context {
-    llm_build_qwen2vl(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_qwen2vl(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -7946,7 +8027,7 @@ struct llm_build_qwen2vl : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -8002,7 +8083,7 @@ struct llm_build_qwen2vl : public llm_graph_context {
 };
 
 struct llm_build_qwen2moe : public llm_graph_context {
-    llm_build_qwen2moe(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_qwen2moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -8073,7 +8154,7 @@ struct llm_build_qwen2moe : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -8161,7 +8242,7 @@ struct llm_build_qwen2moe : public llm_graph_context {
 };
 
 struct llm_build_qwen3 : public llm_graph_context {
-    llm_build_qwen3(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_qwen3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -8226,7 +8307,7 @@ struct llm_build_qwen3 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -8282,7 +8363,7 @@ struct llm_build_qwen3 : public llm_graph_context {
 };
 
 struct llm_build_qwen3moe : public llm_graph_context {
-    llm_build_qwen3moe(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_qwen3moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -8347,7 +8428,7 @@ struct llm_build_qwen3moe : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -8410,7 +8491,7 @@ struct llm_build_qwen3moe : public llm_graph_context {
 };
 
 struct llm_build_phi2 : public llm_graph_context {
-    llm_build_phi2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_phi2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -8487,7 +8568,7 @@ struct llm_build_phi2 : public llm_graph_context {
                 // ref: https://github.com/ml-explore/mlx-examples/blob/08e862336ade809bc37d1035f94b359e7d1a5152/phi2/phi2.py#L64-L66
                 Qcur = ggml_scale(ctx0, Qcur, 1.0f/sqrtf(float(n_embd_head)));
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
             }
@@ -8541,7 +8622,7 @@ struct llm_build_phi2 : public llm_graph_context {
 
 template<bool iswa>
 struct llm_build_phi3 : public llm_graph_context {
-    llm_build_phi3(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_phi3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa = hparams.n_embd_v_gqa();
 
@@ -8624,7 +8705,7 @@ struct llm_build_phi3 : public llm_graph_context {
                 Qcur = ggml_scale(ctx0, Qcur, 1.0f / sqrtf(float(n_embd_head)));
                 cb(Qcur, "Qcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
             }
@@ -8699,7 +8780,7 @@ struct llm_build_phi3 : public llm_graph_context {
 };
 
 struct llm_build_plamo : public llm_graph_context {
-    llm_build_plamo(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_plamo(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -8758,7 +8839,7 @@ struct llm_build_plamo : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -8814,7 +8895,7 @@ struct llm_build_plamo : public llm_graph_context {
 };
 
 struct llm_build_gpt2 : public llm_graph_context {
-    llm_build_gpt2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_gpt2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -8866,7 +8947,7 @@ struct llm_build_gpt2 : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -8924,7 +9005,7 @@ struct llm_build_gpt2 : public llm_graph_context {
 };
 
 struct llm_build_codeshell : public llm_graph_context {
-    llm_build_codeshell(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_codeshell(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -8980,7 +9061,7 @@ struct llm_build_codeshell : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -9038,7 +9119,7 @@ struct llm_build_codeshell : public llm_graph_context {
 };
 
 struct llm_build_orion : public llm_graph_context {
-    llm_build_orion(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_orion(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -9109,7 +9190,7 @@ struct llm_build_orion : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -9165,7 +9246,7 @@ struct llm_build_orion : public llm_graph_context {
 };
 
 struct llm_build_internlm2 : public llm_graph_context {
-    llm_build_internlm2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_internlm2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -9236,7 +9317,7 @@ struct llm_build_internlm2 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -9292,7 +9373,7 @@ struct llm_build_internlm2 : public llm_graph_context {
 };
 
 struct llm_build_minicpm3 : public llm_graph_context {
-    llm_build_minicpm3(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_minicpm3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         //TODO: if the model varies, these parameters need to be read from the model
         const int64_t n_embd_base = 256;
         const float scale_embd  = 12.0f;
@@ -9424,7 +9505,7 @@ struct llm_build_minicpm3 : public llm_graph_context {
                 ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
                 cb(k_states, "k_states", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         q_states, k_states, v_states, nullptr, nullptr, kq_scale, il);
             }
@@ -9496,7 +9577,7 @@ struct llm_build_minicpm3 : public llm_graph_context {
 };
 
 struct llm_build_gemma : public llm_graph_context {
-    llm_build_gemma(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_gemma(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         ggml_tensor * cur;
@@ -9554,7 +9635,7 @@ struct llm_build_gemma : public llm_graph_context {
                 Qcur = ggml_scale(ctx0, Qcur, 1.0f / sqrtf(float(n_embd_head)));
                 cb(Qcur, "Qcur_scaled", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
             }
@@ -9612,7 +9693,7 @@ struct llm_build_gemma : public llm_graph_context {
 };
 
 struct llm_build_gemma2_iswa : public llm_graph_context {
-    llm_build_gemma2_iswa(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_gemma2_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_k;
 
         ggml_tensor * cur;
@@ -9669,7 +9750,7 @@ struct llm_build_gemma2_iswa : public llm_graph_context {
 
                 Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
             }
@@ -9742,7 +9823,7 @@ struct llm_build_gemma2_iswa : public llm_graph_context {
 };
 
 struct llm_build_gemma3_iswa : public llm_graph_context {
-    llm_build_gemma3_iswa(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_gemma3_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_k;
 
         ggml_tensor * cur;
@@ -9811,7 +9892,7 @@ struct llm_build_gemma3_iswa : public llm_graph_context {
                 // ref: https://github.com/google/gemma_pytorch/blob/014acb7ac4563a5f77c76d7ff98f31b568c16508/gemma/model.py#L315
                 Qcur = ggml_scale(ctx0, Qcur, hparams.f_attention_scale);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
             }
@@ -9880,7 +9961,6 @@ struct llm_build_gemma3_iswa : public llm_graph_context {
 
 struct llm_build_gemma3n_iswa : public llm_graph_context {
     const llama_model & model;
-    ggml_cgraph * gf;
 
     const int64_t n_embd_head;
     const int64_t n_embd_altup;
@@ -9890,10 +9970,9 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
     const int     n_layer_sparsity = 10; // number of layers using activation sparsity
     const float   f_sparsity_std_mul = 1.6448533535003662f; // std_multiplier = normal_dist.icdf(0.95)
 
-    llm_build_gemma3n_iswa(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf)
+    llm_build_gemma3n_iswa(const llama_model & model, const llm_graph_params & params)
             : llm_graph_context(params),
               model(model),
-              gf(gf),
               n_embd_head(model.hparams.n_embd_head_k),
               n_embd_altup(model.hparams.n_embd_altup),
               n_altup(model.hparams.n_altup),
@@ -9994,7 +10073,7 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
                 cb(Qcur, "Qcur_pos", il);
                 cb(Kcur, "Kcur_pos", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, hparams.f_attention_scale, il);
             } else {
@@ -10012,7 +10091,7 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
                         ext_factor, attn_factor, beta_fast, beta_slow);
                 cb(Qcur, "Qcur_pos", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                     model.layers[il].wo, NULL,
                     Qcur, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
             }
@@ -10306,7 +10385,7 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
 
 // TODO: move up next to build_starcoder
 struct llm_build_starcoder2 : public llm_graph_context {
-    llm_build_starcoder2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_starcoder2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -10377,7 +10456,7 @@ struct llm_build_starcoder2 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -10438,7 +10517,6 @@ struct llm_graph_context_mamba : public llm_graph_context {
 
     ggml_tensor * build_mamba_layer(
         llm_graph_input_rs * inp,
-               ggml_cgraph * gf,
                ggml_tensor * cur,
          const llama_model & model,
         const llama_ubatch & ubatch,
@@ -10463,13 +10541,13 @@ struct llm_graph_context_mamba : public llm_graph_context {
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
         ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-        ggml_tensor * conv = build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -10550,7 +10628,7 @@ struct llm_graph_context_mamba : public llm_graph_context {
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
 
             // store last states
             ggml_build_forward_expand(gf,
@@ -10577,11 +10655,10 @@ struct llm_graph_context_mamba : public llm_graph_context {
 
     ggml_tensor * build_mamba2_layer(
         llm_graph_input_rs * inp,
-             ggml_cgraph * gf,
-             ggml_tensor * cur,
-       const llama_model & model,
-      const llama_ubatch & ubatch,
-                     int   il) const {
+               ggml_tensor * cur,
+         const llama_model & model,
+        const llama_ubatch & ubatch,
+                       int   il) const {
 
         const auto * mctx_cur = inp->mctx;
 
@@ -10598,13 +10675,13 @@ struct llm_graph_context_mamba : public llm_graph_context {
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
         ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-        ggml_tensor * conv = build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2*n_group*d_state, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -10674,7 +10751,7 @@ struct llm_graph_context_mamba : public llm_graph_context {
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
 
             // store last states
             ggml_build_forward_expand(gf,
@@ -10710,7 +10787,7 @@ struct llm_graph_context_mamba : public llm_graph_context {
 };
 
 struct llm_build_mamba : public llm_graph_context_mamba {
-    llm_build_mamba(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context_mamba(params) {
+    llm_build_mamba(const llama_model & model, const llm_graph_params & params) : llm_graph_context_mamba(params) {
         ggml_tensor * cur;
         ggml_tensor * inpL;
 
@@ -10729,9 +10806,9 @@ struct llm_build_mamba : public llm_graph_context_mamba {
             cb(cur, "attn_norm", il);
 
             if (model.arch == LLM_ARCH_MAMBA2) {
-                cur = build_mamba2_layer(rs_inp, gf, cur, model, ubatch, il);
+                cur = build_mamba2_layer(rs_inp, cur, model, ubatch, il);
             } else {
-                cur = build_mamba_layer(rs_inp, gf, cur, model, ubatch, il);
+                cur = build_mamba_layer(rs_inp, cur, model, ubatch, il);
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
@@ -10767,7 +10844,7 @@ struct llm_build_mamba : public llm_graph_context_mamba {
 };
 
 struct llm_build_jamba : public llm_graph_context_mamba {
-    llm_build_jamba(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context_mamba(params) {
+    llm_build_jamba(const llama_model & model, const llm_graph_params & params) : llm_graph_context_mamba(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         ggml_tensor * cur;
@@ -10787,7 +10864,7 @@ struct llm_build_jamba : public llm_graph_context_mamba {
             cb(cur, "attn_norm", il);
 
             if (n_head_kv == 0) {
-                cur = build_mamba_layer(inp_hybrid->get_recr(), gf, cur, model, ubatch, il);
+                cur = build_mamba_layer(inp_hybrid->get_recr(), cur, model, ubatch, il);
             } else {
                 // Attention
 
@@ -10808,7 +10885,7 @@ struct llm_build_jamba : public llm_graph_context_mamba {
                 cb(Vcur, "Vcur", il);
 
                 // No RoPE :)
-                cur = build_attn(inp_hybrid->get_attn(), gf, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f/sqrtf(float(n_embd_head)), il);
+                cur = build_attn(inp_hybrid->get_attn(), model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f/sqrtf(float(n_embd_head)), il);
             }
 
             if (il == n_layer - 1 && inp_out_ids) {
@@ -10876,7 +10953,7 @@ struct llm_build_jamba : public llm_graph_context_mamba {
 };
 
 struct llm_build_command_r : public llm_graph_context {
-    llm_build_command_r(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_command_r(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -10964,7 +11041,7 @@ struct llm_build_command_r : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11023,7 +11100,7 @@ struct llm_build_command_r : public llm_graph_context {
 };
 
 struct llm_build_cohere2_iswa : public llm_graph_context {
-    llm_build_cohere2_iswa(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_cohere2_iswa(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -11099,7 +11176,7 @@ struct llm_build_cohere2_iswa : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11159,7 +11236,7 @@ struct llm_build_cohere2_iswa : public llm_graph_context {
 //   * removed bias
 //   * removed MoE
 struct llm_build_olmo : public llm_graph_context {
-    llm_build_olmo(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_olmo(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -11230,7 +11307,7 @@ struct llm_build_olmo : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, nullptr,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11287,7 +11364,7 @@ struct llm_build_olmo : public llm_graph_context {
 };
 
 struct llm_build_olmo2 : public llm_graph_context {
-    llm_build_olmo2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_olmo2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -11350,7 +11427,7 @@ struct llm_build_olmo2 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11416,7 +11493,7 @@ struct llm_build_olmo2 : public llm_graph_context {
 //   * removed bias
 //   * added q, k norm
 struct llm_build_olmoe : public llm_graph_context {
-    llm_build_olmoe(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_olmoe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -11483,7 +11560,7 @@ struct llm_build_olmoe : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11544,7 +11621,7 @@ struct llm_build_olmoe : public llm_graph_context {
 };
 
 struct llm_build_openelm : public llm_graph_context {
-    llm_build_openelm(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_openelm(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -11616,7 +11693,7 @@ struct llm_build_openelm : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Qcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11673,7 +11750,7 @@ struct llm_build_openelm : public llm_graph_context {
 };
 
 struct llm_build_gptneox : public llm_graph_context {
-    llm_build_gptneox(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_gptneox(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -11728,7 +11805,7 @@ struct llm_build_gptneox : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11819,7 +11896,7 @@ struct llm_build_gptneox : public llm_graph_context {
 };
 
 struct llm_build_arctic : public llm_graph_context {
-    llm_build_arctic(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_arctic(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -11878,7 +11955,7 @@ struct llm_build_arctic : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -11957,7 +12034,7 @@ struct llm_build_arctic : public llm_graph_context {
 };
 
 struct llm_build_deepseek : public llm_graph_context {
-    llm_build_deepseek(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_deepseek(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -12033,7 +12110,7 @@ struct llm_build_deepseek : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
             }
@@ -12119,7 +12196,7 @@ struct llm_build_deepseek : public llm_graph_context {
 };
 
 struct llm_build_deepseek2 : public llm_graph_context {
-    llm_build_deepseek2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_deepseek2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         bool is_lite = (hparams.n_layer == 27);
 
         const bool is_mla = (hparams.n_embd_head_k_mla != 0 && hparams.n_embd_head_v_mla != 0);
@@ -12261,7 +12338,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     cb(Vcur, "Vcur", il);
 
                     // note: MLA with the absorption optimzation converts into MQA (ie: GQA with 1 group)
-                    cur = build_attn(inp_attn, gf,
+                    cur = build_attn(inp_attn,
                             model.layers[il].wo, NULL,
                             Qcur, Kcur, Vcur, nullptr, model.layers[il].wv_b, kq_scale, il);
                 } else {
@@ -12295,7 +12372,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
                     cb(Kcur, "Kcur", il);
 
                     // note: MLA without the absorption optimization converts into MHA (ie: GQA with full n_head groups)
-                    cur = build_attn(inp_attn, gf,
+                    cur = build_attn(inp_attn,
                             model.layers[il].wo, NULL,
                             Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 }
@@ -12382,7 +12459,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
 };
 
 struct llm_build_bitnet : public llm_graph_context {
-    llm_build_bitnet(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_bitnet(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -12462,7 +12539,7 @@ struct llm_build_bitnet : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         NULL, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
 
@@ -12542,7 +12619,7 @@ struct llm_build_bitnet : public llm_graph_context {
 };
 
 struct llm_build_t5_enc : public llm_graph_context {
-    llm_build_t5_enc(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_t5_enc(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -12585,7 +12662,7 @@ struct llm_build_t5_enc : public llm_graph_context {
                 ggml_tensor * attn_rel_b = model.layers[il].attn_rel_b_enc ? model.layers[il].attn_rel_b_enc : model.layers[0].attn_rel_b_enc;
                 ggml_tensor * kq_b = build_pos_bias(pos_bucket_enc, attn_rel_b);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo_enc, nullptr,
                         Qcur, Kcur, Vcur, kq_b, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
@@ -12643,7 +12720,7 @@ struct llm_build_t5_enc : public llm_graph_context {
 };
 
 struct llm_build_t5_dec : public llm_graph_context {
-    llm_build_t5_dec(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_t5_dec(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         //const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -12691,7 +12768,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 ggml_tensor * attn_rel_b = model.layers[il].attn_rel_b ? model.layers[il].attn_rel_b : model.layers[0].attn_rel_b;
                 ggml_tensor * kq_b = build_pos_bias(pos_bucket_dec, attn_rel_b);
 
-                cur = build_attn(inp_attn_self, gf,
+                cur = build_attn(inp_attn_self,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, kq_b, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
@@ -12723,7 +12800,7 @@ struct llm_build_t5_dec : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_outputs_enc);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_outputs_enc);
 
-                cur = build_attn(inp_attn_cross, gf,
+                cur = build_attn(inp_attn_cross,
                         model.layers[il].wo_cross, nullptr,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f, il);
                 cb(cur, "kqv_out", il);
@@ -12813,7 +12890,7 @@ struct llm_build_t5_dec : public llm_graph_context {
 };
 
 struct llm_build_jais : public llm_graph_context {
-    llm_build_jais(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_jais(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -12855,7 +12932,7 @@ struct llm_build_jais : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/float(n_embd_head), il);
             }
@@ -12908,7 +12985,7 @@ struct llm_build_jais : public llm_graph_context {
 };
 
 struct llm_build_chatglm : public llm_graph_context {
-    llm_build_chatglm(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_chatglm(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -12987,7 +13064,7 @@ struct llm_build_chatglm : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -13041,7 +13118,7 @@ struct llm_build_chatglm : public llm_graph_context {
 };
 
 struct llm_build_glm4 : public llm_graph_context {
-    llm_build_glm4(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_glm4(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
@@ -13120,7 +13197,7 @@ struct llm_build_glm4 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -13192,7 +13269,7 @@ struct llm_build_glm4 : public llm_graph_context {
 };
 
 struct llm_build_nemotron : public llm_graph_context {
-    llm_build_nemotron(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_nemotron(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -13264,7 +13341,7 @@ struct llm_build_nemotron : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -13321,7 +13398,7 @@ struct llm_build_nemotron : public llm_graph_context {
 };
 
 struct llm_build_exaone : public llm_graph_context {
-    llm_build_exaone(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_exaone(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -13395,7 +13472,7 @@ struct llm_build_exaone : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -13424,6 +13501,142 @@ struct llm_build_exaone : public llm_graph_context {
 
             cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_out", il);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
+template <bool iswa>
+struct llm_build_exaone4 : public llm_graph_context {
+    llm_build_exaone4(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+        const int64_t n_embd_head = hparams.n_embd_head_k;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_v);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        // inp_pos - contains the positions
+        ggml_tensor * inp_pos = build_inp_pos();
+
+        using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_unified_iswa, llm_graph_input_attn_kv_unified>;
+        inp_attn_type * inp_attn = nullptr;
+
+        if constexpr (iswa) {
+            inp_attn = build_attn_inp_kv_unified_iswa();
+        } else {
+            inp_attn = build_attn_inp_kv_unified();
+        }
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+
+            // use RoPE for SWA layers or non-SWA models
+            const bool use_rope = hparams.is_swa(il) || hparams.swa_type == LLAMA_SWA_TYPE_NONE;
+
+            cur = inpL;
+
+            // self-attention
+            {
+                ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+                Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+                cb(Qcur, "Qcur_normed", il);
+                cb(Kcur, "Kcur_normed", il);
+
+                if (use_rope) {
+                    Qcur = ggml_rope_ext(
+                            ctx0, Qcur, inp_pos, rope_factors,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow
+                            );
+
+                    Kcur = ggml_rope_ext(
+                            ctx0, Kcur, inp_pos, rope_factors,
+                            n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                            ext_factor, attn_factor, beta_fast, beta_slow
+                            );
+                }
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, NULL,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                cb(cur, "attn_out", il);
+            }
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            cur = build_norm(cur,
+                    model.layers[il].attn_post_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_post_norm", il);
+
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // feed-forward network
+            cur = build_ffn(ffn_inp,
+                    model.layers[il].ffn_up,   NULL, NULL,
+                    model.layers[il].ffn_gate, NULL, NULL,
+                    model.layers[il].ffn_down, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, il);
+            cb(cur, "ffn_out", il);
+
+            cur = build_norm(cur,
+                    model.layers[il].ffn_post_norm, NULL,
+                    LLM_NORM_RMS, -1);
+            cb(cur, "ffn_post_norm", -1);
+
+            cur = ggml_add(ctx0, cur, ffn_inp);
 
             cur = build_cvec(cur, il);
             cb(cur, "l_out", il);
@@ -13488,7 +13701,6 @@ struct llm_build_rwkv6_base : public llm_graph_context {
 
     ggml_tensor * build_rwkv6_time_mix(
             llm_graph_input_rs * inp,
-            ggml_cgraph * gf,
             ggml_tensor * cur,
             ggml_tensor * x_prev,
             const llama_ubatch & ubatch,
@@ -13615,7 +13827,7 @@ struct llm_build_rwkv6_base : public llm_graph_context {
         }
 
         ggml_tensor * wkv_state = build_rs(
-                inp, gf, mctx_cur->get_s_l(il),
+                inp, mctx_cur->get_s_l(il),
                 hparams.n_embd_s(), n_seqs);
 
         ggml_tensor * wkv_output;
@@ -13661,7 +13873,7 @@ struct llm_build_rwkv6_base : public llm_graph_context {
 };
 
 struct llm_build_rwkv6 : public llm_build_rwkv6_base {
-    llm_build_rwkv6(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_build_rwkv6_base(model, params) {
+    llm_build_rwkv6(const llama_model & model, const llm_graph_params & params) : llm_build_rwkv6_base(model, params) {
         GGML_ASSERT(hparams.token_shift_count == 2);
 
         ggml_tensor * cur;
@@ -13682,7 +13894,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, ubatch, il);
 
             ggml_tensor * att_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], 0);
             ggml_tensor * ffn_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], n_embd * ggml_element_size(token_shift));
@@ -13697,7 +13909,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
                     1
                     );
 
-            cur = build_rwkv6_time_mix(rs_inp, gf, att_norm, x_prev, ubatch, il);
+            cur = build_rwkv6_time_mix(rs_inp, att_norm, x_prev, ubatch, il);
 
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
             cb(ffn_inp, "ffn_inp", il);
@@ -13762,7 +13974,7 @@ struct llm_build_rwkv6 : public llm_build_rwkv6_base {
 
 // ref: https://huggingface.co/recursal/QRWKV6-32B-Instruct-Preview-v0.1/blob/main/modeling_rwkv6qwen2.py
 struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
-    llm_build_rwkv6qwen2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_build_rwkv6_base(model, params) {
+    llm_build_rwkv6qwen2(const llama_model & model, const llm_graph_params & params) : llm_build_rwkv6_base(model, params) {
         GGML_ASSERT(n_embd == hparams.n_embd_r());
 
         ggml_tensor * cur;
@@ -13782,7 +13994,7 @@ struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, ubatch, il);
 
             ggml_tensor * att_norm = build_norm(inpL, layer->attn_norm, layer->attn_norm_b, LLM_NORM_RMS, il);
             cb(att_norm, "attn_norm", il);
@@ -13794,7 +14006,7 @@ struct llm_build_rwkv6qwen2 : public llm_build_rwkv6_base {
                     1
                     );
 
-            cur = build_rwkv6_time_mix(rs_inp, gf, att_norm, x_prev, ubatch, il);
+            cur = build_rwkv6_time_mix(rs_inp, att_norm, x_prev, ubatch, il);
 
             token_shift = ggml_view_3d(ctx0, att_norm, n_embd, 1, n_seqs, att_norm->nb[1], att_norm->nb[2], (n_seq_tokens-1)*n_embd*ggml_element_size(att_norm));
             ggml_build_forward_expand(gf, build_rwkv_token_shift_store(token_shift, ubatch, il));
@@ -13884,7 +14096,6 @@ struct llm_build_rwkv7_base : public llm_graph_context {
 
     ggml_tensor * build_rwkv7_time_mix(
             llm_graph_input_rs * inp,
-            ggml_cgraph * gf,
             ggml_tensor * cur,
             ggml_tensor * x_prev,
             ggml_tensor *& first_layer_value,
@@ -13970,7 +14181,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
         a = ggml_reshape_3d(ctx0, a, head_size, head_count, n_tokens);
 
         ggml_tensor * wkv_state = build_rs(
-                inp, gf, mctx_cur->get_s_l(il),
+                inp, mctx_cur->get_s_l(il),
                 hparams.n_embd_s(), n_seqs);
 
         ggml_tensor * wkv_output = ggml_rwkv_wkv7(ctx0, r, w, k, v, ggml_neg(ctx0, kk), ggml_mul(ctx0, kk, a), wkv_state);
@@ -14017,7 +14228,7 @@ struct llm_build_rwkv7_base : public llm_graph_context {
 };
 
 struct llm_build_rwkv7 : public llm_build_rwkv7_base {
-    llm_build_rwkv7(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_build_rwkv7_base(model, params) {
+    llm_build_rwkv7(const llama_model & model, const llm_graph_params & params) : llm_build_rwkv7_base(model, params) {
         GGML_ASSERT(hparams.token_shift_count == 2);
 
         ggml_tensor * cur;
@@ -14039,7 +14250,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, ubatch, il);
 
             ggml_tensor * att_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], 0);
             ggml_tensor * ffn_shift = ggml_view_3d(ctx0, token_shift, n_embd, 1, n_seqs, token_shift->nb[1], token_shift->nb[2], n_embd * ggml_element_size(token_shift));
@@ -14054,7 +14265,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
                     1
                     );
 
-            cur = build_rwkv7_time_mix(rs_inp, gf, att_norm, x_prev, v_first, ubatch, il);
+            cur = build_rwkv7_time_mix(rs_inp, att_norm, x_prev, v_first, ubatch, il);
 
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
             cb(ffn_inp, "ffn_inp", il);
@@ -14113,7 +14324,7 @@ struct llm_build_rwkv7 : public llm_build_rwkv7_base {
 
 
 struct llm_build_arwkv7 : public llm_build_rwkv7_base {
-    llm_build_arwkv7(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_build_rwkv7_base(model, params) {
+    llm_build_arwkv7(const llama_model & model, const llm_graph_params & params) : llm_build_rwkv7_base(model, params) {
         GGML_ASSERT(n_embd == hparams.n_embd_r());
 
         ggml_tensor * cur;
@@ -14134,7 +14345,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
             const llama_layer * layer = &model.layers[il];
             inpL = ggml_reshape_3d(ctx0, inpL, n_embd, n_seq_tokens, n_seqs);
 
-            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, gf, ubatch, il);
+            ggml_tensor * token_shift = build_rwkv_token_shift_load(rs_inp, ubatch, il);
 
             ggml_tensor * att_norm = build_norm(inpL, layer->attn_norm, layer->attn_norm_b, LLM_NORM_RMS, il);
             cb(att_norm, "attn_norm", il);
@@ -14146,7 +14357,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
                     1
                     );
 
-            cur = build_rwkv7_time_mix(rs_inp, gf, att_norm, x_prev, v_first, ubatch, il);
+            cur = build_rwkv7_time_mix(rs_inp, att_norm, x_prev, v_first, ubatch, il);
 
             token_shift = ggml_view_3d(ctx0, att_norm, n_embd, 1, n_seqs, att_norm->nb[1], att_norm->nb[2], (n_seq_tokens-1)*n_embd*ggml_element_size(att_norm));
             ggml_build_forward_expand(gf, build_rwkv_token_shift_store(token_shift, ubatch, il));
@@ -14203,8 +14414,7 @@ struct llm_build_arwkv7 : public llm_build_rwkv7_base {
 struct llm_build_granite : public llm_graph_context {
     llm_build_granite(
         const llama_model & model,
-        const llm_graph_params & params,
-        ggml_cgraph * gf)
+        const llm_graph_params & params)
         : llm_graph_context(params) {
 
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -14238,7 +14448,7 @@ struct llm_build_granite : public llm_graph_context {
 
             // self-attention
             cur = build_attention_layer(
-                gf, cur, inp_pos, inp_attn,
+                cur, inp_pos, inp_attn,
                 model, n_embd_head, il);
 
             if (il == n_layer - 1 && inp_out_ids) {
@@ -14274,7 +14484,6 @@ struct llm_build_granite : public llm_graph_context {
     }
 
     ggml_tensor * build_attention_layer(
-              ggml_cgraph                     * gf,
               ggml_tensor                     * cur,
               ggml_tensor                     * inp_pos,
               llm_graph_input_attn_kv_unified * inp_attn,
@@ -14329,7 +14538,7 @@ struct llm_build_granite : public llm_graph_context {
         cb(Vcur, "Vcur", il);
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-        cur = build_attn(inp_attn, gf,
+        cur = build_attn(inp_attn,
                 model.layers[il].wo, model.layers[il].bo,
                 Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -14417,11 +14626,9 @@ struct llm_build_granite : public llm_graph_context {
 };
 
 struct llm_build_granite_hybrid : public llm_graph_context_mamba {
-
     llm_build_granite_hybrid(
                  const llama_model & model,
-            const llm_graph_params & params,
-                       ggml_cgraph * gf) :
+            const llm_graph_params & params) :
         llm_graph_context_mamba(params) {
 
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -14453,11 +14660,11 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba {
 
             if (hparams.is_recurrent(il)) {
                 // ssm layer //
-                cur = build_mamba2_layer(inp->get_recr(), gf, cur, model, ubatch, il);
+                cur = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
             } else {
                 // attention layer //
                 cur = build_attention_layer(
-                    gf, cur, inp_pos, inp->get_attn(), model,
+                    cur, inp_pos, inp->get_attn(), model,
                     n_embd_head, il);
             }
 
@@ -14496,7 +14703,6 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba {
     }
 
     ggml_tensor * build_attention_layer(
-              ggml_cgraph                     * gf,
               ggml_tensor                     * cur,
               ggml_tensor                     * inp_pos,
               llm_graph_input_attn_kv_unified * inp_attn,
@@ -14551,7 +14757,7 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba {
         cb(Vcur, "Vcur", il);
 
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-        cur = build_attn(inp_attn, gf,
+        cur = build_attn(inp_attn,
                 model.layers[il].wo, model.layers[il].bo,
                 Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -14645,7 +14851,7 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba {
 //   * removed bias
 //   * removed MoE
 struct llm_build_chameleon : public llm_graph_context {
-    llm_build_chameleon(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_chameleon(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -14736,7 +14942,7 @@ struct llm_build_chameleon : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, nullptr,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -14822,7 +15028,7 @@ struct llm_build_chameleon : public llm_graph_context {
 };
 
 struct llm_build_wavtokenizer_dec : public llm_graph_context {
-    llm_build_wavtokenizer_dec(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_wavtokenizer_dec(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         ggml_tensor * cur;
         ggml_tensor * inpL;
 
@@ -14974,7 +15180,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
 };
 
 struct llm_build_plm : public llm_graph_context {
-    llm_build_plm(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_plm(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const float kq_scale = 1.0f/sqrtf(float(hparams.n_embd_head_k));
 
         const uint32_t n_embd_head_qk_rope = hparams.n_rot;
@@ -15092,7 +15298,7 @@ struct llm_build_plm : public llm_graph_context {
                 ggml_tensor * k_states = ggml_concat(ctx0, k_nope, ggml_repeat(ctx0, k_pe, q_pe), 0);
                 cb(k_states, "k_states", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         q_states, k_states, v_states, nullptr, nullptr, kq_scale, il);
             }
@@ -15146,7 +15352,7 @@ struct llm_build_plm : public llm_graph_context {
 };
 
 struct llm_build_bailingmoe : public llm_graph_context {
-    llm_build_bailingmoe(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_bailingmoe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         ggml_tensor * cur;
         ggml_tensor * inpL;
 
@@ -15215,7 +15421,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_rot)), il);
             }
@@ -15290,7 +15496,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
 };
 
 struct llm_build_dots1 : public llm_graph_context {
-    llm_build_dots1(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_dots1(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -15355,7 +15561,7 @@ struct llm_build_dots1 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -15440,7 +15646,7 @@ struct llm_build_dots1 : public llm_graph_context {
 };
 
 struct llm_build_ernie4_5 : public llm_graph_context {
-    llm_build_ernie4_5(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_ernie4_5(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -15510,7 +15716,7 @@ struct llm_build_ernie4_5 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
@@ -15569,8 +15775,178 @@ struct llm_build_ernie4_5 : public llm_graph_context {
     }
 };
 
+struct llm_build_ernie4_5_moe : public llm_graph_context {
+    llm_build_ernie4_5_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_embd_head == hparams.n_rot);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        // inp_pos - contains the positions
+        ggml_tensor * inp_pos = build_inp_pos();
+
+        auto * inp_attn = build_attn_inp_kv_unified();
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Ernie 4.5 MoE requires n_moe_layer_step > 0");
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+            // norm
+            {
+                cur = build_norm(inpL,
+                        model.layers[il].attn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "attn_norm", il);
+            }
+
+            // self-attention
+            {
+                // compute Q and K and RoPE them
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                cb(Qcur, "Qcur", il);
+                if (model.layers[il].bq) {
+                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
+                    cb(Qcur, "Qcur", il);
+                }
+
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                cb(Kcur, "Kcur", il);
+                if (model.layers[il].bk) {
+                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
+                    cb(Kcur, "Kcur", il);
+                }
+
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Vcur, "Vcur", il);
+                if (model.layers[il].bv) {
+                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
+                    cb(Vcur, "Vcur", il);
+                }
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, NULL,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
+                cb(cur, "attn_out", il);
+            }
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // feed-forward network
+            bool is_moe_layer = static_cast<uint32_t>(il) >= hparams.n_layer_dense_lead && (il + 1) % hparams.n_moe_layer_step == 0;
+
+            if (!is_moe_layer) {
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
+
+                cur = build_ffn(cur,
+                        model.layers[il].ffn_up,   NULL, NULL,
+                        model.layers[il].ffn_gate, NULL, NULL,
+                        model.layers[il].ffn_down, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(cur, "ffn_out", il);
+            } else {
+                // MoE branch
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
+
+                ggml_tensor * moe_out = build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        model.layers[il].ffn_exp_probs_b,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, true,
+                        false, 0.0,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il);
+                cb(moe_out, "ffn_moe_out", il);
+
+                // Shared expert (if present)
+                if (hparams.n_ff_shexp > 0) {
+                    ggml_tensor * ffn_shexp = build_ffn(cur,
+                        model.layers[il].ffn_up_shexp,   NULL, NULL,
+                        model.layers[il].ffn_gate_shexp, NULL, NULL,
+                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                    cb(ffn_shexp, "ffn_shexp", il);
+
+                    cur = ggml_add(ctx0, moe_out, ffn_shexp);
+                } else {
+                    cur = moe_out;
+                }
+                cb(cur, "ffn_out", il);
+            }
+
+            cur = ggml_add(ctx0, cur, ffn_inp);
+            cb(cur, "ffn_out", il);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        cur = build_norm(cur,
+                model.output_norm, NULL,
+                LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
 struct llm_build_falcon_h1 : public llm_graph_context_mamba {
-    llm_build_falcon_h1(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context_mamba(params) {
+    llm_build_falcon_h1(const llama_model & model, const llm_graph_params & params) : llm_graph_context_mamba(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         ggml_tensor * cur;
@@ -15626,7 +16002,7 @@ struct llm_build_falcon_h1 : public llm_graph_context_mamba {
             cb(Kcur, "Kcur-post-rope", il);
             cb(Vcur, "Vcur-post-rope", il);
 
-            ggml_tensor * attn_out = build_attn(inp->get_attn(), gf,
+            ggml_tensor * attn_out = build_attn(inp->get_attn(),
                     model.layers[il].wo, NULL,
                     Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
             cb(attn_out, "attn_out", il);
@@ -15637,7 +16013,7 @@ struct llm_build_falcon_h1 : public llm_graph_context_mamba {
             // Mamba2 layer
             cb(cur, "ssm_in", il);
 
-            ggml_tensor * ssm_out = build_mamba2_layer(inp->get_recr(), gf, cur, model, ubatch, il);
+            ggml_tensor * ssm_out = build_mamba2_layer(inp->get_recr(), cur, model, ubatch, il);
             cb(ssm_out, "ssm_out", il);
 
             // // Aggregation
@@ -15696,7 +16072,7 @@ struct llm_build_falcon_h1 : public llm_graph_context_mamba {
 };
 
 struct llm_build_plamo2 : public llm_graph_context_mamba {
-    llm_build_plamo2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context_mamba(params) {
+    llm_build_plamo2(const llama_model & model, const llm_graph_params & params) : llm_graph_context_mamba(params) {
         ggml_tensor * cur;
         ggml_tensor * inpL;
 
@@ -15724,10 +16100,10 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
 
             if (is_mamba_layer) {
                 // PLaMo-2 Mamba layer
-                cur = build_plamo2_mamba_layer(inp_hybrid->get_recr(), gf, cur, model, ubatch, il);
+                cur = build_plamo2_mamba_layer(inp_hybrid->get_recr(), cur, model, ubatch, il);
             } else {
                 // PLaMo-2 Attention layer
-                cur = build_plamo2_attn_layer(inp_hybrid->get_attn(), inp_pos, gf, cur, model, il);
+                cur = build_plamo2_attn_layer(inp_hybrid->get_attn(), inp_pos, cur, model, il);
             }
 
             // post_mixer_norm
@@ -15790,7 +16166,6 @@ private:
     ggml_tensor * build_plamo2_attn_layer(
             llm_graph_input_attn_kv_unified * inp,
             ggml_tensor * inp_pos,
-            ggml_cgraph * gf,
             ggml_tensor * cur,
             const llama_model & model,
             int il) {
@@ -15839,7 +16214,7 @@ private:
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
 
-            cur = build_attn(inp, gf, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f, il);
+            cur = build_attn(inp, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f, il);
         }
 
         cb(cur, "attn_out", il);
@@ -15849,7 +16224,6 @@ private:
 
     ggml_tensor * build_plamo2_mamba_layer(
          llm_graph_input_rs * inp,
-               ggml_cgraph * gf,
                ggml_tensor * cur,
          const llama_model & model,
         const llama_ubatch & ubatch,
@@ -15870,13 +16244,13 @@ private:
         const int64_t n_seq_tokens = ubatch.n_seq_tokens;
 
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         ggml_tensor * conv_states_all = mctx_cur->get_r_l(il);
         ggml_tensor * ssm_states_all  = mctx_cur->get_s_l(il);
 
-        ggml_tensor * conv = build_rs(inp, gf, conv_states_all, hparams.n_embd_r(), n_seqs);
+        ggml_tensor * conv = build_rs(inp, conv_states_all, hparams.n_embd_r(), n_seqs);
         conv = ggml_reshape_3d(ctx0, conv, d_conv - 1, d_inner + 2*n_group*d_state, n_seqs);
 
         // {n_embd, n_tokens} => {n_embd, n_seq_tokens, n_seqs}
@@ -15973,7 +16347,7 @@ private:
                 return ggml_ssm_scan(ctx, ssm, x, dt, A, B, C, ids);
             };
 
-            ggml_tensor * y_ssm = build_rs(inp, gf, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
+            ggml_tensor * y_ssm = build_rs(inp, ssm_states_all, hparams.n_embd_s(), ubatch.n_seqs, get_ssm_rows);
             cb(y_ssm, "mamba_ssm_scan", il);
 
             // store last states
@@ -16010,7 +16384,7 @@ private:
 };
 
 struct llm_build_arcee : public llm_graph_context {
-    llm_build_arcee(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_arcee(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -16086,7 +16460,7 @@ struct llm_build_arcee : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -16145,7 +16519,7 @@ struct llm_build_arcee : public llm_graph_context {
 };
 
 struct llm_build_hunyuan_moe : public llm_graph_context {
-    llm_build_hunyuan_moe(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_hunyuan_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -16231,7 +16605,7 @@ struct llm_build_hunyuan_moe : public llm_graph_context {
                         LLM_NORM_RMS, il);
                 cb(Qcur, "Qcur_norm", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -16306,7 +16680,7 @@ struct llm_build_hunyuan_moe : public llm_graph_context {
 };
 
 struct llm_build_smollm3 : public llm_graph_context {
-    llm_build_smollm3(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_smollm3(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -16383,7 +16757,7 @@ struct llm_build_smollm3 : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf,
+                cur = build_attn(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
                         Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -16445,7 +16819,7 @@ struct llm_build_smollm3 : public llm_graph_context {
 struct llm_build_lfm2 : public llm_graph_context {
     const llama_model & model;
 
-    llm_build_lfm2(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params), model(model) {
+    llm_build_lfm2(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params), model(model) {
 
         ggml_tensor * cur = build_inp_embd(model.tok_embd);
         cb(cur, "model.embed_tokens", -1);
@@ -16460,8 +16834,8 @@ struct llm_build_lfm2 : public llm_graph_context {
             cb(cur, "model.layers.{}.operator_norm", il);
 
             cur = hparams.is_recurrent(il) ?
-                build_shortconv_block(gf, cur, inp_hybrid->get_recr(), il) :
-                build_attn_block(gf, cur, inp_pos, inp_hybrid->get_attn(), il) ;
+                build_shortconv_block(cur, inp_hybrid->get_recr(), il) :
+                build_attn_block(cur, inp_pos, inp_hybrid->get_attn(), il) ;
 
             if (il == n_layer - 1 && inp_out_ids) {
                 cur      = ggml_get_rows(ctx0,      cur, inp_out_ids);
@@ -16504,8 +16878,7 @@ struct llm_build_lfm2 : public llm_graph_context {
         return cur;
     }
 
-    ggml_tensor * build_attn_block(ggml_cgraph                     * gf,
-                                   ggml_tensor                     * cur,
+    ggml_tensor * build_attn_block(ggml_tensor                     * cur,
                                    ggml_tensor                     * inp_pos,
                                    llm_graph_input_attn_kv_unified * inp_attn,
                                    int                               il) const {
@@ -16542,7 +16915,7 @@ struct llm_build_lfm2 : public llm_graph_context {
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
 
-        cur = build_attn(inp_attn, gf, model.layers[il].wo, NULL,
+        cur = build_attn(inp_attn, model.layers[il].wo, NULL,
                 q, k, v, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
 
         cb(cur, "model.layers.{}.self_attn.out_proj", il);
@@ -16550,8 +16923,7 @@ struct llm_build_lfm2 : public llm_graph_context {
         return cur;
     }
 
-    ggml_tensor * build_shortconv_block(ggml_cgraph        * gf,
-                                        ggml_tensor        * cur,
+    ggml_tensor * build_shortconv_block(ggml_tensor        * cur,
                                         llm_graph_input_rs * inp_recr,
                                         int                il) {
         const auto *   mctx_cur     = static_cast<const llama_memory_hybrid_context *>(mctx)->get_recr();
@@ -16559,7 +16931,7 @@ struct llm_build_lfm2 : public llm_graph_context {
         const int64_t  n_seq_tokens = ubatch.n_seq_tokens;
         const int64_t  n_seqs       = ubatch.n_seqs;
         GGML_ASSERT(n_seqs != 0);
-        GGML_ASSERT(ubatch.equal_seqs);
+        GGML_ASSERT(ubatch.equal_seqs());
         GGML_ASSERT(ubatch.n_tokens == n_seq_tokens * n_seqs);
 
         GGML_ASSERT(hparams.n_shortconv_l_cache > 1);
@@ -16582,7 +16954,7 @@ struct llm_build_lfm2 : public llm_graph_context {
 
         // read conv state
         auto * conv_state = mctx_cur->get_r_l(il);
-        auto * conv_rs    = build_rs(inp_recr, gf, conv_state, hparams.n_embd_r(), n_seqs);
+        auto * conv_rs    = build_rs(inp_recr, conv_state, hparams.n_embd_r(), n_seqs);
         auto * conv       = ggml_reshape_3d(ctx0, conv_rs, d_conv, hparams.n_embd, n_seqs);
 
         bx = ggml_concat(ctx0, conv, bx, 0);
@@ -16728,236 +17100,233 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     return res;
 }
 
-llm_graph_result_ptr llama_model::build_graph(
-        const llm_graph_params & params,
-                   ggml_cgraph * gf,
-                llm_graph_type   type) const {
+ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     std::unique_ptr<llm_graph_context> llm;
 
     switch (arch) {
         case LLM_ARCH_LLAMA:
             {
-                llm = std::make_unique<llm_build_llama>(*this, params, gf);
+                llm = std::make_unique<llm_build_llama>(*this, params);
             } break;
         case LLM_ARCH_LLAMA4:
             {
-                llm = std::make_unique<llm_build_llama_iswa>(*this, params, gf);
+                llm = std::make_unique<llm_build_llama_iswa>(*this, params);
             } break;
         case LLM_ARCH_DECI:
             {
-                llm = std::make_unique<llm_build_deci>(*this, params, gf);
+                llm = std::make_unique<llm_build_deci>(*this, params);
             } break;
         case LLM_ARCH_BAICHUAN:
             {
-                llm = std::make_unique<llm_build_baichuan>(*this, params, gf);
+                llm = std::make_unique<llm_build_baichuan>(*this, params);
             } break;
         case LLM_ARCH_FALCON:
             {
-                llm = std::make_unique<llm_build_falcon>(*this, params, gf);
+                llm = std::make_unique<llm_build_falcon>(*this, params);
             } break;
         case LLM_ARCH_GROK:
             {
-                llm = std::make_unique<llm_build_grok>(*this, params, gf);
+                llm = std::make_unique<llm_build_grok>(*this, params);
             } break;
         case LLM_ARCH_STARCODER:
             {
-                llm = std::make_unique<llm_build_starcoder>(*this, params, gf);
+                llm = std::make_unique<llm_build_starcoder>(*this, params);
             } break;
         case LLM_ARCH_REFACT:
             {
-                llm = std::make_unique<llm_build_refact>(*this, params, gf);
+                llm = std::make_unique<llm_build_refact>(*this, params);
             } break;
         case LLM_ARCH_BERT:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_NOMIC_BERT:
         case LLM_ARCH_NOMIC_BERT_MOE:
             {
-                llm = std::make_unique<llm_build_bert>(*this, params, gf);
+                llm = std::make_unique<llm_build_bert>(*this, params);
             } break;
         case LLM_ARCH_NEO_BERT:
             {
-                llm = std::make_unique<llm_build_neo_bert>(*this, params, gf);
+                llm = std::make_unique<llm_build_neo_bert>(*this, params);
             } break;
         case LLM_ARCH_BLOOM:
             {
-                llm = std::make_unique<llm_build_bloom>(*this, params, gf);
+                llm = std::make_unique<llm_build_bloom>(*this, params);
             } break;
         case LLM_ARCH_MPT:
             {
-                llm = std::make_unique<llm_build_mpt>(*this, params, gf);
+                llm = std::make_unique<llm_build_mpt>(*this, params);
             } break;
         case LLM_ARCH_STABLELM:
             {
-                llm = std::make_unique<llm_build_stablelm>(*this, params, gf);
+                llm = std::make_unique<llm_build_stablelm>(*this, params);
             } break;
         case LLM_ARCH_QWEN:
             {
-                llm = std::make_unique<llm_build_qwen>(*this, params, gf);
+                llm = std::make_unique<llm_build_qwen>(*this, params);
             } break;
         case LLM_ARCH_QWEN2:
             {
-                llm = std::make_unique<llm_build_qwen2>(*this, params, gf);
+                llm = std::make_unique<llm_build_qwen2>(*this, params);
             } break;
         case LLM_ARCH_DREAM:
             {
-                llm = std::make_unique<llm_build_dream>(*this, params, gf);
+                llm = std::make_unique<llm_build_dream>(*this, params);
             }
             break;
         case LLM_ARCH_QWEN2VL:
             {
-                llm = std::make_unique<llm_build_qwen2vl>(*this, params, gf);
+                llm = std::make_unique<llm_build_qwen2vl>(*this, params);
             } break;
         case LLM_ARCH_QWEN2MOE:
             {
-                llm = std::make_unique<llm_build_qwen2moe>(*this, params, gf);
+                llm = std::make_unique<llm_build_qwen2moe>(*this, params);
             } break;
         case LLM_ARCH_QWEN3:
             {
-                llm = std::make_unique<llm_build_qwen3>(*this, params, gf);
+                llm = std::make_unique<llm_build_qwen3>(*this, params);
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
-                llm = std::make_unique<llm_build_qwen3moe>(*this, params, gf);
+                llm = std::make_unique<llm_build_qwen3moe>(*this, params);
             } break;
         case LLM_ARCH_PHI2:
             {
-                llm = std::make_unique<llm_build_phi2>(*this, params, gf);
+                llm = std::make_unique<llm_build_phi2>(*this, params);
             } break;
         case LLM_ARCH_PHI3:
         case LLM_ARCH_PHIMOE:
             {
                 if (hparams.swa_type != LLAMA_SWA_TYPE_NONE) {
-                    llm = std::make_unique<llm_build_phi3<true>> (*this, params, gf);
+                    llm = std::make_unique<llm_build_phi3<true>> (*this, params);
                 } else {
-                    llm = std::make_unique<llm_build_phi3<false>>(*this, params, gf);
+                    llm = std::make_unique<llm_build_phi3<false>>(*this, params);
                 }
             } break;
         case LLM_ARCH_PLAMO:
             {
-                llm = std::make_unique<llm_build_plamo>(*this, params, gf);
+                llm = std::make_unique<llm_build_plamo>(*this, params);
             } break;
         case LLM_ARCH_PLAMO2:
             {
-                llm = std::make_unique<llm_build_plamo2>(*this, params, gf);
+                llm = std::make_unique<llm_build_plamo2>(*this, params);
             } break;
         case LLM_ARCH_GPT2:
             {
-                llm = std::make_unique<llm_build_gpt2>(*this, params, gf);
+                llm = std::make_unique<llm_build_gpt2>(*this, params);
             } break;
         case LLM_ARCH_CODESHELL:
             {
-                llm = std::make_unique<llm_build_codeshell>(*this, params, gf);
+                llm = std::make_unique<llm_build_codeshell>(*this, params);
             } break;
         case LLM_ARCH_ORION:
             {
-                llm = std::make_unique<llm_build_orion>(*this, params, gf);
+                llm = std::make_unique<llm_build_orion>(*this, params);
             } break;
         case LLM_ARCH_INTERNLM2:
             {
-                llm = std::make_unique<llm_build_internlm2>(*this, params, gf);
+                llm = std::make_unique<llm_build_internlm2>(*this, params);
             } break;
         case LLM_ARCH_MINICPM3:
             {
-                llm = std::make_unique<llm_build_minicpm3>(*this, params, gf);
+                llm = std::make_unique<llm_build_minicpm3>(*this, params);
             } break;
         case LLM_ARCH_GEMMA:
             {
-                llm = std::make_unique<llm_build_gemma>(*this, params, gf);
+                llm = std::make_unique<llm_build_gemma>(*this, params);
             } break;
         case LLM_ARCH_GEMMA2:
             {
-                llm = std::make_unique<llm_build_gemma2_iswa>(*this, params, gf);
+                llm = std::make_unique<llm_build_gemma2_iswa>(*this, params);
             } break;
         case LLM_ARCH_GEMMA3:
             {
-                llm = std::make_unique<llm_build_gemma3_iswa>(*this, params, gf);
+                llm = std::make_unique<llm_build_gemma3_iswa>(*this, params);
             } break;
         case LLM_ARCH_GEMMA3N:
             {
-                llm = std::make_unique<llm_build_gemma3n_iswa>(*this, params, gf);
+                llm = std::make_unique<llm_build_gemma3n_iswa>(*this, params);
             } break;
         case LLM_ARCH_STARCODER2:
             {
-                llm = std::make_unique<llm_build_starcoder2>(*this, params, gf);
+                llm = std::make_unique<llm_build_starcoder2>(*this, params);
             } break;
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_MAMBA2:
             {
-                llm = std::make_unique<llm_build_mamba>(*this, params, gf);
+                llm = std::make_unique<llm_build_mamba>(*this, params);
             } break;
         case LLM_ARCH_JAMBA:
             {
-                llm = std::make_unique<llm_build_jamba>(*this, params, gf);
+                llm = std::make_unique<llm_build_jamba>(*this, params);
             } break;
         case LLM_ARCH_XVERSE:
             {
-                llm = std::make_unique<llm_build_xverse>(*this, params, gf);
+                llm = std::make_unique<llm_build_xverse>(*this, params);
             } break;
         case LLM_ARCH_COMMAND_R:
             {
-                llm = std::make_unique<llm_build_command_r>(*this, params, gf);
+                llm = std::make_unique<llm_build_command_r>(*this, params);
             } break;
         case LLM_ARCH_COHERE2:
             {
-                llm = std::make_unique<llm_build_cohere2_iswa>(*this, params, gf);
+                llm = std::make_unique<llm_build_cohere2_iswa>(*this, params);
             } break;
         case LLM_ARCH_DBRX:
             {
-                llm = std::make_unique<llm_build_dbrx>(*this, params, gf);
+                llm = std::make_unique<llm_build_dbrx>(*this, params);
             } break;
         case LLM_ARCH_OLMO:
             {
-                llm = std::make_unique<llm_build_olmo>(*this, params, gf);
+                llm = std::make_unique<llm_build_olmo>(*this, params);
             } break;
         case LLM_ARCH_OLMO2:
             {
-                llm = std::make_unique<llm_build_olmo2>(*this, params, gf);
+                llm = std::make_unique<llm_build_olmo2>(*this, params);
             } break;
         case LLM_ARCH_OLMOE:
             {
-                llm = std::make_unique<llm_build_olmoe>(*this, params, gf);
+                llm = std::make_unique<llm_build_olmoe>(*this, params);
             } break;
         case LLM_ARCH_OPENELM:
             {
-                llm = std::make_unique<llm_build_openelm>(*this, params, gf);
+                llm = std::make_unique<llm_build_openelm>(*this, params);
             } break;
         case LLM_ARCH_GPTNEOX:
             {
-                llm = std::make_unique<llm_build_gptneox>(*this, params, gf);
+                llm = std::make_unique<llm_build_gptneox>(*this, params);
             } break;
         case LLM_ARCH_ARCTIC:
             {
-                llm = std::make_unique<llm_build_arctic>(*this, params, gf);
+                llm = std::make_unique<llm_build_arctic>(*this, params);
             } break;
         case LLM_ARCH_DEEPSEEK:
             {
-                llm = std::make_unique<llm_build_deepseek>(*this, params, gf);
+                llm = std::make_unique<llm_build_deepseek>(*this, params);
             } break;
         case LLM_ARCH_DEEPSEEK2:
             {
-                llm = std::make_unique<llm_build_deepseek2>(*this, params, gf);
+                llm = std::make_unique<llm_build_deepseek2>(*this, params);
             } break;
         case LLM_ARCH_CHATGLM:
             {
-                llm = std::make_unique<llm_build_chatglm>(*this, params, gf);
+                llm = std::make_unique<llm_build_chatglm>(*this, params);
             } break;
         case LLM_ARCH_GLM4:
             {
-                llm = std::make_unique<llm_build_glm4>(*this, params, gf);
+                llm = std::make_unique<llm_build_glm4>(*this, params);
             } break;
         case LLM_ARCH_BITNET:
             {
-                llm = std::make_unique<llm_build_bitnet>(*this, params, gf);
+                llm = std::make_unique<llm_build_bitnet>(*this, params);
             } break;
         case LLM_ARCH_T5:
             {
-                switch (type) {
+                switch (params.gtype) {
                     case LLM_GRAPH_TYPE_ENCODER:
-                        llm = std::make_unique<llm_build_t5_enc>(*this, params, gf);
+                        llm = std::make_unique<llm_build_t5_enc>(*this, params);
                         break;
                     case LLM_GRAPH_TYPE_DEFAULT:
                     case LLM_GRAPH_TYPE_DECODER:
-                        llm = std::make_unique<llm_build_t5_dec>(*this, params, gf);
+                        llm = std::make_unique<llm_build_t5_dec>(*this, params);
                         break;
                     default:
                         GGML_ABORT("invalid graph type");
@@ -16965,99 +17334,111 @@ llm_graph_result_ptr llama_model::build_graph(
             } break;
         case LLM_ARCH_T5ENCODER:
             {
-                llm = std::make_unique<llm_build_t5_enc>(*this, params, gf);
+                llm = std::make_unique<llm_build_t5_enc>(*this, params);
             }
             break;
         case LLM_ARCH_JAIS:
             {
-                llm = std::make_unique<llm_build_jais>(*this, params, gf);
+                llm = std::make_unique<llm_build_jais>(*this, params);
             } break;
         case LLM_ARCH_NEMOTRON:
             {
-                llm = std::make_unique<llm_build_nemotron>(*this, params, gf);
+                llm = std::make_unique<llm_build_nemotron>(*this, params);
             } break;
         case LLM_ARCH_EXAONE:
             {
-                llm = std::make_unique<llm_build_exaone>(*this, params, gf);
+                llm = std::make_unique<llm_build_exaone>(*this, params);
+            } break;
+        case LLM_ARCH_EXAONE4:
+            {
+                if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+                    llm = std::make_unique<llm_build_exaone4<true>>(*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_exaone4<false>>(*this, params);
+                }
             } break;
         case LLM_ARCH_RWKV6:
             {
-                llm = std::make_unique<llm_build_rwkv6>(*this, params, gf);
+                llm = std::make_unique<llm_build_rwkv6>(*this, params);
             } break;
         case LLM_ARCH_RWKV6QWEN2:
             {
-                llm = std::make_unique<llm_build_rwkv6qwen2>(*this, params, gf);
+                llm = std::make_unique<llm_build_rwkv6qwen2>(*this, params);
             } break;
         case LLM_ARCH_RWKV7:
             {
-                llm = std::make_unique<llm_build_rwkv7>(*this, params, gf);
+                llm = std::make_unique<llm_build_rwkv7>(*this, params);
             } break;
         case LLM_ARCH_ARWKV7:
             {
-                llm = std::make_unique<llm_build_arwkv7>(*this, params, gf);
+                llm = std::make_unique<llm_build_arwkv7>(*this, params);
             } break;
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_MINICPM:
             {
-                llm = std::make_unique<llm_build_granite>(*this, params, gf);
+                llm = std::make_unique<llm_build_granite>(*this, params);
             } break;
         case LLM_ARCH_GRANITE_HYBRID:
             {
-                llm = std::make_unique<llm_build_granite_hybrid>(*this, params, gf);
+                llm = std::make_unique<llm_build_granite_hybrid>(*this, params);
             } break;
         case LLM_ARCH_CHAMELEON:
             {
-                llm = std::make_unique<llm_build_chameleon>(*this, params, gf);
+                llm = std::make_unique<llm_build_chameleon>(*this, params);
             } break;
         case LLM_ARCH_WAVTOKENIZER_DEC:
             {
-                llm = std::make_unique<llm_build_wavtokenizer_dec>(*this, params, gf);
+                llm = std::make_unique<llm_build_wavtokenizer_dec>(*this, params);
             } break;
         case LLM_ARCH_PLM:
             {
-                llm = std::make_unique<llm_build_plm>(*this, params, gf);
+                llm = std::make_unique<llm_build_plm>(*this, params);
             } break;
         case LLM_ARCH_BAILINGMOE:
             {
-                llm = std::make_unique<llm_build_bailingmoe>(*this, params, gf);
+                llm = std::make_unique<llm_build_bailingmoe>(*this, params);
             } break;
         case LLM_ARCH_DOTS1:
             {
-                llm = std::make_unique<llm_build_dots1>(*this, params, gf);
+                llm = std::make_unique<llm_build_dots1>(*this, params);
             } break;
         case LLM_ARCH_ARCEE:
             {
-                llm = std::make_unique<llm_build_arcee>(*this, params, gf);
+                llm = std::make_unique<llm_build_arcee>(*this, params);
             } break;
         case LLM_ARCH_ERNIE4_5:
             {
-                llm = std::make_unique<llm_build_ernie4_5>(*this, params, gf);
+                llm = std::make_unique<llm_build_ernie4_5>(*this, params);
+            } break;
+        case LLM_ARCH_ERNIE4_5_MOE:
+            {
+                llm = std::make_unique<llm_build_ernie4_5_moe>(*this, params);
             } break;
         case LLM_ARCH_HUNYUAN_MOE:
             {
-                llm = std::make_unique<llm_build_hunyuan_moe>(*this, params, gf);
+                llm = std::make_unique<llm_build_hunyuan_moe>(*this, params);
             } break;
         case LLM_ARCH_SMOLLM3:
             {
-                llm = std::make_unique<llm_build_smollm3>(*this, params, gf);
+                llm = std::make_unique<llm_build_smollm3>(*this, params);
             } break;
         case LLM_ARCH_FALCON_H1:
             {
-                llm = std::make_unique<llm_build_falcon_h1>(*this, params, gf);
+                llm = std::make_unique<llm_build_falcon_h1>(*this, params);
             } break;
         case LLM_ARCH_LFM2:
             {
-                llm = std::make_unique<llm_build_lfm2>(*this, params, gf);
+                llm = std::make_unique<llm_build_lfm2>(*this, params);
             } break;
         default:
             GGML_ABORT("fatal error");
     }
 
     // add on pooling layer
-    llm->build_pooling(gf, cls, cls_b, cls_out, cls_out_b);
+    llm->build_pooling(cls, cls_b, cls_out, cls_out_b);
 
-    return std::move(llm->res);
+    return llm->res->get_gf();
 }
 
 //
@@ -17206,6 +17587,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SMOLLM3:
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
+        case LLM_ARCH_ERNIE4_5_MOE:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
@@ -17242,6 +17624,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ORION:
         case LLM_ARCH_NEMOTRON:
         case LLM_ARCH_EXAONE:
+        case LLM_ARCH_EXAONE4:
         case LLM_ARCH_MINICPM3:
         case LLM_ARCH_DOTS1:
         case LLM_ARCH_HUNYUAN_MOE:
