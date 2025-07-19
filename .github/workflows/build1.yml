@@ -1,6 +1,24 @@
 name: Build llama.cpp
-  run: |
-    mkdir -p build
-    cd build
-    cmake ..
-    make
+
+on:
+  workflow_dispatch:  # يسمح لك بتشغيله يدويًا من GitHub Actions
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🔄 استنساخ المستودع
+        uses: actions/checkout@v3
+
+      - name: 🛠️ تثبيت المتطلبات
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential
+
+      - name: ⚙️ بناء المشروع
+        run: |
+          mkdir -p build
+          cd build
+          cmake ..
+          make
