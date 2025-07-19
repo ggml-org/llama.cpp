@@ -1,0 +1,31 @@
+name: Run LLaMA Server
+
+on:
+  workflow_dispatch:  # لتشغيله يدوياً من GitHub UI
+
+jobs:
+  run-llama:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🧬 نسخ المستودع
+        uses: actions/checkout@v3
+
+      - name: 📂 إنشاء مجلدات
+        run: |
+          mkdir -p models
+          mkdir -p build
+
+      - name: ⬇️ تحميل الملف التنفيذي (server)
+        run: |
+          wget -O build/server https://github.com/issa261/llama.cpp/raw/main/build/server
+          chmod +x build/server
+
+      - name: ⬇️ تحميل نموذج TinyLLaMA
+        run: |
+          wget -O models/tinyllama-1.1b-chat-v1.0.Q8_0.gguf \
+          https://raw.githubusercontent.com/issa261/github-workflows-download-model.yml/main/tinyllama-1.1b-chat-v1.0.Q8_0.gguf
+
+      - name: 🚀 تشغيل السيرفر
+        run: |
+          ./build/server -m models/tinyllama-1.1b-chat-v1.0.Q8_0.gguf -c 512 -n 256 --host 0.0.0.0 --port 8080
