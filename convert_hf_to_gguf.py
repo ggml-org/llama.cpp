@@ -2904,6 +2904,159 @@ class DreamModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("LLaDAModelLM")
+class LLaDAModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.LLADA
+    undo_permute = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # fix for SmolVLM2, missing `num_attention_heads` in config.json
+        if self.hf_arch == "VLlama3ForCausalLM":
+            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
+
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+
+        vocab_dict = tokenizer.get_vocab()
+        vocab_size = self.hparams.get("vocab_size", len(vocab_dict))
+        assert max(vocab_dict.values()) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab_dict.items()}
+        added_vocab = tokenizer.get_added_vocab()
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            elif reverse_vocab[i] in added_vocab:
+                tokens.append(reverse_vocab[i])
+                # Check if it's a special token - treat special tokens as CONTROL tokens
+                if hasattr(tokenizer, 'added_tokens_decoder') and i in tokenizer.added_tokens_decoder:
+                    if tokenizer.added_tokens_decoder[i].special:
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    # Fallback: treat all added vocab as control tokens for special tokens like <|im_start|>
+                    toktypes.append(gguf.TokenType.CONTROL)
+            else:
+                tokens.append(reverse_vocab[i])
+                toktypes.append(gguf.TokenType.NORMAL)
+
+        return tokens, toktypes, tokpre
+
+    def set_vocab(self):
+        try:
+            self._set_vocab_sentencepiece()
+        except FileNotFoundError:
+            try:
+                self._set_vocab_llama_hf()
+            except (FileNotFoundError, TypeError):
+                # Llama 3
+                self._set_vocab_gpt2()
+
+        # Apply to CodeLlama only (and ignore for Llama 3 with a vocab size of 128256)
+        if self.hparams.get("vocab_size", 32000) == 32016:
+            special_vocab = gguf.SpecialVocab(
+                self.dir_model, load_merges=False,
+                special_token_types = ['prefix', 'suffix', 'middle', 'eot']
+            )
+            special_vocab._set_special_token("prefix", 32007)
+            special_vocab._set_special_token("suffix", 32008)
+            special_vocab._set_special_token("middle", 32009)
+            special_vocab._set_special_token("eot",    32010)
+            special_vocab.add_to_gguf(self.gguf_writer)
+
+        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
+        if tokenizer_config_file.is_file():
+            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
+                tokenizer_config_json = json.load(f)
+                if "add_prefix_space" in tokenizer_config_json:
+                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
+
+        # Apply to granite small models only
+        if self.hparams.get("vocab_size", 32000) == 49152:
+            self.gguf_writer.add_add_bos_token(False)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self._try_set_pooling_type()
+
+        # Add parameters similar to LlamaModel
+        hparams = self.hparams
+        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        if (rope_dim := hparams.get("head_dim")) is None:
+            n_heads = hparams.get("num_attention_heads", hparams.get("n_heads"))
+            rope_dim = hparams.get("hidden_size", hparams.get("d_model")) // n_heads
+        self.gguf_writer.add_rope_dimension_count(rope_dim)
+
+        # Set context length for LLaDA
+        context_length = self.hparams.get("max_sequence_length")
+        self.gguf_writer.add_context_length(context_length)
+
+        # Set embedding length (dimension size)
+        embedding_length = self.hparams.get("d_model")
+        self.gguf_writer.add_embedding_length(embedding_length)
+
+        # Set feed forward length (MLP hidden size)
+        feed_forward_length = self.hparams.get("mlp_hidden_size")
+        self.gguf_writer.add_feed_forward_length(feed_forward_length)
+
+        # Set RoPE parameters
+        if "rope_theta" in self.hparams:
+            self.gguf_writer.add_rope_freq_base(self.hparams["rope_theta"])
+
+        # Set RMS norm epsilon
+        if "rms_norm_eps" in self.hparams:
+            self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
+
+        # LLaDA models use non-causal attention for diffusion, similar to Dream
+        self.gguf_writer.add_causal_attention(False)
+        # Handle RoPE scaling similar to LlamaModel and Dream
+        rope_scaling = self.hparams.get("rope_scaling") or {}
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+        elif rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
+            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+        # Add LLaDA-specific parameters
+        mask_token_id = self.hparams.get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+    @staticmethod
+    def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
+        if n_head_kv is not None and n_head != n_head_kv:
+            n_head = n_head_kv
+        return (weights.reshape(n_head, 2, weights.shape[0] // n_head // 2, *weights.shape[1:])
+                .swapaxes(1, 2)
+                .reshape(weights.shape))
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        n_head = self.hparams.get("num_attention_heads", self.hparams.get("n_heads"))
+        n_kv_head = self.hparams.get("num_key_value_heads", self.hparams.get("n_kv_heads"))
+
+        if self.undo_permute:
+            if name.endswith(("q_proj.weight", "q_proj.bias")):
+                data_torch = LLaDAModel.permute(data_torch, n_head, n_head)
+            if name.endswith(("k_proj.weight", "k_proj.bias")):
+                data_torch = LLaDAModel.permute(data_torch, n_head, n_kv_head)
+
+        # LLaDA model tensors should be mapped directly since it's the base model
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("Ernie4_5_ForCausalLM")
 class Ernie4_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5

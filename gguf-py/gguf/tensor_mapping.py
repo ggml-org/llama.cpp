@@ -32,6 +32,7 @@ class TensorNameMap:
             "model.word_embeddings",                     # bailingmoe
             "language_model.model.embed_tokens",         # llama4
             "encoder",                                   # neobert
+            "model.transformer.wte",                     # llada
         ),
 
         # Token type embeddings
@@ -71,6 +72,7 @@ class TensorNameMap:
             "head",                      # rwkv
             "head.out",                  # wavtokenizer
             "lm_head",                   # llama4
+            "model.transformer.ff_out",  # llada
         ),
 
         # Output norm
@@ -94,6 +96,7 @@ class TensorNameMap:
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
+            "model.transformer.ln_f",                  # llada
         ),
 
         # Rope frequencies
@@ -139,6 +142,7 @@ class TensorNameMap:
             "model.layers.{bid}.input_layernorm",                   # llama4
             "transformer_encoder.{bid}.attention_norm",             # neobert
             "model.layers.{bid}.operator_norm",                     # lfm2
+            "model.transformer.blocks.{bid}.attn_norm",             # llada
         ),
 
         # Attention norm 2
@@ -183,6 +187,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
+            "model.transformer.blocks.{bid}.q_proj",                     # llada
         ),
 
         # Attention key
@@ -199,6 +204,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
+            "model.transformer.blocks.{bid}.k_proj",                   # llada
         ),
 
         # Attention value
@@ -214,6 +220,7 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
+            "model.transformer.blocks.{bid}.v_proj",                     # llada
         ),
 
         # Attention output
@@ -246,6 +253,7 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
             "transformer_encoder.{bid}.wo",                                 # neobert
+            "model.transformer.blocks.{bid}.attn_out",                      # llada
         ),
 
         # Attention output norm
@@ -291,6 +299,7 @@ class TensorNameMap:
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
             "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
+            "model.transformer.blocks.{bid}.ff_norm",                        # llada
         ),
 
         # Post feed-forward norm
@@ -363,7 +372,11 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
+<<<<<<< HEAD
             "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
+=======
+            "model.transformer.blocks.{bid}.up_proj",                  # llada
+>>>>>>> c56f1b02 (Add support for Llada-8b: diffusion model)
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -404,7 +417,11 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba granite-hybrid
+<<<<<<< HEAD
             "model.layers.{bid}.block_sparse_moe.gate",   # smallthinker
+=======
+            "model.transformer.blocks.{bid}.ff_proj",     # llada
+>>>>>>> c56f1b02 (Add support for Llada-8b: diffusion model)
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -453,7 +470,11 @@ class TensorNameMap:
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
+<<<<<<< HEAD
             "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
+=======
+            "model.transformer.blocks.{bid}.ff_out",                   # llada
+>>>>>>> c56f1b02 (Add support for Llada-8b: diffusion model)
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (

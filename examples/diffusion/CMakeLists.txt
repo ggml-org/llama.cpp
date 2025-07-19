@@ -1,5 +1,11 @@
-set(TARGET llama-diffusion-cli)
-add_executable(${TARGET} diffusion-cli.cpp)
+set(TARGET llama-diffusion-dream-cli)
+add_executable(${TARGET} diffusion-dream-cli.cpp)
+install(TARGETS ${TARGET} RUNTIME)
+target_link_libraries(${TARGET} PRIVATE llama common ${CMAKE_THREAD_LIBS_INIT})
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+set(TARGET llama-diffusion-llada-cli)
+add_executable(${TARGET} diffusion-llada-cli.cpp)
 install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE llama common ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
