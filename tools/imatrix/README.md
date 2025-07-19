@@ -1,7 +1,7 @@
 # llama.cpp/tools/imatrix
 
 Compute an importance matrix for a model and given text dataset. Can be used during quantization to enhance the quality of the quantized models.
-More information is [available here](https://github.com/ggml-org/llama.cpp/pull/4861)
+More information is available in <https://github.com/ggml-org/llama.cpp/pull/4861>.
 
 ## Usage
 
