@@ -159,6 +159,7 @@ The project is under active development, and we are [looking for feedback and co
 | `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
 | `--no-webui` | Disable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_NO_WEBUI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
+| `--truncate-embed` | allow truncation for embedding tasks to handle large inputs (default: disabled)<br/>(env: LLAMA_ARG_TRUNCATE_EMBED) |
 | `--reranking, --rerank` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
 | `--api-key KEY` | API key to use for authentication (default: none)<br/>(env: LLAMA_API_KEY) |
 | `--api-key-file FNAME` | path to file containing API keys (default: none) |
@@ -635,6 +636,8 @@ Returns a JSON object with a field `prompt` containing a string of the input mes
 > This endpoint is **not** OAI-compatible. For OAI-compatible client, use `/v1/embeddings` instead.
 
 The same as [the embedding example](../embedding) does.
+
+**Note**: By default, embedding tasks cannot be split across multiple batches for safety. For large inputs that exceed the batch size, use the `--truncate-embed` flag to enable automatic truncation. When truncation occurs, the `truncated` field in the response will indicate this.
 
 *Options:*
 
@@ -1174,6 +1177,8 @@ curl http://localhost:8080/v1/chat/completions \
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
 This endpoint requires that the model uses a pooling different than type `none`. The embeddings are normalized using the Eucledian norm.
+
+**Note**: By default, embedding tasks cannot be split across multiple batches for safety. For large inputs that exceed the batch size, use the `--truncate-embed` flag to enable automatic truncation. When truncation occurs, the `truncated` field in the response will indicate this.
 
 *Options:*
 
