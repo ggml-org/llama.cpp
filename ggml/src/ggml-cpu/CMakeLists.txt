@@ -486,7 +486,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_REPACK)
     endif()
 
-    if (GGML_CPU_KLEIDIAI)
+    if (GGML_CPU_KLEIDIAI AND GGML_CPU_AARCH64 AND (CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64"))
         message(STATUS "Using KleidiAI optimized kernels if applicable")
 
         # Disable the KleidiAI tests
