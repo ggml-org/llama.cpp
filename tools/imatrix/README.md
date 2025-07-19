@@ -24,7 +24,7 @@ The parameters in square brackets are optional and have the following meaning:
 * `--process-output` specifies if data will be collected for the `output.weight` tensor. Typically, it is better not to utilize the importance matrix when quantizing `output.weight`, so this is set to `false` by default.
 * `--in-file` one or more existing imatrix files to load and combine. Useful for merging files from multiple runs/datasets.
 * `--parse-special` enables parsing of special tokens (e.g., `<|im_start|>` in some models). Useful for models with custom tokenizers.
-* `--chunk` to skip the first `n` chunks of tokens from the input data. Useful for resuming or skipping initial low-quality data.
+* `--chunk | --from-chunk` to skip the first `n` chunks of tokens from the input data. Useful for resuming or skipping initial low-quality data.
 * `--chunks` maximum number of chunks to process. Default is -1 for all available chunks.
 * `--no-ppl` disables the calculation of perplexity for the processed chunks. Useful if you want to speed up the processing and do not care about perplexity.
 * `--show-statistics` displays imatrix file's statistics.
