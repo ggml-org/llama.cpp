@@ -201,6 +201,8 @@ struct clip_hparams {
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;
+    int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
+    int32_t minicpmv_projection_dim = 0;    // MiniCPM-V projection dimension
 };
 
 struct clip_layer {
@@ -847,13 +849,19 @@ struct clip_graph {
             int n_embd = clip_n_mmproj_embd(ctx);
             const int d_head = 128;
             int n_head = n_embd/d_head;
+            // Use actual config value if available, otherwise fall back to hardcoded values
             int num_query = 96;
-            if (ctx->model.hparams.minicpmv_version == 2) {
-                num_query = 96;
-            } else if (ctx->model.hparams.minicpmv_version == 3) {
-                num_query = 64;
-            } else if (ctx->model.hparams.minicpmv_version == 4) {
-                num_query = 64;
+            if (ctx->model.hparams.minicpmv_query_num > 0) {
+                num_query = ctx->model.hparams.minicpmv_query_num;
+            } else {
+                // Fallback to hardcoded values for legacy models
+                if (ctx->model.hparams.minicpmv_version == 2) {
+                    num_query = 96;
+                } else if (ctx->model.hparams.minicpmv_version == 3) {
+                    num_query = 64;
+                } else if (ctx->model.hparams.minicpmv_version == 4) {
+                    num_query = 64;
+                }
             }
 
             ggml_tensor * Q = ggml_add(ctx0,
@@ -2110,6 +2118,8 @@ struct clip_model_loader {
                 get_u32(KEY_PATCH_SIZE, hparams.patch_size);
                 get_u32(KEY_IMAGE_CROP_RESOLUTION, hparams.image_crop_resolution, false);
                 get_i32(KEY_MINICPMV_VERSION, hparams.minicpmv_version, false); // legacy
+                get_u32(KEY_MINICPMV_QUERY_NUM, hparams.minicpmv_query_num, false);
+                get_u32(KEY_MINICPMV_PROJECTION_DIM, hparams.minicpmv_projection_dim, false);
 
             } else if (is_audio) {
                 get_u32(KEY_A_NUM_MEL_BINS, hparams.n_mel_bins);
@@ -3517,14 +3527,20 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
-                if (params.minicpmv_version == 2) {
-                    n_patches_sq = 96;
-                } else if (params.minicpmv_version == 3) {
-                    n_patches_sq = 64;
-                } else if (params.minicpmv_version == 4) {
-                    n_patches_sq = 64;
+                // Use actual config value if available, otherwise fall back to hardcoded values
+                if (params.minicpmv_query_num > 0) {
+                    n_patches_sq = params.minicpmv_query_num;
                 } else {
-                    GGML_ABORT("Unknown minicpmv version");
+                    // Fallback to hardcoded values for legacy models
+                    if (params.minicpmv_version == 2) {
+                        n_patches_sq = 96;
+                    } else if (params.minicpmv_version == 3) {
+                        n_patches_sq = 64;
+                    } else if (params.minicpmv_version == 4) {
+                        n_patches_sq = 64;
+                    } else {
+                        GGML_ABORT("Unknown minicpmv version");
+                    }
                 }
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
@@ -4059,14 +4075,20 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
-            if (hparams.minicpmv_version == 2) {
-                return 4096;
-            } else if (hparams.minicpmv_version == 3) {
-                return 3584;
-            } else if (hparams.minicpmv_version == 4) {
-                return 3584;
+            // Use actual config value if available, otherwise fall back to hardcoded values
+            if (hparams.minicpmv_projection_dim > 0) {
+                return hparams.minicpmv_projection_dim;
+            } else {
+                // Fallback to hardcoded values for legacy models
+                if (hparams.minicpmv_version == 2) {
+                    return 4096;
+                } else if (hparams.minicpmv_version == 3) {
+                    return 3584;
+                } else if (hparams.minicpmv_version == 4) {
+                    return 3584;
+                }
+                GGML_ABORT("Unknown minicpmv version");
             }
-            GGML_ABORT("Unknown minicpmv version");
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:
