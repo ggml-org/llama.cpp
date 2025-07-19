@@ -1294,7 +1294,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.use_color = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_PREDICTED}));
     add_opt(common_arg(
         {"-t", "--threads"}, "N",
         string_format("number of threads to use during generation (default: %d)", params.cpuparams.n_threads),
@@ -1506,7 +1506,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.system_prompt = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_PREDICTED}));
     add_opt(common_arg(
         {"--no-perf"},
         string_format("disable internal libllama performance timings (default: %s)", params.no_perf ? "true" : "false"),
@@ -3186,14 +3186,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.speculative.n_max = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_MAX"));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_PREDICTED, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_MAX"));
     add_opt(common_arg(
         {"--draft-min", "--draft-n-min"}, "N",
         string_format("minimum number of draft tokens to use for speculative decoding (default: %d)", params.speculative.n_min),
         [](common_params & params, int value) {
             params.speculative.n_min = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_MIN"));
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_LOOKUP, LLAMA_EXAMPLE_PREDICTED, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_MIN"));
     add_opt(common_arg(
         {"--draft-p-split"}, "P",
         string_format("speculative decoding split probability (default: %.1f)", (double)params.speculative.p_split),
@@ -3208,6 +3208,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.p_min = std::stof(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DRAFT_P_MIN"));
+    add_opt(common_arg(
+        {"--draft-text"}, "PROMPT",
+        "draft text to use for prediction (default: empty)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.text = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_PREDICTED}).set_env("LLAMA_ARG_DRAFT_TEXT"));
     add_opt(common_arg(
         {"-cd", "--ctx-size-draft"}, "N",
         string_format("size of the prompt context for the draft model (default: %d, 0 = loaded from model)", params.speculative.n_ctx),
