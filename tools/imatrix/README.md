@@ -9,8 +9,8 @@ More information is [available here](https://github.com/ggml-org/llama.cpp/pull/
 ./llama-imatrix \
     -m model.gguf -f some-text.txt [-o imatrix.gguf] [--process-output] [--no-ppl] \
     [--chunk 123] [--output-frequency 10] [--save-frequency 0] [--show-statistics] \
-    [--no-ppl] [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] \
-    [--parse-special] [...]
+    [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \
+    [...]
 ```
 
 Here `-m | --model` with a model name and `-f | --file` with a file containing calibration data (such as e.g. `wiki.train.raw`) are mandatory.
