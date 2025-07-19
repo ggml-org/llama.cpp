@@ -1,0 +1,201 @@
+#version 450
+
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_integer_dot_product : require
+
+#ifdef USE_SUBGROUPS
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_clustered : require
+
+#define INVOCATION_ID gl_SubgroupInvocationID.x
+#else
+#define INVOCATION_ID gl_LocalInvocationID.x
+#endif
+
+#define MMQ
+#define B_TYPE block_q8_1_packed32
+
+#include "mul_mat_vec_base.comp"
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+#define K_PER_ITER 32
+
+const uint GROUP_SIZE = 8;
+const uint GROUPS_PER_WARP = (BLOCK_SIZE / GROUP_SIZE);
+
+#include "mul_mmq_funcs.comp"
+
+uint a_offset, b_offset, d_offset, y_offset;
+
+#ifdef USE_SUBGROUPS
+void reduce_result_grouped(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offset, const in uint32_t first_row, const in uint32_t num_rows, const in uint32_t tid_in_group) {
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            temp[j][n] = subgroupClusteredAdd(temp[j][n], GROUP_SIZE);
+        }
+    }
+
+    if (tid_in_group == 0) {
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(temp[j][n]);
+            }
+        }
+    }
+}
+#else
+void reduce_result_grouped(const in FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offset, const in uint32_t first_row, const in uint32_t num_rows, const in uint32_t tid_in_group) {
+    const uint tid = INVOCATION_ID;
+    // sum up partial sums and write back result
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            tmpsh[j][n][tid] = temp[j][n];
+        }
+    }
+    barrier();
+    if (tid_in_group < 4) {
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                tmpsh[j][n][tid] += tmpsh[j][n][tid + 4];
+            }
+        }
+    }
+    barrier();
+    if (tid_in_group < 2) {
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                tmpsh[j][n][tid] += tmpsh[j][n][tid + 2];
+            }
+        }
+    }
+    barrier();
+    if (tid_in_group == 0) {
+        [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+            [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+                data_d[j*p.batch_stride_d + d_offset + first_row + n] = D_TYPE(tmpsh[j][n][tid] + tmpsh[j][n][tid + 1]);
+            }
+        }
+    }
+}
+#endif
+
+int32_t cache_b_qs[8];
+vec2 cache_b_ds;
+
+void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid_in_group, const uint i) {
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        const uint col = i*GROUP_SIZE + K_PER_ITER*tid_in_group;
+
+        // Preload data_b block
+        const uint b_block_idx = (j*p.batch_stride_b + col) / QUANT_K_Q8_1 + b_offset;
+        cache_b_ds = vec2(data_b[b_block_idx].ds);
+        [[unroll]] for (uint k = 0; k < 8; k++) {
+            cache_b_qs[k] = data_b[b_block_idx].qs[k];
+        }
+
+        uint ibi = first_row*p.ncols;
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            const uint a_block_idx = (ibi + col)/QUANT_K + a_offset;
+            ibi += p.ncols;
+
+            int32_t q_sum = 0;
+#if QUANT_R == 2
+            [[unroll]] for (uint k = 0; k < 4; k++) {
+                const i32vec2 data_a_qs = repack(a_block_idx, k);
+                q_sum += dotPacked4x8EXT(data_a_qs.x,
+                                         cache_b_qs[k]);
+                q_sum += dotPacked4x8EXT(data_a_qs.y,
+                                         cache_b_qs[k + 4]);
+            }
+#else
+            [[unroll]] for (uint k = 0; k < 8; k++) {
+                const int32_t data_a_qs = repack(a_block_idx, k);
+                q_sum += dotPacked4x8EXT(data_a_qs,
+                                         cache_b_qs[k]);
+            }
+#endif
+
+#if QUANT_AUXF == 1
+            temp[j][n] += mul_q8_1(q_sum,  get_d(a_block_idx), cache_b_ds);
+#else
+            temp[j][n] += mul_q8_1(q_sum, get_dm(a_block_idx), cache_b_ds);
+#endif
+        }
+    }
+}
+
+void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
+    const uint tid_in_group = INVOCATION_ID % GROUP_SIZE;
+
+    get_offsets(a_offset, b_offset, d_offset);
+    a_offset /= QUANT_K;
+    b_offset /= QUANT_K_Q8_1;
+
+    y_offset = QUANT_R == 1 ? 1 : QUANT_K/2;
+
+    FLOAT_TYPE temp[NUM_COLS][NUM_ROWS];
+
+    [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
+        [[unroll]] for (uint n = 0; n < num_rows; ++n) {
+            temp[j][n] = FLOAT_TYPE(0.0f);
+        }
+    }
+
+    uint num_iters = p.ncols / (K_PER_ITER * GROUP_SIZE);
+    if (num_iters * K_PER_ITER * GROUP_SIZE + K_PER_ITER*tid_in_group < p.ncols) {
+        num_iters++;
+    }
+    int unroll_count = 4;
+    uint unrolled_iters = num_iters & ~(unroll_count - 1);
+
+    uint i = 0;
+    while (i < unrolled_iters) {
+        // Manually partially unroll the loop
+        [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
+            iter(temp, first_row, num_rows, tid_in_group, i*K_PER_ITER);
+            i++;
+        }
+    }
+
+    unroll_count = 2;
+    unrolled_iters = num_iters & ~(unroll_count - 1);
+
+#if K_PER_ITER == 2
+    if ((p.ncols & 1) != 0 &&
+        unrolled_iters == num_iters &&
+        unrolled_iters > 0) {
+        unrolled_iters -= unroll_count;
+    }
+#endif
+
+    while (i < unrolled_iters) {
+        // Manually partially unroll the loop
+        [[unroll]] for (uint k = 0; k < unroll_count; ++k) {
+            iter(temp, first_row, num_rows, tid_in_group, i*K_PER_ITER);
+            i++;
+        }
+    }
+    while (i < num_iters) {
+        iter(temp, first_row, num_rows, tid_in_group, i*K_PER_ITER);
+        i++;
+    }
+
+    reduce_result_grouped(temp, d_offset, first_row, num_rows, tid_in_group);
+}
+
+void main() {
+    const uint group_id = INVOCATION_ID / GROUP_SIZE;
+    // 8 threads work together on a NUM_ROWS * NUM_COLS block/slice
+    const uint first_row = NUM_ROWS * (GROUPS_PER_WARP * (gl_WorkGroupID.x + gl_NumWorkGroups.x * gl_WorkGroupID.z) + group_id);
+
+    // do NUM_ROWS at a time, unless there aren't enough remaining rows
+    if (first_row + NUM_ROWS <= p.stride_d) {
+        compute_outputs(first_row, NUM_ROWS);
+    } else {
+        if (first_row >= p.stride_d) {
+            return;
+        }
+        compute_outputs(first_row, p.stride_d - first_row);
+    }
+}
