@@ -26,10 +26,10 @@
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s \\\n"
-            "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--process-output] [--no-ppl] \\\n"
-            "       [--chunk 123] [--output-frequency 10] [--save-frequency 0] [--show-statistics] \\\n"
-            "       [--no-ppl] [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] \\\n"
-            "       [--parse-special] [...]\n" , argv[0]);
+            "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--no-ppl] \\\n"
+            "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
+            "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
+            "       [--show-statistics] [...]\n" , argv[0]);
     LOG("\n");
 }
 
