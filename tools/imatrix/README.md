@@ -31,7 +31,7 @@ The parameters in square brackets are optional and have the following meaning:
 
 For faster computation, make sure to use GPU offloading via the `-ngl | --n-gpu-layers` argument.
 
-Recent versions of `llama-imatrix` store data in GGUF format by default. For the legacy format, use an extension other than `.gguf` when saving the output file.
+Recent versions of `llama-imatrix` store data in GGUF format by default. For the legacy format, use an extension other than `.gguf` when saving the output file. More information is [available here](https://github.com/ggml-org/llama.cpp/pull/9400)
 
 ## Examples
 
