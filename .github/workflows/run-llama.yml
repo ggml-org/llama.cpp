@@ -1,31 +1,34 @@
-name: Run LLaMA Server
+name: Build and Run LLaMA.cpp
 
 on:
-  workflow_dispatch:  # يشغل السكربت يدويًا من GitHub
+  workflow_dispatch:
 
 jobs:
-  run-llama:
+  build-and-run:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🧬 نسخ المستودع
+      - name: 📥 Checkout repository
         uses: actions/checkout@v3
 
-      - name: 📁 إنشاء مجلدات ضرورية
+      - name: 🛠️ Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential
+
+      - name: 🏗️ Build llama.cpp using cmake
+        run: |
+          mkdir -p build
+          cd build
+          cmake ..
+          make -j
+
+      - name: 📁 Create model folder and download model
         run: |
           mkdir -p models
-          mkdir -p build
-
-      - name: ⬇️ تنزيل الملف التنفيذي server
-        run: |
-          wget -O build/server https://github.com/issa261/llama.cpp/raw/main/build/server
-          chmod +x build/server
-
-      - name: ⬇️ تحميل نموذج gguf
-        run: |
           wget -O models/tinyllama-1.1b-chat-v1.0.Q8_0.gguf \
           https://raw.githubusercontent.com/issa261/github-workflows-download-model.yml/main/tinyllama-1.1b-chat-v1.0.Q8_0.gguf
 
-      - name: 🚀 تشغيل النموذج
+      - name: 🚀 Run the model server
         run: |
           ./build/server -m models/tinyllama-1.1b-chat-v1.0.Q8_0.gguf -c 512 -n 256 --host 0.0.0.0 --port 8080
