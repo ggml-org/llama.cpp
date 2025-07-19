@@ -1007,28 +1007,32 @@ private:
 #endif // GGML_VULKAN_MEMORY_DEBUG
 
 class vk_perf_logger {
-public:
+  public:
     void print_timings() {
-        if(timings.empty()){
+        if (timings.empty()) {
             return;
         }
         uint64_t total_all_op_times = 0;
         std::cerr << "----------------\nVulkan Timings:" << std::endl;
-        for (const auto& t : timings) {
+        for (const auto & t : timings) {
             uint64_t total_op_times = 0;
-            for (const auto& time : t.second) {
+            for (const auto & time : t.second) {
                 total_op_times += time;
             }
-            std::cerr << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0) << " us";
+            std::cerr << t.first << ": " << t.second.size() << " x " << (total_op_times / t.second.size() / 1000.0)
+                      << " us";
 
             // If we have as many flops entries as timing entries for the op, then compute and log the flops/S.
             auto it = flops.find(t.first);
-            if(it != flops.end() && (it->second).size() == t.second.size()){
+            if (it != flops.end() && (it->second).size() == t.second.size()) {
                 uint64_t total_op_flops = 0;
-                for(const auto& elem : it->second){
+                for (const auto & elem : it->second) {
                     total_op_flops += elem;
                 }
-                std::cerr << " (" << (double(total_op_flops)/(1000.0*1000.0*1000.0)) / (double(total_op_times)/(1000.0*1000.0*1000.0)) << " GFLOPS/s)";
+                std::cerr << " ("
+                          << (double(total_op_flops) / (1000.0 * 1000.0 * 1000.0)) /
+                                 (double(total_op_times) / (1000.0 * 1000.0 * 1000.0))
+                          << " GFLOPS/s)";
             }
 
             total_all_op_times += total_op_times;
@@ -1036,8 +1040,8 @@ public:
             std::cerr << std::endl;
         }
 
-        if(timings.size() > 0){
-            std::cerr << "Total time: " << total_all_op_times/1000.0 << " us." << std::endl;
+        if (timings.size() > 0) {
+            std::cerr << "Total time: " << total_all_op_times / 1000.0 << " us." << std::endl;
         }
 
         timings.clear();
@@ -1050,42 +1054,43 @@ public:
             return;
         }
         if (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) {
-            const uint64_t m = node->src[0]->ne[1];
-            const uint64_t n = node->src[1]->ne[1];
-            const uint64_t k = node->src[1]->ne[0];
-            std::string name = ggml_op_name(node->op);
+            const uint64_t m    = node->src[0]->ne[1];
+            const uint64_t n    = node->src[1]->ne[1];
+            const uint64_t k    = node->src[1]->ne[0];
+            std::string    name = ggml_op_name(node->op);
             if (n == 1) {
                 name += "_VEC m=" + std::to_string(m) + " k=" + std::to_string(k);
             } else {
                 name += " m=" + std::to_string(m) + " n=" + std::to_string(n) + " k=" + std::to_string(k);
             }
             timings[name].push_back(time);
-            flops[name].push_back( m*n*(k+(k-1)) );
+            flops[name].push_back(m * n * (k + (k - 1)));
             return;
         }
-        if(node->op == GGML_OP_CONV_2D){
-            std::string name = ggml_op_name(node->op);
-            ggml_tensor * knl = node->src[0];
-            uint64_t OW = node->ne[0];
-            uint64_t OH = node->ne[1];
-            uint64_t N = node->ne[3];
-            uint64_t Cout = node->ne[2];
-            uint64_t KW = knl->ne[0];
-            uint64_t KH = knl->ne[1];
-            uint64_t Cin = knl->ne[2];
+        if (node->op == GGML_OP_CONV_2D) {
+            std::string   name    = ggml_op_name(node->op);
+            ggml_tensor * knl     = node->src[0];
+            uint64_t      OW      = node->ne[0];
+            uint64_t      OH      = node->ne[1];
+            uint64_t      N       = node->ne[3];
+            uint64_t      Cout    = node->ne[2];
+            uint64_t      KW      = knl->ne[0];
+            uint64_t      KH      = knl->ne[1];
+            uint64_t      Cin     = knl->ne[2];
             // KxCRS @ CRSxNPQ = KxNPQ -> M=K, K=CRS, N=NPQ
-            uint64_t size_M = Cout;
-            uint64_t size_K = Cin*KW*KH;
-            uint64_t size_N = N*OW*OH;
-            uint64_t n_flops = size_M*size_N*(size_K+(size_K-1));
-            name += " M=Cout=" + std::to_string(size_M) + ", K=Cin*KW*KH=" + std::to_string(size_K) + ", N=N*OW*OH=" + std::to_string(size_N);
+            uint64_t      size_M  = Cout;
+            uint64_t      size_K  = Cin * KW * KH;
+            uint64_t      size_N  = N * OW * OH;
+            uint64_t      n_flops = size_M * size_N * (size_K + (size_K - 1));
+            name += " M=Cout=" + std::to_string(size_M) + ", K=Cin*KW*KH=" + std::to_string(size_K) +
+                    ", N=N*OW*OH=" + std::to_string(size_N);
             flops[name].push_back(n_flops);
             timings[name].push_back(time);
             return;
         }
         timings[ggml_op_name(node->op)].push_back(time);
     }
-private:
+  private:
     std::map<std::string, std::vector<uint64_t>> timings;
     std::map<std::string, std::vector<uint64_t>> flops;
 };
@@ -3035,28 +3040,39 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_adamw_f32, "opt_step_adamw_f32", opt_step_adamw_f32_len, opt_step_adamw_f32_data, "main", 5, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
     // conv2d
-    uint32_t conv2d_WG_SIZE = 256;
-    uint32_t conv2d_BS_K = 128;
-    uint32_t conv2d_BS_CRS = 16;
-    uint32_t use_collectives = 0;   // Enables subgroup ops for preventing the re-calculation of indices.
-    if(device->subgroup_shuffle && device->vendor_id != VK_VENDOR_ID_INTEL){   // Do not enable collectives on Intel, see PR 14316
+    uint32_t conv2d_WG_SIZE  = 256;
+    uint32_t conv2d_BS_K     = 128;
+    uint32_t conv2d_BS_CRS   = 16;
+    uint32_t use_collectives = 0;  // Enables subgroup ops for preventing the re-calculation of indices.
+    if (device->subgroup_shuffle &&
+        device->vendor_id != VK_VENDOR_ID_INTEL) {  // Do not enable collectives on Intel, see PR 14316
         use_collectives = 1;
-        conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS); // CRS block size should be capped at sugroup size for correctness when shuffle is used.
+        conv2d_BS_CRS   = std::min(
+            device->subgroup_size,
+            conv2d_BS_CRS);  // CRS block size should be capped at sugroup size for correctness when shuffle is used.
     }
     uint32_t conv2d_BS_NPQ = 128;
-    uint32_t conv2d_TS_K = 8;
-    uint32_t conv2d_shmem_req = (conv2d_BS_K*(conv2d_BS_CRS+1) + conv2d_BS_CRS*(conv2d_BS_NPQ+1))*sizeof(float);
-    if(device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req){
+    uint32_t conv2d_TS_K   = 8;
+    uint32_t conv2d_shmem_req =
+        (conv2d_BS_K * (conv2d_BS_CRS + 1) + conv2d_BS_CRS * (conv2d_BS_NPQ + 1)) * sizeof(float);
+    if (device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req) {
         conv2d_BS_CRS = 8;
-        if(use_collectives){
+        if (use_collectives) {
             conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
         }
     }
 
-    if(use_collectives){
-        ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true, true);
-    }else{
-        ggml_vk_create_pipeline(device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3, sizeof(vk_op_conv2d_push_constants), {conv2d_BS_K, conv2d_BS_NPQ, 1}, {conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives}, 1, true, false);
+    if (use_collectives) {
+        ggml_vk_create_pipeline(
+            device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3,
+            sizeof(vk_op_conv2d_push_constants), { conv2d_BS_K, conv2d_BS_NPQ, 1 },
+            { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives }, 1, true, true);
+    } else {
+        ggml_vk_create_pipeline(
+            device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3,
+            sizeof(vk_op_conv2d_push_constants), { conv2d_BS_K, conv2d_BS_NPQ, 1 },
+            { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives }, 1, true,
+            false);
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -6908,12 +6924,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_CONV_2D:
-        if (src0->type == GGML_TYPE_F32 &&
-                src1->type == GGML_TYPE_F32 &&
-                dst->type == GGML_TYPE_F32 &&
-                ggml_is_contiguous(src0) &&
-                ggml_is_contiguous(src1) &&
-                ggml_is_contiguous(dst)) {
+        if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
+            ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
             return ctx->device->pipeline_conv2d_f32;
         }
         return nullptr;
@@ -7250,19 +7262,20 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
                 return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
             };
             // parallelize in {OW/BS_K, OH/BS_NPQ, 1}
-            int64_t W = src1->ne[0];
-            int64_t H = src1->ne[1];
-            int64_t KW = src0->ne[0];
-            int64_t KH = src0->ne[1];
+            int64_t W    = src1->ne[0];
+            int64_t H    = src1->ne[1];
+            int64_t KW   = src0->ne[0];
+            int64_t KH   = src0->ne[1];
             int64_t Cout = src0->ne[3];
-            int64_t N = src1->ne[3];
-            int64_t OH = calc_conv_output_size(H, KH, dst->op_params[1], dst->op_params[3], dst->op_params[5]);
-            int64_t OW = calc_conv_output_size(W, KW, dst->op_params[0], dst->op_params[2], dst->op_params[4]);
-            int64_t NPQ = N*OW*OH;
+            int64_t N    = src1->ne[3];
+            int64_t OH   = calc_conv_output_size(H, KH, dst->op_params[1], dst->op_params[3], dst->op_params[5]);
+            int64_t OW   = calc_conv_output_size(W, KW, dst->op_params[0], dst->op_params[2], dst->op_params[4]);
+            int64_t NPQ  = N * OW * OH;
 
             // Tile output matrix to (K/NB_K, NPQ/NB_NPQ, 1) workgroups
-            elements = {static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1};
-        } break;
+            elements = { static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1 };
+        }
+        break;
     case GGML_OP_ADD:
     case GGML_OP_SUB:
     case GGML_OP_DIV:
@@ -8129,10 +8142,11 @@ static void ggml_vk_pool_2d(ggml_backend_vk_context * ctx, vk_context& subctx, c
     }, dryrun);
 }
 
-static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
+static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context & subctx, const ggml_tensor * src0,
+                            const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -8142,13 +8156,13 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context& subctx, c
 
     vk_op_conv2d_push_constants p{};
     p.Cout = static_cast<uint32_t>(ne03);
-    p.Cin = static_cast<uint32_t>(ne02);
-    p.N = static_cast<uint32_t>(ne13);
+    p.Cin  = static_cast<uint32_t>(ne02);
+    p.N    = static_cast<uint32_t>(ne13);
 
     p.KW = static_cast<uint32_t>(ne00);
     p.KH = static_cast<uint32_t>(ne01);
-    p.W = static_cast<uint32_t>(ne10);
-    p.H = static_cast<uint32_t>(ne11);
+    p.W  = static_cast<uint32_t>(ne10);
+    p.H  = static_cast<uint32_t>(ne11);
     p.OW = static_cast<uint32_t>(ne0);
     p.OH = static_cast<uint32_t>(ne1);
 
@@ -8159,13 +8173,13 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context& subctx, c
     p.d0 = static_cast<uint32_t>(dst->op_params[4]);
     p.d1 = static_cast<uint32_t>(dst->op_params[5]);
 
-    p.nb01 = static_cast<uint32_t>(nb01/nb00);
-    p.nb02 = static_cast<uint32_t>(nb02/nb00);
-    p.nb03 = static_cast<uint32_t>(nb03/nb00);
+    p.nb01 = static_cast<uint32_t>(nb01 / nb00);
+    p.nb02 = static_cast<uint32_t>(nb02 / nb00);
+    p.nb03 = static_cast<uint32_t>(nb03 / nb00);
 
-    p.nb11 = static_cast<uint32_t>(nb11/nb10);
-    p.nb12 = static_cast<uint32_t>(nb12/nb10);
-    p.nb13 = static_cast<uint32_t>(nb13/nb10);
+    p.nb11 = static_cast<uint32_t>(nb11 / nb10);
+    p.nb12 = static_cast<uint32_t>(nb12 / nb10);
+    p.nb13 = static_cast<uint32_t>(nb13 / nb10);
 
     p.nb1 = static_cast<uint32_t>(nb1 / nb0);
     p.nb2 = static_cast<uint32_t>(nb2 / nb0);
@@ -8175,7 +8189,6 @@ static void ggml_vk_conv_2d(ggml_backend_vk_context * ctx, vk_context& subctx, c
     GGML_ASSERT(ne02 == ne12);
 
     ggml_vk_op_f32(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_CONV_2D, std::move(p), dryrun);
-
 }
 
 static void ggml_vk_conv_2d_dw(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -10231,11 +10244,12 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ggml_vk_build_graph(ctx, cgraph, i, nullptr, 0, true, false, false, false);
         if (cgraph->nodes[i]->op == GGML_OP_MUL_MAT || cgraph->nodes[i]->op == GGML_OP_MUL_MAT_ID) {
             total_mat_mul_bytes += ggml_nbytes(cgraph->nodes[i]->src[0]);
-        }else if(cgraph->nodes[i]->op == GGML_OP_CONV_2D){
+        } else if (cgraph->nodes[i]->op == GGML_OP_CONV_2D) {
             // Return CRSxNPQxsizeof(*) to account as many bytes as mul_mat has in im2col->mul_mat mode.
-            auto CRS_size = cgraph->nodes[i]->src[0]->ne[0]*cgraph->nodes[i]->src[0]->ne[1]*cgraph->nodes[i]->src[0]->ne[2];
-            auto NPQ_size = cgraph->nodes[i]->ne[0]*cgraph->nodes[i]->ne[1]*cgraph->nodes[i]->ne[3];
-            total_mat_mul_bytes += NPQ_size*CRS_size*ggml_type_size(cgraph->nodes[i]->type);
+            auto CRS_size =
+                cgraph->nodes[i]->src[0]->ne[0] * cgraph->nodes[i]->src[0]->ne[1] * cgraph->nodes[i]->src[0]->ne[2];
+            auto NPQ_size = cgraph->nodes[i]->ne[0] * cgraph->nodes[i]->ne[1] * cgraph->nodes[i]->ne[3];
+            total_mat_mul_bytes += NPQ_size * CRS_size * ggml_type_size(cgraph->nodes[i]->type);
         }
         i += ctx->num_additional_fused_ops;
         ctx->num_additional_fused_ops = 0;
