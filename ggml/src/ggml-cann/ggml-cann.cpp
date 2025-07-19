@@ -24,6 +24,7 @@
 
 #include <acl/acl.h>
 #include <stdarg.h>
+#include <aclnnop/aclnn_trans_matmul_weight.h>
 
 #include <cmath>
 #include <cstdio>
@@ -1115,6 +1116,95 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
+static bool is_matmul_weight(const ggml_tensor* tensor) {
+    std::string name = ggml_get_name(tensor);
+    static const std::unordered_set<std::string> weight_suffixes{
+        "output.weight",
+        "attn_q.weight",
+        "attn_k.weight",
+        "attn_v.weight",
+        "attn_output.weight",
+        "ffn_gate.weight",
+        "ffn_up.weight",
+        "ffn_down.weight"
+    };
+
+    for (const auto& suffix : weight_suffixes) {
+        if (name.find(suffix) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int CreateAclTensorWeight(const void *hostData, const std::vector<int64_t> &shape, void **deviceAddr,
+                      aclDataType dataType, aclTensor **tensor)
+{
+    uint64_t size = 1;
+    for (auto i : shape) {
+        size *= i;
+    }
+
+    const aclIntArray *mat2Size = aclCreateIntArray(shape.data(), shape.size());
+    ACL_CHECK(aclnnCalculateMatmulWeightSizeV2(mat2Size, dataType, &size));
+
+    size *= sizeof(int16_t);
+
+    ACL_CHECK(aclrtMalloc(deviceAddr, size, ACL_MEM_MALLOC_HUGE_FIRST));
+    aclrtMemcpy(*deviceAddr, size, hostData, size, ACL_MEMCPY_HOST_TO_DEVICE);
+
+    std::vector<int64_t> strides(shape.size(), 1);
+    for (int64_t i = shape.size() - 2; i >= 0; i--) {
+        strides[i] = shape[i + 1] * strides[i + 1];
+    }
+
+    // std::vector<int64_t> storageShape;
+    // storageShape.push_back(size);
+    *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_ND,
+                              shape.data(), shape.size(), *deviceAddr);
+    return 0;
+}
+
+static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
+    aclrtStream stream;
+    ACL_CHECK(aclrtCreateStream(&stream));
+
+    std::vector<int64_t> weightShape = {tensor->ne[0], tensor->ne[1]};
+    std::vector<int64_t> weightTransposedShape = {tensor->ne[1], tensor->ne[0]};
+    void *weightDeviceAddr = nullptr;
+    void *weightTransposedDeviceAddr = nullptr;
+    aclTensor *weight = nullptr;
+    aclTensor *weightTransposed = nullptr;
+    CreateAclTensorWeight(data, weightShape, &weightDeviceAddr, ggml_cann_type_mapping(tensor->type), &weight);
+    CreateAclTensorWeight(data, weightTransposedShape, &weightTransposedDeviceAddr,
+                          ggml_cann_type_mapping(tensor->type), &weightTransposed);
+    
+    uint64_t workspaceSize = 0;
+    aclOpExecutor *executor;
+    void *workspaceAddr = nullptr;
+
+    // TransMatmulWeight
+    ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed, &workspaceSize, &executor));
+    std::unique_ptr<void, aclError (*)(void *)> workspaceAddrPtrTrans(nullptr, aclrtFree);
+    if (workspaceSize > 0) {
+        ACL_CHECK(aclrtMalloc(&workspaceAddr, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST));
+        workspaceAddrPtrTrans.reset(workspaceAddr);
+    }
+    ACL_CHECK(aclnnTransMatmulWeight(workspaceAddr, workspaceSize, executor, stream));
+
+    size_t size = ggml_nelements(tensor) * ggml_element_size(tensor);
+
+    aclrtMemcpy((char *)tensor->data + offset, size,
+                weightTransposedDeviceAddr, size, ACL_MEMCPY_HOST_TO_DEVICE);
+    ACL_CHECK(aclDestroyTensor(weight));
+    ACL_CHECK(aclDestroyTensor(weightTransposed));
+    aclrtFree(weightDeviceAddr);
+    aclrtFree(weightTransposedDeviceAddr);
+    if (workspaceSize > 0) {
+        aclrtFree(workspaceAddr);
+    }
+}
+
 // TODO: need handle tensor which has paddings.
 /**
  * @brief Set tensor data in a CANN buffer.
@@ -1139,9 +1229,16 @@ static void ggml_backend_cann_buffer_set_tensor(
     // For acl, synchronous functions use this default stream.
     // Why aclrtSynchronizeDevice?
 
+    bool weightToNZ = false;
+#ifdef ASCEND_310P
+    weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
+#endif
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
+        if (weightToNZ && is_matmul_weight((const ggml_tensor*)tensor)) {
+            weight_format_to_nz(tensor, data, offset);
+        }
     } else {
         void *transform_buffer = malloc(size);
         ggml_backend_cann_transform(tensor, data, transform_buffer);
@@ -1149,6 +1246,9 @@ static void ggml_backend_cann_buffer_set_tensor(
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size,
                               transform_buffer, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
+        if (weightToNZ && is_matmul_weight((const ggml_tensor*)tensor)) {
+            weight_format_to_nz(tensor, transform_buffer, offset);
+        }
         free(transform_buffer);
     }
 }
@@ -2044,8 +2144,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             switch (op->src[0]->type) {
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
-                    return true;
                 case GGML_TYPE_Q8_0:
+                    return true;
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
                     // Q4 && Q8 per group is not suppor on 310p device
