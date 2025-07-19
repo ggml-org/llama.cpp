@@ -489,7 +489,7 @@ int main(int argc, char ** argv) {
             //clear screen and move cursor to top-left
             LOG_INF("\033[2J\033[H");
         }
-        
+
         output_tokens.erase(output_tokens.begin(), output_tokens.begin() + n_input);
         std::string output_data = common_detokenize(vocab, output_tokens, false);
         LOG_INF("\n%s\n", output_data.c_str());

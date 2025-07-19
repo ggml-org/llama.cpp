@@ -8105,7 +8105,7 @@ struct llm_build_dream : public llm_graph_context {
 };
 
 struct llm_build_llada : public llm_graph_context {
-    llm_build_llada(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) :
+    llm_build_llada(const llama_model & model, const llm_graph_params & params) :
         llm_graph_context(params) {
         // LLaDA is similar to LLaMA but uses non-causal attention for diffusion
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -8158,7 +8158,7 @@ struct llm_build_llada : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                cur = build_attn(inp_attn, gf, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr,
+                cur = build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr,
                                  1.0f / sqrtf(float(n_embd_head)), il);
             }
 
@@ -17532,7 +17532,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             break;
         case LLM_ARCH_LLADA:
             {
-                llm = std::make_unique<llm_build_llada>(*this, params, gf);
+                llm = std::make_unique<llm_build_llada>(*this, params);
             }
             break;
         case LLM_ARCH_QWEN2VL:

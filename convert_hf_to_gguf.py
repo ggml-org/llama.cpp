@@ -2999,15 +2999,15 @@ class LLaDAModel(TextModel):
         self.gguf_writer.add_rope_dimension_count(rope_dim)
 
         # Set context length for LLaDA
-        context_length = self.hparams.get("max_sequence_length")
+        context_length = self.hparams.get("max_sequence_length", 4096)
         self.gguf_writer.add_context_length(context_length)
 
         # Set embedding length (dimension size)
-        embedding_length = self.hparams.get("d_model")
+        embedding_length = self.hparams.get("d_model", 4096)
         self.gguf_writer.add_embedding_length(embedding_length)
 
         # Set feed forward length (MLP hidden size)
-        feed_forward_length = self.hparams.get("mlp_hidden_size")
+        feed_forward_length = self.hparams.get("mlp_hidden_size", 12288)
         self.gguf_writer.add_feed_forward_length(feed_forward_length)
 
         # Set RoPE parameters
