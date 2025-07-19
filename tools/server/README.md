@@ -428,6 +428,8 @@ By default, this value is set to `0`, meaning no tokens are kept. Use `-1` to re
 
 `stream`: Allows receiving each predicted token in real-time instead of waiting for the completion to finish (uses a different response format). To enable this, set to `true`.
 
+`include_prompt_progress`: When `stream` is enabled, this option allows receiving prompt processing progress information before the text generation begins. The progress responses contain a `prompt_processing` field with details about the number of tokens processed and overall progress. This is useful for long prompts where users want to see evaluation progress instead of waiting silently. Default: `false` (only applies when `stream` is `true`).
+
 `stop`: Specify a JSON array of stopping strings.
 These words will not be included in the completion, so make sure to add them to the prompt for the next iteration. Default: `[]`
 
