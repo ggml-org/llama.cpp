@@ -409,6 +409,96 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     return token;
 }
 
+int32_t llama_sampler_sample_with_candidates(
+    struct llama_sampler * smpl, 
+    struct llama_context * ctx, 
+    int32_t idx,
+    size_t max_candidates,
+    struct llama_sampling_result * result
+) {
+    if (!result) {
+        return -1; // Invalid result pointer
+    }
+
+    const auto * logits = llama_get_logits_ith(ctx, idx);
+    if (!logits) {
+        return -2; // Invalid logits
+    }
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const int n_vocab = llama_vocab_n_tokens(vocab);
+
+    // Initialize result structure
+    result->selected_token = LLAMA_TOKEN_NULL;
+    result->selected_logit = 0.0f;
+    result->selected_prob = 0.0f;
+    result->is_selected = false;
+    result->candidates.data = nullptr;
+    result->candidates.size = 0;
+    result->candidates.selected = -1;
+    result->candidates.sorted = false;
+
+    // Create candidate tokens array
+    std::vector<llama_token_data> cur;
+    cur.reserve(n_vocab);
+    for (llama_token token_id = 0; token_id < n_vocab; token_id++) {
+        cur.emplace_back(llama_token_data{token_id, logits[token_id], 0.0f});
+    }
+
+    llama_token_data_array cur_p = {
+        /* .data       = */ cur.data(),
+        /* .size       = */ cur.size(),
+        /* .selected   = */ -1,
+        /* .sorted     = */ false,
+    };
+
+    // Apply sampling
+    llama_sampler_apply(smpl, &cur_p);
+
+    // Check if a token was selected
+    if (cur_p.selected >= 0 && cur_p.selected < (int32_t) cur_p.size) {
+        result->selected_token = cur_p.data[cur_p.selected].id;
+        result->selected_logit = cur_p.data[cur_p.selected].logit;
+        result->selected_prob = cur_p.data[cur_p.selected].p;
+        result->is_selected = true;
+
+        // Accept the selected token
+        llama_sampler_accept(smpl, result->selected_token);
+    }
+
+    // Determine how many candidates to return
+    size_t num_candidates = cur_p.size;
+    if (max_candidates > 0 && max_candidates < num_candidates) {
+        num_candidates = max_candidates;
+    }
+
+    // Allocate and copy candidate data
+    if (num_candidates > 0) {
+        result->candidates.data = new llama_token_data[num_candidates];
+        result->candidates.size = num_candidates;
+        result->candidates.selected = cur_p.selected;
+        result->candidates.sorted = cur_p.sorted;
+
+        // Copy the top candidates (they should already be sorted by the sampler)
+        for (size_t i = 0; i < num_candidates; i++) {
+            result->candidates.data[i] = cur_p.data[i];
+        }
+    }
+
+    return 0; // Success
+}
+
+void llama_sampling_result_free(struct llama_sampling_result * result) {
+    if (result && result->candidates.data) {
+        delete[] result->candidates.data;
+        result->candidates.data = nullptr;
+        result->candidates.size = 0;
+        result->candidates.selected = -1;
+        result->candidates.sorted = false;
+    }
+}
+
 // sampler chain
 
 static const char * llama_sampler_chain_name(const struct llama_sampler * /*smpl*/) {
