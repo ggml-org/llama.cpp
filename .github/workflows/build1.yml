@@ -1,4 +1,4 @@
-- name: Build llama.cpp
+name: Build llama.cpp
   run: |
     mkdir -p build
     cd build
