@@ -8,6 +8,30 @@
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
 
+template <int DKQ, int DV, int ncols1, int ncols2>
+static void ggml_cuda_flash_attn_ext_mma_f16_switch_nstages(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    typedef fattn_mma_f16_config<DKQ, DV> c;
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * mask = dst->src[3];
+
+    if (!cp_async_available(cc)) {
+        ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, ncols1, ncols2, 0>(ctx, dst);
+        return;
+    }
+
+    if constexpr (c::nstages_max > 1) {
+        static_assert(c::nstages_max == 2, "bad nstages_max");
+        if (Q->ne[3] == 1 && mask) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, ncols1, ncols2, 2>(ctx, dst);
+            return;
+        }
+    }
+
+    ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, ncols1, ncols2, 1>(ctx, dst);
+}
+
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -15,22 +39,22 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
 
     if constexpr (ncols2 <= 8) {
         if (Q->ne[1] <= 8/ncols2) {
-            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 8/ncols2, ncols2>(ctx, dst);
+            ggml_cuda_flash_attn_ext_mma_f16_switch_nstages<DKQ, DV, 8/ncols2, ncols2>(ctx, dst);
             return;
         }
     }
 
     if (Q->ne[1] <= 16/ncols2) {
-        ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 16/ncols2, ncols2>(ctx, dst);
+        ggml_cuda_flash_attn_ext_mma_f16_switch_nstages<DKQ, DV, 16/ncols2, ncols2>(ctx, dst);
         return;
     }
 
     if (ggml_cuda_highest_compiled_arch(cc) == GGML_CUDA_CC_TURING || Q->ne[1] <= 32/ncols2) {
-        ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 32/ncols2, ncols2>(ctx, dst);
+        ggml_cuda_flash_attn_ext_mma_f16_switch_nstages<DKQ, DV, 32/ncols2, ncols2>(ctx, dst);
         return;
     }
 
-    ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 64/ncols2, ncols2>(ctx, dst);
+    ggml_cuda_flash_attn_ext_mma_f16_switch_nstages<DKQ, DV, 64/ncols2, ncols2>(ctx, dst);
 }
 
 template <int DKQ, int DV>
@@ -325,7 +349,8 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
     const bool gqa_opt_applies = ((Q->ne[2] / K->ne[2]) % 2 == 0) && mask; // The mma-based kernels have GQA-specific optimizations
     const bool mma_needs_data_conversion = K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16;
-    const bool mma_faster_for_bs1 = new_mma_available(cc) && gqa_opt_applies && cc < GGML_CUDA_CC_ADA_LOVELACE && !mma_needs_data_conversion;
+    const bool mma_faster_for_bs1 = new_mma_available(cc) && gqa_opt_applies &&
+        (Q->ne[3] > 1 || cc < GGML_CUDA_CC_ADA_LOVELACE) && !mma_needs_data_conversion;
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % (2*warp_size) == 0;
     if (Q->ne[1] == 1 && can_use_vector_kernel && !mma_faster_for_bs1) {
         if (prec == GGML_PREC_DEFAULT) {
