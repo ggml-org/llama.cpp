@@ -1,23 +1,27 @@
-name: C/C++ CI
+name: Build llama.cpp
 
 on:
-  push:
-    branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+  workflow_dispatch:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: configure
-      run: ./configure
-    - name: make
-      run: make
-    - name: make check
-      run: make check
-    - name: make distcheck
-      run: make distcheck
+      - name: 📥 استنساخ الكود
+        uses: actions/checkout@v3
+
+      - name: 🛠️ تثبيت المتطلبات
+        run: |
+          sudo apt update
+          sudo apt install -y cmake build-essential
+
+      - name: 🏗️ بناء المشروع
+        run: |
+          mkdir -p build
+          cd build
+          cmake ..
+          make
+
+      - name: ✅ عرض نتيجة البناء
+        run: ls -la build
