@@ -25,7 +25,7 @@ The parameters in square brackets are optional and have the following meaning:
 * `--in-file` one or more existing imatrix files to load and combine. Useful for merging files from multiple runs/datasets.
 * `--parse-special` enables parsing of special tokens (e.g., `<|im_start|>` in some models). Useful for models with custom tokenizers.
 * `--chunk` to skip the first `n` chunks of tokens from the input data. Useful for resuming or skipping initial low-quality data.
-* `-n | --n-chunks` maximum number of chunks to process. Default is -1 for all available chunks.
+* `--chunks` maximum number of chunks to process. Default is -1 for all available chunks.
 * `--no-ppl` disables the calculation of perplexity for the processed chunks. Useful if you want to speed up the processing and do not care about perplexity.
 * `--show-statistics` displays imatrix file's statistics.
 
