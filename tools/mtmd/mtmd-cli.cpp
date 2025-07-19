@@ -160,8 +160,9 @@ struct mtmd_cli_context {
     }
 };
 
-static int generate_response(mtmd_cli_context & ctx, int n_predict) {
+static std::string generate_response(mtmd_cli_context & ctx, int n_predict) {
     llama_tokens generated_tokens;
+    std::string response = "";
     for (int i = 0; i < n_predict; i++) {
         if (i > n_predict || !g_is_generating || g_is_interrupted) {
             LOG("\n");
@@ -176,8 +177,9 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
             LOG("\n");
             break; // end of generation
         }
-
-        LOG("%s", common_token_to_piece(ctx.lctx, token_id).c_str());
+        std::string piece=common_token_to_piece(ctx.lctx, token_id);
+        LOG("%s", piece.c_str());
+        response += piece;
         fflush(stdout);
 
         if (g_is_interrupted) {
@@ -190,17 +192,18 @@ static int generate_response(mtmd_cli_context & ctx, int n_predict) {
         common_batch_add(ctx.batch, token_id, ctx.n_past++, {0}, true);
         if (llama_decode(ctx.lctx, ctx.batch)) {
             LOG_ERR("failed to decode token\n");
-            return 1;
+            return "";
         }
     }
-    return 0;
+    return response;
 }
 
-static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg, bool add_bos = false) {
+static int eval_message(mtmd_cli_context & ctx, const std::vector<common_chat_msg> & messages, bool add_bos = false) {
     common_chat_templates_inputs tmpl_inputs;
-    tmpl_inputs.messages = {msg};
+    tmpl_inputs.messages = messages;
     tmpl_inputs.add_generation_prompt = true;
-    tmpl_inputs.use_jinja = false; // jinja is buggy here
+    tmpl_inputs.no_part_concat=true;
+    tmpl_inputs.use_jinja = true; // jinja is bughigy here
     auto formatted_chat = common_chat_templates_apply(ctx.tmpls.get(), tmpl_inputs);
     LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.prompt.c_str());
 
@@ -303,10 +306,10 @@ int main(int argc, char ** argv) {
                 return 1; // error is already printed by libmtmd
             }
         }
-        if (eval_message(ctx, msg, true)) {
+        if (eval_message(ctx,{msg} , true)) {
             return 1;
         }
-        if (!g_is_interrupted && generate_response(ctx, n_predict)) {
+        if (!g_is_interrupted && generate_response(ctx, n_predict).empty()) {
             return 1;
         }
 
@@ -324,7 +327,7 @@ int main(int argc, char ** argv) {
 
         bool is_first_msg = true;
         std::string content;
-
+        std::vector<common_chat_msg> messages;
         while (!g_is_interrupted) {
             g_is_generating = false;
             LOG("\n> ");
@@ -357,24 +360,31 @@ int main(int argc, char ** argv) {
                 std::string media_path = line.substr(7);
                 if (ctx.load_media(media_path)) {
                     LOG("%s %s loaded\n", media_path.c_str(), is_image ? "image" : "audio");
-                    content += mtmd_default_marker();
+                    //content += mtmd_default_marker();
+                    common_chat_msg msg;
+                    msg.content_parts.push_back({"image",""});
+                    messages.push_back(std::move(msg));
                 }
                 // else, error is already printed by libmtmd
                 continue;
-            } else {
-                content += line;
             }
             common_chat_msg msg;
             msg.role = "user";
-            msg.content = content;
-            int ret = eval_message(ctx, msg, is_first_msg);
+            msg.content = line;
+            messages.push_back(std::move(msg));
+            int ret = eval_message(ctx, messages, is_first_msg);
             if (ret) {
                 return 1;
             }
             if (g_is_interrupted) break;
-            if (generate_response(ctx, n_predict)) {
+            auto response=generate_response(ctx, n_predict);
+            if (response.empty()) {
                 return 1;
             }
+            common_chat_msg response_message;
+            response_message.role = "assistant";
+            response_message.content = response;
+            messages.push_back(response_message);
             content.clear();
             is_first_msg = false;
         }
