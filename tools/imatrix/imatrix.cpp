@@ -126,7 +126,6 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
 }
 
 static void compute_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
-    // if (e.values.size() != e.counts.size()) {
     if (e.values.size() % e.counts.size() != 0) {
         LOG_ERR("%s: activation size mismatch for tensor %s (%zu vs %zu)\n", __func__, name.c_str(), e.counts.size(), e.values.size());
         return;
