@@ -3487,7 +3487,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { params.diffusion_llada.cfg_scale = std::stof(value); }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_LLADA }));
     add_opt(common_arg(
-        { "--diffusion-alg" }, "N",
+        { "--diffusion-algorithm" }, "N",
         string_format("remasking algorithm: 0=LOW_CONFIDENCE, 1=RANDOM (default: %d)", params.diffusion_llada.remasking),
         [](common_params & params, int value) { params.diffusion_llada.remasking = value; }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_LLADA }));

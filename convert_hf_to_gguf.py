@@ -2911,9 +2911,6 @@ class LLaDAModel(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # fix for SmolVLM2, missing `num_attention_heads` in config.json
-        if self.hf_arch == "VLlama3ForCausalLM":
-            self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
     def get_vocab_base(self) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
@@ -2961,29 +2958,6 @@ class LLaDAModel(TextModel):
             except (FileNotFoundError, TypeError):
                 # Llama 3
                 self._set_vocab_gpt2()
-
-        # Apply to CodeLlama only (and ignore for Llama 3 with a vocab size of 128256)
-        if self.hparams.get("vocab_size", 32000) == 32016:
-            special_vocab = gguf.SpecialVocab(
-                self.dir_model, load_merges=False,
-                special_token_types = ['prefix', 'suffix', 'middle', 'eot']
-            )
-            special_vocab._set_special_token("prefix", 32007)
-            special_vocab._set_special_token("suffix", 32008)
-            special_vocab._set_special_token("middle", 32009)
-            special_vocab._set_special_token("eot",    32010)
-            special_vocab.add_to_gguf(self.gguf_writer)
-
-        tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
-        if tokenizer_config_file.is_file():
-            with open(tokenizer_config_file, "r", encoding="utf-8") as f:
-                tokenizer_config_json = json.load(f)
-                if "add_prefix_space" in tokenizer_config_json:
-                    self.gguf_writer.add_add_space_prefix(tokenizer_config_json["add_prefix_space"])
-
-        # Apply to granite small models only
-        if self.hparams.get("vocab_size", 32000) == 49152:
-            self.gguf_writer.add_add_bos_token(False)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
