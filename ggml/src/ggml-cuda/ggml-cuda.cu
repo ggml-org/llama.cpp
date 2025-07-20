@@ -2610,6 +2610,9 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 
     const std::string gemma3n_per_layer_proj_src0_name = "inp_per_layer_selected";
     const std::string gemma3n_per_layer_proj_src1_name = "per_layer_proj";
+    const std::string ffn_moe_gate_bias_prefix = "ffn_moe_gate_biased";
+    const std::string ffn_moe_up_bias_prefix = "ffn_moe_up_biased";
+    const std::string ffn_moe_down_bias_prefix = "ffn_moe_down_biased";
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
@@ -2632,7 +2635,13 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 #endif
         }
 
-        if (node->op == GGML_OP_ADD && node->src[1] && node->src[1]->ne[1] > 1 && (node->src[0] ? node->src[0]->name != gemma3n_per_layer_proj_src0_name : true) && (node->src[1] ? node->src[1]->name != gemma3n_per_layer_proj_src1_name : true)) {
+        if (node->op == GGML_OP_ADD &&
+            node->src[1] && node->src[1]->ne[1] > 1 &&
+            (node->src[0] ? node->src[0]->name != gemma3n_per_layer_proj_src0_name : true) &&
+            (node->src[1] ? node->src[1]->name != gemma3n_per_layer_proj_src1_name : true) &&
+            strncmp(node->name, ffn_moe_gate_bias_prefix.c_str(), ffn_moe_gate_bias_prefix.size()) != 0 &&
+            strncmp(node->name, ffn_moe_up_bias_prefix.c_str(), ffn_moe_up_bias_prefix.size()) != 0 &&
+            strncmp(node->name, ffn_moe_down_bias_prefix.c_str(), ffn_moe_down_bias_prefix.size()) != 0) {
             // disable CUDA graphs for batch size > 1 for now while excluding the matrix-matrix addition as part of Gemma3n's `project_per_layer_input` operation
             // by means of matching node names. See
             // https://github.com/ggml-org/llama.cpp/blob/f9a31eea06a859e34cecb88b4d020c7f03d86cc4/src/llama-model.cpp#L10199-L10241 and
@@ -3281,6 +3290,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q5_1:
                     case GGML_TYPE_Q8_0:
+                    case GGML_TYPE_MXFP4:
                     case GGML_TYPE_Q2_K:
                     case GGML_TYPE_Q3_K:
                     case GGML_TYPE_Q4_K:

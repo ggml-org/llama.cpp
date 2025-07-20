@@ -64,6 +64,7 @@ const std::vector<std::string> type_names = {
     "iq3_s",
     "iq4_xs",
     "iq4_nl",
+    "mxfp4",
     "bf16",
 };
 
@@ -118,7 +119,7 @@ void execute_command(const std::string& command, std::string& stdout_str, std::s
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 #else
-int stdout_pipe[2];
+    int stdout_pipe[2];
     int stderr_pipe[2];
 
     if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
@@ -362,7 +363,7 @@ void matmul_shaders(bool fp16, bool matmul_id, bool coopmat, bool coopmat2, bool
         std::string load_vec_quant = "2";
         if ((tname == "q4_0") || (tname == "q4_1") || (tname == "iq1_s") || (tname == "iq1_m") || (tname == "iq2_xxs") || (tname == "iq2_xs") || (tname == "iq2_s"))
             load_vec_quant = "8";
-        else if ((tname == "q5_0") || (tname == "q5_1") || (tname == "q8_0") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_nl"))
+        else if ((tname == "q5_0") || (tname == "q5_1") || (tname == "q8_0") || (tname == "iq3_xxs") || (tname == "iq3_s") || (tname == "iq4_nl") || (tname == "mxfp4"))
             load_vec_quant = "4";
 
         if (tname == "bf16") {
