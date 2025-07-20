@@ -436,7 +436,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
 ## [`llama-perplexity`](tools/perplexity)
 
-#### A tool for measuring the perplexity [^1][^2] (and other quality metrics) of a model over a given text.
+#### A tool for measuring the [perplexity](./tools/perplexity/README.md)(and other quality metrics) of a model over a given text.
 
 - <details open>
     <summary>Measure the perplexity over a text file</summary>
@@ -458,9 +458,6 @@ To learn more about model quantization, [read this documentation](tools/quantize
     ```
 
     </details>
-
-[^1]: [https://github.com/ggml-org/llama.cpp/blob/master/tools/perplexity/README.md](./tools/perplexity/README.md)
-[^2]: [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity)
 
 ## [`llama-bench`](tools/llama-bench)
 
