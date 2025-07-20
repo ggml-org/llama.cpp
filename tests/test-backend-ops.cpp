@@ -5263,7 +5263,7 @@ static const ggml_type other_types[] = {
 };
 
 // Test cases for evaluation: should try to cover edge cases while using small input sizes to keep the runtime low
-static std::vector<std::unique_ptr<test_case>> make_test_cases_eval(bool test_sgd = true) {
+static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
 
@@ -6097,8 +6097,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval(bool test_sg
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {30000, 1, 1, 1}));
 
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
-    if (test_sgd)
-        test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, { 10, 5, 4, 3 }));
+    test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, { 10, 5, 4, 3 }));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging
@@ -6242,10 +6241,6 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         }
     };
 
-    char const* name = ggml_backend_name(backend);
-    bool const vulkan = strstr(name, "ulkan");
-    bool const sgd = !vulkan;
-
     if (mode == MODE_TEST) {
         auto test_cases = make_test_cases_eval();
         filter_test_cases(test_cases, params_filter);
@@ -6271,7 +6266,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
     }
 
     if (mode == MODE_GRAD) {
-        auto test_cases = make_test_cases_eval(sgd);
+        auto test_cases = make_test_cases_eval();
         filter_test_cases(test_cases, params_filter);
         size_t n_ok = 0;
         for (auto & test : test_cases) {
