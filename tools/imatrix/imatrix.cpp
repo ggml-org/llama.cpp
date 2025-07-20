@@ -1183,12 +1183,6 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    if (params.in_files.empty() || params.model.path.empty()) {
-        LOG_ERR("%s: an input file is required", __func__);
-        print_usage(argc, argv);
-        return 1;
-    }
-
     if (params.show_statistics) {
         if (!show_statistics(params)) {
             return 1;
