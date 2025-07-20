@@ -459,7 +459,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
     </details>
 
-- [^1]: [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity)
+[^1]: [https://huggingface.co/docs/transformers/perplexity](https://huggingface.co/docs/transformers/perplexity)
 
 ## [`llama-bench`](tools/llama-bench)
 
