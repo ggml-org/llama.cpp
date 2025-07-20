@@ -317,10 +317,11 @@ enum test_mode {
     MODE_TEST,
     MODE_PERF,
     MODE_GRAD,
+    MODE_SUPPORT,
 };
 
 // Output format support similar to llama-bench
-enum output_formats { CONSOLE, SQL };
+enum output_formats { CONSOLE, SQL, CSV };
 
 static const char * output_format_str(output_formats format) {
     switch (format) {
@@ -328,6 +329,8 @@ static const char * output_format_str(output_formats format) {
             return "console";
         case SQL:
             return "sql";
+        case CSV:
+            return "csv";
         default:
             GGML_ABORT("invalid output format");
     }
@@ -338,6 +341,8 @@ static bool output_format_from_str(const std::string & s, output_formats & forma
         format = CONSOLE;
     } else if (s == "sql") {
         format = SQL;
+    } else if (s == "csv") {
+        format = CSV;
     } else {
         return false;
     }
@@ -360,6 +365,8 @@ struct test_result {
     double      bandwidth_gb_s;
     size_t      memory_kb;
     int         n_runs;
+    std::string device_description;
+    std::string backend_reg_name;
 
     test_result() {
         // Initialize with default values
@@ -384,7 +391,7 @@ struct test_result {
     test_result(const std::string & backend_name, const std::string & op_name, const std::string & op_params,
                 const std::string & test_mode, bool supported, bool passed, const std::string & error_message = "",
                 double time_us = 0.0, double flops = 0.0, double bandwidth_gb_s = 0.0, size_t memory_kb = 0,
-                int n_runs = 0) :
+                int n_runs = 0, const std::string & device_description = "", const std::string & backend_reg_name = "") :
         backend_name(backend_name),
         op_name(op_name),
         op_params(op_params),
@@ -396,7 +403,9 @@ struct test_result {
         flops(flops),
         bandwidth_gb_s(bandwidth_gb_s),
         memory_kb(memory_kb),
-        n_runs(n_runs) {
+        n_runs(n_runs),
+        device_description(device_description),
+        backend_reg_name(backend_reg_name) {
         // Set test time
         time_t t = time(NULL);
         char   buf[32];
@@ -410,7 +419,8 @@ struct test_result {
     static const std::vector<std::string> & get_fields() {
         static const std::vector<std::string> fields = {
             "test_time", "build_commit",  "backend_name", "op_name", "op_params",      "test_mode", "supported",
-            "passed",    "error_message", "time_us",      "flops",   "bandwidth_gb_s", "memory_kb", "n_runs"
+            "passed",    "error_message", "time_us",      "flops",   "bandwidth_gb_s", "memory_kb", "n_runs",
+            "device_description", "backend_reg_name"
         };
         return fields;
     }
@@ -444,7 +454,9 @@ struct test_result {
                  std::to_string(flops),
                  std::to_string(bandwidth_gb_s),
                  std::to_string(memory_kb),
-                 std::to_string(n_runs) };
+                 std::to_string(n_runs),
+                 device_description,
+                 backend_reg_name };
     }
 };
 
@@ -633,6 +645,8 @@ struct console_printer : public printer {
             print_test_console(result);
         } else if (result.test_mode == "perf") {
             print_perf_console(result);
+        } else if (result.test_mode == "support") {
+            print_support_console(result);
         }
     }
 
@@ -799,6 +813,17 @@ struct console_printer : public printer {
         }
         printf("\n");
     }
+
+    void print_support_console(const test_result & result) {
+        printf("  %s(%s): ", result.op_name.c_str(), result.op_params.c_str());
+        fflush(stdout);
+
+        if (result.supported) {
+            printf("\033[1;32mSUPPORTED\033[0m\n");
+        } else {
+            printf("\033[1;31mNOT SUPPORTED\033[0m\n");
+        }
+    }
 };
 
 struct sql_printer : public printer {
@@ -841,12 +866,39 @@ struct sql_printer : public printer {
     }
 };
 
+struct csv_printer : public printer {
+    void print_header() override {
+        std::vector<std::string> fields = test_result::get_fields();
+        for (size_t i = 0; i < fields.size(); i++) {
+            printf("\"%s\"%s", fields[i].c_str(), i < fields.size() - 1 ? "," : "");
+        }
+        printf("\n");
+    }
+
+    void print_test_result(const test_result & result) override {
+        std::vector<std::string> values = result.get_values();
+        for (size_t i = 0; i < values.size(); i++) {
+            // Escape quotes and wrap in quotes for CSV
+            std::string escaped_value = values[i];
+            size_t pos = 0;
+            while ((pos = escaped_value.find("\"", pos)) != std::string::npos) {
+                escaped_value.replace(pos, 1, "\"\"");
+                pos += 2;
+            }
+            printf("\"%s\"%s", escaped_value.c_str(), i < values.size() - 1 ? "," : "");
+        }
+        printf("\n");
+    }
+};
+
 static std::unique_ptr<printer> create_printer(output_formats format) {
     switch (format) {
         case CONSOLE:
             return std::make_unique<console_printer>();
         case SQL:
             return std::make_unique<sql_printer>();
+        case CSV:
+            return std::make_unique<csv_printer>();
     }
     GGML_ABORT("invalid output format");
 }
@@ -928,7 +980,7 @@ struct test_case {
     std::vector<ggml_tensor *> sentinels;
 
     void add_sentinel(ggml_context * ctx) {
-        if (mode == MODE_PERF || mode == MODE_GRAD) {
+        if (mode == MODE_PERF || mode == MODE_GRAD || mode == MODE_SUPPORT) {
             return;
         }
         ggml_tensor * sentinel = ::ggml_new_tensor_1d(ctx, GGML_TYPE_F32, sentinel_size);
@@ -1153,15 +1205,12 @@ struct test_case {
             return true;
         }
 
-        // check if backends support op
         if (!ggml_backend_supports_op(backend, out)) {
             // Create test result for unsupported performance test
             test_result result(ggml_backend_name(backend), current_op_name, vars(), "perf", false, false,
                                "not supported");
 
-            if (output_printer) {
-                output_printer->print_test_result(result);
-            }
+            output_printer->print_test_result(result);
 
             return true;
         }
@@ -1262,6 +1311,38 @@ struct test_case {
         if (output_printer) {
             output_printer->print_test_result(result);
         }
+
+        return true;
+    }
+
+    bool eval_support(ggml_backend_t backend, const char * op_name, printer * output_printer) {
+        mode = MODE_SUPPORT;
+
+        static const size_t graph_nodes = 8192;
+
+        ggml_init_params params = {
+            /* .mem_size = */ ggml_tensor_overhead()*128 + ggml_graph_overhead_custom(graph_nodes, false),
+            /* .mem_base = */ NULL,
+            /* .no_alloc = */ true,
+        };
+        ggml_context_ptr ctx(ggml_init(params)); // smart ptr
+        GGML_ASSERT(ctx);
+
+        ggml_tensor * out             = build_graph(ctx.get());
+        std::string   current_op_name = op_desc(out);
+        if (op_name != nullptr && current_op_name != op_name) {
+            return true;
+        }
+
+        bool supported = ggml_backend_supports_op(backend, out);
+
+        std::string device_desc = ggml_backend_dev_description(ggml_backend_get_device(backend));
+        std::string backend_reg_name = ggml_backend_reg_name(ggml_backend_dev_backend_reg(ggml_backend_get_device(backend)));
+
+        test_result result(ggml_backend_name(backend), current_op_name, vars(), "support", supported, supported,
+                           supported ? "yes" : "no", 0.0, 0.0, 0.0, 0, 0, device_desc, backend_reg_name);
+
+        output_printer->print_test_result(result);
 
         return true;
     }
@@ -2272,9 +2353,12 @@ struct test_bin_bcast : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const std::array<int, 4> nr;
+    int nf; // number of fused ops, nf == 1 -> single op (no fusion)
+
+    bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, nr);
+        return VARS_TO_STR4(type, ne, nr, nf);
     }
 
     size_t op_size(ggml_tensor * t) override {
@@ -2283,24 +2367,35 @@ struct test_bin_bcast : public test_case {
 
     test_bin_bcast(op_t op, ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {10, 10, 1, 1},
-            std::array<int, 4> nr = {1, 2, 1, 1})
-        : op(op), type(type), ne(ne), nr(nr) {}
+            std::array<int, 4> nr = {1, 2, 1, 1},
+            int nf = 1)
+        : op(op), type(type), ne(ne), nr(nr), nf(nf) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(nf <= 8);
+
         ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0]*nr[0], ne[1]*nr[1], ne[2]*nr[2], ne[3]*nr[3]);
         ggml_set_name(a, "a");
 
-        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
-        ggml_set_name(b, "b");
-
-        // The backward pass supports broadcasting only for GGML_ADD:
-        const bool grad_supported = op == ggml_add || ggml_are_same_shape(a, b);
-        if (grad_supported) {
-            ggml_set_param(a);
-            ggml_set_param(b);
+        ggml_tensor * b[8];
+        for (int i = 0; i < nf; ++i) {
+            b[i] = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(b[i], (std::string("b") + std::to_string(i)).c_str());
         }
 
-        ggml_tensor * out = op(ctx, a, b);
+        // The backward pass supports broadcasting only for GGML_ADD:
+        const bool grad_supported = op == ggml_add && ggml_are_same_shape(a, b[0]) && nf == 1;
+        if (grad_supported) {
+            ggml_set_param(a);
+            ggml_set_param(b[0]);
+        }
+
+        ggml_tensor * out = a;
+
+        for (int i = 0; i < nf; ++i) {
+            out = op(ctx, out, b[i]);
+        }
+
         ggml_set_name(out, "out");
 
         return out;
@@ -2541,15 +2636,15 @@ struct test_rms_norm_back : public test_case {
     }
 };
 
-// GGML_OP_RMS_NORM + GGML_OP_MUL
-struct test_rms_norm_mul : public test_case {
+// GGML_OP_RMS_NORM + GGML_OP_MUL + GGML_OP_ADD
+struct test_rms_norm_mul_add : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
     const float eps;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "RMS_NORM_MUL";
+        return "RMS_NORM_MUL_ADD";
     }
 
     bool run_whole_graph() override { return true; }
@@ -2558,7 +2653,7 @@ struct test_rms_norm_mul : public test_case {
         return VARS_TO_STR3(type, ne, eps);
     }
 
-    test_rms_norm_mul(ggml_type type = GGML_TYPE_F32,
+    test_rms_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
             float eps = 1e-6f)
         : type(type), ne(ne), eps(eps) {}
@@ -2566,14 +2661,17 @@ struct test_rms_norm_mul : public test_case {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * c = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_param(a);
         ggml_set_name(a, "a");
         ggml_set_param(b);
         ggml_set_name(b, "b");
+        ggml_set_param(c);
+        ggml_set_name(c, "c");
 
-        // Use a and b early, so we don't end up with an OP_NONE between rms_norm and mul
-        a = ggml_add(ctx, a, b);
-        ggml_tensor * out = ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b);
+        // Use a, b and c early, so we don't end up with an OP_NONE between rms_norm and mul
+        a = ggml_add(ctx, ggml_add(ctx, a, b), c);
+        ggml_tensor * out = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b), c);
         ggml_set_name(out, "out");
 
         return out;
@@ -3601,6 +3699,93 @@ struct test_im2col : public test_case {
     }
 };
 
+// CONV_2D
+struct test_conv_2d : public test_case {
+    const std::array<int64_t, 4> ne_input;
+    const std::array<int64_t, 4> ne_kernel;
+    const int                    stride0;
+    const int                    stride1;
+    const int                    padding0;
+    const int                    padding1;
+    const int                    dilation0;
+    const int                    dilation1;
+    // Whether the inputs are contiguous in the channel dim or the width dim
+    const bool                   cwhn;
+
+    // If true, the direct CONV_2D will be used in the graph, otherwise it
+    // uses ggml_conv_2d:
+    // * if the program is called with -o CONV_2D_DIRECT_IMPL, the
+    // CONV_2D graph will be built, while
+    // * if the program is called with -o CONV_2D_INDIRECT_IMPL, the
+    // IM2COL -> MUL_MM graph will be built.
+
+    std::string vars() override {
+        return VARS_TO_STR9(ne_input, ne_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        // Just counting matmul costs:
+        // KxCRS @ CRSxNPQ = KxNPQ --> KxNPQx(CRS+CRS-1) flops
+
+        // Copied from ggml.c: int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d)
+        auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+            return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+        };
+
+        int64_t W    = ne_input[0];
+        int64_t H    = ne_input[1];
+        int64_t KW   = ne_kernel[0];
+        int64_t KH   = ne_kernel[1];
+        int64_t Cin  = ne_kernel[2];
+        int64_t Cout = ne_kernel[3];
+        int64_t N    = ne_input[3];
+        int64_t OH   = calc_conv_output_size(H, KH, stride0, padding0, dilation0);
+        int64_t OW   = calc_conv_output_size(W, KW, stride0, padding0, dilation0);
+
+        int64_t K   = Cout;
+        int64_t CRS = Cin * KH * KW;
+        int64_t NPQ = N * OH * OW;
+
+        return K * NPQ * (2 * CRS - 1);
+    }
+
+    test_conv_2d(std::array<int64_t, 4> ne_input  = { 64, 64, 16, 1 },
+                 std::array<int64_t, 4> ne_kernel = { 3, 3, 1, 16 }, int stride0 = 1, int stride1 = 1, int padding0 = 0,
+                 int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false) :
+        ne_input(ne_input),
+        ne_kernel(ne_kernel),
+        stride0(stride0),
+        stride1(stride1),
+        padding0(padding0),
+        padding1(padding1),
+        dilation0(dilation0),
+        dilation1(dilation1),
+        cwhn(cwhn) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
+        ggml_set_name(input, "input");
+
+        ggml_tensor * kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
+        ggml_set_name(kernel, "kernel");
+
+        if (cwhn) {
+            // change memory layout to channel-most-contiguous (CWHN),
+            // then permute it back so NE matches the original input
+            input  = ggml_cont(ctx, ggml_permute(ctx, input, 1, 2, 0, 3));
+            input  = ggml_permute(ctx, input, 2, 0, 1, 3);
+            kernel = ggml_cont(ctx, ggml_permute(ctx, kernel, 2, 3, 1, 0));
+            kernel = ggml_permute(ctx, kernel, 3, 2, 0, 1);
+        }
+
+        ggml_tensor * out =
+            ggml_conv_2d_direct(ctx, kernel, input, stride0, stride1, padding0, padding1, dilation0, dilation1);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_CONV_2D_DW
 struct test_conv_2d_dw : public test_case {
     const std::array<int64_t, 4> ne_input;
@@ -4033,6 +4218,32 @@ struct test_pad_reflect_1d : public test_case {
     }
 };
 
+// GGML_OP_ROLL
+struct test_roll : public test_case {
+    const int shift0;
+    const int shift1;
+    const int shift3;
+    const int shift4;
+
+    std::string vars() override {
+        return VARS_TO_STR4(shift0, shift1, shift3, shift4);
+    }
+
+    test_roll(int shift0 = 3, int shift1 = -2, int shift3 = 1, int shift4 = -1)
+        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        int64_t ne[4] = {10, 5, 4, 3};
+        ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_roll(ctx, a, shift0, shift1, shift3, shift4);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
 // GGML_OP_ARANGE
 struct test_arange : public test_case {
     const ggml_type type;
@@ -4175,7 +4386,7 @@ struct test_flash_attn_ext : public test_case {
 
         ggml_tensor * m = nullptr;
         if (mask) {
-            m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, GGML_PAD(nb, GGML_KQ_MASK_PAD), nr23[0], nr23[1]);
+            m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, GGML_PAD(nb, GGML_KQ_MASK_PAD), 1, nr23[1]);
             ggml_set_name(m, "m");
         }
 
@@ -4883,6 +5094,80 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 1, 2560}, {3, 3, 1, 2560}, 1, 1, 1, 1, 1, 1, true));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 2, 2560}, {3, 3, 2, 2560}, 1, 1, 1, 1, 1, 1, true));
 
+// Conv_2D test cases
+#ifdef DETAILED_TESTS
+    // Probably we do not have enough time to execute these in the pipeline.
+    uint32_t iwh_idx  = 0;
+    uint32_t kwh_idx  = 1;
+    uint32_t Cout_idx = 2;
+    uint32_t Cin_idx  = 3;
+    uint32_t B_idx    = 4;
+
+    std::vector<std::array<int, 5>> cases = {
+  //{IWH, KWH, Cout, Cin, B}
+  // K=CRS=NPQ=4096 conv_2d matmul performance
+        {19,   4, 4096, 256, 16},
+ // K=128, CRS=128, NPQ=4096
+        { 19,  4, 128,  8,   16},
+ // K=130, CRS=128, NPQ=4096
+        { 19,  4, 130,  8,   16},
+ // Edge case: K x CRS is small
+        { 19,  2, 4,    4,   16},
+ // A ConvNet's first layer
+        { 224, 3, 8,    3,   1 },
+ // A ConvNet's first layer with 2x2 convolution, and 1 channel
+        { 224, 2, 8,    1,   1 },
+ // A ConvNet's first layer with 2x2 convolution, and 1 channel, several images in the batch
+        { 224, 2, 8,    1,   8 },
+ // A middle layer of a ConvNet
+        { 58,  3, 64,   32,  1 },
+ // A middle layer of a ConvNet, several images in the batch
+        { 58,  3, 64,   32,  8 },
+ // A deep layer of a ConvNet, several images in the batch
+        { 16,  3, 256,  128, 8 }
+    };
+
+    for (auto act_case : cases) {
+        test_cases.emplace_back(new test_conv_2d(
+            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
+    }
+#endif
+
+    // CONV_2D:
+    auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+        return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+    };
+
+    //uint32_t s0 = 3;
+    uint32_t s1 = 5;
+    uint32_t p0 = 5;
+    //uint32_t p1 = 2;
+    uint32_t d0 = 2;
+    uint32_t d1 = 4;
+
+    for (uint32_t s0 : { 1, 3 }) {
+        for (uint32_t p1 : { 2, 5 }) {
+            for (uint32_t Cin : { 1, 25 }) {
+                for (uint32_t Cout : { 1, 12 }) {
+                    for (uint32_t KH : { 1, 2, 3, 11 }) {
+                        for (uint32_t KW : { 1, 2, 3, 11 }) {
+                            for (uint32_t H : { 1, 133 }) {
+                                for (uint32_t W : { 1, 141 }) {
+                                    if (calc_conv_output_size(W, KW, s0, p0, d0) > 0 &&
+                                        calc_conv_output_size(H, KH, s1, p1, d1) > 0) {
+                                        test_cases.emplace_back(new test_conv_2d(
+                                            { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, s1, p0, p1, d0, d1, false));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // sycl backend will limit task global_range < MAX_INT
     // test cases for 2D im2col with large input W and H (occurs in stable-diffusion)
     // however these cases need to alloc more memory which may fail in some devices (Intel Arc770, etc.)
@@ -5044,6 +5329,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         //add_test_bin_bcast(type, {3, 3, 2560, 1280}, {2, 1, 1, 1});
     }
 
+    // fusion
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {10, 5, 4, 3}, {2, 1, 1, 1}, 2));
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {16, 5, 4, 3}, {1, 2, 1, 1}, 3));
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {10, 5, 4, 3}, {1, 1, 2, 1}, 4));
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {16, 5, 4, 3}, {1, 1, 1, 2}, 5));
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {10, 5, 4, 3}, {1, 1, 2, 2}, 6));
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {10, 5, 4, 3}, {1, 2, 2, 2}, 7));
+    test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {16, 5, 4, 3}, {2, 2, 2, 2}, 8));
+
     test_cases.emplace_back(new test_add1());
     test_cases.emplace_back(new test_scale());
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
@@ -5058,14 +5352,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_l2_norm      (GGML_TYPE_F32, {64, 5, 4, 3}, eps));
     }
     for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f}) {
-        test_cases.emplace_back(new test_rms_norm_mul(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
+        test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
     }
 
     test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, {64, 5, 4, 3}, 1e-12f));
 
-    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4, 1536, 1, 1}, {4, 1536, 1, 1}));
-    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {8, 1536, 1, 1}, {4, 1536, 1, 1}));
-    test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4, 1536, 4, 1}, {4, 1536, 1, 1}));
+    for (int64_t d_conv : {3, 4}) {
+        for (int64_t d_inner: {1024, 1536, 2048}) {
+            test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
+            test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {8, d_inner, 1, 1}, {d_conv, d_inner, 1, 1}));
+            test_cases.emplace_back(new test_ssm_conv(GGML_TYPE_F32, {4, d_inner, 4, 1}, {d_conv, d_inner, 1, 1}));
+        }
+    }
 
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 16, 1, 1024, 1, 32, 4)); // Mamba-1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 32, 4)); // Mamba-2
@@ -5403,6 +5701,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_acc());
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad_reflect_1d());
+    test_cases.emplace_back(new test_roll());
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_timestep_embedding());
     test_cases.emplace_back(new test_leaky_relu());
@@ -5471,6 +5770,43 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
+
+    // Conv2d: K=CRS=NPQ=4096 matmul performance
+    uint32_t                        iwh_idx  = 0;
+    uint32_t                        kwh_idx  = 1;
+    uint32_t                        Cout_idx = 2;
+    uint32_t                        Cin_idx  = 3;
+    uint32_t                        B_idx    = 4;
+    std::vector<std::array<int, 5>> cases    = {
+  //{IWH, KWH, Cout, Cin, B}
+  // K=CRS=NPQ=4096 conv2d matmul performance
+        {19,   4, 4096, 256, 16},
+ // K=128, CRS=128, NPQ=4096
+        { 19,  4, 128,  8,   16},
+ // K=130, CRS=128, NPQ=4096
+        { 19,  4, 130,  8,   16},
+ // Edge case: K x CRS is small
+        { 19,  2, 4,    4,   16},
+ // A ConvNet's first layer
+        { 224, 3, 8,    3,   1 },
+ // A ConvNet's first layer with 2x2 convolution, and 1 channel
+        { 224, 2, 8,    1,   1 },
+ // A ConvNet's first layer with 2x2 convolution, and 1 channel, several images in the batch
+        { 224, 2, 8,    1,   8 },
+ // A middle layer of a ConvNet
+        { 58,  3, 64,   32,  1 },
+ // A middle layer of a ConvNet, several images in the batch
+        { 58,  3, 64,   32,  8 },
+ // A deep layer of a ConvNet, several images in the batch
+        { 16,  3, 512,  128, 8 },
+    };
+
+    for (auto act_case : cases) {
+        // Direct CONV_2D
+        test_cases.emplace_back(new test_conv_2d(
+            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
+    }
 
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1, 512, 1, 1}));
@@ -5599,17 +5935,27 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         return true;
     }
 
+    if (mode == MODE_SUPPORT) {
+        auto test_cases = make_test_cases_eval();
+        filter_test_cases(test_cases, params_filter);
+        for (auto & test : test_cases) {
+            test->eval_support(backend, op_name, output_printer);
+        }
+        return true;
+    }
+
     GGML_ABORT("fatal error");
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op>] [-b <backend>] [-p <params regex>] [--output <console|sql>]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>]\n", argv[0]);
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
     printf("      - perf (performance evaluation)\n");
+    printf("      - support (probe backend operation support)\n");
     printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc)\n");
-    printf("    --output specifies output format (default: console)\n");
+    printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
 }
 
 int main(int argc, char ** argv) {
@@ -5626,6 +5972,8 @@ int main(int argc, char ** argv) {
             mode = MODE_PERF;
         } else if (strcmp(argv[i], "grad") == 0) {
             mode = MODE_GRAD;
+        } else if (strcmp(argv[i], "support") == 0) {
+            mode = MODE_SUPPORT;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) {
                 op_name_filter = argv[++i];
