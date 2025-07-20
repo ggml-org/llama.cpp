@@ -9,7 +9,7 @@ This directory contains implementations for diffusion-based text generation usin
 - https://huggingface.co/Dream-org/Dream-v0-Base-7B
 - Original PR - https://github.com/ggml-org/llama.cpp/pull/14644
 
-The Dream model supports four different sampling algorithms controlled by the `--diffusion-alg` parameter:
+The Dream model supports four different sampling algorithms controlled by the `--diffusion-algorithm` parameter:
 
 1. **ORIGIN (0)** - Original diffusion algorithm
    - Uses probability transfer based on timestep ratios
@@ -30,7 +30,7 @@ The Dream model supports four different sampling algorithms controlled by the `-
 
 ### LLaDA Model Remasking Strategies
 
-The LLaDA model uses two remasking approaches controlled by the `--diffusion-alg` parameter:
+The LLaDA model uses two remasking approaches controlled by the `--diffusion-algorithm` parameter:
 
 1. **REMASKING_LOW_CONFIDENCE (0)** - Default strategy
    - Remasks tokens with lowest confidence scores
