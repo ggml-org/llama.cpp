@@ -436,7 +436,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 
 ## [`llama-perplexity`](tools/perplexity)
 
-#### A tool for measuring the [perplexity](./tools/perplexity/README.md) [^1] (and other quality metrics) of a model over a given text.
+#### A tool for measuring the [perplexity](tools/perplexity/README.md) [^1] (and other quality metrics) of a model over a given text.
 
 - <details open>
     <summary>Measure the perplexity over a text file</summary>
