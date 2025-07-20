@@ -59,8 +59,8 @@ static void set_error(mtmd_ios_context* ctx, const std::string& error) {
 
 mtmd_ios_params mtmd_ios_params_default(void) {
     mtmd_ios_params params = {};
-    params.model_path = nullptr;
-    params.mmproj_path = nullptr;
+    params.model_path = "";
+    params.mmproj_path = "";
     params.n_predict = -1;
     params.n_ctx = 4096;
     params.n_threads = 4;
@@ -70,7 +70,7 @@ mtmd_ios_params mtmd_ios_params_default(void) {
 }
 
 mtmd_ios_context* mtmd_ios_init(const mtmd_ios_params* params) {
-    if (!params || !params->model_path || !params->mmproj_path) {
+    if (!params || params->model_path.empty() || params->mmproj_path.empty()) {
         return nullptr;
     }
     
@@ -133,7 +133,7 @@ mtmd_ios_context* mtmd_ios_init(const mtmd_ios_params* params) {
     mparams.n_threads = params->n_threads;
     mparams.verbosity = GGML_LOG_LEVEL_INFO;
     
-    ctx->ctx_vision.reset(mtmd_init_from_file(params->mmproj_path, ctx->model, mparams));
+    ctx->ctx_vision.reset(mtmd_init_from_file(params->mmproj_path.c_str(), ctx->model, mparams));
     if (!ctx->ctx_vision.get()) {
         set_error(ctx.get(), "Failed to load vision model from " + std::string(params->mmproj_path));
         return nullptr;
@@ -148,14 +148,14 @@ void mtmd_ios_free(mtmd_ios_context* ctx) {
     }
 }
 
-int mtmd_ios_prefill_image(mtmd_ios_context* ctx, const char* image_path) {
-    if (!ctx || !image_path) {
+int mtmd_ios_prefill_image(mtmd_ios_context* ctx, const std::string& image_path) {
+    if (!ctx || image_path.empty()) {
         return -1;
     }
     
-    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx->ctx_vision.get(), image_path));
+    mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_file(ctx->ctx_vision.get(), image_path.c_str()));
     if (!bmp.ptr) {
-        set_error(ctx, "Failed to load image from file: " + std::string(image_path));
+        set_error(ctx, "Failed to load image from file: " + image_path);
         return -1;
     }
     ctx->bitmaps.entries.push_back(std::move(bmp));
@@ -199,14 +199,14 @@ int mtmd_ios_prefill_image(mtmd_ios_context* ctx, const char* image_path) {
 
 
 
-int mtmd_ios_prefill_text(mtmd_ios_context* ctx, const char* text, const char* role) {
-    if (!ctx || !text || !role) {
+int mtmd_ios_prefill_text(mtmd_ios_context* ctx, const std::string& text, const std::string& role) {
+    if (!ctx || text.empty() || role.empty()) {
         return -1;
     }
     
     common_chat_msg msg;
-    msg.role = role;
-    msg.content = text;
+    msg.role = role.c_str();
+    msg.content = text.c_str();
     
     common_chat_templates_inputs tmpl_inputs;
     tmpl_inputs.messages = {msg};

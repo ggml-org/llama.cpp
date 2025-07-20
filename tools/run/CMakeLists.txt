@@ -11,6 +11,6 @@ if (LLAMA_CURL)
     set(LLAMA_RUN_EXTRA_LIBS ${LLAMA_RUN_EXTRA_LIBS} ${CURL_LIBRARY})
 endif ()
 
-install(TARGETS ${TARGET} RUNTIME)
+install(TARGETS ${TARGET} RUNTIME BUNDLE DESTINATION .)
 target_link_libraries(${TARGET} PRIVATE common llama ${CMAKE_THREAD_LIBS_INIT} ${LLAMA_RUN_EXTRA_LIBS})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
