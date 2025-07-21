@@ -18603,6 +18603,10 @@ struct llm_build_cogvlm : public llm_graph_context {
         ggml_tensor * inpL, * cur;
         inpL = build_inp_embd(model.tok_embd);
 
+        ggml_tensor * inp_pos = build_inp_pos();
+
+        auto * inp_attn = build_attn_inp_kv_unified();
+
         // check ubatch to see if we have input tokens (text)
         // or an input embedding vector (image)
         bool is_text;
@@ -19378,6 +19382,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
+        case LLM_ARCH_COGVLM:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2

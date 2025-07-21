@@ -1644,7 +1644,7 @@ struct clip_graph {
             ggml_row_size(cur->type, n_embd), 0);
 
         // Multiply with mm_model_proj
-        cur = ggml_mul_mat(ctx0, model.mm_model_proj_w, cur);
+        cur = ggml_mul_mat(ctx0, model.mm_model_proj, cur);
 
         // Apply layernorm, weight, bias
         cur = build_norm(cur, model.mm_post_fc_norm_w, model.mm_post_fc_norm_b, NORM_TYPE_NORMAL, 1e-5, -1);
