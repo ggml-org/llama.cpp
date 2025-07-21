@@ -68,6 +68,10 @@ cmake --build build --config Release
       cmake --build build-x64-windows-llvm-release
       ```
 - Curl usage is enabled by default and can be turned off with `-DLLAMA_CURL=OFF`. Otherwise you need to install development libraries for libcurl.
+  - **Debian / Ubuntu:** `sudo apt-get install libcurl4-openssl-dev`  
+    _(or `libcurl4-gnutls-dev` if you prefer GnuTLS)_
+  - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install libcurl-devel`
+  - **Arch / Manjaro:** `sudo pacman -S curl`  # includes libcurl headers
 
 ## BLAS Build
 
