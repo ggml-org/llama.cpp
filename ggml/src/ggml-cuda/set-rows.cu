@@ -5,7 +5,7 @@ typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
 template<typename src_t, typename dst_t>
 __device__ __forceinline__ void set_rows_1(const src_t * src_f, dst_t * dst_f) {
-    convert_to_flt(src_f, dst_f);
+    convert_flt(src_f, dst_f);
 }
 
 // Generic quantized set_rows kernel template

@@ -3,7 +3,7 @@
 #include "ggml-common.h"
 
 template<typename src_t, typename dst_t>
-static __device__ __forceinline__ void convert_to_flt(const src_t * src, dst_t * dst) {
+static __device__ __forceinline__ void convert_flt(const src_t * src, dst_t * dst) {
     if constexpr (std::is_same_v<src_t, dst_t>) {
         *dst = *src;
     } else {
@@ -221,5 +221,5 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
 
 template<typename src_t, typename dst_t>
 static __device__ void cpy_1_flt(const char * cxi, char * cdsti) {
-    convert_to_flt((const src_t *)cxi, (dst_t *)cdsti);
+    convert_flt((const src_t *)cxi, (dst_t *)cdsti);
 }
