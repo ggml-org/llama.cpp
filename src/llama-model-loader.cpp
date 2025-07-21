@@ -713,6 +713,14 @@ llama_model_loader::llama_model_loader(
 
     this->use_mmap = use_mmap;
     this->check_tensors = check_tensors;
+    ggml_backend_reg_t reg = ggml_backend_reg_by_name("RPC");
+    if (reg) {
+        rpc_load_tensor_fn = (ggml_backend_tensor_load_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_tensor_load");
+    }
+    reg = ggml_backend_reg_by_name("CUDA");
+    if (reg) {
+        cuda_load_tensor_fn = (ggml_backend_tensor_load_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_tensor_load");
+    }
 }
 
 std::string llama_model_loader::get_arch_name() const {
@@ -915,6 +923,24 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     }
 }
 
+bool llama_model_loader::load_tensor(ggml_tensor * cur, const char * path, size_t file_offset, size_t tensor_offset, size_t size) {
+    ggml_backend_buffer_t buf = cur->view_src ? cur->view_src->buffer : cur->buffer;
+    const char * buf_name = ggml_backend_buffer_name(buf);
+    if (strncmp(buf_name, "RPC", 3) == 0) {
+        if (!rpc_load_tensor_fn) {
+            return false;
+        }
+        return rpc_load_tensor_fn(buf, cur, path, file_offset, tensor_offset, size);
+    }
+    if (strncmp(buf_name, "CUDA", 4) == 0) {
+        if (!cuda_load_tensor_fn) {
+            return false;
+        }
+        return cuda_load_tensor_fn(buf, cur, path, file_offset, tensor_offset, size);
+    }
+    return false;
+}
+
 bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
         llama_buf_map & bufs,
@@ -1056,7 +1082,10 @@ bool llama_model_loader::load_all_data(
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
-                ggml_backend_tensor_set(cur, data, 0, n_size);
+                const auto & file = files.at(weight->idx);
+                if (!load_tensor(cur, file->fname(), weight->offs, 0, n_size)) {
+                    ggml_backend_tensor_set(cur, data, 0, n_size);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);

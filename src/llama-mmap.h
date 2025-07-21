@@ -19,6 +19,7 @@ struct llama_file {
     size_t tell() const;
     size_t size() const;
 
+    const char * fname() const;
     int file_id() const; // fileno overload
 
     void seek(size_t offset, int whence) const;

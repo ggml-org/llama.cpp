@@ -159,7 +159,7 @@ struct llama_file::impl {
         }
     }
 #else
-    impl(const char * fname, const char * mode) {
+    impl(const char * fname, const char * mode) : fname(fname) {
         fp = ggml_fopen(fname, mode);
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname, strerror(errno)));
@@ -237,6 +237,7 @@ struct llama_file::impl {
     }
 #endif
 
+    const char * fname;
     FILE * fp;
     size_t size;
 };
@@ -246,6 +247,7 @@ llama_file::~llama_file() = default;
 
 size_t llama_file::tell() const { return pimpl->tell(); }
 size_t llama_file::size() const { return pimpl->size; }
+const char * llama_file::fname() const { return pimpl->fname; }
 
 int llama_file::file_id() const {
 #ifdef _WIN32

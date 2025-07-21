@@ -111,6 +111,13 @@ extern "C" {
     // automatic fallback to sync copy if async is not supported
     GGML_API void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, struct ggml_tensor * src, struct ggml_tensor * dst);
 
+    typedef bool (*ggml_backend_tensor_load_t)(ggml_backend_buffer_t buffer,
+                                               struct ggml_tensor * tensor,
+                                               const char * path,
+                                               size_t file_offset,
+                                               size_t tensor_offset,
+                                               size_t size);
+
     GGML_API ggml_backend_dev_t ggml_backend_get_device(ggml_backend_t backend);
 
     //

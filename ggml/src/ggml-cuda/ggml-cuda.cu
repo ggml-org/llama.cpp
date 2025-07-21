@@ -64,6 +64,14 @@
 #include <stdlib.h>
 #include <string>
 #include <vector>
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && !defined(_WIN32)
+#   define GGML_USE_CUFILE
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && !defined(_WIN32)
+#ifdef GGML_USE_CUFILE
+    #include <cufile.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+#endif // GGML_USE_CUFILE
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
 
@@ -3601,6 +3609,68 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
     GGML_UNUSED(reg);
 }
 
+static bool ggml_backend_cuda_buffer_load_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const char * path, size_t file_offset, size_t tensor_offset, size_t size) {
+#ifdef GGML_USE_CUFILE
+    static bool initialized = false;
+    static bool use_cufile = false;
+    if (!initialized) {
+        CUfileError_t err = cuFileDriverOpen();
+        initialized = true;
+        if (err.err != CU_FILE_SUCCESS) {
+            use_cufile = false;
+            return false;
+        }
+        CUfileDrvProps_t props;
+        err = cuFileDriverGetProperties(&props);
+        if (err.err != CU_FILE_SUCCESS) {
+            use_cufile = false;
+            return false;
+        }
+        if (props.nvfs.dcontrolflags & (1 << CU_FILE_ALLOW_COMPAT_MODE)) {
+            // do not use CUfile if the driver is in compatibility mode
+            // as we have faster mechanisms in llama-model-loader
+            use_cufile = false;
+            return false;
+        }
+        use_cufile = true;
+    }
+    if (!use_cufile) {
+        return false;
+    }
+    ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
+    ggml_cuda_set_device(ctx->device);
+
+    int fd = open(path, O_RDONLY | O_DIRECT);
+    if (fd < 0) {
+        return false;
+    }
+    CUfileDescr_t cf_descr;
+    CUfileHandle_t cf_handle;
+    memset((void *)&cf_descr, 0, sizeof(CUfileDescr_t));
+    cf_descr.handle.fd = fd;
+    cf_descr.type = CU_FILE_HANDLE_TYPE_OPAQUE_FD;
+    CUfileError_t status = cuFileHandleRegister(&cf_handle, &cf_descr);
+    if (status.err != CU_FILE_SUCCESS) {
+        return false;
+    }
+    ssize_t ret = cuFileRead(cf_handle, (char *)tensor->data, size, file_offset, tensor_offset);
+    if (ret < 0) {
+        return false;
+    }
+    cuFileHandleDeregister(cf_handle);
+    close(fd);
+    return true;
+#else
+    GGML_UNUSED(buffer);
+    GGML_UNUSED(tensor);
+    GGML_UNUSED(path);
+    GGML_UNUSED(file_offset);
+    GGML_UNUSED(tensor_offset);
+    GGML_UNUSED(size);
+    return false;
+#endif // GGML_USE_CUFILE
+}
+
 static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
     GGML_UNUSED(reg);
     if (strcmp(name, "ggml_backend_split_buffer_type") == 0) {
@@ -3614,6 +3684,9 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     }
     if (strcmp(name, "ggml_backend_get_features") == 0) {
         return (void *)ggml_backend_cuda_get_features;
+    }
+    if (strcmp(name, "ggml_backend_tensor_load") == 0) {
+        return (void *)ggml_backend_cuda_buffer_load_tensor;
     }
     return nullptr;
 }
