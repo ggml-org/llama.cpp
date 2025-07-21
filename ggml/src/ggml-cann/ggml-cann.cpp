@@ -1116,27 +1116,6 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
-static bool is_matmul_weight(const ggml_tensor* tensor) {
-    std::string name = ggml_get_name(tensor);
-    static const std::unordered_set<std::string> weight_suffixes{
-        "output.weight",
-        "attn_q.weight",
-        "attn_k.weight",
-        "attn_v.weight",
-        "attn_output.weight",
-        "ffn_gate.weight",
-        "ffn_up.weight",
-        "ffn_down.weight"
-    };
-
-    for (const auto& suffix : weight_suffixes) {
-        if (name.find(suffix) != std::string::npos) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static int CreateAclTensorWeight(const void *hostData, const std::vector<int64_t> &shape, void **deviceAddr,
                       aclDataType dataType, aclTensor **tensor)
 {

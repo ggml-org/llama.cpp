@@ -1791,7 +1791,7 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
 #ifdef ASCEND_310P
     weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
 #endif
-    if (weightToNZ && n_dims == 2) {
+    if (weightToNZ && is_matmul_weight(weight)) {
         int64_t acl_stride[2] = {1, transpose_ne[1]};
 
         // Reverse ne.
