@@ -1785,7 +1785,7 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
     size_t transpose_nb[] = {bcast_weight_nb[1], bcast_weight_nb[0],
                              bcast_weight_nb[2], bcast_weight_nb[3],
                              bcast_weight_nb[4], bcast_weight_nb[5]};
-        aclTensor* acl_weight_tensor;
+    aclTensor* acl_weight_tensor;
 
     bool weightToNZ = false;
 #ifdef ASCEND_310P
@@ -1931,13 +1931,13 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context& ctx,
             int64_t output_ne[2] = {weight_ne[0], dst->ne[1]};
 
             aclTensor* acl_weight_tensor = ggml_cann_create_tensor(
-                    (char*)src0->data + batch0 * weight_stride,
-                    ggml_cann_type_mapping(type), weight_elem_size, weight_ne,
-                    weight_nb, 2, ACL_FORMAT_ND, weight_ne_offset);
+                (char*)src0->data + batch0 * weight_stride,
+                ggml_cann_type_mapping(type), weight_elem_size, weight_ne,
+                weight_nb, 2, ACL_FORMAT_ND, weight_ne_offset);
             aclTensor* acl_scale_tensor = ggml_cann_create_tensor(
-                    scale_offset + batch0 * scale_stride, ACL_FLOAT16,
-                    scale_elem_size, scale_ne, scale_nb, 2, ACL_FORMAT_ND,
-                    scale_ne_offset);
+                scale_offset + batch0 * scale_stride, ACL_FLOAT16,
+                scale_elem_size, scale_ne, scale_nb, 2, ACL_FORMAT_ND,
+                scale_ne_offset);
             aclTensor* acl_output_tensor = ggml_cann_create_tensor(
                 (char*)output_buffer + batch1 * output_stride, ACL_FLOAT16,
                 output_elem_size, output_ne, output_nb, 2, ACL_FORMAT_ND,
