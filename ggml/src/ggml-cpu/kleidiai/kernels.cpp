@@ -25,6 +25,9 @@
 #include "kernels.h"
 
 #define NELEMS(x) sizeof(x) / sizeof(*x)
+
+// Check if any ARM features are available
+#if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8)
 static ggml_kleidiai_kernels gemm_gemv_kernels[] = {
 #if defined(__ARM_FEATURE_SME)
     {
@@ -304,10 +307,15 @@ static ggml_kleidiai_kernels gemm_gemv_kernels[] = {
 #endif
 #endif
 };
+#else
+// Fallback for when no ARM features are available - provide an empty array
+static ggml_kleidiai_kernels gemm_gemv_kernels[1] = {};
+#endif
 
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, const ggml_tensor * tensor) {
     ggml_kleidiai_kernels * kernel = nullptr;
 
+#if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8)
     if (tensor->op == GGML_OP_MUL_MAT && tensor->src[0] != nullptr && tensor->src[1] != nullptr) {
         for (size_t i = 0; i < NELEMS(gemm_gemv_kernels); ++i) {
             if ((cpu_features & gemm_gemv_kernels[i].required_cpu) == gemm_gemv_kernels[i].required_cpu &&
@@ -319,6 +327,7 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, c
             }
         }
     }
+#endif
 
     return kernel;
 }
@@ -326,12 +335,14 @@ ggml_kleidiai_kernels * ggml_kleidiai_select_kernels(cpu_feature cpu_features, c
 ggml_kleidiai_kernels * ggml_kleidiai_select_kernels_q4_0(cpu_feature features) {
     ggml_kleidiai_kernels * kernels = nullptr;
 
+#if defined(__ARM_FEATURE_SME) || defined(__ARM_FEATURE_DOTPROD) || defined(__ARM_FEATURE_MATMUL_INT8)
     for (size_t i = 0; i < NELEMS(gemm_gemv_kernels); ++i) {
         if ((features & gemm_gemv_kernels[i].required_cpu) == gemm_gemv_kernels[i].required_cpu) {
             kernels = &gemm_gemv_kernels[i];
             break;
         }
     }
+#endif
 
     return kernels;
 }
