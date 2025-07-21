@@ -22,8 +22,8 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLambdasOnASingleLine: Inline
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakBeforeMultilineStrings: true
-BinPackArguments: true
-BinPackParameters: true # OnePerLine
+BinPackArguments: false
+BinPackParameters: false # OnePerLine
 BitFieldColonSpacing: Both
 BreakBeforeBraces: Custom # Attach
 BraceWrapping:
@@ -70,14 +70,17 @@ ExperimentalAutoDetectBinPacking: false
 FixNamespaceComments: true
 IncludeBlocks:   Regroup
 IncludeCategories:
-  - Regex:           '^<.*\.h>'
+  - Regex:           '".*"'
     Priority:        1
     SortPriority:    0
-  - Regex:           '^<.*'
+  - Regex:           '^<.*\.h>'
     Priority:        2
     SortPriority:    0
-  - Regex:           '.*'
+  - Regex:           '^<.*'
     Priority:        3
+    SortPriority:    0
+  - Regex:           '.*'
+    Priority:        4
     SortPriority:    0
 IncludeIsMainRegex: '([-_](test|unittest))?$'
 IncludeIsMainSourceRegex: ''
