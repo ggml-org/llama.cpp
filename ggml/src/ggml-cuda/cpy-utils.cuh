@@ -2,35 +2,17 @@
 
 #include "ggml-common.h"
 
-static __device__ __forceinline__ void convert_f32_f32(const float * src, float * dst) {
-    *dst = *src;
-}
-
-static __device__ __forceinline__ void convert_f32_f16(const float * src, half * dst) {
-    *dst = __float2half(*src);
-}
-
-static __device__ __forceinline__ void convert_f32_bf16(const float * src, nv_bfloat16 * dst) {
-    *dst = *src;
-}
-
-static __device__ __forceinline__ void convert_f16_f16(const half * src, half * dst) {
-    *dst = *src;
-}
-
-static __device__ __forceinline__ void convert_f16_bf16(const half * src, nv_bfloat16 * dst) {
+template<typename src_t, typename dst_t>
+static __device__ __forceinline__ void convert_to_flt(const src_t * src, dst_t * dst) {
     *dst = float(*src);
 }
 
-static __device__ __forceinline__ void convert_f16_f32(const half * src, float * dst) {
-    *dst = *src;
-}
-
-static __device__ __forceinline__ void convert_bf16_f16(const nv_bfloat16 * src, half * dst) {
+template<typename src_t>
+static __device__ __forceinline__ void convert_to_f16(const src_t * src, half * dst) {
     *dst = __float2half(*src);
 }
 
-static __device__ __forceinline__ void convert_bf16_f32(const nv_bfloat16 * src, float * dst) {
+static __device__ __forceinline__ void convert_f16_f16(const half * src, half * dst) {
     *dst = *src;
 }
 
@@ -242,34 +224,16 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     quantize_f32_iq4_nl_block((const float *)cxi, (block_iq4_nl *)cdsti);
 }
 
-static __device__ void cpy_1_f32_f32(const char * cxi, char * cdsti) {
-    convert_f32_f32((const float *)cxi, (float *)cdsti);
+template<typename src_t, typename dst_t>
+static __device__ void cpy_1_flt(const char * cxi, char * cdsti) {
+    convert_to_flt((const src_t *)cxi, (dst_t *)cdsti);
 }
 
-static __device__ void cpy_1_f32_f16(const char * cxi, char * cdsti) {
-    convert_f32_f16((const float *)cxi, (half *)cdsti);
-}
-
-static __device__ void cpy_1_f32_bf16(const char * cxi, char * cdsti) {
-    convert_f32_bf16((const float *)cxi, (nv_bfloat16 *)cdsti);
+template<typename src_t>
+static __device__ void cpy_1_to_f16(const char * cxi, char * cdsti) {
+    convert_to_f16((const src_t *)cxi, (half *)cdsti);
 }
 
 static __device__ void cpy_1_f16_f16(const char * cxi, char * cdsti) {
     convert_f16_f16((const half *)cxi, (half *)cdsti);
-}
-
-static __device__ void cpy_1_f16_bf16(const char * cxi, char * cdsti) {
-    convert_f16_bf16((const half *)cxi, (nv_bfloat16 *)cdsti);
-}
-
-static __device__ void cpy_1_f16_f32(const char * cxi, char * cdsti) {
-    convert_f16_f32((const half *)cxi, (float *)cdsti);
-}
-
-static __device__ void cpy_1_bf16_f16(const char * cxi, char * cdsti) {
-    convert_bf16_f16((const nv_bfloat16 *)cxi, (half *)cdsti);
-}
-
-static __device__ void cpy_1_bf16_f32(const char * cxi, char * cdsti) {
-    convert_bf16_f32((const nv_bfloat16 *)cxi, (float *)cdsti);
 }

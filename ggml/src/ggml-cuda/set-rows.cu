@@ -11,17 +11,17 @@ __device__ void set_rows_1(const src_t * src_f, dst_t * dst_f) {
 
 template<>
 __device__ __forceinline__ void set_rows_1<float, half>(const float * src_f, half * dst_h) {
-    convert_f32_f16(src_f, dst_h);
+    convert_to_f16(src_f, dst_h);
 }
 
 template<>
 __device__ __forceinline__ void set_rows_1<float, nv_bfloat16>(const float * src_f, nv_bfloat16 * dst_b) {
-    convert_f32_bf16(src_f, dst_b);
+    convert_to_flt(src_f, dst_b);
 }
 
 template<>
 __device__ __forceinline__ void set_rows_1<float, float>(const float * src_f, float * dst_f) {
-    convert_f32_f32(src_f, dst_f);
+    convert_to_flt(src_f, dst_f);
 }
 
 // Generic quantized set_rows kernel template
