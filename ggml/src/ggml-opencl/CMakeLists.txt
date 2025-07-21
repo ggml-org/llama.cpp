@@ -105,6 +105,9 @@ set(GGML_OPENCL_KERNELS
     pad
     repeat
     mul_mat_f16_f32
+    mul_mat_f16_f32_image
+    pack_a_for_image
+    pack_b_for_image
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})
