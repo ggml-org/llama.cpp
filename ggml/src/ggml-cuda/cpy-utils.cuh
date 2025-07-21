@@ -4,16 +4,11 @@
 
 template<typename src_t, typename dst_t>
 static __device__ __forceinline__ void convert_to_flt(const src_t * src, dst_t * dst) {
-    *dst = float(*src);
-}
-
-template<typename src_t>
-static __device__ __forceinline__ void convert_to_f16(const src_t * src, half * dst) {
-    *dst = __float2half(*src);
-}
-
-static __device__ __forceinline__ void convert_f16_f16(const half * src, half * dst) {
-    *dst = *src;
+    if constexpr (std::is_same_v<src_t, dst_t>) {
+        *dst = *src;
+    } else {
+        *dst = float(*src);
+    }
 }
 
 static __device__ __forceinline__ int best_index_int8(int n, const int8_t * val, float x) {
@@ -227,13 +222,4 @@ static __device__ void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
 template<typename src_t, typename dst_t>
 static __device__ void cpy_1_flt(const char * cxi, char * cdsti) {
     convert_to_flt((const src_t *)cxi, (dst_t *)cdsti);
-}
-
-template<typename src_t>
-static __device__ void cpy_1_to_f16(const char * cxi, char * cdsti) {
-    convert_to_f16((const src_t *)cxi, (half *)cdsti);
-}
-
-static __device__ void cpy_1_f16_f16(const char * cxi, char * cdsti) {
-    convert_f16_f16((const half *)cxi, (half *)cdsti);
 }
