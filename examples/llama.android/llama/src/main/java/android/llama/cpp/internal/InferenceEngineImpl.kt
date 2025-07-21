@@ -30,8 +30,8 @@ import java.io.File
  * 2. Load a model with [loadModel]
  * 3. Send prompts with [sendUserPrompt]
  * 4. Generate responses as token streams
- * 5. Unload the model with [unloadModel] when switching models
- * 6. Call [destroy] when completely done
+ * 5. Perform [cleanUp] when done with a model
+ * 6. Properly [destroy] when completely done
  *
  * State transitions are managed automatically and validated at each operation.
  *
@@ -133,18 +133,23 @@ internal class InferenceEngineImpl private constructor(
                 require(it.isFile) { "Model file is not a file: $pathToModel" }
             }
 
-            Log.i(TAG, "Loading model... \n$pathToModel")
-            _readyForSystemPrompt = false
-            _state.value = InferenceEngine.State.LoadingModel
-            load(pathToModel).let { result ->
-                if (result != 0) throw IllegalStateException("Failed to Load model: $result")
+            try {
+                Log.i(TAG, "Loading model... \n$pathToModel")
+                _readyForSystemPrompt = false
+                _state.value = InferenceEngine.State.LoadingModel
+                load(pathToModel).let {
+                    if (it != 0) throw IllegalStateException("Failed to load the model!")
+                }
+                prepare().let {
+                    if (it != 0) throw IllegalStateException("Failed to prepare resources!")
+                }
+                Log.i(TAG, "Model loaded!")
+                _readyForSystemPrompt = true
+                _state.value = InferenceEngine.State.ModelReady
+            } catch (e: Exception) {
+                _state.value = InferenceEngine.State.Error(e.message ?: "Unknown error")
+                throw e
             }
-            prepare().let { result ->
-                if (result != 0) throw IllegalStateException("Failed to prepare resources: $result")
-            }
-            Log.i(TAG, "Model loaded!")
-            _readyForSystemPrompt = true
-            _state.value = InferenceEngine.State.ModelReady
         }
 
     /**
@@ -235,12 +240,12 @@ internal class InferenceEngineImpl private constructor(
         }
 
     /**
-     * Unloads the model and frees resources
+     * Unloads the model and frees resources, or reset error states
      */
-    override suspend fun unloadModel() =
+    override suspend fun cleanUp() =
         withContext(llamaDispatcher) {
             when (val state = _state.value) {
-                is InferenceEngine.State.ModelReady, is InferenceEngine.State.Error -> {
+                is InferenceEngine.State.ModelReady -> {
                     Log.i(TAG, "Unloading model and free resources...")
                     _readyForSystemPrompt = false
                     _state.value = InferenceEngine.State.UnloadingModel
@@ -249,6 +254,13 @@ internal class InferenceEngineImpl private constructor(
 
                     _state.value = InferenceEngine.State.Initialized
                     Log.i(TAG, "Model unloaded!")
+                    Unit
+                }
+
+                is InferenceEngine.State.Error -> {
+                    Log.i(TAG, "Resetting error states...")
+                    _state.value = InferenceEngine.State.Initialized
+                    Log.i(TAG, "States reset!")
                     Unit
                 }
 

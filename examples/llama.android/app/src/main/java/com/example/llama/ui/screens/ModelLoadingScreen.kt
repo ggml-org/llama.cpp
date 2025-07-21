@@ -22,7 +22,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -109,6 +112,7 @@ fun ModelLoadingScreen(
 
     // Check if we're in a loading state
     val isLoading = engineState !is State.Initialized && engineState !is State.ModelReady
+    val errorMessage = (engineState as? State.Error)?.errorMessage
 
     // Handle back navigation requests
     BackHandler {
@@ -315,13 +319,10 @@ fun ModelLoadingScreen(
                                     customPromptText.takeIf { it.isNotBlank() }
                                         ?.also { promptText ->
                                             // Save custom prompt to database
-                                            viewModel.saveCustomPromptToRecents(
-                                                promptText
-                                            )
+                                            viewModel.saveCustomPromptToRecents(promptText)
                                         }
                             }
                         } else null
-
                         viewModel.onConversationSelected(systemPrompt, onNavigateToConversation)
                     }
 
@@ -329,30 +330,51 @@ fun ModelLoadingScreen(
                     }
                 }
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = if (errorMessage != null)
+                ButtonDefaults.buttonColors(
+                    disabledContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
+                    disabledContentColor   = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
+                ) else ButtonDefaults.buttonColors(),
             enabled = selectedMode != null && !isLoading &&
                 (!useSystemPrompt || hasActiveSystemPrompt)
         ) {
-            if (isLoading) {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .height(24.dp)
-                        .width(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = when (engineState) {
-                        is State.Initializing, State.Initialized -> "Initializing..."
-                        is State.LoadingModel -> "Loading model..."
-                        is State.ProcessingSystemPrompt -> "Processing system prompt..."
-                        else -> "Processing..."
-                    },
-                    style = MaterialTheme.typography.titleMedium
-                )
-            } else {
-                Text(text = "Start", style = MaterialTheme.typography.titleMedium)
+            when {
+                errorMessage != null -> {
+                    Icon(
+                        imageVector = Icons.Default.Error,
+                        contentDescription = errorMessage,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = errorMessage,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+
+                isLoading -> {
+                    CircularProgressIndicator(modifier = Modifier.height(24.dp).width(24.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = when (engineState) {
+                            is State.Initializing, State.Initialized -> "Initializing..."
+                            is State.LoadingModel -> "Loading model..."
+                            is State.ProcessingSystemPrompt -> "Processing system prompt..."
+                            else -> "Processing..."
+                        },
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+
+                else -> {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = "Run model ${selectedModel?.name} with $selectedMode"
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = "Start", style = MaterialTheme.typography.titleMedium)
+                }
             }
         }
     }

@@ -38,12 +38,12 @@ interface ModelLoadingService : InferenceService {
     /**
      * Load a model for benchmark
      */
-    suspend fun loadModelForBenchmark(): ModelLoadingMetrics
+    suspend fun loadModelForBenchmark(): ModelLoadingMetrics?
 
     /**
      * Load a model for conversation
      */
-    suspend fun loadModelForConversation(systemPrompt: String?): ModelLoadingMetrics
+    suspend fun loadModelForConversation(systemPrompt: String?): ModelLoadingMetrics?
 }
 
 interface BenchmarkService : InferenceService {
@@ -132,7 +132,7 @@ internal class InferenceServiceImpl @Inject internal constructor(
 
     override fun setCurrentModel(model: ModelInfo) { _currentModel.value = model }
 
-    override suspend fun unloadModel() = inferenceEngine.unloadModel()
+    override suspend fun unloadModel() = inferenceEngine.cleanUp()
 
     /**
      * Shut down inference engine
@@ -145,8 +145,10 @@ internal class InferenceServiceImpl @Inject internal constructor(
      *
      */
 
-    override suspend fun loadModelForBenchmark(): ModelLoadingMetrics =
-        _currentModel.value?.let { model ->
+    override suspend fun loadModelForBenchmark(): ModelLoadingMetrics? {
+        checkNotNull(_currentModel.value) { "Attempt to load model for bench while none selected!" }
+
+        return _currentModel.value?.let { model ->
             try {
                 val modelLoadStartTs = System.currentTimeMillis()
                 inferenceEngine.loadModel(model.path)
@@ -154,12 +156,15 @@ internal class InferenceServiceImpl @Inject internal constructor(
                 ModelLoadingMetrics(modelLoadEndTs - modelLoadStartTs)
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading model", e)
-                throw e
+                null
             }
-        } ?: throw IllegalStateException("No model selected!")
+        }
+    }
 
-    override suspend fun loadModelForConversation(systemPrompt: String?): ModelLoadingMetrics =
-        _currentModel.value?.let { model ->
+    override suspend fun loadModelForConversation(systemPrompt: String?): ModelLoadingMetrics? {
+        checkNotNull(_currentModel.value) { "Attempt to load model for chat while none selected!" }
+
+        return _currentModel.value?.let { model ->
             try {
                 _systemPrompt.value = systemPrompt
 
@@ -181,10 +186,10 @@ internal class InferenceServiceImpl @Inject internal constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error loading model", e)
-                throw e
+                null
             }
-        } ?: throw IllegalStateException("No model selected!")
-
+        }
+    }
 
     /*
      *

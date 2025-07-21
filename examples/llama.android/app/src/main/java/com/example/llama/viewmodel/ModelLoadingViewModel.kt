@@ -86,10 +86,12 @@ class ModelLoadingViewModel @Inject constructor(
      */
     fun onBenchmarkSelected(onNavigateToBenchmark: (ModelLoadingMetrics) -> Unit) =
         viewModelScope.launch {
-            selectedModel.value?.let {
-                modelRepository.updateModelLastUsed(it.id)
+            selectedModel.value?.let { model ->
+                modelLoadingService.loadModelForBenchmark()?.let { metrics ->
+                    modelRepository.updateModelLastUsed(model.id)
+                    onNavigateToBenchmark(metrics)
+                }
             }
-            onNavigateToBenchmark(modelLoadingService.loadModelForBenchmark())
         }
 
     /**
@@ -100,10 +102,12 @@ class ModelLoadingViewModel @Inject constructor(
         systemPrompt: String? = null,
         onNavigateToConversation: (ModelLoadingMetrics) -> Unit
     ) = viewModelScope.launch {
-        selectedModel.value?.let {
-            modelRepository.updateModelLastUsed(it.id)
+        selectedModel.value?.let { model ->
+            modelLoadingService.loadModelForConversation(systemPrompt)?.let { metrics ->
+                modelRepository.updateModelLastUsed(model.id)
+                onNavigateToConversation(metrics)
+            }
         }
-        onNavigateToConversation(modelLoadingService.loadModelForConversation(systemPrompt))
     }
 
     companion object {

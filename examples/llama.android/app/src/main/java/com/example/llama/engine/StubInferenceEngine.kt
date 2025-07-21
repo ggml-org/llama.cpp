@@ -206,7 +206,7 @@ class StubInferenceEngine : InferenceEngine {
     /**
      * Unloads the currently loaded model.
      */
-    override suspend fun unloadModel() =
+    override suspend fun cleanUp() =
         withContext(llamaDispatcher) {
             when(val state = _state.value) {
                 is State.ModelReady, is State.Error -> {
