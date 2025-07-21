@@ -3183,9 +3183,10 @@ struct llava_uhd {
         const int original_width  = original_size.width;
         const int original_height = original_size.height;
 
-        const bool has_slices    = original_size.width > slice_size || original_size.height > slice_size;
+        bool has_slices    = original_size.width > slice_size || original_size.height > slice_size;
         const bool has_pinpoints = !ctx->model.hparams.image_res_candidates.empty();
 
+        has_slices = false;
         if (!has_slices) {
             // skip slicing logic
             res.overview_size = clip_image_size{slice_size, slice_size};
