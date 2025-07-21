@@ -5123,16 +5123,7 @@ static void ggml_cl_conv_2d(ggml_backend_t backend, const ggml_tensor * src0, co
     size_t global_work_size[] = { (size_t)NB_K * WG_K, (size_t)NB_NPQ * WG_NPQ, 1 };
     size_t local_work_size[] = { (size_t)WG_K, (size_t)WG_NPQ, 1 };
 
-#ifdef GGML_OPENCL_PROFILING
-    cl_event evt;
-    CL_CHECK(clEnqueueNDRangeKernel(backend_ctx->queue, kernel, 2, NULL, global_work_size, local_work_size, 0, NULL, &evt));
-
-    backend_ctx->profiling_info.emplace_back();
-    populateProfilingInfo(backend_ctx->profiling_info.back(), evt, kernel, 2, global_work_size, local_work_size, dst);
-#else
-    GGML_UNUSED(dst);
-    CL_CHECK(clEnqueueNDRangeKernel(backend_ctx->queue, kernel, 2, NULL, global_work_size, local_work_size, 0, NULL, NULL));
-#endif
+    backend_ctx->enqueue_ndrange_kernel(kernel, 2, global_work_size, local_work_size, dst);
 }
 
 static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
