@@ -1930,37 +1930,14 @@ static void ggml_cann_mul_mat_quant(ggml_backend_cann_context& ctx,
             int64_t output_ne_offset = 0;
             int64_t output_ne[2] = {weight_ne[0], dst->ne[1]};
 
-            aclTensor* acl_weight_tensor;
-            aclTensor* acl_scale_tensor;
-
-            bool weightToNZ = false;
-#ifdef ASCEND_310P
-            weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
-#endif
-            if (weightToNZ) {
-                 int64_t acl_weight_stride[] = {weight_ne[1], 1};
-                std::vector<int64_t> storageDims = {weight_ne[0], weight_ne[1]};
-                acl_weight_tensor = aclCreateTensor(
-                    weight_ne, 2, ggml_cann_type_mapping(type), acl_weight_stride,
-                    weight_ne_offset / ggml_element_size(src0), ACL_FORMAT_FRACTAL_NZ, storageDims.data(), 2,
-                    src0->data);
-                
-                int64_t acl_scale_stride[] = {scale_ne[1], 1};
-                std::vector<int64_t> scaleStorageDims = {scale_ne[0], scale_ne[1]};
-                acl_scale_tensor = aclCreateTensor(
-                    scale_ne, 2, ACL_FLOAT16, acl_scale_stride,
-                    scale_ne_offset, ACL_FORMAT_ND, scaleStorageDims.data(), 2,
-                    scale_offset + batch0 * scale_stride);
-            } else {
-                acl_weight_tensor = ggml_cann_create_tensor(
+            aclTensor* acl_weight_tensor = ggml_cann_create_tensor(
                     (char*)src0->data + batch0 * weight_stride,
                     ggml_cann_type_mapping(type), weight_elem_size, weight_ne,
                     weight_nb, 2, ACL_FORMAT_ND, weight_ne_offset);
-                acl_scale_tensor = ggml_cann_create_tensor(
+            aclTensor* acl_scale_tensor = ggml_cann_create_tensor(
                     scale_offset + batch0 * scale_stride, ACL_FLOAT16,
                     scale_elem_size, scale_ne, scale_nb, 2, ACL_FORMAT_ND,
                     scale_ne_offset);
-            }
             aclTensor* acl_output_tensor = ggml_cann_create_tensor(
                 (char*)output_buffer + batch1 * output_stride, ACL_FLOAT16,
                 output_elem_size, output_ne, output_nb, 2, ACL_FORMAT_ND,

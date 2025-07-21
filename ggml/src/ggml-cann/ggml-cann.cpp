@@ -1158,8 +1158,6 @@ static int CreateAclTensorWeight(const void *hostData, const std::vector<int64_t
         strides[i] = shape[i + 1] * strides[i + 1];
     }
 
-    // std::vector<int64_t> storageShape;
-    // storageShape.push_back(size);
     *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_ND,
                               shape.data(), shape.size(), *deviceAddr);
     return 0;
@@ -1169,13 +1167,9 @@ static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t of
     aclrtStream stream;
     ACL_CHECK(aclrtCreateStream(&stream));
 
-    std::vector<int64_t> weightShape = {tensor->ne[0], tensor->ne[1]};
     std::vector<int64_t> weightTransposedShape = {tensor->ne[1], tensor->ne[0]};
-    void *weightDeviceAddr = nullptr;
     void *weightTransposedDeviceAddr = nullptr;
-    aclTensor *weight = nullptr;
     aclTensor *weightTransposed = nullptr;
-    CreateAclTensorWeight(data, weightShape, &weightDeviceAddr, ggml_cann_type_mapping(tensor->type), &weight);
     CreateAclTensorWeight(data, weightTransposedShape, &weightTransposedDeviceAddr,
                           ggml_cann_type_mapping(tensor->type), &weightTransposed);
     
@@ -1196,13 +1190,8 @@ static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t of
 
     aclrtMemcpy((char *)tensor->data + offset, size,
                 weightTransposedDeviceAddr, size, ACL_MEMCPY_HOST_TO_DEVICE);
-    ACL_CHECK(aclDestroyTensor(weight));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
-    aclrtFree(weightDeviceAddr);
     aclrtFree(weightTransposedDeviceAddr);
-    if (workspaceSize > 0) {
-        aclrtFree(workspaceAddr);
-    }
 }
 
 // TODO: need handle tensor which has paddings.
@@ -1246,9 +1235,6 @@ static void ggml_backend_cann_buffer_set_tensor(
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size,
                               transform_buffer, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
-        if (weightToNZ && is_matmul_weight((const ggml_tensor*)tensor)) {
-            weight_format_to_nz(tensor, transform_buffer, offset);
-        }
         free(transform_buffer);
     }
 }
