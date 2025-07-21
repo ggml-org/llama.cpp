@@ -34,19 +34,7 @@ OutputVector translate_cont(const NodeContext& context) {
             false);
     } else {
         // The input comes from a VIEW
-        // Currently all cases are slicing at lowest dim
-        int32_t* op_params = context.get_input_op_params(0);
-        auto output_stride = context.get_output_stride(0);
-
-        int64_t split_addr = op_params[0] / output_stride[2];
-        std::vector<int64_t> begin = {0, 0, split_addr};
-        std::vector<int64_t> end = {(int64_t)src_shape[0], INT_MAX, split_addr + (int64_t)src_shape[2]};
-        std::vector<int64_t> strides = {1, 1, 1};
-
-        auto begin_const = ov::op::v0::Constant::create(element::i64, {begin.size()}, begin);
-        auto end_const = ov::op::v0::Constant::create(ov::element::i64, {end.size()}, end);
-        auto strides_const = ov::op::v0::Constant::create(ov::element::i64, {strides.size()}, strides);
-        res = std::make_shared<ov::op::v8::Slice>(context.get_input(0), begin_const, end_const, strides_const);
+        res = process_view_input(context, 0);
     }
 
     return rename_outputs_with_suffix({res}, context.get_name());

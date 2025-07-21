@@ -15,6 +15,8 @@ public:
     GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
                   int context_size, int num_heads, int num_heads_kv, int head_size);
 
+    // Naive decoder
+    GgmlOvDecoder(struct ggml_cgraph* cgraph);
     virtual ov::Any get_attribute(const std::string& name) const override {
         return nullptr;
         GGML_UNUSED(name);
@@ -111,7 +113,7 @@ public:
     void clear_model_weights() { m_model_weights.clear(); }
 
 private:
-    void set_input_output(ggml_tensor* node);
+    void set_input_output(ggml_tensor* node, bool naive = false);
     void add_extra_inputs();
     static void dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename);
     static std::vector<size_t> get_shape(const ggml_tensor* tensor);
@@ -124,13 +126,13 @@ private:
     static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
     void add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
 
-    struct ggml_cgraph* m_cgraph;
+    struct ggml_cgraph* m_cgraph = nullptr;
+    ggml_tensor* m_node = nullptr;
+    std::vector<ggml_tensor*> m_nodes;
     std::map<std::string, ggml_tensor*> m_inputs;
     std::vector<std::string> m_input_names;
     std::map<std::string, ggml_tensor*> m_outputs;
     std::vector<std::string> m_output_names;
-    ggml_tensor* m_node;
-    std::vector<ggml_tensor*> m_nodes;
     std::string m_op_name;
     mutable std::string m_name;
     int m_op_case;

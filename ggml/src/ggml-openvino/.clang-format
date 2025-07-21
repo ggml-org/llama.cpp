@@ -5,6 +5,10 @@ AlignConsecutiveDeclarations: false
 ReferenceAlignment: Left
 PointerAlignment: Left
 Cpp11BracedListStyle: true
+AccessModifierOffset: -4
+BinPackArguments: false
+BinPackParameters: false
+BreakBeforeBraces: Attach
 
 Language:        Cpp
 AlignAfterOpenBracket: Align
@@ -27,29 +31,7 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLambdasOnASingleLine: Inline
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakBeforeMultilineStrings: true
-BinPackArguments: true
-BinPackParameters: true # OnePerLine
 BitFieldColonSpacing: Both
-BreakBeforeBraces: Custom # Attach
-BraceWrapping:
-  AfterCaseLabel:  true
-  AfterClass:      false
-  AfterControlStatement: false
-  AfterEnum:       false
-  AfterFunction:   false
-  AfterNamespace:  false
-  AfterObjCDeclaration: false
-  AfterStruct:     false
-  AfterUnion:      false
-  AfterExternBlock: false
-  BeforeCatch:     false
-  BeforeElse:      false
-  BeforeLambdaBody: false
-  BeforeWhile: false
-  IndentBraces:    false
-  SplitEmptyFunction: false
-  SplitEmptyRecord: false
-  SplitEmptyNamespace: false
 # BreakAdjacentStringLiterals: true
 BreakAfterAttributes: Never
 BreakBeforeBinaryOperators: None
