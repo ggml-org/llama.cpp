@@ -33,9 +33,9 @@ OutputVector translate_soft_max(const NodeContext& context) {
     auto* op_params = context.get_output_op_params(0);
     memcpy(&scale, (float*) op_params + 0, sizeof(float));
     memcpy(&max_bias, (float*) op_params + 1, sizeof(float));
-    const uint32_t h = context.get_head_size();
-
-    const uint32_t n_head = context.get_input_shape(0)[0].get_length();
+    auto src0_shape = context.get_input_shape(0).get_shape();
+    const uint32_t h = src0_shape[2];
+    const uint32_t n_head = src0_shape[0];
     const uint32_t n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
     const float m0 = powf(2.0f, -(max_bias) / n_head_log2);
@@ -46,23 +46,30 @@ OutputVector translate_soft_max(const NodeContext& context) {
     auto scale_node = std::make_shared<ov::op::v0::Constant>(ov::element::f32, ov::Shape{}, std::vector<float>{scale});
     auto scaled_input = std::make_shared<ov::op::v1::Multiply>(input_node, scale_node);
 
+    if (context.get_input_size() < 2) {
+        res = std::make_shared<ov::op::v8::Softmax>(scaled_input, 2);
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
+
     auto mask_node = context.get_input(1);
 
-    // Use Q-cur to retrieve the token length, so that the translation of SOFT_MAX
+    std::shared_ptr<ov::Node> token_len = get_dimensions(input_node, {1});
+    // Try using Q-cur to retrieve the token length, so that the translation of SOFT_MAX
     // does not depend on the result of the QK MatMul, so that QK matmul + softmax + qkv matmul
     // can be fused into SDPA.
-    if (input_node->get_type_info() != ov::op::v0::Convert::get_type_info_static()) {
-        throw std::runtime_error("Input of SOFT_MAX should be MatMul of qk followed by a Convert");
+    if (input_node->get_type_info() == ov::op::v0::Convert::get_type_info_static()) {
+        auto qk = input_node->get_input_node_shared_ptr(0);
+        if (qk->get_type_info() == ov::op::v0::MatMul::get_type_info_static()) {
+            token_len = get_dimensions(qk->get_input_node_shared_ptr(0), {1});
+        }
     }
-    auto qk = input_node->get_input_node_shared_ptr(0);
-    if (qk->get_type_info() != ov::op::v0::MatMul::get_type_info_static()) {
-        throw std::runtime_error("Input of SOFT_MAX should be MatMul of qk followed by a Convert");
-    }
-    auto token_len = get_dimensions(qk->get_input_node_shared_ptr(0), {1});
-
     auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
     auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-    auto mask_node_sliced = std::make_shared<ov::op::v8::Slice>(mask_node, zero, token_len, one, one);
+    std::shared_ptr<ov::Node> mask_node_sliced =
+        std::make_shared<ov::op::v8::Slice>(mask_node, zero, token_len, one, one);
+    if (mask_node_sliced->get_element_type() != context.get_output_type(0)) {
+        mask_node_sliced = std::make_shared<ov::op::v0::Convert>(mask_node_sliced, context.get_output_type(0));
+    }
 
     Output<Node> slope_mask;
     if (slope != 1.0f) {
