@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "ggml-impl.h"
+#include "ggml-openvino/ggml-decoder.h"
 #include "ggml.h"
 #include "openvino/frontend.hpp"
 #include "openvino/input_model.hpp"
@@ -35,6 +36,9 @@ ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder,
     ov::Shape input_shape;
     if (name.find("cache_k") == 0 || name.find("cache_v") == 0) {
         input_shape = ggml_decoder->get_graph_input_shape(ggml_tensor).to_shape();
+    } else if (ggml_tensor->op == GGML_OP_VIEW) {
+        // This case is added to make test-backend-ops work
+        input_shape = ggml_decoder->get_graph_input_shape(ggml_tensor->view_src).to_shape();
     } else {
         input_shape = ggml_decoder->get_input_shape(name).to_shape();
     }
@@ -79,6 +83,10 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     ov::AnyMap config;
     if (device == "NPU") {
         config = get_npu_config();
+    }
+
+    if (cgraph->n_nodes == 1) {
+        return naive_compute(cgraph, core, device, config);
     }
 
     auto start_time = ggml_time_us();
@@ -240,6 +248,42 @@ ov::AnyMap get_npu_config() {
         { "NPU_COMPILER_TYPE",           "MLIR"                                            },
     };
     return config;
+}
+
+enum ggml_status naive_compute(struct ggml_cgraph* cgraph,
+                               ov::Core& core,
+                               const std::string& device,
+                               const ov::AnyMap& config) {
+    if (cgraph->nodes[0]->op == GGML_OP_NONE) {
+        return GGML_STATUS_SUCCESS;
+    }
+
+    auto decoder = std::make_shared<GgmlOvDecoder>(cgraph);
+    auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(decoder);
+    auto naive = true;
+    auto model = ov::frontend::ggml::FrontEnd::convert(input_model, naive);
+    auto infer_request = core.compile_model(model, device, config).create_infer_request();
+
+    ov::serialize(model, "IR.xml");
+
+    auto ov_params = model->get_parameters();
+    for (size_t i = 0; i < ov_params.size(); i++) {
+        auto param_name = ov_params[i]->get_friendly_name();
+        auto input_tensor = get_ov_input_tensor(decoder, param_name);
+        infer_request.set_input_tensor(i, input_tensor);
+    }
+
+    infer_request.infer();
+
+    auto gguf_tensor_addrs = get_ggml_graph_output_dst(decoder);
+    auto ov_results = model->get_results();
+    for (size_t i = 0; i < ov_results.size(); i++) {
+        auto result_name = ov_results[i]->get_friendly_name();
+        const auto output_tensor = infer_request.get_output_tensor(i);
+
+        std::memcpy(gguf_tensor_addrs[result_name], output_tensor.data(), output_tensor.get_byte_size());
+    }
+    return GGML_STATUS_SUCCESS;
 }
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& param_name) {

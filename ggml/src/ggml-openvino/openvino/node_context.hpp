@@ -77,6 +77,10 @@ public:
         return m_tensor_map->at(name);
     }
 
+    bool has_input(const std::string& name) const {
+        return m_tensor_map->find(name) != m_tensor_map->end();
+    }
+
     const std::string& get_name() const override {
         return m_decoder->get_op_name();
     }

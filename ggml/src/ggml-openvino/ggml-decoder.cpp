@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <execution>
@@ -15,6 +16,8 @@
 #include <openvino/core/dimension.hpp>
 #include <openvino/core/node.hpp>
 #include <openvino/core/partial_shape.hpp>
+#include <openvino/core/type/bfloat16.hpp>
+#include <openvino/core/type/element_type.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/parameter.hpp>
@@ -71,9 +74,19 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgrap
     }
 }
 
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph) {
+    m_cgraph = cgraph;
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+        auto* cur_node = cgraph->nodes[node_n];
+        m_nodes.push_back(cur_node);
+        set_input_output(cur_node, true);
+    }
+}
+
 // Called in GgmlOvDecoder constructor. Two cases: 1. constructing a decoder for the whole graph;
-// 2. constructing a decoder for a node.
-void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
+// 2. constructing a decoder for a node;
+// 3. constructing a decoder for the whole graph naively (op test case)
+void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
     std::string node_name;
     if (node->op == GGML_OP_CPY) {
         // CPY updates the input tensor in place. For later ov op that uses the
@@ -98,8 +111,14 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
         m_inputs[src_name] = src;
         m_op_node_name.emplace_back(src_name, ggml_op_name(node->op));
 
-        // If called for the whole graph, create constant nodes for weights and param nodes for inputs
-        if (!m_node && !src->view_src) {
+        // Add model inputs and weights constants, if called for the whole graph
+        if (naive) {
+            auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(src));
+            param_node->set_friendly_name(src_name);
+            param_node->output(0).get_tensor().set_names({src_name});
+            m_model_inputs[src_name] = param_node;
+
+        } else if (!m_node && !src->view_src) {
             ggml_backend_buffer* buffer = src->buffer;
 
             if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || src->flags & GGML_TENSOR_FLAG_INPUT) {
@@ -118,7 +137,10 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
         }
     }
 
-    if (!m_node) {
+    // Add model outputs, if called for the whole graph
+    if (naive) {
+        m_model_output_names.push_back(node->name);
+    } else if (!m_node) {
         static std::set<std::string> debug_output_names = {};
         // Workaround: the final tensor "result_output" does not have GGML_TENSOR_FLAG_OUTPUT flag set in cgraph
         if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY || node->flags & GGML_TENSOR_FLAG_OUTPUT ||
@@ -164,17 +186,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
                 m_op_case = 2;
             }
             break;
-        }
-        case GGML_OP_MUL_MAT: {
-            if (node->src[0]->view_src == nullptr) {
-                m_op_case = 1;
-            } else if (std::string(node->src[0]->name).find("cache_k") == 0) {
-                m_op_case = 2;
-            } else if (std::string(node->src[0]->name).find("cache_v") == 0) {
-                m_op_case = 3;
             }
-            break;
-        }
         case GGML_OP_PERMUTE: {
             if (node->src[0]->view_src == nullptr) {
                 // Permute Qcur
@@ -188,6 +200,23 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node) {
             }
             break;
         }
+        case GGML_OP_GET_ROWS:
+            {
+                if (node->src[1]->op == GGML_OP_VIEW) {
+                    m_op_case = 2;
+                } else {
+                    m_op_case = 1;
+                }
+                break;
+            }
+        case GGML_OP_ROPE:
+            {
+                if (node->src[0]->op == GGML_OP_VIEW) {
+                    m_op_case = 2;
+                } else {
+                    m_op_case = 1;
+                }
+            }
         default:
             break;
         }
@@ -237,6 +266,9 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
         input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
     } else if (std::string(src->name).find("cache_v") == 0) {
         input_shape = ov::PartialShape{m_num_heads_kv, m_head_size, m_context_size};
+    } else if (src->op == GGML_OP_VIEW) {
+        // This case is added to make test-backend-ops work
+        input_shape = ov::PartialShape{get_shape(src->view_src)};
     } else {
         input_shape = ov::PartialShape{get_shape(src)};
     }
@@ -373,6 +405,17 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
         weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_f16);
         break;
     }
+    case GGML_TYPE_BF16:
+        {
+            const auto* ptr = reinterpret_cast<const uint16_t*>(tensor->data);
+            std::vector<ov::bfloat16> data_bf16;
+            data_bf16.reserve(ne_total);
+            for (int i = 0; i < ne_total; ++i) {
+                data_bf16.push_back(ov::bfloat16::from_bits(ptr[i]));
+            }
+            weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_bf16);
+            break;
+        }
     default:
         throw std::invalid_argument("Unsupported tensor type");
     }
@@ -496,6 +539,9 @@ ov::element::Type GgmlOvDecoder::get_ov_type(const ggml_tensor* tensor) {
     case GGML_TYPE_F16:
         type = ov::element::f16;
         break;
+    case GGML_TYPE_BF16:
+        type = ov::element::bf16;
+        break;
     case GGML_TYPE_I64:
         type = ov::element::i64;
         break;
@@ -576,6 +622,7 @@ void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecode
 
 const std::string& GgmlOvDecoder::get_op_type() const {
     static const std::map<ggml_op, std::string> ops = {
+        {GGML_OP_NONE,      "GGML_OP_NONE"     },
         {GGML_OP_ACC,       "GGML_OP_ACC"      },
         {GGML_OP_ADD,       "GGML_OP_ADD"      },
         {GGML_OP_ADD1,      "GGML_OP_ADD1"     },

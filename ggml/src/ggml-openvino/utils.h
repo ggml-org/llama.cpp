@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <openvino/runtime/core.hpp>
 
 #include "ggml-backend-impl.h"
 #include "ggml-decoder.h"
@@ -42,3 +43,6 @@ bool is_prefill(struct ggml_cgraph * cgraph);
 ov::AnyMap get_npu_config();
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& param_name);
+
+enum ggml_status naive_compute(struct ggml_cgraph* cgraph, ov::Core& core, const std::string& device,
+                               const ov::AnyMap& config);
