@@ -96,7 +96,8 @@ data class ModelLoadingMetrics(
  */
 data class GenerationUpdate(
     val text: String,
-    val isComplete: Boolean
+    val isComplete: Boolean,
+    val metrics: TokenMetrics? = null
 )
 
 /**
@@ -221,14 +222,14 @@ internal class InferenceServiceImpl @Inject internal constructor(
     private var isFirstToken: Boolean = true
 
     override fun generateResponse(prompt: String): Flow<GenerationUpdate> = flow {
+        val response = StringBuilder()
+
         try {
             // Reset metrics tracking
             generationStartTime = System.currentTimeMillis()
             firstTokenTime = 0L
             tokenCount = 0
             isFirstToken = true
-
-            val response = StringBuilder()
 
             inferenceEngine.sendUserPrompt(prompt)
                 .collect { token ->
@@ -253,10 +254,11 @@ internal class InferenceServiceImpl @Inject internal constructor(
             val metrics = createTokenMetrics()
 
             // Emit final response with completion flag
-            emit(GenerationUpdate(response.toString(), true))
+            emit(GenerationUpdate(response.toString(), true, metrics))
         } catch (e: Exception) {
             // Emit error
             val metrics = createTokenMetrics()
+            emit(GenerationUpdate(response.toString(), true, metrics))
             throw e
         }
     }

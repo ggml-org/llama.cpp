@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.launch
+import okhttp3.internal.toImmutableList
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -94,76 +95,57 @@ class ConversationViewModel @Inject constructor(
     /**
      * Stop ongoing generation
      */
-    fun stopGeneration() {
+    fun stopGeneration() =
         tokenCollectionJob?.let { job ->
             // handled by the catch blocks
             if (job.isActive) { job.cancel() }
         }
-    }
 
     /**
-     * Handle the case when generation is explicitly cancelled
+     * Handle the case when generation is explicitly cancelled by adding a stopping suffix
      */
-    private fun handleCancellation() {
-        val currentMessages = _messages.value.toMutableList()
-        val lastIndex = currentMessages.size - 1
-        val currentAssistantMessage = currentMessages.getOrNull(lastIndex) as? Message.Assistant.Ongoing
-
-        if (currentAssistantMessage != null) {
-            // Replace with completed message, adding note that it was interrupted
-            currentMessages[lastIndex] = Message.Assistant.Completed(
-                content = currentAssistantMessage.content + " [Generation stopped]",
-                timestamp = currentAssistantMessage.timestamp,
-                metrics = conversationService.createTokenMetrics()
-            )
-            _messages.value = currentMessages
+    private fun handleCancellation() =
+        _messages.value.toMutableList().apply {
+            (removeLastOrNull() as? Message.Assistant.Stopped)?.let {
+                add(it.copy(content = it.content + SUFFIX_GENERATION_STOPPED))
+                _messages.value = toImmutableList()
+            }
         }
-    }
 
     /**
-     * Handle response error
+     * Handle response error by appending an error suffix
      */
-    private fun handleResponseError(e: Exception) {
-        val currentMessages = _messages.value.toMutableList()
-        val lastIndex = currentMessages.size - 1
-        val currentAssistantMessage = currentMessages.getOrNull(lastIndex) as? Message.Assistant.Ongoing
-
-        if (currentAssistantMessage != null) {
-            currentMessages[lastIndex] = Message.Assistant.Completed(
-                content = currentAssistantMessage.content + " [Error: ${e.message}]",
-                timestamp = currentAssistantMessage.timestamp,
-                metrics = conversationService.createTokenMetrics()
-            )
-            _messages.value = currentMessages
+    private fun handleResponseError(e: Exception) =
+        _messages.value.toMutableList().apply {
+            (removeLastOrNull() as? Message.Assistant.Stopped)?.let {
+                add(it.copy(content = it.content + SUFFIX_GENERATION_ERROR.format(e.message)))
+                _messages.value = toImmutableList()
+            }
         }
-    }
 
     /**
      * Handle updating the assistant message
      */
-    private fun updateAssistantMessage(update: GenerationUpdate) {
-        val currentMessages = _messages.value.toMutableList()
-        val lastIndex = currentMessages.size - 1
-        val currentAssistantMessage = currentMessages.getOrNull(lastIndex) as? Message.Assistant.Ongoing
-
-        if (currentAssistantMessage != null) {
-            if (update.isComplete) {
-                // Final message with metrics
-                currentMessages[lastIndex] = Message.Assistant.Completed(
-                    content = update.text,
-                    timestamp = currentAssistantMessage.timestamp,
-                    metrics = conversationService.createTokenMetrics()
-                )
-            } else {
-                // Ongoing message update
-                currentMessages[lastIndex] = Message.Assistant.Ongoing(
-                    content = update.text,
-                    timestamp = currentAssistantMessage.timestamp
-                )
+    private fun updateAssistantMessage(update: GenerationUpdate) =
+        _messages.value.toMutableList().apply {
+            (removeLastOrNull() as? Message.Assistant.Ongoing)?.let {
+                if (update.metrics != null) {
+                    // Finalized message (partial or complete) with metrics
+                    add(Message.Assistant.Stopped(
+                        content = update.text,
+                        timestamp = it.timestamp,
+                        metrics = update.metrics
+                    ))
+                } else if (!update.isComplete) {
+                    // Ongoing message update
+                    add(Message.Assistant.Ongoing(
+                        content = update.text,
+                        timestamp = it.timestamp
+                    ))
+                }
+                _messages.value = toImmutableList()
             }
-            _messages.value = currentMessages
         }
-    }
 
     override suspend fun performCleanup() = clearConversation()
 
@@ -178,6 +160,11 @@ class ConversationViewModel @Inject constructor(
     override fun onCleared() {
         stopGeneration()
         super.onCleared()
+    }
+
+    companion object {
+        private const val SUFFIX_GENERATION_STOPPED = " [Generation stopped]"
+        private const val SUFFIX_GENERATION_ERROR = " [Error: %s]"
     }
 }
 
@@ -203,7 +190,7 @@ sealed class Message {
             override val content: String,
         ) : Assistant()
 
-        data class Completed(
+        data class Stopped(
             override val timestamp: Long,
             override val content: String,
             val metrics: TokenMetrics

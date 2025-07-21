@@ -301,15 +301,15 @@ private fun MessageBubble(message: Message) {
             formattedTime = message.formattedTime,
             content = message.content,
             isThinking = message.content.isBlank(),
-            isComplete = false,
+            isGenerating = true,
             metrics = null
         )
 
-        is Message.Assistant.Completed -> AssistantMessageBubble(
+        is Message.Assistant.Stopped -> AssistantMessageBubble(
             formattedTime = message.formattedTime,
             content = message.content,
             isThinking = false,
-            isComplete = true,
+            isGenerating = false,
             metrics = message.metrics.text
         )
     }
@@ -357,7 +357,7 @@ private fun AssistantMessageBubble(
     formattedTime: String,
     content: String,
     isThinking: Boolean,
-    isComplete: Boolean,
+    isGenerating: Boolean,
     metrics: String? = null
 ) {
     Row(
@@ -417,7 +417,7 @@ private fun AssistantMessageBubble(
                     .padding(top = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (!isComplete) {
+                if (isGenerating) {
                     PulsatingDots(small = true)
 
                     Spacer(modifier = Modifier.width(4.dp))
