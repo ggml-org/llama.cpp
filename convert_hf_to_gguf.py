@@ -8699,6 +8699,11 @@ class CogVLMVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.hparams_vision['num_attention_heads'] = self.hparams['num_heads']
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-6))
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.COGVLM)
     
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
