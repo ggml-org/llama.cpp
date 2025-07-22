@@ -120,9 +120,8 @@ static __global__ void rms_norm_f32(
     x   += sample*stride_sample + channel*stride_channel + row*stride_row;
     dst += ((sample*nchannels + channel)*nrows + row)*ncols;
 
-    const float * mul_ptr = nullptr;
     if constexpr (do_multiply) {
-        mul_ptr = mul + sample*mul_stride_sample + channel*mul_stride_channel + row*mul_stride_row;
+        mul += sample*mul_stride_sample + channel*mul_stride_channel + row*mul_stride_row;
     }
 
     float tmp = 0.0f; // partial sum for thread in warp
@@ -152,7 +151,7 @@ static __global__ void rms_norm_f32(
 
     for (int col = tid; col < ncols; col += block_size) {
         if constexpr (do_multiply) {
-            dst[col] = scale * x[col] * mul_ptr[col];
+            dst[col] = scale * x[col] * mul[col];
         } else {
             dst[col] = scale * x[col];
         }
@@ -333,7 +332,7 @@ static void rms_norm_mul_f32_cuda(
         const int64_t mul_stride_row, const int64_t mul_stride_channel, const int64_t mul_stride_sample,
         const float eps, cudaStream_t stream) {
     const dim3 blocks_num(nrows, nchannels, nsamples);
-    if(mul == nullptr) {
+    if (mul == nullptr) {
         rms_norm_f32_cuda(x, dst, ncols, nrows, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, stream);
         return;
     }
