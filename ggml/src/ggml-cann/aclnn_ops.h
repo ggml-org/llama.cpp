@@ -1025,7 +1025,7 @@ void ggml_cann_mul_mat_id(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  * @brief   Check whether a tensor is a weight tensor for matrix multiplication.
  *
  * @details Checks whether the given tensor serves as weight parameters in matrix multiplication operations,
- *          typically within neural network layers. The function maintains a static set of canonical weight 
+ *          typically within neural network layers. The function maintains a static set of canonical weight
  *          naming suffixes from Transformer-based architectures. Uses substring matching to identify weight
  *          tensors even with hierarchical naming patterns.
  *

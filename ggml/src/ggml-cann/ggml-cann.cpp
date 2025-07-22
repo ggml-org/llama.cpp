@@ -1151,7 +1151,7 @@ static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t of
     aclTensor *weightTransposed = nullptr;
     CreateAclTensorWeight(data, weightTransposedShape, &weightTransposedDeviceAddr,
                           ggml_cann_type_mapping(tensor->type), &weightTransposed);
-    
+
     uint64_t workspaceSize = 0;
     aclOpExecutor *executor;
     void *workspaceAddr = nullptr;
