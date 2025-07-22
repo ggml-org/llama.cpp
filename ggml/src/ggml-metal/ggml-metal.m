@@ -3015,12 +3015,9 @@ static bool ggml_metal_encode_node(
                 [encoder setBuffer:id_dst  offset:offs_dst  atIndex:7];
                 [encoder setBytes:&args    length:sizeof(args) atIndex:8];
 
-                if (ne30 == 1) {
-                    // Mamba-2
-
-                    // One shared memory bucket for each simd group in the threadgroup
+                // One shared memory bucket for each simd group in the threadgroup
+                if (d_state >= 32) {
                     const int64_t shmem_size = d_state / 32;
-                    GGML_ASSERT(shmem_size * 32 == d_state);
 
                     // The final simd_sum won't work if the number of simd groups is
                     // larger than the size of a single simd group. If this case is
@@ -3033,10 +3030,14 @@ static bool ggml_metal_encode_node(
                     GGML_ASSERT(d_state <= (int64_t)pipeline.maxTotalThreadsPerThreadgroup);
 
                     [encoder setThreadgroupMemoryLength:(shmem_size)*sizeof(float) atIndex:0];
+                }
+
+                if (ne30 == 1) {
+                    // Mamba-2
                     [encoder dispatchThreadgroups:MTLSizeMake(d_inner, n_head, n_seqs) threadsPerThreadgroup:MTLSizeMake(d_state, 1, 1)];
                 } else {
                     GGML_ASSERT(d_inner == 1);
-                    [encoder dispatchThreadgroups:MTLSizeMake(n_head, n_seqs, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                    [encoder dispatchThreadgroups:MTLSizeMake(n_head, n_seqs, 1) threadsPerThreadgroup:MTLSizeMake(d_state, 1, 1)];
                 }
             } break;
         case GGML_OP_RWKV_WKV6:
