@@ -149,6 +149,7 @@ void mtmd_ios_free(mtmd_ios_context* ctx) {
 }
 
 int mtmd_ios_prefill_image(mtmd_ios_context* ctx, const std::string& image_path) {
+
     if (!ctx || image_path.empty()) {
         return -1;
     }
@@ -291,4 +292,19 @@ mtmd_ios_token mtmd_ios_loop(mtmd_ios_context* ctx) {
 
 const char* mtmd_ios_get_last_error(mtmd_ios_context* ctx) {
     return ctx ? ctx->last_error.c_str() : nullptr;
+}
+
+bool mtmd_ios_clean_kv_cache(mtmd_ios_context* ctx) {
+    if (!ctx) {
+        return false;
+    }
+ 
+    // 清理 kv-cache 并重置序列位置
+    ctx->n_past = 0;
+    llama_kv_self_seq_rm(ctx->lctx, 0, 0, -1);
+
+    // 清理batch状态
+    common_batch_clear(ctx->batch);
+    
+    return true;
 }

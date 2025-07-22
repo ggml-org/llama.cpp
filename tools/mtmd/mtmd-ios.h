@@ -8,14 +8,10 @@
 #include "mtmd-helper.h"
 #include "mtmd.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 // Context structure
 typedef struct mtmd_ios_context mtmd_ios_context;
 
-// Parameters structure
+// Parameters structure (C++ only)
 typedef struct mtmd_ios_params {
     std::string model_path;
     std::string mmproj_path;
@@ -27,6 +23,16 @@ typedef struct mtmd_ios_params {
     bool        mmproj_use_gpu;
     bool        warmup;
 } mtmd_ios_params;
+
+// Loop return value structure (C++ only)
+typedef struct {
+    char * token;
+    bool   is_end;
+} mtmd_ios_token;
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 // Initialize, returns 0 on success, -1 on failure
 // Parameters:
@@ -54,12 +60,6 @@ int mtmd_ios_prefill_image(mtmd_ios_context * ctx, const std::string & image_pat
 // role: role
 int mtmd_ios_prefill_text(mtmd_ios_context * ctx, const std::string & text, const std::string & role);
 
-// Loop return value structure
-typedef struct {
-    char * token;
-    bool   is_end;
-} mtmd_ios_token;
-
 // Loop, returns 0 on success, -1 on failure
 // Parameters:
 // ctx: context
@@ -74,6 +74,11 @@ const char * mtmd_ios_get_last_error(mtmd_ios_context * ctx);
 // Parameters:
 // str: string
 void mtmd_ios_string_free(char * str);
+
+// Clean kv-cache
+// Parameters:
+// ctx: context
+bool mtmd_ios_clean_kv_cache(mtmd_ios_context * ctx);
 
 #ifdef __cplusplus
 }
