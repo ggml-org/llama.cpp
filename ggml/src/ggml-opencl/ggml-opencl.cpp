@@ -5103,7 +5103,6 @@ static void ggml_cl_conv_2d(ggml_backend_t backend, const ggml_tensor * src0, co
         shmem_size = (size_t)(BS_K * BS_CRS * sizeof(cl_half) + BS_CRS * (BS_NPQ / VEC_SIZE) * sizeof(cl_float4));
     } else {
         GGML_ASSERT(false && "Unsupported data type combination for conv2d");
-        return;
     }
 
     cl_uint idx = 0;
