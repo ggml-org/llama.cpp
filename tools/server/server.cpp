@@ -253,6 +253,7 @@ struct server_task {
         defaults.sampling    = params_base.sampling;
         defaults.speculative = params_base.speculative;
         defaults.n_keep      = params_base.n_keep;
+        defaults.antiprompt  = params_base.antiprompt;
 
         // enabling this will output extra debug information in the HTTP responses from the server
         params.verbose           = params_base.verbosity > 9;
@@ -489,6 +490,10 @@ struct server_task {
                         params.antiprompt.push_back(word);
                     }
                 }
+            }
+            // set reverse prompt from cli args if not set in the request
+            if (params.antiprompt.empty()) {
+                params.antiprompt = defaults.antiprompt;
             }
         }
 

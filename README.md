@@ -270,7 +270,6 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [CANN](docs/build.md#cann) | Ascend NPU |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
 | [WebGPU [In Progress]](docs/build.md#webgpu) | All |
-
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 
 ## Obtaining and quantizing models
