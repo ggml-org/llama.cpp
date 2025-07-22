@@ -1,6 +1,8 @@
 #pragma once
 
+#include <list>
 #include <type_traits>
+#include <vector>
 
 #include "common.hpp"
 #include "ggml-impl.h"
@@ -42,7 +44,7 @@ class host_tensor {
         auto status = npu_device_tensor_init(_device_handle, &_info, &_device_tensor_handle);
         if (status != AEE_SUCCESS) {
             LOG_ERROR("Failed to init tensor: %d", (int) status);
-            _device_tensor_handle = 0;
+            _device_tensor_handle = npu_device_INVALID_DEVICE_TENSOR_HANDLE;
             return;
         }
 
@@ -64,6 +66,27 @@ class host_tensor {
             npu_device_tensor_free(_device_handle, _device_tensor_handle);
             // TODO: figure out why the _ggml_tensor is invalid here
         }
+    }
+
+    static void destroy_tensors(std::list<std::shared_ptr<host_tensor>> & tensors) {
+        std::vector<npu_device_tensor_handle_t> handles;
+
+        handles.reserve(tensors.size());
+        remote_handle64 device_handle = 0;
+
+        for (auto tensor : tensors) {
+            if (tensor && tensor->_device_tensor_handle != npu_device_INVALID_DEVICE_TENSOR_HANDLE) {
+                handles.push_back(tensor->_device_tensor_handle);
+                tensor->_device_tensor_handle = npu_device_INVALID_DEVICE_TENSOR_HANDLE;  // prevent double free
+                device_handle                 = tensor->_device_handle;
+            }
+        }
+
+        if (!handles.empty()) {
+            npu_device_tensors_free(device_handle, handles.data(), handles.size());
+        }
+
+        tensors.clear();
     }
 
     npu_device_tensor_handle_t get_device_tensor_handle() const { return _device_tensor_handle; }
@@ -157,7 +180,7 @@ class host_tensor {
         return _info_update;
     }
 
-    bool is_valid() const { return _device_tensor_handle != 0; }
+    bool is_valid() const { return _device_tensor_handle != npu_device_INVALID_DEVICE_TENSOR_HANDLE; }
 
     int64_t get_ne(size_t index) const {
         if (index >= DEVICE_TENSOR_MAX_DIMS) {

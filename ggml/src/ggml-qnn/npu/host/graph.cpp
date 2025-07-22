@@ -57,10 +57,10 @@ bool host_graph::update(ggml_cgraph * cgraph) {
         _tensor_handles.push_back(tensor_obj->get_device_tensor_handle());
         _tensor_update_configs.push_back(tensor_obj->update_hosts_params_only(node));
 
-        PROFILER_LOG_DEBUG("node[%d]%s(%s), addr(%p), %s_%ldx%ldx%ldx%ld, handle(%p)\n", i, ggml_get_name(node),
-                           ggml_op_desc(node), (void *) tensor_obj, ggml_type_name(node->type),
-                           (long) tensor_obj->get_ne(0), (long) tensor_obj->get_ne(1), (long) tensor_obj->get_ne(2),
-                           (long) tensor_obj->get_ne(3), (void *) tensor_obj->get_device_tensor_handle());
+        PROFILER_LOG_DEBUG("node[%d]%s(%s), addr(%p), %ldx%ldx%ldx%ld%s, handle(%p)\n", i, ggml_get_name(node),
+                           ggml_op_desc(node), (void *) tensor_obj, (long) tensor_obj->get_ne(0),
+                           (long) tensor_obj->get_ne(1), (long) tensor_obj->get_ne(2), (long) tensor_obj->get_ne(3),
+                           ggml_type_name(node->type), (void *) tensor_obj->get_device_tensor_handle());
     }
 
     GGML_ASSERT(_tensor_handles.size() == _tensor_update_configs.size());

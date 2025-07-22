@@ -31,6 +31,10 @@ inline bool is_addr_aligned(const void * addr) {
     return unaligned_bytes(addr) == 0;
 }
 
+inline bool is_size_aligned(size_t size) {
+    return (size & kAlignMask) == 0;
+}
+
 inline float get_flt0_from_fltv(HVX_Vector vect) {
     static_assert(sizeof(vect[0]) == sizeof(float), "vect[0] should be a float");
     int32_t i = vect[0];
@@ -157,31 +161,25 @@ inline HVX_VectorPair hvx_vqf32_convert_vhf(HVX_Vector vxl) {
     return qhmath_hvx_vqf32_convert_vqf16(qhmath_hvx_vqf16_convert_vhf(vxl));
 }
 
-inline HVX_VectorPair hvx_vsf_convert_vhf(HVX_Vector vxl, HVX_Vector one) {
-    HVX_VectorPair res   = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vxl), one);
-    HVX_Vector     vxl_w = Q6_Vsf_equals_Vqf32(Q6_V_lo_W(res));
-    HVX_Vector     vxh_w = Q6_Vsf_equals_Vqf32(Q6_V_hi_W(res));
-    return Q6_W_vcombine_VV(vxh_w, vxl_w);
+using HVX_Vector_Dual = std::pair<HVX_Vector, HVX_Vector>;
+
+inline HVX_Vector_Dual hvx_vsf_convert_vhf(HVX_Vector vxl, HVX_Vector one) {
+    HVX_VectorPair res = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vxl), one);
+    return {
+        Q6_Vsf_equals_Vqf32(Q6_V_lo_W(res)),
+        Q6_Vsf_equals_Vqf32(Q6_V_hi_W(res)),
+    };
 }
 
 inline HVX_Vector vec_reduction_qf32(HVX_Vector sums) {
     constexpr const size_t kFloatsPerVector = hexagon::kBytesPerVector / sizeof(float);
-    static_assert(kFloatsPerVector == 32 || kFloatsPerVector == 16, "kFloatsPerVector should be 16 or 32");
+    static_assert(kFloatsPerVector == 32, "kFloatsPerVector should be 32");
 
-    // TODO: do we have a better way to do the reduction?
-    switch (kFloatsPerVector) {
-        default:
-        case 32:
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 16 * sizeof(float)));
-            // fallthrough
-        case 16:
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 8 * sizeof(float)));
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 4 * sizeof(float)));
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 2 * sizeof(float)));
-            sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, sizeof(float)));
-            break;
-    }
-
+    sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 16 * sizeof(float)));
+    sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 8 * sizeof(float)));
+    sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 4 * sizeof(float)));
+    sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, 2 * sizeof(float)));
+    sums = Q6_Vqf32_vadd_Vqf32Vqf32(sums, Q6_V_vror_VR(sums, sizeof(float)));
     return sums;
 }
 
@@ -191,23 +189,14 @@ inline float vec_reduction_f32_qf32(HVX_Vector sums) {
 
 inline HVX_Vector vec_reduction_qf16(HVX_Vector sums) {
     constexpr const size_t kFloatsPerVector = hexagon::kBytesPerVector / sizeof(npu_device_fp16_t);
-    static_assert(kFloatsPerVector == 64 || kFloatsPerVector == 32, "kFloatsPerVector should be 32 or 64");
+    static_assert(kFloatsPerVector == 64, "kFloatsPerVector should be 64");
 
-    // TODO: do we have a better way to do the reduction?
-    switch (kFloatsPerVector) {
-        default:
-        case 64:
-            sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 32 * sizeof(npu_device_fp16_t)));
-            // fallthrough
-        case 32:
-            sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 16 * sizeof(npu_device_fp16_t)));
-            sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 8 * sizeof(npu_device_fp16_t)));
-            sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 4 * sizeof(npu_device_fp16_t)));
-            sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 2 * sizeof(npu_device_fp16_t)));
-            sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, sizeof(npu_device_fp16_t)));
-            break;
-    }
-
+    sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 32 * sizeof(npu_device_fp16_t)));
+    sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 16 * sizeof(npu_device_fp16_t)));
+    sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 8 * sizeof(npu_device_fp16_t)));
+    sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 4 * sizeof(npu_device_fp16_t)));
+    sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, 2 * sizeof(npu_device_fp16_t)));
+    sums = Q6_Vqf16_vadd_Vqf16Vqf16(sums, Q6_V_vror_VR(sums, sizeof(npu_device_fp16_t)));
     return sums;
 }
 
@@ -221,62 +210,6 @@ inline HVX_Vector hvx_scale_f32(float scale) {
     return Q6_V_vsplat_R(reinterpret_cast<const uint32_t &>(scale));
 }
 
-template <HVX_Vector (*_Func)(HVX_Vector, HVX_UVector *, HVX_Vector), HVX_Vector (*_FuncScaleConvert)(float),
-          typename _TParam>
-inline void vec_scale_impl(const _TParam * src, float scale, _TParam * dst, size_t count) {
-    constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(_TParam);
-
-    HVX_Vector *       src_vec_ptr    = ((HVX_Vector *) src);
-    HVX_Vector * const src_vec_end    = ((HVX_Vector *) src) + (count / kElementsPerVector);
-    HVX_UVector *      dst_vec_ptr    = ((HVX_UVector *) dst);  // TODO: opt the unaligned case?
-    HVX_Vector         prev           = *src_vec_ptr++;
-    const size_t       leftover       = count % kElementsPerVector;
-    const size_t       leftover_bytes = leftover * sizeof(_TParam);
-
-    HVX_Vector scale_vec = _FuncScaleConvert(scale);
-
-    while (src_vec_end - src_vec_ptr > 1) {
-        HVX_VectorPair curr = reinterpret_cast<HVX_VectorPair *>(src_vec_ptr)[0];
-        src_vec_ptr += 2;
-
-        HVX_Vector lo = Q6_V_valign_VVR(Q6_V_lo_W(curr), prev, (size_t) src);
-        HVX_Vector hi = Q6_V_valign_VVR(Q6_V_hi_W(curr), Q6_V_lo_W(curr), (size_t) src);
-
-        dst_vec_ptr[0] = _Func(lo, dst_vec_ptr, scale_vec);
-        dst_vec_ptr[1] = _Func(hi, dst_vec_ptr + 1, scale_vec);
-
-        dst_vec_ptr += 2;
-        prev = Q6_V_hi_W(curr);
-    }
-
-    if (src_vec_end - src_vec_ptr > 0) {
-        HVX_Vector curr = *src_vec_ptr++;
-        HVX_Vector s0   = Q6_V_valign_VVR(curr, prev, (size_t) src);
-        dst_vec_ptr[0]  = _Func(s0, dst_vec_ptr, scale_vec);
-        dst_vec_ptr++;
-        prev = curr;
-    }
-
-    if ((src_vec_end - ((HVX_Vector *) src)) > 0) {
-        // handle the last vector
-        bool       should_fetch_next = leftover == 0 && hexagon::is_addr_aligned(src_vec_ptr);
-        HVX_Vector curr              = should_fetch_next ? prev : *src_vec_ptr;
-        src_vec_ptr                  = should_fetch_next ? src_vec_ptr : src_vec_ptr + 1;
-        HVX_Vector s0                = Q6_V_valign_VVR(curr, prev, (size_t) src);
-        dst_vec_ptr[0]               = _Func(s0, dst_vec_ptr, scale_vec);
-        dst_vec_ptr++;
-        prev = curr;
-    }
-
-    if (leftover > 0) {
-        // handle the leftover elements
-        HVX_Vector curr =
-            (leftover_bytes + hexagon::unaligned_bytes(src_vec_ptr) > hexagon::kBytesPerVector) ? *src_vec_ptr : prev;
-        curr = Q6_V_valign_VVR(curr, prev, (size_t) src);
-        q6op_vstu_variable_ARV(dst_vec_ptr, leftover_bytes, _Func(curr, dst_vec_ptr, scale_vec));
-    }
-}
-
 inline HVX_Vector hvx_vec_scale_f32_f32(HVX_Vector src, HVX_UVector *, HVX_Vector scale_vec) {
     return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(src, scale_vec));
 }
@@ -286,14 +219,6 @@ inline HVX_Vector hvx_vec_mad_f32_f32(HVX_Vector src, HVX_UVector * dst_ptr, HVX
     src            = Q6_Vqf32_vmpy_VsfVsf(src, scale_vec);
     src            = Q6_Vqf32_vadd_Vqf32Vsf(src, dst);
     return Q6_Vsf_equals_Vqf32(src);
-}
-
-inline void vec_scale_f32(const float * src, float scale, float * dst, size_t count) {
-    vec_scale_impl<hvx_vec_scale_f32_f32, hvx_scale_f32, float>(src, scale, dst, count);
-}
-
-inline void vec_mad_f32(const float * src, float scale, float * dst, size_t count) {
-    vec_scale_impl<hvx_vec_mad_f32_f32, hvx_scale_f32, float>(src, scale, dst, count);
 }
 
 inline HVX_Vector hvx_scale_f16(float scale) {
@@ -312,19 +237,65 @@ inline HVX_Vector hvx_vec_mad_f16_f16(HVX_Vector src, HVX_UVector * dst_ptr, HVX
     return Q6_Vhf_equals_Vqf16(result);
 }
 
+inline HVX_Vector hvx_nop(float scale) {
+    return HVX_Vector();
+}
+
+inline HVX_Vector hvx_passthru(HVX_Vector src, HVX_UVector *, HVX_Vector) {
+    return src;
+}
+
+}  // namespace hexagon
+
+#include "vec_ops.inl"
+
+namespace hexagon {
+
+inline void vec_scale_f32(const float * src, float scale, float * dst, size_t count) {
+    using namespace hexagon::vec;
+    vec_scale_impl<hvx_vec_scale_f32_f32, hvx_scale_f32, float>(src, scale, dst, count);
+}
+
+inline void vec_mad_f32(const float * src, float scale, float * dst, size_t count) {
+    using namespace hexagon::vec;
+    vec_scale_impl<hvx_vec_mad_f32_f32, hvx_scale_f32, float>(src, scale, dst, count);
+}
+
+inline void vec_cpy_f32(const float * src, float * dst, size_t count) {
+    using namespace hexagon::vec;
+    vec_scale_impl<hvx_passthru, hvx_nop, float>(src, 0, dst, count);
+}
+
+inline void vec_zero_f32(float * src, size_t count) {
+    using namespace hexagon::vec;
+    vec_zero_impl<float>(src, count);
+}
+
 inline void vec_scale_f16(const npu_device_fp16_t * src, float scale, npu_device_fp16_t * dst, size_t count) {
+    using namespace hexagon::vec;
     vec_scale_impl<hvx_vec_scale_f16_f16, hvx_scale_f16, npu_device_fp16_t>(src, scale, dst, count);
 }
 
 inline void vec_mad_f16(const npu_device_fp16_t * src, float scale, npu_device_fp16_t * dst, size_t count) {
+    using namespace hexagon::vec;
     vec_scale_impl<hvx_vec_mad_f16_f16, hvx_scale_f16, npu_device_fp16_t>(src, scale, dst, count);
+}
+
+inline void vec_cpy_f16(const npu_device_fp16_t * src, npu_device_fp16_t * dst, size_t count) {
+    using namespace hexagon::vec;
+    vec_scale_impl<hvx_passthru, hvx_nop, npu_device_fp16_t>(src, 0, dst, count);
+}
+
+inline void vec_zero_f16(npu_device_fp16_t * src, size_t count) {
+    using namespace hexagon::vec;
+    vec_zero_impl<npu_device_fp16_t>(src, count);
 }
 
 template <typename _TElem0, typename _TElem1>
 inline bool is_dot_product_aligned(const _TElem0 * src0, const _TElem1 * src1, size_t count) {
     static_assert(sizeof(_TElem0) <= sizeof(_TElem1), "src0 should be smaller than src1");
 
-    if (!hexagon::is_addr_aligned(src0) || !hexagon::is_addr_aligned(src1)) {
+    if ((src0 && !hexagon::is_addr_aligned(src0)) || (src1 && !hexagon::is_addr_aligned(src1))) {
         return false;
     }
 
@@ -335,26 +306,107 @@ inline bool is_dot_product_aligned(const _TElem0 * src0, const _TElem1 * src1, s
     return true;
 }
 
-float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count);
-float vec_dot_product_aligned_f32_f32(const float * src0, const float * src1, size_t count);
+inline HVX_Vector vec_dot_product_vqf32_f32_f32(const float * src0, const float * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_impl<float, HVX_Vector, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32>(src0, src1, count);
+}
+
+inline HVX_Vector vec_dot_product_aligned_vqf32_f32_f32(const float * src0, const float * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_aligned_impl<float, HVX_Vector, vec_mpy_qf32, vec_add_qf32, vec_reduction_qf32>(src0, src1,
+                                                                                                           count);
+}
+
+inline float vec_dot_product_f32_f32(const float * src0, const float * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_impl<float, float, vec_mpy_qf32, vec_add_qf32, vec_reduction_f32_qf32>(src0, src1, count);
+}
+
+inline float vec_dot_product_aligned_f32_f32(const float * src0, const float * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_aligned_impl<float, float, vec_mpy_qf32, vec_add_qf32, vec_reduction_f32_qf32>(src0, src1,
+                                                                                                          count);
+}
 
 inline bool is_f32_f32_dot_product_aligned(const float * src0, const float * src1, size_t count) {
     return is_dot_product_aligned<float, float>(src0, src1, count);
 }
 
-float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count);
-float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count);
+inline HVX_Vector vec_dot_product_vqf16_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1,
+                                                size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_impl<npu_device_fp16_t, HVX_Vector, vec_mpy_qf16, vec_add_qf16, vec_reduction_qf16>(
+        src0, src1, count);
+}
+
+inline HVX_Vector vec_dot_product_aligned_vqf16_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1,
+                                                        size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_aligned_impl<npu_device_fp16_t, HVX_Vector, vec_mpy_qf16, vec_add_qf16, vec_reduction_qf16>(
+        src0, src1, count);
+}
+
+inline float vec_dot_product_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_impl<npu_device_fp16_t, float, vec_mpy_qf16, vec_add_qf16, vec_reduction_qf16_f32>(
+        src0, src1, count);
+}
+
+inline float vec_dot_product_aligned_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1,
+                                             size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_aligned_impl<npu_device_fp16_t, float, vec_mpy_qf16, vec_add_qf16, vec_reduction_qf16_f32>(
+        src0, src1, count);
+}
 
 inline bool is_f16_f16_dot_product_aligned(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1,
                                            size_t count) {
     return is_dot_product_aligned<npu_device_fp16_t, npu_device_fp16_t>(src0, src1, count);
 }
 
-float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
-float vec_dot_product_aligned_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count);
+inline HVX_Vector vec_dot_product_vqf32_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_mixed_impl<npu_device_fp16_t, float, HVX_Vector, hvx_vsf_convert_vhf, vec_mpy_qf32,
+                                      vec_add_qf32, vec_reduction_qf32>(src0, src1, count);
+}
+
+inline HVX_Vector vec_dot_product_aligned_vqf32_f16_f32(const npu_device_fp16_t * src0, const float * src1,
+                                                        size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_mix_aligned_impl<npu_device_fp16_t, float, HVX_Vector, hvx_vsf_convert_vhf, vec_mpy_qf32,
+                                            vec_add_qf32, vec_reduction_qf32>(src0, src1, count);
+}
+
+inline float vec_dot_product_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_mixed_impl<npu_device_fp16_t, float, float, hvx_vsf_convert_vhf, vec_mpy_qf32, vec_add_qf32,
+                                      vec_reduction_f32_qf32>(src0, src1, count);
+}
+
+inline float vec_dot_product_aligned_f16_f32(const npu_device_fp16_t * src0, const float * src1, size_t count) {
+    using namespace hexagon::vec;
+    return vec_dot_product_mix_aligned_impl<npu_device_fp16_t, float, float, hvx_vsf_convert_vhf, vec_mpy_qf32,
+                                            vec_add_qf32, vec_reduction_f32_qf32>(src0, src1, count);
+}
 
 inline bool is_f16_f32_dot_product_aligned(const npu_device_fp16_t * src0, const float * src1, size_t count) {
     return is_dot_product_aligned<npu_device_fp16_t, float>(src0, src1, count);
+}
+
+template <typename _TFunc> struct dot_func_traits {};
+
+template <typename _TData, typename _TReturn> struct dot_func_traits<_TReturn (*)(_TData, _TData, size_t)> {
+    using param_type  = std::remove_const_t<std::remove_pointer_t<_TData>>;
+    using return_type = _TReturn;
+};
+
+template <auto _DotFunc, typename _TReturn = typename dot_func_traits<decltype(_DotFunc)>::return_type>
+_TReturn type_erase_dot_func(const void * src0, const void * src1, size_t count) {
+    using param_type = typename dot_func_traits<decltype(_DotFunc)>::param_type;
+
+    auto * src0_typed = reinterpret_cast<const param_type *>(src0);
+    auto * src1_typed = reinterpret_cast<const param_type *>(src1);
+    return _DotFunc(src0_typed, src1_typed, count);
 }
 
 }  // namespace hexagon

@@ -12,64 +12,10 @@
 
 namespace {
 
-template <HVX_Vector (*_OpIntrinsic)(HVX_Vector, HVX_Vector), typename _TyData>
-inline void vec_op_impl(const _TyData * src0, const _TyData * src1, size_t count, _TyData * dst) {
-    constexpr const size_t kElementsPerVector = hexagon::kBytesPerVector / sizeof(_TyData);
-
-    HVX_Vector *       iptr0     = ((HVX_Vector *) src0);
-    HVX_Vector * const iptr0_end = ((HVX_Vector *) src0) + (count / kElementsPerVector);
-    HVX_Vector *       iptr1     = ((HVX_Vector *) src1);
-    HVX_Vector *       optr      = ((HVX_Vector *) dst);  // framework will ensure the dst is aligned
-    HVX_Vector         prev0     = *iptr0++;
-    HVX_Vector         prev1     = *iptr1++;
-
-    while (iptr0 < iptr0_end) {
-        HVX_Vector curr0 = *iptr0++;
-        HVX_Vector curr1 = *iptr1++;
-        HVX_Vector s0    = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-        HVX_Vector s1    = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-        *optr++          = _OpIntrinsic(s0, s1);
-        prev0            = curr0;
-        prev1            = curr1;
-    }
-
-    const size_t leftover = count % kElementsPerVector;
-    if ((iptr0_end - ((HVX_Vector *) src0)) > 0) {
-        // handle the last vector
-        // see also:
-        //   https://github.com/UbiquitousLearning/mllm/blob/babf4410352ce8730824c87699c025a0d4ce3a6f/src/backends/qnn/LLaMAOpPackageHtp/LLaMAPackage/src/ops/LLaMAMul.cpp#L147
-        //   or qualcomm sdk libs\qhl_hvx\src\qhblas_hvx\qhblas_hvx_aw_vector_add_ah.c
-        bool       should_fetch_src0 = leftover != 0 || !hexagon::is_addr_aligned(iptr0);
-        bool       should_fetch_src1 = leftover != 0 || !hexagon::is_addr_aligned(iptr1);
-        HVX_Vector curr0             = should_fetch_src0 ? *iptr0 : prev0;
-        HVX_Vector curr1             = should_fetch_src1 ? *iptr1 : prev1;
-        iptr0 += should_fetch_src0 ? 1 : 0;
-        iptr1 += should_fetch_src1 ? 1 : 0;
-        HVX_Vector s0 = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-        HVX_Vector s1 = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-        *optr++       = _OpIntrinsic(s0, s1);
-        prev0         = curr0;
-        prev1         = curr1;
-    }
-
-    const size_t leftover_bytes = leftover * sizeof(_TyData);
-    if (leftover > 0) {
-        // handle the leftover elements
-        HVX_Vector curr0 =
-            (leftover_bytes + hexagon::unaligned_bytes(iptr0) > hexagon::kBytesPerVector) ? *iptr0 : prev0;
-        curr0 = Q6_V_valign_VVR(curr0, prev0, (size_t) src0);
-
-        HVX_Vector curr1 =
-            (leftover_bytes + hexagon::unaligned_bytes(iptr1) > hexagon::kBytesPerVector) ? *iptr1 : prev1;
-        curr1 = Q6_V_valign_VVR(curr1, prev1, (size_t) src1);
-
-        hexagon::q6op_vstu_variable_ARV(optr, leftover_bytes, _OpIntrinsic(curr0, curr1));
-    }
-}
-
-template <HVX_Vector (*_OpIntrinsic)(HVX_Vector, HVX_Vector)>
+template <HVX_Vector (*_OpBinaryTransform)(HVX_Vector, HVX_Vector)>
 inline void vec_op_f32_f32(const float * src0, const float * src1, size_t count, float * dst) {
-    vec_op_impl<_OpIntrinsic, float>(src0, src1, count, dst);
+    using namespace hexagon::vec;
+    vec_trans_op_impl<_OpBinaryTransform, float>(src0, src1, count, dst);
 }
 
 inline HVX_Vector vadd_f32_f32(HVX_Vector a, HVX_Vector b) {
@@ -84,10 +30,11 @@ inline HVX_Vector vmul_f32_f32(HVX_Vector a, HVX_Vector b) {
     return Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(a, b));
 }
 
-template <HVX_Vector (*_OpIntrinsic)(HVX_Vector, HVX_Vector)>
+template <HVX_Vector (*_OpBinaryTransform)(HVX_Vector, HVX_Vector)>
 inline void vec_op_f16_f16(const npu_device_fp16_t * src0, const npu_device_fp16_t * src1, size_t count,
                            npu_device_fp16_t * dst) {
-    vec_op_impl<_OpIntrinsic, npu_device_fp16_t>(src0, src1, count, dst);
+    using namespace hexagon::vec;
+    vec_trans_op_impl<_OpBinaryTransform, npu_device_fp16_t>(src0, src1, count, dst);
 }
 
 inline HVX_Vector vadd_f16_f16(HVX_Vector a, HVX_Vector b) {
@@ -252,10 +199,10 @@ void rms_norm_vec_f32(const float * src, size_t count, float eps, float * dst) {
         prev          = curr;
     }
 
-    const size_t leftover_bytes = leftover * sizeof(float);
     if (leftover > 0) {
         // handle the leftover elements
-        HVX_Vector curr =
+        const size_t leftover_bytes = leftover * sizeof(float);
+        HVX_Vector   curr =
             (leftover_bytes + hexagon::unaligned_bytes(src_vec_ptr) > hexagon::kBytesPerVector) ? *src_vec_ptr : prev;
         curr = Q6_V_valign_VVR(curr, prev, (size_t) src);
         sum  = Q6_Vqf32_vadd_Vqf32Vqf32(sum,

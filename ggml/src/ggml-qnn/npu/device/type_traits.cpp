@@ -28,22 +28,26 @@ inline npu_device_fp16_t to_fp16(const float src) {
     return reinterpret_cast<const npu_device_fp16_t &>(f16_value);
 }
 
+template <typename _TStruct, size_t _Count, auto _MemberPtr> inline HVX_Vector load_into_vector(const _TStruct * src) {
+    static_assert(hexagon::kBytesPerVector >= sizeof(_TStruct) * _Count, "_TStruct too large for vector load");
+
+    const HVX_Vector * qs0  = reinterpret_cast<const HVX_Vector *>(&(src->*_MemberPtr));
+    HVX_Vector         prev = *qs0;
+    HVX_Vector         curr = hexagon::is_addr_aligned(qs0) ? Q6_V_vzero() : *(qs0 + 1);
+    return Q6_V_valign_VVR(curr, prev, (size_t) qs0);
+}
+
 template <typename _TBlock> inline HVX_Vector load_block_generic(const _TBlock & src) {
     static_assert(hexagon::kBytesPerVector >= sizeof(_TBlock), "wrong q4_0 block size/padding");
-
-    const HVX_Vector * qs0 = reinterpret_cast<const HVX_Vector *>(src.qs);
-    const HVX_Vector * qs1 = qs0 + 1;
-    return Q6_V_valign_VVR(*qs1, *qs0, (size_t) src.qs);
+    return load_into_vector<_TBlock, 1, &_TBlock::qs>(&src);
 }
 
 template <typename _TBlock> inline HVX_Vector load_dual_block_generic(const _TBlock * srcs) {
     static_assert(hexagon::kBytesPerVector >= sizeof(_TBlock) * 2, "wrong q4_0 block size/padding");
     constexpr const uint32_t kSizeOfQs = sizeof(_TBlock::qs);
 
-    const HVX_Vector * qs0    = reinterpret_cast<const HVX_Vector *>(srcs->qs);
-    const HVX_Vector * qs1    = qs0 + 1;
-    HVX_Vector         blocks = Q6_V_valign_VVR(*qs1, *qs0, (size_t) srcs->qs);
-    HVX_Vector         block1 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock));
+    HVX_Vector blocks = load_into_vector<_TBlock, 2, &_TBlock::qs>(srcs);
+    HVX_Vector block1 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock));
     return Q6_V_lo_W(Q6_W_vshuff_VVR(block1, blocks, kSizeOfQs));
 }
 
@@ -51,15 +55,14 @@ template <typename _TBlock> inline HVX_Vector load_qual_block_generic(const _TBl
     static_assert(hexagon::kBytesPerVector >= sizeof(_TBlock) * 4, "wrong q4_0 block size/padding");
     constexpr const uint32_t kSizeOfQs = sizeof(_TBlock::qs);
 
-    const HVX_Vector * qs0    = reinterpret_cast<const HVX_Vector *>(srcs->qs);
-    const HVX_Vector * qs1    = qs0 + 1;
-    HVX_Vector         blocks = Q6_V_valign_VVR(*qs1, *qs0, (size_t) srcs->qs);
-    HVX_Vector         block1 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock));
-    HVX_Vector         block2 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock) * 2);
-    HVX_Vector         block3 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock) * 3);
+    HVX_Vector     blocks = load_into_vector<_TBlock, 4, &_TBlock::qs>(srcs);
+    HVX_Vector     block1 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock));
+    HVX_VectorPair qp0    = Q6_W_vshuff_VVR(block1, blocks, kSizeOfQs);
 
-    HVX_VectorPair qp0 = Q6_W_vshuff_VVR(block1, blocks, kSizeOfQs);
-    HVX_VectorPair qp1 = Q6_W_vshuff_VVR(block3, block2, kSizeOfQs);
+    HVX_Vector     block2 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock) * 2);
+    HVX_Vector     block3 = Q6_V_valign_VVR(Q6_V_vzero(), blocks, sizeof(_TBlock) * 3);
+    HVX_VectorPair qp1    = Q6_W_vshuff_VVR(block3, block2, kSizeOfQs);
+
     return Q6_V_lo_W(Q6_W_vshuff_VVR(Q6_V_lo_W(qp1), Q6_V_lo_W(qp0), kSizeOfQs * 2));
 }
 
@@ -381,17 +384,22 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_target_type * d
         HVX_VectorPair qp0  = Q6_W_vshuff_VVR(q_hi, q_lo, kSizeOfQs * (1 + 2 + 4));
         q_lo                = Q6_Vb_vsub_VbVb(Q6_V_lo_W(qp0), minus);
         qp0                 = Q6_Wh_vunpack_Vb(q_lo);
-        q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(qp0));
-        q_hi                = Q6_Vhf_equals_Vh(Q6_V_hi_W(qp0));
-        q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales01);
-        q_hi                = Q6_Vqf16_vmpy_VhfVhf(q_hi, scales23);
+
+        q_lo = Q6_Vhf_equals_Vh(Q6_V_lo_W(qp0));
+        q_hi = Q6_Vhf_equals_Vh(Q6_V_hi_W(qp0));
+
+        q_lo = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales01);
+        q_lo = Q6_Vhf_equals_Vqf16(q_lo);
+
+        q_hi = Q6_Vqf16_vmpy_VhfVhf(q_hi, scales23);
+        q_hi = Q6_Vhf_equals_Vqf16(q_hi);
 
         if constexpr (_IsDstAligned) {
-            reinterpret_cast<HVX_Vector *>(dst_ptr)[0] = Q6_Vhf_equals_Vqf16(q_lo);
-            reinterpret_cast<HVX_Vector *>(dst_ptr)[1] = Q6_Vhf_equals_Vqf16(q_hi);
+            reinterpret_cast<HVX_Vector *>(dst_ptr)[0] = q_lo;
+            reinterpret_cast<HVX_Vector *>(dst_ptr)[1] = q_hi;
         } else {
-            reinterpret_cast<HVX_UVector *>(dst_ptr)[0] = Q6_Vhf_equals_Vqf16(q_lo);
-            reinterpret_cast<HVX_UVector *>(dst_ptr)[1] = Q6_Vhf_equals_Vqf16(q_hi);
+            reinterpret_cast<HVX_UVector *>(dst_ptr)[0] = q_lo;
+            reinterpret_cast<HVX_UVector *>(dst_ptr)[1] = q_hi;
         }
 
         dst_ptr += hexagon::kBytesPerVector / sizeof(hexagon::dequant_target_type) * 2;
@@ -412,11 +420,12 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_target_type * d
         qp0                 = Q6_Wh_vunpack_Vb(q_lo);
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(qp0));
         q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales01);
+        q_lo                = Q6_Vhf_equals_Vqf16(q_lo);
 
         if constexpr (_IsDstAligned) {
-            *reinterpret_cast<HVX_Vector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(q_lo);
+            *reinterpret_cast<HVX_Vector *>(dst_ptr) = q_lo;
         } else {
-            *reinterpret_cast<HVX_UVector *>(dst_ptr) = Q6_Vhf_equals_Vqf16(q_lo);
+            *reinterpret_cast<HVX_UVector *>(dst_ptr) = q_lo;
         }
 
         dst_ptr += hexagon::kBytesPerVector / sizeof(hexagon::dequant_target_type);
@@ -434,12 +443,12 @@ void dequantize_row_q4_0_impl(const void * src, hexagon::dequant_target_type * d
         qp0                 = Q6_Wh_vunpack_Vb(q_lo);
         q_lo                = Q6_Vhf_equals_Vh(Q6_V_lo_W(qp0));
         q_lo                = Q6_Vqf16_vmpy_VhfVhf(q_lo, scales);
+        q_lo                = Q6_Vhf_equals_Vqf16(q_lo);
+
         if constexpr (_IsDstAligned) {
-            hexagon::q6op_vstu_variable_aligned<hexagon::kBytesPerVector / 2>(dst_ptr, Q6_Vhf_equals_Vqf16(q_lo));
+            hexagon::q6op_vstu_variable_aligned<hexagon::kBytesPerVector / 2>(dst_ptr, q_lo);
         } else {
-            hexagon::q6op_vstu_variable_ARV<hexagon::kBytesPerVector / 2>(
-                dst_ptr,
-                Q6_Vhf_equals_Vqf16(q_lo));  // TODO: opt the store
+            hexagon::q6op_vstu_variable_ARV<hexagon::kBytesPerVector / 2>(dst_ptr, q_lo);
         }
     }
 }
@@ -488,26 +497,24 @@ void dequantize_row_q4_K(const void * src, hexagon::dequant_target_type * dst, s
     }
 }
 
-template <typename _TFunc> struct dot_func_traits {};
+void copy_row_f16(const void * src, hexagon::dequant_target_type * dst, size_t count) {
+    hexagon::vec_cpy_f16(reinterpret_cast<const npu_device_fp16_t *>(src), dst, count);
+}
 
-template <typename _TData> struct dot_func_traits<float (*)(_TData, _TData, size_t)> {
-    using param_type = std::remove_const_t<std::remove_pointer_t<_TData>>;
-};
-
-template <auto _DotFunc> float wrap_dot_func(const void * src0, const void * src1, size_t count) {
-    using param_type = typename dot_func_traits<decltype(_DotFunc)>::param_type;
-
-    auto * src0_typed = reinterpret_cast<const param_type *>(src0);
-    auto * src1_typed = reinterpret_cast<const param_type *>(src1);
-    return _DotFunc(src0_typed, src1_typed, count);
+void copy_row_f32(const void * src, hexagon::dequant_target_type * dst, size_t count) {
+    hexagon::vec_cpy_f32(reinterpret_cast<const float *>(src), reinterpret_cast<float *>(dst), count);
 }
 
 constexpr const hexagon::device_type_traits kDeviceTypeTraits[] = {
-    { NPU_DATA_TYPE_F32, "F32", 1, sizeof(float), false, nullptr, nullptr,
-     wrap_dot_func<hexagon::vec_dot_product_f32_f32> },
-    { NPU_DATA_TYPE_F16, "F16", 1, sizeof(npu_device_fp16_t), false, nullptr, quantize_row_fp16,
-     wrap_dot_func<hexagon::vec_dot_product_f16_f16> },
-    { NPU_DATA_TYPE_I32, "I32", 1, sizeof(int32_t), false, nullptr, nullptr, nullptr },
+    { NPU_DATA_TYPE_F32, "F32", 1, sizeof(float), false, copy_row_f32, nullptr,
+     hexagon::type_erase_dot_func<hexagon::vec_dot_product_f32_f32>,
+     hexagon::type_erase_dot_func<hexagon::vec_dot_product_aligned_f32_f32>,
+     hexagon::type_erase_dot_func<hexagon::is_f32_f32_dot_product_aligned> },
+    { NPU_DATA_TYPE_F16, "F16", 1, sizeof(npu_device_fp16_t), false, copy_row_f16, quantize_row_fp16,
+     hexagon::type_erase_dot_func<hexagon::vec_dot_product_f16_f16>,
+     hexagon::type_erase_dot_func<hexagon::vec_dot_product_aligned_f16_f16>,
+     hexagon::type_erase_dot_func<hexagon::is_f16_f16_dot_product_aligned> },
+    { NPU_DATA_TYPE_I32, "I32", 1, sizeof(int32_t), false },
     { NPU_DATA_TYPE_Q8_0, "Q8_0", QUANT_BLOCK_SIZE, sizeof(npu_device_block_q8_0), true, dequantize_row_q8_0,
      quantize_row_q8_0 },
     { NPU_DATA_TYPE_Q4_0, "Q4_0", QUANT_BLOCK_SIZE, sizeof(npu_device_block_q4_0), true, dequantize_row_q4_0,
@@ -550,6 +557,16 @@ bool init_f16_f32_table(float * table, size_t count) {
 
 const device_type_traits & get_type_traits(npu_device_tensor_data_type type) {
     return kDeviceTypeTraits[type];
+}
+
+size_t get_dequantized_row_size(const tensor * tensor) {
+    if (!is_quantized_type(tensor->get_type())) {
+        return tensor->get_nb(1);  // for f32 and f16
+    }
+
+    auto row_elems_count = tensor->get_ne(0);
+    return hexagon::get_aligned_size(
+        row_elems_count * sizeof(dequant_target_type));  // dequant_target_type is currently restricted to f32
 }
 
 }  // namespace hexagon

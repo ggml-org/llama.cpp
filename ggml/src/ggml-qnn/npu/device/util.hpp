@@ -344,8 +344,10 @@ inline auto make_scoped_perf_timer(const char * format, ...) {
 }  // namespace hexagon
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
+#    define _MAKE_VARIABLE_NAME2(name, postfix) name##postfix
+#    define _MAKE_VARIABLE_NAME(name, postfix)  _MAKE_VARIABLE_NAME2(name, postfix)
 #    define DEVICE_SCOPED_PERFORMANCE_TRACKER(fmt, ...) \
-        auto __npu_timer_##__LINE__ = hexagon::make_scoped_perf_timer(fmt, __VA_ARGS__)
+        auto _MAKE_VARIABLE_NAME(__npu_timer_, __LINE__) = hexagon::make_scoped_perf_timer(fmt, __VA_ARGS__)
 #else
 #    define DEVICE_SCOPED_PERFORMANCE_TRACKER(fmt, ...) ((void) 0)
 #endif

@@ -20,6 +20,9 @@ interface npu_device : remote_handle64{
     typedef uint64_t tensor_handle_t;
     typedef uint64_t graph_handle_t;
 
+    const graph_handle_t INVALID_DEVICE_GRAPH_HANDLE = 0;
+    const tensor_handle_t INVALID_DEVICE_TENSOR_HANDLE = 0;
+
     typedef uint16_t fp16_t;
 
     struct block_q4_0 {
@@ -105,6 +108,10 @@ interface npu_device : remote_handle64{
 
     AEEResult tensor_free(
         in tensor_handle_t tensor_handle
+    );
+
+    AEEResult tensors_free(
+        in sequence<tensor_handle_t> tensor_handles
     );
 
     AEEResult graph_init(

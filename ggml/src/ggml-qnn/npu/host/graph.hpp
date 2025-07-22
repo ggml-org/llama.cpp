@@ -22,7 +22,7 @@ class host_graph {
 
   private:
     remote_handle64                              _device_handle = 0;
-    npu_device_graph_handle_t                    _graph_handle  = 0;
+    npu_device_graph_handle_t                    _graph_handle  = npu_device_INVALID_DEVICE_GRAPH_HANDLE;
     std::vector<npu_device_tensor_handle_t>      _tensor_handles;
     std::vector<npu_device_tensor_update_config> _tensor_update_configs;
 

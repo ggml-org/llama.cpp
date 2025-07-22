@@ -3,6 +3,7 @@
 #include <rpcmem.h>
 
 #include "host_device.hpp"
+#include "profiler.hpp"
 #include "tensor.hpp"
 
 namespace {
@@ -78,6 +79,8 @@ void backend_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
 void backend_buffer_reset(ggml_backend_buffer_t buffer) {
     auto * buffer_obj = get_buffer_object(buffer);
     GGML_ASSERT(buffer_obj != nullptr);
+
+    SCOPED_PERFORMANCE_TRACKER("[hexagon-npu][%p]backend_buffer_reset", (void *) buffer_obj);
     buffer_obj->clear_tensors();
 }
 
@@ -199,8 +202,8 @@ std::shared_ptr<host_tensor> host_buffer::init_tensor(ggml_tensor * tensor, remo
 }
 
 void host_buffer::clear_tensors() {
-    _tensors.clear();
     LOG_DEBUG("clear host_buffer(%p) tensors\n", (void *) _data);
+    host_tensor::destroy_tensors(_tensors);
 }
 
 host_buffer_type::host_buffer_type(ggml_backend_dev_t dev, const std::string & name, common::rpc_mem_ptr rpc_mem) :

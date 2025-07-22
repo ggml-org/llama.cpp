@@ -60,7 +60,8 @@ class tensor {
         memcpy(_op_params, config.params, sizeof(_op_params));
         for (size_t i = 0; i < DEVICE_TENSOR_MAX_SRC; ++i) {
             auto src_handle = config.src_handles[i];
-            _src[i]         = (src_handle ? reinterpret_cast<tensor *>(src_handle) : nullptr);
+            _src[i] = (src_handle != npu_device_INVALID_DEVICE_TENSOR_HANDLE ? reinterpret_cast<tensor *>(src_handle) :
+                                                                               nullptr);
         }
     }
 

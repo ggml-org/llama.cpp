@@ -6,26 +6,37 @@
 
 namespace {
 
-template <typename T> struct get_data_type {};
+template <typename _T> struct get_data_type {};
 
-template <typename _TyData0, typename _TyData1>
-struct get_data_type<float (*)(const _TyData0 *, const _TyData1 *, size_t)> {
-    using data_type0 = _TyData0;
-    using data_type1 = _TyData1;
+template <typename _TData0, typename _TData1>
+struct get_data_type<HVX_Vector (*)(const _TData0 *, const _TData1 *, size_t)> {
+    using data_type0 = _TData0;
+    using data_type1 = _TData1;
 };
 
-template <auto _DotFunc, bool _IsQuantized>
+template <typename _TRet> struct convert_vector {};
+
+template <> struct convert_vector<float> {
+    static float convert(HVX_Vector vec) { return hexagon::get_flt0_from_fltv(Q6_Vsf_equals_Vqf32(vec)); }
+};
+
+template <> struct convert_vector<npu_device_fp16_t> {
+    static float convert(HVX_Vector vec) {
+        HVX_Vector vect = Q6_Vhf_equals_Vqf16(vec);
+        uint16_t   i    = (vect[0] & 0xffff);
+        return reinterpret_cast<__fp16 &>(i);
+    }
+};
+
+template <auto _DotFunc, bool _ShouldCacheSrc0>
 void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tensor * dst,
                   hexagon::compute_params * params) {
     using data_type0 = typename get_data_type<decltype(_DotFunc)>::data_type0;
     using data_type1 = typename get_data_type<decltype(_DotFunc)>::data_type1;
 
-    static_assert(!_IsQuantized || std::is_same_v<data_type0, hexagon::dequant_target_type>,
-                  "data_type0 must be the same as hexagon::dequant_target_type");
-
     const auto src0_actual_row_size = hexagon::get_dequantized_row_size(src0);
     auto *     dequantize_row_func  = hexagon::get_type_traits(src0->get_type()).to_float;
-    if (_IsQuantized && dequantize_row_func == nullptr) {
+    if (_ShouldCacheSrc0 && dequantize_row_func == nullptr) {
         DEVICE_LOG_ERROR("Unsupported quantized src0 type: %d, dequantize_row_func is null\n", src0->get_type());
         return;
     }
@@ -61,7 +72,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
     size_t          src0_plane_cache_size      = 0;
     uint8_t *       src0_plane_cache_ptr       = nullptr;
     const uint8_t * last_cached_plane_ptr      = nullptr;
-    if constexpr (_IsQuantized) {
+    if constexpr (_ShouldCacheSrc0) {
         src0_plane_slice_row_count =
             std::min(params->get_vtcm_quota_size() / src0_actual_row_size, src0_plane_slice_row_count);
         src0_plane_cache_size = src0_actual_row_size * src0_plane_slice_row_count;
@@ -78,11 +89,12 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
     DEVICE_LOG_DEBUG(
         "mul_mat_impl src0_actual_row_size: %zu, src0_plane_slice_row_count: %zu, is_quantized: %d, vtcm_mem: "
         "%p(%zu)\n",
-        src0_actual_row_size, src0_plane_slice_row_count, _IsQuantized, (void *) src0_plane_cache_ptr,
+        src0_actual_row_size, src0_plane_slice_row_count, _ShouldCacheSrc0, (void *) src0_plane_cache_ptr,
         src0_plane_cache_size);
 
     const size_t valid_row0_bytes = src0->get_ne(0) * sizeof(data_type0);
-    const size_t valid_row1_bytes = src1->get_ne(0) * sizeof(data_type1);
+    const size_t valid_row1_bytes =
+        src0->get_ne(0) * sizeof(data_type1);  // src0 and src1 should have the same element count in the 1st dimension
     DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_WITH_MULTI_SUB_PROC(dst, params->get_thread_index(), mul_mat);
 
     uint8_t * dst_ptr = dst->get_write_buffer();
@@ -92,7 +104,7 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         return;
     }
 
-    constexpr bool  should_fetch_src0_row = !_IsQuantized;
+    constexpr bool  should_fetch_src0_row = !_ShouldCacheSrc0;
     const uint8_t * src0_ptr              = src0->get_read_buffer();
     const uint8_t * src1_ptr              = src1->get_read_buffer();
     for (int64_t ip = start_end_plane.first; ip < start_end_plane.second; ip++) {
@@ -102,24 +114,24 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
         auto *       dst_plane  = dst_ptr + i3 * dst->get_nb(3) + i2 * dst->get_nb(2);
         for (int64_t col_idx = start_end_element.first; col_idx < start_end_element.second;
              col_idx += src0_plane_slice_row_count) {
-            const auto actual_row_count =
+            const int64_t actual_row_count =
                 std::min<int64_t>(src0_plane_slice_row_count,
                                   start_end_element.second - col_idx);  // number of rows in this slice
             const uint8_t * src0_plane =
                 src0_ptr + i3 / r03 * src0->get_nb(3) + i2 / r02 * src0->get_nb(2) + col_idx * src0->get_nb(1);
-            if constexpr (_IsQuantized) {
+            if constexpr (_ShouldCacheSrc0) {
                 if (last_cached_plane_ptr != src0_plane) {
                     DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 0, dequant);
 
-                    for (int64_t ir = 0; ir < (int64_t) actual_row_count; ir++) {
+                    hexagon::l2fetch_row(src0_plane, src0->get_nb(1));
+                    for (int64_t ir = 0; ir < actual_row_count; ir++) {
                         auto * src0_row = src0_plane + ir * src0->get_nb(1);
                         if (ir + 1 < actual_row_count) {
                             hexagon::l2fetch_row(src0_row + src0->get_nb(1), src0->get_nb(1));
                         }
 
-                        auto * dst_row = reinterpret_cast<hexagon::dequant_target_type *>(src0_plane_cache_ptr +
-                                                                                          ir * src0_actual_row_size);
-                        dequantize_row_func(src0_row, reinterpret_cast<hexagon::dequant_target_type *>(dst_row),
+                        auto * cached_row_ptr = src0_plane_cache_ptr + ir * src0_actual_row_size;
+                        dequantize_row_func(src0_row, reinterpret_cast<hexagon::dequant_target_type *>(cached_row_ptr),
                                             src0->get_ne(0));
                     }
 
@@ -138,40 +150,70 @@ void mul_mat_impl(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tenso
                 auto *  src1_row = src1_plane + i1 * src1->get_nb(1);
                 auto *  dst_row  = reinterpret_cast<float *>(dst_plane + i1 * dst->get_nb(1)) + col_idx;
                 int64_t i0       = 0;
-                for (; i0 + 1 < (int64_t) actual_row_count; i0 += 2) {
+                for (; i0 + 1 < actual_row_count; i0 += 2) {
                     auto * src0_row = src0_plane + i0 * src0_actual_row_size;
                     if constexpr (should_fetch_src0_row) {
                         hexagon::l2fetch_row(src0_row + src0_actual_row_size, valid_row0_bytes);
                     }
 
                     // TODO: figure dst how to handle a entire row
-                    dst_row[i0] = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row),
-                                           reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
+                    auto res0 = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row),
+                                         reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
 
-                    if (should_fetch_src0_row && i0 + 2 < (int64_t) actual_row_count) {
+                    {
+                        DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 2, store);
+                        dst_row[i0] = convert_vector<data_type1>::convert(res0);
+                    }
+
+                    if (should_fetch_src0_row && i0 + 2 < actual_row_count) {
                         hexagon::l2fetch_row(src0_row + src0_actual_row_size + src0_actual_row_size, valid_row0_bytes);
                     }
 
                     // TODO: figure dst how to handle a entire row
-                    dst_row[i0 + 1] =
-                        _DotFunc(reinterpret_cast<const data_type0 *>(src0_row + src0_actual_row_size),
-                                 reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
+                    auto res1 = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row + src0_actual_row_size),
+                                         reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
+
+                    {
+                        DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 2, store);
+                        dst_row[i0 + 1] = convert_vector<data_type1>::convert(res1);
+                    }
                 }
 
                 if (ip + 1 < start_end_plane.second) {
                     hexagon::l2fetch_row(src1_row + src1->get_nb(1), valid_row1_bytes);
                 }
 
-                if (i0 < (int64_t) actual_row_count) {
+                if (i0 < actual_row_count) {
                     auto * src0_row = src0_plane + i0 * src0_actual_row_size;
-                    dst_row[i0]     = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row),
+                    auto   res      = _DotFunc(reinterpret_cast<const data_type0 *>(src0_row),
                                                reinterpret_cast<const data_type1 *>(src1_row), (size_t) src0->get_ne(0));
+                    DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(mul_mat, 2, store);
+                    dst_row[i0] = convert_vector<data_type1>::convert(res);
                 }
             }
         }
     }
 
     dst->release_write_buffer();  // mark the output tensor as modified
+}
+
+bool is_row_size_cacheable(const npu_device_tensor_spec & src) {
+    const auto & type_traits = hexagon::get_type_traits(src.type);
+    if (type_traits.to_float == nullptr) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src.type(%s) cannot be cached, to_float is null\n",
+                         hexagon::get_type_name(src.type));
+        return false;
+    }
+
+    const size_t type_size = type_traits.is_quantized ? sizeof(hexagon::dequant_target_type) : type_traits.type_size;
+    const auto   vtcm_thread_quota_size = hexagon::default_thread_pool::get_per_thread_vtcm_quota();
+    if (src.ne[0] * type_size > vtcm_thread_quota_size) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src.type(%s) ne[0] is too large: %ld, vtcm_thread_quota_size: %zu\n",
+                         hexagon::get_type_name(src.type), (long) src.ne[0], vtcm_thread_quota_size);
+        return false;
+    }
+
+    return true;
 }
 
 bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const npu_device_tensor_spec & src1) {
@@ -194,10 +236,7 @@ bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const n
         return false;
     }
 
-    const auto vtcm_thread_quota_size = hexagon::default_thread_pool::get_per_thread_vtcm_quota();
-    if (src0.ne[0] * sizeof(hexagon::dequant_target_type) > vtcm_thread_quota_size) {
-        DEVICE_LOG_DEBUG("[MUL_MAT]src0.type(%s) ne[0] is too large: %ld, vtcm_thread_quota_size: %zu\n",
-                         hexagon::get_type_name(src0.type), (long) src0.ne[0], vtcm_thread_quota_size);
+    if (!is_row_size_cacheable(src0)) {
         return false;
     }
 
@@ -208,9 +247,8 @@ bool is_quantized_mul_mat_supported(const npu_device_tensor_spec & src0, const n
 
 bool is_mul_mat_f16_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::tensor * src1, bool is_src0_quantized) {
     const auto * src1_ptr = src1->get_read_buffer_as<float>();
-    const auto * src0_ptr = is_src0_quantized ?
-                                src1->get_read_buffer_as<npu_device_fp16_t>() :
-                                src0->get_read_buffer_as<npu_device_fp16_t>();  // skip src0 for quantized tensors
+    const auto * src0_ptr =
+        is_src0_quantized ? nullptr : src0->get_read_buffer_as<npu_device_fp16_t>();  // skip src0 for quantized tensors
 
     if (!hexagon::is_f16_f32_dot_product_aligned(src0_ptr, src1_ptr, src0->get_ne(0))) {
         DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_unaligned: ne[0]: %ld\n", (long) src0->get_ne(0));
@@ -223,10 +261,20 @@ bool is_mul_mat_f16_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::ten
 
 bool is_mul_mat_f16_f16_src_tensors_aligned(hexagon::tensor * src0, hexagon::tensor * src1, bool is_src0_quantized) {
     const auto * src1_ptr = src1->get_read_buffer_as<npu_device_fp16_t>();
-    const auto * src0_ptr = is_src0_quantized ? src1_ptr : src0->get_read_buffer_as<npu_device_fp16_t>();
+    const auto * src0_ptr = is_src0_quantized ? nullptr : src0->get_read_buffer_as<npu_device_fp16_t>();
 
     if (!hexagon::is_f16_f16_dot_product_aligned(src0_ptr, src1_ptr, src0->get_ne(0))) {
         DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_unaligned: ne[0]: %ld\n", (long) src0->get_ne(0));
+        return false;
+    }
+
+    if (!is_src0_quantized && !hexagon::is_size_aligned(src0->get_nb(1))) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src0 tensor nb[1] is not aligned: %zu\n", src0->get_nb(1));
+        return false;
+    }
+
+    if (!hexagon::is_size_aligned(src1->get_nb(1))) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src1 tensor nb[1] is not aligned: %zu\n", src1->get_nb(1));
         return false;
     }
 
@@ -243,6 +291,16 @@ bool is_mul_mat_f32_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::ten
         return false;
     }
 
+    if (!hexagon::is_size_aligned(src0->get_nb(1))) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src0 tensor nb[1] is not aligned: %zu\n", src0->get_nb(1));
+        return false;
+    }
+
+    if (!hexagon::is_size_aligned(src1->get_nb(1))) {
+        DEVICE_LOG_DEBUG("[MUL_MAT]src1 tensor nb[1] is not aligned: %zu\n", src1->get_nb(1));
+        return false;
+    }
+
     DEVICE_LOG_DEBUG("[MUL_MAT]src_tensors_aligned: ne[0]: %ld\n", (long) src0->get_ne(0));
     return true;
 }
@@ -250,30 +308,32 @@ bool is_mul_mat_f32_f32_src_tensors_aligned(hexagon::tensor * src0, hexagon::ten
 typedef void (*mul_mat_func_type)(hexagon::tensor * src0, hexagon::tensor * src1, hexagon::tensor * dst,
                                   hexagon::compute_params * params);
 
-constexpr const mul_mat_func_type kMulMatF16F32Funcs[2][2] = {
-    {
-     // non-quantized
-        mul_mat_impl<hexagon::vec_dot_product_f16_f32, false>, // F32 * F32 unaligned
-        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, false>,                                        // F32 * F32 aligned
-    },
-    {
-     // quantized
-        mul_mat_impl<hexagon::vec_dot_product_f16_f32,                                                 true>,         // F32 * F32 quantized unaligned
-        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f32, true>,  // F32 * F32 quantized aligned
-    },
+constexpr const mul_mat_func_type kMulMatF32F32CachedFuncs[2] = {
+    // quantized and non-quantized
+    mul_mat_impl<hexagon::vec_dot_product_vqf32_f32_f32, true>,          // F32 * F32 quantized unaligned
+    mul_mat_impl<hexagon::vec_dot_product_aligned_vqf32_f32_f32, true>,  // F32 * F32 quantized aligned
 };
 
-constexpr const mul_mat_func_type kMulMatF16Funcs[2][2] = {
-    {
-     // non-quantized
-        mul_mat_impl<hexagon::vec_dot_product_f16_f16, false>, // F16 * F16 unaligned
-        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, false>,                                        // F16 * F16 aligned
-    },
-    {
-     // quantized
-        mul_mat_impl<hexagon::vec_dot_product_f16_f16,                                                 true>,         // F16 * F16 quantized unaligned
-        mul_mat_impl<hexagon::vec_dot_product_aligned_f16_f16, true>,  // F16 * F16 quantized aligned
-    },
+constexpr const mul_mat_func_type kMulMatF32F32Funcs[2] = {
+    // quantized and non-quantized
+    mul_mat_impl<hexagon::vec_dot_product_vqf32_f32_f32, false>,          // F32 * F32 quantized unaligned
+    mul_mat_impl<hexagon::vec_dot_product_aligned_vqf32_f32_f32, false>,  // F32 * F32 quantized aligned
+};
+
+constexpr const mul_mat_func_type kMulMatF16CachedFuncs[2] = {
+    mul_mat_impl<hexagon::vec_dot_product_vqf16_f16_f16, true>,          // F16 * F16 quantized unaligned
+    mul_mat_impl<hexagon::vec_dot_product_aligned_vqf16_f16_f16, true>,  // F16 * F16 quantized aligned
+};
+
+constexpr const mul_mat_func_type kMulMatF16Funcs[2] = {
+    mul_mat_impl<hexagon::vec_dot_product_vqf16_f16_f16, false>,          // F16 * F16 quantized unaligned
+    mul_mat_impl<hexagon::vec_dot_product_aligned_vqf16_f16_f16, false>,  // F16 * F16 quantized aligned
+};
+
+constexpr const mul_mat_func_type kMulMatF16F32Funcs[2] = {
+    // quantized and non-quantized
+    mul_mat_impl<hexagon::vec_dot_product_vqf32_f16_f32, true>,          // F32 * F32 quantized unaligned
+    mul_mat_impl<hexagon::vec_dot_product_aligned_vqf32_f16_f32, true>,  // F32 * F32 quantized aligned
 };
 
 }  // namespace
@@ -297,22 +357,26 @@ bool mul_mat_f32(hexagon::tensor * out, compute_params * params) {
     }
 
     const bool is_src0_quantized = is_quantized_type(src0->get_type());
+    const bool should_cache_src0 = is_src0_quantized || src1->get_ne(1) > 1;
     switch (src1->get_type()) {
         case NPU_DATA_TYPE_F32:
             if (is_src0_quantized || src0->get_type() == NPU_DATA_TYPE_F16) {
-                kMulMatF16F32Funcs[is_src0_quantized][is_mul_mat_f16_f32_src_tensors_aligned(
-                    src0, src1, is_src0_quantized)](src0, src1, out, params);
+                kMulMatF16F32Funcs[is_mul_mat_f16_f32_src_tensors_aligned(src0, src1, is_src0_quantized)](src0, src1,
+                                                                                                          out, params);
+            } else if (should_cache_src0) {
+                kMulMatF32F32CachedFuncs[is_mul_mat_f32_f32_src_tensors_aligned(src0, src1)](src0, src1, out, params);
             } else {
-                if (is_mul_mat_f32_f32_src_tensors_aligned(src0, src1)) {
-                    mul_mat_impl<hexagon::vec_dot_product_aligned_f32_f32, false>(src0, src1, out, params);
-                } else {
-                    mul_mat_impl<hexagon::vec_dot_product_f32_f32, false>(src0, src1, out, params);
-                }
+                kMulMatF32F32Funcs[is_mul_mat_f32_f32_src_tensors_aligned(src0, src1)](src0, src1, out, params);
             }
             return true;
         case NPU_DATA_TYPE_F16:
-            kMulMatF16Funcs[is_src0_quantized][is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)](
-                src0, src1, out, params);
+            if (should_cache_src0) {
+                kMulMatF16CachedFuncs[is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)](
+                    src0, src1, out, params);
+            } else {
+                kMulMatF16Funcs[is_mul_mat_f16_f16_src_tensors_aligned(src0, src1, is_src0_quantized)](src0, src1, out,
+                                                                                                       params);
+            }
             return true;
         default:
             break;

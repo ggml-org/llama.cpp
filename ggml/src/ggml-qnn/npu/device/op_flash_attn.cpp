@@ -13,9 +13,18 @@ inline float f16_to_f32(const npu_device_fp16_t src) {
 }
 
 // From: ggml/src/ggml-cpu/ops.cpp
+template <bool _IsKvF16>
 void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hexagon::tensor * k,
                      const hexagon::tensor * v, const hexagon::tensor * mask, hexagon::compute_params * params) {
     static_assert(3 <= hexagon::kMaxParamsCount, "flash_attn op params count exceeds max params count");
+
+    constexpr const npu_device_tensor_data_type kKvDataType = _IsKvF16 ? NPU_DATA_TYPE_F16 : NPU_DATA_TYPE_F32;
+
+    if (k->get_type() != kKvDataType || v->get_type() != k->get_type()) {
+        DEVICE_LOG_ERROR("flash_attn_impl: k and v must have same type, got k: %s, v: %s\n",
+                         hexagon::get_type_name(k->get_type()), hexagon::get_type_name(v->get_type()));
+        return;
+    }
 
     float       scale         = out->get_op_param<float>(0);
     const float max_bias      = out->get_op_param<float>(1);
@@ -37,9 +46,11 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
     const float m0 = powf(2.0f, -(max_bias) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    const auto q_to_vec_dot = hexagon::get_type_traits(k->get_type()).from_float;  // TODO: fix this
-    const auto kq_vec_dot   = hexagon::get_type_traits(k->get_type()).vec_dot;
-    if (!q_to_vec_dot || !kq_vec_dot) {
+    const auto &         k_type_traits = hexagon::get_type_traits(kKvDataType);
+    const auto           q_to_vec_dot  = k_type_traits.from_float;
+    constexpr const auto kq_vec_dot    = _IsKvF16 ? hexagon::type_erase_dot_func<hexagon::vec_dot_product_f16_f16> :
+                                                    hexagon::type_erase_dot_func<hexagon::vec_dot_product_f32_f32>;
+    if (!q_to_vec_dot) {
         DEVICE_LOG_ERROR("flash_attn_impl: unsupported data type for q, k, or v\n");
         return;
     }
@@ -50,12 +61,12 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
     const auto DK          = k->get_ne(0);
     const auto DV          = v->get_ne(0);
     const auto row_bytes_q = q->get_ne(0) * hexagon::get_type_traits(q->get_type()).type_size;
-    const auto row_bytes_k = DK * hexagon::get_type_traits(k->get_type()).type_size;
+    const auto row_bytes_k = DK * k_type_traits.type_size;
     const auto row_bytes_v = DV * hexagon::get_type_traits(v->get_type()).type_size;
 
-    constexpr const size_t kFloatsPerVector = hexagon::kBytesPerVector / sizeof(float);
-    const auto             aligned_dk       = (DK + kFloatsPerVector - 1) / kFloatsPerVector * kFloatsPerVector;
-    const auto             aligned_dv       = (DV + kFloatsPerVector - 1) / kFloatsPerVector * kFloatsPerVector;
+    constexpr const size_t kFloatsPerVectorPair = hexagon::kBytesPerVector * 2 / sizeof(float);
+    const auto             aligned_dk = (DK + kFloatsPerVectorPair - 1) / kFloatsPerVectorPair * kFloatsPerVectorPair;
+    const auto             aligned_dv = (DV + kFloatsPerVectorPair - 1) / kFloatsPerVectorPair * kFloatsPerVectorPair;
     size_t                 total_cache_size = sizeof(float) * (aligned_dk + 2 * aligned_dv);
     auto *                 cache_ptr        = params->get_vtcm_cache(total_cache_size);
     if (!cache_ptr) {
@@ -64,11 +75,10 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
     }
 
     // loop over n_batch and n_head
-    const auto rows_per_batch     = q->get_ne(2) * q->get_ne(1);
-    const auto out_rows_per_batch = out->get_ne(2) * out->get_ne(1);
-    const bool is_v_f16 =
-        v->get_type() == NPU_DATA_TYPE_F16;  // check if V is in FP16 format, otherwise it is in FP32 format
-    uint8_t * dst_ptr = out->get_write_buffer();
+    constexpr bool is_v_f16           = _IsKvF16;  // check if V is in FP16 format, otherwise it is in FP32 format
+    const auto     rows_per_batch     = q->get_ne(2) * q->get_ne(1);
+    const auto     out_rows_per_batch = out->get_ne(2) * out->get_ne(1);
+    uint8_t *      dst_ptr            = out->get_write_buffer();
     if (!dst_ptr) {
         DEVICE_LOG_ERROR("flash_attn_impl: dst_ptr is not writable, tensor: %p, type: %s\n", (void *) out,
                          hexagon::get_type_name(out->get_type()));
@@ -80,6 +90,10 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
     const uint8_t * k_ptr    = k->get_read_buffer();
     const uint8_t * v_ptr    = v->get_read_buffer();
     const uint8_t * mask_ptr = mask ? mask->get_read_buffer() : nullptr;
+    float *         VKQ32    = reinterpret_cast<float *>(cache_ptr);           // FP32 VKQ accumulator
+    auto * VKQ16 = reinterpret_cast<npu_device_fp16_t *>(VKQ32 + aligned_dv);  // (temporary) FP16 VKQ accumulator
+    auto * Q_q   = reinterpret_cast<npu_device_fp16_t *>(
+        VKQ32 + 2 * aligned_dv);  // (temporary) buffer for Q converted to quantized/FP16
     for (auto ir = start_end_row.first; ir < start_end_row.second; ++ir) {
         // q indices
         const auto iq3 = ir / rows_per_batch;
@@ -90,15 +104,13 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
         const float    slope =
             (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2 * (h - n_head_log2) + 1) : 1.0f;
 
-        float S = 0.0f;                                                             // sum
-        float M = -INFINITY;                                                        // maximum KQ value
+        float S = 0.0f;       // sum
+        float M = -INFINITY;  // maximum KQ value
 
-        float * VKQ32 = reinterpret_cast<float *>(cache_ptr);                       // FP32 VKQ accumulator
-        auto *  VKQ16 = reinterpret_cast<npu_device_fp16_t *>(VKQ32 + aligned_dv);  // (temporary) FP16 VKQ accumulator
-        auto *  Q_q   = reinterpret_cast<npu_device_fp16_t *>(
-            VKQ32 + 2 * aligned_dv);  // (temporary) buffer for Q converted to quantized/FP16
+        const auto * q_data = q_ptr + (iq1 * q->get_nb(1) + iq2 * q->get_nb(2) + iq3 * q->get_nb(3));
+        hexagon::l2fetch_row(q_data, row_bytes_q);
 
-        if (is_v_f16) {
+        if constexpr (is_v_f16) {
             memset(VKQ16, 0, DV * sizeof(npu_device_fp16_t));
         } else {
             memset(VKQ32, 0, DV * sizeof(float));
@@ -117,16 +129,13 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
         const int iv3 = iq3 / rv3;
         const int iv2 = iq2 / rv2;
 
-        const auto * q_data = q_ptr + (iq1 * q->get_nb(1) + iq2 * q->get_nb(2) + iq3 * q->get_nb(3));
-        if (iq1 < q->get_ne(1) - 1) {
-            hexagon::l2fetch_row(q_data + q->get_nb(1), row_bytes_q);
-        }
-
         q_to_vec_dot(reinterpret_cast<const float *>(q_data), Q_q, DK);
 
         // online softmax / attention
         // loop over n_kv and n_head_kv
         // ref: https://arxiv.org/pdf/2112.05682.pdf
+        const auto * k_plane_ptr = k_ptr + ik2 * k->get_nb(2) + ik3 * k->get_nb(3);
+        const auto * v_plane_ptr = v_ptr + iv2 * v->get_nb(2) + iv3 * v->get_nb(3);
         for (int64_t ic = 0; ic < k->get_ne(1); ++ic) {
             DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(flash_attn, 0, loop);
             float mv = mp ? (slope * f16_to_f32(mp[ic])) : 0.0f;
@@ -137,7 +146,7 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
             float s = 0.f;
             {
                 DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(flash_attn, 1, kq_dot);
-                const auto * k_data = k_ptr + (ic * k->get_nb(1) + ik2 * k->get_nb(2) + ik3 * k->get_nb(3));
+                const auto * k_data = k_plane_ptr + ic * k->get_nb(1);
                 if (ic < k->get_ne(1) - 1) {
                     hexagon::l2fetch_row(k_data + k->get_nb(1), row_bytes_k);
                 }
@@ -156,12 +165,12 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
             float ms = 1.0f;  // upon new higher max val, scale VKQ and KQ sum with this value
             float vs = 1.0f;  // post-softmax KQ value, expf(s - M)
 
-            const auto * v_data = v_ptr + (ic * v->get_nb(1) + iv2 * v->get_nb(2) + iv3 * v->get_nb(3));
+            const auto * v_data = v_plane_ptr + ic * v->get_nb(1);
             if (ic < v->get_ne(1)) {
                 hexagon::l2fetch_row(v_data, row_bytes_v);
             }
 
-            if (is_v_f16) {
+            if constexpr (is_v_f16) {
                 if (s > M) {
                     // s is new maximum, ms < 1.0f, vs == expf(s - s) == 1.0f
                     M  = s;
@@ -201,7 +210,7 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
             S = S * ms + vs;  // scale and increment sum with partial sum
         }
 
-        if (is_v_f16) {
+        if constexpr (is_v_f16) {
             // TODO: use a more efficient conversion
             for (int64_t d = 0; d < DV; ++d) {
                 VKQ32[d] = f16_to_f32(VKQ16[d]);
@@ -218,7 +227,10 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
         const int i3 = iq3;
 
         // permute(0, 2, 1, 3)
-        memcpy(dst_ptr + (i3 * out_rows_per_batch + i2 + i1 * out->get_ne(1)) * out->get_nb(1), VKQ32, out->get_nb(1));
+        hexagon::vec_cpy_f32(
+            reinterpret_cast<const float *>(VKQ32),
+            reinterpret_cast<float *>(dst_ptr + (i3 * out_rows_per_batch + i2 + i1 * out->get_ne(1)) * out->get_nb(1)),
+            out->get_ne(0));
     }
 
     out->release_write_buffer();  // mark the output tensor as modified
@@ -244,7 +256,11 @@ bool flash_attn_f32(tensor * out, compute_params * params) {
         return false;
     }
 
-    flash_attn_impl(out, q, k, v, mask, params);
+    if (k->get_type() == NPU_DATA_TYPE_F16) {
+        flash_attn_impl<true>(out, q, k, v, mask, params);
+    } else {
+        flash_attn_impl<false>(out, q, k, v, mask, params);
+    }
     return true;
 }
 

@@ -4,7 +4,6 @@
 #include <hexagon_types.h>
 
 #include <memory>
-#include <new>
 
 #include "graph.hpp"
 #include "hexagon_npu.h"
@@ -69,20 +68,28 @@ struct npu_device_context {
     }
 };
 
-inline hexagon::tensor * tensor_from_handle(npu_device_graph_handle_t h) {
+inline hexagon::tensor * tensor_from_handle(npu_device_tensor_handle_t h) {
+    if (h == npu_device_INVALID_DEVICE_TENSOR_HANDLE) {
+        return nullptr;
+    }
+
     return reinterpret_cast<hexagon::tensor *>(h);
 }
 
-inline npu_device_graph_handle_t tensor_to_handle(hexagon::tensor * tensor) {
-    return reinterpret_cast<npu_device_graph_handle_t>(tensor);
+inline npu_device_tensor_handle_t tensor_to_handle(hexagon::tensor * tensor) {
+    return reinterpret_cast<npu_device_tensor_handle_t>(tensor);
 }
 
-inline hexagon::graph * graph_from_handle(npu_device_tensor_handle_t h) {
+inline hexagon::graph * graph_from_handle(npu_device_graph_handle_t h) {
+    if (h == npu_device_INVALID_DEVICE_GRAPH_HANDLE) {
+        return nullptr;
+    }
+
     return reinterpret_cast<hexagon::graph *>(h);
 }
 
-inline npu_device_tensor_handle_t graph_to_handle(hexagon::graph * graph) {
-    return reinterpret_cast<npu_device_tensor_handle_t>(graph);
+inline npu_device_graph_handle_t graph_to_handle(hexagon::graph * graph) {
+    return reinterpret_cast<npu_device_graph_handle_t>(graph);
 }
 
 inline npu_device_context * device_context_from_handle(remote_handle64 h) {
@@ -93,12 +100,7 @@ inline npu_device_context * device_context_from_handle(remote_handle64 h) {
 
 int npu_device_open(const char * uri, remote_handle64 * h) {
     // TODO: should we have a device context here?
-    auto * context = new (std::nothrow) npu_device_context();
-    if (!context) {
-        DEVICE_LOG_ERROR("Failed to allocate memory for the npu_device_context");
-        return AEE_ENOMEMORY;
-    }
-
+    auto * context = new npu_device_context();
     if (!context->init()) {
         DEVICE_LOG_ERROR("Failed to initialize npu_device_context");
         delete context;
@@ -144,12 +146,7 @@ AEEResult npu_device_device_support_op(remote_handle64 _h, npu_device_tensor_op 
 AEEResult npu_device_tensor_init(remote_handle64 _h, const npu_device_tensor_config * info,
                                  npu_device_tensor_handle_t * tensor_handle) {
     NPU_UNUSED(_h);
-    auto * tensor = new (std::nothrow) hexagon::tensor(*info);
-    if (!tensor) {
-        DEVICE_LOG_ERROR("Failed to allocate memory for the tensor");
-        return AEE_ENOMEMORY;
-    }
-
+    auto * tensor  = new hexagon::tensor(*info);
     *tensor_handle = tensor_to_handle(tensor);
     return AEE_SUCCESS;
 }
@@ -177,13 +174,29 @@ AEEResult npu_device_tensor_free(remote_handle64 _h, npu_device_tensor_handle_t 
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_graph_init(remote_handle64 _h, npu_device_graph_handle_t * graph_handle) {
+AEEResult npu_device_tensors_free(remote_handle64 _h, const npu_device_tensor_handle_t * tensor_handles,
+                                  int tensor_handlesLen) {
     NPU_UNUSED(_h);
-    auto * graph = new (std::nothrow) hexagon::graph();
-    if (!graph) {
-        return AEE_ENOMEMORY;
+    if (!tensor_handles || tensor_handlesLen < 0) {
+        DEVICE_LOG_ERROR("npu_device_tensors_free: Invalid arguments");
+        return AEE_EINVARGS;
     }
 
+    for (int i = 0; i < tensor_handlesLen; ++i) {
+        auto * tensor = tensor_from_handle(tensor_handles[i]);
+        if (tensor) {
+            delete tensor;
+        } else {
+            DEVICE_LOG_ERROR("npu_device_tensors_free: Invalid tensor handle at index %d", i);
+        }
+    }
+
+    return AEE_SUCCESS;
+}
+
+AEEResult npu_device_graph_init(remote_handle64 _h, npu_device_graph_handle_t * graph_handle) {
+    NPU_UNUSED(_h);
+    auto * graph  = new hexagon::graph();
     *graph_handle = graph_to_handle(graph);
     return AEE_SUCCESS;
 }
