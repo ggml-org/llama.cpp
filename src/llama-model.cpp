@@ -1544,7 +1544,11 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_TOKEN_SHIFT_COUNT,                      hparams.token_shift_count, false);
 
                 switch (hparams.n_layer) {
-                    case 12: type = LLM_TYPE_190M; break;
+                    case 12:
+                        switch (hparams.n_embd) {
+                            case 768: type = LLM_TYPE_190M; break;
+                            default: type = LLM_TYPE_UNKNOWN;
+                        } break;
                     case 24:
                         switch (hparams.n_embd) {
                             case 1024: type = LLM_TYPE_450M; break;
@@ -1557,7 +1561,17 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                             case 3584: type = LLM_TYPE_7B; break;
                             default: type = LLM_TYPE_UNKNOWN;
                         } break;
-                    case 32: type = LLM_TYPE_2_9B; break; // RWKV-7-World
+                    case 32:
+                        switch (hparams.n_embd) {
+                            case 2560: type = LLM_TYPE_2_9B; break;
+                            case 4096: type = LLM_TYPE_7B; break;
+                            default: type = LLM_TYPE_UNKNOWN;
+                        } break;
+                    case 61:
+                        switch (hparams.n_embd) {
+                            case 4096: type = LLM_TYPE_14B; break;
+                            default: type = LLM_TYPE_UNKNOWN;
+                        } break;
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
