@@ -2561,7 +2561,7 @@ struct test_rms_norm : public test_case {
     const float eps;
 
     std::string vars() override {
-        return VARS_TO_STR5(type, ne, v, eps, v);
+        return VARS_TO_STR4(type, ne, v, eps);
     }
 
     test_rms_norm(ggml_type type = GGML_TYPE_F32,
@@ -2651,7 +2651,7 @@ struct test_rms_norm_mul_add : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR3(type, ne, eps);
+        return VARS_TO_STR4(type, ne, eps, broadcast);
     }
 
     test_rms_norm_mul_add(ggml_type type = GGML_TYPE_F32,
@@ -2665,8 +2665,6 @@ struct test_rms_norm_mul_add : public test_case {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, broadcast ? broadcast_dims.data() : ne.data());
         ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_tensor * c = ggml_new_tensor(ctx, type, 4, ne.data());
-
-
 
         ggml_set_param(a);
         ggml_set_name(a, "a");
