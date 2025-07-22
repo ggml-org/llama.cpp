@@ -2909,9 +2909,6 @@ class LLaDAModel(TextModel):
     model_arch = gguf.MODEL_ARCH.LLADA
     undo_permute = True
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
     def get_vocab_base(self) -> tuple[list[str], list[int], str]:
         tokens: list[str] = []
         toktypes: list[int] = []
@@ -2950,14 +2947,7 @@ class LLaDAModel(TextModel):
         return tokens, toktypes, tokpre
 
     def set_vocab(self):
-        try:
-            self._set_vocab_sentencepiece()
-        except FileNotFoundError:
-            try:
-                self._set_vocab_llama_hf()
-            except (FileNotFoundError, TypeError):
-                # Llama 3
-                self._set_vocab_gpt2()
+        self._set_vocab_gpt2()
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -2995,14 +2985,6 @@ class LLaDAModel(TextModel):
         # LLaDA models use non-causal attention for diffusion, similar to Dream
         self.gguf_writer.add_causal_attention(False)
         # Handle RoPE scaling similar to LlamaModel and Dream
-        rope_scaling = self.hparams.get("rope_scaling") or {}
-        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear" and "factor" in rope_scaling:
-            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
-            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
-        elif rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
-            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
-            self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
-            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
 
         # Add LLaDA-specific parameters
         mask_token_id = self.hparams.get("mask_token_id")
