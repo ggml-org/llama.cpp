@@ -228,7 +228,7 @@ typedef float2 dfloat2;
 #endif // defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || (defined(GGML_HIP_ROCWMMA_FATTN_GFX12) && defined(RDNA4)))
 
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__) && defined(CDNA3)
-#define AMD_MMA_AVAILABLE
+#define AMD_MFMA_AVAILABLE
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__) && defined(CDNA3)
 
 #if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
@@ -294,7 +294,7 @@ static bool fp32_mma_hardware_available(const int cc) {
 }
 
 // AMD CDNA3 matrix cores.. Will add support for other CDNA generations later.
-static bool amd_mma_available(const int cc) {
+static bool amd_mfma_available(const int cc) {
     return cc >= GGML_CUDA_CC_OFFSET_AMD && GGML_CUDA_CC_IS_CDNA3(cc);
 }
 
