@@ -1663,10 +1663,16 @@ kernel void kernel_ssm_conv_f32(
         device const  void * src0,
         device const  void * src1,
         device       float * dst,
+        threadgroup  float * shared [[threadgroup(0)]],
         constant ggml_metal_kargs_ssm_conv & args,
-        uint3 tgpig[[threadgroup_position_in_grid]],
-        uint3 tpitg[[thread_position_in_threadgroup]],
-        uint3   ntg[[threads_per_threadgroup]]) {
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        uint3  tpitg[[thread_position_in_threadgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgptg[[simdgroups_per_threadgroup]],
+        uint3   tgpg[[threadgroups_per_grid]]) {
+
+    const int64_t i0 = tpitg.x;
     const int64_t ir = tgpig.x;
     const int64_t i2 = tgpig.y;
     const int64_t i3 = tgpig.z;
@@ -1681,13 +1687,31 @@ kernel void kernel_ssm_conv_f32(
     device const float * c = (device const float *) ((device const char *) src1 + ir*args.nb11);
     device       float * x = (device       float *) ((device       char *) dst  + ir*args.nb0  + i2*args.nb1  + i3*args.nb2);
 
-    float sumf = 0.0f;
+    float sumf = s[i0] * c[i0];
 
-    for (int64_t i0 = 0; i0 < nc; ++i0) {
-        sumf += s[i0] * c[i0];
+    // Parallel sum: first sum over threads in simd group, then sum over simd
+    // group sums
+    sumf = simd_sum(sumf);
+
+    // If multiple simd groups per threadgroup, sum over simd group sums
+    if (sgptg > 1) {
+        if (tiisg == 0) {
+            shared[sgitg] = sumf;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        sumf = 0.0f;
+        if (sgitg == 0) {
+            if (tiisg < sgptg) {
+                sumf = shared[tiisg];
+            }
+            sumf = simd_sum(sumf);
+            if (tiisg == 0) {
+                x[0] = sumf;
+            }
+        }
+    } else if (tiisg == 0) {
+        x[0] = sumf;
     }
-
-    x[0] = sumf;
 }
 
 // ref: ggml.c:ggml_compute_forward_ssm_scan_f32, Mamba-1 part
