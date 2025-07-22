@@ -447,6 +447,7 @@ struct common_params {
 
     // batched-bench params
     bool batched_bench_output_jsonl = false;
+    bool upload = false; // whether to upload benchmark results
 
     // common params
     std::string out_file; // output filename for all example programs
