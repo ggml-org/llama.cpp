@@ -11,12 +11,17 @@
 
 class GgmlOvDecoder : public ov::frontend::ggml::GgmlDecoder {
 public:
-    GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token);
+    // Graph decoder
+    GgmlOvDecoder(struct ggml_cgraph* cgraph, std::map<std::string, std::shared_ptr<ov::Node>>& model_weights,
+                  bool is_static, bool is_first_token);
+
+    // Node decoder, called in GgmlOvDecoder::visit_subgraph
     GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
                   int context_size, int num_heads, int num_heads_kv, int head_size);
 
-    // Naive decoder
+    // Naive graph decoder
     GgmlOvDecoder(struct ggml_cgraph* cgraph);
+
     virtual ov::Any get_attribute(const std::string& name) const override {
         return nullptr;
         GGML_UNUSED(name);
@@ -110,6 +115,8 @@ public:
 
     ov::PartialShape get_graph_input_shape(const ggml_tensor* src) const;
 
+    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
+    static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(struct ggml_cgraph* cgraph);
     void clear_model_weights() { m_model_weights.clear(); }
 
 private:
@@ -122,9 +129,6 @@ private:
 
     // set context_size, num_heads, etc
     void set_llm_params();
-
-    static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
-    void add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
 
     struct ggml_cgraph* m_cgraph = nullptr;
     ggml_tensor* m_node = nullptr;

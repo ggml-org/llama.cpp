@@ -7,7 +7,6 @@ PointerAlignment: Left
 Cpp11BracedListStyle: true
 AccessModifierOffset: -4
 BinPackArguments: false
-BinPackParameters: false
 BreakBeforeBraces: Attach
 
 Language:        Cpp
@@ -31,6 +30,7 @@ AllowShortIfStatementsOnASingleLine: Never
 AllowShortLambdasOnASingleLine: Inline
 AllowShortLoopsOnASingleLine: false
 AlwaysBreakBeforeMultilineStrings: true
+BinPackParameters: true
 BitFieldColonSpacing: Both
 # BreakAdjacentStringLiterals: true
 BreakAfterAttributes: Never
