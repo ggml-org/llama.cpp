@@ -1,23 +1,10 @@
 <script lang="ts">
-	import ChatMessages from '$lib/components/ChatMessages.svelte';
-	import ChatForm from '$lib/components/ChatForm.svelte';
-	import { chatMessages, isLoading, sendMessage, stopGeneration } from '$lib/stores/chat.svelte';
+	import ChatConversation from '$lib/components/ChatConversation.svelte';
+	import ChatHeader from '$lib/components/ChatHeader.svelte';
 </script>
 
-<div class="flex h-screen flex-col">
-	<header class="bg-background border-b p-4">
-		<h1 class="text-xl font-semibold">llama.cpp</h1>
-	</header>
+<ChatHeader />
 
-	<main class="flex-1 overflow-hidden">
-		<ChatMessages messages={chatMessages} {isLoading} />
-	</main>
-
-	<footer>
-		<ChatForm
-			{isLoading}
-			onsend={(message) => sendMessage(message)}
-			onstop={() => stopGeneration()}
-		/>
-	</footer>
+<div class="flex-1 overflow-hidden">
+	<ChatConversation />
 </div>
