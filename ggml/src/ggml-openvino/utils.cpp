@@ -26,10 +26,6 @@
 #include "openvino/frontend.hpp"
 #include "openvino/input_model.hpp"
 
-std::shared_ptr<GgmlOvDecoder> get_ggml_decoder(struct ggml_cgraph* cgraph, bool is_static, bool is_first_token) {
-    return std::make_shared<GgmlOvDecoder>(nullptr, cgraph, is_static, is_first_token);
-}
-
 ov::Tensor convert_ggml_input_to_ov(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& name) {
     const auto* ggml_tensor = ggml_decoder->get_input_ggml_tensor(name);
     auto* input_data = ggml_tensor->data;
@@ -111,7 +107,8 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
     auto it = infer_request_cache.find(cgraph);
     if (it != infer_request_cache.end()) {
-        ggml_decoder = get_ggml_decoder(cgraph, is_static, false);
+        std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
+        ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, false);
         decoder_end_time = ggml_time_us();
 
         // For NPU for the first time we call kvcache modle, pop the compiled kvcache model from cache
@@ -126,17 +123,20 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         compile_end_time = conversion_end_time;
     } else {
         std::shared_ptr<ov::Model> model;
+        auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
 
         if (is_static) {
-            ggml_decoder = get_ggml_decoder(cgraph, is_static, true);
-            auto ggml_decoder_kvcache = get_ggml_decoder(cgraph, is_static, false);
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, true);
+            auto ggml_decoder_kvcache = std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, false);
             decoder_end_time = ggml_time_us();
 
             auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
             auto input_model_kvcache = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder_kvcache);
 
             model = ov::frontend::ggml::FrontEnd::convert(input_model);
+            ggml_decoder->clear_model_weights();
             auto model_kvcache = ov::frontend::ggml::FrontEnd::convert(input_model_kvcache);
+            ggml_decoder_kvcache->clear_model_weights();
             conversion_end_time = ggml_time_us();
 
             auto compiled_model = core.compile_model(model, device, config);
@@ -157,7 +157,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
                 ov::serialize(model_kvcache, timestamped_filename);
             }
         } else {
-            ggml_decoder = get_ggml_decoder(cgraph, is_static, true);
+            ggml_decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights, is_static, true);
             decoder_end_time = ggml_time_us();
 
             auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(ggml_decoder);
