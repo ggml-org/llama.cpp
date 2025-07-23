@@ -777,7 +777,6 @@ void launch_fattn(
 
         V_f16.alloc(ggml_nelements(V));
         if (ggml_is_contiguously_allocated(V)) {
-            V_f16.alloc(ggml_nelements(V));
             to_fp16_cuda_t to_fp16 = ggml_get_to_fp16_cuda(V->type);
             to_fp16(V_data, V_f16.ptr, ggml_nelements(V), main_stream);
             V_data = (char *) V_f16.ptr;
