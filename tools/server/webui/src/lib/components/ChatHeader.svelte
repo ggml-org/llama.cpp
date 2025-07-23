@@ -1,12 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import { 
-		Cog6ToothIcon,
-		SignalIcon,
-		ServerIcon,
-		ExclamationTriangleIcon
-	} from '@heroicons/svelte/24/outline';
+	import { AlertTriangle, Server, Settings } from '@lucide/svelte';
 
 	// Mock server status - will be replaced with real store data
 	let serverStatus = {
@@ -38,20 +33,20 @@
 	}
 </script>
 
-<header class="bg-background border-b p-4 flex items-center justify-between">
+<header class="bg-background flex items-center justify-between border-b p-4">
 	<div class="flex items-center space-x-4">
 		<h1 class="text-xl font-semibold">llama.cpp</h1>
-		
+
 		<!-- Server Status -->
 		<div class="flex items-center space-x-2">
 			<div class="flex items-center space-x-2">
-				<div class="w-2 h-2 rounded-full {getStatusColor()}"></div>
-				<span class="text-sm text-muted-foreground">{getStatusText()}</span>
+				<div class="h-2 w-2 rounded-full {getStatusColor()}"></div>
+				<span class="text-muted-foreground text-sm">{getStatusText()}</span>
 			</div>
-			
+
 			{#if serverStatus.connected}
 				<Badge variant="outline" class="text-xs">
-					<ServerIcon class="h-3 w-3 mr-1" />
+					<Server class="mr-1 h-3 w-3" />
 					{serverStatus.model}
 				</Badge>
 				<Badge variant="secondary" class="text-xs">
@@ -65,13 +60,13 @@
 	<div class="flex items-center space-x-2">
 		{#if !serverStatus.connected}
 			<Button variant="outline" size="sm" class="text-destructive">
-				<ExclamationTriangleIcon class="h-4 w-4 mr-2" />
+				<AlertTriangle class="mr-2 h-4 w-4" />
 				Connection Error
 			</Button>
 		{/if}
-		
+
 		<Button variant="ghost" size="sm" onclick={toggleSettings}>
-			<Cog6ToothIcon class="h-4 w-4" />
+			<Settings class="h-4 w-4" />
 		</Button>
 	</div>
 </header>

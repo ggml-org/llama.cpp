@@ -5,6 +5,4 @@
 
 <ChatHeader />
 
-<div class="flex-1 overflow-hidden">
-	<ChatConversation />
-</div>
+<ChatConversation />

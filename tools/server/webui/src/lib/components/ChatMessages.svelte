@@ -1,13 +1,13 @@
 <script lang="ts">
 	import ChatMessage from './ChatMessage.svelte';
 	import ChatMessageLoading from './ChatMessageLoading.svelte';
-	let {
-		messages = [],
-		isLoading = false
-	}: {
+	interface Props {
+		class?: string;
 		messages?: ChatMessageData[];
 		isLoading?: boolean;
-	} = $props();
+	}
+
+	let { class: className, messages = [], isLoading = false }: Props = $props();
 
 	let scrollContainer = $state<HTMLDivElement>();
 
@@ -22,7 +22,7 @@
 	});
 </script>
 
-<div class="flex h-full flex-col">
+<div class="flex h-full flex-col {className}">
 	<div bind:this={scrollContainer} class="bg-background flex-1 overflow-y-auto p-4">
 		<div class="space-y-4">
 			{#each messages as message, i}

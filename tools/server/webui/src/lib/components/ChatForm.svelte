@@ -4,17 +4,15 @@
 	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
 	import { Send, Square } from '@lucide/svelte';
 
-	let {
-		disabled = false,
-		isLoading = false,
-		onsend,
-		onstop
-	}: {
+	interface Props {
+		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
 		onsend?: (message: string) => void;
 		onstop?: () => void;
-	} = $props();
+	}
+
+	let { class: className, disabled = false, isLoading = false, onsend, onstop }: Props = $props();
 
 	let message = $state('');
 	let textareaElement = $state<HTMLTextAreaElement>();
@@ -51,7 +49,7 @@
 	}
 </script>
 
-<div class="bg-background border-t p-4">
+<div class="bg-background p-4 {className}">
 	<form onsubmit={handleSubmit} class="flex items-center gap-4">
 		<div class="flex-1">
 			<Textarea

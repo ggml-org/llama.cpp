@@ -8,14 +8,14 @@
 
 <ModeWatcher />
 
-<div class="flex h-screen bg-background">
+<div class="bg-background flex h-screen">
 	<!-- Sidebar -->
-	<aside class="w-80 border-r bg-card flex-shrink-0">
+	<aside class="bg-card w-64 flex-shrink-0 border-r">
 		<ChatSidebar />
 	</aside>
 
 	<!-- Main Content -->
-	<main class="flex-1 flex flex-col overflow-hidden">
+	<main class="flex flex-1 flex-col overflow-hidden">
 		{@render children?.()}
 	</main>
 </div>
