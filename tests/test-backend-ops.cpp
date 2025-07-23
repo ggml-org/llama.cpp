@@ -4091,7 +4091,7 @@ struct test_conv_2d_im2col : public test_case {
         dilation1(dilation1),
         cwhn(cwhn) {}
 
-    std::vector<std::string> get_input_names() { return { "kernel", "input" }; }
+    std::vector<std::string> get_input_names() override { return { "kernel", "input" }; }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         //printf("Building conv_2d_im2col graph...\n");
@@ -4180,7 +4180,7 @@ struct test_conv_2d : public test_case {
         dilation1(dilation1),
         cwhn(cwhn) {}
 
-    std::vector<std::string> get_input_names() { return { "kernel", "input" }; }
+    std::vector<std::string> get_input_names() override { return { "kernel", "input" }; }
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         //printf("Building conv_2d graph...\n");
