@@ -5625,8 +5625,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                         auto test_case_conv_2d = new test_conv_2d(
                                             { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, s1, p0, p1, d0, d1, false);
                                         test_cases.emplace_back(test_case_conv_2d);
-                                        auto test_case_conv_2d_im2col = new test_conv_2d_im2col(
-                                            { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, s1, p0, p1, d0, d1, false);
+                                        //auto test_case_conv_2d_im2col = new test_conv_2d_im2col(
+                                        //    { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, s1, p0, p1, d0, d1, false);
                                         //test_cases.emplace_back(test_case_conv_2d_im2col);
                                         //test_cases.emplace_back(new test_conv_2d_compare(test_case_conv_2d, test_case_conv_2d_im2col);
                                     }
