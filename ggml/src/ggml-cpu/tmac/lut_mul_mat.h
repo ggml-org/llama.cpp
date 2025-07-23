@@ -52,6 +52,8 @@ bool is_tmac_type(enum ggml_type type);
 
 bool is_type_supported(enum ggml_type type);
 
+bool is_embedding_weight(const struct ggml_tensor * tensor);
+
 size_t ggml_backend_tmac_desired_wsize(const struct ggml_tensor * dst);
 
 size_t ggml_backend_tmac_get_alloc_size(const struct ggml_tensor * tensor);

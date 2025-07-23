@@ -81,7 +81,7 @@ static void ggml_backend_tmac_buffer_memset_tensor(ggml_backend_buffer_t buffer,
 
 static void ggml_backend_tmac_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor,
                                                const void * data, size_t offset, size_t size) {
-    if (is_type_supported(tensor->type)) {
+    if (is_type_supported(tensor->type) && !is_embedding_weight(tensor)) {
         GGML_LOG_DEBUG("%s: tmac repack tensor %s of type %s\n", __func__, tensor->name, ggml_type_name(tensor->type));
         ggml_backend_tmac_convert_weight(tensor, data, offset, size);
     } else {

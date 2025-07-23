@@ -121,6 +121,10 @@ bool ggml_tmac_can_mul_mat(const struct ggml_tensor * dst) {
     return false;
 }
 
+bool is_embedding_weight(const struct ggml_tensor * tensor) {
+    return (strcmp(tensor->name, "token_embd.weight") == 0);
+}
+
 static inline int get_type_bits(enum ggml_type type) {
     if (is_tmac_2bit_type(type) || type == GGML_TYPE_TQ1_0 || type == GGML_TYPE_TQ2_0) {
         return 2;
@@ -197,6 +201,7 @@ static inline int ggml_tmac_get_scales_size(const struct tmac_kernel_config * ke
     }
     return scales_size;
 }
+
 
 static void * aligned_malloc(size_t size) {
 #if defined(_WIN32)
@@ -576,8 +581,7 @@ struct BlockI2TypeAccessor {
     }
 
     static tmac_float_type get_scale(const void * data, int idx, int group_size) {
-        const ggml_fp16_t * ss = (const ggml_fp16_t *) data;
-        ggml_fp16_t s = ss[idx / group_size];
+        ggml_fp16_t s = ((const ggml_fp16_t *) data)[idx / group_size];
         if constexpr (sizeof(tmac_float_type) == 2) {
             tmac_float_type * fp16dp = reinterpret_cast<tmac_float_type *>(&s);
             return *fp16dp;
