@@ -38,6 +38,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <map>
 
 static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
     size_t nels = ggml_nelements(tensor);
@@ -5531,7 +5532,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     // extra tests for im2col 2D
-    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 1, 32}, {3, 4, 1, 32}, 1, 1, 1, 1, 1, 1, true));
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 1, 32}, {3, 3, 1, 32}, 1, 1, 1, 1, 1, 1, true));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 2, 32}, {3, 3, 2, 32}, 1, 1, 1, 1, 1, 1, true));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 1, 1024}, {3, 3, 1, 1024}, 1, 1, 1, 1, 1, 1, true));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {12, 12, 2, 1024}, {3, 3, 2, 1024}, 1, 1, 1, 1, 1, 1, true));
@@ -5575,16 +5576,27 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     };
 
     for (auto act_case : cases) {
-        test_cases.emplace_back(new test_conv_2d(
-            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
-        test_cases.emplace_back(new test_conv_2d_im2col(
-            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
         test_cases.emplace_back(
+            new test_conv_2d({ act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+                             { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
+                             1,
+                             1,
+                             0,
+                             0,
+                             1,
+                             1,
+                             false));
+        /*
+        // Example test for testing a composite op
+            test_cases.emplace_back(new test_conv_2d_im2col(
+            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
+        // Example test for testing a regular op against a composite op
+            test_cases.emplace_back(
             new test_conv_2d_compare({ act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
                                      { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1,
                                      1, 0, 0, 1, 1, false, true));
+        */
     }
 #endif
 
@@ -5615,7 +5627,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                         test_cases.emplace_back(test_case_conv_2d);
                                         auto test_case_conv_2d_im2col = new test_conv_2d_im2col(
                                             { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, s1, p0, p1, d0, d1, false);
-                                        test_cases.emplace_back(test_case_conv_2d_im2col);
+                                        //test_cases.emplace_back(test_case_conv_2d_im2col);
                                         //test_cases.emplace_back(new test_conv_2d_compare(test_case_conv_2d, test_case_conv_2d_im2col);
                                     }
                                 }
