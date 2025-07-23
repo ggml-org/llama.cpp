@@ -87,6 +87,10 @@ if [[ "$BUILD" == true ]]; then
     cmake -B build
     cmake --build build --config Release -t llama-server
     echo "✅ Build completed"
+    echo "Building webui..."
+    cd tools/server/webui
+    npm run build
+    cd $PROJECT_ROOT
     echo ""
 fi
 
@@ -106,8 +110,8 @@ echo ""
 # Check if model looks like a HuggingFace model or local path
 if [[ "$MODEL" == *"/"* && ! "$MODEL" == *"ggml-org/"* && ! "$MODEL" == *"microsoft/"* && ! "$MODEL" == *"meta-llama/"* ]]; then
     # Looks like a local path
-    ./build/bin/llama-server -m "$MODEL" --port "$PORT"
+    ./build/bin/llama-server --path tools/server/public -m "$MODEL" --port "$PORT"
 else
     # Treat as HuggingFace model
-    ./build/bin/llama-server -hf "$MODEL" --port "$PORT"
+    ./build/bin/llama-server --path tools/server/public -hf "$MODEL" --port "$PORT"
 fi

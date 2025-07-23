@@ -14,8 +14,7 @@ set(TARGET_SRCS
     utils.hpp
 )
 set(PUBLIC_ASSETS
-    index.html.gz
-    loading.html
+    index.html
 )
 
 foreach(asset ${PUBLIC_ASSETS})
