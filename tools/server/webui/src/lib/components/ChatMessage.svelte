@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
 	import { User, Bot } from '@lucide/svelte';
-	import type { ChatMessage } from '../../routes/handle-send-message';
 
 	let { message }: { message: ChatMessageData } = $props();
 </script>

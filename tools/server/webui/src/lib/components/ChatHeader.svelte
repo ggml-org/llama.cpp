@@ -2,22 +2,21 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { AlertTriangle, Server, Settings } from '@lucide/svelte';
+	import ChatSettingsDialog from './ChatSettingsDialog.svelte';
 
 	// Mock server status - will be replaced with real store data
 	let serverStatus = {
 		connected: true,
+		loading: false,
 		model: 'llama-3.2-3b-instruct',
-		buildInfo: 'llama.cpp (build 1234)',
-		contextSize: 4096,
-		loading: false
+		contextSize: 8192,
+		tokensPerSecond: 45.2
 	};
 
-	let showSettings = false;
+	let settingsOpen = $state(false);
 
 	function toggleSettings() {
-		showSettings = !showSettings;
-		console.log('Toggle settings:', showSettings);
-		// TODO: Implement settings dialog
+		settingsOpen = true;
 	}
 
 	function getStatusColor() {
@@ -27,9 +26,7 @@
 	}
 
 	function getStatusText() {
-		if (serverStatus.loading) return 'Loading...';
-		if (serverStatus.connected) return 'Connected';
-		return 'Disconnected';
+		return serverStatus.connected ? 'Connected' : 'Disconnected';
 	}
 </script>
 
@@ -70,3 +67,5 @@
 		</Button>
 	</div>
 </header>
+
+<ChatSettingsDialog open={settingsOpen} onOpenChange={(open) => (settingsOpen = open)} />

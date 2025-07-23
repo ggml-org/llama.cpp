@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { ChatMessageData } from '$lib/types/chat';
 	import ChatMessage from './ChatMessage.svelte';
 	import ChatMessageLoading from './ChatMessageLoading.svelte';
 	interface Props {
@@ -25,7 +26,7 @@
 <div class="flex h-full flex-col {className}">
 	<div bind:this={scrollContainer} class="bg-background flex-1 overflow-y-auto p-4">
 		<div class="space-y-4">
-			{#each messages as message, i}
+			{#each messages as message}
 				<ChatMessage {message} />
 			{/each}
 

@@ -40,6 +40,7 @@
 		"@vitest/browser": "^3.2.3",
 		"bits-ui": "^2.8.11",
 		"clsx": "^2.1.1",
+		"dexie": "^4.0.11",
 		"eslint": "^9.18.0",
 		"eslint-config-prettier": "^10.0.1",
 		"eslint-plugin-storybook": "^9.0.17",
