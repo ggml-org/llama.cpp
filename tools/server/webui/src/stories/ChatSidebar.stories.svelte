@@ -1,6 +1,6 @@
 <script module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatSidebar from '$lib/components/ChatSidebar.svelte';
+	import ChatSidebar from '$lib/components/chat/ChatSidebar/ChatSidebar.svelte';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatSidebar',

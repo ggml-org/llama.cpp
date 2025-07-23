@@ -1,6 +1,6 @@
 <script module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatSettingsDialog from '$lib/components/ChatSettingsDialog.svelte';
+	import { ChatSettingsDialog } from '$lib/components';
 	import { fn } from 'storybook/test';
 
 	const { Story } = defineMeta({

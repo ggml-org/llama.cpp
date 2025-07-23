@@ -78,3 +78,10 @@
 		{@render children?.()}
 	</button>
 {/if}
+
+<style>
+	a,
+	button {
+		cursor: pointer;
+	}
+</style>

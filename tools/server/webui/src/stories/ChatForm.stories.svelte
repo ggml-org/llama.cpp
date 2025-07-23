@@ -1,6 +1,6 @@
 <script module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatForm from '$lib/components/ChatForm.svelte';
+	import ChatForm from '$lib/components/chat/ChatForm.svelte';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatForm',
