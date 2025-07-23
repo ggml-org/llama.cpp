@@ -31,47 +31,45 @@
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
                              int context_size, int num_heads, int num_heads_kv, int head_size) :
-    GgmlOvDecoder::GgmlOvDecoder(node, cgraph, is_static, is_first_token) {
-    m_context_size = context_size;
-    m_num_heads = num_heads;
-    m_num_heads_kv = num_heads_kv;
-    m_head_size = head_size;
-}
-
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static,
-                             bool is_first_token) :
     m_cgraph(cgraph),
     m_node(node),
-    m_op_name(m_node ? std::string(m_node->name) : "NONE_OP"),
+    m_op_name(std::string(node->name)),
+    m_context_size(context_size),
+    m_num_heads(num_heads),
+    m_num_heads_kv(num_heads_kv),
+    m_head_size(head_size),
     m_is_static(is_static),
     m_is_first_token(is_first_token) {
-    if (m_node) {
-        set_input_output(m_node);
-    } else {
-        if (is_first_token && getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
-            print_tensor_address_map(cgraph);
-        }
+    set_input_output(node);
+}
 
-        if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-            auto timestamp = (long long) ggml_time_us();
-            std::string filename = "cgraph_" + std::to_string(timestamp) + ".txt";
-            dump_cgraph(cgraph, filename);
-        }
-
-        set_llm_params();
-
-        if (is_first_token) {
-            add_weight_const_parallel(m_model_weights);
-        }
-
-        for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
-            auto* cur_node = cgraph->nodes[node_n];
-            m_nodes.push_back(cur_node);
-            set_input_output(cur_node);
-        }
-
-        add_extra_inputs();
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
+                             std::map<std::string, std::shared_ptr<ov::Node>>& model_weights, bool is_static,
+                             bool is_first_token) :
+    m_cgraph(cgraph),
+    m_op_name(m_node ? std::string(m_node->name) : ""),
+    m_model_weights(model_weights),
+    m_is_static(is_static),
+    m_is_first_token(is_first_token) {
+    if (is_first_token && getenv("GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS")) {
+        print_tensor_address_map(cgraph);
     }
+
+    if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
+        auto timestamp = (long long) ggml_time_us();
+        std::string filename = "cgraph_" + std::to_string(timestamp) + ".txt";
+        dump_cgraph(cgraph, filename);
+    }
+
+    set_llm_params();
+
+    for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
+        auto* cur_node = cgraph->nodes[node_n];
+        m_nodes.push_back(cur_node);
+        set_input_output(cur_node);
+    }
+
+    add_extra_inputs();
 }
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph) {
@@ -334,10 +332,11 @@ std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const
     return kv_param_res_names;
 }
 
-void GgmlOvDecoder::add_weight_const_parallel(std::map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
+std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_nodes(struct ggml_cgraph* cgraph) {
+    std::map<std::string, std::shared_ptr<ov::Node>> model_weights;
     static std::mutex weights_mutex;
-    auto* nodes = m_cgraph->nodes;
-    auto n_nodes = m_cgraph->n_nodes;
+    auto* nodes = cgraph->nodes;
+    auto n_nodes = cgraph->n_nodes;
     std::for_each(std::execution::par, nodes, nodes + n_nodes, [&](ggml_tensor* node) {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             auto* src = node->src[i];
@@ -369,6 +368,7 @@ void GgmlOvDecoder::add_weight_const_parallel(std::map<std::string, std::shared_
             }
         }
     });
+    return model_weights;
 }
 
 std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor) {
