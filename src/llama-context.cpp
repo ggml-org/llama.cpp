@@ -694,7 +694,7 @@ bool llama_context::apply_adapter_cvec(
     return cvec.apply(model, data, len, n_embd, il_start, il_end);
 }
 
-llm_graph_result_i * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
@@ -1312,7 +1312,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 //
 
 uint32_t llama_context::graph_max_nodes() const {
-    return std::max<uint32_t>(65536u, 5u*model.n_tensors());
+    return std::max<uint32_t>(1024u, 8u*model.n_tensors());
 }
 
 llm_graph_result * llama_context::get_gf_res_reserve() const {
@@ -1363,7 +1363,7 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t n_tokens, uint32_t n_seqs, u
 }
 
 llm_graph_params llama_context::graph_params(
-                      llm_graph_result_i * res,
+                        llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
             llm_graph_type   gtype) const {

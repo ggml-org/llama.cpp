@@ -233,6 +233,11 @@ class Keys:
         TYPE       = "adapter.type"
         LORA_ALPHA = "adapter.lora.alpha"
 
+    class IMatrix:
+        CHUNK_COUNT = "imatrix.chunk_count"
+        CHUNK_SIZE  = "imatrix.chunk_size"
+        DATASETS    = "imatrix.datasets"
+
     class Clip:
         PROJECTOR_TYPE      = "clip.projector_type"
         HAS_VISION_ENCODER  = "clip.has_vision_encoder"
@@ -282,6 +287,7 @@ class Keys:
 class GGUFType:
     MODEL   = "model"
     ADAPTER = "adapter"
+    IMATRIX = "imatrix"
     MMPROJ  = "mmproj" # dummy, unused for now
 
 
@@ -354,6 +360,7 @@ class MODEL_ARCH(IntEnum):
     JAIS             = auto()
     NEMOTRON         = auto()
     EXAONE           = auto()
+    EXAONE4          = auto()
     GRANITE          = auto()
     GRANITE_MOE      = auto()
     GRANITE_HYBRID   = auto()
@@ -364,6 +371,7 @@ class MODEL_ARCH(IntEnum):
     DOTS1            = auto()
     ARCEE            = auto()
     ERNIE4_5         = auto()
+    ERNIE4_5_MOE     = auto()
     HUNYUAN_MOE      = auto()
     SMOLLM3          = auto()
     LFM2             = auto()
@@ -670,6 +678,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.JAIS:             "jais",
     MODEL_ARCH.NEMOTRON:         "nemotron",
     MODEL_ARCH.EXAONE:           "exaone",
+    MODEL_ARCH.EXAONE4:          "exaone4",
     MODEL_ARCH.GRANITE:          "granite",
     MODEL_ARCH.GRANITE_MOE:      "granitemoe",
     MODEL_ARCH.GRANITE_HYBRID:   "granitehybrid",
@@ -680,6 +689,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.DOTS1:            "dots1",
     MODEL_ARCH.ARCEE:            "arcee",
     MODEL_ARCH.ERNIE4_5:         "ernie4_5",
+    MODEL_ARCH.ERNIE4_5_MOE:     "ernie4_5-moe",
     MODEL_ARCH.FALCON_H1:        "falcon-h1",
     MODEL_ARCH.HUNYUAN_MOE:      "hunyuan-moe",
     MODEL_ARCH.SMOLLM3:          "smollm3",
@@ -2022,6 +2032,28 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_SHEXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.ERNIE4_5_MOE: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
     MODEL_ARCH.PLM: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT,
@@ -2172,6 +2204,23 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
+    ],
+    MODEL_ARCH.EXAONE4: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ROPE_FREQS,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.GRANITE: [
         MODEL_TENSOR.TOKEN_EMBD,

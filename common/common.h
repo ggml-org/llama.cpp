@@ -432,9 +432,10 @@ struct common_params {
     int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations
     int32_t i_chunk     =  0; // start processing from this chunk
 
-    bool process_output = false; // collect data for the output tensor
-    bool compute_ppl    = true;  // whether to compute perplexity
-    bool parse_special  = false; // whether to parse special tokens during imatrix tokenization
+    bool process_output  = false; // collect data for the output tensor
+    bool compute_ppl     = true;  // whether to compute perplexity
+    bool show_statistics = false; // show imatrix statistics per tensor
+    bool parse_special   = false; // whether to parse special tokens during imatrix tokenization
 
     // cvector-generator params
     int n_pca_batch = 100;
@@ -534,6 +535,7 @@ static bool string_starts_with(const std::string & str,
 
 // While we wait for C++20's std::string::ends_with...
 bool string_ends_with(const std::string_view & str, const std::string_view & suffix);
+bool string_remove_suffix(std::string & str, const std::string_view & suffix);
 size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop);
 
 bool string_parse_kv_override(const char * data, std::vector<llama_model_kv_override> & overrides);

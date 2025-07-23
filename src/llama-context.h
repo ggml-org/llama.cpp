@@ -94,7 +94,7 @@ struct llama_context {
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
     // returns nullptr only if ret != GGML_STATUS_SUCCESS
-    llm_graph_result_i * process_ubatch(
+    llm_graph_result * process_ubatch(
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
@@ -199,7 +199,7 @@ public:
 
 private:
     llm_graph_params graph_params(
-                      llm_graph_result_i * res,
+                        llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
                           llm_graph_type   gtype) const;

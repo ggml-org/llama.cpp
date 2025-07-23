@@ -253,6 +253,7 @@ struct server_task {
         defaults.sampling    = params_base.sampling;
         defaults.speculative = params_base.speculative;
         defaults.n_keep      = params_base.n_keep;
+        defaults.antiprompt  = params_base.antiprompt;
 
         // enabling this will output extra debug information in the HTTP responses from the server
         params.verbose           = params_base.verbosity > 9;
@@ -489,6 +490,10 @@ struct server_task {
                         params.antiprompt.push_back(word);
                     }
                 }
+            }
+            // set reverse prompt from cli args if not set in the request
+            if (params.antiprompt.empty()) {
+                params.antiprompt = defaults.antiprompt;
             }
         }
 
@@ -4516,9 +4521,10 @@ int main(int argc, char ** argv) {
         json tokens_response = json::array();
         if (body.count("content") != 0) {
             const bool add_special = json_value(body, "add_special", false);
+            const bool parse_special = json_value(body, "parse_special", true);
             const bool with_pieces = json_value(body, "with_pieces", false);
 
-            llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, true);
+            llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, parse_special);
 
             if (with_pieces) {
                 for (const auto& token : tokens) {

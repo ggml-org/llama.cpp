@@ -448,6 +448,15 @@ void string_replace_all(std::string & s, const std::string & search, const std::
 bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
     return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
 }
+
+bool string_remove_suffix(std::string & str, const std::string_view & suffix) {
+    bool has_suffix = string_ends_with(str, suffix);
+    if (has_suffix) {
+        str = str.substr(0, str.size() - suffix.size());
+    }
+    return has_suffix;
+}
+
 size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
     if (!str.empty() && !stop.empty()) {
         const char text_last_char = str.back();

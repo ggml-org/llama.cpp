@@ -23,6 +23,7 @@
 #ifndef CANN_ACLNN_OPS
 #define CANN_ACLNN_OPS
 
+#include <unordered_set>
 #include <functional>
 #include <aclnnop/aclnn_abs.h>
 #include <aclnnop/aclnn_neg.h>
@@ -1019,6 +1020,37 @@ inline void ggml_cann_async_memset(ggml_backend_cann_context & ctx, void * buffe
  *            Expected to be of shape [M, K, N, 1].
  */
 void ggml_cann_mul_mat_id(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Check whether a tensor is a weight tensor for matrix multiplication.
+ *
+ * @details Checks whether the given tensor serves as weight parameters in matrix multiplication operations,
+ *          typically within neural network layers. The function maintains a static set of canonical weight
+ *          naming suffixes from Transformer-based architectures. Uses substring matching to identify weight
+ *          tensors even with hierarchical naming patterns.
+ *
+ * @param tensor Pointer to the target ggml_tensor object (const-qualified).
+ */
+static bool is_matmul_weight(const ggml_tensor* tensor) {
+    std::string name = ggml_get_name(tensor);
+    static const std::unordered_set<std::string> weight_suffixes{
+        "output.weight",
+        "attn_q.weight",
+        "attn_k.weight",
+        "attn_v.weight",
+        "attn_output.weight",
+        "ffn_gate.weight",
+        "ffn_up.weight",
+        "ffn_down.weight"
+    };
+
+    for (const auto& suffix : weight_suffixes) {
+        if (name.find(suffix) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
 
 /**
  * @brief Applies a element-wise operation to two input tensors using the CANN

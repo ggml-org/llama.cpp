@@ -1261,7 +1261,7 @@ void llama_kv_cache_unified::set_input_k_shift(ggml_tensor * dst) const {
         const auto & cells = v_cells[s];
 
         for (uint32_t i = 0; i < cells.size(); ++i) {
-            data[i] = cells.is_empty(i) ? 0 : cells.get_shift(i);
+            data[s*cells.size() + i] = cells.is_empty(i) ? 0 : cells.get_shift(i);
         }
     }
 }
