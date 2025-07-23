@@ -143,10 +143,13 @@ static constexpr __device__ int get_mmq_y_device() {
 #endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 }
 
-// Decouple sizes from WARP_SIZE to allow for different warp sizes.
-// MMQ_TILE_NE_K is the number of 32 bit elements in the K dimension
-// which is treated as a single fundamental block. Bigger blocks are
-// multiples of this size (excluding scales/padding).
+// Decouple shared memory tile sizes from WARP_SIZE to allow for different warp sizes.
+// The K dimension of the tiles has either,
+// 1*MMQ_TILE_NE_K==32 (always for TILE_Y_K) or 2*MMQ_TILE_NE_K==64 (typically for TILE_X_K),
+// 32 bit elements for the quantized data (does not include scales).
+// In other words, the size of the quantized data in the K dimension is a multiple of MMQ_TILE_NE_K.
+// The final tile size in K direction is padded to avoid shared memory bank conflicts,
+// in terms of 32 bit elements that means K % 2 == 1 for dp4a or K % 8 == 4 for mma.
 #define MMQ_TILE_NE_K 32
 
 #define MMQ_DP4A_TXS_Q4_0    tile_x_sizes{mmq_y*MMQ_TILE_NE_K   + mmq_y, mmq_y*MMQ_TILE_NE_K/QI4_0   + mmq_y/QI4_0,     0}
@@ -220,7 +223,7 @@ static constexpr __host__ __device__ int mmq_get_mma_tile_x_k(ggml_type type) {
     }
 }
 
-// block_q8_1_mmq has (128 8-bit ints == 32 32-bit ints + 4 32-bit factors)
+// block_q8_1_mmq has (128 8-bit ints == 32 32-bit ints + 4 32-bit scales)
 #define MMQ_TILE_Y_K (MMQ_TILE_NE_K + MMQ_TILE_NE_K/QI8_1)
 
 static int mmq_get_granularity_host(ggml_type type, const int mmq_x, const int cc) {
@@ -238,6 +241,7 @@ static int mmq_get_granularity_host(ggml_type type, const int mmq_x, const int c
             // vec_dot_q8_1_q8_1_mma
             case GGML_TYPE_Q4_1:
             case GGML_TYPE_Q5_1:
+            case GGML_TYPE_Q8_1:
             case GGML_TYPE_Q4_K:
             case GGML_TYPE_Q5_K:
             case GGML_TYPE_IQ1_S:
@@ -273,6 +277,7 @@ static constexpr __device__ int mmq_get_granularity_device(ggml_type type, const
         // vec_dot_q8_1_q8_1_mma
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_1:
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_IQ1_S:
@@ -873,7 +878,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
 #pragma unroll
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_A::I + tile_C::get_i(l);
-                    float dA = x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + k0/QI8_0];
+                    const float dA = x_df[i*MMQ_MMA_TILE_X_K_Q8_0 + k0/QI8_0];
                     sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l]*dA*dB;
                 }
             }
@@ -888,7 +893,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
     constexpr int rows_per_warp = 2 * granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + 2*MMQ_TILE_NE_K;
@@ -998,7 +1003,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     typedef tile<16,  8, int> tile_B;
     typedef tile<16, 16, int> tile_C;
 
-    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q4_K, mmq_x);
+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q8_1, mmq_x);
     constexpr int rows_per_warp = granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
@@ -1048,7 +1053,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     typedef tile< 8,  8, int> tile_B;
     typedef tile<16,  8, int> tile_C;
 
-    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q8_0, mmq_x);
+    constexpr int granularity = mmq_get_granularity_device(GGML_TYPE_Q8_1, mmq_x);
     constexpr int rows_per_warp = 2 * granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
@@ -1118,6 +1123,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
 #endif // defined(AMD_MFMA_AVAILABLE)
 }
 
+// Used for Q3_K, IQ2_S, and IQ2_XS
 template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
@@ -1152,6 +1158,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_dp4a(
     }
 }
 
+// Used for Q3_K, IQ2_S, and IQ2_XS:
 template <int mmq_x, int mmq_y>
 static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
     const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
@@ -1164,7 +1171,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
     constexpr int rows_per_warp = granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + MMQ_TILE_NE_K*2;
@@ -1214,7 +1221,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
     constexpr int rows_per_warp = 2 * granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + MMQ_TILE_NE_K*2;
@@ -1420,7 +1427,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
     constexpr int rows_per_warp = granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
     const int   * x_qs = (const int   *) x;
     const half2 * x_dm = (const half2 *) x_qs + MMQ_TILE_NE_K*2;
@@ -1487,7 +1494,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
     constexpr int rows_per_warp = 2 * granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
     const int   * x_qs = (const int   *) x;
     const half2 * x_dm = (const half2 *) x_qs + MMQ_TILE_NE_K*2;
@@ -1972,7 +1979,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
             const half2 dm = bxi->dm * make_half2(1.0f, -1.0f);
 
-    #pragma unroll
+#pragma unroll
             for (int l = 0; l < int(sizeof(int)); ++l) {
                 x_dm[i*MMQ_MMA_TILE_X_K_Q8_1 + sizeof(int)*ksc + l] = dm*make_half2(sc8[l], m8[l]);
             }
@@ -2181,7 +2188,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
     constexpr int rows_per_warp = granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + MMQ_TILE_NE_K*2;
@@ -2232,7 +2239,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
     constexpr int rows_per_warp = 2 * granularity;
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
-    y += (threadIdx.y % ntx) * (tile_B::I*MMQ_TILE_Y_K);
+    y += (threadIdx.y % ntx) * (tile_C::J*MMQ_TILE_Y_K);
 
     const int   * x_qs = (const int   *) x;
     const float * x_df = (const float *) x_qs + MMQ_TILE_NE_K*2;
@@ -2410,7 +2417,7 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
 
     constexpr int threads_per_row = (MMQ_ITER_K / (4 * QR2_XXS)) / 2;
     constexpr int nrows = warp_size / threads_per_row;
-    const int kqsx = threadIdx.x % threads_per_row;
+    const int kqsx = warp_size > threads_per_row ? threadIdx.x % threads_per_row : threadIdx.x;
 
 #pragma unroll
     for (int i0 = 0; i0 < mmq_y; i0 += nwarps * nrows) {
