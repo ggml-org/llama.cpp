@@ -116,6 +116,7 @@ setup_framework_structure() {
 
     # Copy all required headers (common for all platforms)
     cp include/llama.h             ${header_path}
+    cp include/llama-cpp.h         ${header_path}
     cp ggml/include/ggml.h         ${header_path}
     cp ggml/include/ggml-opt.h     ${header_path}
     cp ggml/include/ggml-alloc.h   ${header_path}
@@ -124,6 +125,8 @@ setup_framework_structure() {
     cp ggml/include/ggml-cpu.h     ${header_path}
     cp ggml/include/ggml-blas.h    ${header_path}
     cp ggml/include/gguf.h         ${header_path}
+    cp common/common.h             ${header_path}
+    cp common/chat.h               ${header_path}
 
     # Create module map (common for all platforms)
     cat > ${module_path}module.modulemap << EOF
@@ -247,6 +250,7 @@ combine_static_libraries() {
 
     local libs=(
         "${base_dir}/${build_dir}/src/${release_dir}/libllama.a"
+        "${base_dir}/${build_dir}/common/${release_dir}/libcommon.a"
         "${base_dir}/${build_dir}/ggml/src/${release_dir}/libggml.a"
         "${base_dir}/${build_dir}/ggml/src/${release_dir}/libggml-base.a"
         "${base_dir}/${build_dir}/ggml/src/${release_dir}/libggml-cpu.a"
