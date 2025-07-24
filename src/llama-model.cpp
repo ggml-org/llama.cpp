@@ -1551,17 +1551,25 @@ void llama_model::load_hparams(llama_model_loader & ml) {
             } break;
         case LLM_ARCH_SMALLTHINKER:
             {
-                hparams.swa_type      = LLAMA_SWA_TYPE_STANDARD;
-                hparams.n_swa         = 4096; 
-                hparams.set_dense_start_swa_pattern(4);  
+                const bool found_swa = ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false);
+
+                if (found_swa && hparams.n_swa > 0) {
+                    hparams.swa_type      = LLAMA_SWA_TYPE_STANDARD;
+                    hparams.n_swa         = 4096;
+                    hparams.set_dense_start_swa_pattern(4);
+                } else {
+                    hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
+                    hparams.n_no_rope_layer_step = hparams.n_layer;
+                }
 
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
-
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
 
                 switch (hparams.n_layer) {
-                    default:
-                        type = LLM_TYPE_UNKNOWN;
+                    case 32: type = LLM_TYPE_4B;  break;
+                    case 52: type = LLM_TYPE_20B; break;
+                    default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
         default: throw std::runtime_error("unsupported model architecture");
@@ -4854,6 +4862,7 @@ void llama_model::print_info() const {
 
     if (arch == LLM_ARCH_SMALLTHINKER) {
         LLAMA_LOG_INFO("%s: n_ff_exp         = %d\n",     __func__, hparams.n_ff_exp);
+        LLAMA_LOG_INFO("%s: expert_gating_func   = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
     }
 
     vocab.print_info();
@@ -14736,7 +14745,12 @@ struct llm_build_smallthinker : public llm_graph_context{
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        auto * inp_attn = build_attn_inp_kv_unified_iswa();
+        llm_graph_input_i * inp_attn = nullptr;
+        if (hparams.is_swa_any()) {
+            inp_attn = build_attn_inp_kv_unified_iswa();
+        } else {
+            inp_attn = build_attn_inp_kv_unified();
+        }
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA  = inpL;
@@ -14747,7 +14761,11 @@ struct llm_build_smallthinker : public llm_graph_context{
                 ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, inpL);  // [n_expert, n_tokens]
                 cb(logits, "ffn_moe_logits", il);
 
-                probs = ggml_sigmoid(ctx0, logits);  // [n_expert, n_tokens]
+                if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX) {
+                    probs = ggml_soft_max(ctx0, logits);  // [n_expert, n_tokens]
+                } else {
+                    probs = ggml_sigmoid(ctx0, logits);  // [n_expert, n_tokens]
+                }
                 cb(probs, "ffn_moe_probs", il);
             }
 
@@ -14782,8 +14800,13 @@ struct llm_build_smallthinker : public llm_graph_context{
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
 
-                cur = build_attn(inp_attn, gf, model.layers[il].wo, model.layers[il].bo, Qcur, Kcur, Vcur,
-                                   nullptr,nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+                if (hparams.is_swa_any()) {
+                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified_iswa *>(inp_attn), gf, model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
+                       nullptr,nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+                } else {
+                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified *>(inp_attn), gf, model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
+                        nullptr,nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
+                }
             }
 
             if (il == n_layer - 1) {
@@ -14791,6 +14814,7 @@ struct llm_build_smallthinker : public llm_graph_context{
                 ggml_tensor * inp_out_ids = build_inp_out_ids();
                 cur = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+                if (probs != nullptr) { probs = ggml_get_rows(ctx0, probs, inp_out_ids); }
             }
 
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);

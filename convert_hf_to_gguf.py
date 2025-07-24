@@ -6552,6 +6552,10 @@ class SmallthinkerModel(TextModel):
         if (shared_expert_intermediate_size := self.hparams.get('shared_expert_intermediate_size')) is not None:
             self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size)
             logger.info(f"gguf: expert shared feed forward length = {shared_expert_intermediate_size}")
+        if (self.hparams.get('moe_primary_router_apply_softmax')):
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
+        else:
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
         # YaRN is not enabled by default
         # To enable it, please refer to this guide: https://huggingface.co/Qwen/Qwen3-30B-A3B#processing-long-texts
         rope_scaling = self.hparams.get("rope_scaling") or {}
@@ -6559,8 +6563,16 @@ class SmallthinkerModel(TextModel):
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+        
         sliding_window = self.hparams.get("sliding_window")
-        self.gguf_writer.add_sliding_window(sliding_window)
+        sliding_window_layout = self.hparams.get("sliding_window_layout")
+        if sliding_window and sliding_window_layout:
+            for i in sliding_window_layout:
+                if i != 0:
+                    self.gguf_writer.add_sliding_window(sliding_window)
+                    break
+        elif sliding_window:
+            self.gguf_writer.add_sliding_window(sliding_window)
 
         intermediate_size = self.hparams.get("ffn_hidden_size")
         moe_intermediate_size = self.hparams.get("moe_ffn_hidden_size")
