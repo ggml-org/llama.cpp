@@ -181,6 +181,8 @@ private:
     // Returns max number of outputs for which space was reserved.
     uint32_t output_reserve(int32_t n_outputs);
 
+    void output_reorder();
+
     //
     // graph
     //
@@ -249,6 +251,13 @@ private:
     uint32_t n_outputs = 0; // number of actually-used outputs in the current ubatch or last logical batch
 
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
+
+    struct swap_info {
+        uint32_t i0;
+        uint32_t i1;
+    };
+
+    std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
 
