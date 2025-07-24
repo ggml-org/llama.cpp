@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <openvino/core/node.hpp>
+#include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/convert.hpp>
@@ -78,11 +79,11 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
     // cache_k layout: [S, N, H] (seq, num_heads, head_size)
     // cache_v layout: [N, H, S] (num_heads, head_size, seq)
     // When writing to cache_v, cache should be reshaped to [N*H, S] and v-curr should be flattened
-    auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
+    auto past_token_len = tensor_map.at("past_token_len").get_node_shared_ptr();
     auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
 
-    std::shared_ptr<ov::Node> update_indices_k;
-    std::shared_ptr<ov::Node> update_indices_v;
+    Output<Node> update_indices_k;
+    Output<Node> update_indices_v;
 
     auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
     auto zero_scalar = ov::op::v0::Constant::create(ov::element::i64, {}, {0});
@@ -90,11 +91,19 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
     auto one_scalar = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {1});
     auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
 
-    update_indices_k =
-        std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
-    update_indices_k = std::make_shared<ov::op::v0::Unsqueeze>(update_indices_k, one);
-    update_indices_k->set_friendly_name("update_indices_k");
-    tensor_map.insert({"update_indices_k", update_indices_k->output(0)});
+    auto past_token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(past_token_len, zero);
+    auto token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(token_len, zero);
+    auto total_token_len_scalar = std::make_shared<ov::op::v1::Add>(past_token_len_scalar, token_len_scalar);
+
+    Output<Node> update_indices = std::make_shared<ov::op::v4::Range>(
+        past_token_len_scalar, total_token_len_scalar, one_scalar, ov::element::i64);
+    if (ggml_model_decoder.is_static()) {
+        update_indices = past_token_len;
+    }
+
+    update_indices_k = std::make_shared<ov::op::v0::Unsqueeze>(update_indices, one);
+    update_indices_k.get_node_shared_ptr()->set_friendly_name("update_indices_k");
+    tensor_map.insert({"update_indices_k", update_indices_k});
 
     auto total_head_size = ggml_model_decoder.get_num_heads_kv() * ggml_model_decoder.get_head_size();
     auto total_head_size_node = ov::op::v0::Constant::create(ov::element::i64, {1}, {total_head_size});
@@ -102,7 +111,7 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
 
     // 1D tensor of shape [total_head_size], values starting from 0
     auto range_row =
-        std::make_shared<ov::op::v4::Range>(zero_scalar, total_head_size_scalar, one_scalar, ov::element::i32);
+        std::make_shared<ov::op::v4::Range>(zero_scalar, total_head_size_scalar, one_scalar, ov::element::i64);
     auto range_row_reshaped =
         std::make_shared<ov::op::v0::Unsqueeze>(range_row, ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2}));
     auto row_indices = std::make_shared<ov::op::v3::Broadcast>(
@@ -110,8 +119,7 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
         std::make_shared<ov::op::v0::Concat>(ov::OutputVector{total_head_size_node, token_len, one}, 0));
 
     // 1D tensor of shape [token_len], values starting from past_token_len
-    auto range_col =
-        std::make_shared<ov::op::v0::Squeeze>(inp_pos, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
+    auto range_col = update_indices;
     auto range_col_reshaped =
         std::make_shared<ov::op::v0::Unsqueeze>(range_col, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 2}));
     auto col_indices = std::make_shared<ov::op::v3::Broadcast>(
@@ -119,26 +127,11 @@ void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decode
         std::make_shared<ov::op::v0::Concat>(ov::OutputVector{total_head_size_node, token_len, one}, 0));
 
     // Stack row_indices and col_indices along last axis: [total_head_size, token_len, 2]
-    auto indices = std::make_shared<ov::op::v0::Concat>(OutputVector{row_indices, col_indices}, 2);
+    update_indices_v = std::make_shared<ov::op::v0::Concat>(OutputVector{row_indices, col_indices}, 2);
     update_indices_v = std::make_shared<ov::op::v1::Reshape>(
-        indices, ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{-1, 2}), false);
-    update_indices_v->set_friendly_name("update_indices_v");
-    tensor_map.insert({"update_indices_v", update_indices_v->output(0)});
-}
-
-float ggml_rope_yarn_corr_dim(int n_dims, int n_ctx_orig, float n_rot, float base) {
-#ifndef M_PI
-#    define M_PI 3.14159265358979323846
-#endif
-    return n_dims * logf(n_ctx_orig / (n_rot * 2 * (float) M_PI)) / (2 * logf(base));
-}
-
-void ggml_rope_yarn_corr_dims(int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow,
-                              float dims[2]) {
-    float start = floorf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_fast, freq_base));
-    float end = ceilf(ggml_rope_yarn_corr_dim(n_dims, n_ctx_orig, beta_slow, freq_base));
-    dims[0] = std::max(0.0f, start);
-    dims[1] = std::min(static_cast<float>(n_dims - 1), end);
+        update_indices_v, ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{-1, 2}), false);
+    update_indices_v.get_node_shared_ptr()->set_friendly_name("update_indices_v");
+    tensor_map.insert({"update_indices_v", update_indices_v});
 }
 
 void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
