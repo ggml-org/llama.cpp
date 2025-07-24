@@ -5191,7 +5191,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), { n_embd, n_vocab }, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto &        layer    = layers[i];
@@ -17078,7 +17083,7 @@ struct llm_build_lfm2 : public llm_graph_context {
 };
 
 struct llm_build_smallthinker : public llm_graph_context{
-    llm_build_smallthinker(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params){
+    llm_build_smallthinker(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params){
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -17105,15 +17110,8 @@ struct llm_build_smallthinker : public llm_graph_context{
             bool is_moe = hparams.n_ff_exp == hparams.n_ff_arr[il];
 
             if (is_moe) {
-                ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, inpL);  // [n_expert, n_tokens]
-                cb(logits, "ffn_moe_logits", il);
-
-                if (hparams.expert_gating_func == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX) {
-                    probs = ggml_soft_max(ctx0, logits);  // [n_expert, n_tokens]
-                } else {
-                    probs = ggml_sigmoid(ctx0, logits);  // [n_expert, n_tokens]
-                }
-                cb(probs, "ffn_moe_probs", il);
+                probs = build_lora_mm(model.layers[il].ffn_gate_inp, inpL);  // [n_expert, n_tokens]
+                cb(probs, "ffn_moe_logits", il);
             }
 
             // norm
@@ -17148,10 +17146,10 @@ struct llm_build_smallthinker : public llm_graph_context{
                 cb(Kcur, "Kcur", il);
 
                 if (hparams.is_swa_any()) {
-                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified_iswa *>(inp_attn), gf, model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
+                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified_iswa *>(inp_attn), model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
                        nullptr,nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
                 } else {
-                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified *>(inp_attn), gf, model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
+                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified *>(inp_attn), model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
                         nullptr,nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
                 }
             }
@@ -17175,8 +17173,8 @@ struct llm_build_smallthinker : public llm_graph_context{
             if (is_moe) {
                 ffn_out = build_moe_ffn_from_probs(cur, probs, model.layers[il].ffn_up_exps,
                                                 model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
-                                                nullptr, n_expert, n_expert_used, LLM_FFN_RELU, true, false, 0.0, il);
-
+                                                nullptr, n_expert, n_expert_used,
+                                                static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
             } else {
                 ffn_out = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
                                     model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_RELU, LLM_FFN_PAR, il);
@@ -17647,7 +17645,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_SMALLTHINKER:
             {
-                llm = std::make_unique<llm_build_smallthinker>(*this, params, gf);
+                llm = std::make_unique<llm_build_smallthinker>(*this, params);
             } break;
         default:
             GGML_ABORT("fatal error");

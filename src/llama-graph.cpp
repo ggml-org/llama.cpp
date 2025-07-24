@@ -947,14 +947,10 @@ ggml_tensor * llm_graph_context::build_moe_ffn_from_probs(
          ggml_tensor * exp_probs_b,
              int64_t   n_expert,
              int64_t   n_expert_used,
-     llm_ffn_op_type   type_op,
-                bool   norm_w,
-                bool   scale_w,
-               float   w_scale,
+             llama_expert_gating_func_type gating_op,
                  int   il) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
-    const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
 
     // add experts selection bias - introduced in DeepSeek V3
     // leave probs unbiased as it's later used to get expert weights
@@ -973,90 +969,57 @@ ggml_tensor * llm_graph_context::build_moe_ffn_from_probs(
             ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
-    if (norm_w) {
-        weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
-
+    weights = ggml_reshape_2d(ctx0, weights, n_expert_used, n_tokens);
+     if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX) {
+        weights = ggml_soft_max(ctx0, weights);
+    } else {
+        weights = ggml_sigmoid(ctx0, weights);
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, n_tokens]
         cb(weights_sum, "ffn_moe_weights_sum", il);
 
         weights = ggml_div(ctx0, weights, weights_sum); // [n_expert_used, n_tokens]
         cb(weights, "ffn_moe_weights_norm", il);
+    }
 
-        weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
-    }
-    if (scale_w) {
-        weights = ggml_scale(ctx0, weights, w_scale);
-        cb(weights, "ffn_moe_weights_scaled", il);
-    }
+    weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, n_tokens);
 
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
-
-    if (weight_before_ffn) {
-        // repeat cur to [n_embd, n_expert_used, n_tokens]
-        ggml_tensor * repeated = ggml_repeat_4d(ctx0, cur, n_embd, n_expert_used, n_tokens, 1);
-        cur = ggml_mul(ctx0, repeated, weights);
-        cb(cur, "ffn_moe_weighted", il);
-    }
 
     ggml_tensor * up = build_lora_mm_id(up_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
     cb(up, "ffn_moe_up", il);
 
     ggml_tensor * experts = nullptr;
-    if (gate_exps) {
-        cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
-        cb(cur, "ffn_moe_gate", il);
-    } else {
-        cur = up;
-    }
+    cur = build_lora_mm_id(gate_exps, cur, selected_experts); // [n_ff, n_expert_used, n_tokens]
+    cb(cur, "ffn_moe_gate", il);
 
-    switch (type_op) {
-        case LLM_FFN_SILU:
-            if (gate_exps) {
-                cur = ggml_swiglu_split(ctx0, cur, up);
-                cb(cur, "ffn_moe_swiglu", il);
-            } else {
-                cur = ggml_silu(ctx0, cur);
-                cb(cur, "ffn_moe_silu", il);
-            } break;
-        case LLM_FFN_GELU:
-            if (gate_exps) {
-                cur = ggml_geglu_split(ctx0, cur, up);
-                cb(cur, "ffn_moe_geglu", il);
-            } else {
-                cur = ggml_gelu(ctx0, cur);
-                cb(cur, "ffn_moe_gelu", il);
-            } break;
-        case LLM_FFN_RELU:
-            if (gate_exps) {
-                cur = ggml_reglu_split(ctx0, cur, up);
-                cb(cur, "ffn_moe_reglu", il);
-            } else {
-                cur = ggml_relu(ctx0, cur);
-                cb(cur, "ffn_moe_relu", il);
-            } break;
-        default:
-            GGML_ABORT("fatal error");
-    }
+    cur = ggml_reglu_split(ctx0, cur, up);
+    cb(cur, "ffn_moe_reglu", il);
 
     experts = build_lora_mm_id(down_exps, cur, selected_experts); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
 
-    if (!weight_before_ffn) {
-        experts = ggml_mul(ctx0, experts, weights);
-        cb(cur, "ffn_moe_weighted", il);
+    experts = ggml_mul(ctx0, experts, weights);
+    cb(cur, "ffn_moe_weighted", il);
+
+    ggml_tensor * cur_experts[LLAMA_MAX_EXPERTS] = { nullptr };
+
+    assert(n_expert_used > 0);
+
+    // order the views before the adds
+    for (uint32_t i = 0; i < hparams.n_expert_used; ++i) {
+        cur_experts[i] = ggml_view_2d(ctx0, experts, n_embd, n_tokens, experts->nb[2], i*experts->nb[1]);
+
+        ggml_build_forward_expand(gf, cur_experts[i]);
     }
 
     // aggregate experts
-    ggml_tensor * moe_out = nullptr;
-    for (int i = 0; i < n_expert_used; ++i) {
-        ggml_tensor * cur_expert = ggml_view_2d(ctx0, experts, n_embd, n_tokens,
-                experts->nb[2], i*experts->nb[1]);
+    // note: here we explicitly use hparams.n_expert_used instead of n_expert_used
+    //       to avoid potentially a large number of add nodes during warmup
+    //       ref: https://github.com/ggml-org/llama.cpp/pull/14753
+    ggml_tensor * moe_out = cur_experts[0];
 
-        if (i == 0) {
-            moe_out = cur_expert;
-        } else {
-            moe_out = ggml_add(ctx0, moe_out, cur_expert);
-        }
+    for (uint32_t i = 1; i < hparams.n_expert_used; ++i) {
+        moe_out = ggml_add(ctx0, moe_out, cur_experts[i]);
     }
 
     if (n_expert_used == 1) {

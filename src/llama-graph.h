@@ -634,10 +634,7 @@ struct llm_graph_context {
              ggml_tensor * exp_probs_b,
                  int64_t   n_expert,
                  int64_t   n_expert_used,
-         llm_ffn_op_type   type_op,
-                    bool   norm_w,
-                    bool   scale_w,
-                   float   w_scale,
+            llama_expert_gating_func_type gating_op,
                      int   il) const;
 
     //
