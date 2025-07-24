@@ -8,6 +8,8 @@ Cpp11BracedListStyle: true
 AccessModifierOffset: -4
 BinPackArguments: false
 BreakBeforeBraces: Attach
+IndentCaseBlocks: false
+IndentCaseLabels: false
 
 Language:        Cpp
 AlignAfterOpenBracket: Align
@@ -68,8 +70,6 @@ IncludeCategories:
 IncludeIsMainRegex: '([-_](test|unittest))?$'
 IncludeIsMainSourceRegex: ''
 IndentAccessModifiers: false
-IndentCaseBlocks: true
-IndentCaseLabels: true
 IndentExternBlock: NoIndent
 IndentGotoLabels: false
 IndentPPDirectives: AfterHash
