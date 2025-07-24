@@ -3531,7 +3531,7 @@ static void ggml_sycl_mul_mat_id(ggml_backend_sycl_context & ctx,
                 stream->memset(dev_cur_src1_row.get(), 0, sizeof(int))));
 
             const unsigned int max_work_group_size = ggml_sycl_info().max_work_group_sizes[ctx.device];
-            assert(work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
+            assert(max_work_group_size % (WARP_SIZE * WARP_SIZE) == 0);
 
             {
                 sycl::range<3> block_dims(1, 1, std::min((unsigned int)ne10, max_work_group_size));

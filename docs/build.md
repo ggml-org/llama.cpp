@@ -68,6 +68,9 @@ cmake --build build --config Release
       cmake --build build-x64-windows-llvm-release
       ```
 - Curl usage is enabled by default and can be turned off with `-DLLAMA_CURL=OFF`. Otherwise you need to install development libraries for libcurl.
+  - **Debian / Ubuntu:** `sudo apt-get install libcurl4-openssl-dev`  # (or `libcurl4-gnutls-dev` if you prefer GnuTLS)
+  - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install libcurl-devel`
+  - **Arch / Manjaro:** `sudo pacman -S curl`  # includes libcurl headers
 
 ## BLAS Build
 
@@ -387,12 +390,12 @@ docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/ren
 
 ### For Linux users:
 
-First, follow the the official [Getting Started with the Linux Tarball Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html) guide.
+First, follow the official LunarG instructions for the installation and setup of the Vulkan SDK in the [Getting Started with the Linux Tarball Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html) guide.
 
 > [!IMPORTANT]
 > After completing the first step, ensure that you have used the `source` command on the `setup_env.sh` file inside of the Vulkan SDK in your current terminal session. Otherwise, the build won't work. Additionally, if you close out of your terminal, you must perform this step again if you intend to perform a build. However, there are ways to make this persistent. Refer to the Vulkan SDK guide linked in the first step for more information about any of this.
 
-Second, after verifying that you have done everything in the Vulkan SDK guide provided in the first step, run the following command to verify that everything is set up correctly:
+Second, after verifying that you have followed all of the SDK installation/setup steps, use this command to make sure before proceeding:
 ```bash
 vulkaninfo
 ```
@@ -403,10 +406,11 @@ cmake -B build -DGGML_VULKAN=1
 cmake --build build --config Release
 ```
 
-Finally, after finishing your build, you should be able to do this:
+Finally, after finishing your build, you should be able to do something like this:
 ```bash
-# Test the output binary (with "-ngl 33" to offload all layers to GPU)
-./build/bin/llama-cli -m "PATH_TO_MODEL" -p "Hi you how are you" -n 50 -e -ngl 33 -t 4
+# Test the output binary
+# "-ngl 99" should offload all of the layers to GPU for most (if not all) models.
+./build/bin/llama-cli -m "PATH_TO_MODEL" -p "Hi you how are you" -ngl 99
 
 # You should see in the output, ggml_vulkan detected your GPU. For example:
 # ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32

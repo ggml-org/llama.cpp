@@ -1954,12 +1954,6 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         }
     },
     {
-        LLM_ARCH_UNKNOWN,
-        {
-            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
-        },
-    },
-    {
         LLM_ARCH_DREAM,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -1974,6 +1968,12 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_FFN_GATE,        "blk.%d.ffn_gate" },
             { LLM_TENSOR_FFN_DOWN,        "blk.%d.ffn_down" },
             { LLM_TENSOR_FFN_UP,          "blk.%d.ffn_up" },
+        },
+    },
+    {
+        LLM_ARCH_UNKNOWN,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
         },
     },
 };

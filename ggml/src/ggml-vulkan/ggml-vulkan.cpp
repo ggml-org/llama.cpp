@@ -10248,7 +10248,7 @@ static bool ggml_vk_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, st
         }
         // if rms_norm is the B operand, then we don't handle broadcast
         if (rms_norm == mul->src[1] &&
-            mul->src[0]->ne[1] != rms_norm->ne[1]) {
+            !ggml_are_same_shape(mul->src[0], rms_norm)) {
             return false;
         }
         // rms_norm shader assumes contiguous rows

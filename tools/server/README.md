@@ -575,6 +575,8 @@ These words will not be included in the completion, so make sure to add them to 
 
 `add_special`: (Optional) Boolean indicating if special tokens, i.e. `BOS`, should be inserted.  Default: `false`
 
+`parse_special`: (Optional) Boolean indicating if special tokens should be tokenized. When `false` special tokens are treated as plaintext.  Default: `true`
+
 `with_pieces`: (Optional) Boolean indicating whether to return token pieces along with IDs.  Default: `false`
 
 **Response:**

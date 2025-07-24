@@ -6486,7 +6486,7 @@ class JaisModel(TextModel):
         self.gguf_writer.add_max_alibi_bias(self.max_alibi_bias)
 
 
-@ModelBase.register("Glm4ForCausalLM")
+@ModelBase.register("Glm4ForCausalLM", "Glm4vForConditionalGeneration")
 class Glm4Model(TextModel):
     model_arch = gguf.MODEL_ARCH.GLM4
 
@@ -6508,13 +6508,21 @@ class Glm4Model(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        rope_dim = self.hparams["head_dim"]
+        if (rope_dim := self.hparams.get("head_dim")) is None:
+            rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5)))
         rope_scaling = self.hparams.get("rope_scaling") or {}
         if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("model.visual."): # ignore visual part of Glm4v
+            return []
+        elif name.startswith("model.language_model."):
+            name = name.replace("language_model.", "") # for Glm4v
+        return super().modify_tensors(data_torch, name, bid)
 
 
 @ModelBase.register("GlmForCausalLM", "ChatGLMModel", "ChatGLMForConditionalGeneration")

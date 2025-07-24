@@ -1612,7 +1612,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.antiprompt.emplace_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-sp", "--special"},
         string_format("special tokens output enabled (default: %s)", params.special ? "true" : "false"),
@@ -2653,6 +2653,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("start processing the input from chunk N (default: %d)", params.i_chunk),
         [](common_params & params, int value) {
             params.i_chunk = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--show-statistics"},
+        string_format("show imatrix statistics and then exit (default: %s)", params.show_statistics ? "true" : "false"),
+        [](common_params & params) {
+            params.show_statistics = true;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
