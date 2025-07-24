@@ -236,8 +236,9 @@ void GgmlOvDecoder::set_llm_params() {
 }
 
 ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) const {
+    auto name = std::string(src->name);
     ov::PartialShape input_shape;
-    if (std::string(src->name) == "inp_tokens" || std::string(src->name) == "inp_pos") {
+    if (name == "inp_tokens" || name == "inp_pos") {
         if (m_is_static) {
             if (m_is_first_token) {
                 input_shape = ov::PartialShape{1, 1, m_context_size};
@@ -247,7 +248,9 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
         } else {
             input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_context_size)};
         }
-    } else if (std::string(src->name) == "KQ_mask") {
+    } else if (name == "inp_out_ids" && !m_is_static) {
+        input_shape = ov::PartialShape{1, 1, ov::Dimension(1, m_context_size)};
+    } else if (name == "KQ_mask") {
         if (m_is_static) {
             if (m_is_first_token) {
                 input_shape = ov::PartialShape{1, m_context_size, m_context_size};
@@ -258,9 +261,9 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
             auto max_mask_size = GGML_PAD(m_context_size, GGML_KQ_MASK_PAD);
             input_shape = ov::PartialShape{1, ov::Dimension(1, max_mask_size), ov::Dimension(1, max_mask_size)};
         }
-    } else if (std::string(src->name).find("cache_k") == 0) {
+    } else if (name.find("cache_k") == 0) {
         input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
-    } else if (std::string(src->name).find("cache_v") == 0) {
+    } else if (name.find("cache_v") == 0) {
         input_shape = ov::PartialShape{m_num_heads_kv, m_head_size, m_context_size};
     } else if (src->op == GGML_OP_VIEW) {
         // This case is added to make test-backend-ops work
@@ -273,18 +276,22 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
 
 void GgmlOvDecoder::add_extra_inputs() {
     // Extra inputs:
-    //   1. `attention_size`, used in matmul's in the attention block. The shape of those matmul's are 32 aligned,
-    //       see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
-    //       Not used for NPU
+    // 1. `past_token_len`, used to create indices for updating kv cache. Usually equal to inp_pos[0], except for
+    //     llama-perplexity.
+    // 2. `attention_size`, used in matmul's in the attention block. The shape of those matmul's are 32 aligned,
+    //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
+    //     Not used for NPU
+    int64_t past_token_len = -1;
     int64_t attention_size = -1;
 
-    int64_t past_token_len = -1;
+    int64_t token_len = -1;
     int64_t past_token_len_from_inp_pos = -1;
     for (const auto& node : m_nodes) {
         if (node->op == GGML_OP_ROPE && std::string(node->src[1]->name) == "inp_pos") {
             if (node->src[1]->type != GGML_TYPE_I32) {
                 throw std::runtime_error("Expected cgraph input `inp_pos` to be of type GGML_TYPE_I32");
             }
+            token_len = node->src[1]->ne[0];
             past_token_len_from_inp_pos = ((int32_t*) (node->src[1]->data))[0];
         }
         if (node->op == GGML_OP_CPY && ggml_is_contiguous(node)) {
@@ -294,29 +301,39 @@ void GgmlOvDecoder::add_extra_inputs() {
             break;
         }
     }
+
     if (past_token_len == -1) {
         throw std::runtime_error("Failed to find input \"cache_k\" in the graph");
     }
     if (past_token_len != past_token_len_from_inp_pos) {
-        throw std::runtime_error("Mismatch between past_token_len from cache_k and inp_pos: " +
-                                 std::to_string(past_token_len) + " vs " + std::to_string(past_token_len_from_inp_pos));
+        GGML_LOG_DEBUG("Mismatch between past_token_len from cache_k and inp_pos: %ld vs %ld\n",
+                       past_token_len,
+                       past_token_len_from_inp_pos);
     }
 
-    for (const auto& node : m_nodes) {
-        if (node->src[1] && std::string(node->src[1]->name).find("inp_tokens") == 0) {
-            int64_t total_token_len = node->src[1]->ne[0] + past_token_len;
-            attention_size = GGML_PAD(total_token_len, 32);
-            std::string name = "attention_size";
-            auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
-            param_node->set_friendly_name(name);
-            param_node->output(0).get_tensor().set_names({name});
-            m_model_extra_inputs[name] = param_node;
+    {
+        std::string name = "past_token_len";
+        auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
+        param_node->set_friendly_name(name);
+        param_node->output(0).get_tensor().set_names({name});
+        m_model_extra_inputs[name] = param_node;
 
-            auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
-            *tensor->data<int64_t>() = attention_size;
-            m_model_extra_input_values[name] = tensor;
-            break;
-        }
+        auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
+        *tensor->data<int64_t>() = past_token_len;
+        m_model_extra_input_values[name] = tensor;
+    }
+    {
+        int64_t total_token_len = token_len + past_token_len;
+        attention_size = GGML_PAD(total_token_len, 32);
+        std::string name = "attention_size";
+        auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
+        param_node->set_friendly_name(name);
+        param_node->output(0).get_tensor().set_names({name});
+        m_model_extra_inputs[name] = param_node;
+
+        auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
+        *tensor->data<int64_t>() = attention_size;
+        m_model_extra_input_values[name] = tensor;
     }
 }
 
