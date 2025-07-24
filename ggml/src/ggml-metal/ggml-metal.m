@@ -6275,6 +6275,10 @@ static void ggml_backend_metal_set_n_cb(ggml_backend_t backend, int n_cb) {
             }
 
             const int res = ggml_metal_encode_node(backend, idx, node_end, encoder, mem_pool);
+            if (idx + res > node_end) {
+                GGML_ABORT("fusion error: nodes spanning multiple encoders have been fused. this indicates a bug in the fusion logic %s",
+                        "https://github.com/ggml-org/llama.cpp/pull/14849");
+            }
 
             if (should_capture) {
                 [encoder popDebugGroup];
