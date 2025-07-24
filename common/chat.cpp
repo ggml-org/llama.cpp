@@ -592,6 +592,8 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_1_LLAMA_3_1: return "Functionary v3.1 Llama 3.1";
         case COMMON_CHAT_FORMAT_HERMES_2_PRO: return "Hermes 2 Pro";
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
+        case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
+
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -602,6 +604,7 @@ const char * common_reasoning_format_name(common_reasoning_format format) {
         case COMMON_REASONING_FORMAT_NONE:     return "none";
         case COMMON_REASONING_FORMAT_DEEPSEEK: return "deepseek";
         case COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY: return "deepseek-legacy";
+        case COMMON_REASONING_FORMAT_GRANITE: return "granite";
         default:
             throw std::runtime_error("Unknown reasoning format");
     }
@@ -1709,6 +1712,7 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
     };
 
     data.prompt = apply(tmpl, inputs, /* messages_override= */ std::nullopt, /* tools_override= */ std::nullopt, additional_context);
+    data.format = COMMON_CHAT_FORMAT_GRANITE;
 
     if (string_ends_with(data.prompt, "<think>\n") || string_ends_with(data.prompt, "<think>")) {
         if (!inputs.enable_thinking) {
@@ -1719,7 +1723,6 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
     }
 
     if (!inputs.tools.is_null()) {
-        data.format = COMMON_CHAT_FORMAT_GRANITE;
         // Granite uses <|tool_call|> followed by JSON list
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
@@ -1763,7 +1766,6 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
             };
         });
     } else {
-        data.format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
         // Handle thinking tags for non-tool responses
         if (data.thinking_forced_open && inputs.enable_thinking) {
             data.grammar_lazy = false;
@@ -1948,6 +1950,7 @@ static common_chat_params common_chat_templates_apply_legacy(
     int alloc_size = 0;
     std::vector<llama_chat_message> chat;
     std::vector<std::string> contents;
+
     for (const auto & msg : inputs.messages) {
         auto content = msg.content;
         for (const auto & part : msg.content_parts) {
