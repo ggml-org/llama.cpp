@@ -356,10 +356,13 @@ void print_input_tensor_info(const std::string& name, const ov::Tensor& tensor) 
             std::cout << *(tensor.data<float>()) << std::endl;
             break;
         case ov::element::f16:
-            std::cout << ov::float16::from_bits(*(tensor.data<uint16_t>())) << std::endl;
+            std::cout << *(tensor.data<ov::float16>()) << std::endl;
             break;
         case ov::element::i32:
-            std::cout << *(tensor.data<int32_t>()) << std::endl;
+            for (size_t i = 0; i < tensor.get_size(); ++i) {
+                std::cout << tensor.data<int32_t>()[i] << " ";
+            }
+            std::cout << std::endl;
             break;
         case ov::element::i64:
             std::cout << *(tensor.data<int64_t>()) << std::endl;
@@ -379,7 +382,7 @@ void print_output_tensor_info(const std::string& name, const ov::Tensor& tensor,
             std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
             break;
         case ov::element::f16:
-            std::cout << ov::float16::from_bits(*(tensor.data<uint16_t>())) << std::endl;
+            std::cout << *(tensor.data<ov::float16>()) << std::endl;
             std::cout << checksum(tensor.data(), tensor.get_byte_size()) << std::endl;
             break;
         default:
