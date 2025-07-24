@@ -73,7 +73,9 @@ namespace ggml_cuda_mma {
         T x[ne] = {0};
 
         static __device__ __forceinline__ int get_i(const int l) {
-            if constexpr (I == 16 && J == 8) {
+            if constexpr (I == 64 && J == 2) { // Special tile size to load <16, 4> as <16, 8>
+                return threadIdx.x % 16;
+            } else if constexpr (I == 16 && J == 8) {
                 return threadIdx.x % 16;
             } else if constexpr (I == 32 && J == 4) {
                 return threadIdx.x % 32;
@@ -87,7 +89,9 @@ namespace ggml_cuda_mma {
         }
 
         static __device__ __forceinline__ int get_j(const int l) {
-            if constexpr (I == 16 && J == 8) {
+            if constexpr (I == 64 && J == 2) { // Special tile size to load <16, 4> as <16, 8>
+                return (2 * ((threadIdx.x / 16) % 2) + l);
+            } else if constexpr (I == 16 && J == 8) {
                 return 2 * (threadIdx.x / 16) + l;
             } else if constexpr (I == 32 && J == 4) {
                 return 2 * (threadIdx.x / 32) + l;
@@ -184,9 +188,16 @@ namespace ggml_cuda_mma {
     template <int I, int J, typename T>
     static __device__ __forceinline__ void load_generic(tile<I, J, T> & t, const T * __restrict__ xs0, const int stride) {
 #if defined(AMD_MFMA_AVAILABLE)
-        int64_t * xi = (int64_t *) t.x;
-        const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
-        xi[0] = xs[0];
+        if constexpr (I == 64 && J == 2) { // Special tile size to load <16, 4> as <16, 8>
+#pragma unroll
+            for (int l = 0; l < t.ne; ++l) {
+                t.x[l] = xs0[t.get_i(l)*stride + t.get_j(l)];
+            }
+        } else {
+            int64_t * xi = (int64_t *) t.x;
+            const int64_t * xs = (int64_t *) ((const int *) xs0 + (threadIdx.x % t.I) * stride + 2 * (threadIdx.x / t.I));
+            xi[0] = xs[0];
+        }
 #else
 #pragma unroll
         for (int l = 0; l < t.ne; ++l) {
