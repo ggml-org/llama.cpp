@@ -1303,6 +1303,7 @@ struct test_case {
                     }
                 }
                 assert(added_nodes == nodes_per_op);
+                (void) added_nodes;
             } else {
                 ggml_graph_add_node(gf, out);
             }
@@ -1713,7 +1714,7 @@ struct test_case_compare : public test_case {
 
     std::string vars() override { return "(" + case1->vars() + "),(" + case2->vars() + ")"; }
 
-    ggml_tensor * build_graph(ggml_context * ctx) {
+    ggml_tensor * build_graph(ggml_context * ctx) override {
         GGML_UNUSED(ctx);
         return nullptr;
     }
@@ -1761,7 +1762,7 @@ struct test_case_compare : public test_case {
     }
 
     // Compares the output of the actual graph to the output of the reference
-    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name,
+    bool eval_compare(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name,
               std::vector<std::pair<std::string, std::string>> input_names, std::string output_name_1,
               std::string output_name_2, printer * output_printer) {
         mode = MODE_TEST;
@@ -4045,7 +4046,7 @@ struct test_conv_2d_im2col : public test_case {
         return std::string("CONV_2D_IM2COL");
     }
 
-    bool run_whole_graph() { return false; }
+    bool run_whole_graph() override { return false; }
 
     std::string vars() override {
         return VARS_TO_STR9(ne_input, ne_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
@@ -4228,7 +4229,7 @@ struct test_conv_2d_compare : public test_case_compare {
 
     bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name,
               printer * output_printer) override {
-        return test_case_compare::eval(backend1, backend2, op_name, input_names, output_name_1, output_name_2,
+        return test_case_compare::eval_compare(backend1, backend2, op_name, input_names, output_name_1, output_name_2,
                                        output_printer);
     }
 };
