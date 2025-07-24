@@ -24,16 +24,16 @@ from typing import (
 import numpy as np
 import torch
 
+if "NO_LOCAL_GGUF" not in os.environ:
+    sys.path.insert(1, str(Path(__file__).parent / "gguf-py"))
+
+import gguf
 from gguf.constants import MODEL_ARCH, MODEL_ARCH_NAMES
 from gguf.vocab import MistralTokenizerType, MistralVocab
 from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN, DATASET_STD
 
 if TYPE_CHECKING:
     from torch import Tensor
-
-if "NO_LOCAL_GGUF" not in os.environ:
-    sys.path.insert(1, str(Path(__file__).parent / "gguf-py"))
-import gguf
 
 logger = logging.getLogger("mistral-to-gguf")
 
