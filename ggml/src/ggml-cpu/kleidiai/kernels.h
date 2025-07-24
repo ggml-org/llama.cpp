@@ -71,12 +71,15 @@ struct rhs_packing_info {
         std::function<size_t(size_t n, size_t k, size_t nr, size_t kr, size_t bl)>,
         std::function<size_t(size_t n, size_t k)>
     > packed_size;
+    size_t (*packed_stride)(size_t k, size_t nr, size_t kr, size_t bl);
     std::variant<
         std::function<void(size_t num_groups, size_t n, size_t k, size_t nr, size_t kr, size_t sr, size_t bl, const uint8_t* rhs,
             const float* bias, void* rhs_packed, size_t extra_bytes, const struct kai_rhs_pack_qs4cxs1s0_param* params)>,
         std::function<void(size_t num_groups, size_t n, size_t k, size_t nr, size_t kr, size_t sr, size_t rhs_stride, const void* rhs,
             const void* bias, const void* scale, void* rhs_packed, size_t extra_bytes, const void* params)>
     > pack_func;
+    void (*to_float)(const void *packed_data, int32_t row_idx, int64_t nc, float *out, size_t nr_pack, size_t packed_row_stride,
+          size_t kr, size_t bl, size_t num_bytes_multiplier);
 };
 
 struct ggml_kleidiai_kernels {

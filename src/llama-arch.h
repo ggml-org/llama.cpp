@@ -38,6 +38,7 @@ enum llm_arch {
     LLM_ARCH_PHI3,
     LLM_ARCH_PHIMOE,
     LLM_ARCH_PLAMO,
+    LLM_ARCH_PLAMO2,
     LLM_ARCH_CODESHELL,
     LLM_ARCH_ORION,
     LLM_ARCH_INTERNLM2,
@@ -50,6 +51,8 @@ enum llm_arch {
     LLM_ARCH_STARCODER2,
     LLM_ARCH_MAMBA,
     LLM_ARCH_MAMBA2,
+    LLM_ARCH_JAMBA,
+    LLM_ARCH_FALCON_H1,
     LLM_ARCH_XVERSE,
     LLM_ARCH_COMMAND_R,
     LLM_ARCH_COHERE2,
@@ -69,12 +72,14 @@ enum llm_arch {
     LLM_ARCH_JAIS,
     LLM_ARCH_NEMOTRON,
     LLM_ARCH_EXAONE,
+    LLM_ARCH_EXAONE4,
     LLM_ARCH_RWKV6,
     LLM_ARCH_RWKV6QWEN2,
     LLM_ARCH_RWKV7,
     LLM_ARCH_ARWKV7,
     LLM_ARCH_GRANITE,
     LLM_ARCH_GRANITE_MOE,
+    LLM_ARCH_GRANITE_HYBRID,
     LLM_ARCH_CHAMELEON,
     LLM_ARCH_WAVTOKENIZER_DEC,
     LLM_ARCH_PLM,
@@ -82,6 +87,11 @@ enum llm_arch {
     LLM_ARCH_DOTS1,
     LLM_ARCH_ARCEE,
     LLM_ARCH_ERNIE4_5,
+    LLM_ARCH_ERNIE4_5_MOE,
+    LLM_ARCH_HUNYUAN_MOE,
+    LLM_ARCH_SMOLLM3,
+    LLM_ARCH_LFM2,
+    LLM_ARCH_DREAM,
     LLM_ARCH_SMALLTHINKER,
     LLM_ARCH_UNKNOWN,
 };
@@ -155,7 +165,6 @@ enum llm_kv {
     LLM_KV_ATTENTION_SCALE,
     LLM_KV_ATTENTION_KEY_LENGTH_MLA,
     LLM_KV_ATTENTION_VALUE_LENGTH_MLA,
-    LLM_KV_ATTENTION_LAYER_INDICES,
 
     LLM_KV_ROPE_DIMENSION_COUNT,
     LLM_KV_ROPE_DIMENSION_SECTIONS,
@@ -223,6 +232,8 @@ enum llm_kv {
     LLM_KV_CONVNEXT_BLOCK_COUNT,
 
     LLM_KV_CLASSIFIER_OUTPUT_LABELS,
+
+    LLM_KV_SHORTCONV_L_CACHE,
 
     // deprecated:
     LLM_KV_TOKENIZER_PREFIX_ID,
@@ -294,7 +305,10 @@ enum llm_tensor {
     LLM_TENSOR_SSM_CONV1D,
     LLM_TENSOR_SSM_X,
     LLM_TENSOR_SSM_DT,
+    LLM_TENSOR_SSM_DT_NORM,
     LLM_TENSOR_SSM_A,
+    LLM_TENSOR_SSM_B_NORM,
+    LLM_TENSOR_SSM_C_NORM,
     LLM_TENSOR_SSM_D,
     LLM_TENSOR_SSM_NORM,
     LLM_TENSOR_SSM_OUT,
@@ -390,6 +404,9 @@ enum llm_tensor {
     LLM_TENSOR_POS_NET_ATTN_K,
     LLM_TENSOR_POS_NET_ATTN_V,
     LLM_TENSOR_POS_NET_ATTN_OUT,
+    LLM_TENSOR_SHORTCONV_CONV,
+    LLM_TENSOR_SHORTCONV_INPROJ,
+    LLM_TENSOR_SHORTCONV_OUTPROJ,
 };
 
 enum llm_tensor_layer {
@@ -466,3 +483,4 @@ const llm_tensor_info & llm_tensor_info_for(llm_tensor tensor);
 
 bool llm_arch_is_recurrent(const llm_arch & arch);
 bool llm_arch_is_hybrid   (const llm_arch & arch);
+bool llm_arch_is_diffusion(const llm_arch & arch);

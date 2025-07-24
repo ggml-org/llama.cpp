@@ -305,9 +305,8 @@ On Linux it is possible to use unified memory architecture (UMA) to share main m
 
 ## Vulkan
 
-**Windows**
-
-### w64devkit
+### For Windows Users:
+**w64devkit**
 
 Download and extract [`w64devkit`](https://github.com/skeeto/w64devkit/releases).
 
@@ -334,7 +333,7 @@ cmake -B build -DGGML_VULKAN=ON
 cmake --build build --config Release
 ```
 
-### Git Bash MINGW64
+**Git Bash MINGW64**
 
 Download and install [`Git-SCM`](https://git-scm.com/downloads/win) with the default settings
 
@@ -357,7 +356,8 @@ Now you can load the model in conversation mode using `Vulkan`
 build/bin/Release/llama-cli -m "[PATH TO MODEL]" -ngl 100 -c 16384 -t 10 -n -2 -cnv
 ```
 
-### MSYS2
+**MSYS2**
+
 Install [MSYS2](https://www.msys2.org/) and then run the following commands in a UCRT terminal to install dependencies.
 ```sh
 pacman -S git \
@@ -373,9 +373,9 @@ cmake -B build -DGGML_VULKAN=ON
 cmake --build build --config Release
 ```
 
-**With docker**:
+### For Docker users:
 
-You don't need to install Vulkan SDK. It will be installed inside the container.
+You don't need to install the Vulkan SDK. It will be installed inside the container.
 
 ```sh
 # Build the image
@@ -385,32 +385,29 @@ docker build -t llama-cpp-vulkan --target light -f .devops/vulkan.Dockerfile .
 docker run -it --rm -v "$(pwd):/app:Z" --device /dev/dri/renderD128:/dev/dri/renderD128 --device /dev/dri/card1:/dev/dri/card1 llama-cpp-vulkan -m "/app/models/YOUR_MODEL_FILE" -p "Building a website can be done in 10 simple steps:" -n 400 -e -ngl 33
 ```
 
-**Without docker**:
+### For Linux users:
 
-Firstly, you need to make sure you have installed [Vulkan SDK](https://vulkan.lunarg.com/doc/view/latest/linux/getting_started_ubuntu.html)
+First, follow the official LunarG instructions for the installation and setup of the Vulkan SDK in the [Getting Started with the Linux Tarball Vulkan SDK](https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html) guide.
 
-For example, on Ubuntu 22.04 (jammy), use the command below:
+> [!IMPORTANT]
+> After completing the first step, ensure that you have used the `source` command on the `setup_env.sh` file inside of the Vulkan SDK in your current terminal session. Otherwise, the build won't work. Additionally, if you close out of your terminal, you must perform this step again if you intend to perform a build. However, there are ways to make this persistent. Refer to the Vulkan SDK guide linked in the first step for more information about any of this.
 
+Second, after verifying that you have followed all of the SDK installation/setup steps, use this command to make sure before proceeding:
 ```bash
-wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add -
-wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
-apt update -y
-apt-get install -y vulkan-sdk
-# To verify the installation, use the command below:
 vulkaninfo
 ```
 
-Alternatively your package manager might be able to provide the appropriate libraries.
-For example for Ubuntu 22.04 you can install `libvulkan-dev` instead.
-For Fedora 40, you can install `vulkan-devel`, `glslc` and `glslang` packages.
-
-Then, build llama.cpp using the cmake command below:
-
+Then, assuming you have `cd` into your llama.cpp folder and there are no errors with running `vulkaninfo`, you can proceed to build llama.cpp using the CMake commands below:
 ```bash
 cmake -B build -DGGML_VULKAN=1
 cmake --build build --config Release
-# Test the output binary (with "-ngl 33" to offload all layers to GPU)
-./bin/llama-cli -m "PATH_TO_MODEL" -p "Hi you how are you" -n 50 -e -ngl 33 -t 4
+```
+
+Finally, after finishing your build, you should be able to do something like this:
+```bash
+# Test the output binary
+# "-ngl 99" should offload all of the layers to GPU for most (if not all) models.
+./build/bin/llama-cli -m "PATH_TO_MODEL" -p "Hi you how are you" -ngl 99
 
 # You should see in the output, ggml_vulkan detected your GPU. For example:
 # ggml_vulkan: Using Intel(R) Graphics (ADL GT2) | uma: 1 | fp16: 1 | warp size: 32
@@ -556,6 +553,23 @@ ninja
 ## Android
 
 To read documentation for how to build on Android, [click here](./android.md)
+
+## WebGPU [In Progress]
+
+The WebGPU backend relies on [Dawn](https://dawn.googlesource.com/dawn). Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/docs/quickstart-cmake.md) to install Dawn locally so that llama.cpp can find it using CMake. The currrent implementation is up-to-date with Dawn commit `bed1a61`.
+
+In the llama.cpp directory, build with CMake:
+
+```
+cmake -B build -DGGML_WEBGPU=ON
+cmake --build build --config Release
+```
+
+### Browser Support
+
+WebGPU allows cross-platform access to the GPU from supported browsers. We utilize [Emscripten](https://emscripten.org/) to compile ggml's WebGPU backend to WebAssembly. Emscripten does not officially support WebGPU bindings yet, but Dawn currently maintains its own WebGPU bindings called emdawnwebgpu.
+
+Follow the instructions [here](https://dawn.googlesource.com/dawn/+/refs/heads/main/src/emdawnwebgpu/) to download or build the emdawnwebgpu package (Note that it might be safer to build the emdawbwebgpu package locally, so that it stays in sync with the version of Dawn you have installed above). When building using CMake, the path to the emdawnwebgpu port file needs to be set with the flag `EMDAWNWEBGPU_DIR`.
 
 ## IBM Z & LinuxONE
 

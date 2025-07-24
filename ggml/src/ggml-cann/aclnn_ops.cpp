@@ -1785,8 +1785,27 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
     size_t transpose_nb[] = {bcast_weight_nb[1], bcast_weight_nb[0],
                              bcast_weight_nb[2], bcast_weight_nb[3],
                              bcast_weight_nb[4], bcast_weight_nb[5]};
-    aclTensor* acl_weight_tensor =
-        ggml_cann_create_tensor(weight, transpose_ne, transpose_nb, n_dims);
+    aclTensor* acl_weight_tensor;
+
+    bool weightToNZ = false;
+#ifdef ASCEND_310P
+    weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
+#endif
+    if (weightToNZ && is_matmul_weight(weight)) {
+        int64_t acl_stride[2] = {1, transpose_ne[1]};
+
+        // Reverse ne.
+        std::reverse(transpose_ne, transpose_ne + n_dims);
+
+        std::vector<int64_t> storageDims = {transpose_ne[0], transpose_ne[1]};
+
+        acl_weight_tensor = aclCreateTensor(
+            transpose_ne, n_dims, ggml_cann_type_mapping(weight->type), acl_stride,
+            0, ACL_FORMAT_FRACTAL_NZ, storageDims.data(), 2, weight->data);
+    } else {
+        acl_weight_tensor =
+            ggml_cann_create_tensor(weight, transpose_ne, transpose_nb, n_dims, ACL_FORMAT_ND);
+    }
     aclTensor* acl_dst =
         ggml_cann_create_tensor(dst, bcast_dst_ne, bcast_dst_nb, n_dims);
 

@@ -16,6 +16,9 @@
 # # with VULKAN support
 # GG_BUILD_VULKAN=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
+# # with WebGPU support
+# GG_BUILD_WEBGPU=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+#
 # # with MUSA support
 # GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
@@ -79,6 +82,10 @@ fi
 
 if [ ! -z ${GG_BUILD_VULKAN} ]; then
     CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_VULKAN=1"
+fi
+
+if [ ! -z ${GG_BUILD_WEBGPU} ]; then
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_WEBGPU=1"
 fi
 
 if [ ! -z ${GG_BUILD_MUSA} ]; then

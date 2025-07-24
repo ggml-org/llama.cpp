@@ -24,6 +24,7 @@
 
 #include <acl/acl.h>
 #include <stdarg.h>
+#include <aclnnop/aclnn_trans_matmul_weight.h>
 
 #include <cmath>
 #include <cstdio>
@@ -1115,6 +1116,63 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
+static int CreateAclTensorWeight(const void *hostData, const std::vector<int64_t> &shape, void **deviceAddr,
+                      aclDataType dataType, aclTensor **tensor)
+{
+    uint64_t size = 1;
+    for (auto i : shape) {
+        size *= i;
+    }
+
+    const aclIntArray *mat2Size = aclCreateIntArray(shape.data(), shape.size());
+    ACL_CHECK(aclnnCalculateMatmulWeightSizeV2(mat2Size, dataType, &size));
+
+    size *= sizeof(int16_t);
+
+    ACL_CHECK(aclrtMalloc(deviceAddr, size, ACL_MEM_MALLOC_HUGE_FIRST));
+    aclrtMemcpy(*deviceAddr, size, hostData, size, ACL_MEMCPY_HOST_TO_DEVICE);
+
+    std::vector<int64_t> strides(shape.size(), 1);
+    for (int64_t i = shape.size() - 2; i >= 0; i--) {
+        strides[i] = shape[i + 1] * strides[i + 1];
+    }
+
+    *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_ND,
+                              shape.data(), shape.size(), *deviceAddr);
+    return 0;
+}
+
+static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
+    aclrtStream stream;
+    ACL_CHECK(aclrtCreateStream(&stream));
+
+    std::vector<int64_t> weightTransposedShape = {tensor->ne[1], tensor->ne[0]};
+    void *weightTransposedDeviceAddr = nullptr;
+    aclTensor *weightTransposed = nullptr;
+    CreateAclTensorWeight(data, weightTransposedShape, &weightTransposedDeviceAddr,
+                          ggml_cann_type_mapping(tensor->type), &weightTransposed);
+
+    uint64_t workspaceSize = 0;
+    aclOpExecutor *executor;
+    void *workspaceAddr = nullptr;
+
+    // TransMatmulWeight
+    ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed, &workspaceSize, &executor));
+    std::unique_ptr<void, aclError (*)(void *)> workspaceAddrPtrTrans(nullptr, aclrtFree);
+    if (workspaceSize > 0) {
+        ACL_CHECK(aclrtMalloc(&workspaceAddr, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST));
+        workspaceAddrPtrTrans.reset(workspaceAddr);
+    }
+    ACL_CHECK(aclnnTransMatmulWeight(workspaceAddr, workspaceSize, executor, stream));
+
+    size_t size = ggml_nelements(tensor) * ggml_element_size(tensor);
+
+    aclrtMemcpy((char *)tensor->data + offset, size,
+                weightTransposedDeviceAddr, size, ACL_MEMCPY_HOST_TO_DEVICE);
+    ACL_CHECK(aclDestroyTensor(weightTransposed));
+    aclrtFree(weightTransposedDeviceAddr);
+}
+
 // TODO: need handle tensor which has paddings.
 /**
  * @brief Set tensor data in a CANN buffer.
@@ -1139,9 +1197,16 @@ static void ggml_backend_cann_buffer_set_tensor(
     // For acl, synchronous functions use this default stream.
     // Why aclrtSynchronizeDevice?
 
+    bool weightToNZ = false;
+#ifdef ASCEND_310P
+    weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
+#endif
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
+        if (weightToNZ && is_matmul_weight((const ggml_tensor*)tensor)) {
+            weight_format_to_nz(tensor, data, offset);
+        }
     } else {
         void *transform_buffer = malloc(size);
         ggml_backend_cann_transform(tensor, data, transform_buffer);
@@ -2090,6 +2155,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             {
                 // TODO: add support
                 // ref: https://github.com/ggml-org/llama.cpp/pull/14274
+#pragma message("TODO: implement F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, IQ4_NL support (https://github.com/ggml-org/llama.cpp/pull/14661)")
                 return false;
             } break;
         case GGML_OP_CPY: {
@@ -2188,7 +2254,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_RMS_NORM:
-        case GGML_OP_SCALE:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_CLAMP:
@@ -2210,6 +2275,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_COUNT_EQUAL:
             return true;
+        case GGML_OP_SCALE:
+            float bias;
+            memcpy(&bias, (float*)op->op_params + 1, sizeof(float));
+            return bias == 0.0f; // TODO: support bias != 0.0f
         case GGML_OP_SOFT_MAX:
             // TODO: support broadcast
             // ref: https://github.com/ggml-org/llama.cpp/pull/14435
