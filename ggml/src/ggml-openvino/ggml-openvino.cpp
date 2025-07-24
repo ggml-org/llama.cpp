@@ -309,7 +309,7 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
     return false;
 }
 
-static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor* op) {
     GGML_ASSERT(dev->reg != nullptr);
 
     static const std::set<ggml_type> supported_types{
@@ -327,34 +327,29 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     };
 
     switch (op->op) {
-        case GGML_OP_UNARY:
-            {
-                auto supported = supported_unary_ops.find(ggml_get_unary_op(op)) != supported_unary_ops.end();
-                if (!supported) {
-                    GGML_LOG_WARN("OpenVINO backend does not support unary op %s\n",
-                                  ggml_unary_op_name(ggml_get_unary_op(op)));
-                    return false;
-                }
-                break;
-            }
-        case GGML_OP_GLU:
-            {
-                auto supported = supported_glu_ops.find(ggml_get_glu_op(op)) != supported_glu_ops.end();
-                if (!supported) {
-                    GGML_LOG_WARN("OpenVINO backend does not support GLU op %s\n",
-                                  ggml_glu_op_name(ggml_get_glu_op(op)));
-                    return false;
-                }
-                break;
-            }
-        default:
-            {
-                auto supported = supported_ops.find(op->op) != supported_ops.end();
-                if (!supported) {
-                    GGML_LOG_WARN("OpenVINO backend does not support op %s\n", ggml_op_name(op->op));
-                    return false;
-                }
-            }
+    case GGML_OP_UNARY: {
+        auto supported = supported_unary_ops.find(ggml_get_unary_op(op)) != supported_unary_ops.end();
+        if (!supported) {
+            GGML_LOG_WARN("OpenVINO backend does not support unary op %s\n", ggml_unary_op_name(ggml_get_unary_op(op)));
+            return false;
+        }
+        break;
+    }
+    case GGML_OP_GLU: {
+        auto supported = supported_glu_ops.find(ggml_get_glu_op(op)) != supported_glu_ops.end();
+        if (!supported) {
+            GGML_LOG_WARN("OpenVINO backend does not support GLU op %s\n", ggml_glu_op_name(ggml_get_glu_op(op)));
+            return false;
+        }
+        break;
+    }
+    default: {
+        auto supported = supported_ops.find(op->op) != supported_ops.end();
+        if (!supported) {
+            GGML_LOG_WARN("OpenVINO backend does not support op %s\n", ggml_op_name(op->op));
+            return false;
+        }
+    }
     }
 
     if (supported_types.find(op->type) == supported_types.end()) {
