@@ -6,6 +6,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Settings, Filter, Hand, MessageSquare, Plus, Beaker } from '@lucide/svelte';
+	import type { ConfigValue, FieldConfig } from '$lib/types/settings';
 
 	interface Props {
 		open?: boolean;
@@ -13,15 +14,6 @@
 	}
 
 	let { open = false, onOpenChange }: Props = $props();
-
-	type ConfigValue = string | number | boolean;
-
-	interface FieldConfig {
-		key: string;
-		label: string;
-		type: 'input' | 'textarea' | 'checkbox';
-		help?: string;
-	}
 
 	// Mock configuration - will be replaced with real stores
 	let config: Record<string, ConfigValue> = $state({
@@ -267,7 +259,7 @@
 											<div class="space-y-1">
 												<label
 													for={field.key}
-													class="text-sm font-medium leading-none cursor-pointer"
+													class="cursor-pointer text-sm font-medium leading-none"
 												>
 													{field.label}
 												</label>

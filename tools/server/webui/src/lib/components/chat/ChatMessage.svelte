@@ -15,7 +15,7 @@
 	{/if}
 
 	<Card
-		class="max-w-[80%] p-3 {message.role === 'user'
+		class="max-w-[80%] gap-2 px-4 py-3 {message.role === 'user'
 			? 'bg-primary text-primary-foreground'
 			: 'bg-muted'}"
 	>
@@ -23,8 +23,8 @@
 			{message.content}
 		</div>
 		{#if message.timestamp}
-			<div class="mt-2 text-xs opacity-70">
-				{message.timestamp.toLocaleTimeString()}
+			<div class="text-xs opacity-70">
+				{new Date(message.timestamp).toLocaleTimeString()}
 			</div>
 		{/if}
 	</Card>

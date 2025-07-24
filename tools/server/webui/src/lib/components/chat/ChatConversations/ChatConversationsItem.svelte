@@ -43,7 +43,9 @@
 </script>
 
 <button
-	class="hover:bg-accent group flex w-full cursor-pointer items-center justify-between space-x-3 rounded-lg p-3 text-left transition-colors"
+	class="hover:bg-accent group flex w-full cursor-pointer items-center justify-between space-x-3 rounded-lg p-3 text-left transition-colors {isActive
+		? 'bg-accent text-accent-foreground border border-border'
+		: 'border border-transparent'}"
 	onclick={handleSelect}
 >
 	<div class="flex min-w-0 flex-1 items-center space-x-3">

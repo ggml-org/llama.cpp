@@ -1,7 +1,7 @@
 export interface ChatMessageData {
-	role: 'user' | 'assistant';
+	role: 'user' | 'assistant' | 'system';
 	content: string;
-	timestamp?: Date;
+	timestamp?: Date | number;
 }
 
 export interface ChatCompletionRequest {

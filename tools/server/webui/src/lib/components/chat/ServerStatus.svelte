@@ -2,6 +2,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { AlertTriangle, Server } from '@lucide/svelte';
+	import { serverProps, serverLoading, serverError, modelName } from '$lib/stores/server.svelte';
 
 	interface Props {
 		class?: string;
@@ -11,23 +12,24 @@
 
 	let { class: className = '', variant = 'header', showActions = false }: Props = $props();
 
-	// Mock server status - will be replaced with real store data
-	let serverStatus = {
-		connected: true,
-		loading: false,
-		model: 'llama-3.2-3b-instruct',
-		contextSize: 8192,
-		tokensPerSecond: 45.2
-	};
+	// Real server status from store
+	const serverData = $derived(serverProps());
+	const loading = $derived(serverLoading());
+	const error = $derived(serverError());
+	const model = $derived(modelName());
 
 	function getStatusColor() {
-		if (serverStatus.loading) return 'bg-yellow-500';
-		if (serverStatus.connected) return 'bg-green-500';
-		return 'bg-red-500';
+		if (loading) return 'bg-yellow-500';
+		if (error) return 'bg-red-500';
+		if (serverData) return 'bg-green-500';
+		return 'bg-gray-500';
 	}
 
 	function getStatusText() {
-		return serverStatus.connected ? 'Connected' : 'Disconnected';
+		if (loading) return 'Connecting...';
+		if (error) return 'Connection Error';
+		if (serverData) return 'Connected';
+		return 'Unknown';
 	}
 </script>
 
@@ -39,21 +41,23 @@
 	</div>
 
 	<!-- Server Info -->
-	{#if serverStatus.connected}
+	{#if serverData && !error}
 		<Badge variant="outline" class="text-xs">
 			<Server class="mr-1 h-3 w-3" />
-			{serverStatus.model}
+			{model || 'Unknown Model'}
 		</Badge>
-		<Badge variant="secondary" class="text-xs">
-			ctx: {serverStatus.contextSize}
-		</Badge>
+		{#if serverData.n_ctx}
+			<Badge variant="secondary" class="text-xs">
+				ctx: {serverData.n_ctx.toLocaleString()}
+			</Badge>
+		{/if}
 	{/if}
 
 	<!-- Error Action (if needed) -->
-	{#if showActions && !serverStatus.connected}
+	{#if showActions && error}
 		<Button variant="outline" size="sm" class="text-destructive">
 			<AlertTriangle class="mr-2 h-4 w-4" />
-			Connection Error
+			{error}
 		</Button>
 	{/if}
 </div>
