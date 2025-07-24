@@ -1,9 +1,15 @@
 <script lang="ts">
 	import { Card } from '$lib/components/ui/card';
 	import { Bot } from '@lucide/svelte';
+
+	interface Props {
+		class?: string;
+	}
+
+	let { class: className }: Props = $props();
 </script>
 
-<div class="flex justify-start gap-3">
+<div class="flex justify-start gap-3 {className}">
 	<div
 		class="bg-background flex h-8 w-8 shrink-0 select-none items-center justify-center rounded-md border shadow"
 	>

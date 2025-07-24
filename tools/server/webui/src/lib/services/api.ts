@@ -1,4 +1,4 @@
-import type { ChatMessage } from '$lib/stores/database';
+import type { DatabaseChatMessage } from '$lib/types/database';
 
 export interface LlamaCppServerProps {
 	build_info: string;
@@ -44,17 +44,13 @@ export interface ChatCompletionChunk {
 export class ApiService {
 	private static baseUrl = import.meta.env.VITE_BASE_URL;
 
-	/**
-	 * Send a chat completion request with streaming support
-	 */
 	static async sendChatCompletion(
-		messages: ChatMessage[],
+		messages: DatabaseChatMessage[],
 		onChunk?: (content: string) => void,
 		onComplete?: () => void,
 		onError?: (error: Error) => void
 	): Promise<string> {
 		try {
-			// Convert database messages to API format
 			const apiMessages: ChatCompletionMessage[] = messages.map((msg) => ({
 				role: msg.role as 'user' | 'assistant' | 'system',
 				content: msg.content
@@ -86,7 +82,6 @@ export class ApiService {
 				throw new Error('No response body received');
 			}
 
-			// Handle streaming response
 			const reader = response.body.getReader();
 			const decoder = new TextDecoder();
 			let fullResponse = '';
@@ -136,9 +131,6 @@ export class ApiService {
 		}
 	}
 
-	/**
-	 * Get server properties including model info, build info, and supported modalities
-	 */
 	static async getServerProps(): Promise<LlamaCppServerProps> {
 		try {
 			const response = await fetch(`${this.baseUrl}/props`, {

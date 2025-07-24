@@ -31,7 +31,7 @@
 			{/each}
 
 			{#if isLoading}
-				<ChatMessageLoading />
+				<ChatMessageLoading class="mx-auto w-full max-w-[56rem]" />
 			{/if}
 		</div>
 	</div>

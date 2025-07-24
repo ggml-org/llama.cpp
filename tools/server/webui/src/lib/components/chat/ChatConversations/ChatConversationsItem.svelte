@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
-	import { MessageCircle, Trash2, Pencil } from '@lucide/svelte';
+	import { Trash2, Pencil } from '@lucide/svelte';
 	import type { Conversation } from '$lib/types/conversation';
 
 	interface Props {
@@ -44,13 +43,11 @@
 
 <button
 	class="hover:bg-accent group flex w-full cursor-pointer items-center justify-between space-x-3 rounded-lg p-3 text-left transition-colors {isActive
-		? 'bg-accent text-accent-foreground border border-border'
+		? 'bg-accent text-accent-foreground border-border border'
 		: 'border border-transparent'}"
 	onclick={handleSelect}
 >
 	<div class="flex min-w-0 flex-1 items-center space-x-3">
-		<!-- <MessageCircle class="text-muted-foreground h-5 w-5 flex-shrink-0" /> -->
-
 		<div class="min-w-0 flex-1">
 			<p class="truncate text-sm font-medium">{conversation.name}</p>
 
@@ -62,7 +59,6 @@
 		</div>
 	</div>
 
-	<!-- Actions (visible on hover) -->
 	<div class="flex items-center space-x-1 opacity-0 transition-opacity group-hover:opacity-100">
 		<Button size="sm" variant="ghost" class="h-6 w-6 p-0" onclick={handleEdit}>
 			<Pencil class="h-3 w-3" />

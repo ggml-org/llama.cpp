@@ -4,22 +4,15 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Plus, Search } from '@lucide/svelte';
 	import ChatConversationsItem from '$lib/components/chat/ChatConversations/ChatConversationsItem.svelte';
-	import {
-		chats,
-		activeChat,
-		createChat,
-		updateChatName,
-		deleteChat
-	} from '$lib/stores/chat.svelte';
-	import { page } from '$app/stores';
+	import { chats, deleteChat } from '$lib/stores/chat.svelte';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 
 	// Sidebar state
-	let sidebarOpen = $state(true);
 	let searchQuery = $state('');
 
 	// Get current chat ID from URL
-	const currentChatId = $derived($page.params.id);
+	const currentChatId = $derived(page.params.id);
 
 	// Filter chats based on search query
 	let filteredChats = $derived(

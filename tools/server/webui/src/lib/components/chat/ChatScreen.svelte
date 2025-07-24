@@ -11,16 +11,13 @@
 	} from '$lib/stores/chat.svelte';
 	import { fly, slide } from 'svelte/transition';
 
-	// Props to control UI layout
 	let { showCenteredEmpty = false } = $props();
 
-	// Show empty state only when explicitly requested (home route)
 	const isEmpty = $derived(
 		showCenteredEmpty && !activeChat() && activeChatMessages().length === 0 && !isLoading()
 	);
 
 	async function handleSendMessage(message: string) {
-		// sendMessage now handles chat creation internally
 		await sendMessage(message);
 	}
 </script>
