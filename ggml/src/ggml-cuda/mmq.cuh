@@ -250,13 +250,15 @@ static constexpr __device__ int mmq_get_granularity_device(const int /*mmq_x*/) 
 }
 #endif // AMD_MFMA_AVAILABLE
 
-static int mmq_get_nwarps_host(const int cc) {
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
+static int mmq_get_nwarps_host(const int cc) {
     return amd_mfma_available(cc) ? 8 : 4;
-#else
-    return 8;
-#endif // (GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 }
+#else
+static int mmq_get_nwarps_host(const int /*cc*/) {
+    return 8;
+}
+#endif // (GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
 
 static constexpr __device__ int mmq_get_nwarps_device() {
 #if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
