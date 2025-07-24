@@ -1902,9 +1902,9 @@ bool ggml_backend_compare_graph_backend_node(ggml_backend_t backend1, ggml_backe
         }
     }
 
-    assert(out1 != NULL);
-    assert(out2 != NULL);
-    assert(ggml_are_same_layout(out1, out2));
+    GGML_ASSERT(out1 != NULL);
+    GGML_ASSERT(out2 != NULL);
+    GGML_ASSERT(ggml_are_same_layout(out1, out2));
 
     // compare results, calculate rms etc
     if (!callback(0, out1, out2, user_data)) {

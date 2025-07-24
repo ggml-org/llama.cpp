@@ -1302,8 +1302,8 @@ struct test_case {
                         ggml_graph_add_node(gf, t);
                     }
                 }
-                assert(added_nodes == nodes_per_op);
-                (void) added_nodes;
+                GGML_ASSERT(added_nodes == nodes_per_op);
+                GGML_UNUSED(added_nodes);
             } else {
                 ggml_graph_add_node(gf, out);
             }
