@@ -20,7 +20,6 @@
 #include <ggml-backend.h>
 #include <ggml-cpp.h>
 
-#include <assert.h>
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -4042,7 +4041,7 @@ struct test_conv_2d_im2col : public test_case {
     // IM2COL -> MUL_MM graph will be built.
 
     virtual std::string op_desc(ggml_tensor * t) override {
-        (void) t;
+        GGML_UNUSED(t);
         return std::string("CONV_2D_IM2COL");
     }
 
@@ -4220,7 +4219,7 @@ struct test_conv_2d_compare : public test_case_compare {
     std::string output_name_2 = "out";
 
     virtual std::string op_desc(ggml_tensor * t) override {
-        (void) t;
+        GGML_UNUSED(t);
         return std::string("CONV_2D_COMPARE");
     }
 
