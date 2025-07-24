@@ -176,7 +176,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             break;
         }
         case GGML_OP_CPY: {
-            if (ggml_is_contiguous(node)) {
+            if (std::string(node->src[1]->name).find("cache_k") == 0) {
                 // Write K to cache_k
                 m_op_case = 1;
             } else {
@@ -184,7 +184,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
                 m_op_case = 2;
             }
             break;
-            }
+        }
         case GGML_OP_PERMUTE: {
             if (node->src[0]->view_src == nullptr) {
                 // Permute Qcur
@@ -198,23 +198,21 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             }
             break;
         }
-        case GGML_OP_GET_ROWS:
-            {
-                if (node->src[1]->op == GGML_OP_VIEW) {
-                    m_op_case = 2;
-                } else {
-                    m_op_case = 1;
-                }
-                break;
+        case GGML_OP_GET_ROWS: {
+            if (node->src[1]->op == GGML_OP_VIEW) {
+                m_op_case = 2;
+            } else {
+                m_op_case = 1;
             }
-        case GGML_OP_ROPE:
-            {
-                if (node->src[0]->op == GGML_OP_VIEW) {
-                    m_op_case = 2;
-                } else {
-                    m_op_case = 1;
-                }
+            break;
+        }
+        case GGML_OP_ROPE: {
+            if (node->src[0]->op == GGML_OP_VIEW) {
+                m_op_case = 2;
+            } else {
+                m_op_case = 1;
             }
+        }
         default:
             break;
         }
@@ -405,17 +403,16 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
         weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_f16);
         break;
     }
-    case GGML_TYPE_BF16:
-        {
-            const auto* ptr = reinterpret_cast<const uint16_t*>(tensor->data);
-            std::vector<ov::bfloat16> data_bf16;
-            data_bf16.reserve(ne_total);
-            for (int i = 0; i < ne_total; ++i) {
-                data_bf16.push_back(ov::bfloat16::from_bits(ptr[i]));
-            }
-            weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_bf16);
-            break;
+    case GGML_TYPE_BF16: {
+        const auto* ptr = reinterpret_cast<const uint16_t*>(tensor->data);
+        std::vector<ov::bfloat16> data_bf16;
+        data_bf16.reserve(ne_total);
+        for (int i = 0; i < ne_total; ++i) {
+            data_bf16.push_back(ov::bfloat16::from_bits(ptr[i]));
         }
+        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_bf16);
+        break;
+    }
     default:
         throw std::invalid_argument("Unsupported tensor type");
     }
@@ -614,8 +611,8 @@ int32_t* GgmlOvDecoder::get_output_op_params(const std::string& name) const {
 
 void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecoder>)> node_visitor) const {
     for (const auto& node : m_nodes) {
-        auto decoder = std::make_shared<GgmlOvDecoder>(node, m_cgraph, m_is_static, m_is_first_token, m_context_size,
-                                                       m_num_heads, m_num_heads_kv, m_head_size);
+        auto decoder = std::make_shared<GgmlOvDecoder>(
+            node, m_cgraph, m_is_static, m_is_first_token, m_context_size, m_num_heads, m_num_heads_kv, m_head_size);
         node_visitor(decoder);
     }
 }
@@ -667,12 +664,12 @@ const std::string& GgmlOvDecoder::get_op_type() const {
     };
 
     switch (m_node->op) {
-        case GGML_OP_UNARY:
-            return unary_ops.at(ggml_get_unary_op(m_node));
-        case GGML_OP_GLU:
-            return glu_ops.at(ggml_get_glu_op(m_node));
-        default:
-            return ops.at(m_node->op);
+    case GGML_OP_UNARY:
+        return unary_ops.at(ggml_get_unary_op(m_node));
+    case GGML_OP_GLU:
+        return glu_ops.at(ggml_get_glu_op(m_node));
+    default:
+        return ops.at(m_node->op);
     }
     static const std::string unknown_op = "UNKNOWN_GGML_OP";
     return unknown_op;
