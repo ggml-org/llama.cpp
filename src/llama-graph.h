@@ -216,7 +216,8 @@ public:
 
     ggml_tensor * s_copy;  // I32 [n_rs]
 
-    // views
+    // views of s_copy, computed once per graph
+    // and shared across layers which use build_rs
     ggml_tensor * s_copy_main;   // I32 [n_seqs]
     ggml_tensor * s_copy_extra;  // I32 [n_rs - n_seqs]
 
