@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { page } from '$app/stores';
-	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import ChatScreen from '$lib/components/chat/ChatScreen.svelte';
 	import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
@@ -29,12 +28,8 @@
 	<title>{activeChat?.name || 'Chat'} - llama.cpp</title>
 </svelte:head>
 
-<!-- Chat Header (slides in when chat is active) -->
 {#if activeChat() && (activeChatMessages().length > 0 || isLoading())}
-	<div in:slide={{ duration: 300, axis: 'y' }}>
-		<ChatHeader />
-	</div>
+	<ChatHeader />
 {/if}
 
-<!-- Main Chat Screen -->
 <ChatScreen />

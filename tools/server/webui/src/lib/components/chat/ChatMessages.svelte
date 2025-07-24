@@ -25,9 +25,9 @@
 
 <div class="flex h-full flex-col {className}">
 	<div bind:this={scrollContainer} class="bg-background flex-1 overflow-y-auto p-4">
-		<div class="space-y-4">
+		<div class="mb-48 mt-16 space-y-4">
 			{#each messages as message}
-				<ChatMessage {message} />
+				<ChatMessage class="mx-auto w-full max-w-[56rem]" {message} />
 			{/each}
 
 			{#if isLoading}

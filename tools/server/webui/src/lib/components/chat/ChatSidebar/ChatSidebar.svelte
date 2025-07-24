@@ -4,7 +4,13 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Plus, Search } from '@lucide/svelte';
 	import ChatConversationsItem from '$lib/components/chat/ChatConversations/ChatConversationsItem.svelte';
-	import { chats, activeChat, createChat, updateChatName, deleteChat } from '$lib/stores/chat.svelte';
+	import {
+		chats,
+		activeChat,
+		createChat,
+		updateChatName,
+		deleteChat
+	} from '$lib/stores/chat.svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 
@@ -19,10 +25,6 @@
 	let filteredChats = $derived(
 		chats().filter((chat) => chat.name.toLowerCase().includes(searchQuery.toLowerCase()))
 	);
-
-	async function createNewConversation() {
-		await createChat();
-	}
 
 	async function selectConversation(id: string) {
 		await goto(`/chat/${id}`);
@@ -48,27 +50,23 @@
 </Sidebar.Header>
 
 <!-- Search -->
-<div class="px-2 pb-2">
+<div class="px-2 pb-4">
 	<div class="relative">
 		<Search class="text-muted-foreground absolute left-2 top-2.5 h-4 w-4" />
-		<Input
-			bind:value={searchQuery}
-			placeholder="Search conversations..."
-			class="pl-8"
-		/>
+		<Input bind:value={searchQuery} placeholder="Search conversations..." class="pl-8" />
 	</div>
 </div>
 
 <!-- New Chat Button -->
 <div class="px-2 pb-4">
-	<Button 
-		onclick={createNewConversation} 
-		class="w-full justify-start gap-2 rounded-lg border-2 border-dashed border-muted-foreground/25 bg-transparent hover:bg-accent hover:border-accent-foreground/25 transition-colors"
+	<Button
+		href="/?new_chat=true"
+		class="border-muted-foreground/25 hover:bg-accent hover:border-accent-foreground/25 w-full justify-start gap-2 rounded-lg border-2 border-dashed bg-transparent transition-colors"
 		variant="ghost"
 	>
 		<Plus class="h-4 w-4" />
 		New Chat
-		<div class="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+		<div class="text-muted-foreground ml-auto flex items-center gap-1 text-xs">
 			<span class="rounded border px-1.5 py-0.5">⌘</span>
 			<span class="rounded border px-1.5 py-0.5">K</span>
 		</div>
@@ -100,11 +98,9 @@
 			{#if filteredChats.length === 0}
 				<div class="px-2 py-4 text-center">
 					<p class="text-muted-foreground text-sm">
-						{searchQuery
-							? 'No conversations found'
-							: 'No conversations yet'}
+						{searchQuery ? 'No conversations found' : 'No conversations yet'}
 					</p>
-			</div>
+				</div>
 			{/if}
 		</Sidebar.Menu>
 	</Sidebar.GroupContent>

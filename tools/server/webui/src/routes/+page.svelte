@@ -1,24 +1,25 @@
 <script lang="ts">
 	import ChatScreen from '$lib/components/chat/ChatScreen.svelte';
 	import { chatStore, isInitialized } from '$lib/stores/chat.svelte';
+	import { page } from '$app/stores';
 	import { onMount } from 'svelte';
 
-	// Initialize the chat store when the app loads
 	onMount(async () => {
 		if (!isInitialized) {
 			await chatStore.initialize();
 		}
 	});
 
-	// Clear any active chat when on home page
 	onMount(() => {
 		chatStore.clearActiveChat();
 	});
+
+	// Check if we're in new chat mode
+	const isNewChatMode = $derived($page.url.searchParams.get('new_chat') === 'true');
 </script>
 
 <svelte:head>
 	<title>llama.cpp - AI Chat Interface</title>
 </svelte:head>
 
-<!-- Home page shows empty state with welcome message -->
 <ChatScreen showCenteredEmpty={true} />

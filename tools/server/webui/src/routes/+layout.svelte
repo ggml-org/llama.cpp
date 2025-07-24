@@ -11,14 +11,18 @@
 
 	const isHomeRoute = $derived(page.route.id === '/');
 	const isChatRoute = $derived(page.route.id === '/chat/[id]');
+	const isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
 	const showSidebarByDefault = $derived(activeChatMessages().length > 0 || isLoading());
 
 	let sidebarOpen = $state(false);
 
 	$effect(() => {
-		if (isHomeRoute) {
-			// Auto-collapse sidebar when navigating to home route
+		if (isHomeRoute && !isNewChatMode) {
+			// Auto-collapse sidebar when navigating to home route (but not in new chat mode)
 			sidebarOpen = false;
+		} else if (isHomeRoute && isNewChatMode) {
+			// Keep sidebar open in new chat mode
+			sidebarOpen = true;
 		} else if (isChatRoute) {
 			// On chat routes, show sidebar by default
 			sidebarOpen = true;
@@ -42,9 +46,7 @@
 			<ChatSidebar />
 		</Sidebar.Root>
 
-		{#if !isChatRoute}
-			<Sidebar.Trigger class="h-8 w-8" style="translate: 0.5rem 0.5rem" />
-		{/if}
+		<Sidebar.Trigger class="z-50 h-8 w-8" style="translate: 1rem 1rem" />
 
 		<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
 			{@render children?.()}
