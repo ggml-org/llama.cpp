@@ -2394,11 +2394,6 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
     // here an event is recorded that signals that the main device has finished calculating the input data
     if (split && used_devices > 1) {
         ggml_sycl_set_device(ctx.device);
-        /*
-        DPCT1024:91: The original code returned the error code that was further
-        consumed by the program logic. This original code was replaced with 0.
-        You may need to rewrite the program logic consuming the error code.
-        */
         SYCL_CHECK(CHECK_TRY_ERROR(
             *src0_extra->events[ctx.device][0] =
                 ctx.stream()->ext_oneapi_submit_barrier()));
@@ -2422,11 +2417,6 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
 
             // wait for main GPU data if necessary
             if (split && (i != ctx.device || is != 0)) {
-                /*
-                DPCT1009:163: SYCL uses exceptions to report errors and does not
-                use the error codes. The original code was commented out and a
-                warning string was inserted. You need to rewrite this code.
-                */
                 SYCL_CHECK(CHECK_TRY_ERROR(stream->ext_oneapi_submit_barrier(
                     {*src0_extra->events[ctx.device][0]})));
             }
@@ -2452,38 +2442,39 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                 // copy src0, src1 to device if necessary
                 if (src1_is_contiguous) {
                     if (i != ctx.device) {
-                        if constexpr(quantize_enabled) {
+                        if constexpr (quantize_enabled) {
                             char * src1_ddq_i_source = dev[ctx.device].src1_ddq + src1_ddq_i_offset;
-                          SYCL_CHECK(CHECK_TRY_ERROR(stream->memcpy(
-                                src1_ddq_i, src1_ddq_i_source,
-                                src1_ncols * src1_padded_col_size * q8_1_ts /
-                                    q8_1_bs).wait()));
+                            SYCL_CHECK(
+                                CHECK_TRY_ERROR(stream
+                                                    ->memcpy(src1_ddq_i, src1_ddq_i_source,
+                                                             src1_ncols * src1_padded_col_size * q8_1_ts / q8_1_bs)
+                                                    .wait()));
                         } else {
-
                             float * src1_ddf_i_source = (float *) src1_extra->data_device[ctx.device];
-                            src1_ddf_i_source += (i0*ne11 + src1_col_0) * ne10;
+                            src1_ddf_i_source += (i0 * ne11 + src1_col_0) * ne10;
 
-                            SYCL_CHECK(CHECK_TRY_ERROR(dev2dev_memcpy(*stream, *main_stream,
-                                src1_ddf_i, src1_ddf_i_source,
-                                src1_ncols * ne10 * sizeof(float))));
+                            SYCL_CHECK(
+                                CHECK_TRY_ERROR(dev2dev_memcpy(*stream, *main_stream, src1_ddf_i, src1_ddf_i_source,
+                                                               src1_ncols * ne10 * sizeof(float))));
                         }
                     }
-                } else if (src1_on_device && !src1_is_contiguous) {
-                    SYCL_CHECK(ggml_sycl_cpy_tensor_2d(
-                                   src1_ddf_i, src1, i03, i02, src1_col_0, src1_col_0+src1_ncols, stream));
                 } else {
-                    GGML_ABORT("fatal error");
-                }
+                    if (src1_on_device) {
+                        SYCL_CHECK(ggml_sycl_cpy_tensor_2d(src1_ddf_i, src1, i03, i02, src1_col_0,
+                                                           src1_col_0 + src1_ncols, stream));
+                    } else {
+                        GGML_ABORT("src1 is non-contiguous and not on device");
+                    }
 
-                if constexpr(quantize_enabled) {
-                    if (!src1_is_contiguous) {
+                    if constexpr (quantize_enabled) {
                         scope_op_debug_print scope_dbg_print(__func__, "/quantize_row_q8_1_sycl", dst,
                                                              /*num_src=*/2, " : converting src1 to Q8_1");
                         try {
-                            quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols, src1_padded_col_size, stream);
-                        } catch (sycl::exception const &exc) {
-                            std::cerr << "Quantize_row_q8_1_sycl error" << exc.what() << "Exception caught at file:" << __FILE__
-                                      << ", line:" << __LINE__ << std::endl;
+                            quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols,
+                                                                  src1_padded_col_size, stream);
+                        } catch (const sycl::exception & exc) {
+                            std::cerr << "Quantize_row_q8_1_sycl error" << exc.what()
+                                      << "Exception caught at file:" << __FILE__ << ", line:" << __LINE__ << std::endl;
                             std::exit(1);
                         }
                     }
@@ -2498,12 +2489,6 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                 // do the computation
                 SYCL_CHECK(CHECK_TRY_ERROR(op(ctx, src0, src1, dst, src0_dd_i, src1_ddf_i, src1_ddq_i, dst_dd_i,
                     dev[i].row_low, dev[i].row_high, src1_ncols, src1_padded_col_size, stream)));
-                /*
-                DPCT1010:93: SYCL uses exceptions to report errors and does not
-                use the error codes. The call was replaced with 0. You need to
-                rewrite this code.
-                */
-                SYCL_CHECK(0);
 
                 // copy dst to host or other device if necessary
                 if (!dst_on_device) {
@@ -2534,12 +2519,6 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
 
                 // add event for the main device to wait on until other device is done
                 if (split && (i != ctx.device || is != 0)) {
-                    /*
-                    DPCT1024:94: The original code returned the error code that
-                    was further consumed by the program logic. This original
-                    code was replaced with 0. You may need to rewrite the
-                    program logic consuming the error code.
-                    */
                     SYCL_CHECK(CHECK_TRY_ERROR(
                         *src0_extra->events[i][is] =
                             stream->ext_oneapi_submit_barrier()));
