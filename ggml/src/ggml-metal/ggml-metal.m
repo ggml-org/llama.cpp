@@ -3171,19 +3171,12 @@ static int ggml_metal_encode_node(
                 [encoder setBytes:&args    length:sizeof(args) atIndex:8];
 
                 // One shared memory bucket for each simd group in the threadgroup
+                // NOTE: Metal kernels require the buffer size to be multiple of 16 bytes
+                //  https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/1443142-setthreadgroupmemorylength
                 if (d_state >= 32) {
-                    const int64_t shmem_size = d_state / 32;
-
-                    // The final simd_sum won't work if the number of simd groups is
-                    // larger than the size of a single simd group. If this case is
-                    // hit at some point, the logic in the second simd_sum could be
-                    // expanded to handle this with one more sequential simd_sum to
-                    // collapse simd group sums another time.
-                    GGML_ASSERT(shmem_size <= 32);
-
-                    // One thread pre element in d_state
+                    GGML_ASSERT((int64_t)(d_state / 32) <= 32);
+                    const int64_t shmem_size = 32;
                     GGML_ASSERT(d_state <= (int64_t)pipeline.maxTotalThreadsPerThreadgroup);
-
                     [encoder setThreadgroupMemoryLength:(shmem_size)*sizeof(float) atIndex:0];
                 }
 
