@@ -7637,6 +7637,7 @@ class HunYuanModel(TextModel):
 
         return [(self.map_tensor_name(name), data_torch)]
 
+
 @ModelBase.register("SmolLM3ForCausalLM")
 class SmolLM3Model(LlamaModel):
     model_arch = gguf.MODEL_ARCH.SMOLLM3
