@@ -2,7 +2,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
-	import { Send, Square, Paperclip, Mic } from '@lucide/svelte';
+	import { Send, Square, Paperclip, Mic, ArrowUp } from '@lucide/svelte';
 
 	interface Props {
 		class?: string;
@@ -84,7 +84,7 @@
 			<Button
 				type="button"
 				variant="ghost"
-				class="text-muted-foreground hover:text-foreground h-9 w-9 rounded-full p-0"
+				class="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full p-0"
 				disabled={disabled || isLoading}
 			>
 				<Paperclip class="h-4 w-4" />
@@ -96,25 +96,25 @@
 						type="button"
 						variant="ghost"
 						onclick={handleStop}
-						class="text-muted-foreground hover:text-destructive h-9 w-9 rounded-full p-0"
+						class="text-muted-foreground hover:text-destructive h-8 w-8 rounded-full p-0"
 					>
-						<Square class="h-6 w-6" />
+						<Square class="h-8 w-8" />
 					</Button>
 				{:else}
 					<Button
 						type="button"
 						variant="ghost"
-						class="text-muted-foreground hover:text-foreground h-9 w-9 rounded-full p-0"
+						class="text-muted-foreground hover:text-foreground h-8 w-8 rounded-full p-0"
 						disabled={disabled || isLoading}
 					>
-						<Mic class="h-6 w-6" />
+						<Mic class="h-8 w-8" />
 					</Button>
 					<Button
 						type="submit"
 						disabled={!message.trim() || disabled || isLoading}
-						class="h-9 w-9 rounded-full p-0"
+						class="h-8 w-8 rounded-full p-0"
 					>
-						<Send class="h-6 w-6" />
+						<ArrowUp class="h-12 w-12" />
 					</Button>
 				{/if}
 			</div>

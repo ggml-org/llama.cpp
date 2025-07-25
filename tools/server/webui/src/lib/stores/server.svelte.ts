@@ -1,4 +1,5 @@
-import { ApiService, type LlamaCppServerProps } from '$lib/services/api';
+import { ChatService } from '$lib/services/chat';
+import type { LlamaCppServerProps } from '$lib/services/chat';
 
 /**
  * Server properties store
@@ -51,7 +52,7 @@ class ServerStore {
 
 		try {
 			console.log('Fetching server properties...');
-			const props = await ApiService.getServerProps();
+			const props = await ChatService.getServerProps();
 			this._serverProps = props;
 			console.log('Server properties loaded:', props);
 		} catch (error) {

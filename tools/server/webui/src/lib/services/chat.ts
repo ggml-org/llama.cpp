@@ -1,3 +1,15 @@
+import type { DatabaseChatMessage } from '$lib/types/database';
+
+export interface LlamaCppServerProps {
+	build_info: string;
+	model_path: string;
+	n_ctx: number;
+	modalities?: {
+		vision: boolean;
+		audio: boolean;
+	};
+}
+
 export class ChatService {
 	private baseUrl: string;
 	private abortController: AbortController | null = null;
@@ -79,6 +91,9 @@ export class ChatService {
 
 		const decoder = new TextDecoder();
 		let fullResponse = '';
+		let thinkContent = '';
+		let regularContent = '';
+		let insideThinkTag = false;
 
 		try {
 			while (true) {
@@ -92,6 +107,13 @@ export class ChatService {
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
+							// Log final separated content
+							if (thinkContent.trim()) {
+								console.log('🤔 Think content:', thinkContent.trim());
+							}
+							if (regularContent.trim()) {
+								console.log('💬 Regular response:', regularContent.trim());
+							}
 							onComplete?.(fullResponse);
 							return;
 						}
@@ -101,6 +123,19 @@ export class ChatService {
 							const content = parsed.choices[0]?.delta?.content;
 							if (content) {
 								fullResponse += content;
+
+								// Process content character by character to handle think tags
+								insideThinkTag = this.processContentForThinkTags(
+									content,
+									insideThinkTag,
+									(thinkChunk) => {
+										thinkContent += thinkChunk;
+									},
+									(regularChunk) => {
+										regularContent += regularChunk;
+									}
+								);
+
 								onChunk?.(content);
 							}
 						} catch (e) {
@@ -139,6 +174,119 @@ export class ChatService {
 
 			throw err;
 		}
+	}
+
+	/**
+	 * Unified method to send chat completions supporting both ChatMessageData and DatabaseChatMessage types
+	 */
+	async sendChatCompletion(
+		messages: ChatMessageData[] | DatabaseChatMessage[],
+		options: {
+			stream?: boolean;
+			temperature?: number;
+			max_tokens?: number;
+			onChunk?: (chunk: string) => void;
+			onComplete?: (response?: string) => void;
+			onError?: (error: Error) => void;
+		} = {}
+	): Promise<string | void> {
+		// Normalize messages to ChatMessageData format
+		const normalizedMessages: ChatMessageData[] = messages.map((msg) => ({
+			role: msg.role as ChatMessageData['role'],
+			content: msg.content,
+			timestamp: 'timestamp' in msg ? msg.timestamp : undefined
+		}));
+
+		// Set default options for API compatibility
+		const finalOptions = {
+			stream: true,
+			temperature: 0.7,
+			max_tokens: 2048,
+			...options
+		};
+
+		return this.sendMessage(normalizedMessages, finalOptions);
+	}
+
+	/**
+	 * Static method for backward compatibility with ApiService
+	 */
+	static async sendChatCompletion(
+		messages: DatabaseChatMessage[],
+		onChunk?: (content: string) => void,
+		onComplete?: () => void,
+		onError?: (error: Error) => void
+	): Promise<string> {
+		const service = new ChatService();
+		const result = await service.sendChatCompletion(messages, {
+			stream: true,
+			temperature: 0.7,
+			max_tokens: 2048,
+			onChunk,
+			onComplete: () => onComplete?.(),
+			onError
+		});
+		return result as string;
+	}
+
+	/**
+	 * Get server properties - static method for API compatibility
+	 */
+	static async getServerProps(): Promise<LlamaCppServerProps> {
+		try {
+			const response = await fetch(`${import.meta.env.VITE_BASE_URL}/props`, {
+				headers: {
+					'Content-Type': 'application/json'
+				}
+			});
+
+			if (!response.ok) {
+				throw new Error(`Failed to fetch server props: ${response.status}`);
+			}
+
+			const data = await response.json();
+			return data;
+		} catch (error) {
+			console.error('Error fetching server props:', error);
+			throw error;
+		}
+	}
+
+	private processContentForThinkTags(
+		content: string,
+		currentInsideThinkTag: boolean,
+		addThinkContent: (chunk: string) => void,
+		addRegularContent: (chunk: string) => void
+	): boolean {
+		let i = 0;
+		let insideThinkTag = currentInsideThinkTag;
+
+		while (i < content.length) {
+			// Check for opening <think> tag
+			if (!insideThinkTag && content.substring(i, i + 7) === '<think>') {
+				insideThinkTag = true;
+				i += 7; // Skip the <think> tag
+				continue;
+			}
+
+			// Check for closing </think> tag
+			if (insideThinkTag && content.substring(i, i + 8) === '</think>') {
+				insideThinkTag = false;
+				i += 8; // Skip the </think> tag
+				continue;
+			}
+
+			// Add character to appropriate content bucket
+			if (insideThinkTag) {
+				addThinkContent(content[i]);
+			} else {
+				addRegularContent(content[i]);
+			}
+
+			i++;
+		}
+
+		return insideThinkTag;
 	}
 
 	abort(): void {

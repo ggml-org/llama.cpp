@@ -4,7 +4,7 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "vite dev & storybook dev -p 6006",
+		"dev": "vite dev & storybook dev -p 6006 --ci",
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
@@ -66,6 +66,12 @@
 		"vitest-browser-svelte": "^0.1.0"
 	},
 	"dependencies": {
-		"mode-watcher": "^1.1.0"
+		"mode-watcher": "^1.1.0",
+		"remark": "^15.0.1",
+		"remark-breaks": "^4.0.0",
+		"remark-gfm": "^4.0.1",
+		"remark-html": "^16.0.1",
+		"shiki": "^3.8.1",
+		"unist-util-visit": "^5.0.0"
 	}
 }

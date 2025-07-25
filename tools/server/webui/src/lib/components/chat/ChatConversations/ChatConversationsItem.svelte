@@ -9,9 +9,17 @@
 		onSelect?: (id: string) => void;
 		onEdit?: (id: string) => void;
 		onDelete?: (id: string) => void;
+		showLastModified?: boolean;
 	}
 
-	let { conversation, isActive = false, onSelect, onEdit, onDelete }: Props = $props();
+	let {
+		conversation,
+		isActive = false,
+		onSelect,
+		onEdit,
+		onDelete,
+		showLastModified = false
+	}: Props = $props();
 
 	function formatLastModified(timestamp: number) {
 		const now = Date.now();
@@ -47,19 +55,21 @@
 		: 'border border-transparent'}"
 	onclick={handleSelect}
 >
-	<div class="flex min-w-0 flex-1 items-center space-x-3">
+	<div class="text flex min-w-0 flex-1 items-center space-x-3">
 		<div class="min-w-0 flex-1">
 			<p class="truncate text-sm font-medium">{conversation.name}</p>
 
-			<div class="mt-2 flex flex-wrap items-center space-x-2 space-y-2">
-				<span class="text-muted-foreground w-full text-xs">
-					{formatLastModified(conversation.lastModified)}
-				</span>
-			</div>
+			{#if showLastModified}
+				<div class="mt-2 flex flex-wrap items-center space-x-2 space-y-2">
+					<span class="text-muted-foreground w-full text-xs">
+						{formatLastModified(conversation.lastModified)}
+					</span>
+				</div>
+			{/if}
 		</div>
 	</div>
 
-	<div class="flex items-center space-x-1 opacity-0 transition-opacity group-hover:opacity-100">
+	<div class="actions flex items-center space-x-1">
 		<Button size="sm" variant="ghost" class="h-6 w-6 p-0" onclick={handleEdit}>
 			<Pencil class="h-3 w-3" />
 		</Button>
@@ -73,3 +83,17 @@
 		</Button>
 	</div>
 </button>
+
+<style lang="postcss">
+	.actions {
+		button & {
+			width: 0;
+			opacity: 0;
+		}
+
+		button:hover & {
+			width: auto;
+			opacity: 1;
+		}
+	}
+</style>

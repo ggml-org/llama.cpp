@@ -1,6 +1,8 @@
+export type ChatRole = 'user' | 'assistant' | 'system';
 export interface ChatMessageData {
-	role: 'user' | 'assistant' | 'system';
+	role: ChatRole;
 	content: string;
+	thinking?: string; // Content between <think> and </think> tags
 	timestamp?: Date | number;
 }
 

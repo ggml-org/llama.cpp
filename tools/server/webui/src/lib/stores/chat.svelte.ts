@@ -1,4 +1,5 @@
-import { ApiService, DatabaseService } from '$lib/services';
+import { ChatService } from '$lib/services/chat';
+import { DatabaseService } from '$lib/services';
 import type { DatabaseChat, DatabaseChatMessage } from '$lib/app';
 import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
@@ -124,37 +125,43 @@ class ChatStore {
 			}
 
 			let streamedContent = '';
-			await ApiService.sendChatCompletion(
+			const chatService = new ChatService();
+			await chatService.sendChatCompletion(
 				allMessages,
-				(chunk: string) => {
-					streamedContent += chunk;
-					this.currentResponse = streamedContent;
+				{
+					stream: true,
+					temperature: 0.7,
+					max_tokens: 2048,
+					onChunk: (chunk: string) => {
+						streamedContent += chunk;
+						this.currentResponse = streamedContent;
 
-					const messageIndex = this.activeChatMessages.findIndex(
-						(m) => m.id === assistantMessage.id
-					);
-					if (messageIndex !== -1) {
-						this.activeChatMessages[messageIndex].content = streamedContent;
-					}
-				},
-				async () => {
-					await DatabaseService.updateMessage(assistantMessage.id, {
-						content: streamedContent
-					});
+						const messageIndex = this.activeChatMessages.findIndex(
+							(m) => m.id === assistantMessage.id
+						);
+						if (messageIndex !== -1) {
+							this.activeChatMessages[messageIndex].content = streamedContent;
+						}
+					},
+					onComplete: async () => {
+						await DatabaseService.updateMessage(assistantMessage.id, {
+							content: streamedContent
+						});
 
-					this.isLoading = false;
-					this.currentResponse = '';
-				},
-				(error: Error) => {
-					console.error('Streaming error:', error);
-					this.isLoading = false;
-					this.currentResponse = '';
+						this.isLoading = false;
+						this.currentResponse = '';
+					},
+					onError: (error: Error) => {
+						console.error('Streaming error:', error);
+						this.isLoading = false;
+						this.currentResponse = '';
 
-					const messageIndex = this.activeChatMessages.findIndex(
-						(m) => m.id === assistantMessage.id
-					);
-					if (messageIndex !== -1) {
-						this.activeChatMessages[messageIndex].content = `Error: ${error.message}`;
+						const messageIndex = this.activeChatMessages.findIndex(
+							(m) => m.id === assistantMessage.id
+						);
+						if (messageIndex !== -1) {
+							this.activeChatMessages[messageIndex].content = `Error: ${error.message}`;
+						}
 					}
 				}
 			);

@@ -29,6 +29,7 @@
 
 			<div
 				class="sticky bottom-0 m-auto max-w-[56rem]"
+				style="translate: -1rem;"
 				in:slide={{ duration: 400, axis: 'y' }}
 			>
 				<div class="bg-background m-auto rounded-t-3xl border-t pb-4">
