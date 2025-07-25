@@ -4792,11 +4792,36 @@ struct ggml_tensor * ggml_pad(
         int                   p1,
         int                   p2,
         int                   p3) {
+    return ggml_pad_ext(ctx, a, 0, p0, 0, p1, 0, p2, 0, p3);
+}
+
+struct ggml_tensor * ggml_pad_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                  lp0,
+            int                  rp0,
+            int                  lp1,
+            int                  rp1,
+            int                  lp2,
+            int                  rp2,
+            int                  lp3,
+            int                  rp3
+            ) {
     struct ggml_tensor * result = ggml_new_tensor_4d(ctx, a->type,
-            a->ne[0] + p0,
-            a->ne[1] + p1,
-            a->ne[2] + p2,
-            a->ne[3] + p3);
+            a->ne[0] + lp0 + rp0,
+            a->ne[1] + lp1 + rp1,
+            a->ne[2] + lp2 + rp2,
+            a->ne[3] + lp3 + rp3);
+
+    ggml_set_op_params_i32(result, 0, lp0);
+    ggml_set_op_params_i32(result, 1, rp0);
+    ggml_set_op_params_i32(result, 2, lp1);
+    ggml_set_op_params_i32(result, 3, rp1);
+    ggml_set_op_params_i32(result, 4, lp2);
+    ggml_set_op_params_i32(result, 5, rp2);
+    ggml_set_op_params_i32(result, 6, lp3);
+    ggml_set_op_params_i32(result, 7, rp3);
+
 
     result->op     = GGML_OP_PAD;
     result->src[0] = a;

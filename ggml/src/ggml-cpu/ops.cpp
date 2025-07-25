@@ -8014,6 +8014,15 @@ static void ggml_compute_forward_pad_f32(
     GGML_TENSOR_UNARY_OP_LOCALS
 
     float * dst_ptr = (float *) dst->data;
+    const int32_t lp0 = ggml_get_op_params_i32(dst, 0);
+    const int32_t rp0 = ggml_get_op_params_i32(dst, 1);
+    const int32_t lp1 = ggml_get_op_params_i32(dst, 2);
+    const int32_t rp1 = ggml_get_op_params_i32(dst, 3);
+    const int32_t lp2 = ggml_get_op_params_i32(dst, 4);
+    const int32_t rp2 = ggml_get_op_params_i32(dst, 5);
+    const int32_t lp3 = ggml_get_op_params_i32(dst, 6);
+    const int32_t rp3 = ggml_get_op_params_i32(dst, 7);
+
 
     // TODO: optimize
 
@@ -8022,10 +8031,12 @@ static void ggml_compute_forward_pad_f32(
             for (int64_t i0 = 0; i0 < ne0; ++i0) {
                 for (int64_t i3 = 0; i3 < ne3; ++i3) {
                     const int64_t dst_idx = i3*(ne0*ne1*ne2) + i2*(ne0*ne1) + i1*ne0 + i0;
-
-                    const float * src_ptr = (const float *)((char *) src0->data + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-
-                    if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
+                    if ((i0 >= lp0 && i0 < ne0 - rp0) \
+                         && (i1 >= lp1 && i1 < ne1 - rp1) \
+                         && (i2 >= lp2 && i2 < ne2 - rp2) \
+                         && (i3 >= lp3 && i3 < ne3 - rp3)) {
+                        const int64_t src_idx = (i3 - lp3)*nb03 + (i2 - lp2)*nb02 + (i1 - lp1)*nb01 + (i0 - lp0)*nb00;
+                        const float * src_ptr = (const float *)((char *) src0->data + src_idx);
                         dst_ptr[dst_idx] = *src_ptr;
                     } else {
                         dst_ptr[dst_idx] = 0;

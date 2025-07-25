@@ -2083,6 +2083,19 @@ extern "C" {
             int                  p2,
             int                  p3);
 
+    GGML_API struct ggml_tensor * ggml_pad_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            int                  lp0,
+            int                  rp0,
+            int                  lp1,
+            int                  rp1,
+            int                  lp2,
+            int                  rp2,
+            int                  lp3,
+            int                  rp3
+            );
+
     // pad each dimension with reflection: [a, b, c, d] -> [b, a, b, c, d, c]
     GGML_API struct ggml_tensor * ggml_pad_reflect_1d(
             struct ggml_context * ctx,
