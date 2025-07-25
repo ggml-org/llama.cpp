@@ -72,6 +72,7 @@
 		"remark-gfm": "^4.0.1",
 		"remark-html": "^16.0.1",
 		"shiki": "^3.8.1",
+		"svelte-sonner": "^1.0.5",
 		"unist-util-visit": "^5.0.0"
 	}
 }

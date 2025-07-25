@@ -2,20 +2,23 @@
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
-	import { User, Bot, Edit, Copy, Trash2, RefreshCw } from '@lucide/svelte';
+	import { Textarea } from '$lib/components/ui/textarea';
+	import { User, Bot, Edit, Copy, Trash2, RefreshCw, Check, X } from '@lucide/svelte';
 	import type { ChatRole } from '$lib/types/chat';
-	import type { ChatMessageData } from '$lib/types/chat';
+	import type { DatabaseChatMessage } from '$lib/types/database';
 	import ThinkingSection from './ThinkingSection.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import { parseThinkingContent } from '$lib/utils/thinking';
+	import { copyToClipboard } from '$lib/utils/copy';
 
 	interface Props {
 		class?: string;
-		message: ChatMessageData;
-		onEdit?: (message: ChatMessageData) => void;
-		onDelete?: (message: ChatMessageData) => void;
-		onCopy?: (message: ChatMessageData) => void;
-		onRegenerate?: (message: ChatMessageData) => void;
+		message: DatabaseChatMessage;
+		onEdit?: (message: DatabaseChatMessage) => void;
+		onDelete?: (message: DatabaseChatMessage) => void;
+		onCopy?: (message: DatabaseChatMessage) => void;
+		onRegenerate?: (message: DatabaseChatMessage) => void;
+		onUpdateMessage?: (message: DatabaseChatMessage, newContent: string) => void;
 	}
 
 	let {
@@ -24,35 +27,86 @@
 		onEdit,
 		onDelete,
 		onCopy,
-		onRegenerate
+		onRegenerate,
+		onUpdateMessage
 	}: Props = $props();
 
+	// Editing state
+	let isEditing = $state(false);
+	let editedContent = $state(message.content);
+	// Element reference (not reactive)
+	let textareaElement: HTMLTextAreaElement;
+
 	// Parse thinking content for assistant messages
-	const parsedContent = $derived(() => {
+	// Use separate derived values to prevent unnecessary re-renders
+	let thinkingContent = $derived.by(() => {
 		if (message.role === 'assistant') {
+			// Prioritize message.thinking (from streaming) over parsed thinking
+			if (message.thinking) {
+				return message.thinking;
+			}
+			// Fallback to parsing content for complete messages
 			const parsed = parseThinkingContent(message.content);
-			return {
-				thinking: message.thinking || parsed.thinking,
-				content: parsed.cleanContent || message.content
-			};
+			return parsed.thinking;
 		}
-		return { thinking: null, content: message.content };
+		return null;
+	});
+
+	let messageContent = $derived.by(() => {
+		if (message.role === 'assistant') {
+			// Always parse and clean the content to remove <think>...</think> blocks
+			const parsed = parseThinkingContent(message.content);
+			return parsed.cleanContent;
+		}
+		return message.content;
 	});
 
 	// Handle copy to clipboard
-	function handleCopy() {
-		navigator.clipboard.writeText(message.content);
+	async function handleCopy() {
+		await copyToClipboard(message.content, 'Message copied to clipboard');
 		onCopy?.(message);
 	}
 
 	// Handle edit action
 	function handleEdit() {
+		isEditing = true;
+		editedContent = message.content;
+		// Focus the textarea after it's rendered
+		setTimeout(() => {
+			if (textareaElement) {
+				textareaElement.focus();
+				textareaElement.setSelectionRange(
+					textareaElement.value.length,
+					textareaElement.value.length
+				);
+			}
+		}, 0);
 		onEdit?.(message);
 	}
 
-	// Handle delete action
-	function handleDelete() {
-		onDelete?.(message);
+	// Handle save edited message
+	function handleSaveEdit() {
+		if (editedContent.trim() && editedContent !== message.content) {
+			onUpdateMessage?.(message, editedContent.trim());
+		}
+		isEditing = false;
+	}
+
+	// Handle cancel edit
+	function handleCancelEdit() {
+		isEditing = false;
+		editedContent = message.content;
+	}
+
+	// Handle keyboard shortcuts in edit mode
+	function handleEditKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' && !event.shiftKey) {
+			event.preventDefault();
+			handleSaveEdit();
+		} else if (event.key === 'Escape') {
+			event.preventDefault();
+			handleCancelEdit();
+		}
 	}
 
 	// Handle regenerate action
@@ -137,15 +191,44 @@
 		role="group"
 		aria-label="User message with actions"
 	>
-		<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
-			<div class="text-md whitespace-pre-wrap">
-				{message.content}
+		{#if isEditing}
+			<!-- Editing mode -->
+			<div class="w-full max-w-[80%]">
+				<textarea
+					bind:this={textareaElement}
+					bind:value={editedContent}
+					onkeydown={handleEditKeydown}
+					class="border-primary bg-background text-foreground focus:ring-ring min-h-[60px] w-full resize-none rounded-2xl border-2 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-offset-2"
+					placeholder="Edit your message..."
+				></textarea>
+				<div class="mt-2 flex justify-end gap-2">
+					<Button variant="outline" size="sm" class="h-8 px-3" onclick={handleCancelEdit}>
+						<X class="mr-1 h-3 w-3" />
+						Cancel
+					</Button>
+					<Button
+						size="sm"
+						class="h-8 px-3"
+						onclick={handleSaveEdit}
+						disabled={!editedContent.trim() || editedContent === message.content}
+					>
+						<Check class="mr-1 h-3 w-3" />
+						Send
+					</Button>
+				</div>
 			</div>
-		</Card>
+		{:else}
+			<!-- Display mode -->
+			<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
+				<div class="text-md whitespace-pre-wrap">
+					{message.content}
+				</div>
+			</Card>
 
-		<div class="relative flex h-6 items-center">
-			{@render messageActions({ role: 'user' })}
-		</div>
+			<div class="relative flex h-6 items-center">
+				{@render messageActions({ role: 'user' })}
+			</div>
+		{/if}
 	</div>
 {:else}
 	<div
@@ -153,14 +236,14 @@
 		role="group"
 		aria-label="Assistant message with actions"
 	>
-		{#if parsedContent().thinking}
-			<ThinkingSection thinking={parsedContent().thinking || ''} />
+		{#if thinkingContent}
+			<ThinkingSection thinking={thinkingContent} isStreaming={!message.timestamp} />
 		{/if}
 		{#if message.role === 'assistant'}
-			<MarkdownContent content={parsedContent().content} />
+			<MarkdownContent content={messageContent} />
 		{:else}
 			<div class="whitespace-pre-wrap text-sm">
-				{parsedContent().content}
+				{messageContent}
 			</div>
 		{/if}
 

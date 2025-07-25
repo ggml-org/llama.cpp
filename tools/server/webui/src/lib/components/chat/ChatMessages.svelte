@@ -1,9 +1,10 @@
 <script lang="ts">
-	import type { ChatMessageData } from '$lib/types/chat';
+	import type { DatabaseChatMessage } from '$lib/types/database';
+	import { updateMessage } from '$lib/stores/chat.svelte';
 	import ChatMessage from './ChatMessage.svelte';
 	interface Props {
 		class?: string;
-		messages?: ChatMessageData[];
+		messages?: DatabaseChatMessage[];
 		isLoading?: boolean;
 	}
 
@@ -65,9 +66,15 @@
 		class="bg-background flex-1 overflow-y-auto p-4"
 		onscroll={handleScroll}
 	>
-		<div class="mb-48 mt-16 space-y-4">
+		<div class="mb-48 mt-16 space-y-6">
 			{#each messages as message}
-				<ChatMessage class="mx-auto w-full max-w-[56rem]" {message} />
+				<ChatMessage
+					class="mx-auto w-full max-w-[56rem]"
+					{message}
+					onUpdateMessage={async (msg, newContent) => {
+						await updateMessage(msg.id, newContent);
+					}}
+				/>
 			{/each}
 
 			<!-- {#if isLoading}

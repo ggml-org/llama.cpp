@@ -6,7 +6,7 @@
 	import MarkdownContent from './MarkdownContent.svelte';
 
 	interface Props {
-		thinking: string;
+		thinking: string | null;
 		isStreaming?: boolean;
 		class?: string;
 	}
@@ -16,7 +16,7 @@
 	let isExpanded = $state(false);
 </script>
 
-<Card class="border-muted bg-muted/30 mb-3 {className}">
+<Card class="border-muted bg-muted/30 mb-6 gap-0 py-0 {className}">
 	<Button
 		variant="ghost"
 		class="h-auto w-full justify-between p-3 font-normal"
@@ -25,7 +25,7 @@
 		<div class="text-muted-foreground flex items-center gap-2">
 			<Brain class="h-4 w-4" />
 			<span class="text-sm">
-				{isStreaming ? 'Thinking...' : 'Rozważanie skali ludzkiej w stoiku'}
+				{isStreaming ? 'Thinking...' : 'Thinking summary'}
 			</span>
 		</div>
 		<ChevronDown
@@ -39,7 +39,7 @@
 		<div class="border-muted border-t px-3 pb-3" transition:slide={{ duration: 200 }}>
 			<div class="pt-3">
 				<MarkdownContent
-					content={thinking}
+					content={thinking || ''}
 					variant="thinking"
 					class="text-xs leading-relaxed"
 				/>

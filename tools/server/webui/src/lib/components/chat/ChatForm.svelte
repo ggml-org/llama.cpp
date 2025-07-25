@@ -1,8 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { Textarea } from '$lib/components/ui/textarea';
 	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
-	import { Send, Square, Paperclip, Mic, ArrowUp } from '@lucide/svelte';
+	import { Square, Paperclip, Mic, ArrowUp } from '@lucide/svelte';
 
 	interface Props {
 		class?: string;

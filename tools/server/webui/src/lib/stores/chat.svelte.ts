@@ -3,6 +3,7 @@ import { DatabaseService } from '$lib/services';
 import type { DatabaseChat, DatabaseChatMessage } from '$lib/app';
 import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
+import { extractPartialThinking } from '$lib/utils/thinking';
 
 class ChatStore {
 	activeChat = $state<DatabaseChat | null>(null);
@@ -136,14 +137,23 @@ class ChatStore {
 						streamedContent += chunk;
 						this.currentResponse = streamedContent;
 
+						// Parse thinking content during streaming
+						const partialThinking = extractPartialThinking(streamedContent);
+						
 						const messageIndex = this.activeChatMessages.findIndex(
 							(m) => m.id === assistantMessage.id
 						);
 						if (messageIndex !== -1) {
-							this.activeChatMessages[messageIndex].content = streamedContent;
+							// Update message with parsed content
+							this.activeChatMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
+							// Update thinking content if present
+							if (partialThinking.thinking) {
+								this.activeChatMessages[messageIndex].thinking = partialThinking.thinking;
+							}
 						}
 					},
 					onComplete: async () => {
+						// Update assistant message in database
 						await DatabaseService.updateMessage(assistantMessage.id, {
 							content: streamedContent
 						});
@@ -174,6 +184,136 @@ class ChatStore {
 	stopGeneration() {
 		this.isLoading = false;
 		this.currentResponse = '';
+	}
+
+	async updateMessage(messageId: string, newContent: string): Promise<void> {
+		if (!this.activeChat || this.isLoading) return;
+
+		try {
+			// Find the message to update
+			const messageIndex = this.activeChatMessages.findIndex((m) => m.id === messageId);
+			if (messageIndex === -1) {
+				console.error('Message not found for update');
+				return;
+			}
+
+			const messageToUpdate = this.activeChatMessages[messageIndex];
+			const originalContent = messageToUpdate.content; // Store original content for rollback
+			
+			// Only allow updating user messages
+			if (messageToUpdate.role !== 'user') {
+				console.error('Only user messages can be edited');
+				return;
+			}
+
+			// Update the message in local state immediately for UI responsiveness
+			this.activeChatMessages[messageIndex].content = newContent;
+
+			// Remove all messages after the updated message (including assistant responses)
+			const messagesToRemove = this.activeChatMessages.slice(messageIndex + 1);
+			for (const message of messagesToRemove) {
+				await DatabaseService.deleteMessage(message.id);
+			}
+
+			// Update local state to remove subsequent messages
+			this.activeChatMessages = this.activeChatMessages.slice(0, messageIndex + 1);
+
+			// Update chat message count
+			const chatIndex = this.chats.findIndex((c) => c.id === this.activeChat!.id);
+			if (chatIndex !== -1) {
+				this.chats[chatIndex].messageCount -= messagesToRemove.length;
+				this.chats[chatIndex].updatedAt = Date.now();
+			}
+
+			// Regenerate response to the updated message
+			// We need to generate a new assistant response based on the conversation history
+			this.isLoading = true;
+			this.currentResponse = '';
+
+			try {
+				const allMessages = await DatabaseService.getChatMessages(this.activeChat.id);
+
+				const assistantMessage = await this.addMessage('assistant', '');
+				if (!assistantMessage) {
+					throw new Error('Failed to create assistant message');
+				}
+
+				let streamedContent = '';
+				const chatService = new ChatService();
+				await chatService.sendChatCompletion(
+					allMessages,
+					{
+						stream: true,
+						temperature: 0.7,
+						max_tokens: 2048,
+						onChunk: (chunk: string) => {
+							streamedContent += chunk;
+							this.currentResponse = streamedContent;
+
+							// Parse thinking content during streaming
+							const partialThinking = extractPartialThinking(streamedContent);
+							
+							const messageIndex = this.activeChatMessages.findIndex(
+								(m) => m.id === assistantMessage.id
+							);
+							if (messageIndex !== -1) {
+								// Update message with parsed content
+								this.activeChatMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
+								// Update thinking content if present
+								if (partialThinking.thinking) {
+									this.activeChatMessages[messageIndex].thinking = partialThinking.thinking;
+								}
+							}
+						},
+						onComplete: async () => {
+							// Update assistant message in database
+							await DatabaseService.updateMessage(assistantMessage.id, {
+								content: streamedContent
+							});
+
+							// Only now update the edited user message in database after successful completion
+							await DatabaseService.updateMessage(messageId, { content: newContent });
+
+							this.isLoading = false;
+							this.currentResponse = '';
+						},
+						onError: (error: Error) => {
+							console.error('Streaming error:', error);
+							this.isLoading = false;
+							this.currentResponse = '';
+
+							// Rollback the edited message to original content on error
+							const editedMessageIndex = this.activeChatMessages.findIndex(
+								(m) => m.id === messageId
+							);
+							if (editedMessageIndex !== -1) {
+								this.activeChatMessages[editedMessageIndex].content = originalContent;
+							}
+
+							const assistantMessageIndex = this.activeChatMessages.findIndex(
+								(m) => m.id === assistantMessage.id
+							);
+							if (assistantMessageIndex !== -1) {
+								this.activeChatMessages[assistantMessageIndex].content = `Error: ${error.message}`;
+							}
+						}
+					}
+				);
+			} catch (regenerateError) {
+				console.error('Failed to regenerate response:', regenerateError);
+				this.isLoading = false;
+				
+				// Rollback the edited message to original content on regeneration error
+				const editedMessageIndex = this.activeChatMessages.findIndex(
+					(m) => m.id === messageId
+				);
+				if (editedMessageIndex !== -1) {
+					this.activeChatMessages[editedMessageIndex].content = originalContent;
+				}
+			}
+		} catch (error) {
+			console.error('Failed to update message:', error);
+		}
 	}
 
 	async updateChatName(chatId: string, name: string): Promise<void> {
@@ -229,6 +369,7 @@ export const isInitialized = () => chatStore.isInitialized;
 export const createChat = chatStore.createChat.bind(chatStore);
 export const loadChat = chatStore.loadChat.bind(chatStore);
 export const sendMessage = chatStore.sendMessage.bind(chatStore);
+export const updateMessage = chatStore.updateMessage.bind(chatStore);
 export const updateChatName = chatStore.updateChatName.bind(chatStore);
 export const deleteChat = chatStore.deleteChat.bind(chatStore);
 export const clearActiveChat = chatStore.clearActiveChat.bind(chatStore);

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { ModeWatcher } from 'mode-watcher';
+	import { Toaster } from 'svelte-sonner';
 	import ChatSidebar from '$lib/components/chat/ChatSidebar/ChatSidebar.svelte';
 	import { activeChatMessages, isLoading } from '$lib/stores/chat.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
@@ -39,6 +40,7 @@
 </script>
 
 <ModeWatcher />
+<Toaster richColors />
 
 <Sidebar.Provider bind:open={sidebarOpen}>
 	<div class="flex h-screen w-full">
