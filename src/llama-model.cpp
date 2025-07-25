@@ -1744,13 +1744,13 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
-        case LLM_ARCH_HUNYUAN_V1_DENSE:
+        case LLM_ARCH_HUNYUAN_DENSE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
 
                 switch (hparams.n_embd) {
                     case 1024: type = LLM_TYPE_0_5B; break;
-                    case 2048: type = LLM_TYPE_2B; break;
+                    case 2048: type = LLM_TYPE_1_8B; break;
                     case 3072: type = LLM_TYPE_4B; break;
                     case 4096: type = LLM_TYPE_7B; break;
                     default: type = LLM_TYPE_UNKNOWN;
@@ -5115,7 +5115,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {hparams.n_ff_shexp, n_embd}, 0);
                     }
                 } break;
-            case LLM_ARCH_HUNYUAN_V1_DENSE:
+            case LLM_ARCH_HUNYUAN_DENSE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -16741,8 +16741,8 @@ struct llm_build_hunyuan_moe : public llm_graph_context {
     }
 };
 
-struct llm_build_hunyuan_v1_dense : public llm_graph_context {
-    llm_build_hunyuan_v1_dense(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+struct llm_build_hunyuan_dense : public llm_graph_context {
+    llm_build_hunyuan_dense(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -17619,9 +17619,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_hunyuan_moe>(*this, params);
             } break;
-        case LLM_ARCH_HUNYUAN_V1_DENSE:
+        case LLM_ARCH_HUNYUAN_DENSE:
             {
-                llm = std::make_unique<llm_build_hunyuan_v1_dense>(*this, params);
+                llm = std::make_unique<llm_build_hunyuan_dense>(*this, params);
             } break;
         case LLM_ARCH_SMOLLM3:
             {
@@ -17832,7 +17832,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_MINICPM3:
         case LLM_ARCH_DOTS1:
         case LLM_ARCH_HUNYUAN_MOE:
-        case LLM_ARCH_HUNYUAN_V1_DENSE:
+        case LLM_ARCH_HUNYUAN_DENSE:
         case LLM_ARCH_LFM2:
             return LLAMA_ROPE_TYPE_NEOX;
 

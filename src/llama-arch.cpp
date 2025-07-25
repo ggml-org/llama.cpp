@@ -85,7 +85,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_ERNIE4_5,         "ernie4_5"         },
     { LLM_ARCH_ERNIE4_5_MOE,     "ernie4_5-moe"     },
     { LLM_ARCH_HUNYUAN_MOE,      "hunyuan-moe"      },
-    { LLM_ARCH_HUNYUAN_V1_DENSE, "hunyuan-v1-dense" },
+    { LLM_ARCH_HUNYUAN_DENSE,    "hunyuan-dense"    },
     { LLM_ARCH_SMOLLM3,          "smollm3"          },
     { LLM_ARCH_LFM2,             "lfm2"             },
     { LLM_ARCH_DREAM,            "dream"            },
@@ -1897,7 +1897,7 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
-        LLM_ARCH_HUNYUAN_V1_DENSE,
+        LLM_ARCH_HUNYUAN_DENSE,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
             { LLM_TENSOR_OUTPUT_NORM,     "output_norm" },

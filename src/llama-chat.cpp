@@ -66,7 +66,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
     { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
     { "hunyuan-moe",       LLM_CHAT_TEMPLATE_HUNYUAN_MOE       },
-    { "hunyuan-v1-dense",  LLM_CHAT_TEMPLATE_HUNYUAN_V1_DENSE  },
+    { "hunyuan-dense",     LLM_CHAT_TEMPLATE_HUNYUAN_DENSE     },
     { "kimi-k2",           LLM_CHAT_TEMPLATE_KIMI_K2           },
 };
 
@@ -195,7 +195,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
     } else if (tmpl_contains("<|startoftext|>") && tmpl_contains("<|extra_4|>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_MOE;
     } else if (tmpl_contains("<｜hy_place▁holder▁no▁2｜>") && tmpl_contains("<｜hy_place▁holder▁no▁3｜>")) {
-        return LLM_CHAT_TEMPLATE_HUNYUAN_V1_DENSE;
+        return LLM_CHAT_TEMPLATE_HUNYUAN_DENSE;
     } else if (tmpl_contains("<|im_assistant|>assistant<|im_middle|>")) {
         return LLM_CHAT_TEMPLATE_KIMI_K2;
     }
@@ -706,8 +706,8 @@ int32_t llm_chat_apply_template(
                 ss << "<|startoftext|>" << message->content << "<|extra_0|>";
             }
         }
-    } else if (tmpl == LLM_CHAT_TEMPLATE_HUNYUAN_V1_DENSE) {
-        // Todo: add model name
+    } else if (tmpl == LLM_CHAT_TEMPLATE_HUNYUAN_DENSE) {
+        // tencent/Hunyuan-4B
         for (size_t i = 0; i < chat.size(); i++) {
             std::string role(chat[i]->role);
             if (i == 0) {

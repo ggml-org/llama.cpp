@@ -373,7 +373,7 @@ class MODEL_ARCH(IntEnum):
     ERNIE4_5         = auto()
     ERNIE4_5_MOE     = auto()
     HUNYUAN_MOE      = auto()
-    HUNYUAN_V1_DENSE = auto()
+    HUNYUAN_DENSE    = auto()
     SMOLLM3          = auto()
     LFM2             = auto()
     DREAM            = auto()
@@ -693,7 +693,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.ERNIE4_5_MOE:     "ernie4_5-moe",
     MODEL_ARCH.FALCON_H1:        "falcon-h1",
     MODEL_ARCH.HUNYUAN_MOE:      "hunyuan-moe",
-    MODEL_ARCH.HUNYUAN_V1_DENSE: "hunyuan-v1-dense",
+    MODEL_ARCH.HUNYUAN_DENSE:    "hunyuan-dense",
     MODEL_ARCH.SMOLLM3:          "smollm3",
     MODEL_ARCH.LFM2:             "lfm2",
     MODEL_ARCH.DREAM:            "dream",
@@ -2451,7 +2451,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
     ],
-    MODEL_ARCH.HUNYUAN_V1_DENSE: [
+    MODEL_ARCH.HUNYUAN_DENSE: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
