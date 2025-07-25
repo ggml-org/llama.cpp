@@ -7387,7 +7387,7 @@ class FalconH1Model(Mamba2Model):
 
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
 class HunYuanMoEModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
+    model_arch = gguf.MODEL_ARCH.HUNYUAN_V1_MOE
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

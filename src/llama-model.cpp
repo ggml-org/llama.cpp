@@ -1733,7 +1733,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                         type = LLM_TYPE_UNKNOWN;
                 }
             } break;
-        case LLM_ARCH_HUNYUAN_MOE:
+        case LLM_ARCH_HUNYUAN_V1_MOE:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
@@ -5078,7 +5078,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i), {ffn_intermediate_size}, TENSOR_NOT_REQUIRED);
                     }
                 } break;
-            case LLM_ARCH_HUNYUAN_MOE:
+            case LLM_ARCH_HUNYUAN_V1_MOE:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -16580,8 +16580,8 @@ struct llm_build_arcee : public llm_graph_context {
     }
 };
 
-struct llm_build_hunyuan_moe : public llm_graph_context {
-    llm_build_hunyuan_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+struct llm_build_hunyuan_v1_moe : public llm_graph_context {
+    llm_build_hunyuan_v1_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -17615,9 +17615,9 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_ernie4_5_moe>(*this, params);
             } break;
-        case LLM_ARCH_HUNYUAN_MOE:
+        case LLM_ARCH_HUNYUAN_V1_MOE:
             {
-                llm = std::make_unique<llm_build_hunyuan_moe>(*this, params);
+                llm = std::make_unique<llm_build_hunyuan_v1_moe>(*this, params);
             } break;
         case LLM_ARCH_HUNYUAN_V1_DENSE:
             {
@@ -17831,7 +17831,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_EXAONE4:
         case LLM_ARCH_MINICPM3:
         case LLM_ARCH_DOTS1:
-        case LLM_ARCH_HUNYUAN_MOE:
+        case LLM_ARCH_HUNYUAN_V1_MOE:
         case LLM_ARCH_HUNYUAN_V1_DENSE:
         case LLM_ARCH_LFM2:
             return LLAMA_ROPE_TYPE_NEOX;
