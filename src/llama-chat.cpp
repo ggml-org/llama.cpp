@@ -66,6 +66,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
     { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
     { "hunyuan-moe",       LLM_CHAT_TEMPLATE_HUNYUAN_MOE       },
+    { "hunyuan-v1-dense",  LLM_CHAT_TEMPLATE_HUNYUAN_V1_DENSE  },
     { "kimi-k2",           LLM_CHAT_TEMPLATE_KIMI_K2           },
 };
 
@@ -193,6 +194,8 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_DOTS1;
     } else if (tmpl_contains("<|startoftext|>") && tmpl_contains("<|extra_4|>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_MOE;
+    } else if (tmpl_contains("<｜hy_place▁holder▁no▁2｜>") && tmpl_contains("<｜hy_place▁holder▁no▁3｜>")) {
+        return LLM_CHAT_TEMPLATE_HUNYUAN_V1_DENSE;
     } else if (tmpl_contains("<|im_assistant|>assistant<|im_middle|>")) {
         return LLM_CHAT_TEMPLATE_KIMI_K2;
     }
@@ -702,6 +705,29 @@ int32_t llm_chat_apply_template(
             } else {
                 ss << "<|startoftext|>" << message->content << "<|extra_0|>";
             }
+        }
+    } else if (tmpl == LLM_CHAT_TEMPLATE_HUNYUAN_V1_DENSE) {
+        // Todo: add model name
+        for (size_t i = 0; i < chat.size(); i++) {
+            std::string role(chat[i]->role);
+            if (i == 0) {
+                if (role == "system") {
+                    ss << "<｜hy_begin▁of▁sentence｜>" << chat[i]->content << "<｜hy_place▁holder▁no▁3｜>";
+                } else {
+                    ss << "<｜hy_begin▁of▁sentence｜>";
+                }
+            }
+
+            if (role == "assistant") {
+                ss << "<｜hy_Assistant｜>" << chat[i]->content << "<｜hy_place▁holder▁no▁2｜>";
+            } else if (role == "user") {
+                ss << "<｜hy_User｜>" << chat[i]->content;
+            }
+        }
+        if (add_ass) {
+            ss << "<｜hy_Assistant｜>";
+        } else {
+            ss << "<｜hy_place▁holder▁no▁8｜>";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_KIMI_K2) {
         // moonshotai/Kimi-K2-Instruct
