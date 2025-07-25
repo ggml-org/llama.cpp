@@ -7595,7 +7595,8 @@ class HunYuanModel(TextModel):
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
             # FIX for BOS token: Overwrite incorrect id read from config.json
-            self.gguf_writer.add_bos_token_id(127958) # <|bos|>
+            if self.hparams['hidden_size'] == 4096:
+                self.gguf_writer.add_bos_token_id(127958) # only for 7b dense, fix <|bos|> token
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -7620,7 +7621,7 @@ class HunYuanModel(TextModel):
             self.gguf_writer.add_context_length(256 * 1024) # 256k context length
 
             # if any of our assumptions about the values are wrong, something has changed and this may need to be updated
-            assert alpha == 50 and base == 10000.0 and self.hparams["max_position_embeddings"] in [32 * 1024, 256 * 1024] , \
+            assert base == 10000.0 and self.hparams["max_position_embeddings"] in [32 * 1024, 256 * 1024] , \
                 "HunYuan dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
 
     _experts: list[dict[str, Tensor]] | None = None
