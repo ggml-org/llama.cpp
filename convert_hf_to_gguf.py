@@ -7590,8 +7590,8 @@ class LFM2Model(TextModel):
 
 
 
-@ModelBase.register("SmallthinkerForCausalLM")
-class SmallthinkerModel(TextModel):
+@ModelBase.register("SmallThinkerForCausalLM")
+class SmallThinkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SMALLTHINKER
 
     def set_gguf_parameters(self):
@@ -7602,10 +7602,8 @@ class SmallthinkerModel(TextModel):
             self.gguf_writer.add_expert_used_count(n_experts_used)
         if (moe_intermediate_size := self.hparams.get("moe_ffn_hidden_size")) is not None:
             self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+            self.gguf_writer.add_feed_forward_length(moe_intermediate_size)
             logger.info(f"gguf: expert feed forward length = {moe_intermediate_size}")
-        if (shared_expert_intermediate_size := self.hparams.get('shared_expert_intermediate_size')) is not None:
-            self.gguf_writer.add_expert_shared_feed_forward_length(shared_expert_intermediate_size)
-            logger.info(f"gguf: expert shared feed forward length = {shared_expert_intermediate_size}")
         if (self.hparams.get('moe_primary_router_apply_softmax')):
             self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
         else:
@@ -7618,29 +7616,13 @@ class SmallthinkerModel(TextModel):
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
         
-        sliding_window = self.hparams.get("sliding_window")
         sliding_window_layout = self.hparams.get("sliding_window_layout")
-        if sliding_window and sliding_window_layout:
+        if sliding_window_layout:
             for i in sliding_window_layout:
                 if i != 0:
+                    sliding_window = self.hparams.get("sliding_window_size")
                     self.gguf_writer.add_sliding_window(sliding_window)
                     break
-        elif sliding_window:
-            self.gguf_writer.add_sliding_window(sliding_window)
-
-        intermediate_size = self.hparams.get("ffn_hidden_size")
-        moe_intermediate_size = self.hparams.get("moe_ffn_hidden_size")
-        moe_layer_layout = self.hparams.get("moe_layer_layout")
-        ffn_layout = []
-        for i, layout in enumerate(moe_layer_layout):
-            if layout == 0:
-                ffn_layout.append(intermediate_size)
-            elif layout == 1:
-                ffn_layout.append(moe_intermediate_size)
-            else:
-                raise ValueError(f"Unknown moe layer layout: {layout}")
-        self.gguf_writer.add_feed_forward_length(ffn_layout)
-        # def add_feed_forward_length(self, length: int | Sequence[int]) -> None:
 
     _experts: list[dict[str, Tensor]] | None = None
 
