@@ -111,17 +111,38 @@ static inline void ggml_profile_format_op_types(char *str, struct ggml_tensor *t
     p += sprintf(p, "%3s", ggml_type_name(t->type));
 }
 
+static inline void ggml_profile_format_op_names(char *str, const struct ggml_tensor *t)
+{
+    char *p = str;
+
+    // append src0 and src1 (if any)
+    if (t->src[0]) {
+       p += sprintf(p, "%s", t->src[0]->name);
+
+       for (int i = 1; i < GGML_MAX_SRC && t->src[i]; i++) {
+           p += sprintf(p, " x ");
+           p += sprintf(p, "%s", t->src[i]->name);
+       }
+
+       p += sprintf(p, " -> ");
+    }
+
+    p += sprintf(p, "%s", t->name);
+}
+
+
 extern "C" void ggml_graph_profile_finish(struct ggml_cgraph *cg, int n_threads)
 {
     if (!cg->prof) { return; }
 
     ggml_profile_output *out = cg->prof->output;
 
-    fprintf(out->stream, "%s| node idx | op name | proc (nsec) | sync (nsec) | total (nsec) | op dims | op types | tensor name |\n", out->prefix);
-    fprintf(out->stream, "%s| -------: | :------ | ----------: | ----------: | -----------: | ------: | -------: | ----------: |\n", out->prefix);
+    fprintf(out->stream, "%s| node idx | op name | proc (nsec) | sync (nsec) | total (nsec) | op dims | op types | tensor names |\n", out->prefix);
+    fprintf(out->stream, "%s| -------: | :------ | ----------: | ----------: | -----------: | ------: | -------: | -----------: |\n", out->prefix);
 
     char dims[64 * GGML_MAX_SRC];
     char types[16 * GGML_MAX_SRC];
+    char names[128 * GGML_MAX_SRC];
 
     for (int i = 0; i < cg->n_nodes; i++) {
         uint64_t p_nsec = 0;
@@ -143,11 +164,12 @@ extern "C" void ggml_graph_profile_finish(struct ggml_cgraph *cg, int n_threads)
 
         ggml_profile_format_op_dims(dims, cg->nodes[i]);
         ggml_profile_format_op_types(types, cg->nodes[i]);
+        ggml_profile_format_op_names(names, cg->nodes[i]);
 
         fprintf(out->stream, "%s| %04d | %10s | %10lu | %10lu | %10lu | %46s | %22s | %20s |\n", out->prefix,
             i, ggml_op_name(cg->nodes[i]->op),
             (unsigned long) p_nsec, (unsigned long) s_nsec, (unsigned long) t_nsec,
-            dims, types, cg->nodes[i]->name);
+            dims, types, names);
     }
     fprintf(out->stream, "%s   \n", out->prefix); // empty line to split tables
 }
