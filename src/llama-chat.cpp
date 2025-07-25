@@ -701,7 +701,7 @@ int32_t llm_chat_apply_template(
             if (role == "system") {
                 ss << "<|startoftext|>" << message->content << "<|extra_4|>";
             } else if (role == "assistant") {
-                ss << "<|startoftext|>" << message->content << "<|eos|>";
+                ss << message->content << "<|eos|>";
             } else {
                 ss << "<|startoftext|>" << message->content << "<|extra_0|>";
             }
