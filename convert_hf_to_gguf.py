@@ -7389,11 +7389,6 @@ class FalconH1Model(Mamba2Model):
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # For handling tied embeddings
-        self._tok_embd = None
-
     def set_vocab(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
@@ -7487,9 +7482,6 @@ class HunYuanMoEModel(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == "model.embed_tokens.weight":
-            self._tok_embd = data_torch.clone()
-
         if name == "lm_head.weight":
             if self.hparams.get("tie_word_embeddings", False):
                 logger.info("Skipping tied output layer 'lm_head.weight'")
@@ -7537,11 +7529,6 @@ class HunYuanMoEModel(TextModel):
 @ModelBase.register("HunYuanDenseV1ForCausalLM")
 class HunYuanModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # For handling tied embeddings
-        self._tok_embd = None
 
     def set_vocab(self):
         if (self.dir_model / "tokenizer.json").is_file():
@@ -7602,8 +7589,6 @@ class HunYuanModel(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_expert_shared_feed_forward_length(hparams["intermediate_size"])
-
         # Rope
         rope_scaling = hparams.get("rope_scaling", {})
         if rope_scaling.get("type") == "dynamic":
@@ -7624,12 +7609,7 @@ class HunYuanModel(TextModel):
             assert base == 10000.0 and self.hparams["max_position_embeddings"] in [32 * 1024, 256 * 1024] , \
                 "HunYuan dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
 
-    _experts: list[dict[str, Tensor]] | None = None
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == "model.embed_tokens.weight":
-            self._tok_embd = data_torch.clone()
-
         if name == "lm_head.weight":
             if self.hparams.get("tie_word_embeddings", False):
                 logger.info("Skipping tied output layer 'lm_head.weight'")
