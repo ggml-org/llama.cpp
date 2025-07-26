@@ -2260,6 +2260,63 @@ class Mistral3Model(LlamaModel):
         return super().modify_tensors(data_torch, name, bid)
 
 
+@ModelBase.register("VoxtralForConditionalGeneration")
+class VoxtralModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA
+
+    def set_vocab(self):
+        vocab = gguf.vocab.MistralVocab(self.dir_model)
+        self.gguf_writer.add_tokenizer_model(vocab.gguf_tokenizer_model)
+
+        tokens = []
+        scores = []
+        toktypes = []
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size, (
+            f"token count ({len(tokens)}) != vocab size ({vocab.vocab_size})"
+        )
+
+        if vocab.tokenizer_type == gguf.vocab.MistralTokenizerType.tekken:
+            self.gguf_writer.add_tokenizer_pre("tekken")
+            self.gguf_writer.add_token_merges(
+                vocab.extract_vocab_merges_from_model()
+            )
+
+        logger.info(
+            f"Setting bos, eos, unk and pad token IDs to {vocab.bos_id}, {vocab.eos_id}, {vocab.unk_id}, {vocab.pad_id}."
+        )
+
+        self.gguf_writer.add_bos_token_id(vocab.bos_id)
+        self.gguf_writer.add_eos_token_id(vocab.eos_id)
+        self.gguf_writer.add_unk_token_id(vocab.unk_id)
+        self.gguf_writer.add_pad_token_id(vocab.pad_id)
+
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_vocab_size(vocab.vocab_size)
+
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_add_eos_token(False)
+
+        script_dir = Path(__file__).parent
+        template_path = script_dir / "models/templates/unsloth-mistral-Devstral-Small-2507.jinja"
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = f.read()
+            self.gguf_writer.add_chat_template(template)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        name = name.replace("language_model.", "")
+        if "multi_modal_projector" in name or "audio_tower" in name:
+            return []
+        return super().modify_tensors(data_torch, name, bid)
+
+
 @ModelBase.register("DeciLMForCausalLM")
 class DeciModel(TextModel):
     model_arch = gguf.MODEL_ARCH.DECI
@@ -7231,9 +7288,10 @@ class WhisperEncoderModel(MmprojModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.hparams["hidden_size"] = self.hparams["d_model"]
-        self.hparams["intermediate_size"] = self.hparams["encoder_ffn_dim"]
-        self.hparams["num_attention_heads"] = self.hparams["encoder_attention_heads"]
+        if "hidden_size" not in self.hparams and "intermediate_size" not in self.hparams:
+            self.hparams["hidden_size"] = self.hparams["d_model"]
+            self.hparams["intermediate_size"] = self.hparams["encoder_ffn_dim"]
+            self.hparams["num_attention_heads"] = self.hparams["encoder_attention_heads"]
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -7272,7 +7330,19 @@ class UltravoxWhisperEncoderModel(WhisperEncoderModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.ULTRAVOX)
         self.gguf_writer.add_audio_stack_factor(self.global_config["stack_factor"])
+
+
+@ModelBase.register("VoxtralForConditionalGeneration")
+class VoxtralWhisperEncoderModel(WhisperEncoderModel):
+    has_vision_encoder = False # no vision encoder
+    has_audio_encoder = True
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.VOXTRAL)
+        self.gguf_writer.add_audio_stack_factor(4) # == intermediate_size // hidden_size
 
 
 @ModelBase.register("FalconH1ForCausalLM")
