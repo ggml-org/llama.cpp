@@ -2059,6 +2059,255 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
     ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
 }
 
+#ifdef USE_CANN_GRAPH
+
+void ggml_cann_cpy_dest_ptrs_copy(ggml_cann_graph * cann_graph, char ** host_dest_ptrs, const int host_dest_ptrs_size, aclrtStream stream) {
+#ifdef USE_CANN_GRAPH
+    if (host_dest_ptrs_size == 0 || host_dest_ptrs == nullptr) {
+        return;
+    }
+
+    if (cann_graph->dest_ptrs_size < host_dest_ptrs_size) { // (re-)allocate NPU memory for destination pointers
+        ACL_CHECK(aclrtSynchronizeStream(stream));
+        if (cann_graph->dest_ptrs_d != nullptr) {
+            std::cout << "lcg ggml_cann_cpy_dest_ptrs_copy0" << std::endl;
+            ACL_CHECK(aclrtFree(cann_graph->dest_ptrs_d));
+        }
+        // TODO: check ACL_MEM_MALLOC_NORMAL_ONLY
+        char * device_ptr = nullptr;
+        ACL_CHECK(aclrtMalloc((void **)&device_ptr, host_dest_ptrs_size*sizeof(char *), ACL_MEM_MALLOC_NORMAL_ONLY));
+        cann_graph->dest_ptrs_d = (char **) device_ptr;
+        cann_graph->dest_ptrs_size = host_dest_ptrs_size;
+    }
+    // copy destination pointers to NPU
+    // cann_graph->dest_ptrs_d   (Device Pointer, 存在 device 上)
+    //           │
+    //           │
+    //           ▼
+    //   +---------------------+
+    //   | 0x600000000         |  <-- device copy address1
+    //   +---------------------+
+    //   | 0x600010000         |  <-- device copy address2
+    //   +---------------------+
+    //   | 0x600020000         |  <-- device copy address3
+    //   +---------------------+
+    ACL_CHECK(aclrtMemcpy(cann_graph->dest_ptrs_d, host_dest_ptrs_size*sizeof(char *), host_dest_ptrs, host_dest_ptrs_size*sizeof(char *),
+                              ACL_MEMCPY_HOST_TO_DEVICE));
+                              
+    ACL_CHECK(aclrtSynchronizeStream(stream));
+    cann_graph->graph_cpynode_index = 0; // reset index
+#else
+    GGML_UNUSED(cann_graph); GGML_UNUSED(host_dest_ptrs);
+    GGML_UNUSED(host_dest_ptrs_size); GGML_UNUSED(stream);
+#endif
+}
+
+static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph,
+    bool use_cann_graph) {
+    // Loop over nodes in GGML graph to obtain info needed for CANN graph
+    cann_ctx->cann_graph->cpy_dest_ptrs.clear();
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        ggml_tensor * node = cgraph->nodes[i];
+
+        if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+            continue;
+        }
+
+        if (node->op == GGML_OP_MUL_MAT_ID && node->ne[2] != 1) {
+            // std::cout << "lcg check_node_graph_compatibility_and_refresh_copy_ops start1:" << std::endl;
+            use_cann_graph = false; // This node type is not supported by CANN graph capture
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: disabling CANN graphs due to unsupported node type\n", __func__);
+#endif
+        }
+
+//         if (node->op == GGML_OP_ADD && node->src[1] && node->src[1]->ne[1] > 1) {
+//             // disable CANN graphs for batch size > 1 for now.
+//             // Changes in batch size or context size can cause changes to the grid size of some kernels.
+//             use_cann_graph = false;
+// #ifndef NDEBUG
+//             GGML_LOG_DEBUG("%s: disabling CANN graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+// #endif
+//         }
+        if (node->op == GGML_OP_CPY) {
+            // Store the pointers which are updated for each token, such that these can be sent
+            // to the device and accessed using indirection from CANN graph
+            cann_ctx->cann_graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
+        }
+        
+        if (!use_cann_graph) {
+            break;
+        }
+    }
+
+    if (use_cann_graph) {
+        cann_ctx->cann_graph->use_cpy_indirection = true;
+        // copy pointers to NPU so they can be accessed via indirection within CANN graph
+        ggml_cann_cpy_dest_ptrs_copy(cann_ctx->cann_graph.get(), cann_ctx->cann_graph->cpy_dest_ptrs.data(), cann_ctx->cann_graph->cpy_dest_ptrs.size(), cann_ctx->stream());
+    }
+
+    return use_cann_graph;
+}
+
+static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
+    graph_node_properties->node_address = node->data;
+    graph_node_properties->node_op = node->op;
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        graph_node_properties->ne[i] = node->ne[i];
+        graph_node_properties->nb[i] = node->nb[i];
+    }
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        graph_node_properties->src_address[i] = node->src[i] ? node->src[i]->data : nullptr;
+    }
+    memcpy(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS);
+}
+
+static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
+    if (node->data != graph_node_properties->node_address &&
+          node->op != GGML_OP_CPY &&
+          node->op != GGML_OP_VIEW) {
+        return false;
+    }
+
+    if (node->op != graph_node_properties->node_op) {
+        return false;
+    }
+
+    for (int i = 0; i < GGML_MAX_DIMS; i++) {
+        if (node->ne[i] != graph_node_properties->ne[i]) {
+            return false;
+        }
+        if (node->nb[i] != graph_node_properties->nb[i]) {
+            return false;
+        }
+    }
+
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (node->src[i] &&
+            node->src[i]->data != graph_node_properties->src_address[i] &&
+            node->op != GGML_OP_CPY &&
+            node->op != GGML_OP_VIEW
+        ) {
+            return false;
+        }
+    }
+
+    if (node->op == GGML_OP_SCALE &&
+        memcmp(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS) != 0) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph) {
+    bool cann_graph_update_required = false;
+
+    if (cann_ctx->cann_graph->graph == nullptr) {
+        cann_graph_update_required = true;
+    }
+
+    // Check if the graph size has changed
+    if (cann_ctx->cann_graph->ggml_graph_properties.size() != (size_t)cgraph->n_nodes) {
+        cann_graph_update_required = true;
+        cann_ctx->cann_graph->ggml_graph_properties.resize(cgraph->n_nodes);
+    }
+
+    // Loop over nodes in GGML graph to determine if CANN graph update is required
+    // and store properties to allow this comparison for the next token
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        bool has_matching_properties = true;
+        if (!cann_graph_update_required) {
+            // std::cout << "lcg is_cann_graph_update_required start3:" << std::endl;
+            has_matching_properties = ggml_graph_node_has_matching_properties(cgraph->nodes[i], &cann_ctx->cann_graph->ggml_graph_properties[i]);
+        }
+        if (!has_matching_properties) {
+            // std::cout << "lcg is_cann_graph_update_required start4:" << std::endl;
+            cann_graph_update_required = true;
+        }
+        set_ggml_graph_node_properties(cgraph->nodes[i], &cann_ctx->cann_graph->ggml_graph_properties[i]);
+    }
+
+    return cann_graph_update_required;
+}
+
+static void update_cann_graph_executable(ggml_backend_cann_context * cann_ctx) {
+    if (cann_ctx->cann_graph->graph != nullptr) {
+        // Destroy the existing graph instance
+        ACL_CHECK(aclmdlRIDestroy(cann_ctx->cann_graph->graph));
+        cann_ctx->cann_graph->graph = nullptr;
+    }
+
+    // Begin graph capture
+    ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
+
+    // TODO: Run the GGML graph (this will record operations into the graph)
+    // ggml_cann_compute_forward();
+
+    // // End graph capture and obtain the new graph instance
+    // aclrtGraph new_graph = nullptr;
+    // ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
+
+    // cann_ctx->cann_graph->graph = new_graph;
+#ifndef NDEBUG
+    GGML_LOG_DEBUG("%s: CANN graph recreated and updated.\n", __func__);
+#endif
+}
+
+#endif  // USE_CANN_GRAPH
+
+static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph,
+    bool & graph_evaluated_or_captured, bool & use_cann_graph, bool & cann_graph_update_required) {
+    // std::cout << "lcg evaluate_and_capture_cann_graph start:" << use_cann_graph << "," << cann_graph_update_required << std::endl;
+    while (!graph_evaluated_or_captured) {
+#ifdef USE_CANN_GRAPH
+        // Start CANN graph capture
+        if (use_cann_graph && cann_graph_update_required) {
+            if (cann_ctx->cann_graph->graph != nullptr) {
+                ACL_CHECK(aclmdlRIDestroy(cann_ctx->cann_graph->graph));
+                cann_ctx->cann_graph->graph = nullptr;
+            }
+            ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
+        }
+#endif  // USE_CANN_GRAPH
+
+        // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
+        // With the use of CANN graphs, the execution will be performed by the graph launch.
+        if (!use_cann_graph || cann_graph_update_required) {
+            for (int i = 0; i < cgraph->n_nodes; i++) {
+                ggml_tensor * node = cgraph->nodes[i];
+
+                if (ggml_is_empty(node) || node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_NONE) {
+                    continue;
+                }
+
+                bool ok = ggml_cann_compute_forward(*cann_ctx, node);
+                if (!ok) {
+                    GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+                }
+                GGML_ASSERT(ok);
+            }
+        }
+
+#ifdef USE_CANN_GRAPH
+        if (use_cann_graph && cann_graph_update_required) { // End CANN graph capture
+            ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &cann_ctx->cann_graph->graph));
+            graph_evaluated_or_captured = true; // CANN graph has been captured
+        } else {
+            graph_evaluated_or_captured = true; // ggml graph has been directly evaluated
+        }
+    }
+
+    if (use_cann_graph) {
+        // Launch graph
+        ACL_CHECK(aclmdlRIExecuteAsync(cann_ctx->cann_graph->graph, cann_ctx->stream()));
+#else
+        graph_evaluated_or_captured = true;
+#endif  // USE_CANN_GRAPH
+    }
+}
+
 /**
  * @brief Computes a computational graph using a CANN backend.
  *
@@ -2071,28 +2320,52 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
  * @return enum ggml_status Returns GGML_STATUS_SUCCESS if computation
  *         completes successfully, otherwise an appropriate error status.
  */
-static enum ggml_status ggml_backend_cann_graph_compute(
-    ggml_backend_t backend, ggml_cgraph* cgraph) {
-    ggml_backend_cann_context* cann_ctx =
-        (ggml_backend_cann_context*)backend->context;
-
+static enum ggml_status ggml_backend_cann_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
+    ggml_backend_cann_context * cann_ctx = (ggml_backend_cann_context *)backend->context;
     ggml_cann_set_device(cann_ctx->device);
 
-    for (int i = 0; i < cgraph->n_nodes; i++) {
-        ggml_tensor* node = cgraph->nodes[i];
+#ifdef USE_CANN_GRAPH
+    bool use_cann_graph = true;
+    bool cann_graph_update_required = true;
 
-        if (ggml_is_empty(node) || node->op == GGML_OP_NONE) {
-            continue;
-        }
-
-        bool ok = ggml_cann_compute_forward(*cann_ctx, node);
-
-        if (!ok) {
-            GGML_LOG_ERROR("%s: error: op not supported %s (%s)\n", __func__,
-                    node->name, ggml_op_name(node->op));
-        }
-        GGML_ASSERT(ok);
+    static const bool disable_cann_graphs_due_to_env = (getenv("GGML_CANN_DISABLE_GRAPHS") != nullptr);
+    if (disable_cann_graphs_due_to_env) {
+        use_cann_graph = false;
     }
+
+    // Objects required for CANN Graph
+    if (cann_ctx->cann_graph == nullptr) {
+        cann_ctx->cann_graph.reset(new ggml_cann_graph());
+    }
+    
+    if (use_cann_graph) {
+        cann_graph_update_required = is_cann_graph_update_required(cann_ctx, cgraph);
+
+        use_cann_graph = check_node_graph_compatibility_and_refresh_copy_ops(cann_ctx, cgraph, use_cann_graph);
+
+        // Disable CANN graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
+        if (use_cann_graph && cann_graph_update_required) {
+            cann_ctx->cann_graph->number_consecutive_updates++;
+        } else {
+            cann_ctx->cann_graph->number_consecutive_updates = 0;
+        }
+
+//         if (cann_ctx->cann_graph->number_consecutive_updates >= 4) {
+//             cann_ctx->cann_graph->disable_due_to_too_many_updates = true;
+// #ifndef NDEBUG
+//             GGML_LOG_DEBUG("%s: disabling CANN graphs due to too many consecutive updates\n", __func__);
+// #endif
+//         }
+    }
+
+#else
+    bool use_cann_graph = false;
+    bool cann_graph_update_required = false;
+#endif // USE_CANN_GRAPH
+
+    bool graph_evaluated_or_captured = false;
+
+    evaluate_and_capture_cann_graph(cann_ctx, cgraph, graph_evaluated_or_captured, use_cann_graph, cann_graph_update_required);
 
     return GGML_STATUS_SUCCESS;
 }
