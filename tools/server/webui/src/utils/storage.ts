@@ -25,8 +25,14 @@ const db = new Dexie('LlamacppWebui') as Dexie & {
 
 // https://dexie.org/docs/Version/Version.stores()
 db.version(1).stores({
-  // Unlike SQL, you don’t need to specify all properties but only the one you wish to index.
+  // Unlike SQL, you don't need to specify all properties but only the one you wish to index.
   conversations: '&id, lastModified',
+  messages: '&id, convId, [convId+id], timestamp',
+});
+
+db.version(2).stores({
+  // Version 2: Added modelName field to conversations
+  conversations: '&id, lastModified, modelName',
   messages: '&id, convId, [convId+id], timestamp',
 });
 
@@ -93,7 +99,10 @@ const StorageUtils = {
   /**
    * create a new conversation with a default root node
    */
-  async createConversation(name: string): Promise<Conversation> {
+  async createConversation(
+    name: string,
+    modelName?: string
+  ): Promise<Conversation> {
     const now = Date.now();
     const msgId = now;
     const conv: Conversation = {
@@ -101,6 +110,7 @@ const StorageUtils = {
       lastModified: now,
       currNode: msgId,
       name,
+      modelName,
     };
     await db.conversations.add(conv);
     // create a root node
