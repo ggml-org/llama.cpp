@@ -3438,59 +3438,50 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
-    // shared diffusion parameters
     add_opt(common_arg(
         { "--diffusion-steps" }, "N",
-        string_format("number of diffusion steps (default: %d)", params.diffusion_dream.steps),
-        [](common_params & params, int value) {
-            params.diffusion_dream.steps = value;
-            params.diffusion_llada.steps = value;
-        }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_DREAM, LLAMA_EXAMPLE_DIFFUSION_LLADA }));
+        string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
+        [](common_params & params, int value) { params.diffusion.steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
         { "--diffusion-visual" },
         string_format("enable visual diffusion mode (show progressive generation) (default: %s)",
-                      params.diffusion_dream.visual_mode ? "true" : "false"),
-        [](common_params & params) {
-            params.diffusion_dream.visual_mode = true;
-            params.diffusion_llada.visual_mode = true;
-        }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_DREAM, LLAMA_EXAMPLE_DIFFUSION_LLADA }));
+                      params.diffusion.visual_mode ? "true" : "false"),
+        [](common_params & params) { params.diffusion.visual_mode = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
 
-    // DREAM-specific diffusion parameters
     add_opt(common_arg(
-        { "--diffusion-eps" }, "F",
-        string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion_dream.eps),
-        [](common_params & params, const std::string & value) { params.diffusion_dream.eps = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_DREAM }));
+        { "--diffusion--dream-eps" }, "F",
+        string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
+        [](common_params & params, const std::string & value) { params.diffusion.eps = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
-        { "--diffusion-algorithm" }, "N",
+        { "--diffusion-dream-algorithm" }, "N",
         string_format("diffusion algorithm: 0=ORIGIN, 1=MASKGIT_PLUS, 2=TOPK_MARGIN, 3=ENTROPY (default: %d)",
-                      params.diffusion_dream.algorithm),
-        [](common_params & params, int value) { params.diffusion_dream.algorithm = value; }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_DREAM }));
+                      params.diffusion.algorithm),
+        [](common_params & params, int value) { params.diffusion.algorithm = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
-        { "--diffusion-alg-temp" }, "F",
-        string_format("algorithm temperature (default: %.3f)", (double) params.diffusion_dream.alg_temp),
-        [](common_params & params, const std::string & value) { params.diffusion_dream.alg_temp = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_DREAM }));
+        { "--diffusion-dream-alg-temp" }, "F",
+        string_format("dream algorithm temperature (default: %.3f)", (double) params.diffusion.alg_temp),
+        [](common_params & params, const std::string & value) { params.diffusion.alg_temp = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
 
-    // LLADA-specific diffusion parameters
     add_opt(common_arg(
-        { "--diffusion-block-length" }, "N",
-        string_format("block length for generation (default: %d)", params.diffusion_llada.block_length),
-        [](common_params & params, int value) { params.diffusion_llada.block_length = value; }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_LLADA }));
+        { "--diffusion-llada-block-length" }, "N",
+        string_format("llada block length for generation (default: %d)", params.diffusion.block_length),
+        [](common_params & params, int value) { params.diffusion.block_length = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
-        { "--diffusion-cfg-scale" }, "F",
-        string_format("classifier-free guidance scale (default: %.3f)", (double) params.diffusion_llada.cfg_scale),
-        [](common_params & params, const std::string & value) { params.diffusion_llada.cfg_scale = std::stof(value); }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_LLADA }));
+        { "--diffusion-llada-cfg-scale" }, "F",
+        string_format("llada classifier-free guidance scale (default: %.3f)", (double) params.diffusion.cfg_scale),
+        [](common_params & params, const std::string & value) { params.diffusion.cfg_scale = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
     add_opt(common_arg(
-        { "--diffusion-algorithm" }, "N",
-        string_format("remasking algorithm: 0=LOW_CONFIDENCE, 1=RANDOM (default: %d)", params.diffusion_llada.remasking),
-        [](common_params & params, int value) { params.diffusion_llada.remasking = value; }
-    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION_LLADA }));
+        { "--diffusion-llada-algorithm" }, "N",
+        string_format("llada remasking algorithm: 0=LOW_CONFIDENCE, 1=RANDOM (default: %d)", params.diffusion.remasking),
+        [](common_params & params, int value) { params.diffusion.remasking = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
 
     return ctx_arg;
 }
