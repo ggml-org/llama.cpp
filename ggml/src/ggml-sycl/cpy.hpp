@@ -2,6 +2,7 @@
 #define GGML_SYCL_CPY_HPP
 
 #include "common.hpp"
+
 #include <algorithm>
 #include <cfloat>
 
@@ -26,7 +27,6 @@ __dpct_inline__ int best_index_int8(int n, const int8_t * val, float x) {
     return x - val[mu - 1] < val[mu] - x ? mu - 1 : mu;
 }
 
-
 inline void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
     block_q8_0 *  dsti = (block_q8_0 *) cdsti;
@@ -49,7 +49,6 @@ inline void cpy_blck_f32_q8_0(const char * cxi, char * cdsti) {
         dsti->qs[j] = sycl::round((float) x0);
     }
 }
-
 
 inline void cpy_blck_f32_q4_0(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
@@ -184,7 +183,6 @@ inline void cpy_blck_f32_q5_1(const char * cxi, char * cdsti) {
     memcpy(dsti->qh, &qh, sizeof(qh));
 }
 
-
 inline void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
     const float *  xi   = (const float *) cxi;
     block_iq4_nl * dsti = (block_iq4_nl *) cdsti;
@@ -224,4 +222,4 @@ inline void cpy_blck_f32_iq4_nl(const char * cxi, char * cdsti) {
 void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1);
 void ggml_sycl_dup(ggml_backend_sycl_context & ctx, ggml_tensor * dst);
 
-#endif // GGML_SYCL_CPY_HPP
+#endif  // GGML_SYCL_CPY_HPP
