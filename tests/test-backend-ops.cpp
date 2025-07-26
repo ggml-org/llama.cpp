@@ -868,16 +868,30 @@ struct sql_printer : public printer {
 
 struct csv_printer : public printer {
     void print_header() override {
-        std::vector<std::string> fields = test_result::get_fields();
+
+        std::vector<std::string> fields     = test_result::get_fields();
+        std::vector<std::string> fields_csv = get_fields_csv();
         for (size_t i = 0; i < fields.size(); i++) {
+            if (std::find(std::begin(fields_csv), std::end(fields_csv), fields[i]) == std::end(fields_csv)) {
+                continue;
+            }
             printf("\"%s\"%s", fields[i].c_str(), i < fields.size() - 1 ? "," : "");
         }
         printf("\n");
     }
 
     void print_test_result(const test_result & result) override {
-        std::vector<std::string> values = result.get_values();
+
+        std::vector<std::string> values     = result.get_values();
+        std::vector<std::string> fields     = test_result::get_fields();
+        std::vector<std::string> fields_csv = get_fields_csv();
+
         for (size_t i = 0; i < values.size(); i++) {
+
+            if (std::find(std::begin(fields_csv), std::end(fields_csv), fields[i]) == std::end(fields_csv)) {
+                continue;
+            }
+
             // Escape quotes and wrap in quotes for CSV
             std::string escaped_value = values[i];
             size_t pos = 0;
@@ -889,6 +903,19 @@ struct csv_printer : public printer {
         }
         printf("\n");
     }
+
+    static std::vector<std::string> get_fields_csv() {
+        return {
+            "op_name",
+            "op_params",
+            "supported",
+            "error_message",
+            "test_mode",
+            "backend_reg_name",
+            "backend_name",
+        };
+    }
+
 };
 
 static std::unique_ptr<printer> create_printer(output_formats format) {
