@@ -43,7 +43,7 @@ static void set_rows_sycl_q(
             stream,
             sycl::nd_range<1>(grid_size * block_size, block_size),
             [=](sycl::nd_item<1> item_ct1) {
-            const int64_t i = item_ct1.get_global_id(0);
+            const int64_t i = item_ct1.get_global_linear_id();
             if (i >= total_blocks) return;
             const int64_t i_base = i * qk;
             const int64_t i03 = i_base / (ne00 * ne01 * ne02);
