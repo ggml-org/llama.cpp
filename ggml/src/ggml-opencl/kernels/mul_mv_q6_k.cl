@@ -202,9 +202,9 @@ kernel void kernel_mul_mv_q6_K_f32(
 #undef N_SIMDWIDTH
 
 #ifdef INTEL_GPU
-#define N_DST 1 // number of rows each SIMD group works on
-#define N_SIMDGROUP 2 // number of SIMD groups in a thread group
-#define N_SIMDWIDTH 16 // SIMD group size
+#define N_DST 1
+#define N_SIMDGROUP 2
+#define N_SIMDWIDTH 16
 #elif defined (ADRENO_GPU)
 #define N_DST 1
 #define N_SIMDGROUP 2
@@ -237,7 +237,6 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
         int r2,
         int r3
 ) {
-    //src0 = (global void*)((global char*)src0 + offset0);
     src1 = (global float*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
@@ -263,12 +262,11 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     ulong offset_src0_s  = offset_src0 * 16;
     ulong offset_src0_d  = offset_src0;
 
-    //global block_q6_K * x = (global block_q6_K *) src0 + offset_src0;
-    global uchar      * blk_ql      = (global uchar *) src0_ql + offset_src0_ql;
-    global uchar      * blk_qh      = (global uchar *) src0_qh + offset_src0_qh;
-    global char       * blk_scales  = (global char  *) src0_s  + offset_src0_s;
-    global half       * blk_d       = (global half  *) src0_d  + offset_src0_d;
-    global float      * yy          = (global float *) src1    + r1*ne10 + im*ne00*ne1;
+    global uchar * blk_ql     = (global uchar *) src0_ql + offset_src0_ql;
+    global uchar * blk_qh     = (global uchar *) src0_qh + offset_src0_qh;
+    global char  * blk_scales = (global char  *) src0_s  + offset_src0_s;
+    global half  * blk_d      = (global half  *) src0_d  + offset_src0_d;
+    global float * yy         = (global float *) src1    + r1*ne10 + im*ne00*ne1;
 
     float sumf = 0;
 
@@ -286,25 +284,19 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     // Thread0 - thread3 work on subblocks 0, 2, 4, 6; thread4 - thread7 work on
     // subblocks 1, 3, 5, 7. Each thread does not work on an entire subblock, but
     // works on a total of 16 weight values.
-    int tid  = get_sub_group_local_id()/BLOCK_STRIDE; // first block_stride groups have tid=0
-    int ix   = get_sub_group_local_id()%BLOCK_STRIDE; // first block is 0..block_stride-1
-    int ip   = tid/8;   // first or second half of (super) block (0 or 1)
-    int il   = tid%8;   // each half has 8 parts, one per scale
-    int n    = 4;       // 4 scales at a time (and 4 sums)
-    int l0   = n*il;    // offset into half-block, 0..28
-    int is   = 8*ip + l0/16; // 0, 1, 8, 9
+    int tid = get_sub_group_local_id()/BLOCK_STRIDE; // first block_stride groups have tid=0
+    int ix  = get_sub_group_local_id()%BLOCK_STRIDE; // first block is 0..block_stride-1
+    int ip  = tid/8;   // first or second half of (super) block (0 or 1)
+    int il  = tid%8;   // each half has 8 parts, one per scale
+    int n   = 4;       // 4 scales at a time (and 4 sums)
+    int l0  = n*il;    // offset into half-block, 0..28
+    int is  = 8*ip + l0/16; // 0, 1, 8, 9
 
     int y_offset   = 128*ip + l0;
     int q_offset_l = 64*ip + l0;
     int q_offset_h = 32*ip + l0;
 
     for (int i = ix; i < nb; i += BLOCK_STRIDE) {
-
-        //global uint8_t * q1 = x[i].ql + q_offset_l;
-        //global uint8_t * q2 = q1 + QK_K/8;
-        //global uint8_t * qh = x[i].qh + q_offset_h;
-        //global int8_t  * sc = x[i].scales + is;
-
         global uint8_t * q1 = blk_ql     + i*128 + q_offset_l;
         global uint8_t * q2 = q1         + QK_K/8;
         global uint8_t * qh = blk_qh     + i*64 + q_offset_h;
@@ -312,7 +304,6 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
 
         global float * y = yy + i * QK_K + y_offset;
 
-        //float dall = x[i].d;
         float dall = blk_d[i];
 
         float4 sums = {0.f, 0.f, 0.f, 0.f};
