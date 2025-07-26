@@ -58,7 +58,7 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="bg-background border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
+	class="bg-background dark:bg-muted border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
 >
 	<!-- Input Container -->
 	<div
@@ -119,16 +119,14 @@
 			</div>
 		</div>
 	</div>
-
-	<!-- Helper Text -->
-	{#if showHelperText}
-		<div class="mt-2 flex items-center justify-center">
-			<p class="text-muted-foreground text-xs">
-				Press <kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Enter</kbd> to
-				send,
-				<kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Shift + Enter</kbd> for new
-				line
-			</p>
-		</div>
-	{/if}
 </form>
+
+<!-- Helper Text -->
+{#if showHelperText}
+	<div class="mt-4 flex items-center justify-center">
+		<p class="text-muted-foreground text-xs">
+			Press <kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Enter</kbd> to send,
+			<kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Shift + Enter</kbd> for new line
+		</p>
+	</div>
+{/if}
