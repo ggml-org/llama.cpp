@@ -16019,6 +16019,7 @@ private:
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
+            cb(Qcur, "Qcur_rope", il);
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
@@ -16104,8 +16105,8 @@ private:
             ggml_build_forward_expand(gf,
                 ggml_cpy(ctx0, last_conv,
                     ggml_view_1d(ctx0, conv_states_all,
-                        (d_conv - 1)*d_inner*(n_seqs),
-                        kv_head*(d_conv - 1)*d_inner*ggml_element_size(conv_states_all))));
+                        (d_conv - 1)*(d_inner + 2*n_group*d_state)*(n_seqs),
+                        kv_head*(d_conv - 1)*(d_inner + 2*n_group*d_state)*ggml_element_size(conv_states_all))));
             cb(conv_states_all, "mamba_conv1d_state", il);
 
             // 1D convolution
@@ -16169,8 +16170,8 @@ private:
             // store last states
             ggml_build_forward_expand(gf,
                 ggml_cpy(ctx0,
-                    ggml_view_1d(ctx0, y_ssm, n_heads*head_dim*d_state*n_seqs, ggml_nelements(x)*x->nb[0]),
-                    ggml_view_1d(ctx0, ssm_states_all, n_heads*head_dim*d_state*n_seqs, kv_head*d_state*d_inner*ggml_element_size(ssm_states_all))));
+                    ggml_view_1d(ctx0, y_ssm, n_heads*head_dim*d_state*n_seqs, n_heads*head_dim*n_seq_tokens*n_seqs*ggml_element_size(y_ssm)),
+                    ggml_view_1d(ctx0, ssm_states_all, n_heads*head_dim*d_state*n_seqs, kv_head*n_seqs*n_heads*head_dim*d_state*ggml_element_size(ssm_states_all))));
             cb(ssm_states_all, "mamba_ssm_states", il);
 
             ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_heads, n_seq_tokens, n_seqs, head_dim * ggml_element_size(x), head_dim * n_heads * ggml_element_size(x), head_dim * n_heads * n_seq_tokens * ggml_element_size(x), 0);
