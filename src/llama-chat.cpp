@@ -712,9 +712,7 @@ int32_t llm_chat_apply_template(
             std::string role(chat[i]->role);
             if (i == 0) {
                 if (role == "system") {
-                    ss << "<｜hy_begin▁of▁sentence｜>" << chat[i]->content << "<｜hy_place▁holder▁no▁3｜>";
-                } else {
-                    ss << "<｜hy_begin▁of▁sentence｜>";
+                    ss << chat[i]->content << "<｜hy_place▁holder▁no▁3｜>";
                 }
             }
 

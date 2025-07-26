@@ -7533,6 +7533,7 @@ class HunYuanModel(TextModel):
     def set_vocab(self):
         if (self.dir_model / "tokenizer.json").is_file():
             self._set_vocab_gpt2()
+            self.gguf_writer.add_add_bos_token(True)
         else:
             from transformers import AutoTokenizer
             tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
