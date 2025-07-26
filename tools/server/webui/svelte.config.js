@@ -14,7 +14,10 @@ const config = {
 			fallback: 'index.html',
 			precompress: false,
 			strict: true
-		})
+		}),
+		output: {
+			bundleStrategy: 'single'
+		}
 	},
 	extensions: ['.svelte', '.svx']
 };

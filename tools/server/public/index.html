@@ -5,29 +5,21 @@
 		<link rel="icon" href="/favicon.svg" />
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		
-		<link rel="modulepreload" href="/_app/immutable/entry/start.CTva-hwj.js">
-		<link rel="modulepreload" href="/_app/immutable/chunks/CR1FXvTD.js">
-		<link rel="modulepreload" href="/_app/immutable/chunks/DHa_N7rM.js">
-		<link rel="modulepreload" href="/_app/immutable/entry/app.BdNKBXR0.js">
-		<link rel="modulepreload" href="/_app/immutable/chunks/DsnmJJEf.js">
-		<link rel="modulepreload" href="/_app/immutable/chunks/Dn_KYLer.js">
-		<link rel="modulepreload" href="/_app/immutable/chunks/Cs1KchBm.js">
+		<link href="/_app/immutable/assets/bundle.PZXE3vIS.css" rel="stylesheet">
+		<link rel="modulepreload" href="/_app/immutable/bundle.SafNvfz4.js">
 	</head>
 	<body data-sveltekit-preload-data="hover">
 		<div style="display: contents">
 			<script>
 				{
-					__sveltekit_4ghlth = {
+					__sveltekit_hzagaa = {
 						base: ""
 					};
 
 					const element = document.currentScript.parentElement;
 
-					Promise.all([
-						import("/_app/immutable/entry/start.CTva-hwj.js"),
-						import("/_app/immutable/entry/app.BdNKBXR0.js")
-					]).then(([kit, app]) => {
-						kit.start(app, element);
+					import("/_app/immutable/bundle.SafNvfz4.js").then((app) => {
+						app.start(element)
 					});
 				}
 			</script>
