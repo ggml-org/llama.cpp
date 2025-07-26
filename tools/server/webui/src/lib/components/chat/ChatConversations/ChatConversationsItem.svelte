@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Trash2, Pencil } from '@lucide/svelte';
 	import type { Conversation } from '$lib/types/conversation';
 
@@ -43,8 +44,12 @@
 		onEdit?.(conversation.id);
 	}
 
-	function handleDelete(event: Event) {
+	function handleDeleteClick(event: Event) {
 		event.stopPropagation();
+		// Alert dialog will handle the actual delete confirmation
+	}
+
+	function handleConfirmDelete() {
 		onDelete?.(conversation.id);
 	}
 </script>
@@ -73,14 +78,33 @@
 		<Button size="sm" variant="ghost" class="h-6 w-6 p-0" onclick={handleEdit}>
 			<Pencil class="h-3 w-3" />
 		</Button>
-		<Button
-			size="sm"
-			variant="ghost"
-			class="text-destructive hover:text-destructive h-6 w-6 p-0"
-			onclick={handleDelete}
-		>
-			<Trash2 class="h-3 w-3" />
-		</Button>
+		<AlertDialog.Root>
+			<AlertDialog.Trigger onclick={handleDeleteClick}>
+				<Button
+					size="sm"
+					variant="ghost"
+					class="text-destructive hover:text-destructive h-6 w-6 p-0"
+				>
+					<Trash2 class="h-3 w-3" />
+				</Button>
+			</AlertDialog.Trigger>
+			<AlertDialog.Content>
+				<AlertDialog.Header>
+					<AlertDialog.Title>Delete Conversation</AlertDialog.Title>
+					<AlertDialog.Description>
+						Are you sure you want to delete "{conversation.name}"? This action cannot be
+						undone and will permanently remove all messages in this conversation.
+					</AlertDialog.Description>
+				</AlertDialog.Header>
+				<AlertDialog.Footer>
+					<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+					<AlertDialog.Action
+						class="bg-destructive text-destructive-foreground"
+						onclick={handleConfirmDelete}>Delete</AlertDialog.Action
+					>
+				</AlertDialog.Footer>
+			</AlertDialog.Content>
+		</AlertDialog.Root>
 	</div>
 </button>
 
