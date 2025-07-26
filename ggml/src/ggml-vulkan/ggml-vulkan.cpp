@@ -7882,6 +7882,13 @@ static void ggml_vk_set_rows(ggml_backend_vk_context * ctx, vk_context& subctx, 
     const uint32_t src1_type_size = ggml_type_size(src1->type);
     const uint32_t dst_type_size = ggml_type_size(dst->type);
 
+    // Skip empty skip_rows operations. For most ops the empty check at the start
+    // of ggml_vk_build_graph is sufficient, but set_rows can have a nonempty dst
+    // with empty srcs.
+    if (ggml_is_empty(src0) || ggml_is_empty(src1)) {
+        return;
+    }
+
     ggml_vk_op_f32<vk_op_binary_push_constants>(ctx, subctx, src0, src1, nullptr, dst, GGML_OP_SET_ROWS, {
         (uint32_t)ggml_nelements(src0),
         (uint32_t)src0->ne[0], (uint32_t)src0->ne[1], (uint32_t)src0->ne[2],(uint32_t)src0->ne[3], (uint32_t)src0->nb[0] / src0_type_size, (uint32_t)src0->nb[1] / src0_type_size, (uint32_t)src0->nb[2] / src0_type_size, (uint32_t)src0->nb[3] / src0_type_size,
