@@ -3707,6 +3707,7 @@ struct test_im2col : public test_case {
 struct test_conv_2d : public test_case {
     const std::array<int64_t, 4> ne_input;
     const std::array<int64_t, 4> ne_kernel;
+    const ggml_type              type_kernel;
     const int                    stride0;
     const int                    stride1;
     const int                    padding0;
@@ -3724,7 +3725,7 @@ struct test_conv_2d : public test_case {
     // IM2COL -> MUL_MM graph will be built.
 
     std::string vars() override {
-        return VARS_TO_STR9(ne_input, ne_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
+        return VARS_TO_STR10(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
     }
 
     uint64_t op_flops(ggml_tensor * t) override {
@@ -3755,10 +3756,11 @@ struct test_conv_2d : public test_case {
     }
 
     test_conv_2d(std::array<int64_t, 4> ne_input  = { 64, 64, 16, 1 },
-                 std::array<int64_t, 4> ne_kernel = { 3, 3, 1, 16 }, int stride0 = 1, int stride1 = 1, int padding0 = 0,
-                 int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false) :
+                 std::array<int64_t, 4> ne_kernel = { 3, 3, 1, 16 }, ggml_type type_kernel = GGML_TYPE_F32, int stride0 = 1,
+                 int stride1 = 1, int padding0 = 0, int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false) :
         ne_input(ne_input),
         ne_kernel(ne_kernel),
+        type_kernel(type_kernel),
         stride0(stride0),
         stride1(stride1),
         padding0(padding0),
@@ -3771,7 +3773,7 @@ struct test_conv_2d : public test_case {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
         ggml_set_name(input, "input");
 
-        ggml_tensor * kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
+        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
         ggml_set_name(kernel, "kernel");
 
         if (cwhn) {
@@ -5138,10 +5140,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         { 16,  3, 256,  128, 8 }
     };
 
-    for (auto act_case : cases) {
-        test_cases.emplace_back(new test_conv_2d(
-            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
+    for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (auto act_case : cases) {
+            test_cases.emplace_back(new test_conv_2d(
+                { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+                { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
+                kernel_type, 1, 1, 0, 0, 1, 1, false));
+        }
     }
 #endif
 
@@ -5167,8 +5172,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 for (uint32_t W : { 1, 141 }) {
                                     if (calc_conv_output_size(W, KW, s0, p0, d0) > 0 &&
                                         calc_conv_output_size(H, KH, s1, p1, d1) > 0) {
-                                        test_cases.emplace_back(new test_conv_2d(
-                                            { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, s1, p0, p1, d0, d1, false));
+                                        for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+                                            test_cases.emplace_back(new test_conv_2d(
+                                                { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, kernel_type, s0, s1, p0, p1, d0, d1, false));
+                                        }
                                     }
                                 }
                             }
@@ -5813,11 +5820,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         { 16,  3, 512,  128, 8 },
     };
 
-    for (auto act_case : cases) {
-        // Direct CONV_2D
-        test_cases.emplace_back(new test_conv_2d(
-            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
+    for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (auto act_case : cases) {
+            // Direct CONV_2D
+            test_cases.emplace_back(new test_conv_2d(
+                { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+                { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
+                kernel_type, 1, 1, 0, 0, 1, 1, false));
+        }
     }
 
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
