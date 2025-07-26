@@ -1,0 +1,10 @@
+**/.vscode
+**/.github
+**/.git
+**/.svn
+**/.hg
+**/node_modules
+**/dist
+**/build
+
+*.config.js
