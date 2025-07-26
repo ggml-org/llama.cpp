@@ -226,7 +226,7 @@ void main() {
             uint32_t W_idx = OW_idx * p.s0 + KW_idx_b * p.d0 - p.p0;
             uint32_t src_idx =
                 min(max(W_idx + H_idx * p.nb11 + Cin_idx_b * p.nb12 + N_idx * p.nb13, 0), p.Cin * p.N * p.W * p.H - 1);
-            float val = src_data[src_idx];
+            float val = A_TYPE(src_data[src_idx]);
             if (CRS_idx_b >= CRS || NPQ_idx >= NPQ || H_idx < 0 || H_idx >= p.H || W_idx < 0 || W_idx >= p.W) {
                 val = 0.0;
             }
