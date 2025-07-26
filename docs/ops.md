@@ -2,6 +2,11 @@
 
 List of GGML operations and backend support status.
 
+## How to add a backend to this table:
+
+1. Run `test-backend-ops support --output csv` with your backend name and redirect output to a csv file in `docs/ops/` (e.g., `docs/ops/CUDA.csv`)
+2. Regenerate `/docs/ops.md` via `./scripts/create_ops_docs.py`
+
 Legend:
 - ✅ Fully supported by this backend
 - 🟡 Partially supported by this backend
@@ -18,7 +23,8 @@ Legend:
 |                          ARGSORT | ❌ | ✅ | ✅ | ✅ |
 |                            CLAMP | ❌ | ✅ | ✅ | 🟡 |
 |                           CONCAT | ❌ | ✅ | 🟡 | ✅ |
-|                             CONT | ❌ | ✅ | 🟡 | ✅ |
+|                             CONT | ❌ | ✅ | ✅ | ✅ |
+|                          CONV_2D | ❌ | ✅ | ❌ | ❌ |
 |                       CONV_2D_DW | ❌ | ✅ | ✅ | ❌ |
 |                CONV_TRANSPOSE_1D | ❌ | ✅ | ✅ | ✅ |
 |                CONV_TRANSPOSE_2D | ❌ | ✅ | ✅ | ❌ |
@@ -30,7 +36,7 @@ Legend:
 |                    DIAG_MASK_INF | ❌ | ✅ | ✅ | 🟡 |
 |                              DIV | ❌ | ✅ | ✅ | 🟡 |
 |                              DUP | ❌ | ✅ | 🟡 | 🟡 |
-|                              ELU | ❌ | ✅ | ❌ | 🟡 |
+|                              ELU | ❌ | ✅ | 🟡 | 🟡 |
 |                              EXP | ❌ | ✅ | 🟡 | ❌ |
 |                   FLASH_ATTN_EXT | ❌ | ✅ | 🟡 | 🟡 |
 |                GATED_LINEAR_ATTN | ❌ | ✅ | ✅ | ❌ |
@@ -66,14 +72,16 @@ Legend:
 |                      REPEAT_BACK | ❌ | ✅ | ✅ | ❌ |
 |                         RMS_NORM | ❌ | ✅ | ✅ | 🟡 |
 |                    RMS_NORM_BACK | ❌ | ✅ | ✅ | ❌ |
-|                     RMS_NORM_MUL | ❌ | ✅ | ✅ | ✅ |
+|                     RMS_NORM_MUL | ❌ | ❌ | ❌ | ✅ |
+|                 RMS_NORM_MUL_ADD | ❌ | ✅ | ✅ | ❌ |
+|                             ROLL | ❌ | ✅ | ❌ | ❌ |
 |                             ROPE | ❌ | ✅ | ✅ | ✅ |
 |                        ROPE_BACK | ❌ | ✅ | ✅ | ❌ |
 |                        RWKV_WKV6 | ❌ | ✅ | ✅ | ✅ |
 |                        RWKV_WKV7 | ❌ | ✅ | ✅ | ✅ |
 |                            SCALE | ❌ | ✅ | ✅ | ✅ |
 |                              SET | ❌ | ✅ | ❌ | ✅ |
-|                         SET_ROWS | ❌ | 🟡 | ❌ | 🟡 |
+|                         SET_ROWS | ❌ | 🟡 | 🟡 | 🟡 |
 |                              SGN | ❌ | ✅ | 🟡 | ❌ |
 |                          SIGMOID | ❌ | ✅ | 🟡 | 🟡 |
 |                             SILU | ❌ | ✅ | 🟡 | 🟡 |
