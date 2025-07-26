@@ -3791,7 +3791,7 @@ class Plamo2Model(TextModel):
         self.gguf_writer.add_block_count(block_count)
         self.gguf_writer.add_head_count(hparams.get("num_attention_heads", 32))
         self.gguf_writer.add_layer_norm_rms_eps(hparams.get("rms_norm_eps", 1e-06))
-        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 1000000.0))
+        self.gguf_writer.add_rope_freq_base(hparams.get("rope_theta", 10000))
 
         # Mamba parameters
         self.gguf_writer.add_ssm_state_size(hparams.get("mamba_d_state", 64))
@@ -3802,7 +3802,7 @@ class Plamo2Model(TextModel):
         self.gguf_writer.add_ssm_group_count(0)
 
         # MLP feed forward parameters (for attention layers)
-        self.gguf_writer.add_feed_forward_length(hparams.get("intermediate_size", 16384))
+        self.gguf_writer.add_feed_forward_length(hparams.get("intermediate_size", 13312))
         self.gguf_writer.add_file_type(self.ftype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:

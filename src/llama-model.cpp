@@ -16191,7 +16191,7 @@ private:
         {
             // PLaMo-2 uses combined QKV tensor
             ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
-            cb(qkv, "qkv", il);
+            cb(qkv, "wqkv", il);
 
             // split QKV tensor into Q, K, V
             const int64_t n_embd_head_q = hparams.n_embd_head_k;
@@ -16215,7 +16215,6 @@ private:
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
-
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
@@ -16224,17 +16223,16 @@ private:
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
-
             Kcur = ggml_rope_ext(
                     ctx0, Kcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
 
-            cur = build_attn(inp, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f, il);
+            cur = build_attn(inp, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f/sqrtf(float(n_embd_head_v)), il);
         }
 
-        cb(cur, "attn_out", il);
+        cb(cur, "attn_output", il);
 
         return cur;
     }
@@ -16306,8 +16304,9 @@ private:
             ggml_build_forward_expand(gf,
                 ggml_cpy(ctx0, last_conv,
                     ggml_view_1d(ctx0, conv_states_all,
-                        (d_conv - 1)*(d_inner)*(n_seqs),
-                        kv_head*(d_conv - 1)*(d_inner)*ggml_element_size(conv_states_all))));
+                        (d_conv - 1)*(d_inner + 2*n_group*d_state)*(n_seqs),
+                        kv_head*(d_conv - 1)*(d_inner + 2*n_group*d_state)*ggml_element_size(conv_states_all))));
+            cb(conv_states_all, "mamba_conv1d_state", il);
 
             // 1D convolution
             x = ggml_ssm_conv(ctx0, conv_x, model.layers[il].ssm_conv1d);
@@ -16370,9 +16369,9 @@ private:
             // store last states
             ggml_build_forward_expand(gf,
                 ggml_cpy(ctx0,
-                    ggml_view_1d(ctx0, y_ssm, d_state*d_inner*n_seqs, x->nb[3]*x->ne[3]),
-                    ggml_view_1d(ctx0, ssm_states_all, d_state*d_inner*n_seqs,
-                            kv_head*d_state*d_inner*ggml_element_size(ssm_states_all))));
+                    ggml_view_1d(ctx0, y_ssm, n_heads*head_dim*d_state*n_seqs, n_heads*head_dim*n_seq_tokens*n_seqs*ggml_element_size(y_ssm)),
+                    ggml_view_1d(ctx0, ssm_states_all, n_heads*head_dim*d_state*n_seqs, kv_head*n_seqs*n_heads*head_dim*d_state*ggml_element_size(ssm_states_all))));
+            cb(ssm_states_all, "mamba_ssm_states", il);
 
             ggml_tensor * y = ggml_view_4d(ctx0, y_ssm, head_dim, n_heads, n_seq_tokens, n_seqs, head_dim * ggml_element_size(x), head_dim * n_heads * ggml_element_size(x), head_dim * n_heads * n_seq_tokens * ggml_element_size(x), 0);
             cb(y, "mamba_y_view", il);
