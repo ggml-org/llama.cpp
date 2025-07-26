@@ -126,7 +126,8 @@
 	<div class="mt-4 flex items-center justify-center">
 		<p class="text-muted-foreground text-xs">
 			Press <kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Enter</kbd> to send,
-			<kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Shift + Enter</kbd> for new line
+			<kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Shift + Enter</kbd> for new
+			line
 		</p>
 	</div>
 {/if}

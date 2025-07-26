@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { DatabaseChatMessage } from '$lib/types/database';
-	import { updateMessage } from '$lib/stores/chat.svelte';
+	import { updateMessage, regenerateMessage } from '$lib/stores/chat.svelte';
 	import ChatMessage from './ChatMessage.svelte';
 	interface Props {
 		class?: string;
@@ -73,6 +73,9 @@
 					{message}
 					onUpdateMessage={async (msg, newContent) => {
 						await updateMessage(msg.id, newContent);
+					}}
+					onRegenerate={async (msg) => {
+						await regenerateMessage(msg.id);
 					}}
 				/>
 			{/each}
