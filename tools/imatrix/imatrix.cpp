@@ -38,10 +38,12 @@ static const char * const LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
 static const char * const LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
 
 struct Stats {
+    std::vector<float>   activations;
     std::vector<float>   values;
     std::vector<int64_t> counts;
 };
 
+//ToDo: rename sqract variables to be more generic like 'values'
 struct tensor_statistics {
     std::string tensor;
     Stats stats;
@@ -139,14 +141,28 @@ static void compute_statistics(std::vector<tensor_statistics> & tstats, const st
     const int row_size = e.values.size() / n_mat;
 
     std::vector<float> activations;
-    activations.reserve(e.values.size());
 
-    for (int i = 0; i < n_mat; ++i) {
-        for (int j = 0; j < row_size; ++j) {
-            activations.push_back(e.values[i*row_size + j] / e.counts[i]);
+    if (e.activations.empty()) {
+        activations.reserve(e.values.size());
+
+        for (int i = 0; i < n_mat; ++i) {
+            for (int j = 0; j < row_size; ++j) {
+                activations.push_back(e.values[i*row_size + j] / e.counts[i]);
+            }
+        }
+    } else {
+        activations.reserve(e.activations.size());
+
+        for (int i = 0; i < n_mat; ++i) {
+            for (int j = 0; j < row_size; ++j) {
+                activations.push_back(e.activations[i*row_size + j] / e.counts[i]);
+            }
         }
     }
 
+
+
+    //ToDo: rename act_ variables to be more generic like 'values'
     const float act_total     = std::accumulate(activations.begin(), activations.end(), 0.0f);
     const float act_max       = *std::max_element(activations.begin(), activations.end());
     const float act_min       = *std::min_element(activations.begin(), activations.end());
@@ -282,6 +298,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             e.counts.resize(n_as, e.counts[0]);
         }
         if (e.values.empty()) {
+            e.activations.resize(src1->ne[0]*n_as, 0);
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(n_as, 0);
         }
@@ -313,6 +330,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     e.counts[ex]++;
 
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
+                        e.activations[e_start + j] += x[j];
                         e.values[e_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[e_start + j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[e_start + j], wname.c_str());
@@ -338,6 +356,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         const int64_t n_mat = src1->ne[2] * src1->ne[3];
 
         if (e.values.empty()) {
+            e.activations.resize(src1->ne[0] * n_mat, 0);
             e.values.resize(src1->ne[0] * n_mat, 0);
             e.counts.resize(n_mat, 0);
         }
@@ -359,6 +378,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->ne[3]);
                     e.counts[mat_id]++;
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
+                        e.activations[mat_start + j] += x[j];
                         e.values[mat_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[j], wname.c_str());
@@ -532,6 +552,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         }
 
         to_store.push_back(kv.first);
+        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
     }
@@ -584,6 +605,16 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
 
             gguf_add_tensor(ctx_gguf, in_sum2);
             gguf_add_tensor(ctx_gguf, counts);
+
+            if (!stat.activations.empty()) {
+                const int32_t nact = (int32_t) stat.activations.size();
+                struct ggml_tensor * in_sum  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nact / nmat, nmat);
+                ggml_format_name(in_sum, "%s.in_sum", name.c_str()); // ToDo: consider a better name. 'in_act' maybe?
+                for (int32_t j = 0; j < nval; ++j) {
+                    ((float *) in_sum->data)[j] = (float) stat.activations[j];
+                }
+                gguf_add_tensor(ctx_gguf, in_sum);
+            }
         }
     }
 
@@ -722,6 +753,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         }
     }
 
+    const std::string in_sum_suffix{ ".in_sum" };
     const std::string in_sum2_suffix{ ".in_sum2" };
     const std::string counts_suffix{ ".counts" };
 
@@ -729,7 +761,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
     // checking for completeness of *each* loaded imatrix file
     // and also makes it easier to re-use a similar implementation in quantize.cpp
     // Using an ordered map to get a deterministic iteration order.
-    std::map<std::string, std::pair<struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
+    std::map<std::string, std::tuple<struct ggml_tensor *, struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
 
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
         std::string name = cur->name;
@@ -738,19 +770,24 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
 
         if (string_remove_suffix(name, in_sum2_suffix)) {
             // in_sum2
-            sums_counts_for[std::move(name)].first = cur;
+            std::get<0>(sums_counts_for[std::move(name)]) = cur;
         } else if (string_remove_suffix(name, counts_suffix)) {
             // counts
-            sums_counts_for[std::move(name)].second = cur;
-        } else {
+            std::get<1>(sums_counts_for[std::move(name)]) = cur;
+        }  else if (string_remove_suffix(name, in_sum_suffix)) {
+            // in_sum
+            std::get<2>(sums_counts_for[std::move(name)]) = cur;
+        }
+        else {
             // ignore other tensors
         }
     }
 
     for (const auto & sc : sums_counts_for) {
         const std::string &        name    = sc.first;
-        const struct ggml_tensor * in_sum2 = sc.second.first;
-        const struct ggml_tensor * counts  = sc.second.second;
+        const struct ggml_tensor * in_sum2 = std::get<0>(sc.second);
+        const struct ggml_tensor * counts  = std::get<1>(sc.second);
+        const struct ggml_tensor * in_sum   = std::get<2>(sc.second);
 
         if (!in_sum2 || !counts) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());
@@ -764,6 +801,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         int64_t nval = ggml_nelements(in_sum2);
         if (e.values.empty()) {
             e.values.resize(nval, 0.0f);
+            e.activations.resize(nval, 0.0f);
         } else if ((size_t) nval != e.values.size()) {
             LOG_ERR("%s: mismatched sums size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) nval, e.values.size());
             gguf_free(ctx_gguf);
@@ -790,6 +828,12 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         }
         for (int64_t j = 0; j < ncounts; j++) {
             e.counts[j] += std::lround(((const float *) counts->data)[j]);
+        }
+        // ToDo: fix blow up when GGUF does not have in_sum
+        if (in_sum->data != nullptr) {
+            for (int64_t j = 0; j < nval; j++) {
+                e.activations[j] += ((const float *) in_sum->data)[j];
+            }
         }
     }
 
