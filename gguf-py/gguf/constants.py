@@ -376,6 +376,7 @@ class MODEL_ARCH(IntEnum):
     SMOLLM3          = auto()
     LFM2             = auto()
     DREAM            = auto()
+    MISTRAL          = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):

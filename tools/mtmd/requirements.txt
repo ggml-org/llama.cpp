@@ -1,5 +1,5 @@
 -r ../../requirements/requirements-convert_legacy_llama.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
-pillow~=10.2.0
+pillow~=11.3.0
 torch~=2.2.1
 torchvision~=0.17.1
