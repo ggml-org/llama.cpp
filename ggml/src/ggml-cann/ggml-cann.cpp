@@ -1681,16 +1681,18 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(dst)) {
                 case GGML_UNARY_OP_ABS:
-                    GGML_CANN_CALL_UNARY_OP(Abs);
+                    GGML_CANN_CALL_OP_UNARY(Abs);
                     break;
                 case GGML_UNARY_OP_NEG:
-                    GGML_CANN_CALL_UNARY_OP(Neg);
+                    GGML_CANN_CALL_OP_UNARY(Neg);
                     break;
                 case GGML_UNARY_OP_GELU:
-                    GGML_CANN_CALL_UNARY_OP(Gelu);
+                case GGML_UNARY_OP_GELU_ERF:
+                    // aclnnGelu internally uses the erf-based approximation.
+                    GGML_CANN_CALL_OP_UNARY(Gelu);
                     break;
                 case GGML_UNARY_OP_SILU:
-                    GGML_CANN_CALL_UNARY_OP(Silu);
+                    GGML_CANN_CALL_OP_UNARY(Silu);
                     break;
                 case GGML_UNARY_OP_GELU_QUICK: {
                     auto lambda = [](ggml_backend_cann_context& ctx,
@@ -1698,35 +1700,60 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                         aclTensor* acl_dst) {
                         GGML_CANN_CALL_ACLNN_OP(ctx, GeluV2, acl_src, 0, acl_dst);
                     };
-                    ggml_cann_unary_op(lambda, ctx, dst);
+                    ggml_cann_op_unary(lambda, ctx, dst);
                 } break;
                 case GGML_UNARY_OP_TANH:
-                    GGML_CANN_CALL_UNARY_OP(Tanh);
+                    GGML_CANN_CALL_OP_UNARY(Tanh);
                     break;
                 case GGML_UNARY_OP_RELU:
-                    GGML_CANN_CALL_UNARY_OP(Relu);
+                    GGML_CANN_CALL_OP_UNARY(Relu);
                     break;
                 case GGML_UNARY_OP_SIGMOID:
-                    GGML_CANN_CALL_UNARY_OP(Sigmoid);
+                    GGML_CANN_CALL_OP_UNARY(Sigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSIGMOID:
-                    GGML_CANN_CALL_UNARY_OP(Hardsigmoid);
+                    GGML_CANN_CALL_OP_UNARY(Hardsigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSWISH:
-                    GGML_CANN_CALL_UNARY_OP(Hardswish);
+                    GGML_CANN_CALL_OP_UNARY(Hardswish);
                     break;
                 case GGML_UNARY_OP_EXP:
-                    GGML_CANN_CALL_UNARY_OP(Exp);
+                    GGML_CANN_CALL_OP_UNARY(Exp);
                     break;
                 case GGML_UNARY_OP_ELU:
                     ggml_cann_elu(ctx, dst);
                     break;
                 case GGML_UNARY_OP_SGN:
-                    GGML_CANN_CALL_UNARY_OP(Sign);
+                    GGML_CANN_CALL_OP_UNARY(Sign);
                     break;
                 case GGML_UNARY_OP_STEP:
                     ggml_cann_step(ctx, dst);
                     break;
+                default:
+                    return false;
+            }
+            break;
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(dst)) {
+                case GGML_GLU_OP_REGLU:
+                    GGML_CANN_CALL_OP_UNARY_GATED(Relu);
+                    break;
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                    // aclnnGelu internally uses the erf-based approximation.
+                    GGML_CANN_CALL_OP_UNARY_GATED(Gelu);
+                    break;
+                case GGML_GLU_OP_SWIGLU:
+                    GGML_CANN_CALL_OP_UNARY_GATED(Silu);
+                    break;
+                case GGML_GLU_OP_GEGLU_QUICK: {
+                    auto lambda = [](ggml_backend_cann_context& ctx,
+                        aclTensor* acl_src,
+                        aclTensor* acl_dst) {
+                        GGML_CANN_CALL_ACLNN_OP(ctx, GeluV2, acl_src, 0, acl_dst);
+                    };
+                    ggml_cann_op_unary_gated(lambda, ctx, dst);
+                } break;
                 default:
                     return false;
             }
@@ -1773,7 +1800,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_binary_op<aclnn_mul>(ctx, dst);
             break;
         case GGML_OP_SQRT:
-            GGML_CANN_CALL_UNARY_OP(Sqrt);
+            GGML_CANN_CALL_OP_UNARY(Sqrt);
             break;
         case GGML_OP_CLAMP:
             ggml_cann_clamp(ctx, dst);
@@ -1818,16 +1845,16 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_argmax(ctx, dst);
             break;
         case GGML_OP_COS:
-            ggml_cann_unary_op<aclnn_cos>(ctx, dst);
+            ggml_cann_op_unary<aclnn_cos>(ctx, dst);
             break;
         case GGML_OP_SIN:
-            ggml_cann_unary_op<aclnn_sin>(ctx, dst);
+            ggml_cann_op_unary<aclnn_sin>(ctx, dst);
             break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             ggml_cann_conv_transpose_1d(ctx, dst);
             break;
         case GGML_OP_LOG:
-            GGML_CANN_CALL_UNARY_OP(Log);
+            GGML_CANN_CALL_OP_UNARY(Log);
             break;
         case GGML_OP_MEAN:
             ggml_cann_mean(ctx, dst);
@@ -2101,10 +2128,23 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_UNARY_OP_ELU:
                 case GGML_UNARY_OP_SGN:
                 case GGML_UNARY_OP_STEP:
+                case GGML_UNARY_OP_GELU_ERF:
                     return true;
                 default:
                     return false;
             }
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_REGLU:
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    return true;
+                default:
+                    return false;
+            }
+            break;
         case GGML_OP_MUL_MAT: {
             switch (op->src[0]->type) {
                 case GGML_TYPE_F16:
