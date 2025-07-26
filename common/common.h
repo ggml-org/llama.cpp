@@ -81,8 +81,7 @@ enum llama_example {
     LLAMA_EXAMPLE_LOOKUP,
     LLAMA_EXAMPLE_PARALLEL,
     LLAMA_EXAMPLE_TTS,
-    LLAMA_EXAMPLE_DIFFUSION_DREAM,
-    LLAMA_EXAMPLE_DIFFUSION_LLADA,
+    LLAMA_EXAMPLE_DIFFUSION,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -220,20 +219,20 @@ struct common_params_vocoder {
     bool use_guide_tokens = false; // enable guide tokens to improve TTS accuracy            // NOLINT
 };
 
-struct common_params_diffusion_dream {
-    int32_t steps       = 64;     // number of diffusion steps
-    float   eps         = 1e-3f;  // epsilon for timesteps
-    int32_t algorithm   = 0;      // diffusion algorithm (0=ORIGIN, 1=MASKGIT_PLUS, 2=TOPK_MARGIN, 3=ENTROPY)
-    float   alg_temp    = 0.0f;   // algorithm temperature
-    bool    visual_mode = false;  // show progressive diffusion on screen
-};
+struct common_params_diffusion {
+    // Common parameters
+    int32_t steps         = 128;     // number of diffusion steps
+    bool    visual_mode   = false;  // show progressive diffusion on screen
 
-struct common_params_diffusion_llada {
-    int32_t steps         = 64;     // number of diffusion steps
+    // Dream-specific parameters
+    float   eps           = 1e-3f;  // epsilon for timesteps
+    int32_t algorithm     = 3;      // diffusion algorithm (0=ORIGIN, 1=MASKGIT_PLUS, 2=TOPK_MARGIN, 3=ENTROPY)
+    float   alg_temp      = 0.0f;   // algorithm temperature
+
+    // LLaDA-specific parameters
     int32_t block_length  = 32;     // block length for generation
     float   cfg_scale     = 0.2f;   // classifier-free guidance scale
-    int32_t remasking     = 0;      // remasking algorithm: 0=LOW_CONFIDENCE, 1=RANDOM
-    bool    visual_mode   = false;  // show progressive diffusion on screen
+    int32_t remasking     = 1;      // remasking algorithm: 0=LOW_CONFIDENCE, 1=RANDOM
 };
 
 enum common_reasoning_format {
@@ -287,8 +286,7 @@ struct common_params {
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
     struct common_params_vocoder            vocoder;
-    struct common_params_diffusion_dream   diffusion_dream;
-    struct common_params_diffusion_llada   diffusion_llada;
+    struct common_params_diffusion         diffusion;
 
     struct common_params_model model;
 
