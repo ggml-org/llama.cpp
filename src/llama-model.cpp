@@ -15908,7 +15908,6 @@ struct llm_build_plamo2 : public llm_graph_context_mamba {
 
             // pre_mixer_norm
             cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
-            cb(cur, "pre_mixer_norm", il);
 
             // check if this layer is Mamba or Attention
             bool is_mamba_layer = hparams.is_recurrent(il);
@@ -15989,7 +15988,7 @@ private:
         {
             // PLaMo-2 uses combined QKV tensor
             ggml_tensor * qkv = build_lora_mm(model.layers[il].wqkv, cur);
-            cb(qkv, "qkv", il);
+            cb(qkv, "wqkv", il);
 
             // split QKV tensor into Q, K, V
             const int64_t n_embd_head_q = hparams.n_embd_head_k;
@@ -16013,27 +16012,24 @@ private:
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
-
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
-            cb(Qcur, "Qcur_rope", il);
 
             Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
             cb(Kcur, "Kcur_normed", il);
-
             Kcur = ggml_rope_ext(
                     ctx0, Kcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
 
-            cur = build_attn(inp, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f, il);
+            cur = build_attn(inp, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f/sqrtf(float(n_embd_head_v)), il);
         }
 
-        cb(cur, "attn_out", il);
+        cb(cur, "attn_output", il);
 
         return cur;
     }
@@ -16180,7 +16176,6 @@ private:
             // Add D parameter and apply gating with z
             // {d_inner, n_seq_tokens, n_seqs} * {d_inner} => {d_inner, n_seq_tokens, n_seqs}
             ggml_tensor * D = ggml_reshape_2d(ctx0, model.layers[il].ssm_d, 1, n_heads);
-            cb(D, "mamba_D", il);
             y = ggml_add(ctx0, y, ggml_mul(ctx0, x, D));
             cb(y, "mamba_y_add_d", il);
 
