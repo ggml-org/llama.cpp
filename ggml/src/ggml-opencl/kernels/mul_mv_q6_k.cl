@@ -196,6 +196,62 @@ kernel void kernel_mul_mv_q6_K_f32(
 //------------------------------------------------------------------------------
 // kernel_mul_mv_q6_K_f32_flat
 //------------------------------------------------------------------------------
+#define Q6_K_MASK1 0x03
+#define Q6_K_MASK2 0x0C
+#define Q6_K_MASK3 0x30
+#define Q6_K_MASK4 0xC0
+
+inline float block_q_6_K_dot_y_flat(
+    global uchar * blk_ql,
+    global uchar * blk_qh,
+    global char  * blk_scales,
+    global half  * blk_d,
+    global float * yy,
+    int ib,
+    int ip,
+    int is,
+    int l0
+) {
+    int y_offset   = 128*ip + l0;
+    int q_offset_l =  64*ip + l0;
+    int q_offset_h =  32*ip + l0;
+
+    global uchar * q1 = blk_ql     + ib*128 + q_offset_l;
+    global uchar * q2 = q1         + QK_K/8;
+    global uchar * qh = blk_qh     + ib*64 + q_offset_h;
+    global char  * sc = blk_scales + ib*16 + is;
+
+    global float * y = yy + ib * QK_K + y_offset;
+
+    float dall = blk_d[ib];
+
+    float  sumf = 0;
+    float4 sums = {0.f, 0.f, 0.f, 0.f};
+
+    sums.s0 += y[0+ 0] * ((float)((q1[0] & 0xF) | ((qh[0] & Q6_K_MASK1) << 4)) - 32.f);
+    sums.s1 += y[0+32] * ((float)((q2[0] & 0xF) | ((qh[0] & Q6_K_MASK2) << 2)) - 32.f);
+    sums.s2 += y[0+64] * ((float)((q1[0]  >> 4) | ((qh[0] & Q6_K_MASK3) << 0)) - 32.f);
+    sums.s3 += y[0+96] * ((float)((q2[0]  >> 4) | ((qh[0] & Q6_K_MASK4) >> 2)) - 32.f);
+
+    sums.s0 += y[1+ 0] * ((float)((q1[1] & 0xF) | ((qh[1] & Q6_K_MASK1) << 4)) - 32.f);
+    sums.s1 += y[1+32] * ((float)((q2[1] & 0xF) | ((qh[1] & Q6_K_MASK2) << 2)) - 32.f);
+    sums.s2 += y[1+64] * ((float)((q1[1]  >> 4) | ((qh[1] & Q6_K_MASK3) << 0)) - 32.f);
+    sums.s3 += y[1+96] * ((float)((q2[1]  >> 4) | ((qh[1] & Q6_K_MASK4) >> 2)) - 32.f);
+
+    sums.s0 += y[2+ 0] * ((float)((q1[2] & 0xF) | ((qh[2] & Q6_K_MASK1) << 4)) - 32.f);
+    sums.s1 += y[2+32] * ((float)((q2[2] & 0xF) | ((qh[2] & Q6_K_MASK2) << 2)) - 32.f);
+    sums.s2 += y[2+64] * ((float)((q1[2]  >> 4) | ((qh[2] & Q6_K_MASK3) << 0)) - 32.f);
+    sums.s3 += y[2+96] * ((float)((q2[2]  >> 4) | ((qh[2] & Q6_K_MASK4) >> 2)) - 32.f);
+
+    sums.s0 += y[3+ 0] * ((float)((q1[3] & 0xF) | ((qh[3] & Q6_K_MASK1) << 4)) - 32.f);
+    sums.s1 += y[3+32] * ((float)((q2[3] & 0xF) | ((qh[3] & Q6_K_MASK2) << 2)) - 32.f);
+    sums.s2 += y[3+64] * ((float)((q1[3]  >> 4) | ((qh[3] & Q6_K_MASK3) << 0)) - 32.f);
+    sums.s3 += y[3+96] * ((float)((q2[3]  >> 4) | ((qh[3] & Q6_K_MASK4) >> 2)) - 32.f);
+
+    sumf += dall * (sums.s0 * sc[0] + sums.s1 * sc[2] + sums.s2 * sc[4] + sums.s3 * sc[6]);
+
+    return sumf;
+}
 
 #undef N_DST
 #undef N_SIMDGROUP
@@ -251,12 +307,12 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     int r1 = get_group_id(1);
     int im = get_group_id(2);
 
-    int row = N_SIMDGROUP * r0 + get_sub_group_id();
-
     int i12 = im%ne12;
     int i13 = im/ne12;
 
-    ulong offset_src0    = row*nb + (i12/r2)*(nb*ne01) + (i13/r3)*(nb*ne01*ne02);
+    int first_row = (N_SIMDGROUP * r0 + get_sub_group_id()) * N_DST;
+
+    ulong offset_src0    = first_row*nb + (i12/r2)*(nb*ne01) + (i13/r3)*(nb*ne01*ne02);
     ulong offset_src0_ql = offset_src0 * 128;
     ulong offset_src0_qh = offset_src0 * 64;
     ulong offset_src0_s  = offset_src0 * 16;
@@ -292,47 +348,12 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     int l0  = n*il;    // offset into half-block, 0..28
     int is  = 8*ip + l0/16; // 0, 1, 8, 9
 
-    int y_offset   = 128*ip + l0;
-    int q_offset_l = 64*ip + l0;
-    int q_offset_h = 32*ip + l0;
-
     for (int i = ix; i < nb; i += BLOCK_STRIDE) {
-        global uint8_t * q1 = blk_ql     + i*128 + q_offset_l;
-        global uint8_t * q2 = q1         + QK_K/8;
-        global uint8_t * qh = blk_qh     + i*64 + q_offset_h;
-        global int8_t  * sc = blk_scales + i*16 + is;
-
-        global float * y = yy + i * QK_K + y_offset;
-
-        float dall = blk_d[i];
-
-        float4 sums = {0.f, 0.f, 0.f, 0.f};
-
-        sums.s0 += y[0+ 0] * ((float)((q1[0] & 0xF) | ((qh[0] & kmask1) << 4)) - 32.f);
-        sums.s1 += y[0+32] * ((float)((q2[0] & 0xF) | ((qh[0] & kmask2) << 2)) - 32.f);
-        sums.s2 += y[0+64] * ((float)((q1[0]  >> 4) | ((qh[0] & kmask3) << 0)) - 32.f);
-        sums.s3 += y[0+96] * ((float)((q2[0]  >> 4) | ((qh[0] & kmask4) >> 2)) - 32.f);
-
-        sums.s0 += y[1+ 0] * ((float)((q1[1] & 0xF) | ((qh[1] & kmask1) << 4)) - 32.f);
-        sums.s1 += y[1+32] * ((float)((q2[1] & 0xF) | ((qh[1] & kmask2) << 2)) - 32.f);
-        sums.s2 += y[1+64] * ((float)((q1[1]  >> 4) | ((qh[1] & kmask3) << 0)) - 32.f);
-        sums.s3 += y[1+96] * ((float)((q2[1]  >> 4) | ((qh[1] & kmask4) >> 2)) - 32.f);
-
-        sums.s0 += y[2+ 0] * ((float)((q1[2] & 0xF) | ((qh[2] & kmask1) << 4)) - 32.f);
-        sums.s1 += y[2+32] * ((float)((q2[2] & 0xF) | ((qh[2] & kmask2) << 2)) - 32.f);
-        sums.s2 += y[2+64] * ((float)((q1[2]  >> 4) | ((qh[2] & kmask3) << 0)) - 32.f);
-        sums.s3 += y[2+96] * ((float)((q2[2]  >> 4) | ((qh[2] & kmask4) >> 2)) - 32.f);
-
-        sums.s0 += y[3+ 0] * ((float)((q1[3] & 0xF) | ((qh[3] & kmask1) << 4)) - 32.f);
-        sums.s1 += y[3+32] * ((float)((q2[3] & 0xF) | ((qh[3] & kmask2) << 2)) - 32.f);
-        sums.s2 += y[3+64] * ((float)((q1[3]  >> 4) | ((qh[3] & kmask3) << 0)) - 32.f);
-        sums.s3 += y[3+96] * ((float)((q2[3]  >> 4) | ((qh[3] & kmask4) >> 2)) - 32.f);
-
-        sumf += dall * (sums.s0 * sc[0] + sums.s1 * sc[2] + sums.s2 * sc[4] + sums.s3 * sc[6]);
+        sumf += block_q_6_K_dot_y_flat(blk_ql, blk_qh, blk_scales, blk_d, yy, i, ip, is, l0);
     }
 
     float tot = sub_group_reduce_add(sumf);
     if (get_sub_group_local_id() == 0) {
-        dst[r1*ne0 + im*ne0*ne1 + row] = tot;
+        dst[r1*ne0 + im*ne0*ne1 + first_row] = tot;
     }
 }
