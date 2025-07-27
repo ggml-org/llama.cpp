@@ -32,6 +32,7 @@
 #include "ggml-cuda/quantize.cuh"
 #include "ggml-cuda/rope.cuh"
 #include "ggml-cuda/scale.cuh"
+#include "ggml-cuda/softcap.cuh"
 #include "ggml-cuda/softmax.cuh"
 #include "ggml-cuda/ssm-conv.cuh"
 #include "ggml-cuda/ssm-scan.cuh"
@@ -2766,34 +2767,59 @@ static void update_cuda_graph_executable(ggml_backend_cuda_context * cuda_ctx) {
 }
 #endif
 
-static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
+static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops, std::initializer_list<enum ggml_unary_op> unary_ops) {
     if (!ggml_can_fuse(cgraph, node_idx, ops)) {
         return false;
     }
 
-    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
-        const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
-        const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
+    switch (ops.size()) {
+        case 2:
+            if (ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
+                const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
+                const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
 
-        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
-        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
+                GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
+                GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
 
-        //rms norm only supports F32
-        if (mul->src[0]->type != GGML_TYPE_F32 ||
-            mul->src[1]->type != GGML_TYPE_F32 ||
-            mul->type != GGML_TYPE_F32) {
+                //rms norm only supports F32
+                if (mul->src[0]->type != GGML_TYPE_F32 ||
+                    mul->src[1]->type != GGML_TYPE_F32 ||
+                    mul->type != GGML_TYPE_F32) {
+                    return false;
+                }
+
+                //if rms norm is the B operand, then we don't handle broadcast
+                if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm->src[1])) {
+                    return false;
+                }
+
+                //rms_norm kernel assumes contigous rows
+                if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
+                    return false;
+                }
+            }
+            break;
+        case 3:
+            if (ops.begin()[0] == GGML_OP_SCALE && ops.begin()[1] == GGML_OP_UNARY && ops.begin()[2] == GGML_OP_SCALE
+             && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_TANH) {
+                const ggml_tensor *scale  = cgraph->nodes[node_idx];
+                const ggml_tensor *tanh   = cgraph->nodes[node_idx+1];
+                const ggml_tensor *scale2 = cgraph->nodes[node_idx+2];
+
+                GGML_ASSERT(scale->src[0]->type == GGML_TYPE_F32);
+                GGML_ASSERT(scale->type == GGML_TYPE_F32);
+
+                if (tanh->src[0] != scale || scale2->src[0] != tanh) {
+                    return false;
+                }
+
+                if (ggml_get_op_params_f32(scale, 1) != 0.0f || ggml_get_op_params_f32(scale2, 1) != 0.0f) {
+                    return false;
+                }
+            }
+            break;
+        default:
             return false;
-        }
-
-        //if rms norm is the B operand, then we don't handle broadcast
-        if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm->src[1])) {
-            return false;
-        }
-
-        //rms_norm kernel assumes contigous rows
-        if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
-            return false;
-        }
     }
 
     return true;
@@ -2817,10 +2843,27 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 }
 
                 static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
-                if (!disable_fusion && ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
-                    ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i+1]);
-                    i++;
-                    continue;
+                if (!disable_fusion) {
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
+                        ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i+1]);
+                        i++;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
+                        ggml_tensor * src0 = node->src[0];
+                        float scale = ggml_get_op_params_f32(node, 0);
+
+                        i += 2; node = cgraph->nodes[i];
+                        float softcap = ggml_get_op_params_f32(node, 0);
+
+                        ggml_set_op_params_f32(node, 0, scale);
+                        ggml_set_op_params_f32(node, 1, softcap);
+                        node->src[0] = src0;
+
+                        ggml_cuda_op_softcap(*cuda_ctx, node);
+                        continue;
+                    }
                 }
 #ifndef NDEBUG
                 assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
