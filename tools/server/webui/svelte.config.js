@@ -16,7 +16,7 @@ const config = {
 			strict: true
 		}),
 		output: {
-			bundleStrategy: 'single'
+			bundleStrategy: 'inline'
 		}
 	},
 	extensions: ['.svelte', '.svx']
