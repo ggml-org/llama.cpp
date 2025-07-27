@@ -17103,12 +17103,9 @@ struct llm_build_smallthinker : public llm_graph_context{
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA  = inpL;
             ggml_tensor * probs  = nullptr;
-            bool is_moe = hparams.n_ff_exp == hparams.n_ff_arr[il];
 
-            if (is_moe) {
-                probs = build_lora_mm(model.layers[il].ffn_gate_inp, inpL);  // [n_expert, n_tokens]
-                cb(probs, "ffn_moe_logits", il);
-            }
+            probs = build_lora_mm(model.layers[il].ffn_gate_inp, inpL);  // [n_expert, n_tokens]
+            cb(probs, "ffn_moe_logits", il);
 
             // norm
             cur = build_norm(inpL,model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
@@ -17165,16 +17162,10 @@ struct llm_build_smallthinker : public llm_graph_context{
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            ggml_tensor * ffn_out = nullptr;
-            if (is_moe) {
-                ffn_out = build_moe_ffn_from_probs(cur, probs, model.layers[il].ffn_up_exps,
+            ggml_tensor * ffn_out = build_moe_ffn_from_probs(cur, probs, model.layers[il].ffn_up_exps,
                                                 model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
                                                 nullptr, n_expert, n_expert_used,
                                                 static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
-            } else {
-                ffn_out = build_ffn(cur, model.layers[il].ffn_up, NULL, NULL, model.layers[il].ffn_gate, NULL, NULL,
-                                    model.layers[il].ffn_down, NULL, NULL, NULL, LLM_FFN_RELU, LLM_FFN_PAR, il);
-            }
 
             cb(ffn_out, "ffn_out", il);
             cur = ffn_out;
