@@ -7589,7 +7589,6 @@ class LFM2Model(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
-
 @ModelBase.register("SmallThinkerForCausalLM")
 class SmallThinkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.SMALLTHINKER
@@ -7615,7 +7614,7 @@ class SmallThinkerModel(TextModel):
             self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
             self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
-        
+
         sliding_window_layout = self.hparams.get("sliding_window_layout")
         if sliding_window_layout:
             for i in sliding_window_layout:
@@ -7715,7 +7714,7 @@ class SmallThinkerModel(TextModel):
                 tokens.append(token)
 
         return tokens, toktypes, tokpre
-    
+
 ###### CONVERSION LOGIC ######
 
 
