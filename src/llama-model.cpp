@@ -16012,6 +16012,7 @@ private:
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
+
             Qcur = ggml_rope_ext(
                     ctx0, Qcur, inp_pos, nullptr,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
