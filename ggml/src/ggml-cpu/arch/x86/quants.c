@@ -1,4 +1,3 @@
-#include "arch-fallback.h"
 #define GGML_COMMON_IMPL_C
 #include "ggml-common.h"
 #include "ggml-quants.h"
