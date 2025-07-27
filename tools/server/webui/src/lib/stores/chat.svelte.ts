@@ -196,8 +196,86 @@ class ChatStore {
 
 	stopGeneration() {
 		this.chatService.abort();
+		this.savePartialResponseIfNeeded();
 		this.isLoading = false;
 		this.currentResponse = '';
+	}
+
+	/**
+	 * Gracefully stop generation and save partial response
+	 * This method handles both async and sync scenarios
+	 */
+	async gracefulStop(): Promise<void> {
+		if (!this.isLoading) {
+			return;
+		}
+
+		this.chatService.abort();
+		await this.savePartialResponseIfNeeded();
+		this.isLoading = false;
+		this.currentResponse = '';
+	}
+
+	/**
+	 * Save partial response to database if there's content to save
+	 */
+	private async savePartialResponseIfNeeded() {
+		console.log('savePartialResponseIfNeeded called:', {
+			currentResponse: this.currentResponse,
+			activeChatMessagesLength: this.activeChatMessages.length
+		});
+		
+		if (!this.currentResponse.trim() || !this.activeChatMessages.length) {
+			console.log('Early return: no current response or no messages');
+			return;
+		}
+
+		// Find the last assistant message that might be incomplete
+		const lastMessage = this.activeChatMessages[this.activeChatMessages.length - 1];
+		console.log('Last message:', {
+			role: lastMessage?.role,
+			content: lastMessage?.content,
+			contentLength: lastMessage?.content?.length
+		});
+		
+		// Check if the last message is an assistant message (regardless of current content)
+		// During streaming, the message content is updated in real-time, so we need to save it
+		if (lastMessage && lastMessage.role === 'assistant') {
+			try {
+				// Parse thinking content before saving
+				const partialThinking = extractPartialThinking(this.currentResponse);
+				
+				console.log('Saving partial response:', {
+					messageId: lastMessage.id,
+					currentResponse: this.currentResponse,
+					remainingContent: partialThinking.remainingContent,
+					thinking: partialThinking.thinking
+				});
+				
+				// Update the assistant message with the partial response
+				const updateData: { content: string; thinking?: string } = {
+					content: partialThinking.remainingContent || this.currentResponse
+				};
+				if (partialThinking.thinking) {
+					updateData.thinking = partialThinking.thinking;
+				}
+				
+				await DatabaseService.updateMessage(lastMessage.id, updateData);
+				console.log('Successfully saved partial response to database');
+
+				// Update the local state to reflect the saved content
+				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
+				if (partialThinking.thinking) {
+					lastMessage.thinking = partialThinking.thinking;
+				}
+			} catch (error) {
+				console.error('Failed to save partial response:', error);
+				// In case of error, at least update the local state
+				lastMessage.content = this.currentResponse;
+			}
+		} else {
+			console.log('No assistant message found to save partial response to');
+		}
 	}
 
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
@@ -516,6 +594,7 @@ export const regenerateMessage = chatStore.regenerateMessage.bind(chatStore);
 export const updateChatName = chatStore.updateChatName.bind(chatStore);
 export const deleteChat = chatStore.deleteChat.bind(chatStore);
 export const clearActiveChat = chatStore.clearActiveChat.bind(chatStore);
+export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
 
 export function stopGeneration() {
 	chatStore.stopGeneration();
