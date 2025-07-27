@@ -88,11 +88,11 @@ Examples:
 ```
 
 ```bash
-# quantize model setting tensors attn_v and ffn_down to Q5_K_M and pruning layers 20, 21, and 22 
+# quantize model setting tensors attn_v and ffn_down to Q5_K_M and pruning layers 20, 21, and 22
 ./llama-quantize --imatrix imatrix.gguf --tensor-type attn_v=q5_k --tensor-type ffn_down=q5_k --prune-layers 20,21,22 input-model-f32.gguf q4_k_m 8
 ```
 
-```bash 
+```bash
 # override expert used count metadata to 16, prune layers 20, 21, and 22 without quantizing the model (copy tensors) and use specified name for the output file
 ./llama-quantize --imatrix imatrix.gguf --override-kv qwen3moe.expert_used_count=int:16 --prune-layers 20,21,22 input-model-f32.gguf pruned-model-f32.gguf copy 8
 ```
