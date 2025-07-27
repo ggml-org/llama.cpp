@@ -927,6 +927,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
     const block_q8_0 * GGML_RESTRICT y = vy;
 
     int ib = 0;
+    float sumf = 0;
 
 #if defined(__AVX2__)
     // Initialize accumulator with zeros
@@ -945,7 +946,7 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         acc = _mm256_fmadd_ps( d, q, acc );
     }
 
-    *s = hsum_float_8(acc);
+    sumf = hsum_float_8(acc);
 #elif defined(__AVX__)
     __m256 accum = _mm256_setzero_ps();
 
@@ -964,14 +965,19 @@ void ggml_vec_dot_q8_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const voi
         accum = _mm256_add_ps(_mm256_mul_ps(deltas, p), accum);
     }
 
-    *s = hsum_float_8(accum);
-#else
-    UNUSED(nb);
-    UNUSED(ib);
-    UNUSED(x);
-    UNUSED(y);
-    ggml_vec_dot_q8_0_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
+    sumf = hsum_float_8(accum);
 #endif
+    for (; ib < nb; ++ib) {
+        int sumi = 0;
+
+        for (int j = 0; j < qk; j++) {
+            sumi += x[ib].qs[j]*y[ib].qs[j];
+        }
+
+        sumf += sumi*(GGML_CPU_FP16_TO_FP32(x[ib].d)*GGML_CPU_FP16_TO_FP32(y[ib].d));
+    }
+
+    *s = sumf;
 }
 
 void ggml_vec_dot_tq1_0_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
