@@ -98,7 +98,7 @@ struct llama_hparams {
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa;
     uint32_t n_ctx_orig_yarn;
-    float    rope_yarn_log_mul;
+    float    rope_yarn_log_mul = 0.0f;
 
     std::array<int, 4> rope_sections;
 
