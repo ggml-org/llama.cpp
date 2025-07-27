@@ -16031,7 +16031,7 @@ private:
             cur = build_attn(inp, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, NULL, NULL, 1.0f/sqrtf(float(n_embd_head_v)), il);
         }
 
-        cb(cur, "attn_output", il);
+        cb(cur, "attn_out", il);
 
         return cur;
     }
