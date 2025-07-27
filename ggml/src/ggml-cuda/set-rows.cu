@@ -44,6 +44,9 @@ static __global__ void k_set_rows_quant(
     block_type * dst_block = dst_row_ptr + i00 / qk;
 
     quantize_func(src_block, dst_block);
+
+    GGML_UNUSED(ne10);
+    GGML_UNUSED(ne13);
 }
 
 // Template dispatch function for quantized set_rows

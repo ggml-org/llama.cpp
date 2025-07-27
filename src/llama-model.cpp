@@ -646,6 +646,9 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_RESIDUAL_SCALE,              hparams.f_residual_scale);
                 ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
 
+                // MiniCPM uses rope by default, unlike Granite which uses it as a switch
+                hparams.rope_finetuned = true;
+
                 switch (hparams.n_layer) {
                     case 52: type = LLM_TYPE_1B; break;
                     case 40: type = LLM_TYPE_2B; break;
