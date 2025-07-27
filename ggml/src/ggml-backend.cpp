@@ -114,6 +114,7 @@ size_t ggml_backend_buffer_get_size(ggml_backend_buffer_t buffer) {
     return buffer->size;
 }
 
+
 void * ggml_backend_buffer_get_base(ggml_backend_buffer_t buffer) {
     // get_base is optional if the buffer is zero-sized
     if (buffer->size == 0) {
@@ -1866,6 +1867,52 @@ bool ggml_backend_compare_graph_backend(ggml_backend_t backend1, ggml_backend_t 
         }
     }
     ggml_backend_graph_copy_free(copy);
+
+    return true;
+}
+
+bool ggml_backend_compare_graph_backend_node(ggml_backend_t backend1, ggml_backend_t backend2,
+                                             struct ggml_cgraph * graph1, struct ggml_cgraph * graph2,
+                                             ggml_backend_eval_callback callback, void * user_data,
+                                             const char * op_name_out_1, const char * op_name_out_2) {
+    ggml_tensor * out1 = NULL;
+    ggml_tensor * out2 = NULL;
+
+    struct ggml_cgraph * g1 = graph1;
+    struct ggml_cgraph * g2 = graph2;
+
+    for (int i = 0; i < g1->n_nodes; i++) {
+        struct ggml_tensor * t1  = g1->nodes[i];
+        struct ggml_cgraph   g1v = ggml_graph_view(g1, i, i + 1);
+        ggml_backend_graph_compute(backend1, &g1v);
+        if (ggml_is_view_op(t1->op)) {
+            continue;
+        }
+        if (strcmp(t1->name, op_name_out_1) == 0) {
+            out1 = t1;
+        }
+    }
+
+    for (int i = 0; i < g2->n_nodes; i++) {
+        struct ggml_tensor * t2  = g2->nodes[i];
+        struct ggml_cgraph   g2v = ggml_graph_view(g2, i, i + 1);
+        ggml_backend_graph_compute(backend2, &g2v);
+        if (ggml_is_view_op(t2->op)) {
+            continue;
+        }
+        if (strcmp(t2->name, op_name_out_2) == 0) {
+            out2 = t2;
+        }
+    }
+
+    GGML_ASSERT(out1 != NULL);
+    GGML_ASSERT(out2 != NULL);
+    GGML_ASSERT(ggml_are_same_layout(out1, out2));
+
+    // compare results, calculate rms etc
+    if (!callback(0, out1, out2, user_data)) {
+        return false;
+    }
 
     return true;
 }
