@@ -8840,11 +8840,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             kernel = backend_ctx->kernel_mul_mv_q6_K_f32_flat;
 
             if (backend_ctx->gpu_family == INTEL) {
-                nth0 = 2;
-                nth1 = 16;
+                nth0 = 16;
+                nth1 = 2;
+                ndst = 1;
             } else if (backend_ctx->gpu_family == ADRENO) {
-                nth0 = 2;
-                nth1 = 64;
+                nth0 = 64;
+                nth1 = 2;
+                ndst = 1;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -8870,11 +8872,13 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             kernel = backend_ctx->kernel_mul_mv_q6_K_f32;
 
             if (backend_ctx->gpu_family == INTEL) {
-                nth0 = 2;
-                nth1 = 16;
+                nth0 = 16;
+                nth1 = 2;
+                ndst = 1;
             } else if (backend_ctx->gpu_family == ADRENO) {
-                nth0 = 2;
-                nth1 = 64;
+                nth0 = 64;
+                nth1 = 2;
+                ndst = 1;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }
@@ -8997,7 +9001,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     } else if (src0t == GGML_TYPE_Q5_K) {
         GGML_ASSERT(false && "not implemented");
     } else if (src0t == GGML_TYPE_Q6_K) {
-        size_t global_work_size[] = {(size_t)(ne01+1)/2*nth0, (size_t)ne11*nth1, (size_t)ne12*ne13};
+        size_t global_work_size[] = {(size_t)(ne01+ndst*nth1-1)/(ndst*nth1)*nth0, (size_t)ne11*nth1, (size_t)ne12*ne13};
         size_t local_work_size[] = {(size_t)nth0, (size_t)nth1, 1};
 
         backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
