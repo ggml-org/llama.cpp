@@ -8842,11 +8842,11 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             if (backend_ctx->gpu_family == INTEL) {
                 nth0 = 16;
                 nth1 = 2;
-                ndst = 1;
+                ndst = 4;
             } else if (backend_ctx->gpu_family == ADRENO) {
                 nth0 = 64;
                 nth1 = 2;
-                ndst = 1;
+                ndst = 4;
             } else {
                 GGML_ASSERT(false && "TODO: Unknown GPU");
             }

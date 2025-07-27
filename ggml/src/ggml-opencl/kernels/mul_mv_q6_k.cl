@@ -258,11 +258,11 @@ inline float block_q_6_K_dot_y_flat(
 #undef N_SIMDWIDTH
 
 #ifdef INTEL_GPU
-#define N_DST 1
+#define N_DST 4
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 16
 #elif defined (ADRENO_GPU)
-#define N_DST 1
+#define N_DST 4
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
 #endif
@@ -296,11 +296,6 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     src1 = (global float*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
-    uchar kmask1 = 0x03;
-    uchar kmask2 = 0x0C;
-    uchar kmask3 = 0x30;
-    uchar kmask4 = 0xC0;
-
     int nb = ne00/QK_K;
 
     int r0 = get_group_id(0);
@@ -324,8 +319,6 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     global half  * blk_d      = (global half  *) src0_d  + offset_src0_d;
     global float * yy         = (global float *) src1    + r1*ne10 + im*ne00*ne1;
 
-    float sumf = 0;
-
     // For Q6_K quantization, 16 values forms a subblock, 16 subblock forms a
     // block. Values in a subblock share a scale that is quantized with 8 bits;
     // the entire block shares a single floating point scale.
@@ -348,12 +341,25 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     int l0  = n*il;    // offset into half-block, 0..28
     int is  = 8*ip + l0/16; // 0, 1, 8, 9
 
-    for (int i = ix; i < nb; i += BLOCK_STRIDE) {
-        sumf += block_q_6_K_dot_y_flat(blk_ql, blk_qh, blk_scales, blk_d, yy, i, ip, is, l0);
+    float4 sumf = 0;
+
+    for (int ib = ix; ib < nb; ib += BLOCK_STRIDE) {
+        sumf.s0 += block_q_6_K_dot_y_flat(blk_ql + 0*nb*128, blk_qh + 0*nb*64, blk_scales + 0*nb*16, blk_d + 0*nb, yy, ib, ip, is, l0);
+        sumf.s1 += block_q_6_K_dot_y_flat(blk_ql + 1*nb*128, blk_qh + 1*nb*64, blk_scales + 1*nb*16, blk_d + 1*nb, yy, ib, ip, is, l0);
+        sumf.s2 += block_q_6_K_dot_y_flat(blk_ql + 2*nb*128, blk_qh + 2*nb*64, blk_scales + 2*nb*16, blk_d + 2*nb, yy, ib, ip, is, l0);
+        sumf.s3 += block_q_6_K_dot_y_flat(blk_ql + 3*nb*128, blk_qh + 3*nb*64, blk_scales + 3*nb*16, blk_d + 3*nb, yy, ib, ip, is, l0);
     }
 
-    float tot = sub_group_reduce_add(sumf);
+    float4 tot = (float4)(
+        sub_group_reduce_add(sumf.s0),
+        sub_group_reduce_add(sumf.s1),
+        sub_group_reduce_add(sumf.s2),
+        sub_group_reduce_add(sumf.s3)
+    );
     if (get_sub_group_local_id() == 0) {
-        dst[r1*ne0 + im*ne0*ne1 + first_row] = tot;
+        dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0;
+        dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1;
+        dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2;
+        dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3;
     }
 }
