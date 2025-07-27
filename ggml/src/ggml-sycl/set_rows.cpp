@@ -48,7 +48,7 @@ static void set_rows_sycl_q(const char * __restrict__ src0_d,
                             const size_t  nb3,
                             queue_ptr     stream) {
     const int64_t total_blocks = (ne00 * ne01 * ne02 * ne03) / qk;
-    constexpr int block_size   = 64;
+    constexpr int block_size   = 256;
     const int64_t grid_size    = ceil_div(total_blocks, block_size);
 
     sycl_parallel_for(stream, sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
