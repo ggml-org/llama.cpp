@@ -7621,7 +7621,8 @@ class SmallThinkerModel(TextModel):
             for i in sliding_window_layout:
                 if i != 0:
                     sliding_window = self.hparams.get("sliding_window_size")
-                    self.gguf_writer.add_sliding_window(sliding_window)
+                    if sliding_window:
+                        self.gguf_writer.add_sliding_window(sliding_window)
                     break
 
     _experts: list[dict[str, Tensor]] | None = None
