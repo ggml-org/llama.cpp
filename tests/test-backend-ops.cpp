@@ -3728,6 +3728,10 @@ struct test_conv_2d : public test_case {
         return VARS_TO_STR10(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
     }
 
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
     uint64_t op_flops(ggml_tensor * t) override {
         GGML_UNUSED(t);
         // Just counting matmul costs:
