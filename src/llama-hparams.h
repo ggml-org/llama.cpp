@@ -161,9 +161,10 @@ struct llama_hparams {
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
+    // dense_first means whether the pattern is start with a dense layer
     // note that if n_pattern == 0, all layers are SWA
     //           if n_pattern == 1, all layers are dense
-    // example: n_pattern = 3
+    // example 1: n_pattern = 3, dense_first = false
     //   il == 0: swa
     //   il == 1: swa
     //   il == 2: dense
@@ -172,21 +173,13 @@ struct llama_hparams {
     //   il == 5: dense
     //   il == 6: swa
     //   etc ...
-    void set_swa_pattern(uint32_t n_pattern);
-
-    // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
-    // note that if n_pattern == 0, all layers are SWA
-    //           if n_pattern == 1, all layers are dense
-    // example: n_pattern = 3
+    // example 2: n_pattern = 2, dense_first = true
     //   il == 0: dense
     //   il == 1: swa
-    //   il == 2: swa
-    //   il == 3: dense
-    //   il == 4: swa
-    //   il == 5: swa
-    //   il == 6: dense
+    //   il == 2: dense
+    //   il == 3: swa
     //   etc ...
-    void set_dense_start_swa_pattern(uint32_t n_pattern);
+    void set_swa_pattern(uint32_t n_pattern, bool dense_first = false);
 
     // return true if one of the layers is SWA
     bool is_swa_any() const;

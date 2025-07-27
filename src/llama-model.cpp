@@ -1775,7 +1775,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 if (found_swa && hparams.n_swa > 0) {
                     hparams.swa_type      = LLAMA_SWA_TYPE_STANDARD;
                     hparams.n_swa         = 4096;
-                    hparams.set_dense_start_swa_pattern(4);
+                    hparams.set_swa_pattern(4, true);
                 } else {
                     hparams.swa_type             = LLAMA_SWA_TYPE_NONE;
                     hparams.n_no_rope_layer_step = hparams.n_layer;
