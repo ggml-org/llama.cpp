@@ -17,7 +17,7 @@
 
 	// Get chat ID from URL params
 	const chatId = $derived($page.params.id);
-	let currentChatId = chatId;
+	let currentChatId: string | undefined = undefined;
 
 	// Navigation guard to handle streaming abortion
 	beforeNavigate(async ({ cancel, to }) => {
