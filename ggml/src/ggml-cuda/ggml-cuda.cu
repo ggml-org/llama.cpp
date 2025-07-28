@@ -2848,15 +2848,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
-                        ggml_tensor * src0 = node->src[0];
-                        float scale = ggml_get_op_params_f32(node, 0);
-
-                        i += 2; node = cgraph->nodes[i];
-
-                        ggml_set_op_params_f32(node, 1, scale);
-                        node->src[0] = src0;
-
-                        ggml_cuda_op_softcap(*cuda_ctx, node);
+                        i += 2;
+                        ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i], node);
                         continue;
                     }
                 }
