@@ -5213,12 +5213,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
 
-                        if (n_expert == 0) {
-                            throw std::runtime_error("n_expert must be > 0 for SMALLTHINKER");
-                        }
-                        if (n_expert_used == 0) {
-                            throw std::runtime_error("n_expert_used must be > 0 for SMALLTHINKER");
-                        }
+                        GGML_ASSERT(n_expert > 0 && "n_expert must be > 0 for SMALLTHINKER");
+                        GGML_ASSERT(n_expert_used > 0 && "n_expert_used must be > 0 for SMALLTHINKER");
 
                         // MoE branch
                         const int64_t n_ff_exp = hparams.n_ff_exp;
