@@ -2988,8 +2988,14 @@ class LLaDAModel(TextModel):
 
         # Add LLaDA-specific parameters
         mask_token_id = self.hparams.get("mask_token_id")
+
         if mask_token_id is not None:
             self.gguf_writer.add_mask_token_id(mask_token_id)
+
+        self.gguf_writer.add_add_bos_token(True)
+
+        logging.info("Adding diffusion shift logits to False")
+        self.gguf_writer.add_diffusion_shift_logits(False)
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):

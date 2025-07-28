@@ -279,6 +279,9 @@ class Keys:
         class Projector:
             STACK_FACTOR    = "clip.audio.projector.stack_factor"
 
+    class Diffusion:
+        SHIFT_LOGITS        = "diffusion.shift_logits"
+
 #
 # recommended mapping of model tensor names for storage in gguf
 #

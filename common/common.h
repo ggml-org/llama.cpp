@@ -220,19 +220,17 @@ struct common_params_vocoder {
 };
 
 struct common_params_diffusion {
-    // Common parameters
-    int32_t steps         = 128;     // number of diffusion steps
-    bool    visual_mode   = false;  // show progressive diffusion on screen
+    int32_t steps         = 128;
+    bool    visual_mode   = false;
 
-    // Dream-specific parameters
-    float   eps           = 1e-3f;  // epsilon for timesteps
-    int32_t algorithm     = 3;      // diffusion algorithm (0=ORIGIN, 1=MASKGIT_PLUS, 2=TOPK_MARGIN, 3=ENTROPY)
-    float   alg_temp      = 0.0f;   // algorithm temperature
+    float   eps           = 0;        // epsilon for timesteps
+    int32_t block_length  = 32;       // block length for generation
 
-    // LLaDA-specific parameters
-    int32_t block_length  = 32;     // block length for generation
-    float   cfg_scale     = 0.2f;   // classifier-free guidance scale
-    int32_t remasking     = 1;      // remasking algorithm: 0=LOW_CONFIDENCE, 1=RANDOM
+    int32_t algorithm     = 4;        // default algorithm: low-confidence
+    float   alg_temp      = 0.0f;     // algorithm temperature
+
+    float   cfg_scale     = 0;        // classifier-free guidance scale
+    bool    add_gumbel_noise = false; // add gumbel noise to the logits if temp > 0.0
 };
 
 enum common_reasoning_format {

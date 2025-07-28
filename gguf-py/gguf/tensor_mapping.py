@@ -372,11 +372,8 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc_1",                         # exaone
             "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
-<<<<<<< HEAD
             "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
-=======
             "model.transformer.blocks.{bid}.up_proj",                  # llada
->>>>>>> c56f1b02 (Add support for Llada-8b: diffusion model)
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -417,11 +414,8 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w1",         # arctic
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba granite-hybrid
-<<<<<<< HEAD
             "model.layers.{bid}.block_sparse_moe.gate",   # smallthinker
-=======
             "model.transformer.blocks.{bid}.ff_proj",     # llada
->>>>>>> c56f1b02 (Add support for Llada-8b: diffusion model)
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -470,11 +464,8 @@ class TensorNameMap:
             "model.layers.h.{bid}.mlp.c_proj",                        # exaone
             "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
-<<<<<<< HEAD
             "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
-=======
             "model.transformer.blocks.{bid}.ff_out",                   # llada
->>>>>>> c56f1b02 (Add support for Llada-8b: diffusion model)
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
