@@ -120,9 +120,9 @@ class ModelBase:
 
             def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
                 logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
-                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_model(remote_hf_model_id)
+                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
                 self.tensor_names = set(name for name in remote_tensors.keys())
-                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_model(remote_hf_model_id).items():
+                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id).items():
                     yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
 
             self.get_tensors = get_remote_tensors
@@ -4282,7 +4282,7 @@ class BertModel(TextModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        vocab_size = None
+        self.vocab_size = None
 
         if cls_out_labels := self.hparams.get("id2label"):
             if len(cls_out_labels) == 2 and cls_out_labels[0] == "LABEL_0":
@@ -4300,7 +4300,7 @@ class BertModel(TextModel):
 
     def set_vocab(self):
         tokens, toktypes, tokpre = self.get_vocab_base()
-        vocab_size = len(tokens)
+        self.vocab_size = len(tokens)
 
         # we need this to validate the size of the token_type embeddings
         # though currently we are passing all zeros to the token_type embeddings

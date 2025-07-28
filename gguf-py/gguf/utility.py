@@ -111,7 +111,7 @@ class SafetensorRemote:
     ALIGNMENT = 8 # bytes
 
     @classmethod
-    def get_list_tensors_model(cls, model_id: str) -> dict[str, RemoteTensor]:
+    def get_list_tensors_hf_model(cls, model_id: str) -> dict[str, RemoteTensor]:
         """
         Get list of tensors from a Hugging Face model repository.
 
