@@ -7840,7 +7840,7 @@ class SmallThinkerModel(TextModel):
 
 
 class MistralModel(TextModel):
-    model_name = "mistral"
+    model_name = "Mistral"
     model_arch = MODEL_ARCH.LLAMA
     undo_permute = True
 
@@ -7905,7 +7905,7 @@ class MistralModel(TextModel):
 
 
 class PixtralModel(MmprojModel):
-    model_name = "mistral"
+    model_name = "Pixtral"
     img_break_tok_id = -1
 
     def __init__(self, *args, **kwargs):
