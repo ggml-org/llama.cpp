@@ -112,7 +112,7 @@ struct slot_params {
     bool stream                   = true;
     bool cache_prompt             = true; // remember the prompt to avoid reprocessing all prompt
     bool return_tokens            = false;
-    bool include_prompt_progress  = false; // include prompt processing progress in streaming responses
+    bool return_progress          = false; // include prompt processing progress in streaming responses
 
     int32_t n_keep    =  0; // number of tokens to keep from initial prompt
     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
@@ -262,7 +262,7 @@ struct server_task {
         params.stream                  = json_value(data, "stream",                  false);
         params.cache_prompt            = json_value(data, "cache_prompt",            true);
         params.return_tokens           = json_value(data, "return_tokens",           false);
-        params.include_prompt_progress = json_value(data, "include_prompt_progress", false);
+        params.return_progress         = json_value(data, "return_progress",         false);
         params.n_predict        = json_value(data, "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
         params.n_indent         = json_value(data, "n_indent",           defaults.n_indent);
         params.n_keep           = json_value(data, "n_keep",             defaults.n_keep);
@@ -1000,6 +1000,31 @@ struct server_task_result_cmpl_partial : server_task_result {
     }
 
     json to_json_oaicompat_chat() {
+        // Handle progress responses for chat completions
+        if (is_progress_response) {
+            std::time_t t = std::time(0);
+            return json {
+                {"choices", json::array({
+                    json {
+                        {"finish_reason", nullptr},
+                        {"index", 0},
+                        {"delta", json::object()},
+                    },
+                })},
+                {"created", t},
+                {"id", oaicompat_cmpl_id},
+                {"model", oaicompat_model},
+                {"system_fingerprint", build_info},
+                {"object", "chat.completion.chunk"},
+                {"prompt_processing", json {
+                    {"n_past", n_past},
+                    {"n_prompt_tokens", n_prompt_tokens},
+                    {"n_prompt_tokens_processed", n_prompt_tokens_processed},
+                    {"progress", progress},
+                }},
+            };
+        }
+
         bool first = n_decoded == 1;
         std::time_t t = std::time(0);
         json choices;
@@ -2534,37 +2559,14 @@ struct server_context {
 
     void send_progress_response(server_slot & slot) {
         // Only send progress if explicitly requested and streaming is enabled
-        if (!slot.params.include_prompt_progress || !slot.params.stream) {
+        if (!slot.params.return_progress || !slot.params.stream) {
             return;
         }
 
         // Calculate current progress percentage
-        float current_progress = slot.n_prompt_tokens > 0 ? 
+        float current_progress = slot.n_prompt_tokens > 0 ?
                                 (float) slot.n_prompt_tokens_processed / slot.n_prompt_tokens : 0.0f;
-        
-        // Send progress updates at regular intervals (every 10% or significant changes)
-        static float last_progress = -1.0f;
-        static int last_slot_id = -1;
-        
-        // Reset for new slot
-        if (slot.id_task != last_slot_id) {
-            last_progress = -1.0f;
-            last_slot_id = slot.id_task;
-        }
-        
-        // Send progress if:
-        // 1. This is the first progress update (last_progress == -1)
-        // 2. Progress increased by at least 1% or processed at least 10 tokens
-        // 3. We've completed processing (current_progress >= 1.0)
-        bool should_send = (last_progress < 0.0f) || 
-                          (current_progress - last_progress >= 0.01f) || 
-                          (current_progress >= 1.0f && last_progress < 1.0f);
-        
-        if (!should_send) {
-            return;
-        }
-        
-        last_progress = current_progress;
+
 
         auto res = std::make_unique<server_task_result_cmpl_partial>();
 
@@ -3409,9 +3411,6 @@ struct server_context {
 
                         slot.n_prompt_tokens_processed++;
                         slot.n_past++;
-                        
-                        // Send incremental progress updates during token processing
-                        send_progress_response(slot);
                     }
 
                     // SLT_INF(slot, "new cache_tokens: %s\n", slot.cache_tokens.str().c_str());
