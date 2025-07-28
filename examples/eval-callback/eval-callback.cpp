@@ -148,9 +148,6 @@ static bool run(llama_context * ctx, const common_params & params, callback_data
 int main(int argc, char **argv) {
     std::string output_prefix = "default";
 
-    prompt_output_file.open(output_prefix + "_prompt_output.txt");
-    tensor_output_file.open(output_prefix + "_tensor_output.txt");
-
 
     if (!prompt_output_file || !tensor_output_file) {
         std::cerr << "❌ Failed to open output files.\n";
@@ -222,7 +219,13 @@ int main(int argc, char **argv) {
         filtered_argv.push_back(argv[i]);
     }
 
+    prompt_output_file.open(output_prefix + "_prompt_output.txt");
+    tensor_output_file.open(output_prefix + "_tensor_output.txt");
 
+    if (!prompt_output_file || !tensor_output_file) {
+        std::cerr << "❌ Failed to open output files.\n";
+        return 1;
+    }
 
     if (!common_params_parse((int)filtered_argv.size(), filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
