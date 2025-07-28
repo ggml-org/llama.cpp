@@ -607,7 +607,7 @@ class TextModel(ModelBase):
         toktypes: list[int] = []
 
         from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
         vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
         vocab_size = self.hparams.get("vocab_size", len(vocab))
         assert max(vocab.values()) < vocab_size
@@ -1219,12 +1219,8 @@ class MmprojModel(ModelBase):
         self.tensor_map = gguf.get_tensor_name_map(gguf.MODEL_ARCH.MMPROJ, self.block_count)
 
         # load preprocessor config
-        preprocess_config_file = self.dir_model / "preprocessor_config.json"
-        if preprocess_config_file.exists():
-            with open(preprocess_config_file, "r", encoding="utf-8") as f:
-                self.preprocessor_config = json.load(f)
-        else:
-            self.preprocessor_config = dict(image_mean=[0.485, 0.456, 0.406], image_std=[0.229, 0.224, 0.225])
+        with open(self.dir_model / "preprocessor_config.json", "r", encoding="utf-8") as f:
+            self.preprocessor_config = json.load(f)
 
     def get_vision_config(self) -> dict[str, Any] | None:
         return self.global_config.get("vision_config")
@@ -3160,7 +3156,7 @@ class Qwen2MoeModel(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
-        name = name.replace(r"language_model.", r"") # InternVL
+        name = name.replace("language_model.", "") # InternVL
         if name.startswith("mlp") or name.startswith("vision_model") or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector"):
             # skip visual tensors
             return []
@@ -3217,9 +3213,14 @@ class Qwen3Model(Qwen2Model):
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hparams = ModelBase.load_hparams(self.dir_model)
+        self.origin_hf_arch = hparams.get('architectures', [None])[0]
+
     def set_vocab(self):
-        # deal with interns1
-        if 'interns1' in f'{self.dir_model}'.lower():
+        # deal with intern-s1
+        if self.origin_hf_arch == 'InternS1ForConditionalGeneration':
             self._set_vocab_interns1()
             return
 
@@ -3240,18 +3241,19 @@ class Qwen3MoeModel(Qwen2MoeModel):
         additional_special_tokens = []
         if special_tokens_map_file.is_file():
             with open(special_tokens_map_file, encoding = 'utf-8') as f:
-                    additional_special_tokens = json.load(f).get('additional_special_tokens', [])
+                additional_special_tokens = json.load(f).get('additional_special_tokens', [])
         tokenizer_cfg_file = self.dir_model / 'special_tokens_map.json'
         if tokenizer_cfg_file.is_file():
             with open(tokenizer_cfg_file, encoding = 'utf-8') as f:
-                    added_tokens_decoder = json.load(f).get('added_tokens_decoder', {})
-                    token2ids_map = {data['content'] : int(token) for token, data in added_tokens_decoder.items() if data['special']}
-                    for token in additional_special_tokens:
-                        if token in token2ids_map:
-                            special_vocab._set_special_token(token, token2ids_map[token])
+                added_tokens_decoder = json.load(f).get('added_tokens_decoder', {})
+                token2ids_map = {data['content'] : int(token) for token, data in added_tokens_decoder.items() if data['special']}
+                for token in additional_special_tokens:
+                    if token in token2ids_map:
+                        special_vocab._set_special_token(token, token2ids_map[token])
         special_vocab._set_special_token('eos', 151645)
         special_vocab._set_special_token("bos", 151643)
         special_vocab.add_to_gguf(self.gguf_writer)
+
 
 @ModelBase.register("GPT2LMHeadModel")
 class GPT2Model(TextModel):
