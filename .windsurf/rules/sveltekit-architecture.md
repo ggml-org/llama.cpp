@@ -37,3 +37,7 @@ trigger: manual
 - Stores should leverage Svelte's reactivity system
 - Clear separation: services handle data, stores handle state
 - Services can be reused across multiple stores
+
+### Tailwind & CSS
+
+- We are using Tailwind v4 which uses oklch colors so we now want to refer to the CSS vars directly, without wrapping it with any color function like `hsla/hsl`, `rgba` etc.
