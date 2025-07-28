@@ -27,7 +27,7 @@ struct common_speculative * common_speculative_init(
         struct llama_context * ctx_tgt,
         struct llama_context * ctx_dft) {
     auto * result = new common_speculative {
-        /* .ctx_main   = */ ctx_tgt,
+        /* .ctx_tgt    = */ ctx_tgt,
         /* .ctx_dft    = */ ctx_dft,
         /* .smpl       = */ nullptr,
         /* .batch      = */ llama_batch_init(llama_n_batch(ctx_dft), 0, 1),
