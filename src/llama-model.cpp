@@ -17074,6 +17074,7 @@ struct llm_build_lfm2 : public llm_graph_context {
     }
 };
 
+template <bool iswa>
 struct llm_build_smallthinker : public llm_graph_context{
     llm_build_smallthinker(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params){
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -17089,8 +17090,10 @@ struct llm_build_smallthinker : public llm_graph_context{
         // inp_pos - contains the positions
         ggml_tensor * inp_pos = build_inp_pos();
 
-        llm_graph_input_i * inp_attn = nullptr;
-        if (hparams.is_swa_any()) {
+        using inp_attn_type = std::conditional_t<iswa, llm_graph_input_attn_kv_unified_iswa, llm_graph_input_attn_kv_unified>;
+        inp_attn_type * inp_attn = nullptr;
+
+        if constexpr (iswa) {
             inp_attn = build_attn_inp_kv_unified_iswa();
         } else {
             inp_attn = build_attn_inp_kv_unified();
@@ -17134,13 +17137,9 @@ struct llm_build_smallthinker : public llm_graph_context{
                 cb(Qcur, "Qcur", il);
                 cb(Kcur, "Kcur", il);
 
-                if (hparams.is_swa_any()) {
-                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified_iswa *>(inp_attn), model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
-                       nullptr,nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
-                } else {
-                    cur = build_attn(static_cast<llm_graph_input_attn_kv_unified *>(inp_attn), model.layers[il].wo, model.layers[il].bo, Qcur,Kcur, Vcur,
-                        nullptr,nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
-                }
+                cur = build_attn(inp_attn,
+                        model.layers[il].wo, model.layers[il].bo,
+                        Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             }
 
             if (il == n_layer - 1) {
@@ -17630,7 +17629,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_SMALLTHINKER:
             {
-                llm = std::make_unique<llm_build_smallthinker>(*this, params);
+                if (hparams.swa_type == LLAMA_SWA_TYPE_STANDARD) {
+                    llm = std::make_unique<llm_build_smallthinker<true>> (*this, params);
+                } else {
+                    llm = std::make_unique<llm_build_smallthinker<false>>(*this, params);
+                }
             } break;
         default:
             GGML_ABORT("fatal error");
