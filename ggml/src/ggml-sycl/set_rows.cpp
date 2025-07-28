@@ -1,8 +1,5 @@
 #include "set_rows.hpp"
-#include "ggml-sycl/common.hpp"
 #include "cpy.hpp"
-#include "ggml.h"
-#include <cstddef>
 
 namespace utils {
 template<typename T>
