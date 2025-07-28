@@ -14,7 +14,7 @@ Legend:
 
 | Operation | BLAS | CPU | CUDA | Metal | SYCL | Vulkan |
 |-----------|------|------|------|------|------|------|
-|                              ABS | ❌ | ✅ | 🟡 | ❌ | 🟡 | ❌ |
+|                              ABS | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ❌ |
 |                              ACC | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |                              ADD | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 |                             ADD1 | ❌ | ✅ | ✅ | ❌ | ✅ | ❌ |
@@ -37,7 +37,7 @@ Legend:
 |                              DIV | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 |                              DUP | ❌ | ✅ | 🟡 | 🟡 | ✅ | 🟡 |
 |                              ELU | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ❌ |
-|                              EXP | ❌ | ✅ | 🟡 | ❌ | 🟡 | ❌ |
+|                              EXP | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ❌ |
 |                   FLASH_ATTN_EXT | ❌ | ✅ | 🟡 | 🟡 | ❌ | 🟡 |
 |                GATED_LINEAR_ATTN | ❌ | ✅ | ✅ | ❌ | ✅ | ❌ |
 |                            GEGLU | ❌ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
@@ -49,8 +49,8 @@ Legend:
 |                         GET_ROWS | ❌ | ✅ | 🟡 | ✅ | 🟡 | 🟡 |
 |                    GET_ROWS_BACK | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ |
 |                       GROUP_NORM | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-|                      HARDSIGMOID | ❌ | ✅ | 🟡 | ❌ | 🟡 | ❌ |
-|                        HARDSWISH | ❌ | ✅ | 🟡 | ❌ | 🟡 | ❌ |
+|                      HARDSIGMOID | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ❌ |
+|                        HARDSWISH | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ❌ |
 |                           IM2COL | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 |                          L2_NORM | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |                       LEAKY_RELU | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -72,8 +72,8 @@ Legend:
 |                      REPEAT_BACK | ❌ | ✅ | ✅ | ❌ | ❌ | ✅ |
 |                         RMS_NORM | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 |                    RMS_NORM_BACK | ❌ | ✅ | ✅ | ❌ | ❌ | ✅ |
-|                     RMS_NORM_MUL | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-|                 RMS_NORM_MUL_ADD | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ |
+|                     RMS_NORM_MUL | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+|                 RMS_NORM_MUL_ADD | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |                             ROLL | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
 |                             ROPE | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |                        ROPE_BACK | ❌ | ✅ | ✅ | ❌ | ❌ | ✅ |
@@ -82,7 +82,7 @@ Legend:
 |                            SCALE | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 |                              SET | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ |
 |                         SET_ROWS | ❌ | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 |
-|                              SGN | ❌ | ✅ | 🟡 | ❌ | 🟡 | ❌ |
+|                              SGN | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ❌ |
 |                          SIGMOID | ❌ | ✅ | 🟡 | 🟡 | 🟡 | 🟡 |
 |                             SILU | ❌ | ✅ | 🟡 | 🟡 | 🟡 | 🟡 |
 |                        SILU_BACK | ❌ | ✅ | ✅ | ❌ | ❌ | ✅ |
@@ -93,7 +93,7 @@ Legend:
 |                             SQRT | ❌ | ✅ | ✅ | 🟡 | ✅ | ❌ |
 |                         SSM_CONV | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ |
 |                         SSM_SCAN | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ |
-|                             STEP | ❌ | ✅ | 🟡 | ❌ | 🟡 | ❌ |
+|                             STEP | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ❌ |
 |                              SUB | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 |                              SUM | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ |
 |                         SUM_ROWS | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
