@@ -1344,7 +1344,7 @@ static void test_template_output_parsers() {
                 "```<｜tool▁call▁end｜><｜tool▁calls▁end｜>");
     }
     {
-        auto tmpls = read_templates("models/templates/ibm-granite-granite-2.2-2B-Instruct.jinja");
+        auto tmpls = read_templates("models/templates/ibm-granite-granite-3.3-2B-Instruct.jinja");
         std::vector<std::string> end_tokens{ "<|end_of_text|>" };
 
         assert_equals(COMMON_CHAT_FORMAT_GRANITE, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
