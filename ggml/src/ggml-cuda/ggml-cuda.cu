@@ -2852,10 +2852,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         float scale = ggml_get_op_params_f32(node, 0);
 
                         i += 2; node = cgraph->nodes[i];
-                        float softcap = ggml_get_op_params_f32(node, 0);
 
-                        ggml_set_op_params_f32(node, 0, scale);
-                        ggml_set_op_params_f32(node, 1, softcap);
+                        ggml_set_op_params_f32(node, 1, scale);
                         node->src[0] = src0;
 
                         ggml_cuda_op_softcap(*cuda_ctx, node);
