@@ -1775,7 +1775,7 @@ static common_chat_params common_chat_params_init_granite(const common_chat_temp
             data.preserved_tokens = {
                 "<think>",
                 "</think>",
-            "<response>",
+                "<response>",
                 "</response>",
             };
         }
