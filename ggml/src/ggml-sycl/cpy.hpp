@@ -2,6 +2,7 @@
 #define GGML_SYCL_CPY_HPP
 
 #include "common.hpp"
+#include <float.h>
 
 typedef void (*cpy_kernel_t)(const char * cx, char * cdst);
 
