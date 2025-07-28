@@ -189,7 +189,7 @@ def benchmark(path_server: str, path_log: Optional[str], prompt_source: str, n_p
                 random.seed(3 * (seed_offset + 1000 * i) + 1)
             data.append({
                 "session": session, "server_address": server_address, "prompt": p, "synthetic_prompt": synthetic_prompts,
-                "n_predict": random.randint(n_predict_min, n_predict), "seed": 3 * (seed_offset + 1000 * i) + 2 if seed_offset >= 0 else -1})
+                "n_predict": random.randint(n_predict_min, n_predict), "seed": (3 * (seed_offset + 1000 * i) + 2) if seed_offset >= 0 else -1})
 
         if not synthetic_prompts:
             logger.info("Getting the prompt lengths...")
