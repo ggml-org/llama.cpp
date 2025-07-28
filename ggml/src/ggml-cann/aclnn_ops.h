@@ -23,6 +23,7 @@
 #ifndef CANN_ACLNN_OPS
 #define CANN_ACLNN_OPS
 
+#include <unordered_set>
 #include <functional>
 #include <aclnnop/aclnn_abs.h>
 #include <aclnnop/aclnn_neg.h>
@@ -1021,6 +1022,37 @@ inline void ggml_cann_async_memset(ggml_backend_cann_context & ctx, void * buffe
 void ggml_cann_mul_mat_id(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
+ * @brief   Check whether a tensor is a weight tensor for matrix multiplication.
+ *
+ * @details Checks whether the given tensor serves as weight parameters in matrix multiplication operations,
+ *          typically within neural network layers. The function maintains a static set of canonical weight
+ *          naming suffixes from Transformer-based architectures. Uses substring matching to identify weight
+ *          tensors even with hierarchical naming patterns.
+ *
+ * @param tensor Pointer to the target ggml_tensor object (const-qualified).
+ */
+static bool is_matmul_weight(const ggml_tensor* tensor) {
+    std::string name = ggml_get_name(tensor);
+    static const std::unordered_set<std::string> weight_suffixes{
+        "output.weight",
+        "attn_q.weight",
+        "attn_k.weight",
+        "attn_v.weight",
+        "attn_output.weight",
+        "ffn_gate.weight",
+        "ffn_up.weight",
+        "ffn_down.weight"
+    };
+
+    for (const auto& suffix : weight_suffixes) {
+        if (name.find(suffix) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * @brief Applies a element-wise operation to two input tensors using the CANN
  * backend.
  *
@@ -1066,7 +1098,7 @@ void ggml_cann_binary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
  * @param dst The destination tensor. Its src[0] is treated as the input tensor.
  */
 template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
-    void ggml_cann_unary_op(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    void ggml_cann_op_unary(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
 
     aclTensor* acl_src = ggml_cann_create_tensor(src);
@@ -1077,49 +1109,125 @@ template <void unary_op(ggml_backend_cann_context&, aclTensor*, aclTensor*)>
 }
 
 /**
- * @brief   Applies a unary operation to a ggml tensor using the CANN backend.
+ * @brief Applies a unary operation to a ggml tensor using the CANN backend.
  *
- * @details This function performs a unary operation on the input tensor using
- * a user-provided lambda or callable object `unary_op`, which accepts the CANN
- * context and two ACL tensors (source and destination). Internally, this function
- * creates ACL representations of the ggml tensors and invokes the unary operation.
- * The result is stored in the destination tensor `dst`. This utility abstracts the
- * common boilerplate of tensor conversion and cleanup when implementing unary ops.
+ * @details This function applies a unary operation to the input tensor using
+ * a user-provided lambda or callable `unary_op`. The lambda receives the
+ * CANN backend context and two ACL tensors: the source and the destination.
  *
- * @param unary_op A callable that performs the unary operation using CANN APIs.
- * @param ctx The CANN context used for operations.
- * @param dst The destination tensor where the result will be stored.
- *            The source tensor is retrieved from `dst->src[0]`.
+ * Internally, this function handles the conversion from GGML tensors to ACL tensors,
+ * calls the provided unary op, and manages resource cleanup. The input is assumed
+ * to be `dst->src[0]`, and the result is written to `dst`.
+ *
+ * This utility simplifies writing unary op wrappers by abstracting tensor preparation.
+ *
+ * @param unary_op A callable that performs the unary operation using CANN ACL APIs.
+ * @param ctx The CANN context for operation execution.
+ * @param dst The destination ggml_tensor where the result will be stored.
+ *            The input tensor is assumed to be `dst->src[0]`.
+ *
+ * @see GGML_CANN_CALL_OP_UNARY
  */
-void ggml_cann_unary_op(
+void ggml_cann_op_unary(
     std::function<void(ggml_backend_cann_context&, aclTensor*, aclTensor*)> unary_op,
     ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
- * @brief Helper macro to invoke a unary ACL operation using ggml_cann_unary_op.
+ * @brief Applies a gated (GLU-style) unary operation using the CANN backend.
  *
- * This macro defines an inline lambda wrapping a specific ACL operation name,
- * and passes it to the templated ggml_cann_unary_op function. It simplifies
- * calling unary ops by hiding the lambda boilerplate.
+ * @details This function performs a gated activation such as GEGLU or ReGLU.
+ * It supports two input modes:
  *
- * Internally, the lambda will call:
+ * 1. **Dual input mode**: `dst->src[0]` and `dst->src[1]` are both valid tensors.
+ *    These are used directly as the value and gate tensors.
+ *
+ * 2. **Packed input mode**: Only `dst->src[0]` is valid, and it is assumed to
+ *    contain a concatenation of value and gate along the first dimension. This tensor
+ *    will be split into two equal halves to form the value and gate inputs.
+ *
+ * The function applies a user-provided unary operation (e.g., GELU) to the value tensor,
+ * then multiplies the result in-place with the gate tensor:
+ *
  * @code
- * GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);
+ * dst = unary_op(value) * gate;
  * @endcode
+ *
+ * The `swapped` parameter (from `dst->op_params[1]`) allows flipping the
+ * order of value/gate in the packed input case.
+ *
+ * @param unary_op A callable that performs the unary operation using CANN ACL APIs.
+ *                 It receives (ctx, acl_value_tensor, acl_output_tensor).
+ * @param ctx      The CANN context used for execution.
+ * @param dst      The destination ggml_tensor. Source tensors are in `dst->src[0]` and optionally `src[1]`.
+ *
+ * @see GGML_CANN_CALL_OP_UNARY_GATED
+ */
+void ggml_cann_op_unary_gated(
+    std::function<void(ggml_backend_cann_context&, aclTensor*, aclTensor*)> unary_op,
+    ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief Helper macro to call a unary ACL operator via ggml_cann_op_unary.
+ *
+ * This macro wraps the specified ACLNN unary operator name into a lambda expression,
+ * and passes it to `ggml_cann_op_unary`, which handles the common logic for executing
+ * unary ops in the CANN backend.
+ *
+ * Internally, this macro expands to a lambda like:
+ * @code
+ * [](ggml_backend_cann_context& ctx, aclTensor* acl_src, aclTensor* acl_dst) {
+ *     GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);
+ * };
+ * @endcode
+ *
+ * This lambda is then passed to `ggml_cann_op_unary`, which applies the operation.
  *
  * @param OP_NAME The name of the ACL unary operator to invoke via GGML_CANN_CALL_ACLNN_OP.
  *
- * @see ggml_cann_unary_op
+ * @see ggml_cann_op_unary
  * @see GGML_CANN_CALL_ACLNN_OP
  */
-#define GGML_CANN_CALL_UNARY_OP(OP_NAME)                              \
+#define GGML_CANN_CALL_OP_UNARY(OP_NAME)                              \
     do {                                                              \
         auto lambda = [](ggml_backend_cann_context& ctx,              \
             aclTensor* acl_src,                                       \
             aclTensor* acl_dst) {                                     \
             GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);  \
         };                                                            \
-        ggml_cann_unary_op(lambda, ctx, dst);                         \
+        ggml_cann_op_unary(lambda, ctx, dst);                         \
     }                                                                 \
     while (0)
+
+/**
+ * @brief Helper macro to call a gated unary ACL operator via ggml_cann_op_unary_gated.
+ *
+ * This macro wraps the specified ACLNN unary operator name into a lambda expression,
+ * and passes it to `ggml_cann_op_unary_gated`, which handles the common logic for
+ * executing gated unary ops in the CANN backend.
+ *
+ * Internally, this macro expands to a lambda like:
+ * @code
+ * [](ggml_backend_cann_context& ctx, aclTensor* acl_src, aclTensor* acl_dst) {
+ *     GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);
+ * };
+ * @endcode
+ *
+ * This lambda is then passed to `ggml_cann_op_unary_gated`, which applies the operation.
+ *
+ * @param OP_NAME The name of the ACL unary operator to invoke via GGML_CANN_CALL_ACLNN_OP.
+ *
+ * @see ggml_cann_op_unary_gated
+ * @see GGML_CANN_CALL_ACLNN_OP
+ */
+#define GGML_CANN_CALL_OP_UNARY_GATED(OP_NAME)                        \
+    do {                                                              \
+        auto lambda = [](ggml_backend_cann_context& ctx,              \
+            aclTensor* acl_src,                                       \
+            aclTensor* acl_dst) {                                     \
+            GGML_CANN_CALL_ACLNN_OP(ctx, OP_NAME, acl_src, acl_dst);  \
+        };                                                            \
+        ggml_cann_op_unary_gated(lambda, ctx, dst);                   \
+    }                                                                 \
+    while (0)
+
 #endif  // CANN_ACLNN_OPS

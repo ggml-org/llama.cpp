@@ -131,7 +131,7 @@ option(GGML_RVV              "ggml: enable rvv"              ON)
 option(GGML_RV_ZFH           "ggml: enable riscv zfh"        OFF)
 option(GGML_XTHEADVECTOR     "ggml: enable xtheadvector"     OFF)
 option(GGML_VXE              "ggml: enable vxe"              ON)
-option(GGML_NNPA             "ggml: enable nnpa"             ON)
+option(GGML_NNPA             "ggml: enable nnpa"             OFF)  # temp disabled by default, see: https://github.com/ggml-org/llama.cpp/issues/14877
 
 option(GGML_CPU_ALL_VARIANTS "ggml: build all variants of the CPU backend (requires GGML_BACKEND_DL)" OFF)
 set(GGML_CPU_ARM_ARCH        "" CACHE STRING "ggml: CPU architecture for ARM")
@@ -174,6 +174,8 @@ option(GGML_HIP_GRAPHS                      "ggml: use HIP graph, experimental, 
 option(GGML_HIP_NO_VMM                      "ggml: do not try to use HIP VMM"                 ON)
 option(GGML_HIP_ROCWMMA_FATTN               "ggml: enable rocWMMA for FlashAttention"         OFF)
 option(GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12   "ggml: enable rocWMMA FlashAttention on GFX12"    OFF)
+option(GGML_MUSA_GRAPHS                     "ggml: use MUSA graph, experimental, unstable"    OFF)
+option(GGML_MUSA_MUDNN_COPY                 "ggml: enable muDNN for accelerated copy"         OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)
 option(GGML_VULKAN_CHECK_RESULTS            "ggml: run Vulkan op checks"                      OFF)
 option(GGML_VULKAN_DEBUG                    "ggml: enable Vulkan debug output"                OFF)
@@ -181,6 +183,8 @@ option(GGML_VULKAN_MEMORY_DEBUG             "ggml: enable Vulkan memory debug ou
 option(GGML_VULKAN_SHADER_DEBUG_INFO        "ggml: enable Vulkan shader debug info"           OFF)
 option(GGML_VULKAN_VALIDATE                 "ggml: enable Vulkan validation"                  OFF)
 option(GGML_VULKAN_RUN_TESTS                "ggml: run Vulkan tests"                          OFF)
+option(GGML_WEBGPU                          "ggml: use WebGPU"                                OFF)
+option(GGML_WEBGPU_DEBUG                    "ggml: enable WebGPU debug output"                OFF)
 option(GGML_METAL                           "ggml: use Metal"                                 ${GGML_METAL_DEFAULT})
 option(GGML_METAL_USE_BF16                  "ggml: use bfloat if available"                   OFF)
 option(GGML_METAL_NDEBUG                    "ggml: disable Metal debugging"                   OFF)
@@ -270,6 +274,7 @@ set(GGML_PUBLIC_HEADERS
     include/ggml-rpc.h
     include/ggml-sycl.h
     include/ggml-vulkan.h
+    include/ggml-webgpu.h
     include/gguf.h)
 
 set_target_properties(ggml PROPERTIES PUBLIC_HEADER "${GGML_PUBLIC_HEADERS}")

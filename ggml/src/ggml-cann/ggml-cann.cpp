@@ -24,6 +24,7 @@
 
 #include <acl/acl.h>
 #include <stdarg.h>
+#include <aclnnop/aclnn_trans_matmul_weight.h>
 
 #include <cmath>
 #include <cstdio>
@@ -1115,6 +1116,63 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
+static int CreateAclTensorWeight(const void *hostData, const std::vector<int64_t> &shape, void **deviceAddr,
+                      aclDataType dataType, aclTensor **tensor)
+{
+    uint64_t size = 1;
+    for (auto i : shape) {
+        size *= i;
+    }
+
+    const aclIntArray *mat2Size = aclCreateIntArray(shape.data(), shape.size());
+    ACL_CHECK(aclnnCalculateMatmulWeightSizeV2(mat2Size, dataType, &size));
+
+    size *= sizeof(int16_t);
+
+    ACL_CHECK(aclrtMalloc(deviceAddr, size, ACL_MEM_MALLOC_HUGE_FIRST));
+    aclrtMemcpy(*deviceAddr, size, hostData, size, ACL_MEMCPY_HOST_TO_DEVICE);
+
+    std::vector<int64_t> strides(shape.size(), 1);
+    for (int64_t i = shape.size() - 2; i >= 0; i--) {
+        strides[i] = shape[i + 1] * strides[i + 1];
+    }
+
+    *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_ND,
+                              shape.data(), shape.size(), *deviceAddr);
+    return 0;
+}
+
+static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
+    aclrtStream stream;
+    ACL_CHECK(aclrtCreateStream(&stream));
+
+    std::vector<int64_t> weightTransposedShape = {tensor->ne[1], tensor->ne[0]};
+    void *weightTransposedDeviceAddr = nullptr;
+    aclTensor *weightTransposed = nullptr;
+    CreateAclTensorWeight(data, weightTransposedShape, &weightTransposedDeviceAddr,
+                          ggml_cann_type_mapping(tensor->type), &weightTransposed);
+
+    uint64_t workspaceSize = 0;
+    aclOpExecutor *executor;
+    void *workspaceAddr = nullptr;
+
+    // TransMatmulWeight
+    ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed, &workspaceSize, &executor));
+    std::unique_ptr<void, aclError (*)(void *)> workspaceAddrPtrTrans(nullptr, aclrtFree);
+    if (workspaceSize > 0) {
+        ACL_CHECK(aclrtMalloc(&workspaceAddr, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST));
+        workspaceAddrPtrTrans.reset(workspaceAddr);
+    }
+    ACL_CHECK(aclnnTransMatmulWeight(workspaceAddr, workspaceSize, executor, stream));
+
+    size_t size = ggml_nelements(tensor) * ggml_element_size(tensor);
+
+    aclrtMemcpy((char *)tensor->data + offset, size,
+                weightTransposedDeviceAddr, size, ACL_MEMCPY_HOST_TO_DEVICE);
+    ACL_CHECK(aclDestroyTensor(weightTransposed));
+    aclrtFree(weightTransposedDeviceAddr);
+}
+
 // TODO: need handle tensor which has paddings.
 /**
  * @brief Set tensor data in a CANN buffer.
@@ -1139,9 +1197,16 @@ static void ggml_backend_cann_buffer_set_tensor(
     // For acl, synchronous functions use this default stream.
     // Why aclrtSynchronizeDevice?
 
+    bool weightToNZ = false;
+#ifdef ASCEND_310P
+    weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
+#endif
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
+        if (weightToNZ && is_matmul_weight((const ggml_tensor*)tensor)) {
+            weight_format_to_nz(tensor, data, offset);
+        }
     } else {
         void *transform_buffer = malloc(size);
         ggml_backend_cann_transform(tensor, data, transform_buffer);
@@ -1616,16 +1681,18 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(dst)) {
                 case GGML_UNARY_OP_ABS:
-                    GGML_CANN_CALL_UNARY_OP(Abs);
+                    GGML_CANN_CALL_OP_UNARY(Abs);
                     break;
                 case GGML_UNARY_OP_NEG:
-                    GGML_CANN_CALL_UNARY_OP(Neg);
+                    GGML_CANN_CALL_OP_UNARY(Neg);
                     break;
                 case GGML_UNARY_OP_GELU:
-                    GGML_CANN_CALL_UNARY_OP(Gelu);
+                case GGML_UNARY_OP_GELU_ERF:
+                    // aclnnGelu internally uses the erf-based approximation.
+                    GGML_CANN_CALL_OP_UNARY(Gelu);
                     break;
                 case GGML_UNARY_OP_SILU:
-                    GGML_CANN_CALL_UNARY_OP(Silu);
+                    GGML_CANN_CALL_OP_UNARY(Silu);
                     break;
                 case GGML_UNARY_OP_GELU_QUICK: {
                     auto lambda = [](ggml_backend_cann_context& ctx,
@@ -1633,35 +1700,60 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
                         aclTensor* acl_dst) {
                         GGML_CANN_CALL_ACLNN_OP(ctx, GeluV2, acl_src, 0, acl_dst);
                     };
-                    ggml_cann_unary_op(lambda, ctx, dst);
+                    ggml_cann_op_unary(lambda, ctx, dst);
                 } break;
                 case GGML_UNARY_OP_TANH:
-                    GGML_CANN_CALL_UNARY_OP(Tanh);
+                    GGML_CANN_CALL_OP_UNARY(Tanh);
                     break;
                 case GGML_UNARY_OP_RELU:
-                    GGML_CANN_CALL_UNARY_OP(Relu);
+                    GGML_CANN_CALL_OP_UNARY(Relu);
                     break;
                 case GGML_UNARY_OP_SIGMOID:
-                    GGML_CANN_CALL_UNARY_OP(Sigmoid);
+                    GGML_CANN_CALL_OP_UNARY(Sigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSIGMOID:
-                    GGML_CANN_CALL_UNARY_OP(Hardsigmoid);
+                    GGML_CANN_CALL_OP_UNARY(Hardsigmoid);
                     break;
                 case GGML_UNARY_OP_HARDSWISH:
-                    GGML_CANN_CALL_UNARY_OP(Hardswish);
+                    GGML_CANN_CALL_OP_UNARY(Hardswish);
                     break;
                 case GGML_UNARY_OP_EXP:
-                    GGML_CANN_CALL_UNARY_OP(Exp);
+                    GGML_CANN_CALL_OP_UNARY(Exp);
                     break;
                 case GGML_UNARY_OP_ELU:
                     ggml_cann_elu(ctx, dst);
                     break;
                 case GGML_UNARY_OP_SGN:
-                    GGML_CANN_CALL_UNARY_OP(Sign);
+                    GGML_CANN_CALL_OP_UNARY(Sign);
                     break;
                 case GGML_UNARY_OP_STEP:
                     ggml_cann_step(ctx, dst);
                     break;
+                default:
+                    return false;
+            }
+            break;
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(dst)) {
+                case GGML_GLU_OP_REGLU:
+                    GGML_CANN_CALL_OP_UNARY_GATED(Relu);
+                    break;
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                    // aclnnGelu internally uses the erf-based approximation.
+                    GGML_CANN_CALL_OP_UNARY_GATED(Gelu);
+                    break;
+                case GGML_GLU_OP_SWIGLU:
+                    GGML_CANN_CALL_OP_UNARY_GATED(Silu);
+                    break;
+                case GGML_GLU_OP_GEGLU_QUICK: {
+                    auto lambda = [](ggml_backend_cann_context& ctx,
+                        aclTensor* acl_src,
+                        aclTensor* acl_dst) {
+                        GGML_CANN_CALL_ACLNN_OP(ctx, GeluV2, acl_src, 0, acl_dst);
+                    };
+                    ggml_cann_op_unary_gated(lambda, ctx, dst);
+                } break;
                 default:
                     return false;
             }
@@ -1708,7 +1800,7 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_binary_op<aclnn_mul>(ctx, dst);
             break;
         case GGML_OP_SQRT:
-            GGML_CANN_CALL_UNARY_OP(Sqrt);
+            GGML_CANN_CALL_OP_UNARY(Sqrt);
             break;
         case GGML_OP_CLAMP:
             ggml_cann_clamp(ctx, dst);
@@ -1753,16 +1845,16 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             ggml_cann_argmax(ctx, dst);
             break;
         case GGML_OP_COS:
-            ggml_cann_unary_op<aclnn_cos>(ctx, dst);
+            ggml_cann_op_unary<aclnn_cos>(ctx, dst);
             break;
         case GGML_OP_SIN:
-            ggml_cann_unary_op<aclnn_sin>(ctx, dst);
+            ggml_cann_op_unary<aclnn_sin>(ctx, dst);
             break;
         case GGML_OP_CONV_TRANSPOSE_1D:
             ggml_cann_conv_transpose_1d(ctx, dst);
             break;
         case GGML_OP_LOG:
-            GGML_CANN_CALL_UNARY_OP(Log);
+            GGML_CANN_CALL_OP_UNARY(Log);
             break;
         case GGML_OP_MEAN:
             ggml_cann_mean(ctx, dst);
@@ -2036,10 +2128,23 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 case GGML_UNARY_OP_ELU:
                 case GGML_UNARY_OP_SGN:
                 case GGML_UNARY_OP_STEP:
+                case GGML_UNARY_OP_GELU_ERF:
                     return true;
                 default:
                     return false;
             }
+        case GGML_OP_GLU:
+            switch (ggml_get_glu_op(op)) {
+                case GGML_GLU_OP_REGLU:
+                case GGML_GLU_OP_GEGLU:
+                case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_GEGLU_ERF:
+                case GGML_GLU_OP_GEGLU_QUICK:
+                    return true;
+                default:
+                    return false;
+            }
+            break;
         case GGML_OP_MUL_MAT: {
             switch (op->src[0]->type) {
                 case GGML_TYPE_F16:

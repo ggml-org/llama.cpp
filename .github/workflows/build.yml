@@ -135,6 +135,69 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
+  macOS-latest-cmake-arm64-webgpu:
+    runs-on: macos-14
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-arm64-webgpu
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+          brew install curl
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          ARTIFACTS_JSON=$(curl -s -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/google/dawn/actions/artifacts")
+          echo "Finding latest macos-latest-Release artifact..."
+          DOWNLOAD_URL=$(echo "$ARTIFACTS_JSON" | jq -r '.artifacts
+            | sort_by(.created_at)
+            | reverse
+            | map(select(.name | test("macos-latest-Release$")))
+            | .[0].archive_download_url')
+          if [ "$DOWNLOAD_URL" = "null" ] || [ -z "$DOWNLOAD_URL" ]; then
+            echo "No suitable Dawn artifact found!"
+            exit 1
+          fi
+          echo "Downloading from: $DOWNLOAD_URL"
+          curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -o artifact.zip "$DOWNLOAD_URL"
+          unzip artifact.zip
+          mkdir dawn
+          tar_file=$(find . -name '*.tar.gz' | head -n 1)
+          echo "Extracting: $tar_file"
+          tar -xvf "$tar_file" -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export CMAKE_PREFIX_PATH=dawn
+          cmake -B build -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
   ubuntu-cpu-cmake:
     strategy:
       matrix:
@@ -344,6 +407,72 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4200
 
+  ubuntu-22-cmake-webgpu:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-webgpu
+          evict-old-files: 1d
+
+      - name: Vulkan SDK Dependencies
+        id: vulkan-depends
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
+          ARTIFACTS_JSON=$(curl -s -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/google/dawn/actions/artifacts")
+          echo "Finding latest ubuntu-latest-Release artifact..."
+          DOWNLOAD_URL=$(echo "$ARTIFACTS_JSON" | jq -r '.artifacts
+            | sort_by(.created_at)
+            | reverse
+            | map(select(.name | test("ubuntu-latest-Release$")))
+            | .[0].archive_download_url')
+          if [ "$DOWNLOAD_URL" = "null" ] || [ -z "$DOWNLOAD_URL" ]; then
+            echo "No suitable Dawn artifact found!"
+            exit 1
+          fi
+          echo "Downloading from: $DOWNLOAD_URL"
+          curl -L \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -o artifact.zip "$DOWNLOAD_URL"
+          unzip artifact.zip
+          mkdir dawn
+          tar_file=$(find . -name '*.tar.gz' | head -n 1)
+          echo "Extracting: $tar_file"
+          tar -xvf "$tar_file" -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export Dawn_DIR=dawn/lib64/cmake/Dawn
+          cmake -B build -DGGML_WEBGPU=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          # This is using llvmpipe and runs slower than other backends
+          ctest -L main --verbose --timeout 3600
+
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.0.2
@@ -386,7 +515,7 @@ jobs:
 
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.0.1-mudnn-devel-ubuntu22.04
+    container: mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone

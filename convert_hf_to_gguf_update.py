@@ -7,7 +7,6 @@ import pathlib
 import re
 
 import requests
-import sys
 import json
 import shutil
 import argparse
@@ -69,8 +68,7 @@ args = parser.parse_args()
 hf_token = args.hf_token if args.hf_token is not None else hf_token
 
 if hf_token is None:
-    logger.error("HF token is required. Please provide it as an argument or set it in ~/.cache/huggingface/token")
-    sys.exit(1)
+    logger.warning("HF token not found. You can provide it as an argument or set it in ~/.cache/huggingface/token")
 
 # TODO: this string has to exercise as much pre-tokenizer functionality as possible
 #       will be updated with time - contributions welcome
@@ -131,6 +129,7 @@ models = [
     {"name": "a.x-4.0",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/skt/A.X-4.0", },
     {"name": "midm-2.0",         "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/K-intelligence/Midm-2.0-Base-Instruct", },
     {"name": "lfm2",             "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LiquidAI/LFM2-Tokenizer"},
+    {"name": "exaone4",          "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B", },
 ]
 
 # some models are known to be broken upstream, so we will skip them as exceptions
@@ -146,11 +145,12 @@ pre_computed_hashes = [
     {"name": "falcon-h1", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/tiiuae/Falcon-H1-1B-Base", "chkhsh": "60476e1243776c4fb1b993dbd7a5f15ac22f83c80afdf425fa5ae01c8d44ef86"},
     {"name": "falcon-h1", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/tiiuae/Falcon-H1-7B-Base", "chkhsh": "3eda48b4c4dc7de733d1a8b3e3b4a85243dbbf704da2ee9d42c6beced8897896"},
     {"name": "falcon-h1", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/tiiuae/Falcon-H1-34B-Base", "chkhsh": "48f8e02c0359c0bbdd82f26909171fac1c18a457bb47573ed1fe3bbb2c1cfd4b"},
+    {"name": "kimi-k2",   "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/moonshotai/Kimi-K2-Base",   "chkhsh": "81212dc7cdb7e0c1074ca62c5aeab0d43c9f52b8a737be7b12a777c953027890"},
 ]
 
 
 def download_file_with_auth(url, token, save_path):
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}"} if token else None
     response = sess.get(url, headers=headers)
     response.raise_for_status()
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
@@ -231,17 +231,12 @@ for model in models:
 # generate the source code for the convert_hf_to_gguf.py:get_vocab_base_pre() function:
 
 src_ifs = ""
-for model in [*all_models, *pre_computed_hashes]:
+for model in [*pre_computed_hashes, *all_models]:
     name = model["name"]
     tokt = model["tokt"]
     chkhsh = model.get("chkhsh")
 
     if tokt == TOKENIZER_TYPE.SPM or tokt == TOKENIZER_TYPE.UGM:
-        continue
-
-    # Skip if the tokenizer folder does not exist or there are other download issues previously
-    if not os.path.exists(f"models/tokenizers/{name}"):
-        logger.warning(f"Directory for tokenizer {name} not found. Skipping...")
         continue
 
     # create the tokenizer
@@ -253,15 +248,19 @@ for model in [*all_models, *pre_computed_hashes]:
         chkhsh = existing_models[name]
     else:
         # otherwise, compute the hash of the tokenizer
+
+        # Fail if the tokenizer folder with config does not exist or there are other download issues previously
+        if not os.path.isfile(f"models/tokenizers/{name}/tokenizer_config.json"):
+            raise OSError(f"Config for tokenizer {name} not found. The model may not exist or is not accessible with the provided token.")
+
         try:
             logger.info(f"Loading tokenizer from {f'models/tokenizers/{name}'}...")
             if name == "t5":
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}", use_fast=False)
             else:
                 tokenizer = AutoTokenizer.from_pretrained(f"models/tokenizers/{name}")
-        except OSError as e:
-            logger.error(f"Error loading tokenizer for model {name}. The model may not exist or is not accessible with the provided token. Error: {e}")
-            continue  # Skip to the next model if the tokenizer can't be loaded
+        except Exception as e:
+            raise OSError(f"Error loading tokenizer for model {name}.") from e
 
         chktok = tokenizer.encode(CHK_TXT)
         chkhsh = sha256(str(chktok).encode()).hexdigest()

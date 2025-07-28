@@ -71,12 +71,13 @@ extern "C" {
     typedef int32_t llama_seq_id;
 
     enum llama_vocab_type {
-        LLAMA_VOCAB_TYPE_NONE = 0, // For models without vocab
-        LLAMA_VOCAB_TYPE_SPM  = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
-        LLAMA_VOCAB_TYPE_BPE  = 2, // GPT-2 tokenizer based on byte-level BPE
-        LLAMA_VOCAB_TYPE_WPM  = 3, // BERT tokenizer based on WordPiece
-        LLAMA_VOCAB_TYPE_UGM  = 4, // T5 tokenizer based on Unigram
-        LLAMA_VOCAB_TYPE_RWKV = 5, // RWKV tokenizer based on greedy tokenization
+        LLAMA_VOCAB_TYPE_NONE   = 0, // For models without vocab
+        LLAMA_VOCAB_TYPE_SPM    = 1, // LLaMA tokenizer based on byte-level BPE with byte fallback
+        LLAMA_VOCAB_TYPE_BPE    = 2, // GPT-2 tokenizer based on byte-level BPE
+        LLAMA_VOCAB_TYPE_WPM    = 3, // BERT tokenizer based on WordPiece
+        LLAMA_VOCAB_TYPE_UGM    = 4, // T5 tokenizer based on Unigram
+        LLAMA_VOCAB_TYPE_RWKV   = 5, // RWKV tokenizer based on greedy tokenization
+        LLAMA_VOCAB_TYPE_PLAMO2 = 6, // PLaMo-2 tokenizer based on Aho-Corasick with dynamic programming
     };
 
     enum llama_rope_type {
@@ -334,6 +335,9 @@ extern "C" {
         bool swa_full;    // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
                           // NOTE: setting to false when n_seq_max > 1 can cause bad performance in some cases
                           //       ref: https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573
+        bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
+                          // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
+                          // ref: https://github.com/ggml-org/llama.cpp/pull/14363
     };
 
     // model quantization parameters
@@ -724,7 +728,7 @@ extern "C" {
     //   - lazily on next llama_decode()
     // p0 < 0 : [0,  p1]
     // p1 < 0 : [p0, inf)
-    DEPRECATED(void llama_kv_self_seq_div(
+    DEPRECATED(LLAMA_API void llama_kv_self_seq_div(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
                        llama_pos   p0,
@@ -952,6 +956,7 @@ extern "C" {
     // in the order they have appeared in the batch.
     // Rows: number of tokens for which llama_batch.logits[i] != 0
     // Cols: n_vocab
+    // TODO: deprecate in favor of llama_get_logits_ith() (ref: https://github.com/ggml-org/llama.cpp/pull/14853#issuecomment-3113143522)
     LLAMA_API float * llama_get_logits(struct llama_context * ctx);
 
     // Logits for the ith token. For positive indices, Equivalent to:
@@ -966,6 +971,7 @@ extern "C" {
     // in the order they have appeared in the batch.
     // shape: [n_outputs*n_embd]
     // Otherwise, returns NULL.
+    // TODO: deprecate in favor of llama_get_embeddings_ith() (ref: https://github.com/ggml-org/llama.cpp/pull/14853#issuecomment-3113143522)
     LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 
     // Get the embeddings for the ith token. For positive indices, Equivalent to:
@@ -1004,6 +1010,7 @@ extern "C" {
     LLAMA_API llama_token llama_vocab_sep(const struct llama_vocab * vocab); // sentence separator
     LLAMA_API llama_token llama_vocab_nl (const struct llama_vocab * vocab); // next-line
     LLAMA_API llama_token llama_vocab_pad(const struct llama_vocab * vocab); // padding
+    LLAMA_API llama_token llama_vocab_mask(const struct llama_vocab * vocab); // mask
 
     LLAMA_API bool llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_eos(const struct llama_vocab * vocab);
@@ -1389,6 +1396,7 @@ extern "C" {
 
         int32_t n_p_eval;
         int32_t n_eval;
+        int32_t n_reused; // number of times a ggml compute graph had been reused
     };
 
     struct llama_perf_sampler_data {
