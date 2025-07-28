@@ -1781,7 +1781,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     hparams.n_no_rope_layer_step = hparams.n_layer;
                 }
 
-                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp, false);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
 
@@ -5202,7 +5202,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     }
 
                     for (int i = 0; i < n_layer; ++i) {
-                        auto &        layer    = layers[i];
+                        auto & layer = layers[i];
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
 
@@ -5554,7 +5554,7 @@ void llama_model::print_info() const {
     }
 
     if (arch == LLM_ARCH_SMALLTHINKER) {
-        LLAMA_LOG_INFO("%s: n_ff_exp         = %d\n",     __func__, hparams.n_ff_exp);
+        LLAMA_LOG_INFO("%s: n_ff_exp             = %d\n",     __func__, hparams.n_ff_exp);
         LLAMA_LOG_INFO("%s: expert_gating_func   = %s\n",     __func__, llama_expert_gating_func_name((llama_expert_gating_func_type) hparams.expert_gating_func));
     }
 
