@@ -17099,6 +17099,8 @@ struct llm_build_smallthinker : public llm_graph_context{
             inp_attn = build_attn_inp_kv_unified();
         }
 
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA  = inpL;
             ggml_tensor * probs  = nullptr;
@@ -17142,9 +17144,7 @@ struct llm_build_smallthinker : public llm_graph_context{
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             }
 
-            if (il == n_layer - 1) {
-                // skip computing output for unused tokens
-                ggml_tensor * inp_out_ids = build_inp_out_ids();
+            if (il == n_layer - 1 && inp_out_ids) {
                 cur = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
                 if (probs) {
