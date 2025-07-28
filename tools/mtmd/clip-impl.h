@@ -45,7 +45,7 @@
 #define KEY_ATTN_WINDOW_SIZE      "clip.vision.window_size"
 #define KEY_MINICPMV_VERSION      "clip.minicpmv_version"
 #define KEY_MINICPMV_QUERY_NUM    "clip.minicpmv_query_num"
-#define KEY_MINICPMV_PROJECTION_DIM "clip.minicpmv_projection_dim"
+#define KEY_MINICPMV_PROJ_DIM     "clip.minicpmv_projection_dim"
 
 // audio-specific
 #define KEY_A_NUM_MEL_BINS      "clip.audio.num_mel_bins"
