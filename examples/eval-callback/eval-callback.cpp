@@ -146,8 +146,11 @@ static bool run(llama_context * ctx, const common_params & params, callback_data
 
 
 int main(int argc, char **argv) {
-    prompt_output_file.open("prompt_output.txt");
-    tensor_output_file.open("tensor_output.txt");
+    std::string output_prefix = "default";
+
+    prompt_output_file.open(output_prefix + "_prompt_output.txt");
+    tensor_output_file.open(output_prefix + "_tensor_output.txt");
+
 
     if (!prompt_output_file || !tensor_output_file) {
         std::cerr << "❌ Failed to open output files.\n";
@@ -180,6 +183,7 @@ int main(int argc, char **argv) {
                 return 1;
             }
             continue;
+
         } else if (arg == "--prompt") {
             if (i + 1 < argc) {
                 prompts.emplace_back(argv[++i]);
@@ -188,6 +192,16 @@ int main(int argc, char **argv) {
                 return 1;
             }
             continue;
+
+        } else if (arg == "--output-prefix") {
+            if (i + 1 < argc) {
+                output_prefix = argv[++i];
+            } else {
+                fprintf(stderr, "error: --output-prefix requires a string argument\n");
+                return 1;
+            }
+            continue;
+
         } else if (arg == "--n-gpu-layers") {
             if (i + 1 < argc) {
                 params.n_gpu_layers = std::stoi(argv[++i]);  // override default
@@ -196,8 +210,8 @@ int main(int argc, char **argv) {
                 return 1;
             }
             continue;
-        }
-        else if (arg == "--list-layers") {
+
+        } else if (arg == "--list-layers") {
             list_layers = true;
             if (i + 1 < argc && argv[i + 1][0] != '-') {
                 list_layers_filter = argv[++i];  // take optional argument
@@ -207,6 +221,7 @@ int main(int argc, char **argv) {
 
         filtered_argv.push_back(argv[i]);
     }
+
 
 
     if (!common_params_parse((int)filtered_argv.size(), filtered_argv.data(), params, LLAMA_EXAMPLE_COMMON)) {
