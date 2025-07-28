@@ -15,6 +15,7 @@ static void softcap_f32_cuda(const float * x, float * dst, const float scale, co
     softcap_f32<<<num_blocks, CUDA_SOFTCAP_BLOCK_SIZE, 0, stream>>>(x, dst, scale, softcap, k);
 }
 
+// fused GGML_OP_SCALE + GGML_UNARY_OP_TANH + GGML_OP_SCALE
 void ggml_cuda_op_softcap(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * src) {
     const ggml_tensor * src0 = src->src[0];
     const float * src0_d = (const float *)src0->data;
