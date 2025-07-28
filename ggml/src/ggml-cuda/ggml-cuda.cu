@@ -2772,57 +2772,54 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         return false;
     }
 
-    switch (ops.size()) {
-        case 2:
-            if (ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
-                const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
-                const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_RMS_NORM && ops.begin()[1] == GGML_OP_MUL) {
+        const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
+        const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
 
-                GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
-                GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
+        GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
+        GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
 
-                //rms norm only supports F32
-                if (mul->src[0]->type != GGML_TYPE_F32 ||
-                    mul->src[1]->type != GGML_TYPE_F32 ||
-                    mul->type != GGML_TYPE_F32) {
-                    return false;
-                }
-
-                //if rms norm is the B operand, then we don't handle broadcast
-                if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm->src[1])) {
-                    return false;
-                }
-
-                //rms_norm kernel assumes contigous rows
-                if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
-                    return false;
-                }
-            }
-            break;
-        case 3:
-            if (ops.begin()[0] == GGML_OP_SCALE && ops.begin()[1] == GGML_OP_UNARY && ops.begin()[2] == GGML_OP_SCALE
-             && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_TANH) {
-                const ggml_tensor *scale  = cgraph->nodes[node_idx];
-                const ggml_tensor *tanh   = cgraph->nodes[node_idx+1];
-                const ggml_tensor *scale2 = cgraph->nodes[node_idx+2];
-
-                GGML_ASSERT(scale->src[0]->type == GGML_TYPE_F32);
-                GGML_ASSERT(scale->type == GGML_TYPE_F32);
-
-                if (tanh->src[0] != scale || scale2->src[0] != tanh) {
-                    return false;
-                }
-
-                if (ggml_get_op_params_f32(scale, 1) != 0.0f || ggml_get_op_params_f32(scale2, 1) != 0.0f) {
-                    return false;
-                }
-            }
-            break;
-        default:
+        //rms norm only supports F32
+        if (mul->src[0]->type != GGML_TYPE_F32 ||
+            mul->src[1]->type != GGML_TYPE_F32 ||
+            mul->type != GGML_TYPE_F32) {
             return false;
+        }
+
+        //if rms norm is the B operand, then we don't handle broadcast
+        if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm->src[1])) {
+            return false;
+        }
+
+        //rms_norm kernel assumes contigous rows
+        if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
+            return false;
+        }
+
+        return true;
     }
 
-    return true;
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_SCALE && ops.begin()[1] == GGML_OP_UNARY && ops.begin()[2] == GGML_OP_SCALE
+     && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_TANH) {
+        const ggml_tensor *scale  = cgraph->nodes[node_idx];
+        const ggml_tensor *tanh   = cgraph->nodes[node_idx+1];
+        const ggml_tensor *scale2 = cgraph->nodes[node_idx+2];
+
+        GGML_ASSERT(scale->src[0]->type == GGML_TYPE_F32);
+        GGML_ASSERT(scale->type == GGML_TYPE_F32);
+
+        if (tanh->src[0] != scale || scale2->src[0] != tanh) {
+            return false;
+        }
+
+        if (ggml_get_op_params_f32(scale, 1) != 0.0f || ggml_get_op_params_f32(scale2, 1) != 0.0f) {
+            return false;
+        }
+
+        return true;
+    }
+
+    return false;
 }
 
 static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph,
