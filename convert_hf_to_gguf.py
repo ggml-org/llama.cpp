@@ -89,12 +89,14 @@ class ModelBase:
     block_count: int
     tensor_map: gguf.TensorNameMap
 
+    is_mistral_format: bool = False
+
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
                  small_first_shard: bool = False, hparams: dict[str, Any] | None = None,
-                 remote_hf_model_id: str | None = None, n_ctx: int = 0, is_mistral_format: bool = False):
+                 remote_hf_model_id: str | None = None):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -109,11 +111,6 @@ class ModelBase:
         self.use_temp_file = use_temp_file
         self.lazy = not eager or (remote_hf_model_id is not None)
         self.remote_hf_model_id = remote_hf_model_id
-        self.n_ctx = n_ctx
-        self.is_mistral_format = is_mistral_format
-
-        if is_mistral_format and not n_ctx:
-            raise ValueError("Please pass the context length using --ctx when using mistral formats.")
 
         if remote_hf_model_id is not None:
             self.is_safetensors = True
@@ -127,12 +124,12 @@ class ModelBase:
 
             self.get_tensors = get_remote_tensors
         else:
-            prefix = "model" if not is_mistral_format else "consolidated"
+            prefix = "model" if not self.is_mistral_format else "consolidated"
             self.part_names = ModelBase.get_model_part_names(self.dir_model, prefix, ".safetensors")
             self.is_safetensors = len(self.part_names) > 0
             if not self.is_safetensors:
                 self.part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
-        self.hparams = ModelBase.load_hparams(self.dir_model, is_mistral_format) if hparams is None else hparams
+        self.hparams = ModelBase.load_hparams(self.dir_model, self.is_mistral_format) if hparams is None else hparams
         self.tensor_names = None
         self.metadata_override = metadata_override
         self.model_name = model_name
@@ -296,14 +293,6 @@ class ModelBase:
                     break
 
             for new_name, data_torch in (self.modify_tensors(data_torch, name, bid)):
-                # hard coded for pixtral
-                if name == "vision_language_adapter.w_in.weight":
-                    assert new_name == "mm.23.weight", new_name
-                    new_name = "mm.1.weight"
-                elif name == "vision_language_adapter.w_out.weight":
-                    assert new_name == "mm.23.weight", new_name
-                    new_name = "mm.2.weight"
-
                 # TODO: why do we squeeze here?
                 # data = data_torch.squeeze().numpy()
                 data = data_torch.numpy()
@@ -566,12 +555,7 @@ class TextModel(ModelBase):
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
 
-        if self.is_mistral_format:
-            n_ctx = self.n_ctx
-        else:
-            n_ctx = self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions", "max_length"], optional=True)
-
-        if n_ctx is not None:
+        if (n_ctx := self.find_hparam(["max_position_embeddings", "n_ctx", "n_positions", "max_length"], optional=True)) is not None:
             self.gguf_writer.add_context_length(n_ctx)
             logger.info(f"gguf: context length = {n_ctx}")
 
@@ -2014,10 +1998,9 @@ class LlamaModel(TextModel):
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
     def set_vocab(self):
-        path_tekken_json = self.dir_model / "tekken.json"
-        path_tokenizer_json = self.dir_model / "tokenizer.json"
-        if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
-            return self.set_vocab_tekken()
+        if self.is_mistral_format:
+            self._set_vocab_mistral()
+            return
 
         try:
             self._set_vocab_sentencepiece()
@@ -2100,7 +2083,9 @@ class LlamaModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        self.gguf_writer.add_vocab_size(hparams["vocab_size"])
+
+        if not self.is_mistral_format:
+            self.gguf_writer.add_vocab_size(hparams["vocab_size"])
 
         if (rope_dim := hparams.get("head_dim")) is None:
             rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
@@ -2122,13 +2107,25 @@ class LlamaModel(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        n_head = self.hparams["num_attention_heads"]
-        n_kv_head = self.hparams.get("num_key_value_heads")
+        n_head = self.find_hparam(["n_heads", "num_attention_heads"])
+        n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
+
+        vision_prefixes = [
+            "vision_encoder.",
+            "vision_language_adapter.",
+            "patch_merger.",
+            "pre_mm_projector_norm",
+        ]
+        
         is_multimodal_tensor = "vision_tower" in name \
             or "vision_model" in name \
             or "audio_tower" in name \
             or "model.connector" in name \
-            or "multi_modal_projector" in name
+            or "multi_modal_projector" in name \
+            or any(
+                name.startswith(prefix)
+                for prefix in vision_prefixes
+            )
 
         if is_multimodal_tensor:
             return [] # skip vision tensors
@@ -2244,13 +2241,16 @@ class LlavaVisionModel(MmprojModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        if self.hparams["model_type"] == "pixtral":
+        if self.hparams.get("model_type") == "pixtral":
             # layer_norm_eps is not in config.json, it is hard-coded in modeling_pixtral.py
             self.hparams["layer_norm_eps"] = self.hparams.get("layer_norm_eps", 1e-5)
             self.img_break_tok_id = self.get_token_id("[IMG_BREAK]")
-            logger.info(f"Image break token id: {self.img_break_tok_id}")
+        elif self.is_mistral_format:
+            self.hparams["layer_norm_eps"] = self.hparams.get("norm_eps", 1e-5)
+            self.img_break_tok_id = self.find_vparam(["image_break_token_id"])
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
+        logger.info(f"Image break token id: {self.img_break_tok_id}")
 
     def get_token_id(self, token: str) -> int:
         tokenizer_config_file = self.dir_model / 'tokenizer_config.json'
@@ -2264,7 +2264,7 @@ class LlavaVisionModel(MmprojModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
-        if hparams["model_type"] == "pixtral":
+        if hparams.get("model_type") == "pixtral":
             self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PIXTRAL)
             self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
 
@@ -2282,18 +2282,30 @@ class LlavaVisionModel(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-        n_head = self.hparams["num_attention_heads"]
+        n_head = (
+            self.hparams["num_attention_heads"] if not self.is_mistral_format else self.find_vparam(["num_attention_heads"])
+        )
         n_kv_head = n_head
 
-        if name.startswith("multi_modal_projector.") or name.startswith("vision_tower."):
+        valid_prefixes = (
+            "multi_modal_projector.",
+            "vision_tower.",
+            "vision_encoder.",
+            "vision_language_adapter.",
+            "patch_merger.",
+            "pre_mm_projector_norm",
+        )
+
+        if any(name.startswith(prefix) for prefix in valid_prefixes):
             # process vision tensors
-            if name.endswith(("q_proj.weight", "q_proj.bias")):
+            if name.endswith(("q_proj.weight", "q_proj.bias")) and not self.is_mistral_format:
                 data_torch = LlamaModel.permute(data_torch, n_head, n_head)
-            if name.endswith(("k_proj.weight", "k_proj.bias")):
+            if name.endswith(("k_proj.weight", "k_proj.bias")) and not self.is_mistral_format:
                 data_torch = LlamaModel.permute(data_torch, n_head, n_kv_head)
             return [(self.map_tensor_name(name), data_torch)]
 
-        if self.img_break_tok_id > 0 and "embed_tokens.weight" in name:
+        embed_key = "embed_tokens.weight" if not self.is_mistral_format else "tok_embeddings.weight"
+        if self.img_break_tok_id > 0 and embed_key in name:
             logger.info(f"Extracting [IMG_BREAK] token embedding from {name}")
             # for pixtral model, we need to extract the [IMG_BREAK] token embedding
             img_break_embd = data_torch[self.img_break_tok_id]
@@ -7839,81 +7851,101 @@ class SmallThinkerModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-class MistralModel(TextModel):
-    model_name = "Mistral"
-    model_arch = MODEL_ARCH.LLAMA
-    undo_permute = True
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+@ModelBase.register("SmallThinkerForCausalLM")
+class SmallThinkerModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.SMALLTHINKER
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        hparams = self.hparams
-
-        if "head_dim" in hparams:
-            rope_dim = hparams["head_dim"]
+        if (n_experts := self.hparams.get("num_experts", self.hparams.get("moe_num_primary_experts"))) is not None:
+            self.gguf_writer.add_expert_count(n_experts)
+        if (n_experts_used := self.hparams.get("num_experts_per_tok", self.hparams.get("moe_num_active_primary_experts"))) is not None:
+            self.gguf_writer.add_expert_used_count(n_experts_used)
+        if (moe_intermediate_size := self.hparams.get("moe_ffn_hidden_size")) is not None:
+            self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
+            self.gguf_writer.add_feed_forward_length(moe_intermediate_size)
+            logger.info(f"gguf: expert feed forward length = {moe_intermediate_size}")
+        if (self.hparams.get('moe_primary_router_apply_softmax')):
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SOFTMAX)
         else:
-            rope_dim = hparams["hidden_size"] // hparams["num_attention_heads"]
-        self.gguf_writer.add_rope_dimension_count(rope_dim)
-
+            self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+        # YaRN is not enabled by default
+        # To enable it, please refer to this guide: https://huggingface.co/Qwen/Qwen3-30B-A3B#processing-long-texts
         rope_scaling = self.hparams.get("rope_scaling") or {}
-        if (
-            rope_scaling.get("rope_type", rope_scaling.get("type")) == "linear"
-            and "factor" in rope_scaling
-        ):
-            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.LINEAR)
+        if rope_scaling.get("rope_type", rope_scaling.get("type")) == "yarn" and "factor" in rope_scaling:
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
             self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling["original_max_position_embeddings"])
 
-    @staticmethod
-    def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
-        if n_head_kv is not None and n_head != n_head_kv:
-            n_head = n_head_kv
-        return (
-            weights.reshape(
-                n_head, 2, weights.shape[0] // n_head // 2, *weights.shape[1:]
-            )
-            .swapaxes(1, 2)
-            .reshape(weights.shape)
-        )
+        sliding_window_layout = self.hparams.get("sliding_window_layout")
+        if sliding_window_layout:
+            for i in sliding_window_layout:
+                if i != 0:
+                    sliding_window = self.hparams.get("sliding_window_size")
+                    if sliding_window:
+                        self.gguf_writer.add_sliding_window(sliding_window)
+                    break
 
-    def modify_tensors(
-        self, data_torch: Tensor, name: str, bid: int | None
-    ) -> Iterable[tuple[str, Tensor]]:
-        n_head = self.hparams["n_heads"]
-        n_kv_head = self.hparams.get("n_kv_heads")
-        is_vision_tensor = any(
-            name.startswith(prefix)
-            for prefix in [
-                "vision_encoder.",
-                "vision_language_adapter.",
-                "patch_merger.",
-                "pre_mm_projector_norm",
-            ]
-        )
+    _experts: list[dict[str, Tensor]] | None = None
 
-        if is_vision_tensor:
-            return []  # skip vision tensors
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # process the experts separately
+        if name.find("experts") != -1:
+            n_experts = self.hparams.get("num_experts", self.hparams.get("moe_num_primary_experts"))
+            assert bid is not None
 
-        if self.undo_permute:
-            if name.endswith(("q_proj.weight", "q_proj.bias")):
-                data_torch = self.permute(data_torch, n_head, n_head)
-            if name.endswith(("k_proj.weight", "k_proj.bias")):
-                data_torch = self.permute(data_torch, n_head, n_kv_head)
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                tensors: list[tuple[str, Tensor]] = []
+
+                # merge the experts into a single 3d tensor
+                for w_name in ["down", "gate", "up"]:
+                    datas: list[Tensor] = []
+
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    data_torch = torch.stack(datas, dim=0)
+
+                    merged_name = f"model.layers.{bid}.block_sparse_moe.experts.{w_name}.weight"
+
+                    new_name = self.map_tensor_name(merged_name)
+
+                    tensors.append((new_name, data_torch))
+                return tensors
+            else:
+                return []
 
         return [(self.map_tensor_name(name), data_torch)]
 
+    def prepare_tensors(self):
+        super().prepare_tensors()
 
-class PixtralModel(MmprojModel):
+        if self._experts is not None:
+            # flatten `list[dict[str, Tensor]]` into `list[str]`
+            experts = [k for d in self._experts for k in d.keys()]
+            if len(experts) > 0:
+                raise ValueError(f"Unprocessed experts: {experts}")
+
+
+class MistralModel(LlamaModel):
+    model_arch = gguf.MODEL_ARCH.LLAMA
+    model_name = "Mistral"
+    hf_arch = ""
+    is_mistral_format = True
+    undo_permute = True
+
+
+class PixtralModel(LlavaVisionModel):
     model_name = "Pixtral"
-    img_break_tok_id = -1
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # layer_norm_eps is not in config.json, it is hard-coded in modeling_pixtral.py
-        self.hparams["layer_norm_eps"] = self.hparams.get("norm_eps", 1e-5)
-        self.img_break_tok_id = self.find_vparam(["image_break_token_id"])
-        logger.info(f"Image break token id: {self.img_break_tok_id}")
+    hf_arch = ""
+    is_mistral_format = True
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -7931,38 +7963,13 @@ class PixtralModel(MmprojModel):
             self.gguf_writer.add_vision_spatial_merge_size(
                 self.find_vparam(["spatial_merge_size"])
             )
-
-    def modify_tensors(
-        self, data_torch: Tensor, name: str, bid: int | None
-    ) -> Iterable[tuple[str, Tensor]]:
-        del bid  # unused
-        n_head = self.find_vparam(["num_attention_heads"])
-        n_kv_head = n_head
-
-        if any(
-            name.startswith(prefix)
-            for prefix in [
-                "vision_encoder.",
-                "vision_language_adapter.",
-                "patch_merger.",
-                "pre_mm_projector_norm",
-            ]
-        ):
-            # process vision tensors
-            if name.endswith(("q_proj.weight", "q_proj.bias")):
-                data_torch = MistralModel.permute(data_torch, n_head, n_head)
-            if name.endswith(("k_proj.weight", "k_proj.bias")):
-                data_torch = MistralModel.permute(data_torch, n_head, n_kv_head)
-            return [(self.map_tensor_name(name), data_torch)]
-
-        if self.img_break_tok_id > 0 and "tok_embeddings.weight" in name:
-            logger.info(f"Extracting [IMG_BREAK] token embedding from {name}")
-            # for pixtral model, we need to extract the [IMG_BREAK] token embedding
-            img_break_embd = data_torch[self.img_break_tok_id]
-            name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.V_TOK_EMBD_IMG_BREAK]
-            return [(self.map_tensor_name(name), img_break_embd)]
-
-        return []  # skip other tensors
+    
+    def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
+        if name == "vision_language_adapter.w_in.weight":
+            return "mm.1.weight"
+        elif name == "vision_language_adapter.w_out.weight":
+            return "mm.2.weight"
+        return super().map_tensor_name(name, try_suffixes)
 
 ###### CONVERSION LOGIC ######
 
@@ -8117,12 +8124,6 @@ def parse_args() -> argparse.Namespace:
         "--mistral-format", action="store_true",
         help="Whether the model is stored following the Mistral format.",
     )
-    parser.add_argument(
-        "--n-ctx",
-        type=int,
-        help="Training context size",
-        default=0
-    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -8255,8 +8256,6 @@ def main() -> None:
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
                                      remote_hf_model_id=hf_repo_id,
-                                     n_ctx=args.n_ctx,
-                                     is_mistral_format=is_mistral_format
                                      )
 
         if args.vocab_only:

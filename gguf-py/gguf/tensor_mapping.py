@@ -1066,8 +1066,6 @@ class TensorNameMap:
         MODEL_TENSOR.V_MMPROJ: (
             "multi_modal_projector.linear_{bid}",
             "visual.merger.mlp.{bid}", # qwen2vl
-            "vision_language_adapter.w_in", # pixtral
-            "vision_language_adapter.w_out", # pixtral
         ),
 
         MODEL_TENSOR.V_MMPROJ_FC: (
