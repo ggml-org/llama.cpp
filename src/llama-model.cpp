@@ -17147,9 +17147,7 @@ struct llm_build_smallthinker : public llm_graph_context{
             if (il == n_layer - 1 && inp_out_ids) {
                 cur = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-                if (probs) {
-                    probs = ggml_get_rows(ctx0, probs, inp_out_ids);
-                }
+                probs = ggml_get_rows(ctx0, probs, inp_out_ids);
             }
 
             ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
