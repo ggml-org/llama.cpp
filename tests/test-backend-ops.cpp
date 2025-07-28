@@ -1022,7 +1022,7 @@ struct test_case {
     }
 
     // Checks an op against the test filter, which is a comma separated list of OP names or specific variations
-    bool matches_filter(ggml_tensor* op, const char* op_names_filter) {
+    bool matches_filter(ggml_tensor * op, const char * op_names_filter) {
         if (op_names_filter) {
             const auto op_name = op_desc(op);
             const auto op_full_name = op_name + "(" + vars() + ")";
