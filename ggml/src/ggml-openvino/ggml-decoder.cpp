@@ -212,6 +212,7 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             } else {
                 m_op_case = 1;
             }
+            break;
         }
         default:
             break;

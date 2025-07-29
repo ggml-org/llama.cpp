@@ -16,7 +16,7 @@ public:
     std::shared_ptr<Model> translate_graph(const frontend::InputModel::Ptr& input_model);
 
 private:
-    void apply_transformations(const std::shared_ptr<Model>& model);
+    std::shared_ptr<Model> apply_transformations(std::shared_ptr<Model> model);
     const frontend::InputModel::Ptr m_input_model;
     const std::unordered_map<std::string, CreatorFunction>& m_translator_map;
     std::shared_ptr<Model> m_ov_model;
