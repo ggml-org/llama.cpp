@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
-from gguf.constants import MODEL_ARCH, MODEL_ARCH_NAMES
 from gguf.vocab import MistralTokenizerType, MistralVocab
 from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN, DATASET_STD
 
@@ -4546,7 +4545,7 @@ class NomicBertModel(BertModel):
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
-            hparams = ModelBase.load_hparams(dir_model)
+            hparams = ModelBase.load_hparams(dir_model, False)
 
         self.is_moe = bool(hparams.get("moe_every_n_layers"))
         self.model_arch = gguf.MODEL_ARCH.NOMIC_BERT_MOE if self.is_moe else gguf.MODEL_ARCH.NOMIC_BERT
