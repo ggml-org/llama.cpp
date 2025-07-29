@@ -638,7 +638,7 @@ extern "C" {
         void * extra; // extra things e.g. for ggml-cuda.cu
 
 #ifdef GGML_NUMA_MIRROR
-        char padding[8];
+        char padding[4];
 #endif
     };
 
@@ -681,7 +681,7 @@ extern "C" {
         tensor->data = data;
 #endif
     }
-    
+
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
 
     // Abort callback
