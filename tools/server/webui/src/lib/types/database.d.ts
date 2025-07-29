@@ -13,6 +13,7 @@ export interface Message {
 	role: 'system' | 'user' | 'assistant';
 	content: string;
 	parent: string;
+	thinking: string;
 	children: string[];
 }
 

@@ -40,6 +40,7 @@
 </script>
 
 <ModeWatcher />
+
 <Toaster richColors />
 
 <Sidebar.Provider bind:open={sidebarOpen}>

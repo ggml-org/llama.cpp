@@ -4,7 +4,7 @@
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
 	import type { ChatRole } from '$lib/types/chat';
-	import type { DatabaseChatMessage } from '$lib/types/database';
+	import type { Message } from '$lib/types/database';
 	import ThinkingSection from './ThinkingSection.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import { parseThinkingContent } from '$lib/utils/thinking';
@@ -12,19 +12,17 @@
 
 	interface Props {
 		class?: string;
-		message: DatabaseChatMessage;
-		onEdit?: (message: DatabaseChatMessage) => void;
-		onDelete?: (message: DatabaseChatMessage) => void;
-		onCopy?: (message: DatabaseChatMessage) => void;
-		onRegenerate?: (message: DatabaseChatMessage) => void;
-		onUpdateMessage?: (message: DatabaseChatMessage, newContent: string) => void;
+		message: Message;
+		onEdit?: (message: Message) => void;
+		onCopy?: (message: Message) => void;
+		onRegenerate?: (message: Message) => void;
+		onUpdateMessage?: (message: Message, newContent: string) => void;
 	}
 
 	let {
 		class: className = '',
 		message,
 		onEdit,
-		onDelete,
 		onCopy,
 		onRegenerate,
 		onUpdateMessage
@@ -32,6 +30,7 @@
 
 	let isEditing = $state(false);
 	let editedContent = $state(message.content);
+	// svelte-ignore non_reactive_update
 	let textareaElement: HTMLTextAreaElement;
 
 	let thinkingContent = $derived.by(() => {
@@ -60,6 +59,11 @@
 		onCopy?.(message);
 	}
 
+	function handleCancelEdit() {
+		isEditing = false;
+		editedContent = message.content;
+	}
+
 	function handleEdit() {
 		isEditing = true;
 		editedContent = message.content;
@@ -75,17 +79,6 @@
 		onEdit?.(message);
 	}
 
-	function handleSaveEdit() {
-		if (editedContent.trim() && editedContent !== message.content) {
-			onUpdateMessage?.(message, editedContent.trim());
-		}
-		isEditing = false;
-	}
-
-	function handleCancelEdit() {
-		isEditing = false;
-		editedContent = message.content;
-	}
 	function handleEditKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
@@ -98,6 +91,13 @@
 
 	function handleRegenerate() {
 		onRegenerate?.(message);
+	}
+
+	function handleSaveEdit() {
+		if (editedContent.trim() && editedContent !== message.content) {
+			onUpdateMessage?.(message, editedContent.trim());
+		}
+		isEditing = false;
 	}
 </script>
 
@@ -143,23 +143,6 @@
 				</TooltipContent>
 			</Tooltip>
 		{/if}
-		<!-- This will be implemented after fully migrating to SvelteKit -->
-
-		<!-- <Tooltip>
-			<TooltipTrigger>
-				<Button
-					variant="ghost"
-					size="sm"
-					class="text-destructive hover:text-destructive h-6 w-6 p-0"
-					onclick={handleDelete}
-				>
-					<Trash2 class="h-3 w-3" />
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent>
-				<p>Delete</p>
-			</TooltipContent>
-		</Tooltip> -->
 	</div>
 
 	<div
@@ -225,6 +208,7 @@
 		{#if thinkingContent}
 			<ThinkingSection thinking={thinkingContent} isStreaming={!message.timestamp} />
 		{/if}
+		
 		{#if message.role === 'assistant'}
 			<MarkdownContent content={messageContent} />
 		{:else}

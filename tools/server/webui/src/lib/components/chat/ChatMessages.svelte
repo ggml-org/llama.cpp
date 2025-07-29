@@ -1,10 +1,10 @@
 <script lang="ts">
-	import type { DatabaseChatMessage } from '$lib/types/database';
+	import type { Message } from '$lib/types/database';
 	import { updateMessage, regenerateMessage } from '$lib/stores/chat.svelte';
 	import ChatMessage from './ChatMessage.svelte';
 	interface Props {
 		class?: string;
-		messages?: DatabaseChatMessage[];
+		messages?: Message[];
 		isLoading?: boolean;
 	}
 
@@ -79,10 +79,6 @@
 					}}
 				/>
 			{/each}
-
-			<!-- {#if isLoading}
-				<ChatMessageLoading class="mx-auto w-full max-w-[56rem]" />
-			{/if} -->
 		</div>
 	</div>
 </div>
