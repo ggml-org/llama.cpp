@@ -860,6 +860,9 @@ struct clip_graph {
             } else if (ctx->model.hparams.minicpmv_version == 5) {
                 // MiniCPM-V 4.0
                 num_query = 64;
+            } else if (ctx->model.hparams.minicpmv_version == 6) {
+                // MiniCPM-o 4.0
+                num_query = 64;
             }
 
             ggml_tensor * Q = ggml_add(ctx0,
@@ -3535,7 +3538,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 } else if (params.minicpmv_version == 5) {
                     // MiniCPM-V 4.0
                     n_patches_sq = 64;
-                } else {
+                } else if (params.minicpmv_version == 6) {
+                    // MiniCPM-o 4.0
+                    n_patches_sq = 64;
+                }  else {
                     GGML_ABORT("Unknown minicpmv version");
                 }
             } break;
@@ -4082,6 +4088,9 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
                 return 3584;
             } else if (hparams.minicpmv_version == 5) {
                 // MiniCPM-V 4.0
+                return 2560;
+            } else if (hparams.minicpmv_version == 6) {
+                // MiniCPM-o 4.0
                 return 2560;
             }
             GGML_ABORT("Unknown minicpmv version");

@@ -501,7 +501,7 @@ default_image_mean = [0.5, 0.5, 0.5]
 default_image_std = [0.5, 0.5, 0.5]
 ap.add_argument('--image-mean', type=float, nargs='+', help='Mean of the images for normalization (overrides processor) ', default=None)
 ap.add_argument('--image-std', type=float, nargs='+', help='Standard deviation of the images for normalization (overrides processor)', default=None)
-ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4', default=2)
+ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4; MiniCPM-V 4.0 use 5; MiniCPM-o-4.0 use 6', default=2)
 
 # with proper
 args = ap.parse_args()
@@ -561,7 +561,10 @@ elif minicpmv_version == 4:  # MiniCPM-o 2.6
 elif minicpmv_version == 5:  # MiniCPM-V 4.0
     emb_dim = 2560
     block_count = 27
-    
+elif minicpmv_version == 6:  # MiniCPM-o 4.0
+    emb_dim = 2560
+    block_count = 27
+
 default_vision_config = {
         "hidden_size": 1152,
         "image_size": 980,
@@ -584,7 +587,11 @@ elif minicpmv_version == 5:
     default_vision_config["model_type"] = "siglip_vision_model"
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
-
+elif minicpmv_version == 6:
+    default_vision_config["model_type"] = "siglip_vision_model"
+    vision_config = SiglipVisionConfig(**default_vision_config)
+    model = SiglipVisionTransformer(vision_config)
+    
 processor = None
 # if model.attn_pool is not None:
 #     model.attn_pool = torch.nn.Identity()
