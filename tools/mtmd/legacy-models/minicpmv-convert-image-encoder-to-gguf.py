@@ -520,7 +520,7 @@ dir_model = args.model_dir
 # Read config.json to get actual model configuration
 config_path = os.path.join(dir_model, "config.json")
 model_config = {}
-if os.path.exists(config_path):
+if os.path.isfile(config_path):
     with open(config_path, "r", encoding="utf-8") as f:
         model_config = json.load(f)
     print(f"Loaded config from {config_path}")
@@ -681,7 +681,6 @@ if has_vision_encoder:
     query_num = model_config.get("query_num", 0) if model_config else 0
     resampler_emb_dim = model_config.get("hidden_size", 0) if model_config else 0
     fout.add_uint32("clip.minicpmv_query_num", query_num)
-    fout.add_uint32("clip.minicpmv_projection_dim", resampler_emb_dim)
 
     if processor is not None:
         image_mean = processor.image_processor.image_mean if args.image_mean is None or args.image_mean == default_image_mean else args.image_mean

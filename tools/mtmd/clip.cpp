@@ -202,7 +202,6 @@ struct clip_hparams {
     bool has_llava_projector = false;
     int minicpmv_version = 0;
     int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
-    int32_t minicpmv_projection_dim = 0;    // MiniCPM-V projection dimension
 };
 
 struct clip_layer {
@@ -2106,7 +2105,6 @@ struct clip_model_loader {
                 get_u32(KEY_IMAGE_CROP_RESOLUTION, hparams.image_crop_resolution, false);
                 get_i32(KEY_MINICPMV_VERSION, hparams.minicpmv_version, false); // legacy
                 get_u32(KEY_MINICPMV_QUERY_NUM, hparams.minicpmv_query_num, false);
-                get_u32(KEY_MINICPMV_PROJ_DIM, hparams.minicpmv_projection_dim, false);
                 if (hparams.minicpmv_query_num == 0) {
                     // Fallback to hardcoded values for legacy models
                     if (hparams.minicpmv_version == 3) {
