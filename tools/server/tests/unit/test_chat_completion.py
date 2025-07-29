@@ -351,3 +351,32 @@ def test_logprobs_stream():
                     assert token.top_logprobs is not None
                     assert len(token.top_logprobs) > 0
     assert aggregated_text == output_text
+
+
+def test_logit_bias():
+    global server
+    server.start()
+
+    exclude = ["i", "I", "the", "The", "to", "a", "an", "be", "is", "was", "but", "But", "and", "And", "so", "So", "you", "You", "he", "He", "she", "She", "we", "We", "they", "They", "it", "It", "his", "His", "her", "Her", "book", "Book"]
+
+    res = server.make_request("POST", "/tokenize", data={
+        "content": " " + " ".join(exclude) + " ",
+    })
+    assert res.status_code == 200
+    tokens = res.body["tokens"]
+    logit_bias = {tok: -100 for tok in tokens}
+
+    client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
+    res = client.chat.completions.create(
+        model="gpt-3.5-turbo-instruct",
+        temperature=0.0,
+        messages=[
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        max_tokens=64,
+        logit_bias=logit_bias
+    )
+    output_text = res.choices[0].message.content
+    assert output_text
+    assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
