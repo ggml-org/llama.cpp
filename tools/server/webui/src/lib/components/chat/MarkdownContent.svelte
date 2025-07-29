@@ -5,8 +5,7 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeHighlight from 'rehype-highlight';
 	import rehypeStringify from 'rehype-stringify';
-	// Import highlight.js CSS theme
-	import 'highlight.js/styles/github-dark-dimmed.css';
+	import 'highlight.js/styles/github-dark.css';
 
 	interface Props {
 		content: string;
@@ -18,7 +17,6 @@
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
 
-	// Configure remark processor with rehype-highlight syntax highlighting
 	const processor = $derived(() => {
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
@@ -28,43 +26,130 @@
 			.use(rehypeStringify); // Convert to HTML string
 	});
 
-	// Process markdown content with syntax highlighting
 	async function processMarkdown(text: string): Promise<string> {
 		try {
 			const result = await processor().process(text);
-			return String(result);
+			const html = String(result);
+
+			return enhanceCodeBlocks(html);
 		} catch (error) {
 			console.error('Markdown processing error:', error);
+			
 			// Fallback to plain text with line breaks
 			return text.replace(/\n/g, '<br>');
 		}
 	}
 
-	// Function to setup copy-to-clipboard buttons
+	function enhanceCodeBlocks(html: string): string {
+		const tempDiv = document.createElement('div');
+		tempDiv.innerHTML = html;
+		
+		const preElements = tempDiv.querySelectorAll('pre');
+		
+		preElements.forEach((pre, index) => {
+			const codeElement = pre.querySelector('code');
+			if (!codeElement) return;
+			
+			let language = 'text';
+			const classList = Array.from(codeElement.classList);
+			
+			for (const className of classList) {
+				if (className.startsWith('language-')) {
+					language = className.replace('language-', '');
+					break;
+				}
+			}
+			
+			const rawCode = codeElement.textContent || '';
+			
+			const codeId = `code-${Date.now()}-${index}`;
+			
+			codeElement.setAttribute('data-code-id', codeId);
+			codeElement.setAttribute('data-raw-code', rawCode);
+			
+			const wrapper = document.createElement('div');
+			wrapper.className = 'code-block-wrapper';
+			
+			const header = document.createElement('div');
+			header.className = 'code-block-header';
+			
+			const languageLabel = document.createElement('span');
+			languageLabel.className = 'code-language';
+			languageLabel.textContent = language;
+			
+			const copyButton = document.createElement('button');
+			copyButton.className = 'copy-code-btn';
+			copyButton.setAttribute('data-code-id', codeId);
+			copyButton.setAttribute('title', 'Copy code');
+			copyButton.setAttribute('type', 'button');
+			
+			copyButton.innerHTML = `
+				<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+			`;
+			
+			header.appendChild(languageLabel);
+			header.appendChild(copyButton);
+			wrapper.appendChild(header);
+			
+			const clonedPre = pre.cloneNode(true) as HTMLElement;
+			wrapper.appendChild(clonedPre);
+			
+			pre.parentNode?.replaceChild(wrapper, pre);
+		});
+		
+		return tempDiv.innerHTML;
+	}
+
 	function setupCopyButtons() {
 		if (!containerRef) return;
 
 		const copyButtons = containerRef.querySelectorAll('.copy-code-btn');
-		copyButtons.forEach((button) => {
+		console.log('Found copy buttons:', copyButtons.length);
+
+		copyButtons.forEach((button, index) => {
+			console.log(`Setting up button ${index}:`, button);
 			button.addEventListener('click', async (e) => {
+				e.preventDefault();
+				e.stopPropagation();
+				
 				const target = e.currentTarget as HTMLButtonElement;
 				const codeId = target.getAttribute('data-code-id');
-				if (!codeId) return;
+				
+				if (!codeId) {
+					console.error('No code ID found on button');
+					return;
+				}
 
-				const codeContent = containerRef!.querySelector(`[data-code-id="${codeId}"]`);
-				if (!codeContent) return;
+				// Find the code element within the same wrapper
+				const wrapper = target.closest('.code-block-wrapper');
+				if (!wrapper) {
+					console.error('No wrapper found');
+					return;
+				}
+				
+				const codeElement = wrapper.querySelector('code[data-code-id]');
+				if (!codeElement) {
+					console.error('No code element found in wrapper');
+					return;
+				}
 
-				const rawCode = codeContent.getAttribute('data-raw-code');
-				if (!rawCode) return;
+				const rawCode = codeElement.getAttribute('data-raw-code');
+				if (!rawCode) {
+					console.error('No raw code found');
+					return;
+				}
 
-				// Use the reusable copy function
-				const { copyCodeToClipboard } = await import('$lib/utils/copy');
-				await copyCodeToClipboard(rawCode);
+				try {
+					const { copyCodeToClipboard } = await import('$lib/utils/copy');
+					await copyCodeToClipboard(rawCode);
+					console.log('Code copied successfully');
+				} catch (error) {
+					console.error('Failed to copy code:', error);
+				}
 			});
 		});
 	}
 
-	// Update processed content when content or theme changes
 	$effect(() => {
 		if (content) {
 			processMarkdown(content)
@@ -80,7 +165,6 @@
 		}
 	});
 
-	// Setup copy-to-clipboard functionality after content is rendered
 	$effect(() => {
 		if (containerRef && processedHtml) {
 			setupCopyButtons();
@@ -277,13 +361,75 @@
 	}
 
 	/* Code blocks */
+
+	div :global(.code-block-wrapper) {
+		margin: 1.5rem 0;
+		border-radius: 0.75rem;
+		overflow: hidden;
+		border: 1px solid var(--border);
+		background: var(--code-background);
+	}
+
+	div :global(.code-block-header) {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 0.5rem 1rem;
+		background: hsl(var(--muted) / 0.5);
+		border-bottom: 1px solid var(--border);
+		font-size: 0.875rem;
+	}
+
+	div :global(.code-language) {
+		color: var(--code-foreground);
+		font-weight: 500;
+		font-family: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Liberation Mono', Menlo, monospace;
+		text-transform: uppercase;
+		font-size: 0.75rem;
+		letter-spacing: 0.05em;
+	}
+
+	div :global(.copy-code-btn) {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 0;
+		background: transparent;
+		color: var(--code-foreground);
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
+
+	div :global(.copy-code-btn:hover) {
+		transform: scale(1.05);
+	}
+
+	div :global(.copy-code-btn:active) {
+		transform: scale(0.95);
+	}
+
+	div :global(.code-block-wrapper pre) {
+		background: transparent;
+		padding: 1rem;
+		margin: 0;
+		overflow-x: auto;
+		border-radius: 0;
+		border: none;
+		font-size: 0.875rem;
+		line-height: 1.5;
+	}
+
 	div :global(pre) {
 		background: var(--muted);
-		/* padding: 1.5rem 2rem; */
 		margin: 1.5rem 0;
 		overflow-x: auto;
 		border-radius: 1rem;
 		border: none;
+	}
+
+
+	div :global(code) {
+		background: transparent;
 	}
 
 	/* Mentions and hashtags */
