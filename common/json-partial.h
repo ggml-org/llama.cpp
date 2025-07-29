@@ -36,3 +36,5 @@ bool common_json_parse(
     const std::string::const_iterator & end,
     const std::string & healing_marker,
     common_json & out);
+
+std::string truncate_incomplete_utf8(const std::string & str);
