@@ -2708,9 +2708,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
                                                 " : converting src1 to fp16");
 
         // iterate tensor dims and find the slowest moving dim and stride
-        int64_t last_dim=0;
-        int64_t last_str=0;
-        int64_t largest_str=0;
+        size_t last_dim = 0;
+        size_t last_str = 0;
+        size_t largest_str = 0;
         for(int i = 0; i< 4; i++){
             // last stride is always the largest
             if(src1->nb[i] == largest_str){
@@ -2784,7 +2784,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
             auto launch_gemm_for_batches = [&ctx, queue](const sycl::half *src0,
                                                 const sycl::half *src1, float *dst,
                                                 int64_t a0, int64_t a1, int64_t batcha,
-                                                int64_t b0, int64_t b1, int64_t batchb,
+                                                int64_t /* b0 */, int64_t b1, int64_t batchb,
                                                 int64_t sa0, int64_t sa1, int64_t sa2,
                                                 int64_t sb0, int64_t sb1, int64_t sb2,
                                                 int64_t sd2) {
