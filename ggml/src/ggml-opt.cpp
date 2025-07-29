@@ -106,8 +106,8 @@ ggml_opt_dataset_t ggml_opt_dataset_init(
         result->ctx = ggml_init(params);
     }
 
-    tensor_set_data(result, ggml_new_tensor_2d(result->ctx, type_data, ne_datapoint, ndata));
-    result->nbs_data = ggml_nbytes(tensor_get_data(result)) * ndata_shard/ndata;
+    result->data = ggml_new_tensor_2d(result->ctx, type_data, ne_datapoint, ndata);
+    result->nbs_data = ggml_nbytes(result->data) * ndata_shard/ndata;
 
     if (ne_label > 0) {
         result->labels = ggml_new_tensor_2d(result->ctx, type_label, ne_label, ndata);
