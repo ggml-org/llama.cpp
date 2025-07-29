@@ -105,7 +105,7 @@ llama_context::llama_context(
 
     {
         const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
-        const bool supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : false;
+        supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : false;
 
         if (!supports_set_rows && !cparams.kv_unified) {
             LLAMA_LOG_WARN("%s: non-unified KV cache requires ggml_set_rows() - forcing unified KV cache\n", __func__);
@@ -298,7 +298,7 @@ llama_context::llama_context(
 
         cross.v_embd.clear();
 
-        // reserve pp graph first so that buffers are only allocated once
+        // reserve pp (prompt processing) graph first so that buffers are only allocated once
         {
             auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
             if (!gf) {
@@ -309,7 +309,7 @@ llama_context::llama_context(
             n_nodes_pp  = ggml_graph_n_nodes(gf);
         }
 
-        // reserve with tg graph to get the number of splits and nodes
+        // reserve with tg (token generation) graph to get the number of splits and nodes
         {
             auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get());
             if (!gf) {
@@ -899,6 +899,12 @@ int llama_context::encode(const llama_batch & batch_inp) {
         }
     }
 
+    if (!supports_set_rows) {
+        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
+        // overlap with device computation.
+        ggml_backend_sched_reset(sched.get());
+    }
+
     // TODO: hacky solution
     if (model.arch == LLM_ARCH_T5 && t_embd) {
         //cross.t_embd = t_embd;
@@ -1228,6 +1234,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    if (!supports_set_rows) {
+        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
+        // overlap with device computation.
+        ggml_backend_sched_reset(sched.get());
+    }
 
     return 0;
 }

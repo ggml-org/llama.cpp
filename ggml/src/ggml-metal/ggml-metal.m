@@ -3141,6 +3141,7 @@ static int ggml_metal_encode_node(
                     /*.n_group      =*/ n_group,
                     /*.n_seq_tokens =*/ n_seq_tokens,
                     /*.n_seqs       =*/ n_seqs,
+                    /*.s_off        =*/ ggml_nelements(src1) * sizeof(float),
                     /*.nb01         =*/ nb01,
                     /*.nb02         =*/ nb02,
                     /*.nb03         =*/ nb03,
@@ -3169,12 +3170,22 @@ static int ggml_metal_encode_node(
                 [encoder setBuffer:id_dst  offset:offs_dst  atIndex:7];
                 [encoder setBytes:&args    length:sizeof(args) atIndex:8];
 
+                // One shared memory bucket for each simd group in the threadgroup
+                // NOTE: Metal kernels require the buffer size to be multiple of 16 bytes
+                //  https://developer.apple.com/documentation/metal/mtlcomputecommandencoder/1443142-setthreadgroupmemorylength
+                if (d_state >= 32) {
+                    GGML_ASSERT((int64_t)(d_state / 32) <= 32);
+                    const int64_t shmem_size = 32;
+                    GGML_ASSERT(d_state <= (int64_t)pipeline.maxTotalThreadsPerThreadgroup);
+                    [encoder setThreadgroupMemoryLength:(shmem_size)*sizeof(float) atIndex:0];
+                }
+
                 if (ne30 == 1) {
                     // Mamba-2
-                    [encoder dispatchThreadgroups:MTLSizeMake(d_inner, n_head, n_seqs) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                    [encoder dispatchThreadgroups:MTLSizeMake(d_inner, n_head, n_seqs) threadsPerThreadgroup:MTLSizeMake(d_state, 1, 1)];
                 } else {
                     GGML_ASSERT(d_inner == 1);
-                    [encoder dispatchThreadgroups:MTLSizeMake(n_head, n_seqs, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                    [encoder dispatchThreadgroups:MTLSizeMake(n_head, n_seqs, 1) threadsPerThreadgroup:MTLSizeMake(d_state, 1, 1)];
                 }
             } break;
         case GGML_OP_RWKV_WKV6:

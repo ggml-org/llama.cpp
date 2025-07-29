@@ -71,6 +71,7 @@ add_test_vision "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
 
 add_test_audio  "ggml-org/ultravox-v0_5-llama-3_2-1b-GGUF:Q8_0"
 add_test_audio  "ggml-org/Qwen2.5-Omni-3B-GGUF:Q4_K_M"
+add_test_audio  "ggml-org/Voxtral-Mini-3B-2507-GGUF:Q4_K_M"
 
 # to test the big models, run: ./tests.sh big
 if [ "$RUN_BIG_TESTS" = true ]; then

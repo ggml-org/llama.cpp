@@ -160,7 +160,19 @@
 #endif
 
 #if defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx942__)
-#define CDNA
+#define CDNA // For the entire family
+#endif
+
+#if defined(__gfx942__)
+#define CDNA3
+#endif
+
+#if defined(__gfx90a__)
+#define CDNA2
+#endif
+
+#if defined(__gfx908__)
+#define CDNA1
 #endif
 
 #if defined(__GFX12__)
