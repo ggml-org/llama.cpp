@@ -139,7 +139,7 @@ private:
     std::vector<std::string> m_output_names;
     std::string m_op_name;
     mutable std::string m_name;
-    int m_op_case;
+    int m_op_case = 0;
     std::vector<std::pair<std::string, std::string>> m_op_node_name;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_inputs;
     std::map<std::string, std::shared_ptr<ov::Node>> m_model_extra_inputs;

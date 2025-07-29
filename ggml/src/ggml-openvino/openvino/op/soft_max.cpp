@@ -57,11 +57,8 @@ OutputVector translate_soft_max(const NodeContext& context) {
     // Try using Q-cur to retrieve the token length, so that the translation of SOFT_MAX
     // does not depend on the result of the QK MatMul, so that QK matmul + softmax + qkv matmul
     // can be fused into SDPA.
-    if (input_node->get_type_info() == ov::op::v0::Convert::get_type_info_static()) {
-        auto qk = input_node->get_input_node_shared_ptr(0);
-        if (qk->get_type_info() == ov::op::v0::MatMul::get_type_info_static()) {
-            token_len = get_dimensions(qk->get_input_node_shared_ptr(0), {1});
-        }
+    if (input_node->get_type_info() == ov::op::v0::MatMul::get_type_info_static()) {
+        token_len = get_dimensions(input_node->get_input_node_shared_ptr(0), {1});
     }
     auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
     auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});

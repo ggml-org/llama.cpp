@@ -22,7 +22,7 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
-#include <transformations/fp16_compression/mark_decompression_convert_constant_folding.hpp>
+#include <openvino/core/preprocess/pre_post_process.hpp>
 
 #include "ggml-openvino/openvino/node_context.hpp"
 #include "ggml-openvino/openvino/utils.hpp"
@@ -254,22 +254,25 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
     return resulting_model;
 }
 
-void TranslateSession::apply_transformations(const std::shared_ptr<Model>& model) {
+std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<Model> model) {
     auto ggml_model_decoder = std::dynamic_pointer_cast<InputModel>(m_input_model)->get_model_decoder();
+    {
+        ov::pass::Manager manager;
+        manager.set_per_pass_validation(true);
 
-    ov::pass::Manager manager;
-    manager.set_per_pass_validation(true);
-    manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
-    manager.register_pass<ov::pass::ConstantFolding>();
+        if (!ggml_model_decoder->is_static()) {
+            const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
+            const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
+            manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
+        }
 
-    if (!ggml_model_decoder->is_static()) {
-        const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
-        const auto kv_param_res_pairs = get_kv_param_res_pairs(model, kv_param_res_names);
-        manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
+        // SDPA is even worse on performance
+        // manager.register_pass<pass::FuseToSDPA>();
+        manager.run_passes(model);
     }
-
-    manager.register_pass<pass::FuseToSDPA>();
-    manager.run_passes(model);
+    auto preprocessor = ov::preprocess::PrePostProcessor(model);
+    model = preprocessor.build();
+    return model;
 }
 
 }  // namespace ggml
