@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { remark } from 'remark';
-	import remarkHtml from 'remark-html';
 	import remarkGfm from 'remark-gfm';
 	import remarkBreaks from 'remark-breaks';
+	import remarkRehype from 'remark-rehype';
+	import rehypeHighlight from 'rehype-highlight';
+	import rehypeStringify from 'rehype-stringify';
+	// Import highlight.js CSS theme
+	import 'highlight.js/styles/github-dark-dimmed.css';
 
 	interface Props {
 		content: string;
@@ -14,12 +18,14 @@
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
 
-	// Configure remark processor with Shiki syntax highlighting
+	// Configure remark processor with rehype-highlight syntax highlighting
 	const processor = $derived(() => {
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
 			.use(remarkBreaks) // Convert line breaks to <br>
-			.use(remarkHtml, { sanitize: false }); // Convert to HTML
+			.use(remarkRehype) // Convert to rehype (HTML AST)
+			.use(rehypeHighlight) // Add syntax highlighting
+			.use(rehypeStringify); // Convert to HTML string
 	});
 
 	// Process markdown content with syntax highlighting
@@ -273,7 +279,7 @@
 	/* Code blocks */
 	div :global(pre) {
 		background: var(--muted);
-		padding: 1.5rem 2rem;
+		/* padding: 1.5rem 2rem; */
 		margin: 1.5rem 0;
 		overflow-x: auto;
 		border-radius: 1rem;
