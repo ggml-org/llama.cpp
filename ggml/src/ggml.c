@@ -1672,7 +1672,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 #endif
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
-#ifndef GGML_NUMA_MIRROR
+#ifdef GGML_NUMA_MIRROR
         /*.padding      =*/ { 0 },
 #endif
     };
