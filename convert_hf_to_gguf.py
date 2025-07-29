@@ -22,9 +22,6 @@ import math
 import numpy as np
 import torch
 
-if TYPE_CHECKING:
-    from torch import Tensor
-
 if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
@@ -100,7 +97,6 @@ class ModelBase:
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
             raise TypeError(f"{type(self).__name__!r} should not be directly instantiated")
-
 
         self.dir_model = dir_model
         self.ftype = ftype
@@ -898,7 +894,7 @@ class TextModel(ModelBase):
 
     def _set_vocab_none(self) -> None:
         self.gguf_writer.add_tokenizer_model("none")
-    
+
     def _set_vocab_mistral(self):
         vocab = MistralVocab(self.dir_model)
         logger.info(
@@ -1282,7 +1278,7 @@ class MmprojModel(ModelBase):
                 k: v for k, v in self.hparams.items() if k not in ["vision_encoder", "audio_encoder"]
             }
             self.n_embd_text = text_config.get("hidden_dim", 0)
-        
+
         assert self.n_embd_text > 0, "n_embd not found in hparams"
 
         # move vision config to the top level, while preserving the original hparams in global_config
@@ -2083,7 +2079,7 @@ class LlamaModel(TextModel):
             "patch_merger.",
             "pre_mm_projector_norm",
         ]
-        
+
         is_multimodal_tensor = "vision_tower" in name \
             or "vision_model" in name \
             or "audio_tower" in name \
@@ -7847,7 +7843,7 @@ class PixtralModel(LlavaVisionModel):
             self.gguf_writer.add_vision_spatial_merge_size(
                 self.find_vparam(["spatial_merge_size"])
             )
-    
+
     def map_tensor_name(self, name: str, try_suffixes: Sequence[str] = (".weight", ".bias")) -> str:
         if name == "vision_language_adapter.w_in.weight":
             return "mm.1.weight"
@@ -8112,7 +8108,7 @@ def main() -> None:
     if args.mmproj:
         if "mmproj" not in fname_out.name:
             fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
-    
+
     is_mistral_format = args.mistral_format
 
     with torch.inference_mode():
