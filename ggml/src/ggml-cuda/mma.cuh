@@ -68,7 +68,7 @@ namespace ggml_cuda_mma {
         static constexpr int I  = I_;
         static constexpr int J  = J_;
 
-#if defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
+#if defined(GGML_USE_HIP)
         static constexpr int ne = I * J / 64;
         T x[ne] = {0};
 
@@ -132,7 +132,7 @@ namespace ggml_cuda_mma {
                 static_assert(I == -1 && J == -1, "template specialization not implemented");
             }
         }
-#endif // defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__)
+#endif // defined(GGML_USE_HIP)
     };
 
     template <int I_, int J_>
