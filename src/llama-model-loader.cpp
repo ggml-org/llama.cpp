@@ -898,7 +898,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     if (use_mmap) {
         const auto & mapping = mappings.at(w.idx);
         if (tensor_data(cur) == nullptr) {
-            tensor_data(cur) = (uint8_t *)mapping->addr() + w.offs;
+            tensor_set_data(cur, (uint8_t *)mapping->addr() + w.offs);
         } else {
             memcpy(tensor_data(cur), (uint8_t *)mapping->addr() + w.offs, ggml_nbytes(cur));
         }

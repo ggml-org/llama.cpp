@@ -804,7 +804,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (read_data.size() < ggml_nbytes(tensor)) {
                 read_data.resize(ggml_nbytes(tensor));
             }
-            set_tensor_data(tensor, read_data.data());
+            tensor_set_data(tensor, read_data.data());
         }
         ml.load_data_for(tensor);
 
