@@ -64,6 +64,10 @@ int main(int argc, char ** argv) {
     //model_dft = llama_init_dft.model.get();
     ctx_dft   = llama_init_dft.context.get();
 
+    if (!common_speculative_are_compatible(ctx_tgt, ctx_dft)) {
+        LOG_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params.speculative.model.path.c_str(), params.model.path.c_str());
+    }
+
     // Tokenize the prompt
     std::vector<llama_token> inp;
     inp = common_tokenize(ctx_tgt, params.prompt, true, true);
