@@ -22,6 +22,7 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
+#include <transformations/fp16_compression/mark_decompression_convert_constant_folding.hpp>
 
 #include "ggml-openvino/openvino/node_context.hpp"
 #include "ggml-openvino/openvino/utils.hpp"
@@ -258,6 +259,7 @@ void TranslateSession::apply_transformations(const std::shared_ptr<Model>& model
 
     ov::pass::Manager manager;
     manager.set_per_pass_validation(true);
+    manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
     manager.register_pass<ov::pass::ConstantFolding>();
 
     if (!ggml_model_decoder->is_static()) {
