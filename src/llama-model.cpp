@@ -18665,24 +18665,12 @@ struct llm_build_cogvlm : public llm_graph_context {
             {
                 ggml_tensor * Qcur = build_lora_mm(wq, cur);
                 cb(Qcur, "Qcur", il);
-                if (model.layers[il].bq) {
-                    Qcur = ggml_add(ctx0, Qcur, model.layers[il].bq);
-                    cb(Qcur, "Qcur", il);
-                }
 
                 ggml_tensor * Kcur = build_lora_mm(wk, cur);
                 cb(Kcur, "Kcur", il);
-                if (model.layers[il].bk) {
-                    Kcur = ggml_add(ctx0, Kcur, model.layers[il].bk);
-                    cb(Kcur, "Kcur", il);
-                }
 
                 ggml_tensor * Vcur = build_lora_mm(wv, cur);
                 cb(Vcur, "Vcur", il);
-                if (model.layers[il].bv) {
-                    Vcur = ggml_add(ctx0, Vcur, model.layers[il].bv);
-                    cb(Vcur, "Vcur", il);
-                }
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -18703,11 +18691,17 @@ struct llm_build_cogvlm : public llm_graph_context {
             cb(cur, "ffn_norm", il);
 
             // Make a standard ffn without the build_ffn function
-            ggml_tensor * tmp = build_lora_mm(ffn_up, cur);
-            ggml_tensor * gate = build_lora_mm(ffn_gate, cur);
-            gate = ggml_silu(ctx0, gate);
-            cur = ggml_mul(ctx0, gate, tmp);
-            cur = build_lora_mm(ffn_down, cur);
+            //ggml_tensor * tmp = build_lora_mm(ffn_up, cur);
+            //ggml_tensor * gate = build_lora_mm(ffn_gate, cur);
+            //gate = ggml_silu(ctx0, gate);
+            //cur = ggml_mul(ctx0, gate, tmp);
+            //cur = build_lora_mm(ffn_down, cur);
+            cur = build_ffn(cur,
+                    ffn_up,   NULL, NULL,
+                    ffn_gate, NULL, NULL,
+                    ffn_down, NULL, NULL,
+                    NULL,
+                    LLM_FFN_SILU, LLM_FFN_PAR, il);
 
             cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_out", il);
