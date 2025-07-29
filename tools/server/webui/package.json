@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev & storybook dev -p 6006 --ci",
-		"build": "vite build && rm -rf ../public/_app && rm ../public/favicon.svg && rm ../public/index.html",
+		"build": "vite build && rm -rf ../public/_app && rm ../public/favicon.svg",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
