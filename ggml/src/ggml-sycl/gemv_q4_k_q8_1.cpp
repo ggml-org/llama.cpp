@@ -182,10 +182,12 @@ __dpct_inline__ static void q4_K_q8_1_tiled_gemvq(
                     decode_chunk_scales(chunk_idx, scales, &sc_m[2 * i]);
                 }
 
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
                 const int32_t q4_val = unpack_q4_tile(q4_tile[i]);
                 const int32_t q8_val = static_cast<int32_t>(q8_tile);
                 dot1[i]              = sycl::detail::__builtin_IB_dp4a_ss(dot1[i], q4_val, q8_val);
                 dot2[i]              = sycl::detail::__builtin_IB_dp4a_ss(dot2[i], 0x01010101, q8_val);
+#endif
             }
         }
 

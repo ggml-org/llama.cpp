@@ -27,22 +27,19 @@
     assert(0 && x);              \
     printf(x);
 
-#ifdef __SYCL_DEVICE_ONLY__
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
 template <class T, int N> using vector_t = T __attribute__((ext_vector_type(N)));
 #else
 template <class T, int N> using vector_t = sycl::marray<T, N>;
 #endif
 
-#ifdef __SYCL_DEVICE_ONLY__
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
 #    define SYCL_DEVICE_BUILTIN(x) SYCL_EXTERNAL extern "C" x
 #else
-#    define SYCL_DEVICE_BUILTIN(x)                                                      \
-        inline x {                                                                      \
-            GGML_SYCL_UNREACHABLE("Attempting to use a device built-in in host code."); \
-        }
+#    define SYCL_DEVICE_BUILTIN(x)
 #endif
 
-#ifdef __SYCL_DEVICE_ONLY__
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
 #    define SYCL_DEVICE_OCL(x) SYCL_EXTERNAL extern "C" x
 #else
 #    define SYCL_DEVICE_OCL(x)
@@ -92,7 +89,7 @@ SYCL_DEVICE_BUILTIN(sycl::vector_types::ushort16 __builtin_IB_subgroup_block_rea
 SYCL_DEVICE_BUILTIN(uint32_t __builtin_IB_subgroup_block_read_flat_u32_m1k16v1(
     intptr_t baseoffset, int width_minus_one, int height_minus_one, int pitch_minus_one, coord_t coord));
 
-SYCL_EXTERNAL extern "C" int __builtin_IB_dp4a_ss(int c, int a, int b) __attribute__((const));
+SYCL_DEVICE_BUILTIN(int __builtin_IB_dp4a_ss(int c, int a, int b) __attribute__((const)));
 
 #pragma clang diagnostic pop
 
@@ -104,8 +101,17 @@ template <> struct XeSubgroup2DBlockLoad<2, 16, 1, 1> {
     template <typename T>
     __dpct_inline__ void operator()(const void * srcBasePointer, int memoryWidth, int memoryHeight, int memoryPitch,
                                     coord_t coordinate, T * dstPointer) {
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
         *reinterpret_cast<uint16_t *>(dstPointer) = __builtin_IB_subgroup_block_read_flat_u16_m1k16v1(
             (intptr_t) (srcBasePointer), memoryWidth - 1, memoryHeight - 1, memoryPitch - 1, coordinate);
+#else
+       (void)srcBasePointer;
+       (void)memoryWidth;
+       (void)memoryHeight;
+       (void)memoryPitch;
+       (void)coordinate;
+       (void)dstPointer;
+#endif
     }
 };
 
@@ -113,9 +119,18 @@ template <> struct XeSubgroup2DBlockLoad<2, 16, 2, 1> {
     template <typename T>
     __dpct_inline__ void operator()(const void * srcBasePointer, int memoryWidth, int memoryHeight, int memoryPitch,
                                     coord_t coordinate, T * dstPointer) {
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
         *reinterpret_cast<sycl::vector_types::ushort2 *>(dstPointer) =
             __builtin_IB_subgroup_block_read_flat_u16_m2k16v1((intptr_t) (srcBasePointer), memoryWidth - 1,
                                                               memoryHeight - 1, memoryPitch - 1, coordinate);
+#else
+       (void)srcBasePointer;
+       (void)memoryWidth;
+       (void)memoryHeight;
+       (void)memoryPitch;
+       (void)coordinate;
+       (void)dstPointer;
+#endif
     }
 };
 
@@ -123,9 +138,18 @@ template <> struct XeSubgroup2DBlockLoad<2, 16, 4, 1> {
     template <typename T>
     __dpct_inline__ void operator()(const void * srcBasePointer, int memoryWidth, int memoryHeight, int memoryPitch,
                                     coord_t coordinate, T * dstPointer) {
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
         *reinterpret_cast<sycl::vector_types::ushort4 *>(dstPointer) =
             __builtin_IB_subgroup_block_read_flat_u16_m4k16v1((intptr_t) (srcBasePointer), memoryWidth - 1,
                                                               memoryHeight - 1, memoryPitch - 1, coordinate);
+#else
+       (void)srcBasePointer;
+       (void)memoryWidth;
+       (void)memoryHeight;
+       (void)memoryPitch;
+       (void)coordinate;
+       (void)dstPointer;
+#endif
     }
 };
 
@@ -133,9 +157,18 @@ template <> struct XeSubgroup2DBlockLoad<2, 16, 8, 1> {
     template <typename T>
     __dpct_inline__ void operator()(const void * srcBasePointer, int memoryWidth, int memoryHeight, int memoryPitch,
                                     coord_t coordinate, T * dstPointer) {
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
         *reinterpret_cast<sycl::vector_types::ushort8 *>(dstPointer) =
             __builtin_IB_subgroup_block_read_flat_u16_m8k16v1((intptr_t) (srcBasePointer), memoryWidth - 1,
                                                               memoryHeight - 1, memoryPitch - 1, coordinate);
+#else
+       (void)srcBasePointer;
+       (void)memoryWidth;
+       (void)memoryHeight;
+       (void)memoryPitch;
+       (void)coordinate;
+       (void)dstPointer;
+#endif
     }
 };
 
@@ -143,9 +176,18 @@ template <> struct XeSubgroup2DBlockLoad<2, 16, 16, 1> {
     template <typename T>
     __dpct_inline__ void operator()(const void * srcBasePointer, int memoryWidth, int memoryHeight, int memoryPitch,
                                     coord_t coordinate, T * dstPointer) {
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
         *reinterpret_cast<sycl::vector_types::ushort16 *>(dstPointer) =
             __builtin_IB_subgroup_block_read_flat_u16_m16k16v1((intptr_t) (srcBasePointer), memoryWidth - 1,
                                                                memoryHeight - 1, memoryPitch - 1, coordinate);
+#else
+       (void)srcBasePointer;
+       (void)memoryWidth;
+       (void)memoryHeight;
+       (void)memoryPitch;
+       (void)coordinate;
+       (void)dstPointer;
+#endif
     }
 };
 
@@ -153,8 +195,17 @@ template <> struct XeSubgroup2DBlockLoad<4, 16, 1, 1> {
     template <typename T>
     __dpct_inline__ void operator()(const void * srcBasePointer, int memoryWidth, int memoryHeight, int memoryPitch,
                                     coord_t coordinate, T * dstPointer) {
+#if defined(__SYCL_DEVICE_ONLY__) && !defined(__NVPTX__)
         *reinterpret_cast<uint32_t *>(dstPointer) = __builtin_IB_subgroup_block_read_flat_u32_m1k16v1(
             reinterpret_cast<long>(srcBasePointer), memoryWidth - 1, memoryHeight - 1, memoryPitch - 1, coordinate);
+#else
+       (void)srcBasePointer;
+       (void)memoryWidth;
+       (void)memoryHeight;
+       (void)memoryPitch;
+       (void)coordinate;
+       (void)dstPointer;
+#endif
     }
 };
 
