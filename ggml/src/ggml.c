@@ -1672,9 +1672,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
 #endif
         /*.name         =*/ { 0 },
         /*.extra        =*/ NULL,
-#ifdef GGML_NUMA_MIRROR
         /*.padding      =*/ { 0 },
-#endif
     };
 
     // TODO: this should not be needed as long as we don't rely on aligned SIMD loads
