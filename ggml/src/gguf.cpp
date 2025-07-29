@@ -681,7 +681,7 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
             }
 
             // read the binary blob with the tensor data
-            ok = ok && gr.read(data->data, ctx->size);
+            ok = ok && gr.read(tensor_data(data), ctx->size);
 
             if (!ok) {
                 GGML_LOG_ERROR("%s: failed to read tensor data binary blob\n", __func__);
@@ -691,7 +691,7 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
                 return nullptr;
             }
 
-            ctx->data = data->data;
+            ctx->data = tensor_data(data);
         }
 
         ggml_set_no_alloc(ctx_data, true);
@@ -712,7 +712,7 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
 
             // point the data member to the appropriate location in the binary blob using the tensor info
             if (!params.no_alloc) {
-                cur->data = (char *) data->data + info.offset;
+                tensor_set_data(cur, (char *) tensor_data(data) + info.offset);
             }
         }
 
@@ -1163,7 +1163,7 @@ void gguf_set_tensor_data(struct gguf_context * ctx, const char * name, const vo
         GGML_ABORT("tensor not found: %s", name);
     }
 
-    ctx->info[tensor_id].t.data = (void *)(uintptr_t)data; // double cast suppresses warning about casting away const
+    tensor_set_data(&ctx->info[tensor_id].t, (void *)(uintptr_t)data); // double cast suppresses warning about casting away const
 }
 
 struct gguf_writer {
@@ -1281,8 +1281,8 @@ struct gguf_writer {
         if (info.t.buffer) {
             ggml_backend_tensor_get(&info.t, buf.data() + offset, 0, nbytes);
         } else {
-            GGML_ASSERT(info.t.data);
-            memcpy(buf.data() + offset, info.t.data, nbytes);
+            GGML_ASSERT(tensor_data(&info.t));
+            memcpy(buf.data() + offset, tensor_data(&info.t), nbytes);
         }
 
         pad(alignment);

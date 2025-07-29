@@ -310,6 +310,9 @@
     GGML_TENSOR_LOCALS(int64_t, ne1, src1, ne) \
     GGML_TENSOR_LOCALS(size_t,  nb1, src1, nb)
 
+#define GGML_LIKELY  (x) __builtin_expect(!!(x), 1)
+#define GGML_UNLIKELY(x) __builtin_expect(!!(x), 0)
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
@@ -619,15 +622,66 @@ extern "C" {
         struct ggml_tensor * view_src;
         size_t               view_offs;
 
+#ifdef GGML_NUMA_MIRROR
+        union {
+        #ifdef __NVCC__
+            void * data;
+        #endif
+            void * __data[2];
+        };
+#else
         void * data;
+#endif
 
         char name[GGML_MAX_NAME];
 
         void * extra; // extra things e.g. for ggml-cuda.cu
 
+#ifdef GGML_NUMA_MIRROR
         char padding[8];
+#endif
     };
 
+#ifdef GGML_NUMA_MIRROR
+    extern __thread int ggml_current_numa_node;
+#endif
+
+    static inline void * tensor_data(const struct ggml_tensor * tensor) {
+#ifdef GGML_NUMA_MIRROR
+        int n = ggml_current_numa_node;
+        if (n == -1)
+            n = 0;
+        return tensor->__data[n];
+#else
+        return tensor->data;
+#endif
+    }
+
+    static inline void tensor_set_data(struct ggml_tensor * tensor, void * data) {
+#ifdef GGML_NUMA_MIRROR
+        if ((uint64_t)data >= \
+                GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + \
+                GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT && \
+            (uint64_t)data < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + \
+                2 * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
+            data = (void*) ((uint64_t)data - GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
+        }
+        tensor->__data[0] = data;
+        if ((uint64_t)data >= \
+                GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET && \
+            (uint64_t)data < \
+                GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + \
+                GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
+            tensor->__data[1] = (void*) ((uint64_t)data + \
+                    GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
+        } else {
+            tensor->__data[1] = data;
+        }
+#else
+        tensor->data = data;
+#endif
+    }
+    
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
 
     // Abort callback

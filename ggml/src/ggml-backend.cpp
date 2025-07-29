@@ -232,7 +232,7 @@ size_t ggml_backend_get_max_size(ggml_backend_t backend) {
 }
 
 void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(tensor_data(tensor) != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
     if (backend->iface.set_tensor_async == NULL) {
@@ -243,7 +243,7 @@ void ggml_backend_tensor_set_async(ggml_backend_t backend, struct ggml_tensor * 
 }
 
 void ggml_backend_tensor_get_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(tensor_data(tensor) != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
 
     if (backend->iface.get_tensor_async == NULL) {
@@ -262,7 +262,7 @@ void ggml_backend_tensor_set(struct ggml_tensor * tensor, const void * data, siz
     }
 
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(tensor_data(tensor) != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
 
     buf->iface.set_tensor(buf, tensor, data, offset, size);
@@ -277,7 +277,7 @@ void ggml_backend_tensor_get(const struct ggml_tensor * tensor, void * data, siz
     }
 
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(tensor_data(tensor) != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor read out of bounds");
 
     buf->iface.get_tensor(buf, tensor, data, offset, size);
@@ -291,7 +291,7 @@ void ggml_backend_tensor_memset(struct ggml_tensor * tensor, uint8_t value, size
     }
 
     GGML_ASSERT(buf != NULL && "tensor buffer not set");
-    GGML_ASSERT(tensor->data != NULL && "tensor not allocated");
+    GGML_ASSERT(tensor_data(tensor) != NULL && "tensor not allocated");
     GGML_ASSERT(offset + size <= ggml_nbytes(tensor) && "tensor write out of bounds");
     GGML_ASSERT(buf->iface.memset_tensor != NULL && "memset not implemented by backend buffer");
 
@@ -360,9 +360,9 @@ void ggml_backend_tensor_copy(struct ggml_tensor * src, struct ggml_tensor * dst
     }
 
     if (ggml_backend_buffer_is_host(src->buffer)) {
-        ggml_backend_tensor_set(dst, src->data, 0, ggml_nbytes(src));
+        ggml_backend_tensor_set(dst, tensor_data(src), 0, ggml_nbytes(src));
     } else if (ggml_backend_buffer_is_host(dst->buffer)) {
-        ggml_backend_tensor_get(src, dst->data, 0, ggml_nbytes(src));
+        ggml_backend_tensor_get(src, tensor_data(dst), 0, ggml_nbytes(src));
     } else if (!ggml_backend_buffer_copy_tensor(src, dst)) {
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: warning: slow copy from %s to %s\n", __func__, ggml_backend_buffer_name(src->buffer), ggml_backend_buffer_name(dst->buffer));
@@ -1645,23 +1645,23 @@ enum ggml_status ggml_backend_view_init(struct ggml_tensor * tensor) {
     GGML_ASSERT(tensor->buffer == NULL);
     GGML_ASSERT(tensor->view_src != NULL);
     GGML_ASSERT(tensor->view_src->buffer != NULL);
-    GGML_ASSERT(tensor->view_src->data != NULL);
+    GGML_ASSERT(tensor_data(tensor->view_src) != NULL);
 
     tensor->buffer = tensor->view_src->buffer;
-    tensor->data = (char *)tensor->view_src->data + tensor->view_offs;
+    tensor_set_data(tensor, (char *)tensor_data(tensor->view_src) + tensor->view_offs);
     return ggml_backend_buffer_init_tensor(tensor->buffer, tensor);
 }
 
 enum ggml_status ggml_backend_tensor_alloc(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, void * addr) {
     GGML_ASSERT(tensor->buffer == NULL);
-    GGML_ASSERT(tensor->data == NULL);
+    GGML_ASSERT(tensor_data(tensor) == NULL);
     GGML_ASSERT(tensor->view_src == NULL);
     GGML_ASSERT(addr >= ggml_backend_buffer_get_base(buffer));
     GGML_ASSERT((char *)addr + ggml_backend_buffer_get_alloc_size(buffer, tensor) <=
                 (char *)ggml_backend_buffer_get_base(buffer) + ggml_backend_buffer_get_size(buffer));
 
     tensor->buffer = buffer;
-    tensor->data = addr;
+    tensor_set_data(tensor, addr);
     return ggml_backend_buffer_init_tensor(buffer, tensor);
 }
 
@@ -1669,14 +1669,14 @@ static struct ggml_tensor * graph_copy_dup_tensor(struct ggml_hash_set hash_set,
     struct ggml_context * ctx_allocated, struct ggml_context * ctx_unallocated, struct ggml_tensor * src) {
 
     GGML_ASSERT(src != NULL);
-    GGML_ASSERT(src->data && "graph must be allocated");
+    GGML_ASSERT(tensor_data(src) != NULL && "graph must be allocated");
 
     size_t id = ggml_hash_insert(&hash_set, src);
     if (id == GGML_HASHSET_ALREADY_EXISTS) {
         return node_copies[ggml_hash_find(&hash_set, src)];
     }
 
-    struct ggml_tensor * dst = ggml_dup_tensor_layout(src->data && !src->view_src ? ctx_allocated : ctx_unallocated, src);
+    struct ggml_tensor * dst = ggml_dup_tensor_layout(tensor_data(src) && !src->view_src ? ctx_allocated : ctx_unallocated, src);
     if (src->view_src != NULL) {
         dst->view_src = graph_copy_dup_tensor(hash_set, node_copies, ctx_allocated, ctx_unallocated, src->view_src);
         dst->view_offs = src->view_offs;
@@ -1885,26 +1885,26 @@ static void ggml_backend_cpu_buffer_free_buffer(ggml_backend_buffer_t buffer) {
 }
 
 static void ggml_backend_cpu_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
-    memset((char *)tensor->data + offset, value, size);
+    memset((char *)tensor_data(tensor) + offset, value, size);
 
     GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_cpu_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
-    memcpy((char *)tensor->data + offset, data, size);
+    memcpy((char *)tensor_data(tensor) + offset, data, size);
 
     GGML_UNUSED(buffer);
 }
 
 static void ggml_backend_cpu_buffer_get_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
-    memcpy(data, (const char *)tensor->data + offset, size);
+    memcpy(data, (const char *)tensor_data(tensor) + offset, size);
 
     GGML_UNUSED(buffer);
 }
 
 static bool ggml_backend_cpu_buffer_cpy_tensor(ggml_backend_buffer_t buffer, const struct ggml_tensor * src, struct ggml_tensor * dst) {
     if (ggml_backend_buffer_is_host(src->buffer)) {
-        memcpy(dst->data, src->data, ggml_nbytes(src));
+        memcpy(tensor_data(dst), tensor_data(src), ggml_nbytes(src));
         return true;
     }
     return false;

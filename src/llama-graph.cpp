@@ -90,7 +90,7 @@ void llm_graph_input_pos_bucket::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(ggml_backend_buffer_is_host(pos_bucket->buffer));
         GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
 
-        int32_t * data = (int32_t *) pos_bucket->data;
+        int32_t * data = (int32_t *) tensor_data(pos_bucket);
 
         for (int h = 0; h < 1; ++h) {
             for (int j = 0; j < n_tokens; ++j) {
@@ -114,7 +114,7 @@ void llm_graph_input_out_ids::set_input(const llama_ubatch * ubatch) {
     const int64_t n_tokens = ubatch->n_tokens;
 
     GGML_ASSERT(ggml_backend_buffer_is_host(out_ids->buffer));
-    int32_t * data = (int32_t *) out_ids->data;
+    int32_t * data = (int32_t *) tensor_data(out_ids);
 
     if (n_outputs == n_tokens) {
         for (int i = 0; i < n_tokens; ++i) {
@@ -152,8 +152,8 @@ void llm_graph_input_mean::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(mean);
         GGML_ASSERT(ggml_backend_buffer_is_host(mean->buffer));
 
-        float * data = (float *) mean->data;
-        memset(mean->data, 0, n_tokens*n_seqs_unq*ggml_element_size(mean));
+        float * data = (float *) tensor_data(mean);
+        memset(tensor_data(mean), 0, n_tokens*n_seqs_unq*ggml_element_size(mean));
 
         std::vector<uint64_t> sums(n_seqs_unq, 0);
         for (int i = 0; i < n_tokens; i += n_seq_tokens) {
@@ -198,8 +198,8 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(cls);
         GGML_ASSERT(ggml_backend_buffer_is_host(cls->buffer));
 
-        uint32_t * data = (uint32_t *) cls->data;
-        memset(cls->data, 0, n_seqs_unq*ggml_element_size(cls));
+        uint32_t * data = (uint32_t *) tensor_data(cls);
+        memset(tensor_data(cls), 0, n_seqs_unq*ggml_element_size(cls));
 
         for (int i = 0; i < n_tokens; i += n_seq_tokens) {
             for (int s = 0; s < ubatch->n_seq_id[i]; ++s) {
@@ -215,8 +215,8 @@ void llm_graph_input_cls::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(cls);
         GGML_ASSERT(ggml_backend_buffer_is_host(cls->buffer));
 
-        uint32_t * data = (uint32_t *) cls->data;
-        memset(cls->data, 0, n_seqs_unq*ggml_element_size(cls));
+        uint32_t * data = (uint32_t *) tensor_data(cls);
+        memset(tensor_data(cls), 0, n_seqs_unq*ggml_element_size(cls));
 
         std::vector<int> last_pos(n_seqs_unq, -1);
         std::vector<int> last_row(n_seqs_unq, -1);
@@ -250,7 +250,7 @@ void llm_graph_input_rs::set_input(const llama_ubatch * ubatch) {
 
     if (s_copy) {
         GGML_ASSERT(ggml_backend_buffer_is_host(s_copy->buffer));
-        int32_t * data = (int32_t *) s_copy->data;
+        int32_t * data = (int32_t *) tensor_data(s_copy);
 
         // assuming copy destinations ALWAYS happen ONLY on the cells between head and head+n
         for (uint32_t i = 0; i < n_rs; ++i) {
@@ -276,7 +276,7 @@ void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(kq_mask);
     GGML_ASSERT(ggml_backend_buffer_is_host(kq_mask->buffer));
 
-    float * data = (float *) kq_mask->data;
+    float * data = (float *) tensor_data(kq_mask);
 
     for (int h = 0; h < 1; ++h) {
         for (int i1 = 0; i1 < n_tokens; ++i1) {
@@ -375,7 +375,7 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
     GGML_ASSERT(ggml_backend_buffer_is_host(cross_kq_mask->buffer));
     GGML_ASSERT(!ubatch->equal_seqs()); // TODO: use ubatch->n_seqs instead of failing
 
-    float * data = (float *) cross_kq_mask->data;
+    float * data = (float *) tensor_data(cross_kq_mask);
 
     for (int h = 0; h < 1; ++h) {
         for (int i = 0; i < n_tokens; ++i) {

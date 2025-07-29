@@ -63,7 +63,7 @@ static bool gguf_ex_write(const std::string & fname) {
         ggml_set_name(cur, name.c_str());
 
         {
-            float * data = (float *) cur->data;
+            float * data = (float *) tensor_data(cur);
             for (int j = 0; j < ggml_nelements(cur); ++j) {
                 data[j] = 100 + i;
             }
@@ -201,10 +201,10 @@ static bool gguf_ex_read_1(const std::string & fname, bool check_data) {
             struct ggml_tensor * cur = ggml_get_tensor(ctx_data, name);
 
             printf("%s: tensor[%d]: n_dims = %d, ne = (%d, %d, %d, %d), name = %s, data = %p\n",
-                __func__, i, ggml_n_dims(cur), int(cur->ne[0]), int(cur->ne[1]), int(cur->ne[2]), int(cur->ne[3]), cur->name, cur->data);
+                __func__, i, ggml_n_dims(cur), int(cur->ne[0]), int(cur->ne[1]), int(cur->ne[2]), int(cur->ne[3]), cur->name, tensor_data(cur));
 
             // print first 10 elements
-            const float * data = (const float *) cur->data;
+            const float * data = (const float *) tensor_data(cur);
 
             printf("%s data[:10] : ", name);
             for (int j = 0; j < MIN(10, ggml_nelements(cur)); ++j) {
@@ -214,7 +214,7 @@ static bool gguf_ex_read_1(const std::string & fname, bool check_data) {
 
             // check data
             if (check_data) {
-                const float * data = (const float *) cur->data;
+                const float * data = (const float *) tensor_data(cur);
                 for (int j = 0; j < ggml_nelements(cur); ++j) {
                     if (data[j] != 100 + i) {
                         fprintf(stderr, "%s: tensor[%d], data[%d]: found %f, expected %f\n", __func__, i, j, data[j], float(100 + i));

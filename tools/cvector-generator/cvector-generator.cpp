@@ -81,8 +81,8 @@ struct callback_data {
         // copy tensor data
         auto n_bytes = ggml_nbytes(t);
         struct ggml_tensor * t_layer = ggml_new_tensor_2d(ctx_ggml, t->type, t->ne[0], t->ne[1]);
-        t_layer->data = malloc(n_bytes); // TODO @ngxson : get rid of this malloc somehow
-        ggml_backend_tensor_get(t, t_layer->data, 0, n_bytes);
+        set_tensor_data(t_layer, malloc(n_bytes)); // TODO @ngxson : get rid of this malloc somehow
+        ggml_backend_tensor_get(t, tensor_data(t_layer), 0, n_bytes); // @dbsanfte: speculative refactor with tensor_data(), and above
         ggml_set_name(t_layer, ggml_get_name(t));
         //print_debug_tensor(t_layer);
 

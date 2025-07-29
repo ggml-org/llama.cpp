@@ -920,7 +920,7 @@ static int repack_q4_0_to_q4_0_4_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 4 || interleave_block == 8);
     constexpr int nrows_interleaved = 4;
 
-    block_q4_0x4 * dst = (block_q4_0x4 *)t->data;
+    block_q4_0x4 * dst = (block_q4_0x4 *)tensor_data(t);
     const block_q4_0 * src = (const block_q4_0 *)data;
     block_q4_0 dst_tmp[4];
     int nrow = ggml_nrows(t);
@@ -950,7 +950,7 @@ static int repack_q4_K_to_q4_K_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 8);
     constexpr int nrows_interleaved = 8;
 
-    block_q4_Kx8 * dst = (block_q4_Kx8*)t->data;
+    block_q4_Kx8 * dst = (block_q4_Kx8*)tensor_data(t);
     const block_q4_K * src = (const block_q4_K*) data;
     block_q4_K dst_tmp[8];
     int nrow = ggml_nrows(t);
@@ -981,7 +981,7 @@ static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor * t, int interleave_block
     GGML_ASSERT(interleave_block == 8);
     constexpr int nrows_interleaved = 8;
 
-    block_q4_0x8 * dst = (block_q4_0x8*)t->data;
+    block_q4_0x8 * dst = (block_q4_0x8*)tensor_data(t);
     const block_q4_0 * src = (const block_q4_0*) data;
     block_q4_0 dst_tmp[8];
     int nrow = ggml_nrows(t);
@@ -1047,7 +1047,7 @@ static int repack_iq4_nl_to_iq4_nl_4_bl(struct ggml_tensor * t, int interleave_b
     //GGML_ASSERT(interleave_block == 4 || interleave_block == 8);
     GGML_ASSERT(interleave_block == 4);
 
-    block_iq4_nlx4 * dst = (block_iq4_nlx4 *)t->data;
+    block_iq4_nlx4 * dst = (block_iq4_nlx4 *)tensor_data(t);
     const block_iq4_nl * src = (const block_iq4_nl *)data;
     block_iq4_nl dst_tmp[4];
     int nrow = ggml_nrows(t);
@@ -1262,14 +1262,14 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         // If there are more than three rows in src1, use gemm; otherwise, use gemv.
         if (ne11 > 3) {
             gemm<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
-                    (float *) ((char *) dst->data) + src0_start, ne01,
-                    (const char *) src0->data + src0_start * nb01,
+                    (float *) ((char *) tensor_data(dst) + src0_start), ne01,
+                    (const char *) tensor_data(src0) + src0_start * nb01,
                     (const char *) src1_wdata, ne11 - ne11 % 4, src0_end - src0_start);
         }
         for (int iter = ne11 - ne11 % 4; iter < ne11; iter++) {
             gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
-                    (float *) ((char *) dst->data + (iter * nb1)) + src0_start, ne01,
-                    (const char *) src0->data + src0_start * nb01,
+                    (float *) ((char *) tensor_data(dst) + (iter * nb1)) + src0_start, ne01,
+                    (const char *) tensor_data(src0) + src0_start * nb01,
                     (const char *) src1_wdata + (src1_col_stride * iter), 1,
                     src0_end - src0_start);
         }
@@ -1397,7 +1397,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                 const auto * src1_col = (const char *) wdata + (i11 * nbw1 + i12 * nbw2);
 
                 gemv<BLOC_TYPE, INTER_SIZE, NB_COLS, PARAM_TYPE>(ne00,
-                        (float *)((char *) dst->data + (i1 * nb1 + i2 * nb2)) + src0_cur_start, ne01,
+                        (float *)((char *) tensor_data(dst) + (i1 * nb1 + i2 * nb2)) + src0_cur_start, ne01,
                         src0_cur + src0_cur_start * nb01,
                         src1_col, 1, src0_cur_end - src0_cur_start);
             }

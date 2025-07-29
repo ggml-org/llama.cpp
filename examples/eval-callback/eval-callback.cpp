@@ -121,7 +121,7 @@ static bool ggml_debug(struct ggml_tensor * t, bool ask, void * user_data) {
     }
 
     if (!ggml_is_quantized(t->type)) {
-        uint8_t * data = is_host ? (uint8_t *) t->data : cb_data->data.data();
+        uint8_t * data = is_host ? (uint8_t *) tensor_data(t) : cb_data->data.data();
         ggml_print_tensor(data, t->type, t->ne, t->nb, 3);
     }
 

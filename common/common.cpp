@@ -1495,7 +1495,7 @@ static common_control_vector_data common_control_vector_load_one(const common_co
         // extend if necessary - do not store data for layer 0 (it's not used)
         result.data.resize(std::max(result.data.size(), static_cast<size_t>(result.n_embd * layer_idx)), 0.0f);
 
-        const float * src = (const float *) tensor->data;
+        const float * src = (const float *) tensor_data(tensor);
         float * dst = result.data.data() + result.n_embd * (layer_idx - 1);  // layer 1 at [0]
         for (int j = 0; j < result.n_embd; j++) {
             dst[j] += src[j] * load_info.strength;  // allows multiple directions for same layer in same file

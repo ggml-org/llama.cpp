@@ -90,9 +90,9 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
         const int64_t i12 = i02 % ne12;
         const int64_t i11 = i01 % ne11;
 
-        dst_t        * dst_ptr  = (dst_t  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
-        const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
-        const src1_t * src1_ptr = (const src1_t *) ((const char *) src1->data + i13*nb13 + i12*nb12 + i11*nb11);
+        dst_t        * dst_ptr  = (dst_t  *)       ((char *)       tensor_data(dst)  + i03*nb3  + i02*nb2  + i01*nb1 );
+        const src0_t * src0_ptr = (const src0_t *) ((const char *) tensor_data(src0) + i03*nb03 + i02*nb02 + i01*nb01);
+        const src1_t * src1_ptr = (const src1_t *) ((const char *) tensor_data(src1) + i13*nb13 + i12*nb12 + i11*nb11);
 
         if (is_src1_contiguous) {
             // src1 is broadcastable across src0 and dst in i1, i2, i3

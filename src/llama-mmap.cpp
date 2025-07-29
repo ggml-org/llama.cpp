@@ -10,6 +10,11 @@
 #include <cerrno>
 #include <algorithm>
 
+#ifdef GGML_NUMA_MIRROR
+#include <numa.h>
+#include <numaif.h>
+#endif
+
 #ifdef __has_include
     #if __has_include(<unistd.h>)
         #include <unistd.h>
@@ -269,13 +274,23 @@ void llama_file::write_u32(uint32_t val) const { pimpl->write_u32(val); }
 
 // llama_mmap
 
+#ifdef GGML_NUMA_MIRROR
+static uintptr_t base_address_offset = 0;
+static int file_name_offset = 0;
+#endif
+
 struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
 
     impl(struct llama_file * file, size_t prefetch, bool numa) {
+#ifdef GGML_NUMA_MIRROR
+        GGML_UNUSED(prefetch);
+        GGML_UNUSED(numa);
+#endif        
         size = file->size();
         int fd = file->file_id();
+#ifndef GGML_NUMA_MIRROR
         int flags = MAP_SHARED;
         if (numa) { prefetch = 0; }
 #ifdef __linux__
@@ -285,6 +300,92 @@ struct llama_mmap::impl {
         }
         if (prefetch) { flags |= MAP_POPULATE; }
 #endif
+#endif // ifndef GGML_NUMA_MIRROR
+
+#ifdef GGML_NUMA_MIRROR
+        int oldpolicy;
+        struct bitmask* oldmask = numa_allocate_nodemask();
+        if (get_mempolicy(&oldpolicy, oldmask->maskp,
+                          oldmask->size + 1, 0, 0) < 0) {
+            LLAMA_LOG_WARN("get_mempolicy failed, errno=%d %s\n", errno, strerror(errno));
+            oldpolicy = MPOL_DEFAULT;
+        }
+
+        size_t total_size = file->size();
+        char path[128];
+        bool is_new_mem[] = { false, false };
+        int i;
+        for (int node = 0; node < 2; ++node) {
+            numa_set_preferred(node);
+            LLAMA_LOG_INFO("numa_set_preferred(%d)\n", node);
+
+            for (i = 0; i * GGML_MMAP_HUGEPAGESZ < total_size; ++i) {
+                sprintf(path, "/dev/hugepages/llama-node%d-%d", node, file_name_offset + i);
+                if (!is_new_mem[node]) {
+                    is_new_mem[node] = access(path, F_OK) != 0;
+                }
+                int hugefd = open(path, O_CREAT | O_RDWR, 0600);
+                if (hugefd < 0) {
+                    LLAMA_LOG_WARN("failed to open hugepage fd %s: %d %s\n",
+                            path, errno, strerror(errno));
+                    throw std::runtime_error(format("failed to open hugepage fd: %s", strerror(errno)));
+                }
+                uintptr_t address = GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET \
+                                    + node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + \
+                                    base_address_offset + i * GGML_MMAP_HUGEPAGESZ;
+                void* mm = mmap((void*)address, GGML_MMAP_HUGEPAGESZ, PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_HUGETLB | MAP_POPULATE,
+                        hugefd, 0);
+                close(hugefd);
+                LLAMA_LOG_INFO("mmap(%s) desire=%p size=%llu result=%p is_new_mem[%d]=%s\n",
+                        path, (void*)address, GGML_MMAP_HUGEPAGESZ, mm, node, is_new_mem[node] ? "yes" : "no");
+                if (((uintptr_t)mm) != address) {
+                    LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
+                    throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+                }
+                if (is_new_mem[node]) {
+                    memset(mm, 0, GGML_MMAP_HUGEPAGESZ);
+                }
+            }
+            if (node == 0) {
+                addr = (void*)(GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + \
+                        node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + \
+                        base_address_offset);
+            }
+        }
+        base_address_offset += i * GGML_MMAP_HUGEPAGESZ;
+        file_name_offset += i;
+        if (is_new_mem[0]) {
+            LLAMA_LOG_INFO("begin to copy from disk to mem ...\n");
+            size_t n = 0;
+            while (n < total_size) {
+                int nn = read(fd, (void*)((uintptr_t)addr + n), 1024 * 1024);
+                if (nn < 0) {
+                    LLAMA_LOG_WARN("unable to read from file: %d %s\n", errno, strerror(errno));
+                    throw std::runtime_error(format("read failed: %s", strerror(errno)));
+                }
+                n += nn;
+            }
+        }
+        for (int node = 1; node < 2; ++node) {
+            if (is_new_mem[node]) {
+                LLAMA_LOG_INFO("begin to copy from numa0 to numa%d ...\n", node);
+                memcpy((void*)((uintptr_t)addr + \
+                            node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT), \
+                        addr, total_size);
+            }
+        }
+
+        if (oldpolicy == MPOL_DEFAULT) {
+            numa_set_localalloc();
+        } else {
+            set_mempolicy(oldpolicy, oldmask->maskp,
+                          oldmask->size + 1);
+        }
+        numa_free_cpumask(oldmask);
+#endif // GGML_NUMA_MIRROR
+
+#ifndef GGML_NUMA_MIRROR
         addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
@@ -302,6 +403,7 @@ struct llama_mmap::impl {
                         strerror(errno));
             }
         }
+#endif // ifndef GGML_NUMA_MIRROR
 
         mapped_fragments.emplace_back(0, file->size());
     }
@@ -355,11 +457,13 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
+#ifndef GGML_NUMA_MIRROR
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
                 LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
             }
         }
+#endif
     }
 #elif defined(_WIN32)
     impl(struct llama_file * file, size_t prefetch, bool numa) {

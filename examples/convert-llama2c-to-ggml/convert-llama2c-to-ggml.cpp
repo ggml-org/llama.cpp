@@ -408,12 +408,12 @@ static void init_model(struct my_llama_model * model) {
 }
 
 static float get_f32_2d(struct ggml_tensor * tensor, int64_t i0, int64_t i1) {
-    float * ptr = (float *) ((char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1]);
+    float * ptr = (float *) ((char *) tensor_data(tensor) + i0*tensor->nb[0] + i1*tensor->nb[1]);
     return *ptr;
 }
 
 static int32_t get_i32_2d(struct ggml_tensor * tensor, int64_t i0, int64_t i1) {
-    int32_t * ptr = (int32_t *) ((char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1]);
+    int32_t * ptr = (int32_t *) ((char *) tensor_data(tensor) + i0*tensor->nb[0] + i1*tensor->nb[1]);
     return *ptr;
 }
 
