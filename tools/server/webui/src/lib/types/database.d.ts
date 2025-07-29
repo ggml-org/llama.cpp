@@ -1,21 +1,19 @@
-import type { ChatMessageData } from './chat';
-
-export interface DatabaseChatMessage extends ChatMessageData {
+export interface Conversation {
 	id: string;
-	chatId: string;
-	timestamp: number;
-	tokens?: number;
-	model?: string;
+	lastModified: number;
+	currNode: string;
+	name: string;
 }
 
-export interface DatabaseChat {
+export interface Message {
 	id: string;
-	name: string;
-	createdAt: number;
-	updatedAt: number;
-	messageCount: number;
-	model?: string;
-	systemPrompt?: string;
+	convId: string;
+	type: 'root' | 'text' | 'think';
+	timestamp: number;
+	role: 'system' | 'user' | 'assistant';
+	content: string;
+	parent: string;
+	children: string[];
 }
 
 export interface DatabaseAppSettings {

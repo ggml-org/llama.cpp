@@ -3,7 +3,7 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import ChatSidebar from '$lib/components/chat/ChatSidebar/ChatSidebar.svelte';
-	import { activeChatMessages, isLoading } from '$lib/stores/chat.svelte';
+	import { activeMessages, isLoading } from '$lib/stores/chat.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { page } from '$app/state';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
@@ -13,7 +13,7 @@
 	const isHomeRoute = $derived(page.route.id === '/');
 	const isChatRoute = $derived(page.route.id === '/chat/[id]');
 	const isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
-	const showSidebarByDefault = $derived(activeChatMessages().length > 0 || isLoading());
+	const showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 
 	let sidebarOpen = $state(false);
 

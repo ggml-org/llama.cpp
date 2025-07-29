@@ -7,8 +7,8 @@
 	import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
 	import {
 		chatStore,
-		activeChat,
-		activeChatMessages,
+		activeConversation,
+		activeMessages,
 		isLoading,
 		stopGeneration,
 		gracefulStop
@@ -53,7 +53,7 @@
 
 			// Load the chat asynchronously
 			(async () => {
-				const success = await chatStore.loadChat(chatId);
+				const success = await chatStore.loadConversation(chatId);
 				if (!success) {
 					// Chat not found, redirect to home
 					await goto('/');
@@ -92,10 +92,10 @@
 </script>
 
 <svelte:head>
-	<title>{activeChat?.name || 'Chat'} - llama.cpp</title>
+	<title>{activeConversation()?.name || 'Chat'} - llama.cpp</title>
 </svelte:head>
 
-{#if activeChat() && (activeChatMessages().length > 0 || isLoading())}
+{#if activeConversation() && (activeMessages().length > 0 || isLoading())}
 	<ChatHeader />
 {/if}
 

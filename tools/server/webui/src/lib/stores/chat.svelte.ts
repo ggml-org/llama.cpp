@@ -1,14 +1,14 @@
 import { ChatService } from '$lib/services/chat';
 import { DatabaseService } from '$lib/services';
-import type { DatabaseChat, DatabaseChatMessage } from '$lib/app';
+import type { Conversation, Message } from '$lib/types/database';
 import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { extractPartialThinking } from '$lib/utils/thinking';
 
 class ChatStore {
-	activeChat = $state<DatabaseChat | null>(null);
-	activeChatMessages = $state<DatabaseChatMessage[]>([]);
-	chats = $state<DatabaseChat[]>([]);
+	activeConversation = $state<Conversation | null>(null);
+	activeMessages = $state<Message[]>([]);
+	conversations = $state<Conversation[]>([]);
 	currentResponse = $state('');
 	isInitialized = $state(false);
 	isLoading = $state(false);
@@ -22,74 +22,79 @@ class ChatStore {
 
 	async initialize() {
 		try {
-			await this.loadChats();
+			await this.loadConversations();
 			this.isInitialized = true;
 		} catch (error) {
 			console.error('Failed to initialize chat store:', error);
 		}
 	}
 
-	async loadChats() {
-		this.chats = await DatabaseService.getAllChats();
+	async loadConversations() {
+		this.conversations = await DatabaseService.getAllConversations();
 	}
 
-	async createChat(name?: string, systemPrompt?: string): Promise<string> {
-		const chatName = name || `Chat ${new Date().toLocaleString()}`;
+	async createConversation(name?: string): Promise<string> {
+		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
 
-		const chat = await DatabaseService.createChat(chatName, systemPrompt);
+		const conversation = await DatabaseService.createConversation(conversationName);
 
-		this.chats.unshift(chat);
+		this.conversations.unshift(conversation);
 
-		this.activeChat = chat;
-		this.activeChatMessages = [];
+		this.activeConversation = conversation;
+		this.activeMessages = [];
 
-		await goto(`/chat/${chat.id}`);
+		await goto(`/chat/${conversation.id}`);
 
-		return chat.id;
+		return conversation.id;
 	}
 
-	async loadChat(chatId: string): Promise<boolean> {
+	async loadConversation(convId: string): Promise<boolean> {
 		try {
-			const chat = await DatabaseService.getChat(chatId);
-			if (!chat) {
+			const conversation = await DatabaseService.getConversation(convId);
+			if (!conversation) {
 				return false;
 			}
 
-			this.activeChat = chat;
-			this.activeChatMessages = await DatabaseService.getChatMessages(chatId);
+			this.activeConversation = conversation;
+			this.activeMessages = await DatabaseService.getConversationMessages(convId);
 			return true;
 		} catch (error) {
-			console.error('Failed to load chat:', error);
+			console.error('Failed to load conversation:', error);
 			return false;
 		}
 	}
 
 	async addMessage(
 		role: 'user' | 'assistant' | 'system',
-		content: string
-	): Promise<DatabaseChatMessage | null> {
-		if (!this.activeChat) {
-			console.error('No active chat when trying to add message');
+		content: string,
+		type: 'root' | 'text' | 'think' = 'text',
+		parent: string = '-1'
+	): Promise<Message | null> {
+		if (!this.activeConversation) {
+			console.error('No active conversation when trying to add message');
 			return null;
 		}
 
 		try {
 			const message = await DatabaseService.addMessage({
-				chatId: this.activeChat.id,
+				convId: this.activeConversation.id,
 				role,
 				content,
-				timestamp: Date.now()
+				type,
+				timestamp: Date.now(),
+				parent,
+				children: []
 			});
 
-			this.activeChatMessages.push(message);
+			this.activeMessages.push(message);
 
-			const chatIndex = this.chats.findIndex((c) => c.id === this.activeChat!.id);
-			if (chatIndex !== -1) {
-				this.chats[chatIndex].messageCount += 1;
-				this.chats[chatIndex].updatedAt = Date.now();
+			// Update lastModified
+			const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+			if (convIndex !== -1) {
+				this.conversations[convIndex].lastModified = Date.now();
 
-				const updatedChat = this.chats.splice(chatIndex, 1)[0];
-				this.chats.unshift(updatedChat);
+				const updatedConv = this.conversations.splice(convIndex, 1)[0];
+				this.conversations.unshift(updatedConv);
 			}
 
 			return message;
@@ -102,12 +107,12 @@ class ChatStore {
 	async sendMessage(content: string): Promise<void> {
 		if (!content.trim() || this.isLoading) return;
 
-		if (!this.activeChat) {
-			await this.createChat();
+		if (!this.activeConversation) {
+			await this.createConversation();
 		}
 
-		if (!this.activeChat) {
-			console.error('No active chat available for sending message');
+		if (!this.activeConversation) {
+			console.error('No active conversation available for sending message');
 			return;
 		}
 		this.isLoading = true;
@@ -119,7 +124,7 @@ class ChatStore {
 				throw new Error('Failed to add user message');
 			}
 
-			const allMessages = await DatabaseService.getChatMessages(this.activeChat.id);
+			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
 
 			const assistantMessage = await this.addMessage('assistant', '');
 			if (!assistantMessage) {
@@ -140,16 +145,12 @@ class ChatStore {
 						// Parse thinking content during streaming
 						const partialThinking = extractPartialThinking(streamedContent);
 						
-						const messageIndex = this.activeChatMessages.findIndex(
+						const messageIndex = this.activeMessages.findIndex(
 							(m) => m.id === assistantMessage.id
 						);
 						if (messageIndex !== -1) {
 							// Update message with parsed content
-							this.activeChatMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
-							// Update thinking content if present
-							if (partialThinking.thinking) {
-								this.activeChatMessages[messageIndex].thinking = partialThinking.thinking;
-							}
+							this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
 						}
 					},
 					onComplete: async () => {
@@ -173,11 +174,11 @@ class ChatStore {
 						this.isLoading = false;
 						this.currentResponse = '';
 
-						const messageIndex = this.activeChatMessages.findIndex(
-							(m) => m.id === assistantMessage.id
+						const messageIndex = this.activeMessages.findIndex(
+							(m: Message) => m.id === assistantMessage.id
 						);
 						if (messageIndex !== -1) {
-							this.activeChatMessages[messageIndex].content = `Error: ${error.message}`;
+							this.activeMessages[messageIndex].content = `Error: ${error.message}`;
 						}
 					}
 				}
@@ -222,16 +223,16 @@ class ChatStore {
 	private async savePartialResponseIfNeeded() {
 		console.log('savePartialResponseIfNeeded called:', {
 			currentResponse: this.currentResponse,
-			activeChatMessagesLength: this.activeChatMessages.length
+			activeMessagesLength: this.activeMessages.length
 		});
 		
-		if (!this.currentResponse.trim() || !this.activeChatMessages.length) {
+		if (!this.currentResponse.trim() || !this.activeMessages.length) {
 			console.log('Early return: no current response or no messages');
 			return;
 		}
 
 		// Find the last assistant message that might be incomplete
-		const lastMessage = this.activeChatMessages[this.activeChatMessages.length - 1];
+		const lastMessage = this.activeMessages[this.activeMessages.length - 1];
 		console.log('Last message:', {
 			role: lastMessage?.role,
 			content: lastMessage?.content,
@@ -266,7 +267,7 @@ class ChatStore {
 				// Update the local state to reflect the saved content
 				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
 				if (partialThinking.thinking) {
-					lastMessage.thinking = partialThinking.thinking;
+					// Note: thinking content is part of the message content now
 				}
 			} catch (error) {
 				console.error('Failed to save partial response:', error);
@@ -279,17 +280,17 @@ class ChatStore {
 	}
 
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
-		if (!this.activeChat || this.isLoading) return;
+		if (!this.activeConversation || this.isLoading) return;
 
 		try {
 			// Find the message to update
-			const messageIndex = this.activeChatMessages.findIndex((m) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex((m: Message) => m.id === messageId);
 			if (messageIndex === -1) {
 				console.error('Message not found for update');
 				return;
 			}
 
-			const messageToUpdate = this.activeChatMessages[messageIndex];
+			const messageToUpdate = this.activeMessages[messageIndex];
 			const originalContent = messageToUpdate.content; // Store original content for rollback
 			
 			// Only allow updating user messages
@@ -299,22 +300,22 @@ class ChatStore {
 			}
 
 			// Update the message in local state immediately for UI responsiveness
-			this.activeChatMessages[messageIndex].content = newContent;
+			this.activeMessages[messageIndex].content = newContent;
 
 			// Remove all messages after the updated message (including assistant responses)
-			const messagesToRemove = this.activeChatMessages.slice(messageIndex + 1);
+			const messagesToRemove = this.activeMessages.slice(messageIndex + 1);
 			for (const message of messagesToRemove) {
 				await DatabaseService.deleteMessage(message.id);
 			}
 
 			// Update local state to remove subsequent messages
-			this.activeChatMessages = this.activeChatMessages.slice(0, messageIndex + 1);
+			this.activeMessages = this.activeMessages.slice(0, messageIndex + 1);
 
 			// Update chat message count
-			const chatIndex = this.chats.findIndex((c) => c.id === this.activeChat!.id);
+			const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 			if (chatIndex !== -1) {
-				this.chats[chatIndex].messageCount -= messagesToRemove.length;
-				this.chats[chatIndex].updatedAt = Date.now();
+				this.conversations[chatIndex].messageCount -= messagesToRemove.length;
+				this.conversations[chatIndex].updatedAt = Date.now();
 			}
 
 			// Regenerate response to the updated message
@@ -323,7 +324,7 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseService.getChatMessages(this.activeChat.id);
+				const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
 
 				const assistantMessage = await this.addMessage('assistant', '');
 				if (!assistantMessage) {
@@ -344,16 +345,12 @@ class ChatStore {
 							// Parse thinking content during streaming
 							const partialThinking = extractPartialThinking(streamedContent);
 							
-							const messageIndex = this.activeChatMessages.findIndex(
-								(m) => m.id === assistantMessage.id
+							const messageIndex = this.activeMessages.findIndex(
+								(m: Message) => m.id === assistantMessage.id
 							);
 							if (messageIndex !== -1) {
 								// Update message with parsed content
-								this.activeChatMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
-								// Update thinking content if present
-								if (partialThinking.thinking) {
-									this.activeChatMessages[messageIndex].thinking = partialThinking.thinking;
-								}
+								this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
 							}
 						},
 						onComplete: async () => {
@@ -381,18 +378,18 @@ class ChatStore {
 							this.currentResponse = '';
 
 							// Rollback the edited message to original content on error
-							const editedMessageIndex = this.activeChatMessages.findIndex(
-								(m) => m.id === messageId
+							const editedMessageIndex = this.activeMessages.findIndex(
+								(m: Message) => m.id === messageId
 							);
 							if (editedMessageIndex !== -1) {
-								this.activeChatMessages[editedMessageIndex].content = originalContent;
+								this.activeMessages[editedMessageIndex].content = originalContent;
 							}
 
-							const assistantMessageIndex = this.activeChatMessages.findIndex(
-								(m) => m.id === assistantMessage.id
+							const assistantMessageIndex = this.activeMessages.findIndex(
+								(m: Message) => m.id === assistantMessage.id
 							);
 							if (assistantMessageIndex !== -1) {
-								this.activeChatMessages[assistantMessageIndex].content = `Error: ${error.message}`;
+								this.activeMessages[assistantMessageIndex].content = `Error: ${error.message}`;
 							}
 						}
 					}
@@ -402,11 +399,11 @@ class ChatStore {
 				this.isLoading = false;
 				
 				// Rollback the edited message to original content on regeneration error
-				const editedMessageIndex = this.activeChatMessages.findIndex(
-					(m) => m.id === messageId
+				const messageIndex = this.activeMessages.findIndex(
+					(m: Message) => m.id === messageId
 				);
-				if (editedMessageIndex !== -1) {
-					this.activeChatMessages[editedMessageIndex].content = originalContent;
+				if (messageIndex !== -1) {
+					this.activeMessages[messageIndex].content = originalContent;
 				}
 			}
 		} catch (error) {
@@ -420,17 +417,17 @@ class ChatStore {
 	}
 
 	async regenerateMessage(messageId: string): Promise<void> {
-		if (!this.activeChat || this.isLoading) return;
+		if (!this.activeConversation || this.isLoading) return;
 
 		try {
 			// Find the assistant message to regenerate
-			const messageIndex = this.activeChatMessages.findIndex((m) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex((m: Message) => m.id === messageId);
 			if (messageIndex === -1) {
 				console.error('Message not found for regeneration');
 				return;
 			}
 
-			const messageToRegenerate = this.activeChatMessages[messageIndex];
+			const messageToRegenerate = this.activeMessages[messageIndex];
 			
 			// Only allow regenerating assistant messages
 			if (messageToRegenerate.role !== 'assistant') {
@@ -439,19 +436,19 @@ class ChatStore {
 			}
 
 			// Remove the assistant message and all subsequent messages
-			const messagesToRemove = this.activeChatMessages.slice(messageIndex);
+			const messagesToRemove = this.activeMessages.slice(messageIndex);
 			for (const message of messagesToRemove) {
 				await DatabaseService.deleteMessage(message.id);
 			}
 
 			// Update local state to remove the messages
-			this.activeChatMessages = this.activeChatMessages.slice(0, messageIndex);
+			this.activeMessages = this.activeMessages.slice(0, messageIndex);
 
 			// Update chat message count
-			const chatIndex = this.chats.findIndex((c) => c.id === this.activeChat!.id);
+			const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 			if (chatIndex !== -1) {
-				this.chats[chatIndex].messageCount -= messagesToRemove.length;
-				this.chats[chatIndex].updatedAt = Date.now();
+				this.conversations[chatIndex].messageCount -= messagesToRemove.length;
+				this.conversations[chatIndex].updatedAt = Date.now();
 			}
 
 			// Generate a new response based on the conversation history
@@ -459,7 +456,7 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseService.getChatMessages(this.activeChat.id);
+				const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
 
 				const assistantMessage = await this.addMessage('assistant', '');
 				if (!assistantMessage) {
@@ -480,16 +477,14 @@ class ChatStore {
 							// Parse thinking content during streaming
 							const partialThinking = extractPartialThinking(streamedContent);
 							
-							const messageIndex = this.activeChatMessages.findIndex(
-								(m) => m.id === assistantMessage.id
+							const messageIndex = this.activeMessages.findIndex(
+								(m: Message) => m.id === assistantMessage.id
 							);
 							if (messageIndex !== -1) {
 								// Update message with parsed content
-								this.activeChatMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
+								this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
 								// Update thinking content if present
-								if (partialThinking.thinking) {
-									this.activeChatMessages[messageIndex].thinking = partialThinking.thinking;
-								}
+								// Note: thinking content is now part of the message content
 							}
 						},
 						onComplete: async () => {
@@ -536,42 +531,42 @@ class ChatStore {
 		}
 	}
 
-	async updateChatName(chatId: string, name: string): Promise<void> {
+	async updateConversationName(convId: string, name: string): Promise<void> {
 		try {
-			await DatabaseService.updateChat(chatId, { name });
+			await DatabaseService.updateConversation(convId, { name });
 
-			const chatIndex = this.chats.findIndex((c) => c.id === chatId);
-			if (chatIndex !== -1) {
-				this.chats[chatIndex].name = name;
+			const convIndex = this.conversations.findIndex((c) => c.id === convId);
+			if (convIndex !== -1) {
+				this.conversations[convIndex].name = name;
 			}
 
-			if (this.activeChat?.id === chatId) {
-				this.activeChat.name = name;
+			if (this.activeConversation?.id === convId) {
+				this.activeConversation.name = name;
 			}
 		} catch (error) {
-			console.error('Failed to update chat name:', error);
+			console.error('Failed to update conversation name:', error);
 		}
 	}
 
-	async deleteChat(chatId: string): Promise<void> {
+	async deleteConversation(convId: string): Promise<void> {
 		try {
-			await DatabaseService.deleteChat(chatId);
+			await DatabaseService.deleteConversation(convId);
 
-			this.chats = this.chats.filter((c) => c.id !== chatId);
+			this.conversations = this.conversations.filter((c) => c.id !== convId);
 
-			if (this.activeChat?.id === chatId) {
-				this.activeChat = null;
-				this.activeChatMessages = [];
+			if (this.activeConversation?.id === convId) {
+				this.activeConversation = null;
+				this.activeMessages = [];
 				await goto('/?new_chat=true');
 			}
 		} catch (error) {
-			console.error('Failed to delete chat:', error);
+			console.error('Failed to delete conversation:', error);
 		}
 	}
 
-	clearActiveChat() {
-		this.activeChat = null;
-		this.activeChatMessages = [];
+	clearActiveConversation() {
+		this.activeConversation = null;
+		this.activeMessages = [];
 		this.currentResponse = '';
 		this.isLoading = false;
 	}
@@ -579,24 +574,24 @@ class ChatStore {
 
 export const chatStore = new ChatStore();
 
-export const chats = () => chatStore.chats;
-export const activeChat = () => chatStore.activeChat;
-export const activeChatMessages = () => chatStore.activeChatMessages;
+export const conversations = () => chatStore.conversations;
+export const activeConversation = () => chatStore.activeConversation;
+export const activeMessages = () => chatStore.activeMessages;
 export const isLoading = () => chatStore.isLoading;
 export const currentResponse = () => chatStore.currentResponse;
 export const isInitialized = () => chatStore.isInitialized;
 
-export const createChat = chatStore.createChat.bind(chatStore);
-export const loadChat = chatStore.loadChat.bind(chatStore);
+export const createConversation = chatStore.createConversation.bind(chatStore);
+export const loadConversation = chatStore.loadConversation.bind(chatStore);
 export const sendMessage = chatStore.sendMessage.bind(chatStore);
 export const updateMessage = chatStore.updateMessage.bind(chatStore);
 export const regenerateMessage = chatStore.regenerateMessage.bind(chatStore);
-export const updateChatName = chatStore.updateChatName.bind(chatStore);
-export const deleteChat = chatStore.deleteChat.bind(chatStore);
-export const clearActiveChat = chatStore.clearActiveChat.bind(chatStore);
+export const updateConversationName = chatStore.updateConversationName.bind(chatStore);
+export const deleteConversation = chatStore.deleteConversation.bind(chatStore);
+export const clearActiveConversation = chatStore.clearActiveConversation.bind(chatStore);
 export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
 
 export function stopGeneration() {
 	chatStore.stopGeneration();
 }
-export const chatMessages = () => chatStore.activeChatMessages;
+export const messages = () => chatStore.activeMessages;

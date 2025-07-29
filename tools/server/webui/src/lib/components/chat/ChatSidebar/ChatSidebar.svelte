@@ -4,7 +4,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Plus, Search } from '@lucide/svelte';
 	import ChatConversationsItem from '$lib/components/chat/ChatConversations/ChatConversationsItem.svelte';
-	import { chats, deleteChat } from '$lib/stores/chat.svelte';
+	import { conversations, deleteConversation } from '$lib/stores/chat.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 
@@ -14,9 +14,9 @@
 	// Get current chat ID from URL
 	const currentChatId = $derived(page.params.id);
 
-	// Filter chats based on search query
-	let filteredChats = $derived(
-		chats().filter((chat) => chat.name.toLowerCase().includes(searchQuery.toLowerCase()))
+	// Filter conversations based on search query
+	let filteredConversations = $derived(
+		conversations().filter((conversation: { name: string }) => conversation.name.toLowerCase().includes(searchQuery.toLowerCase()))
 	);
 
 	async function selectConversation(id: string) {
@@ -29,7 +29,7 @@
 	}
 
 	async function handleDeleteConversation(id: string) {
-		await deleteChat(id);
+		await deleteConversation(id);
 	}
 </script>
 
@@ -71,16 +71,16 @@
 	<Sidebar.GroupLabel>Conversations</Sidebar.GroupLabel>
 	<Sidebar.GroupContent>
 		<Sidebar.Menu class="space-y-2">
-			{#each filteredChats as chat (chat.id)}
+			{#each filteredConversations as conversation (conversation.id)}
 				<Sidebar.MenuItem>
 					<ChatConversationsItem
 						conversation={{
-							id: chat.id,
-							name: chat.name,
-							lastModified: chat.updatedAt,
-							messageCount: chat.messageCount
+							id: conversation.id,
+							name: conversation.name,
+							lastModified: conversation.lastModified,
+							currNode: conversation.currNode
 						}}
-						isActive={currentChatId === chat.id}
+						isActive={currentChatId === conversation.id}
 						onSelect={selectConversation}
 						onEdit={editConversation}
 						onDelete={handleDeleteConversation}
@@ -88,7 +88,7 @@
 				</Sidebar.MenuItem>
 			{/each}
 
-			{#if filteredChats.length === 0}
+			{#if filteredConversations.length === 0}
 				<div class="px-2 py-4 text-center">
 					<p class="text-muted-foreground text-sm">
 						{searchQuery ? 'No conversations found' : 'No conversations yet'}

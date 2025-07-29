@@ -1,17 +1,17 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { DatabaseChat, DatabaseChatMessage, DatabaseAppSettings } from '$lib/types/database';
+import type { Conversation, Message, DatabaseAppSettings } from '$lib/types/database';
 
 class ChatDatabase extends Dexie {
-	chats!: EntityTable<DatabaseChat, 'id'>;
-	messages!: EntityTable<DatabaseChatMessage, 'id'>;
+	conversations!: EntityTable<Conversation, 'id'>;
+	messages!: EntityTable<Message, 'id'>;
 	settings!: EntityTable<DatabaseAppSettings, 'id'>;
 
 	constructor() {
-		super('LlamaServerDB');
+		super('LlamacppWebui');
 
 		this.version(1).stores({
-			chats: 'id, name, createdAt, updatedAt, messageCount',
-			messages: 'id, chatId, role, timestamp, [chatId+timestamp]',
+			conversations: 'id, lastModified, currNode, name',
+			messages: 'id, convId, type, role, timestamp, parent, children',
 			settings: 'id'
 		});
 	}

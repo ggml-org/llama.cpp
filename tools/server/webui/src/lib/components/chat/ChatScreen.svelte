@@ -3,8 +3,8 @@
 	import ChatForm from './ChatForm.svelte';
 	import ServerInfo from './ServerInfo.svelte';
 	import {
-		activeChatMessages,
-		activeChat,
+		activeMessages,
+		activeConversation,
 		isLoading,
 		sendMessage,
 		stopGeneration
@@ -14,7 +14,7 @@
 	let { showCenteredEmpty = false } = $props();
 
 	const isEmpty = $derived(
-		showCenteredEmpty && !activeChat() && activeChatMessages().length === 0 && !isLoading()
+		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
 
 	async function handleSendMessage(message: string) {
@@ -25,7 +25,7 @@
 {#if !isEmpty}
 	<div class="flex h-full flex-col">
 		<div class="flex-1 overflow-hidden">
-			<ChatMessages class="mb-36" messages={activeChatMessages()} isLoading={isLoading()} />
+			<ChatMessages class="mb-36" messages={activeMessages()} isLoading={isLoading()} />
 
 			<div
 				class="z-999 sticky bottom-0 m-auto max-w-[56rem]"

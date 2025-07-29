@@ -11,7 +11,7 @@
 	});
 
 	onMount(() => {
-		chatStore.clearActiveChat();
+		chatStore.clearActiveConversation();
 	});
 
 	// Check if we're in new chat mode
