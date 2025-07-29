@@ -2002,6 +2002,11 @@ class LlamaModel(TextModel):
             self._set_vocab_mistral()
             return
 
+        path_tekken_json = self.dir_model / "tekken.json"
+        path_tokenizer_json = self.dir_model / "tokenizer.json"
+        if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
+            return self.set_vocab_tekken()
+
         try:
             self._set_vocab_sentencepiece()
         except FileNotFoundError:
