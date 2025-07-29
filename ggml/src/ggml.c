@@ -1151,8 +1151,10 @@ static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
 static_assert(GGML_GLU_OP_COUNT == 5, "GGML_GLU_OP_COUNT != 5");
 
 
+#define GGML_ASSERT_ALIGNED_MSG_P(N, A, P, MSG) \
+    static_assert((N) % (A) == 0, MSG " (size=" #N ", align=" #A ", padding=" #P ")")
 #define GGML_ASSERT_ALIGNED_MSG(N, A, MSG) \
-    static_assert((N) % (A) == 0, MSG " (size=" #N ", align=" #A ", padding=" #((A - (N % A)) % A) ")")
+    GGML_ASSERT_ALIGNED_MSG_P(N, A, ((A) - (N) % (A)) % (A), MSG)
 
 // check that the tensor and object sizes are multiples of GGML_MEM_ALIGN
 GGML_ASSERT_ALIGNED_MSG(sizeof(struct ggml_object), GGML_MEM_ALIGN, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
