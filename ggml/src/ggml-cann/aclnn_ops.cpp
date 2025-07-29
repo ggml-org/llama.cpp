@@ -68,6 +68,8 @@
 #include <aclnnop/aclnn_grouped_matmul_v3.h>
 #include <aclnnop/aclnn_fused_infer_attention_score_v2.h>
 #include <aclnnop/aclnn_zero.h>
+#include <aclnnop/aclnn_index_copy.h>
+#include <aclnnop/aclnn_index_select.h>
 #include <float.h>
 
 #include <cmath>
@@ -1614,50 +1616,97 @@ void ggml_cann_softmax(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 }
 
 /**
- * @brief Performs embedding operation on a 4D tensor using the CANN backend.
+ * @brief Performs index select operation on a 4D tensor using the CANN backend.
  *
- * This function extracts slices from the source tensor (`src_buffer`),
- * index tensor (`index`), and destination tensor (`dst`), and performs an
- * embedding operation on them. The embedding operation is applied by iterating
- * over the last two dimensions of the source tensor, creating the necessary
- * tensors for the source, index, and output, and executing the embedding operation.
+ * This function applies the `IndexSelect` operation along a specific dimension
+ * of the source tensor (`src_buffer`) using the indices from the index tensor (`index`).
+ * It iterates over the last two dimensions of the source tensor, creates the corresponding
+ * CANN tensors for the source, index, and output slices, and executes the `IndexSelect`
+ * operation for each slice.
  *
  * @param ctx The context for CANN backend operations.
- * @param src_buffer The source buffer holding the data for the source tensor.
+ * @param src_buffer The source buffer containing the 4D input tensor data.
  * @param src_ne The dimensions of the source tensor.
  * @param src_nb The strides (byte offsets) of the source tensor.
- * @param index The index tensor used in the embedding operation.
- * @param dst The destination tensor where the result will be stored.
+ * @param dst_buffer The destination buffer where the output tensor data will be written.
+ * @param dst_ne The dimensions of the destination tensor.
+ * @param dst_nb The strides (byte offsets) of the destination tensor.
+ * @param index The index tensor specifying the indices to select from the source tensor.
+ * @param type The data type of the source and destination tensors.
  */
-static void aclnn_embedding_4d(ggml_backend_cann_context& ctx, void* src_buffer,
-                            int64_t* src_ne, size_t* src_nb, ggml_tensor* index,
-                            ggml_tensor* dst) {
+static void aclnn_index_select_4d(ggml_backend_cann_context& ctx,
+                                void* src_buffer,int64_t* src_ne, size_t* src_nb,
+                                void* dst_buffer, int64_t* dst_ne, size_t* dst_nb,
+                                ggml_tensor* index, ggml_type type) {
     for (int64_t i = 0; i < src_ne[3]; i++) {
         for (int64_t j = 0; j < src_ne[2]; j++) {
             // src
-            int64_t acl_src_ne[2] = {src_ne[0], src_ne[1]};
-            size_t acl_src_nb[2] = {src_nb[0], src_nb[1]};
             aclTensor* acl_src_tensor = ggml_cann_create_tensor(
                 (char*)src_buffer + i * src_nb[3] + j * src_nb[2],
-                ggml_cann_type_mapping(dst->type), ggml_element_size(dst),
-                acl_src_ne, acl_src_nb, 2);
+                ggml_cann_type_mapping(type), ggml_type_size(type),
+                src_ne, src_nb, 2);
 
             // index
-            int64_t acl_index_ne[1] = {index->ne[0]};
-            size_t acl_index_nb[1] = {index->nb[0]};
             aclTensor* acl_index = ggml_cann_create_tensor(
-                (char*)index->data + i * index->nb[2] + j * index->nb[1],
+                (char*)index->data + (i % index->ne[2]) * index->nb[2] + (j % index->ne[1]) * index->nb[1],
                 ggml_cann_type_mapping(index->type), ggml_element_size(index),
-                acl_index_ne, acl_index_nb, 1);
+                index->ne, index->nb, 1);
 
             // out
-            int64_t acl_out_ne[2] = {dst->ne[0], dst->ne[1]};
-            size_t acl_out_nb[2] = {dst->nb[0], dst->nb[1]};
             aclTensor* acl_out = ggml_cann_create_tensor(
-                (char*)dst->data + i * dst->nb[3] + j * dst->nb[2],
-                ggml_cann_type_mapping(dst->type), ggml_element_size(dst),
-                acl_out_ne, acl_out_nb, 2);
-            GGML_CANN_CALL_ACLNN_OP(ctx, Embedding, acl_src_tensor, acl_index, acl_out);
+                (char*)dst_buffer + i * dst_nb[3] + j * dst_nb[2],
+                ggml_cann_type_mapping(type), ggml_type_size(type),
+                dst_ne, dst_nb, 2);
+            GGML_CANN_CALL_ACLNN_OP(ctx, IndexSelect, acl_src_tensor, 0, acl_index, acl_out);
+            ggml_cann_release_resources(ctx, acl_src_tensor, acl_index, acl_out);
+        }
+    }
+}
+
+/**
+ * @brief Performs inplace index copy operation on a 4D tensor using the CANN backend.
+ *
+ * This function applies the `IndexCopy` operation along a specific dimension of the
+ * destination tensor (`dst_buffer`) by copying elements from the source tensor (`src_buffer`)
+ * to positions specified by the index tensor (`index`).
+ * It iterates over the last two dimensions of the tensors, creates the corresponding
+ * CANN tensors for source, index, and destination slices, and performs the index copy
+ * operation for each slice.
+ *
+ * @param ctx The context for CANN backend operations.
+ * @param src_buffer The source buffer containing the 4D input tensor data to be copied.
+ * @param src_ne The dimensions of the source tensor.
+ * @param src_nb The strides (byte offsets) of the source tensor.
+ * @param dst_buffer The destination buffer where values will be copied to.
+ * @param dst_ne The dimensions of the destination tensor.
+ * @param dst_nb The strides (byte offsets) of the destination tensor.
+ * @param index The index tensor specifying target positions in the destination tensor.
+ * @param type The data type of the source and destination tensors.
+ */
+static void aclnn_index_copy_4d(ggml_backend_cann_context& ctx,
+                                void* src_buffer,int64_t* src_ne, size_t* src_nb,
+                                void* dst_buffer, int64_t* dst_ne, size_t* dst_nb,
+                                ggml_tensor* index, ggml_type type) {
+    for (int64_t i = 0; i < src_ne[3]; i++) {
+        for (int64_t j = 0; j < src_ne[2]; j++) {
+            // src
+            aclTensor* acl_src_tensor = ggml_cann_create_tensor(
+                (char*)src_buffer + i * src_nb[3] + j * src_nb[2],
+                ggml_cann_type_mapping(type), ggml_type_size(type),
+                src_ne, src_nb, 2);
+
+            // index
+            aclTensor* acl_index = ggml_cann_create_tensor(
+                (char*)index->data + (i % index->ne[2]) * index->nb[2] + (j % index->ne[1]) * index->nb[1],
+                ggml_cann_type_mapping(index->type), ggml_element_size(index),
+                index->ne, index->nb, 1);
+
+            // out
+            aclTensor* acl_out = ggml_cann_create_tensor(
+                (char*)dst_buffer + i * dst_nb[3] + j * dst_nb[2],
+                ggml_cann_type_mapping(type), ggml_type_size(type),
+                dst_ne, dst_nb, 2);
+            GGML_CANN_CALL_ACLNN_OP(ctx, InplaceIndexCopy, acl_out, 0, acl_index, acl_src_tensor);
             ggml_cann_release_resources(ctx, acl_src_tensor, acl_index, acl_out);
         }
     }
@@ -1669,8 +1718,9 @@ void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
 
     switch (src0->type) {
         case GGML_TYPE_F32: {
-            aclnn_embedding_4d(ctx, src0->data, src0->ne, src0->nb, src1,
-                                   dst);
+            aclnn_index_select_4d(ctx, src0->data, src0->ne, src0->nb,
+                                dst->data, dst->ne, dst->nb,
+                                src1, dst->type);
             break;
         }
         case GGML_TYPE_F16: {
@@ -1687,8 +1737,9 @@ void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                 src_trans_buffer, ACL_FLOAT, ggml_type_size(dst->type),
                 src0->ne, src_trans_nb, GGML_MAX_DIMS);
             aclnn_cast(ctx, acl_src0, src_trans_tensor, ggml_cann_type_mapping(dst->type));
-            aclnn_embedding_4d(ctx, src_trans_buffer, src0->ne,
-                                   src_trans_nb, src1, dst);
+            aclnn_index_select_4d(ctx, src_trans_buffer, src0->ne, src_trans_nb,
+                                dst->data, dst->ne, dst->nb,
+                                src1, dst->type);
             ggml_cann_release_resources(ctx, acl_src0, src_trans_tensor);
             break;
         }
@@ -1748,14 +1799,53 @@ void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
                 dequant_nb[i] = dequant_nb[i - 1] * src0->ne[i - 1];
             }
 
-            aclnn_embedding_4d(ctx, dequant_buffer_allocator.get(),
-                                   dequant_ne, dequant_nb, src1, dst);
+            aclnn_index_select_4d(ctx, dequant_buffer_allocator.get(),
+                                   dequant_ne, dequant_nb,
+                                   dst->data, dst->ne, dst->nb,
+                                   src1, dst->type);
 
             ggml_cann_release_resources(ctx, dequant_tensor);
             break;
         }
         default:
             GGML_ABORT("Unsupported tensor type for GGML_OP_GET_ROWS");
+            break;
+    }
+}
+
+void ggml_cann_set_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    ggml_tensor* src0 = dst->src[0];  // src
+    ggml_tensor* src1 = dst->src[1];  // index
+
+    switch (dst->type) {
+        case GGML_TYPE_F32: {
+            aclnn_index_copy_4d(ctx, src0->data, src0->ne, src0->nb,
+                                dst->data, dst->ne, dst->nb,
+                                src1, dst->type);
+            break;
+        }
+        case GGML_TYPE_F16: {
+            aclTensor* acl_src0 = ggml_cann_create_tensor(src0);
+            ggml_cann_pool_alloc src_buffer_allocator(
+                ctx.pool(), ggml_nelements(src0) * sizeof(uint16_t));
+            void* src_trans_buffer = src_buffer_allocator.get();
+            size_t src_trans_nb[GGML_MAX_DIMS];
+            src_trans_nb[0] = sizeof(uint16_t);
+            for (int i = 1; i < GGML_MAX_DIMS; i++) {
+                src_trans_nb[i] = src_trans_nb[i - 1] * src0->ne[i - 1];
+            }
+            aclTensor* src_trans_tensor = ggml_cann_create_tensor(
+                src_trans_buffer, ACL_FLOAT16, ggml_type_size(dst->type),
+                src0->ne, src_trans_nb, GGML_MAX_DIMS);
+            aclnn_cast(ctx, acl_src0, src_trans_tensor, ggml_cann_type_mapping(dst->type));
+            aclnn_index_copy_4d(ctx, src_trans_buffer, src0->ne, src_trans_nb,
+                                dst->data, dst->ne, dst->nb,
+                                src1, dst->type);
+            ggml_cann_release_resources(ctx, acl_src0, src_trans_tensor);
+            break;
+        }
+        default:
+            GGML_ABORT("Unsupported tensor type for GGML_OP_SET_ROWS");
             break;
     }
 }
