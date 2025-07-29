@@ -28,7 +28,17 @@ OutputVector translate_mulmat(const NodeContext& context) {
 
     ov::Output<Node> res;
     ov::Output<ov::Node> B = context.get_input(0);
-    ov::Output<ov::Node> A = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
+    ov::Output<ov::Node> A = context.get_input(1);
+    if (context.get_op_case() == 1) {
+        if (context.get_input_type(0) == ov::element::f16) {
+            B = std::make_shared<ov::op::v0::Convert>(context.get_input(0), ov::element::f32);
+        }
+        if (context.get_input_type(1) == ov::element::f16) {
+            A = std::make_shared<ov::op::v0::Convert>(context.get_input(1), ov::element::f32);
+        }
+    } else {
+        A = std::make_shared<ov::op::v0::Convert>(context.get_input(1), context.get_input_type(0));
+    }
 
     auto B_shape = context.get_input_shape(0).to_shape();
     auto A_shape = context.get_input_shape(1).to_shape();
