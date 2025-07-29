@@ -280,22 +280,12 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
     const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(KQV);
 
-    if (GGML_CUDA_CC_IS_AMD(cc)) {
 #if defined(GGML_HIP_ROCWMMA_FATTN)
-        if (fp16_mma_available(cc)) {
-            ggml_cuda_flash_attn_ext_wmma_f16(ctx, dst);
-            return;
-        }
-#endif // defined(GGML_HIP_ROCWMMA_FATTN)
-
-        // On AMD the tile kernels perform poorly, use the vec kernel instead:
-        if (prec == GGML_PREC_DEFAULT && fast_fp16_available(cc)) {
-            ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
-        } else {
-            ggml_cuda_flash_attn_ext_vec_f32(ctx, dst);
-        }
+    if (GGML_CUDA_CC_IS_AMD(cc) && fp16_mma_available(cc)) {
+        ggml_cuda_flash_attn_ext_wmma_f16(ctx, dst);
         return;
     }
+#endif // defined(GGML_HIP_ROCWMMA_FATTN)
 
     if (!fast_fp16_available(cc)) {
         if (Q->ne[1] <= 8 || Q->ne[0] == 256) {

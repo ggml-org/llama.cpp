@@ -105,7 +105,7 @@ llama_context::llama_context(
 
     {
         const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
-        const bool supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : false;
+        supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : false;
 
         if (!supports_set_rows && !cparams.kv_unified) {
             LLAMA_LOG_WARN("%s: non-unified KV cache requires ggml_set_rows() - forcing unified KV cache\n", __func__);
@@ -298,7 +298,7 @@ llama_context::llama_context(
 
         cross.v_embd.clear();
 
-        // reserve pp graph first so that buffers are only allocated once
+        // reserve pp (prompt processing) graph first so that buffers are only allocated once
         {
             auto * gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
             if (!gf) {
@@ -309,7 +309,7 @@ llama_context::llama_context(
             n_nodes_pp  = ggml_graph_n_nodes(gf);
         }
 
-        // reserve with tg graph to get the number of splits and nodes
+        // reserve with tg (token generation) graph to get the number of splits and nodes
         {
             auto * gf = graph_reserve(n_seqs, n_seqs, n_seqs, mctx.get());
             if (!gf) {
@@ -508,11 +508,15 @@ enum llama_pooling_type llama_context::pooling_type() const {
 }
 
 float * llama_context::get_logits() {
+    output_reorder();
+
     return logits;
 }
 
 float * llama_context::get_logits_ith(int32_t i) {
     int64_t j = -1;
+
+    output_reorder();
 
     try {
         if (logits == nullptr) {
@@ -550,11 +554,15 @@ float * llama_context::get_logits_ith(int32_t i) {
 }
 
 float * llama_context::get_embeddings() {
+    output_reorder();
+
     return embd;
 }
 
 float * llama_context::get_embeddings_ith(int32_t i) {
     int64_t j = -1;
+
+    output_reorder();
 
     try {
         if (embd == nullptr) {
@@ -891,6 +899,12 @@ int llama_context::encode(const llama_batch & batch_inp) {
         }
     }
 
+    if (!supports_set_rows) {
+        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
+        // overlap with device computation.
+        ggml_backend_sched_reset(sched.get());
+    }
+
     // TODO: hacky solution
     if (model.arch == LLM_ARCH_T5 && t_embd) {
         //cross.t_embd = t_embd;
@@ -970,6 +984,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     embd_seq.clear();
+    output_swaps.clear();
 
     bool did_optimize = false;
 
@@ -1189,9 +1204,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
         // make the outputs have the same order they had in the user-provided batch
         // note: this is mostly relevant for recurrent models atm
         if (!sorted_output) {
-            const uint32_t n_vocab = model.vocab.n_tokens();
-            const uint64_t n_embd  = model.hparams.n_embd;
-
             GGML_ASSERT((size_t) n_outputs == out_ids.size());
 
             // TODO: is there something more efficient which also minimizes swaps?
@@ -1207,16 +1219,9 @@ int llama_context::decode(const llama_batch & batch_inp) {
                     continue;
                 }
                 std::swap(out_ids[i], out_ids[j_min]);
-                if (logits_size > 0) {
-                    for (uint32_t k = 0; k < n_vocab; k++) {
-                        std::swap(logits[i*n_vocab + k], logits[j_min*n_vocab + k]);
-                    }
-                }
-                if (embd_size > 0) {
-                    for (uint32_t k = 0; k < n_embd; k++) {
-                        std::swap(embd[i*n_embd + k], embd[j_min*n_embd + k]);
-                    }
-                }
+
+                // remember the swaps and apply them lazily upon logits/embeddings access
+                output_swaps.push_back({ i, j_min });
             }
 
             std::fill(output_ids.begin(), output_ids.end(), -1);
@@ -1229,6 +1234,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    if (!supports_set_rows) {
+        // Reset state for the next token before backend sync, to allow the CPU activities in the reset to
+        // overlap with device computation.
+        ggml_backend_sched_reset(sched.get());
+    }
 
     return 0;
 }
@@ -1305,6 +1316,30 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     this->n_outputs = 0;
 
     return n_outputs_max;
+}
+
+void llama_context::output_reorder() {
+    const uint32_t n_vocab = model.vocab.n_tokens();
+    const uint64_t n_embd  = model.hparams.n_embd;
+
+    for (uint32_t s = 0; s < output_swaps.size(); ++s) {
+        const uint32_t i0 = output_swaps[s].i0;
+        const uint32_t i1 = output_swaps[s].i1;
+
+        if (logits_size > 0) {
+            for (uint32_t k = 0; k < n_vocab; k++) {
+                std::swap(logits[i0*n_vocab + k], logits[i1*n_vocab + k]);
+            }
+        }
+
+        if (embd_size > 0) {
+            for (uint32_t k = 0; k < n_embd; k++) {
+                std::swap(embd[i0*n_embd + k], embd[i1*n_embd + k]);
+            }
+        }
+    }
+
+    output_swaps.clear();
 }
 
 //

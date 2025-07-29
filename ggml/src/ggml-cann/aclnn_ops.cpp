@@ -99,7 +99,7 @@ void bcast_shape(ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst, aclT
     }
 }
 
-void ggml_cann_unary_op(
+void ggml_cann_op_unary(
     std::function<void(ggml_backend_cann_context&, aclTensor*, aclTensor*)> unary_op,
     ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     ggml_tensor* src = dst->src[0];
@@ -109,6 +109,42 @@ void ggml_cann_unary_op(
 
     unary_op(ctx, acl_src, acl_dst);
     ggml_cann_release_resources(ctx, acl_src, acl_dst);
+}
+
+void ggml_cann_op_unary_gated(
+    std::function<void(ggml_backend_cann_context&, aclTensor*, aclTensor*)> unary_op,
+    ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    ggml_tensor* src0 = dst->src[0];
+    ggml_tensor* src1 = dst->src[1];
+
+    GGML_ASSERT(ggml_is_contiguous_1(src0));
+    GGML_ASSERT(ggml_is_contiguous_1(dst));
+    const int32_t swapped = ggml_get_op_params_i32(dst, 1);
+
+    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclTensor *acl_src0 = nullptr, *acl_src1 = nullptr;
+    if(src1) {
+        GGML_ASSERT(ggml_is_contiguous_1(src1));
+        GGML_ASSERT(src0->type == src1->type);
+
+        acl_src0 = ggml_cann_create_tensor(src0);
+        acl_src1 = ggml_cann_create_tensor(src1);
+    } else {
+        int64_t ne[] = {src0->ne[0] / 2, src0->ne[1], src0->ne[2], src0->ne[3]};
+        size_t nb[] = {src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3]};
+        acl_src0 = ggml_cann_create_tensor(src0, ne, nb, GGML_MAX_DIMS, ACL_FORMAT_ND, 0);
+        acl_src1 = ggml_cann_create_tensor(src0, ne, nb, GGML_MAX_DIMS, ACL_FORMAT_ND, ne[0] * ggml_element_size(src0));
+        if (swapped) {
+            std::swap(acl_src0, acl_src1);
+        }
+    }
+
+    unary_op(ctx, acl_src0, acl_dst);
+    GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, acl_dst, acl_src1);
+
+    ggml_cann_release_resources(ctx, acl_src0, acl_dst);
+    if(src1)
+        ggml_cann_release_resources(ctx, acl_src1);
 }
 
 /**
@@ -1785,8 +1821,27 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
     size_t transpose_nb[] = {bcast_weight_nb[1], bcast_weight_nb[0],
                              bcast_weight_nb[2], bcast_weight_nb[3],
                              bcast_weight_nb[4], bcast_weight_nb[5]};
-    aclTensor* acl_weight_tensor =
-        ggml_cann_create_tensor(weight, transpose_ne, transpose_nb, n_dims);
+    aclTensor* acl_weight_tensor;
+
+    bool weightToNZ = false;
+#ifdef ASCEND_310P
+    weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
+#endif
+    if (weightToNZ && is_matmul_weight(weight)) {
+        int64_t acl_stride[2] = {1, transpose_ne[1]};
+
+        // Reverse ne.
+        std::reverse(transpose_ne, transpose_ne + n_dims);
+
+        std::vector<int64_t> storageDims = {transpose_ne[0], transpose_ne[1]};
+
+        acl_weight_tensor = aclCreateTensor(
+            transpose_ne, n_dims, ggml_cann_type_mapping(weight->type), acl_stride,
+            0, ACL_FORMAT_FRACTAL_NZ, storageDims.data(), 2, weight->data);
+    } else {
+        acl_weight_tensor =
+            ggml_cann_create_tensor(weight, transpose_ne, transpose_nb, n_dims, ACL_FORMAT_ND);
+    }
     aclTensor* acl_dst =
         ggml_cann_create_tensor(dst, bcast_dst_ne, bcast_dst_nb, n_dims);
 
