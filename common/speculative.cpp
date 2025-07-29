@@ -1,5 +1,6 @@
 #include "speculative.h"
 
+#include "ggml.h"
 #include "llama.h"
 #include "log.h"
 #include "common.h"
@@ -201,24 +202,22 @@ llama_tokens common_speculative_gen_draft(
 
     llama_tokens prompt_tgt_draft_model;
     if (!spec->vocab_dft_compatible) {
-        const llama_model * model_tgt = llama_get_model(ctx_tgt);
-
         std::string text;
         text = common_detokenize(ctx_tgt, prompt_tgt_main_model, true);
         text = replace_to_dft(spec, text);
         LOG_DBG("main->draft detokenized string: '%s'\n", text.c_str());
         prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, true);
-        text.clear();
 
-        const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
-        int32_t n_chars;
-        n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, true);
-        if (n_chars < 0) {
-            text.resize(-n_chars);
-            n_chars = llama_detokenize(vocab_tgt, &id_last, 1, &text[0], text.size(), false, true);
-        }
-        text.resize(n_chars);
+        // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
+        const auto *model_tgt = llama_get_model(ctx_dft);
+        const auto *vocab_tgt = llama_model_get_vocab(model_tgt);
+
+        int32_t n_chars = llama_detokenize(vocab_tgt, &id_last, 1, nullptr, 0, false, false);
+        GGML_ASSERT(n_chars < 0 && "failed to detokenize id_last");
+        text.resize(-n_chars);
+        llama_detokenize(vocab_tgt, &id_last, 1, text.data(), text.size(), false, false);
         text = replace_to_dft(spec, text);
+
         LOG_DBG("main->draft detokenized id_last(%d): '%s'\n", id_last, text.c_str());
         id_last = common_tokenize(ctx_dft, text, false, true)[0];
     }
