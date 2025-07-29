@@ -3,17 +3,13 @@
 	import remarkHtml from 'remark-html';
 	import remarkGfm from 'remark-gfm';
 	import remarkBreaks from 'remark-breaks';
-	import { onMount } from 'svelte';
-	import { mode } from 'mode-watcher';
-	import remarkShiki from '$lib/utils/remark-shiki';
 
 	interface Props {
 		content: string;
 		class?: string;
-		variant?: 'message' | 'thinking';
 	}
 
-	let { content, class: className = '', variant = 'message' }: Props = $props();
+	let { content, class: className = '' }: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
@@ -23,9 +19,6 @@
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
 			.use(remarkBreaks) // Convert line breaks to <br>
-			.use(remarkShiki, {
-				theme: mode.current === 'dark' ? 'dark' : 'light'
-			}) // Shiki syntax highlighting
 			.use(remarkHtml, { sanitize: false }); // Convert to HTML
 	});
 
@@ -40,29 +33,6 @@
 			return text.replace(/\n/g, '<br>');
 		}
 	}
-
-	// Update processed content when content or theme changes
-	$effect(() => {
-		if (content) {
-			processMarkdown(content)
-				.then((result) => {
-					processedHtml = result;
-				})
-				.catch((error) => {
-					console.error('Failed to process markdown:', error);
-					processedHtml = content.replace(/\n/g, '<br>');
-				});
-		} else {
-			processedHtml = '';
-		}
-	});
-
-	// Setup copy-to-clipboard functionality after content is rendered
-	$effect(() => {
-		if (containerRef && processedHtml) {
-			setupCopyButtons();
-		}
-	});
 
 	// Function to setup copy-to-clipboard buttons
 	function setupCopyButtons() {
@@ -88,109 +58,33 @@
 		});
 	}
 
-	// Initialize Shiki highlighter on mount
-	onMount(async () => {
-		try {
-			// Initialize the highlighter to ensure it's ready
-			const { initHighlighter } = await import('$lib/utils/syntax-highlighting');
-			await initHighlighter();
-		} catch (error) {
-			console.error('Failed to initialize syntax highlighter:', error);
+	// Update processed content when content or theme changes
+	$effect(() => {
+		if (content) {
+			processMarkdown(content)
+				.then((result) => {
+					processedHtml = result;
+				})
+				.catch((error) => {
+					console.error('Failed to process markdown:', error);
+					processedHtml = content.replace(/\n/g, '<br>');
+				});
+		} else {
+			processedHtml = '';
 		}
 	});
 
-	// Dynamic classes based on variant
-	const containerClasses = $derived(() => {
-		const baseClasses = 'prose prose-sm dark:prose-invert max-w-none';
-		const variantClasses =
-			variant === 'thinking'
-				? 'text-muted-foreground prose-headings:text-muted-foreground prose-strong:text-muted-foreground prose-code:text-muted-foreground prose-a:text-muted-foreground'
-				: 'text-foreground';
-
-		// Enhanced prose styling for better chat appearance
-		const chatClasses = [
-			// Base typography
-			'prose-p:mb-4 prose-p:leading-relaxed prose-p:text-foreground',
-			
-			// Headers with consistent spacing
-			'prose-h1:text-2xl prose-h1:font-bold prose-h1:mt-6 prose-h1:mb-3',
-			'prose-h2:text-xl prose-h2:font-semibold prose-h2:mt-5 prose-h2:mb-2',
-			'prose-h3:text-lg prose-h3:font-semibold prose-h3:mt-4 prose-h3:mb-2',
-			'prose-h4:text-base prose-h4:font-semibold prose-h4:mt-3 prose-h4:mb-1',
-			'prose-h5:text-base prose-h5:font-medium prose-h5:mt-2 prose-h5:mb-1',
-			'prose-h6:text-sm prose-h6:font-medium prose-h6:mt-2 prose-h6:mb-1',
-			
-			// Text formatting
-			'prose-strong:font-semibold prose-strong:text-foreground',
-			'prose-em:italic prose-em:text-foreground',
-			'prose-del:text-muted-foreground prose-del:no-underline',
-			
-			// Inline code
-			'prose-code:bg-muted/50 prose-code:text-foreground prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded-md prose-code:text-sm prose-code:font-mono prose-code:before:content-none prose-code:after:content-none',
-			
-			// Links
-			'prose-a:text-primary prose-a:hover:text-primary/80 prose-a:underline prose-a:underline-offset-2 prose-a:transition-colors',
-			
-			// Lists
-			'prose-ul:list-disc prose-ul:ml-4 prose-ul:mb-4',
-			'prose-ol:list-decimal prose-ol:ml-4 prose-ol:mb-4',
-			'prose-li:ml-2 prose-li:mb-1 prose-li:marker:text-muted-foreground',
-			'prose-li:pl-2',
-			
-			// Nested lists
-			'prose-ul:prose-ul:list-circle prose-ol:prose-ol:list-lower-alpha',
-			
-			// Task lists
-			'[&_.task-list-item]:list-none [&_.task-list-item]:ml-0 [&_.task-list-item]:pl-0',
-			'[&_.task-list-item-checkbox]:mr-2 [&_.task-list-item-checkbox]:mt-0.5',
-			
-			// Blockquotes
-			'prose-blockquote:border-l-4 prose-blockquote:border-muted prose-blockquote:pl-4 prose-blockquote:py-1 prose-blockquote:italic prose-blockquote:text-muted-foreground prose-blockquote:bg-muted/20',
-			
-			// Tables
-			'prose-table:w-full prose-table:my-4 prose-table:border-collapse',
-			'prose-th:border prose-th:border-border prose-th:bg-muted/30 prose-th:px-3 prose-th:py-2 prose-th:text-left prose-th:font-semibold',
-			'prose-td:border prose-td:border-border prose-td:px-3 prose-td:py-2',
-			'prose-tr:nth-child(even):bg-muted/10',
-			
-			// Horizontal rules
-			'prose-hr:border-border prose-hr:my-6',
-			
-			// Code blocks
-			'prose-pre:!bg-transparent prose-pre:!p-0 prose-pre:!m-0 prose-pre:!border-0',
-			
-			// Shiki syntax highlighting
-			'[&_.shiki]:rounded-lg [&_.shiki]:p-4  [&_.shiki]:overflow-x-auto [&_.shiki]:border [&_.shiki]:border-border',
-			'[&_.shiki_code]:block [&_.shiki_code]:text-sm [&_.shiki_code]:font-mono [&_.shiki_code]:leading-relaxed',
-			
-			// Mentions and hashtags
-			'[&_.mention]:text-primary [&_.mention]:font-medium [&_.mention]:hover:underline',
-			'[&_.hashtag]:text-primary [&_.hashtag]:font-medium [&_.hashtag]:hover:underline',
-			
-			// Images
-			'prose-img:rounded-lg prose-img:shadow-sm prose-img:my-4',
-			
-			// Responsive design
-			'max-w-none',
-			'sm:prose-p:text-base',
-			'sm:prose-h1:text-3xl',
-			'sm:prose-h2:text-2xl',
-			'sm:prose-h3:text-xl'
-		].join(' ');
-
-		return `${baseClasses} ${variantClasses} ${chatClasses} ${className}`;
+	// Setup copy-to-clipboard functionality after content is rendered
+	$effect(() => {
+		if (containerRef && processedHtml) {
+			setupCopyButtons();
+		}
 	});
 </script>
 
-<div bind:this={containerRef} class={containerClasses}>
+<div bind:this={containerRef} class={className}>
 	{@html processedHtml}
 </div>
-
-{#if processedHtml}
-	<div class="markdown-enhancements" style="display: none;">
-		<!-- Hidden container for enhanced features -->
-	</div>
-{/if}
 
 <style>
 	/* Base typography styles */
@@ -378,90 +272,11 @@
 
 	/* Code blocks */
 	div :global(pre) {
+		background: var(--muted);
+		padding: 1.5rem 2rem;
 		margin: 1.5rem 0;
 		overflow-x: auto;
-		border-radius: 0.5rem;
-		background: transparent;
-		padding: 0;
-		border: none;
-	}
-
-	div :global(.pre) {
-		border: none;
-		padding: 1rem;
-		border-radius: 0.5rem;
-	}
-
-	/* Shiki code blocks */
-	div :global(.shiki) {
-		border-radius: 0.5rem;
-		border: 1px solid var(--border);
-		overflow-x: auto;
-		margin: 1.5rem 0;
-		padding: 3.5rem 1rem 1rem;
-		position: relative;
-	}
-
-	/* Code block wrapper */
-	div :global(.code-block-wrapper) {
-		position: relative;
-		margin: 1.5rem 0;
-		border-radius: 0.5rem;
-		overflow: hidden;
-		border: 1px solid var(--border);
-		background: hsl(var(--background));
-	}
-
-	div :global(.code-block-header) {
-		background: hsl(var(--muted));
-		border-bottom: 1px solid var(--border);
-		height: 2.5rem;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 0 1rem;
-	}
-
-	div :global(.code-block-header span) {
-		font-size: 0.75rem;
-		font-weight: 500;
-		color: hsl(var(--muted-foreground));
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-	}
-
-	div :global(.copy-code-btn) {
-		border: none;
-		background: none;
-		cursor: pointer;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		border-radius: 0.25rem;
-		padding: 0.25rem;
-		color: hsl(var(--muted-foreground));
-		transition: all 0.2s ease;
-	}
-
-	div :global(.copy-code-btn:hover) {
-		background: hsl(var(--accent));
-		color: hsl(var(--accent-foreground));
-	}
-
-	div :global(.code-content) {
-		position: relative;
-	}
-
-	div :global(.code-content pre) {
-		margin: 0;
-		border-radius: 0;
-		border: none;
-		background: transparent;
-	}
-
-	div :global(.code-content .shiki) {
-		border-radius: 0;
-		margin: 0;
+		border-radius: 1rem;
 		border: none;
 	}
 
