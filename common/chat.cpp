@@ -1944,7 +1944,7 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
         }
     }
     auto msg = builder.result();
-    if (msg.content == truncate_incomplete_utf8(msg.content)) {
+    if (!is_partial) {
         LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
     }
     return msg;

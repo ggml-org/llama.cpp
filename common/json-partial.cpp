@@ -254,27 +254,3 @@ bool common_json_parse(
     it = end;
     return true;
 }
-
-std::string truncate_incomplete_utf8(const std::string & str) {
-    if (str.empty()) return str;
-
-    size_t len = str.length();
-    size_t pos = len;
-
-    while (pos > 0) {
-        --pos;
-        unsigned char byte = static_cast<unsigned char>(str[pos]);
-
-        int explen;
-        if      ((byte & 0xC0) == 0x80) continue;
-        if      ((byte & 0x80) == 0x00) explen = 1; // ASCII (0xxxxxxx) - 1 byte
-        else if ((byte & 0xE0) == 0xC0) explen = 2; // 2-byte sequence (110xxxxx)
-        else if ((byte & 0xF0) == 0xE0) explen = 3; // 3-byte sequence (1110xxxx)
-        else if ((byte & 0xF8) == 0xF0) explen = 4; // 4-byte sequence (11110xxx)
-        else return str.substr(0, pos);             // Invalid UTF-8 start byte
-
-        return str.substr(0, pos + (pos + explen <= len ? explen : 0));
-    }
-
-    return "";
-}
