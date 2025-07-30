@@ -81,6 +81,10 @@ int main(int argc, char ** argv) {
 
     params.embedding = true;
 
+    if (params.n_parallel == 1) {
+        params.kv_unified = true;
+    }
+
     // utilize the full context
     if (params.n_batch < params.n_ctx) {
         LOG_WRN("%s: setting batch size to %d\n", __func__, params.n_ctx);
