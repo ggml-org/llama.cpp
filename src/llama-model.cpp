@@ -4418,6 +4418,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
 
                         // Check if this layer uses MoE or dense FFN based on n_layer_dense_lead
+                        // GLM 4.5 uses hybrid architecture: layer 0 is dense, layers 1+ are MoE
                         const bool use_moe =
                             (hparams.n_expert > 0) && (static_cast<uint32_t>(i) >= hparams.n_layer_dense_lead);
 
@@ -13586,7 +13587,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                             n_expert, n_expert_used,
                             LLM_FFN_SILU, true,
                             false, 0.0,
-                            LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
+                            (llama_expert_gating_func_type) hparams.expert_gating_func,
                             il);
                 cb(moe_out, "ffn_moe_out", il);
 
