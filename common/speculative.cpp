@@ -209,8 +209,8 @@ llama_tokens common_speculative_gen_draft(
         prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, true);
 
         // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
-        const auto *model_tgt = llama_get_model(ctx_tgt);
-        const auto *vocab_tgt = llama_model_get_vocab(model_tgt);
+        const auto * model_tgt = llama_get_model(ctx_tgt);
+        const auto * vocab_tgt = llama_model_get_vocab(model_tgt);
 
         int32_t n_chars = llama_detokenize(vocab_tgt, &id_last, 1, nullptr, 0, false, false);
         GGML_ASSERT(n_chars < 0 && "failed to detokenize id_last");
