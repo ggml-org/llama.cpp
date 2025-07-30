@@ -6603,19 +6603,19 @@ class Glm4MoeModel(TextModel):
         self.gguf_writer.add_tokenizer_pre(tokpre)
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+
+        # Set special tokens
         special_vocab._set_special_token(
             "eos", tokenizer.get_added_vocab()["<|endoftext|>"]
         )
         special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
-        special_vocab._set_special_token("eog", tokenizer.get_added_vocab()["<|user|>"])
-        special_vocab._set_special_token("eog", tokenizer.get_added_vocab()["<|observation|>"])
         special_vocab._set_special_token(
             "unk", tokenizer.get_added_vocab()["<|endoftext|>"]
         )
         special_vocab._set_special_token(
             "bos", tokenizer.get_added_vocab()["<|endoftext|>"]
         )
+        special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
