@@ -638,7 +638,9 @@ extern "C" {
         void * extra; // extra things e.g. for ggml-cuda.cu
 
 #ifdef GGML_NUMA_MIRROR
-        char padding[4];
+        char padding[10];
+#else
+	char padding[8];
 #endif
     };
 
