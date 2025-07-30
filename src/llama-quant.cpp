@@ -875,9 +875,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
             if (!params->pure && ggml_is_quantized(default_type)) {
+                int fallback = qs.n_fallback;
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
                 // unless the user specifies a type
-                if (params->tensor_types) {
+                if (params->tensor_types && qs.n_fallback - fallback == 0) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
                     const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
