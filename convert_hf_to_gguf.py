@@ -69,7 +69,6 @@ class ModelBase:
     lazy: bool
     part_names: list[str]
     is_safetensors: bool
-    is_mistral_format: bool
     hparams: dict[str, Any]
     tensor_names: set[str] | None
     gguf_writer: gguf.GGUFWriter
@@ -91,8 +90,7 @@ class ModelBase:
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
-                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None,
-                 remote_hf_model_id: str | None = None):
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -106,7 +104,6 @@ class ModelBase:
         self.use_temp_file = use_temp_file
         self.lazy = not eager or (remote_hf_model_id is not None)
         self.remote_hf_model_id = remote_hf_model_id
-
         if remote_hf_model_id is not None:
             self.is_safetensors = True
 
@@ -2001,7 +1998,13 @@ class LlamaModel(TextModel):
         path_tekken_json = self.dir_model / "tekken.json"
         path_tokenizer_json = self.dir_model / "tokenizer.json"
         if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
-            return self.set_vocab_tekken()
+            self._set_vocab_mistral()
+
+            script_dir = Path(__file__).parent
+            template_path = script_dir / "models/templates/unsloth-mistral-Devstral-Small-2507.jinja"
+            with open(template_path, "r", encoding="utf-8") as f:
+                template = f.read()
+                self.gguf_writer.add_chat_template(template)
 
         try:
             self._set_vocab_sentencepiece()
@@ -2033,16 +2036,7 @@ class LlamaModel(TextModel):
 
         # Apply to granite small models only
         if self.hparams.get("vocab_size", 32000) == 49152:
-            self.gguf_writer.add_add_bos_token(False)
-
-    def set_vocab_tekken(self):
-        self._set_vocab_mistral()
-
-        script_dir = Path(__file__).parent
-        template_path = script_dir / "models/templates/unsloth-mistral-Devstral-Small-2507.jinja"
-        with open(template_path, "r", encoding="utf-8") as f:
-            template = f.read()
-            self.gguf_writer.add_chat_template(template)
+            self.gguf_writer.add_add_bos_token(False)        
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
