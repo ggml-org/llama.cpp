@@ -109,9 +109,10 @@ static bool server_task_type_need_logits(server_task_type task_type) {
 }
 
 struct slot_params {
-    bool stream        = true;
-    bool cache_prompt  = true; // remember the prompt to avoid reprocessing all prompt
-    bool return_tokens = false;
+    bool stream                   = true;
+    bool cache_prompt             = true; // remember the prompt to avoid reprocessing all prompt
+    bool return_tokens            = false;
+    bool return_progress          = false; // include prompt processing progress in streaming responses
 
     int32_t n_keep    =  0; // number of tokens to keep from initial prompt
     int32_t n_discard =  0; // number of tokens after n_keep that may be discarded when shifting context, 0 defaults to half
@@ -262,9 +263,10 @@ struct server_task {
         params.verbose           = params_base.verbosity > 9;
         params.timings_per_token = json_value(data, "timings_per_token", false);
 
-        params.stream           = json_value(data, "stream",             false);
-        params.cache_prompt     = json_value(data, "cache_prompt",       true);
-        params.return_tokens    = json_value(data, "return_tokens",      false);
+        params.stream                  = json_value(data, "stream",                  false);
+        params.cache_prompt            = json_value(data, "cache_prompt",            true);
+        params.return_tokens           = json_value(data, "return_tokens",           false);
+        params.return_progress         = json_value(data, "return_progress",         false);
         params.n_predict        = json_value(data, "n_predict",          json_value(data, "max_tokens", defaults.n_predict));
         params.n_indent         = json_value(data, "n_indent",           defaults.n_indent);
         params.n_keep           = json_value(data, "n_keep",             defaults.n_keep);
@@ -906,6 +908,12 @@ struct server_task_result_cmpl_partial : server_task_result {
     completion_token_output prob_output;
     result_timings timings;
 
+    // Progress fields (only populated when is_progress_response is true)
+    bool is_progress_response = false;
+    int32_t n_past = 0;
+    int32_t n_prompt_tokens_processed = 0;
+    float progress = 0.0f;
+
     // OAI-compat fields
     bool            verbose   = false;
     oaicompat_type  oaicompat = OAICOMPAT_TYPE_NONE;
@@ -952,6 +960,15 @@ struct server_task_result_cmpl_partial : server_task_result {
         if (!prob_output.probs.empty()) {
             res["completion_probabilities"] = completion_token_output::probs_vector_to_json({prob_output}, post_sampling_probs);
         }
+        // include prompt processing progress if this is a progress response
+        if (is_progress_response) {
+            res["prompt_processing"] = json {
+                {"n_past", n_past},
+                {"n_prompt_tokens", n_prompt_tokens},
+                {"n_prompt_tokens_processed", n_prompt_tokens_processed},
+                {"progress", progress},
+            };
+        }
         return res;
     }
 
@@ -991,6 +1008,31 @@ struct server_task_result_cmpl_partial : server_task_result {
     }
 
     json to_json_oaicompat_chat() {
+        // Handle progress responses for chat completions
+        if (is_progress_response) {
+            std::time_t t = std::time(0);
+            return json {
+                {"choices", json::array({
+                    json {
+                        {"finish_reason", nullptr},
+                        {"index", 0},
+                        {"delta", json::object()},
+                    },
+                })},
+                {"created", t},
+                {"id", oaicompat_cmpl_id},
+                {"model", oaicompat_model},
+                {"system_fingerprint", build_info},
+                {"object", "chat.completion.chunk"},
+                {"prompt_processing", json {
+                    {"n_past", n_past},
+                    {"n_prompt_tokens", n_prompt_tokens},
+                    {"n_prompt_tokens_processed", n_prompt_tokens_processed},
+                    {"progress", progress},
+                }},
+            };
+        }
+
         bool first = n_decoded == 1;
         std::time_t t = std::time(0);
         json choices;
@@ -2523,6 +2565,41 @@ struct server_context {
         queue_results.send(std::move(res));
     }
 
+    void send_progress_response(server_slot & slot) {
+        // Only send progress if explicitly requested and streaming is enabled
+        if (!slot.params.return_progress || !slot.params.stream) {
+            return;
+        }
+
+        // Calculate current progress percentage
+        float current_progress = slot.n_prompt_tokens > 0 ?
+                                (float) slot.n_prompt_tokens_processed / slot.n_prompt_tokens : 0.0f;
+
+
+        auto res = std::make_unique<server_task_result_cmpl_partial>();
+
+        res->id      = slot.id_task;
+        res->index   = slot.index;
+        res->content = ""; // empty content for progress responses
+        res->tokens  = {}; // empty tokens for progress responses
+
+        res->n_decoded       = 0; // no tokens decoded yet during prompt processing
+        res->n_prompt_tokens = slot.n_prompt_tokens;
+
+        // Progress-specific fields
+        res->is_progress_response        = true;
+        res->n_past                      = slot.n_past;
+        res->n_prompt_tokens_processed   = slot.n_prompt_tokens_processed;
+        res->progress                    = current_progress;
+
+        res->verbose               = slot.params.verbose;
+        res->oaicompat             = slot.params.oaicompat;
+        res->oaicompat_model       = slot.params.oaicompat_model;
+        res->oaicompat_cmpl_id     = slot.params.oaicompat_cmpl_id;
+
+        queue_results.send(std::move(res));
+    }
+
     void send_final_response(server_slot & slot) {
         auto res = std::make_unique<server_task_result_cmpl_final>();
         res->id              = slot.id_task;
@@ -3348,8 +3425,12 @@ struct server_context {
 
                     SLT_INF(slot, "prompt processing progress, n_past = %d, n_tokens = %d, progress = %f\n", slot.n_past, batch.n_tokens, (float) slot.n_prompt_tokens_processed / slot.n_prompt_tokens);
 
+                    // Send progress response if requested
+                    send_progress_response(slot);
+
                     // entire prompt has been processed
                     if (slot.n_past == slot.n_prompt_tokens) {
+                        
                         slot.state = SLOT_STATE_DONE_PROMPT;
 
                         GGML_ASSERT(batch.n_tokens > 0);

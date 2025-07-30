@@ -8,6 +8,7 @@ server: ServerProcess
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
+    server.server_port = 8080  
 
 
 @pytest.mark.parametrize(
@@ -351,3 +352,165 @@ def test_logprobs_stream():
                     assert token.top_logprobs is not None
                     assert len(token.top_logprobs) > 0
     assert aggregated_text == output_text
+
+
+def test_progress_feature_enabled():
+    """Test progress feature when return_progress is enabled"""
+    global server
+    server.start()
+    
+    # Create a long prompt to ensure multiple batches are processed
+    long_prompt = "This is a comprehensive test prompt designed to verify the progress functionality thoroughly. " * 100
+    
+    res = server.make_stream_request("POST", "/chat/completions", data={
+        "max_tokens": 10,
+        "messages": [
+            {"role": "user", "content": long_prompt},
+        ],
+        "stream": True,
+        "return_progress": True,
+    })
+    
+    progress_responses = []
+    content_responses = []
+    
+    for data in res:
+        choice = data["choices"][0]
+        
+        # Check for progress responses (they can be at root level or in delta)
+        if "prompt_processing" in data:
+            progress_responses.append(data["prompt_processing"])
+        elif "delta" in choice and "prompt_processing" in choice["delta"]:
+            progress_responses.append(choice["delta"]["prompt_processing"])
+        elif "delta" in choice and "content" in choice["delta"] and choice["delta"]["content"]:
+            content_responses.append(data)
+    
+    # Verify we received progress responses
+    assert len(progress_responses) > 0, "No progress responses received"
+    
+    # Verify the last progress response shows 100% completion
+    last_progress = progress_responses[-1]
+    assert last_progress["progress"] >= 0.99, f"Progress did not reach 100% (last: {last_progress['progress']*100:.1f}%)"
+    
+    # Verify we received content responses
+    assert len(content_responses) > 0, "No content responses received"
+
+
+def test_progress_feature_disabled():
+    """Test that progress is not sent when return_progress is disabled"""
+    global server
+    server.start()
+    
+    # Create a long prompt
+    long_prompt = "This is a comprehensive test prompt designed to verify the progress functionality thoroughly. " * 100
+    
+    res = server.make_stream_request("POST", "/chat/completions", data={
+        "max_tokens": 10,
+        "messages": [
+            {"role": "user", "content": long_prompt},
+        ],
+        "stream": True,
+        "return_progress": False,  # Disable progress
+    })
+    
+    progress_responses = []
+    content_responses = []
+    
+    for data in res:
+        choice = data["choices"][0]
+        
+        # Check for progress responses (they can be at root level or in delta)
+        if "prompt_processing" in data:
+            progress_responses.append(data["prompt_processing"])
+        elif "delta" in choice and "prompt_processing" in choice["delta"]:
+            progress_responses.append(choice["delta"]["prompt_processing"])
+        elif "delta" in choice and "content" in choice["delta"] and choice["delta"]["content"]:
+            content_responses.append(data)
+    
+    # Verify no progress responses were received
+    assert len(progress_responses) == 0, f"Progress responses received when disabled: {len(progress_responses)}"
+    
+    # Verify we still received content responses
+    assert len(content_responses) > 0, "No content responses received"
+
+
+def test_progress_feature_completion_endpoint():
+    """Test progress feature on /completion endpoint"""
+    global server
+    server.start()
+    
+    # Create a long prompt
+    long_prompt = "This is a comprehensive test prompt designed to verify the progress functionality thoroughly. " * 100
+    
+    res = server.make_stream_request("POST", "/completion", data={
+        "prompt": long_prompt,
+        "stream": True,
+        "return_progress": True,
+        "max_tokens": 10,
+    })
+    
+    progress_responses = []
+    content_responses = []
+    
+    for data in res:
+        # Check for progress responses in /completion format
+        if "prompt_processing" in data:
+            progress_responses.append(data["prompt_processing"])
+        elif "content" in data and data["content"]:
+            content_responses.append(data)
+    
+    # Verify we received progress responses
+    assert len(progress_responses) > 0, "No progress responses received from /completion endpoint"
+    
+    # Verify the last progress response shows 100% completion
+    last_progress = progress_responses[-1]
+    assert last_progress["progress"] >= 0.99, f"Progress did not reach 100% (last: {last_progress['progress']*100:.1f}%)"
+    
+    # Verify we received content responses
+    assert len(content_responses) > 0, "No content responses received from /completion endpoint"
+
+
+def test_progress_feature_with_different_batch_sizes():
+    """Test progress feature behavior with different batch processing scenarios"""
+    global server
+    server.start()
+    
+    # Test with different prompt lengths to simulate different batch processing
+    test_cases = [
+        ("Short prompt", "Short test prompt"),
+        ("Medium prompt", "This is a medium length test prompt designed to test progress functionality. " * 20),
+        ("Long prompt", "This is a comprehensive test prompt designed to verify the progress functionality thoroughly. " * 100),
+    ]
+    
+    for test_name, prompt in test_cases:
+        res = server.make_stream_request("POST", "/chat/completions", data={
+            "max_tokens": 5,
+            "messages": [
+                {"role": "user", "content": prompt},
+            ],
+            "stream": True,
+            "return_progress": True,
+        })
+        
+        progress_responses = []
+        content_responses = []
+        
+        for data in res:
+            choice = data["choices"][0]
+            
+            # Check for progress responses (they can be at root level or in delta)
+            if "prompt_processing" in data:
+                progress_responses.append(data["prompt_processing"])
+            elif "delta" in choice and "prompt_processing" in choice["delta"]:
+                progress_responses.append(choice["delta"]["prompt_processing"])
+            elif "delta" in choice and "content" in choice["delta"] and choice["delta"]["content"]:
+                content_responses.append(data)
+        
+        # Verify progress functionality works for all prompt lengths
+        assert len(progress_responses) > 0, f"No progress responses for {test_name}"
+        assert len(content_responses) > 0, f"No content responses for {test_name}"
+        
+        # Verify progress reaches 100%
+        if progress_responses:
+            last_progress = progress_responses[-1]
+            assert last_progress["progress"] >= 0.99, f"Progress did not reach 100% for {test_name} (last: {last_progress['progress']*100:.1f}%)"
