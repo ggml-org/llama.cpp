@@ -430,9 +430,9 @@ struct llama_mmap::impl {
                         strerror(errno));
             }
         }
-#endif // ifndef GGML_NUMA_MIRROR
-
+        
         mapped_fragments.emplace_back(0, file->size());
+#endif // ifndef GGML_NUMA_MIRROR
     }
 
     static void align_range(size_t * first, size_t * last, size_t page_size) {
