@@ -648,25 +648,93 @@ extern "C" {
     extern __thread int ggml_current_numa_node;
 #endif
 
+#ifndef __cplusplus
+// C-only implementation using _Generic
 #define tensor_data(tensor) \
     _Generic((tensor), \
         struct ggml_tensor*: _tensor_data_ptr(tensor), \
         const struct ggml_tensor*: _tensor_data_ptr(tensor), \
-        default: _tensor_data_instance(tensor) \
+        default: _tensor_data_ptr(&(tensor)) \
     )
 
 #define tensor_set_data(tensor, value) \
     _Generic((tensor), \
         struct ggml_tensor*: _tensor_set_data_ptr(tensor, value), \
-        default: _tensor_set_data_instance(tensor, value) \
+        default: _tensor_set_data_ptr(&(tensor), value) \
     )
+#else
+// C++ implementation using function overloading
+static inline void * tensor_data(struct ggml_tensor * tensor) {
+#ifdef GGML_NUMA_MIRROR
+    int n = ggml_current_numa_node == -1 ? 0 : ggml_current_numa_node;
+    return tensor->__data[n];
+#else
+    return tensor->data;
+#endif
+}
+static inline void * tensor_data(const struct ggml_tensor * tensor) {
+#ifdef GGML_NUMA_MIRROR
+    int n = ggml_current_numa_node == -1 ? 0 : ggml_current_numa_node;
+    return tensor->__data[n];
+#else
+    return tensor->data;
+#endif
+}
+static inline void * tensor_data(struct ggml_tensor & tensor) {
+#ifdef GGML_NUMA_MIRROR
+    int n = ggml_current_numa_node == -1 ? 0 : ggml_current_numa_node;
+    return tensor.__data[n];
+#else
+    return tensor.data;
+#endif
+}
+static inline void * tensor_data(const struct ggml_tensor & tensor) {
+#ifdef GGML_NUMA_MIRROR
+    int n = ggml_current_numa_node == -1 ? 0 : ggml_current_numa_node;
+    return tensor.__data[n];
+#else
+    return tensor.data;
+#endif
+}
 
+static inline void tensor_set_data(struct ggml_tensor * tensor, void * value) {
+#ifdef GGML_NUMA_MIRROR
+    void* data_ = value;
+    if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT && (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + 2 * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
+        data_ = (void*)((uint64_t)data_ - GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
+    }
+    tensor->__data[0] = data_;
+    if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET && (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
+        tensor->__data[1] = (void*)((uint64_t)data_ + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
+    } else {
+        tensor->__data[1] = data_;
+    }
+#else
+    tensor->data = value;
+#endif
+}
+static inline void tensor_set_data(struct ggml_tensor & tensor, void * value) {
+#ifdef GGML_NUMA_MIRROR
+    void* data_ = value;
+    if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT && (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + 2 * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
+        data_ = (void*)((uint64_t)data_ - GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
+    }
+    tensor.__data[0] = data_;
+    if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET && (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
+        tensor.__data[1] = (void*)((uint64_t)data_ + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
+    } else {
+        tensor.__data[1] = data_;
+    }
+#else
+    tensor.data = value;
+#endif
+}
+#endif
+
+#if !defined(__cplusplus)
 #ifdef GGML_NUMA_MIRROR
     #define _tensor_data_ptr(tensor) \
         (ggml_current_numa_node == -1 ? (tensor)->__data[0] : (tensor)->__data[ggml_current_numa_node])
-
-    #define _tensor_data_instance(tensor) \
-        (ggml_current_numa_node == -1 ? (tensor).__data[0] : (tensor).__data[ggml_current_numa_node])
 
     #define _tensor_set_data_ptr(tensor, data_ptr) \
         do { \
@@ -683,27 +751,10 @@ extern "C" {
                 (tensor)->__data[1] = data_; \
             } \
         } while (0)
-
-    #define _tensor_set_data_instance(tensor, data_ptr) \
-        do { \
-            void* data_ = (data_ptr); \
-            if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT && \
-                (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + 2 * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) { \
-                data_ = (void*)((uint64_t)data_ - GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT); \
-            } \
-            (tensor).__data[0] = data_; \
-            if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET && \
-                (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) { \
-                (tensor).__data[1] = (void*)((uint64_t)data_ + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT); \
-            } else { \
-                (tensor).__data[1] = data_; \
-            } \
-        } while (0)
 #else
     #define _tensor_data_ptr(tensor) ((tensor)->data)
-    #define _tensor_data_instance(tensor) ((tensor).data)
     #define _tensor_set_data_ptr(tensor, value) ((tensor)->data = (value))
-    #define _tensor_set_data_instance(tensor, value) ((tensor).data = (value))
+#endif
 #endif
     
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
