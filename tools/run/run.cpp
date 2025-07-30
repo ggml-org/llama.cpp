@@ -1012,7 +1012,9 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
     // prepare a batch for the prompt
     llama_batch batch = llama_batch_get_one(tokens.data(), tokens.size());
     llama_token new_token_id;
+    int n_remain = batch.n_tokens;
     while (true) {
+        --n_remain;
         check_context_size(llama_data.context, batch);
         if (llama_decode(llama_data.context.get(), batch)) {
             printe("failed to decode\n");
@@ -1020,7 +1022,7 @@ static int generate(LlamaData & llama_data, const std::string & prompt, std::str
         }
 
         // sample the next token, check is it an end of generation?
-        new_token_id = llama_sampler_sample(llama_data.sampler.get(), llama_data.context.get(), -1);
+        new_token_id = llama_sampler_sample(llama_data.sampler.get(), llama_data.context.get(), -1, n_remain);
         if (llama_vocab_is_eog(vocab, new_token_id)) {
             break;
         }

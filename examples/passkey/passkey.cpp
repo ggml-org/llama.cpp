@@ -217,10 +217,12 @@ int main(int argc, char ** argv) {
 
     const auto t_main_start = ggml_time_us();
 
+    int n_remain = n_len - n_cur;
     while (n_cur <= n_len) {
+        --n_remain;
         // sample the next token
         {
-            const llama_token new_token_id = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1);
+          const llama_token new_token_id = llama_sampler_sample(smpl, ctx, batch.n_tokens - 1, n_remain);
 
             // is it an end of generation?
             if (llama_vocab_is_eog(vocab, new_token_id) || n_cur == n_len) {
