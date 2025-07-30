@@ -1414,13 +1414,13 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_FFN_GATE_SHEXP,     "blk.%d.ffn_gate_shexp" },
             { LLM_TENSOR_FFN_DOWN_SHEXP,     "blk.%d.ffn_down_shexp" },
             { LLM_TENSOR_FFN_UP_SHEXP,       "blk.%d.ffn_up_shexp" },
-            // NextN/MTP tensors - preserved but unused (treated as output tensors)
-            { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.46.eh_proj" },
-            { LLM_TENSOR_NEXTN_EMBED_TOKENS, "blk.46.embed_tokens" },
-            { LLM_TENSOR_NEXTN_ENORM,        "blk.46.enorm" },
-            { LLM_TENSOR_NEXTN_HNORM,        "blk.46.hnorm" },
-            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.46.shared_head.head" },
-            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.46.shared_head.norm" },
+            // NextN/MTP tensors - preserved but unused (in final layer, dynamic layer number)
+            { LLM_TENSOR_NEXTN_EH_PROJ,      "blk.%d.eh_proj" },
+            { LLM_TENSOR_NEXTN_EMBED_TOKENS, "blk.%d.embed_tokens" },
+            { LLM_TENSOR_NEXTN_ENORM,        "blk.%d.enorm" },
+            { LLM_TENSOR_NEXTN_HNORM,        "blk.%d.hnorm" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "blk.%d.shared_head.head" },
+            { LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "blk.%d.shared_head.norm" },
         },
     },
     {

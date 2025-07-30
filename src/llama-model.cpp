@@ -4386,13 +4386,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
                     }
 
-                    // NextN/MTP tensors (preserved but unused) - treated as output tensors
-                    create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ), { 2 * n_embd, n_embd }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_ENORM), { n_embd }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_HNORM), { n_embd }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM), { n_embd }, TENSOR_NOT_REQUIRED);
+                    // NextN/MTP tensors (preserved but unused) - in final layer (dynamic layer number)
+                    const int final_layer = n_layer - 1; // NextN tensors are in the last layer
+                    create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", final_layer), { 2 * n_embd, n_embd }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", final_layer), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, "weight", final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", final_layer), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
