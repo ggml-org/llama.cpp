@@ -247,7 +247,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         ggml_backend_tensor_get(src1, m_src1_data.data(), 0, src1_nbytes);
     }
 
-    const char * data = is_host ? (const char *) src1->data : m_src1_data.data();
+    const char * data = is_host ? (const char *) tensor_data(src1) : m_src1_data.data();
     GGML_ASSERT(src1->nb[0] == ggml_element_size(src1));
 
     // TODO: 4d? (is that even used in practice?)
@@ -576,10 +576,10 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             ggml_format_name(counts, "%s.counts", name.c_str());
 
             for (int32_t j = 0; j < nval; ++j) {
-                ((float *) in_sum2->data)[j] = (float) stat.values[j];
+                ((float *) tensor_data(in_sum2))[j] = (float) stat.values[j];
             }
             for (int32_t j = 0; j < nmat; ++j) {
-                ((float *) counts->data)[j] = (float) stat.counts[j];
+                ((float *) tensor_data(counts))[j] = (float) stat.counts[j];
             }
 
             gguf_add_tensor(ctx_gguf, in_sum2);
@@ -786,10 +786,10 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
 
         // Recreate the state as expected by save_imatrix()
         for (int64_t j = 0; j < nval; j++) {
-            e.values[j] += ((const float *) in_sum2->data)[j];
+            e.values[j] += ((const float *) tensor_data(in_sum2))[j];
         }
         for (int64_t j = 0; j < ncounts; j++) {
-            e.counts[j] += std::lround(((const float *) counts->data)[j]);
+            e.counts[j] += std::lround(((const float *) tensor_data(counts))[j]);
         }
     }
 

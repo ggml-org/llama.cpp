@@ -286,10 +286,10 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
         e.resize(ggml_nelements(sums));
         float max_count = 0.0f;
         for (int64_t j = 0; j < ne1; ++j) {
-            const float count = ((const float *) counts->data)[j];
+            const float count = ((const float *) tensor_data(counts))[j];
             if (count > 0.0f) {
                 for (int64_t i = 0; i < ne0; ++i) {
-                    e[j*ne0 + i] = ((const float *) sums->data)[j*ne0 + i] / count;
+                    e[j*ne0 + i] = ((const float *) tensor_data(sums))[j*ne0 + i] / count;
                 }
             } else {
                 // Partial imatrix data, this tensor never got any input during calibration

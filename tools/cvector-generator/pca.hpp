@@ -102,7 +102,7 @@ struct pca_model {
         ggml_set_name(dev_square,      "dev_square");
         ggml_set_name(dev_eigenvector, "dev_eigenvector");
         buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-        ggml_backend_tensor_set(dev_input, t_input->data, 0, ggml_nbytes(t_input));
+        ggml_backend_tensor_set(dev_input, tensor_data(t_input), 0, ggml_nbytes(t_input));
 
         // initialize eigenvector to random normalized vector
         {
@@ -285,7 +285,7 @@ static void power_iteration(
 
     // get output tensor
     GGML_ASSERT(last_eigenvector);
-    ggml_backend_tensor_get(last_eigenvector, output->data, 0, ggml_nbytes(last_eigenvector));
+    ggml_backend_tensor_get(last_eigenvector, tensor_data(output), 0, ggml_nbytes(last_eigenvector));
     //print_debug_tensor(output);
     ggml_gallocr_free(allocr);
 
