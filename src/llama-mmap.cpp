@@ -323,6 +323,10 @@ struct llama_mmap::impl {
         char path[128];
         bool is_new_mem[] = { false, false };
         int i;
+        
+        // Set addr to the first mapping for node 0
+        addr = (void*)(GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + base_address_offset);
+        
         for (int node = 0; node < 2; ++node) {
             numa_set_preferred(node);
             LLAMA_LOG_INFO("numa_set_preferred(%d)\n", node);
@@ -348,6 +352,11 @@ struct llama_mmap::impl {
                 LLAMA_LOG_INFO("mmap(%s) desire=%p size=%llu result=%p is_new_mem[%d]=%s\n",
                         path, (void*)address, GGML_MMAP_HUGEPAGESZ, mm, node, is_new_mem[node] ? "yes" : "no");
                 if (((uintptr_t)mm) != address) {
+                    // Clean up any mappings we've already created before throwing
+                    for (const auto& mapping : numa_mappings) {
+                        munmap(mapping.addr, mapping.size);
+                        unlink(mapping.path.c_str());
+                    }
                     LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
                     throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
                 }
