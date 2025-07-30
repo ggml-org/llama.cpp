@@ -282,6 +282,14 @@ static int file_name_offset = 0;
 struct llama_mmap::impl {
 #ifdef _POSIX_MAPPED_FILES
     std::vector<std::pair<size_t, size_t>> mapped_fragments;
+#ifdef GGML_NUMA_MIRROR
+    struct numa_mapping {
+        void* addr;
+        size_t size;
+        std::string path;
+    };
+    std::vector<numa_mapping> numa_mappings;
+#endif
 
     impl(struct llama_file * file, size_t prefetch, bool numa) {
 #ifdef GGML_NUMA_MIRROR
@@ -346,11 +354,9 @@ struct llama_mmap::impl {
                 if (is_new_mem[node]) {
                     memset(mm, 0, GGML_MMAP_HUGEPAGESZ);
                 }
-            }
-            if (node == 0) {
-                addr = (void*)(GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + \
-                        node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + \
-                        base_address_offset);
+
+                // Store mapping info for cleanup
+                numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
             }
         }
         base_address_offset += i * GGML_MMAP_HUGEPAGESZ;
@@ -457,6 +463,19 @@ struct llama_mmap::impl {
     }
 
     ~impl() {
+#ifdef GGML_NUMA_MIRROR
+        // Unmap all NUMA hugepage mappings
+        for (const auto& mapping : numa_mappings) {
+            if (munmap(mapping.addr, mapping.size)) {
+                LLAMA_LOG_WARN("warning: failed to munmap NUMA hugepage: %s\n", strerror(errno));
+            }
+            // Delete the hugepage file
+            if (unlink(mapping.path.c_str())) {
+                LLAMA_LOG_WARN("warning: failed to unlink hugepage file %s: %s\n", 
+                              mapping.path.c_str(), strerror(errno));
+            }
+        }
+#endif
 #ifndef GGML_NUMA_MIRROR
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
