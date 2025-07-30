@@ -496,8 +496,8 @@ struct llama_mmap::impl {
                               mapping.path.c_str(), strerror(errno));
             }
         }
-#endif
-#ifndef GGML_NUMA_MIRROR
+#else
+        // Only unmap fragments if not using NUMA mirroring
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
                 LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
