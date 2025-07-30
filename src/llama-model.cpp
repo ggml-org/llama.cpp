@@ -13584,7 +13584,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                             model.layers[il].ffn_up_exps,
                             model.layers[il].ffn_gate_exps,
                             model.layers[il].ffn_down_exps,
-                            nullptr,
+                            model.layers[il].ffn_exp_probs_b,
                             n_expert, n_expert_used,
                             LLM_FFN_SILU, true,
                             false, 0.0,
