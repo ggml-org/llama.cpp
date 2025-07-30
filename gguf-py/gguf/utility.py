@@ -120,12 +120,8 @@ class SafetensorRemote:
         """
         # case 1: model has only one single model.safetensor file
         is_single_file = cls.check_file_exist(f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/model.safetensors")
-        is_single_file_consolidated = cls.check_file_exist(f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/consolidated.safetensors")
         if is_single_file:
             url = f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/model.safetensors"
-            return cls.get_list_tensors(url)
-        if is_single_file_consolidated:
-            url = f"{cls.BASE_DOMAIN}/{model_id}/resolve/main/consolidated.safetensors"
             return cls.get_list_tensors(url)
 
         # case 2: model has multiple files

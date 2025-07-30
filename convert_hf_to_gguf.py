@@ -110,12 +110,17 @@ class ModelBase:
         if remote_hf_model_id is not None:
             self.is_safetensors = True
 
-            def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
-                logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
-                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
-                self.tensor_names = set(name for name in remote_tensors.keys())
-                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id).items():
-                    yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
+            if not self.is_mistral_format:
+                def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
+                    logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
+                    remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
+                    self.tensor_names = set(name for name in remote_tensors.keys())
+                    for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id).items():
+                        yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
+            else:
+                def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
+                    url = f"{gguf.utility.SafetensorRemote.BASE_DOMAIN}/{remote_hf_model_id}/resolve/main/consolidated.safetensors"
+                    return gguf.utility.SafetensorRemote.get_list_tensors(url)
 
             self.get_tensors = get_remote_tensors
         else:
@@ -514,10 +519,7 @@ class TextModel(ModelBase):
             raise TypeError(f"Missing property 'model_arch' for {cls.__name__!r}")
 
     def set_vocab(self):
-        if self.is_mistral_format:
-            self._set_vocab_mistral()
-        else:
-            self._set_vocab_gpt2()
+        self._set_vocab_gpt2()
 
     def prepare_metadata(self, vocab_only: bool):
         super().prepare_metadata(vocab_only=vocab_only)
@@ -894,50 +896,6 @@ class TextModel(ModelBase):
 
     def _set_vocab_none(self) -> None:
         self.gguf_writer.add_tokenizer_model("none")
-
-    def _set_vocab_mistral(self):
-        vocab = MistralVocab(self.dir_model)
-        logger.info(
-            f"Converting tokenizer {vocab.tokenizer_type} of size {vocab.vocab_size}."
-        )
-
-        self.gguf_writer.add_tokenizer_model(vocab.gguf_tokenizer_model)
-
-        tokens = []
-        scores = []
-        toktypes = []
-
-        for text, score, toktype in vocab.all_tokens():
-            tokens.append(text)
-            scores.append(score)
-            toktypes.append(toktype)
-
-        assert len(tokens) == vocab.vocab_size, (
-            f"token count ({len(tokens)}) != vocab size ({vocab.vocab_size})"
-        )
-
-        if vocab.tokenizer_type == MistralTokenizerType.tekken:
-            self.gguf_writer.add_tokenizer_pre("tekken")
-            self.gguf_writer.add_token_merges(
-                vocab.extract_vocab_merges_from_model()
-            )
-
-        logger.info(
-            f"Setting bos, eos, unk and pad token IDs to {vocab.bos_id}, {vocab.eos_id}, {vocab.unk_id}, {vocab.pad_id}."
-        )
-
-        self.gguf_writer.add_bos_token_id(vocab.bos_id)
-        self.gguf_writer.add_eos_token_id(vocab.eos_id)
-        self.gguf_writer.add_unk_token_id(vocab.unk_id)
-        self.gguf_writer.add_pad_token_id(vocab.pad_id)
-
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_scores(scores)
-        self.gguf_writer.add_token_types(toktypes)
-        self.gguf_writer.add_vocab_size(vocab.vocab_size)
-
-        self.gguf_writer.add_add_bos_token(True)
-        self.gguf_writer.add_add_eos_token(False)
 
     def _set_vocab_gpt2(self) -> None:
         tokens, toktypes, tokpre = self.get_vocab_base()
@@ -1992,10 +1950,53 @@ class LlamaModel(TextModel):
         if self.hf_arch == "VLlama3ForCausalLM":
             self.hparams["num_attention_heads"] = self.hparams.get("num_attention_heads", 32)
 
+    def _set_vocab_mistral(self):
+        vocab = MistralVocab(self.dir_model)
+        logger.info(
+            f"Converting tokenizer {vocab.tokenizer_type} of size {vocab.vocab_size}."
+        )
+
+        self.gguf_writer.add_tokenizer_model(vocab.gguf_tokenizer_model)
+
+        tokens = []
+        scores = []
+        toktypes = []
+
+        for text, score, toktype in vocab.all_tokens():
+            tokens.append(text)
+            scores.append(score)
+            toktypes.append(toktype)
+
+        assert len(tokens) == vocab.vocab_size, (
+            f"token count ({len(tokens)}) != vocab size ({vocab.vocab_size})"
+        )
+
+        if vocab.tokenizer_type == MistralTokenizerType.tekken:
+            self.gguf_writer.add_tokenizer_pre("tekken")
+            self.gguf_writer.add_token_merges(
+                vocab.extract_vocab_merges_from_model()
+            )
+
+        logger.info(
+            f"Setting bos, eos, unk and pad token IDs to {vocab.bos_id}, {vocab.eos_id}, {vocab.unk_id}, {vocab.pad_id}."
+        )
+
+        self.gguf_writer.add_bos_token_id(vocab.bos_id)
+        self.gguf_writer.add_eos_token_id(vocab.eos_id)
+        self.gguf_writer.add_unk_token_id(vocab.unk_id)
+        self.gguf_writer.add_pad_token_id(vocab.pad_id)
+
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+        self.gguf_writer.add_vocab_size(vocab.vocab_size)
+
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_add_eos_token(False)
+
     def set_vocab(self):
         if self.is_mistral_format:
-            self._set_vocab_mistral()
-            return
+            return self._set_vocab_mistral()
 
         path_tekken_json = self.dir_model / "tekken.json"
         path_tokenizer_json = self.dir_model / "tokenizer.json"
@@ -2209,7 +2210,9 @@ class LlavaVisionModel(MmprojModel):
             self.hparams["layer_norm_eps"] = self.hparams.get("layer_norm_eps", 1e-5)
             self.img_break_tok_id = self.get_token_id("[IMG_BREAK]")
         elif self.is_mistral_format:
-            self.hparams["layer_norm_eps"] = self.hparams.get("norm_eps", 1e-5)
+            # hparams is already vision config here so norm_eps is only defined in global_config.
+            self.hparams["norm_eps"] = self.global_config.get("norm_eps", None)
+            assert self.hparams["norm_eps"] is not None, "norm_eps not found in params.json"
             self.img_break_tok_id = self.find_vparam(["image_break_token_id"])
         else:
             raise ValueError(f"Unsupported model type: {self.hparams['model_type']}")
@@ -7819,7 +7822,7 @@ class MistralModel(LlamaModel):
     model_name = "Mistral"
     hf_arch = ""
     is_mistral_format = True
-    undo_permute = True
+    undo_permute = False
 
 
 class PixtralModel(LlavaVisionModel):
@@ -7832,7 +7835,7 @@ class PixtralModel(LlavaVisionModel):
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.PIXTRAL)
 
         self.gguf_writer.add_vision_attention_layernorm_eps(
-            self.find_hparam(["layer_norm_eps"])
+            self.find_hparam(["norm_eps"])
         )
         self.gguf_writer.add_rope_freq_base(self.find_vparam(["rope_theta"]))
 
@@ -8123,7 +8126,8 @@ def main() -> None:
             except NotImplementedError:
                 logger.error(f"Model {model_architecture} is not supported")
                 sys.exit(1)
-        elif args.mmproj and hparams.get("vision_encoder"):
+        elif args.mmproj:
+            assert hparams.get("vision_encoder") is not None, "This model does not support multimodal"
             model_class = PixtralModel
         else:
             model_class = MistralModel
