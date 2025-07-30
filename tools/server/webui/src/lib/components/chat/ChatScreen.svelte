@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
-	import { navigating } from '$app/state';
 	import { ChatForm, ChatMessages, ServerInfo } from '$lib/components';
 	import {
 		activeMessages,
@@ -8,14 +7,15 @@
 		isLoading,
 		sendMessage,
 		stopGeneration,
-
-		chatStore
-
 	} from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 	import { fly, slide } from 'svelte/transition';
 
 	let { showCenteredEmpty = false } = $props();
+
+	let chatScrollContainer: HTMLDivElement | undefined = $state();
+	let scrollInterval: ReturnType<typeof setInterval> | undefined;
+	let autoScrollEnabled = $state(true);
 
 	const isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
@@ -25,7 +25,6 @@
 		await sendMessage(message);
 	}
 
-	let chatScrollContainer: HTMLDivElement | undefined = $state();
 
 	function scrollChatToBottom() {
 		chatScrollContainer?.scrollTo({top: chatScrollContainer?.scrollHeight, behavior: 'instant'})
@@ -39,8 +38,6 @@
 		setTimeout(scrollChatToBottom, 10); //  This is a dirty workaround, need to find racing conditions
 	})
 
-	let scrollInterval: ReturnType<typeof setInterval> | undefined;
-	let autoScrollEnabled = $state(true);
 
 	function handleScroll() {
 		if (!chatScrollContainer) return;
@@ -48,12 +45,9 @@
 		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
 		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
 		
-		// Disable auto-scroll when user scrolls up 50px+ from bottom
 		if (distanceFromBottom > 50) {
 			autoScrollEnabled = false;
-		}
-		// Re-enable auto-scroll when user reaches bottom
-		else if (distanceFromBottom <= 1) {
+		} else if (distanceFromBottom <= 1) {
 			autoScrollEnabled = true;
 		}
 	}
@@ -61,20 +55,16 @@
 	$effect(() => {
 		if (isLoading() && autoScrollEnabled) {
 			scrollInterval = setInterval(scrollChatToBottom, 100);
-		} else {
-			if (scrollInterval) {
-				clearInterval(scrollInterval);
-				scrollInterval = undefined;
-			}
+		} else if (scrollInterval) {
+			clearInterval(scrollInterval);
+			scrollInterval = undefined;
 		}
 	})
-
-	$inspect(chatStore.isLoading)
 </script>
 
 {#if !isEmpty}
 	<div class="flex h-full flex-col overflow-y-auto" bind:this={chatScrollContainer} onscroll={handleScroll}>
-			<ChatMessages class="mb-36" messages={activeMessages()} isLoading={isLoading()} />
+			<ChatMessages class="mb-36" messages={activeMessages()} />
 
 			<div
 				class="z-999 sticky bottom-0 mx-auto mt-auto max-w-[56rem]"
