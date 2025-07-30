@@ -1095,7 +1095,7 @@ static block_q2_Kx8 make_block_q2_Kx8(block_q2_K * in, unsigned int blck_size_in
 
     const int end = QK_K * 2 / blck_size_interleave;
 
-    // Interleave Q4_K quants by taking 8 bytes at a time
+    // Interleave Q2_K quants by taking 8 bytes at a time
     for (int i = 0; i < end; ++i) {
         int src_id = i % 8;
         int src_offset = (i / 8) * blck_size_interleave;
@@ -1106,7 +1106,7 @@ static block_q2_Kx8 make_block_q2_Kx8(block_q2_K * in, unsigned int blck_size_in
         memcpy(&out.qs[dst_offset], &elems, sizeof(uint64_t));
     }
 
-    // The below logic is designed so as to unapck and rearrange scales and mins values in Q2_K
+    // The below logic is designed so as to unpack and rearrange scales and mins values in Q2_K
     // Currently the Q2_K structure has 16 scales and 16 mins packed in 16 bytes ( 4 bits for each value)
     // The output Q2_Kx8 structure has 128 bytes for storing scales and mins
     // Every 16 byte is packed such that it contains scales and mins for corresponding sub blocks from Q2_K structure
