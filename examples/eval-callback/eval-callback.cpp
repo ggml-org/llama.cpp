@@ -148,12 +148,6 @@ static bool run(llama_context * ctx, const common_params & params, callback_data
 int main(int argc, char **argv) {
     std::string output_prefix = "default";
 
-
-    if (!prompt_output_file || !tensor_output_file) {
-        std::cerr << "❌ Failed to open output files.\n";
-        return 1;
-    }
-
     callback_data cb_data;
     common_params params;
     bool list_layers = false;
