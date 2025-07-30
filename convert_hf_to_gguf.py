@@ -2999,6 +2999,7 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
     def set_gguf_parameters(self):
+        assert self.hparams_vision is not None
         if isinstance(self.hparams_vision['image_size'], list):
             self.hparams_vision['image_size'] = self.hparams_vision['image_size'][0]
         if isinstance(self.hparams_vision['patch_size'], list):

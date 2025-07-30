@@ -1205,7 +1205,6 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_INP_NORM: (
             "multi_modal_projector.norm",
-            "model.multi_modal_projector.layer_norm", # Intern-S1
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
