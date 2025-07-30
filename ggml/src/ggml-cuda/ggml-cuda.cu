@@ -2164,7 +2164,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         src0_slice.nb[3]    = src0_slice.nb[2];
         src0_slice.op       = GGML_OP_VIEW;
         src0_slice.view_src = dst->src[0]; // non-const pointer to src0
-        src0_slice.data     = (char *) tensor_data(src0) + i02*nb02;
+        tensor_set_data(src0_slice, (char *) tensor_data(src0) + i02*nb02);
 
         ggml_tensor src1_slice;
         memset(&src1_slice, 0, sizeof(src1_slice));
@@ -2178,7 +2178,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         src1_slice.nb[1]  = src1_slice.ne[0] * src1_slice.nb[0];
         src1_slice.nb[2]  = src1_slice.ne[1] * src1_slice.nb[1];
         src1_slice.nb[3]  = src1_slice.ne[2] * src1_slice.nb[2];
-        src1_slice.data   = src1_data_cur;
+        tensor_set_data(src1_slice, src1_data_cur);
 
         ggml_tensor dst_slice;
         memset(&dst_slice, 0, sizeof(dst_slice));
@@ -2192,7 +2192,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_slice.nb[1]  = dst_slice.ne[0] * dst_slice.nb[0];
         dst_slice.nb[2]  = dst_slice.ne[1] * dst_slice.nb[1];
         dst_slice.nb[3]  = dst_slice.ne[2] * dst_slice.nb[2];
-        dst_slice.data   = dst_data_cur;
+        tensor_set_data(dst_slice, dst_data_cur);
 
         ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
         CUDA_CHECK(cudaGetLastError());

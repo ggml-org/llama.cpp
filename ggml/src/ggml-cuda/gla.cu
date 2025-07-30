@@ -62,7 +62,7 @@ static __global__ void gated_linear_attn_f32(const int B, const int T, const int
 }
 
 void ggml_cuda_op_gated_linear_attn(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    const float * k_d  = (const float *)tensor_data(dst->src[0])a;
+    const float * k_d  = (const float *)tensor_data(dst->src[0]);
     const float * v_d  = (const float *)tensor_data(dst->src[1]);
     const float * r_d  = (const float *)tensor_data(dst->src[2]);
     const float * td_d = (const float *)tensor_data(dst->src[3]);
