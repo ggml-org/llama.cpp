@@ -3028,7 +3028,7 @@ class InternVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return False
 
-    def _mapping_name_interns1(self, name):
+    def _mapping_interns1_name(self, name):
         names_map = {
             "model.multi_modal_projector.layer_norm.bias": "mlp1.0.bias",
             "model.multi_modal_projector.layer_norm.weight": "mlp1.0.weight",
@@ -3036,41 +3036,22 @@ class InternVisionModel(MmprojModel):
             "model.multi_modal_projector.linear_1.weight": "mlp1.1.weight",
             "model.multi_modal_projector.linear_2.bias": "mlp1.3.bias",
             "model.multi_modal_projector.linear_2.weight": "mlp1.3.weight",
-            "model.vision_tower.embeddings.cls_token": "vision_model.embeddings.class_embedding",
-            "model.vision_tower.embeddings.patch_embeddings.projection.bias": "vision_model.embeddings.patch_embedding.bias",
-            "model.vision_tower.embeddings.patch_embeddings.projection.weight": "vision_model.embeddings.patch_embedding.weight",
-            "model.vision_tower.embeddings.position_embeddings": "vision_model.embeddings.position_embedding",
         }
         if name in names_map:
             name = names_map[name]
-        elif name.startswith("model.language_model."):
-            name = "language_model.model." + name[len("model.language_model.") :]
-        elif name.startswith("model.vision_tower."):
-            name = "vision_model." + name[len("model.vision_tower.") :]
-
-        if name.startswith("vision_model.encoder.layer"):
-            name = name.replace(r".layer.", r".layers.")
-            name = name.replace(r".attention.", r".attn.")
-            name = name.replace(r".attn.q_proj", r".self_attn.q_proj")
-            name = name.replace(r".attn.k_proj", r".self_attn.k_proj")
-            name = name.replace(r".attn.v_proj", r".self_attn.v_proj")
-            name = name.replace(r".projection_layer.", r".proj.")
-            name = name.replace(r".lambda_1", r".ls1")
-            name = name.replace(r".lambda_2", r".ls2")
-            name = name.replace(r".layernorm_before.", r".norm1.")
-            name = name.replace(r".layernorm_after.", r".norm2.")
         return name
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-        name = self._mapping_name_interns1(name)
-        # support interns1
-        if name.startswith("vision_model") or name.startswith("mlp"):
+        vision_prefix = ['vision_model', 'mlp', 'model.vision_tower', 'model.multi_modal_projector']
+        # deal with intern-s1 special case
+        name = self._mapping_interns1_name(name)
+        if any([name.startswith(prefix) for prefix in vision_prefix]):
             # process visual tensors
             # correct name
             if name.startswith("vision_model"):
                 name = "vision_tower." + name
-            if (".ls" in name or "position_embedding" in name) and not name.endswith(".weight"):
+            if (".ls" in name or ".lambda_" in name or "position_embedding" in name) and not name.endswith(".weight"):
                 name += ".weight"
             # split QKV tensors if needed
             if ".qkv." in name:
