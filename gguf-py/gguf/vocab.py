@@ -25,8 +25,8 @@ try:
 except ImportError:
     _mistral_common_installed = False
     MistralTokenizer = None
-    SentencePieceTokenizer = None
     Tekkenizer = None
+    SentencePieceTokenizer = None
     _filter_valid_tokenizer_files = None
 else:
     _mistral_common_installed = True
