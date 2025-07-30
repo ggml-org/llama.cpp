@@ -83,6 +83,7 @@ class ChatStore {
 				type,
 				timestamp: Date.now(),
 				parent,
+				thinking: '',
 				children: []
 			});
 
@@ -107,21 +108,34 @@ class ChatStore {
 	async sendMessage(content: string): Promise<void> {
 		if (!content.trim() || this.isLoading) return;
 
+		let isNewConversation = false;
+
 		if (!this.activeConversation) {
 			await this.createConversation();
+
+			isNewConversation = true;
 		}
 
 		if (!this.activeConversation) {
 			console.error('No active conversation available for sending message');
 			return;
 		}
+
 		this.isLoading = true;
 		this.currentResponse = '';
 
 		try {
 			const userMessage = await this.addMessage('user', content);
+
 			if (!userMessage) {
 				throw new Error('Failed to add user message');
+			}
+
+			// If this is a new conversation, update the title with the first user prompt
+			if (isNewConversation && content) {
+				const title = content.trim();
+
+				await this.updateConversationName(this.activeConversation.id, title);
 			}
 
 			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
@@ -508,11 +522,12 @@ class ChatStore {
 							this.isLoading = false;
 							this.currentResponse = '';
 
-							const assistantMessageIndex = this.activeChatMessages.findIndex(
-								(m) => m.id === assistantMessage.id
+							const assistantMessageIndex = this.activeMessages.findIndex(
+								(m: Message) => m.id === assistantMessage.id
 							);
 							if (assistantMessageIndex !== -1) {
-								this.activeChatMessages[assistantMessageIndex].content = `Error: ${error.message}`;
+								// Update message with parsed content
+								this.activeMessages[assistantMessageIndex].content = `Error: ${error.message}`;
 							}
 						}
 					}
