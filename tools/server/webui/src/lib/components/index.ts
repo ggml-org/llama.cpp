@@ -7,14 +7,8 @@ export { default as ChatHeader } from './chat/ChatHeader.svelte';
 export { default as ChatScreen } from './chat/ChatScreen.svelte';
 export { default as ChatSettingsDialog } from './chat/ChatSettingsDialog.svelte';
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
-
-// ChatSettings components
 export { default as ChatSettings } from './chat/ChatSettings/ChatSettings.svelte';
-export { default as ChatSettingsField } from './chat/ChatSettings/ChatSettingsField.svelte';
-export { default as ChatSettingsSidebar } from './chat/ChatSettings/ChatSettingsSidebar.svelte';
-export { default as ChatSettingsSection } from './chat/ChatSettings/ChatSettingsSection.svelte';
-export { default as ChatSettingsContent } from './chat/ChatSettings/ChatSettingsContent.svelte';
-export { default as ChatSettingsFooter } from './chat/ChatSettings/ChatSettingsFooter.svelte';
-
-// Server Status component
-export { default as ServerStatus } from './chat/ServerStatus.svelte';
+export { default as ChatThinkingBlock } from './chat/ChatThinkingBlock.svelte';
+export { default as MarkdownContent } from './MarkdownContent.svelte';
+export { default as ServerStatus } from './ServerStatus.svelte';
+export { default as ServerInfo } from './ServerInfo.svelte';

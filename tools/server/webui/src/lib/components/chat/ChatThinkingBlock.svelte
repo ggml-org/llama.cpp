@@ -2,8 +2,8 @@
 	import { ChevronDown, Brain } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
+	import { MarkdownContent } from '$lib/components';
 	import { slide } from 'svelte/transition';
-	import MarkdownContent from './MarkdownContent.svelte';
 
 	interface Props {
 		thinking: string | null;
@@ -40,7 +40,6 @@
 			<div class="pt-3">
 				<MarkdownContent
 					content={thinking || ''}
-					variant="thinking"
 					class="text-xs leading-relaxed"
 				/>
 			</div>

@@ -5,8 +5,7 @@
 	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
 	import type { ChatRole } from '$lib/types/chat';
 	import type { Message } from '$lib/types/database';
-	import ThinkingSection from './ThinkingSection.svelte';
-	import MarkdownContent from './MarkdownContent.svelte';
+	import { ChatThinkingBlock, MarkdownContent } from '$lib/components';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 	import { copyToClipboard } from '$lib/utils/copy';
 
@@ -206,7 +205,7 @@
 		aria-label="Assistant message with actions"
 	>
 		{#if thinkingContent}
-			<ThinkingSection thinking={thinkingContent} isStreaming={!message.timestamp} />
+			<ChatThinkingBlock thinking={thinkingContent} isStreaming={!message.timestamp} />
 		{/if}
 		
 		{#if message.role === 'assistant'}
