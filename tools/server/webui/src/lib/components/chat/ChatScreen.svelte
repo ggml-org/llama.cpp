@@ -77,7 +77,7 @@
 			<ChatMessages class="mb-36" messages={activeMessages()} isLoading={isLoading()} />
 
 			<div
-				class="z-999 sticky bottom-0 m-auto max-w-[56rem]"
+				class="z-999 sticky bottom-0 mx-auto mt-auto max-w-[56rem]"
 				in:slide={{ duration: 400, axis: 'y' }}
 			>
 				<div class="bg-background m-auto rounded-t-3xl border-t pb-4 min-w-[56rem]">
