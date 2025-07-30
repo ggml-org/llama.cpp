@@ -205,7 +205,7 @@ llama_tokens common_speculative_gen_draft(
         std::string text;
         text = common_detokenize(ctx_tgt, prompt_tgt_main_model, true);
         text = replace_to_dft(spec, text);
-        LOG_DBG("main->draft detokenized string: '%s'\n", text.c_str());
+        LOG_DBG("%s: main->draft detokenized string: '%s'\n", __func__, text.c_str());
         prompt_tgt_draft_model = common_tokenize(ctx_dft, text, false, true);
 
         // convert id_last to draft vocab. llama_detokenize is called directly to avoid an allocation
