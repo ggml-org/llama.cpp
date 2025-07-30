@@ -4388,12 +4388,12 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // NextN/MTP tensors (preserved but unused) - in final layer (dynamic layer number)
                     const int final_layer = n_layer - 1; // NextN tensors are in the last layer
-                    create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", final_layer), { 2 * n_embd, n_embd }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", final_layer), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, "weight", final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", final_layer), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, final_layer), { 2 * n_embd, n_embd }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, final_layer), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, final_layer), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+                    create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
