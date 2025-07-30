@@ -705,8 +705,7 @@ extern "C" {
     #define _tensor_set_data_ptr(tensor, value) ((tensor)->data = (value))
     #define _tensor_set_data_instance(tensor, value) ((tensor).data = (value))
 #endif
-    }
-
+    
     static const size_t GGML_TENSOR_SIZE = sizeof(struct ggml_tensor);
 
     // Abort callback
