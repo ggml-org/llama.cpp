@@ -114,7 +114,6 @@ class ModelBase:
 
             def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
                 logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
-
                 remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
                 self.tensor_names = set(name for name in remote_tensors.keys())
                 for name, remote_tensor in remote_tensors.items():
@@ -7840,7 +7839,7 @@ class MistralModel(LlamaModel):
         elif vocab.tokenizer.version == TokenizerVersion.v13:
             template_file = "unsloth-mistral-Devstral-Small-2507.jinja"
         else:
-            raise ValueError(f"Unknown tokenizer type: {vocab.tokenizer_type}")
+            raise ValueError(f"Unknown tokenizer type: {vocab.tokenizer_type} and version {vocab.tokenizer.version}")
 
         template_path = templates_dir / template_file
         if not template_path.exists():
