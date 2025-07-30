@@ -149,7 +149,7 @@ __dpct_inline__ static void q4_K_q8_1_tiled_gemvq(
         const int          chunk_idx      = local_id / 2;
         const int          superblock_idx = tile_coord_begin / 64;
         const int          q8_block_idx   = superblock_idx * 8 + chunk_idx;
-        const uint         q8_dm_offset   = block_q8_t::get_d_offset(1, ncols, q8_block_idx).first;
+        const int          q8_dm_offset   = block_q8_t::get_d_offset(1, ncols, q8_block_idx).first;
         const ggml_half2 * q8_dm =
             reinterpret_cast<const ggml_half2 *>(reinterpret_cast<const uint8_t *>(input) + q8_dm_offset);
         const float d8 = static_cast<float>(q8_dm->x());
@@ -162,7 +162,7 @@ __dpct_inline__ static void q4_K_q8_1_tiled_gemvq(
 #pragma unroll(sblock_coord_width / Traits::columns)
         for (size_t w = 0; w < sblock_coord_width / Traits::columns; w++) {
             q4_tile_t q4_tile;
-            uint      q8_tile;
+            uint32_t  q8_tile;
 
             const int  w_coord  = tile_coord_begin + coord_stride * w;
             const auto q4_coord = coord_t{ w_coord, tile_row_begin };
