@@ -357,12 +357,12 @@ struct llama_mmap::impl {
                 LLAMA_LOG_INFO("mmap(%s) desire=%p size=%llu result=%p is_new_mem[%d]=%s\n",
                         path, (void*)address, GGML_MMAP_HUGEPAGESZ, mm, node, is_new_mem[node] ? "yes" : "no");
                 
-                // Store mapping info for cleanup BEFORE checking for errors
-                if (mm != MAP_FAILED) {
-                    numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
-                }
-                
                 if (((uintptr_t)mm) != address) {
+                    // If mmap failed completely, delete the file we just created
+                    if (mm == MAP_FAILED) {
+                        unlink(path);
+                    }
+                    
                     // Clean up any mappings we've already created before throwing
                     for (const auto& mapping : numa_mappings) {
                         munmap(mapping.addr, mapping.size);
@@ -371,6 +371,10 @@ struct llama_mmap::impl {
                     LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
                     throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
                 }
+                
+                // Only store valid mappings
+                numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
+                
                 if (is_new_mem[node]) {
                     memset(mm, 0, GGML_MMAP_HUGEPAGESZ);
                 }
