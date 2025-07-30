@@ -6861,7 +6861,7 @@ static void ggml_call_mul_mat(ggml_type type, const ggml_compute_params * params
     src1.nb[1] = k * traits->type_size;
     src1.nb[2] = src1.nb[1];
     src1.nb[3] = src1.nb[2];
-    tensor_set_data(src1, a);
+    tensor_set_data(&src1, a);
 
     struct ggml_tensor src0 = {};
     src0.type  = type;
@@ -6873,7 +6873,7 @@ static void ggml_call_mul_mat(ggml_type type, const ggml_compute_params * params
     src0.nb[1] = k * traits->type_size;
     src0.nb[2] = src0.nb[1];
     src0.nb[3] = src0.nb[2];
-    tensor_set_data(src0, b);
+    tensor_set_data(&src0, b);
 
     struct ggml_tensor dst = {};
     dst.ne[0] = n;
@@ -6884,7 +6884,7 @@ static void ggml_call_mul_mat(ggml_type type, const ggml_compute_params * params
     dst.nb[1] = n * sizeof(float);
     dst.nb[2] = dst.nb[1];
     dst.nb[3] = dst.nb[2];
-    tensor_set_data(dst, c);
+    tensor_set_data(&dst, c);
     dst.src[0] = &src0;
     dst.src[1] = &src1;
 
