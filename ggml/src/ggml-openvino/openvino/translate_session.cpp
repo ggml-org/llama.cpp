@@ -28,6 +28,7 @@
 #include "ggml-openvino/openvino/utils.hpp"
 #include "input_model.hpp"
 #include "pass/fuse_to_sdpa.hpp"
+#include "pass/mark_decompression_convert_constant_folding.hpp"
 
 namespace ov {
 namespace frontend {
@@ -259,6 +260,8 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
     {
         ov::pass::Manager manager;
         manager.set_per_pass_validation(true);
+        manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
+        manager.register_pass<ov::pass::ConstantFolding>();
 
         if (!ggml_model_decoder->is_static()) {
             const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();
@@ -267,7 +270,7 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         }
 
         // SDPA is even worse on performance
-        // manager.register_pass<pass::FuseToSDPA>();
+        manager.register_pass<pass::FuseToSDPA>();
         manager.run_passes(model);
     }
     auto preprocessor = ov::preprocess::PrePostProcessor(model);
