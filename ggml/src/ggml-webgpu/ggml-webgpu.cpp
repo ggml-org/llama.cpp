@@ -7,6 +7,7 @@
 
 #include "ggml-wgsl-shaders.hpp"
 
+#include <condition_variable>
 #include <cstring>
 #include <mutex>
 #include <vector>
