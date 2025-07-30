@@ -29,7 +29,12 @@ if 'NO_LOCAL_GGUF' not in os.environ:
     sys.path.insert(1, str(Path(__file__).parent / 'gguf-py'))
 import gguf
 from gguf.vocab import MistralTokenizerType, MistralVocab
+from mistral_common.tokens.tokenizers.base import TokenizerVersion
 from mistral_common.tokens.tokenizers.multimodal import DATASET_MEAN, DATASET_STD
+from mistral_common.tokens.tokenizers.tekken import Tekkenizer
+from mistral_common.tokens.tokenizers.sentencepiece import (
+    SentencePieceTokenizer,
+)
 
 
 logger = logging.getLogger("hf-to-gguf")
@@ -110,13 +115,7 @@ class ModelBase:
             def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
                 logger.info(f"Using remote model with HuggingFace id: {remote_hf_model_id}")
 
-                if not self.is_mistral_format:
-                    remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
-
-                else:
-                    url = f"{gguf.utility.SafetensorRemote.BASE_DOMAIN}/{remote_hf_model_id}/resolve/main/consolidated.safetensors"
-                    remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors(url)
-                
+                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(remote_hf_model_id)
                 self.tensor_names = set(name for name in remote_tensors.keys())
                 for name, remote_tensor in remote_tensors.items():
                     yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
@@ -1993,6 +1992,11 @@ class LlamaModel(TextModel):
         self.gguf_writer.add_add_bos_token(True)
         self.gguf_writer.add_add_eos_token(False)
 
+        template_dir = Path(__file__).parent / "models/templates/"
+
+        template = MistralModel.get_community_chat_template(vocab, template_dir)
+        self.gguf_writer.add_chat_template(template)
+
     def set_vocab(self):
         if self.is_mistral_format:
             return self._set_vocab_mistral()
@@ -2001,12 +2005,6 @@ class LlamaModel(TextModel):
         path_tokenizer_json = self.dir_model / "tokenizer.json"
         if path_tekken_json.is_file() and not path_tokenizer_json.is_file():
             self._set_vocab_mistral()
-
-            script_dir = Path(__file__).parent
-            template_path = script_dir / "models/templates/unsloth-mistral-Devstral-Small-2507.jinja"
-            with open(template_path, "r", encoding="utf-8") as f:
-                template = f.read()
-                self.gguf_writer.add_chat_template(template)
 
         try:
             self._set_vocab_sentencepiece()
@@ -2038,7 +2036,7 @@ class LlamaModel(TextModel):
 
         # Apply to granite small models only
         if self.hparams.get("vocab_size", 32000) == 49152:
-            self.gguf_writer.add_add_bos_token(False)        
+            self.gguf_writer.add_add_bos_token(False)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -7819,6 +7817,39 @@ class MistralModel(LlamaModel):
     hf_arch = ""
     is_mistral_format = True
     undo_permute = False
+
+    @staticmethod
+    def get_community_chat_template(vocab: MistralVocab, templates_dir: Path):
+        assert TokenizerVersion is not None, "mistral_common is not installed"
+        assert isinstance(vocab.tokenizer, (Tekkenizer, SentencePieceTokenizer)), (
+            f"Expected Tekkenizer or SentencePieceTokenizer, got {type(vocab.tokenizer)}"
+        )
+
+        if vocab.tokenizer.version == TokenizerVersion.v1:
+            return "mistral-v1"
+        elif vocab.tokenizer.version == TokenizerVersion.v3 and vocab.tokenizer_type == MistralTokenizerType.spm:
+            return "mistral-v3"
+        elif vocab.tokenizer.version == TokenizerVersion.v3 and vocab.tokenizer_type == MistralTokenizerType.tekken:
+            return "mistral-v3-tekken"
+        elif vocab.tokenizer.version == TokenizerVersion.v7 and vocab.tokenizer_type == MistralTokenizerType.spm:
+            return "mistral-v7"
+        elif vocab.tokenizer.version == TokenizerVersion.v7 and vocab.tokenizer_type == MistralTokenizerType.tekken:
+            return "mistral-v7-tekken"
+        elif vocab.tokenizer.version == TokenizerVersion.v11:
+            template_file = "Mistral-Small-3.2-24B-Instruct-2506.jinja"
+        elif vocab.tokenizer.version == TokenizerVersion.v13:
+            template_file = "unsloth-mistral-Devstral-Small-2507.jinja"
+        else:
+            raise ValueError(f"Unknown tokenizer type: {vocab.tokenizer_type}")
+
+        template_path = templates_dir / template_file
+        if not template_path.exists():
+            raise FileNotFoundError(f"Template file not found: {template_path}")
+
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = f.read()
+
+        return template
 
 
 class PixtralModel(LlavaVisionModel):
