@@ -54,8 +54,19 @@ int main(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    std::vector<llama_token> tokens  = common_tokenize(ctx.get(), params.prompt, true);
-    ggml_opt_dataset_t       dataset = common_opt_dataset_init(ctx.get(), tokens, llama_n_ctx(ctx.get()) / 2);
+    // Check if LoRA adapters are loaded?
+    bool has_existing_lora = !params.lora_adapters.empty();
+    if (has_existing_lora) {
+        LOG_INF("Finetuning existing LoRA adapters\n");
+        LOG_INF("Found %zu existing LoRA adapters to train\n", params.lora_adapters.size());
+    } else {
+        LOG_INF("Training full model");
+    }
+
+    constexpr float val_split = 0.05f;
+
+    std::vector<llama_token> tokens = common_tokenize(ctx.get(), params.prompt, true);
+    ggml_opt_dataset_t dataset = common_opt_dataset_init(ctx.get(), tokens, llama_n_ctx(ctx.get())/2);
 
     struct lr_opt & lr = params.lr;
     LOG_INF("-optimizer %s -lr0 %.2g -wd %.2g -lr-min %.2g -min-epochs %.2g -epochs %d -period %.2g -val %.2g\n",
@@ -64,7 +75,8 @@ int main(int argc, char ** argv) {
 
     struct llama_opt_params lopt_params{
         /*n_ctx_train     =*/0,
-        /*param_filter    =*/llama_opt_param_filter_all,
+        // /*param_filter    =*/llama_opt_param_filter_all,
+                              llama_opt_param_filter_lora,
         /*param_filter_ud =*/nullptr,
         /*get_opt_pars    =*/common_opt_lr_pars,
         /*get_opt_pars_ud =*/&params.lr,

@@ -1411,6 +1411,9 @@ extern "C" {
             int64_t                   idata_split,
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
+    
+    // LoRA parameter filter (returns true for LoRA tensors only)
+    LLAMA_API bool llama_opt_param_filter_lora(const struct ggml_tensor * tensor, void * userdata);
 
 #ifdef __cplusplus
 }
