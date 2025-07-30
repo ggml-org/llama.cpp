@@ -76,10 +76,10 @@ struct webgpu_param_buf_pool {
         return bufs;
     }
 
-    void free_bufs(const webgpu_param_bufs& bufs) {
+    void free_bufs(std::vector<webgpu_param_bufs> bufs) {
         std::lock_guard<std::mutex> lock(mutex);
-        free.push_back(bufs);
-        cv.notify_one();
+        free.insert(free.end(), bufs.begin(), bufs.end());
+        cv.notify_all();
     }
 
     void cleanup() {
@@ -222,9 +222,7 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context& ctx) {
                 GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
             }
             // Free the staged parameter buffers
-            for (const auto& bufs : staged_param_bufs) {
-                ctx->param_buf_pool.free_bufs(bufs);
-            }
+            ctx->param_buf_pool.free_bufs(staged_param_bufs);
         });
 }
 
@@ -287,7 +285,7 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context& ctx, wgpu::Com
                 if (status != wgpu::QueueWorkDoneStatus::Success) {
                     GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
                 }
-                ctx->param_buf_pool.free_bufs(params_bufs);
+                ctx->param_buf_pool.free_bufs({params_bufs});
         });
     } else {
         // Enqueue commands and only submit if we have enough staged commands
