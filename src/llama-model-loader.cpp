@@ -1132,9 +1132,18 @@ bool llama_model_loader::load_all_data(
             for (uint32_t idx = 0; idx < mappings.size(); idx++) {
                 const auto & mmap_used = mmaps_used.at(idx);
                 auto & mapping = mappings.at(idx);
-                mapping->unmap_fragment(0, mmap_used.first);
-                if (mmap_used.second != 0) {
-                    mapping->unmap_fragment(mmap_used.second, mapping->size());
+                
+                // Check if this mapping uses NUMA mirroring
+                // If so, skip the unmap_fragment calls as cleanup is handled in the destructor
+                bool is_numa_mirrored = false;
+#ifdef GGML_NUMA_MIRROR
+                is_numa_mirrored = true;
+#endif
+                if (!is_numa_mirrored) {
+                    mapping->unmap_fragment(0, mmap_used.first);
+                    if (mmap_used.second != 0) {
+                        mapping->unmap_fragment(mmap_used.second, mapping->size());
+                    }
                 }
             }
         }
