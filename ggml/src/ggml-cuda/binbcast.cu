@@ -312,23 +312,23 @@ static void ggml_cuda_op_bin_bcast(
 }
 
 void ggml_cuda_op_repeat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(dst, dst->src[0], dst, nullptr, dst->src[0]->data, dst->data, ctx.stream());
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(dst, dst->src[0], dst, nullptr, tensor_data(dst->src[0]), tensor_data(dst), ctx.stream());
 }
 
 void ggml_cuda_op_add(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_add>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_add>>(dst->src[0], dst->src[1], dst, tensor_data(dst->src[0]), tensor_data(dst->src[1]), tensor_data(dst), ctx.stream());
 }
 
 void ggml_cuda_op_sub(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_sub>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_sub>>(dst->src[0], dst->src[1], dst, tensor_data(dst->src[0]), tensor_data(dst->src[1]), tensor_data(dst), ctx.stream());
 }
 
 void ggml_cuda_op_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_mul>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_mul>>(dst->src[0], dst->src[1], dst, tensor_data(dst->src[0]), tensor_data(dst->src[1]), tensor_data(dst), ctx.stream());
 }
 
 void ggml_cuda_op_div(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_div>>(dst->src[0], dst->src[1], dst, dst->src[0]->data, dst->src[1]->data, dst->data, ctx.stream());
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_div>>(dst->src[0], dst->src[1], dst, tensor_data(dst->src[0]), tensor_data(dst->src[1]), tensor_data(dst), ctx.stream());
 }
 
 void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -352,8 +352,8 @@ void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 
     switch (dst->type) {
         case GGML_TYPE_F32: {
-            const float * src0_d = (const float *) src0->data;
-            float       * dst_d  = (float       *) dst->data;
+            const float * src0_d = (const float *) tensor_data(src0);
+            float       * dst_d  = (float       *) tensor_data(dst);
             repeat_back_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s00, s01, s02, s03, ne0, ne1, ne2, ne3, stream);
         } break;
         default: {

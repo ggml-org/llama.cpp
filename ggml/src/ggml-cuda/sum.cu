@@ -33,8 +33,8 @@ void ggml_cuda_op_sum(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_is_contiguously_allocated(src0));
 
-    const float * src0_d = (const float *) src0->data;
-    float * dst_d = (float *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    float * dst_d = (float *) tensor_data(dst);
 
     const int64_t ne = ggml_nelements(src0);
 

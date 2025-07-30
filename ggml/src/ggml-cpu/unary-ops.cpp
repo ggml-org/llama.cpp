@@ -92,8 +92,8 @@ static void apply_unary_op(const ggml_compute_params * params, ggml_tensor * dst
         const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
         const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
 
-        dst_t        * dst_ptr  = (dst_t  *)       ((char *)       dst->data  + i03*nb3  + i02*nb2  + i01*nb1 );
-        const src0_t * src0_ptr = (const src0_t *) ((const char *) src0->data + i03*nb03 + i02*nb02 + i01*nb01);
+        dst_t        * dst_ptr  = (dst_t  *)       ((char *)       tensor_data(dst)  + i03*nb3  + i02*nb2  + i01*nb1 );
+        const src0_t * src0_ptr = (const src0_t *) ((const char *) tensor_data(src0) + i03*nb03 + i02*nb02 + i01*nb01);
 
         vec_unary_op<op>(ne0, dst_ptr, src0_ptr);
     }

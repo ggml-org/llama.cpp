@@ -85,9 +85,9 @@ void ggml_cuda_mul_mat_q(
     GGML_ASSERT(        nb0        == ts_dst);
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
 
-    const char  * src0_d = (const char  *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    float       *  dst_d = (float       *)  dst->data;
+    const char  * src0_d = (const char  *) tensor_data(src0);
+    const float * src1_d = (const float *) tensor_data(src1);
+    float       *  dst_d = (float       *) tensor_data(dst);
 
     // If src0 is a temporary compute buffer, clear any potential padding.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
@@ -96,7 +96,7 @@ void ggml_cuda_mul_mat_q(
         if (size_alloc > size_data) {
             GGML_ASSERT(ggml_is_contiguously_allocated(src0));
             GGML_ASSERT(!src0->view_src);
-            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
+            CUDA_CHECK(cudaMemsetAsync((char *) tensor_data(src0) + size_data, 0, size_alloc - size_data, stream));
         }
     }
 
@@ -154,7 +154,7 @@ void ggml_cuda_mul_mat_q(
     std::vector<int32_t> expert_bounds_host(ne02 + 1);
     ggml_cuda_pool_alloc<int32_t> ids_buf_dev(ctx.pool());
 
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids->data, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), tensor_data(ids), ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     for (int64_t i02 = 0; i02 < ne02; ++i02) { // expert matrices

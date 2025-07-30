@@ -714,12 +714,12 @@ void launch_fattn(
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
 
-    const char * K_data = (const char *) K->data;
+    const char * K_data = (const char *) tensor_data(K);
     size_t nb11 = K->nb[1];
     size_t nb12 = K->nb[2];
     size_t nb13 = K->nb[3];
 
-    const char * V_data = V ? (const char *) V->data : nullptr;
+    const char * V_data = V ? (const char *) tensor_data(V) : nullptr;
     size_t nb21 = V ? V->nb[1] : nb11;
     size_t nb22 = V ? V->nb[2] : nb12;
     size_t nb23 = V ? V->nb[3] : nb13;
@@ -866,11 +866,12 @@ void launch_fattn(
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
     fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
-        (const char *) Q->data,
+        (const char *) tensor_data(Q),
         K_data,
         V_data,
-        mask ? ((const char *) mask->data) : nullptr,
-        !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
+        mask ? ((const char *) tensor_data(mask)) : nullptr,
+        !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) tensor_data(KQV),
+        dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
         K->ne[0], K->ne[1], K->ne[2], K->ne[3], nb11, nb12, nb13,
@@ -887,7 +888,7 @@ void launch_fattn(
 
             flash_attn_stream_k_fixup<DV, ncols1, ncols2>
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
-                ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], Q->ne[3], K->ne[1]);
+                ((float *) tensor_data(KQV), dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], Q->ne[3], K->ne[1]);
         }
     } else if (parallel_blocks > 1) {
         const dim3 block_dim_combine(DV, 1, 1);
@@ -896,7 +897,7 @@ void launch_fattn(
 
         flash_attn_combine_results<DV>
             <<<blocks_num_combine, block_dim_combine, nbytes_shared_combine, main_stream>>>
-            (dst_tmp.ptr, dst_tmp_meta.ptr, (float *) KQV->data, parallel_blocks);
+            (dst_tmp.ptr, dst_tmp_meta.ptr, (float *) tensor_data(KQV), parallel_blocks);
     }
     CUDA_CHECK(cudaGetLastError());
 }

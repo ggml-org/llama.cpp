@@ -24,8 +24,8 @@ static void clamp_cuda(const T * x, T * dst, const T min, const T max, const int
 
 void ggml_cuda_op_clamp(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const void * src0_d = src0->data;
-    void * dst_d = dst->data;
+    const void * src0_d = tensor_data(src0);
+    void * dst_d = tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);

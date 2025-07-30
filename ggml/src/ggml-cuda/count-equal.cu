@@ -37,7 +37,7 @@ void ggml_cuda_count_equal(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(src1));
     GGML_ASSERT(ggml_is_contiguous(dst));
 
-    int64_t * dst_d  = (int64_t *) dst->data;
+    int64_t * dst_d  = (int64_t *) tensor_data(dst);
 
     cudaStream_t stream = ctx.stream();
     const int nsm = ggml_cuda_info().devices[ggml_cuda_get_device()].nsm;
@@ -53,8 +53,8 @@ void ggml_cuda_count_equal(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     switch (src0->type) {
         case GGML_TYPE_I32: {
-            const int * src0_d = (const int *) src0->data;
-            const int * src1_d = (const int *) src1->data;
+            const int * src0_d = (const int *) tensor_data(src0);
+            const int * src1_d = (const int *) tensor_data(src1);
             count_equal<<<blocks_num, blocks_dim, 0, stream>>>(src0_d, src1_d, dst_d, dne, ne);
         } break;
         default:

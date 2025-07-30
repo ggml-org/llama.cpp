@@ -106,9 +106,9 @@ void ggml_cuda_cross_entropy_loss(ggml_backend_cuda_context & ctx, ggml_tensor *
     const int64_t ne00  = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    const float * src0_d = (const float *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    float       * dst_d  = (float       *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    const float * src1_d = (const float *) tensor_data(src1);
+    float       * dst_d  = (float       *) tensor_data(dst);
 
     ggml_cuda_pool & pool = ctx.pool();
     cudaStream_t stream = ctx.stream();
@@ -154,10 +154,10 @@ void ggml_cuda_cross_entropy_loss_back(ggml_backend_cuda_context & ctx, ggml_ten
     const int64_t ne00  = src0f->ne[0];
     const int64_t nrows = ggml_nrows(src0f);
 
-    const float * grad_d  = (const float *) grad->data;
-    const float * src0f_d = (const float *) src0f->data;
-    const float * src1f_d = (const float *) src1f->data;
-    float       * dst_d   = (float       *) dst->data;
+    const float * grad_d  = (const float *) tensor_data(grad);
+    const float * src0f_d = (const float *) tensor_data(src0f);
+    const float * src1f_d = (const float *) tensor_data(src1f);
+    float       * dst_d   = (float       *) tensor_data(dst);
 
     cudaStream_t stream = ctx.stream();
 

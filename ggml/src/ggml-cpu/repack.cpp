@@ -1239,12 +1239,12 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
 
         int64_t i11_processed = 0;
         for (int64_t i11 = ith * 4; i11 < ne11 - ne11 % 4; i11 += nth * 4) {
-            ggml_quantize_mat_t<INTER_SIZE, PARAM_TYPE>((float *) ((char *) src1->data + i11 * nb11), (void *) (wdata + i11 * nbw1), 4, ne10);
+            ggml_quantize_mat_t<INTER_SIZE, PARAM_TYPE>((float *) ((char *) tensor_data(src1) + i11 * nb11), (void *) (wdata + i11 * nbw1), 4, ne10);
         }
 
         i11_processed = ne11 - ne11 % 4;
         for (int64_t i11 = i11_processed + ith; i11 < ne11; i11 += nth) {
-            from_float((float *) ((char *) src1->data + i11 * nb11), (void *) (wdata + i11 * nbw1), ne10);
+            from_float((float *) ((char *) tensor_data(src1) + i11 * nb11), (void *) (wdata + i11 * nbw1), ne10);
         }
 
         ggml_barrier(params->threadpool);
@@ -1332,7 +1332,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
         // src1: float32 => param type
         for (int64_t i12 = 0; i12 < ne12; ++i12) {
             for (int64_t i11 = ith; i11 < ne11; i11 += nth) {
-                from_float((float *)((char *) src1->data + i12 * nb12 + i11 * nb11),
+                from_float((float *)((char *) tensor_data(src1) + i12 * nb12 + i11 * nb11),
                            (void *)               (wdata + i12 * nbw2 + i11 * nbw1),
                            ne10);
             }
@@ -1348,7 +1348,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
             for (int32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
                 for (int32_t id = 0; id < n_ids; ++id) {
                     const int32_t i02 =
-                        *(const int32_t *) ((const char *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
+                        *(const int32_t *) ((const char *) tensor_data(ids) + iid1 * ids->nb[1] + id * ids->nb[0]);
 
                     GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
@@ -1368,7 +1368,7 @@ template <typename BLOC_TYPE, int64_t INTER_SIZE, int64_t NB_COLS, ggml_type PAR
                 continue;
             }
 
-            const auto * src0_cur = (const char *) src0->data + cur_a*nb02;
+            const auto * src0_cur = (const char *) tensor_data(src0) + cur_a*nb02;
 
             //const int64_t nr0 = ne01; // src0 rows
             const int64_t nr1 = cne1; // src1 rows

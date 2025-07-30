@@ -329,9 +329,9 @@ void ggml_cuda_mul_mat_vec(ggml_backend_cuda_context & ctx, const ggml_tensor * 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
 
-    const float   * src1_d =       (const float   *) src1->data;
-    const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
-    float         *  dst_d =       (float         *)  dst->data;
+    const float   * src1_d =       (const float   *) tensor_data(src1);
+    const int32_t *  ids_d = ids ? (const int32_t *)  tensor_data(ids) : nullptr;
+    float         *  dst_d =       (float         *)  tensor_data(dst);
 
     const int64_t s01 = src0->nb[1] / ts_src0;
     const int64_t s11 = src1->nb[1] / ts_src1;
@@ -354,19 +354,19 @@ void ggml_cuda_mul_mat_vec(ggml_backend_cuda_context & ctx, const ggml_tensor * 
 
     switch (src0->type) {
         case GGML_TYPE_F32: {
-            const float * src0_d = (const float *) src0->data;
+            const float * src0_d = (const float *) tensor_data(src0);
             mul_mat_vec_cuda(src0_d, src1_d, ids_d, dst_d, ne00, ne01, ncols_dst, s01, s11, s1,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
                 ne03,              ne3,           s03, s13,              s3,                 prec, ctx.stream());
         } break;
         case GGML_TYPE_F16: {
-            const half * src0_d = (const half *) src0->data;
+            const half * src0_d = (const half *) tensor_data(src0);
             mul_mat_vec_cuda(src0_d, src1_d, ids_d, dst_d, ne00, ne01, ncols_dst, s01, s11, s1,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
                 ne03,              ne3,           s03, s13,              s3,                 prec, ctx.stream());
         } break;
         case GGML_TYPE_BF16: {
-            const nv_bfloat16 * src0_d = (const nv_bfloat16 *) src0->data;
+            const nv_bfloat16 * src0_d = (const nv_bfloat16 *) tensor_data(src0);
             mul_mat_vec_cuda(src0_d, src1_d, ids_d, dst_d, ne00, ne01, ncols_dst, s01, s11, s1,
                 ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
                 ne03,              ne3,           s03, s13,              s3,                 prec, ctx.stream());

@@ -326,10 +326,9 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
 
-    const float * src0_d = (const float *)src0->data;
-    const float * src1_d = (const float *)src1->data;
-
-    float * dst_d = (float *)dst->data;
+    const float * src0_d = (const float *)tensor_data(src0);
+    const float * src1_d = (const float *)tensor_data(src1);
+    float * dst_d = (float *)tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
@@ -383,7 +382,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 
     const float * freq_factors = nullptr;
     if (src2 != nullptr) {
-        freq_factors = (const float *) src2->data;
+        freq_factors = (const float *) tensor_data(src2);
     }
 
     rope_corr_dims corr_dims;

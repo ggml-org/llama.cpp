@@ -2,8 +2,8 @@
 
 void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
-    const float *       src0_d = (const float *) src0->data;
-    float *             dst_d  = (float *) dst->data;
+    const float *       src0_d = (const float *) tensor_data(src0);
+    float *             dst_d  = (float *) tensor_data(dst);
     cudaStream_t        stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);

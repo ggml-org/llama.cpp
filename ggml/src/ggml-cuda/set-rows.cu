@@ -169,8 +169,8 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     GGML_TENSOR_BINARY_OP_LOCALS
 
-    const float * src0_d   = (const float *)src0->data;
-    const int64_t * src1_d = (const int64_t *)src1->data;
+    const float * src0_d   = (const float *)tensor_data(src0);
+    const int64_t * src1_d = (const int64_t *)tensor_data(src1);
 
     cudaStream_t stream = ctx.stream();
 
@@ -178,7 +178,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     if (dst->type == GGML_TYPE_F32) {
         set_rows_cuda(
-            src0_d, src1_d, (float*)dst->data,
+            src0_d, src1_d, (float*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -188,7 +188,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_F16) {
         set_rows_cuda(
-            src0_d, src1_d, (half*)dst->data,
+            src0_d, src1_d, (half*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -198,7 +198,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_BF16) {
         set_rows_cuda(
-            src0_d, src1_d, (nv_bfloat16*)dst->data,
+            src0_d, src1_d, (nv_bfloat16*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -208,7 +208,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_Q4_0) {
         set_rows_cuda_quant<block_q4_0, QK4_0, quantize_f32_q4_0_block>(
-            src0_d, src1_d, (block_q4_0*)dst->data,
+            src0_d, src1_d, (block_q4_0*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -218,7 +218,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_Q4_1) {
         set_rows_cuda_quant<block_q4_1, QK4_1, quantize_f32_q4_1_block>(
-            src0_d, src1_d, (block_q4_1*)dst->data,
+            src0_d, src1_d, (block_q4_1*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -228,7 +228,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_Q5_0) {
         set_rows_cuda_quant<block_q5_0, QK5_0, quantize_f32_q5_0_block>(
-            src0_d, src1_d, (block_q5_0*)dst->data,
+            src0_d, src1_d, (block_q5_0*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -238,7 +238,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_Q5_1) {
         set_rows_cuda_quant<block_q5_1, QK5_1, quantize_f32_q5_1_block>(
-            src0_d, src1_d, (block_q5_1*)dst->data,
+            src0_d, src1_d, (block_q5_1*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -248,7 +248,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_Q8_0) {
         set_rows_cuda_quant<block_q8_0, QK8_0, quantize_f32_q8_0_block>(
-            src0_d, src1_d, (block_q8_0*)dst->data,
+            src0_d, src1_d, (block_q8_0*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,
@@ -258,7 +258,7 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         );
     } else if (dst->type == GGML_TYPE_IQ4_NL) {
         set_rows_cuda_quant<block_iq4_nl, QK4_NL, quantize_f32_iq4_nl_block>(
-            src0_d, src1_d, (block_iq4_nl*)dst->data,
+            src0_d, src1_d, (block_iq4_nl*)tensor_data(dst),
             ne00, ne01, ne02, ne03,
             ne10, ne11, ne12, ne13,
             nb01, nb02, nb03,

@@ -167,10 +167,10 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
 
     if (ggml_is_contiguous(src0) && ggml_is_contiguous(src1)) {
-        const float * src0_d = (const float *)src0->data;
-        const float * src1_d = (const float *)src1->data;
+        const float * src0_d = (const float *)tensor_data(src0);
+        const float * src1_d = (const float *)tensor_data(src1);
 
-        float * dst_d = (float *)dst->data;
+        float * dst_d = (float *)tensor_data(dst);
 
         if (dim != 3) {
             for (int i3 = 0; i3 < dst->ne[3]; i3++) {
@@ -192,7 +192,7 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         dim3 grid_dim(dst->ne[1], dst->ne[2], dst->ne[3]);
         auto launch_kernel = [&](auto dim) {
             concat_f32_non_cont<dim><<<grid_dim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(
-                (const char *) src0->data, (const char *) src1->data, (char *) dst->data,
+                (const char *) tensor_data(src0), (const char *) tensor_data(src1), (char *) tensor_data(dst),
                 src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
                 src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3],
                 src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],

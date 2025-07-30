@@ -274,14 +274,14 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src5->nb[0] == sizeof(float));
     GGML_ASSERT(src6->nb[0] == sizeof(int32_t));
 
-    const float * src0_d = (const float *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    const float * src2_d = (const float *) src2->data;
-    const float * src3_d = (const float *) src3->data;
-    const float * src4_d = (const float *) src4->data;
-    const float * src5_d = (const float *) src5->data;
-    const int32_t * src6_d = (const int32_t *) src6->data;
-    float *       dst_d  = (float *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    const float * src1_d = (const float *) tensor_data(src1);
+    const float * src2_d = (const float *) tensor_data(src2);
+    const float * src3_d = (const float *) tensor_data(src3);
+    const float * src4_d = (const float *) tensor_data(src4);
+    const float * src5_d = (const float *) tensor_data(src5);
+    const int32_t * src6_d = (const int32_t *) tensor_data(src6);
+    float *       dst_d  = (float *) tensor_data(dst);
     cudaStream_t  stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);

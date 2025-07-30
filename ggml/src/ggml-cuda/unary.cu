@@ -107,8 +107,8 @@ static void unary_cuda(const T * x, T * dst, const int k, cudaStream_t stream) {
 template <float (*op)(float)>
 void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const void * src0_d = src0->data;
-    void * dst_d = dst->data;
+    const void * src0_d = tensor_data(src0);
+    void * dst_d = tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(ggml_is_contiguous(src0));
@@ -230,11 +230,11 @@ template <float (*op)(float)>
 void ggml_cuda_op_unary_gated(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
-    void * src0_d = src0->data;
-    void * src1_d = src1 ? src1->data : src0->data;
+    void * src0_d = tensor_data(src0);
+    void * src1_d = src1 ? tensor_data(src1) : src0_d;
     const int64_t src0_o = src0->nb[1];
     const int64_t src1_o = src1 ? src1->nb[1] : src0->nb[1];
-    void * dst_d = dst->data;
+    void * dst_d = tensor_data(dst);
     const int64_t nc = src1 ? src0->ne[0] : src0->ne[0] / 2;
     cudaStream_t stream = ctx.stream();
 
@@ -328,9 +328,9 @@ void ggml_cuda_op_silu_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
     const ggml_tensor * src0 = dst->src[0]; // input from forward pass
     const ggml_tensor * src1 = dst->src[1]; // grads of forward pass output
 
-    const float * src0_d = (const float *) src0->data;
-    const float * src1_d = (const float *) src1->data;
-    float       * dst_d  = (float       *) dst->data;
+    const float * src0_d = (const float *) tensor_data(src0);
+    const float * src1_d = (const float *) tensor_data(src1);
+    float       * dst_d  = (float       *) tensor_data(dst);
 
     cudaStream_t stream = ctx.stream();
 
@@ -372,8 +372,8 @@ static void leaky_relu_cuda(const T * x, T * dst, const int k, const float negat
 
 void ggml_cuda_op_leaky_relu(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const void * src0_d = src0->data;
-    void * dst_d = dst->data;
+    const void * src0_d = tensor_data(src0);
+    void * dst_d = tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(ggml_is_contiguous(src0));

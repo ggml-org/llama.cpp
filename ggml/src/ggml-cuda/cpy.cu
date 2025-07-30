@@ -309,8 +309,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     cudaStream_t main_stream = ctx.stream();
 
-    char * src0_ddc = (char *) src0->data;
-    char * src1_ddc = (char *) src1->data;
+    char * src0_ddc = (char *) tensor_data(src0);
+    char * src1_ddc = (char *) tensor_data(src1);
 
     char ** dest_ptrs_d = nullptr;
     int graph_cpynode_index = -1;

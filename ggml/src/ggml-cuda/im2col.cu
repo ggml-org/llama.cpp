@@ -65,8 +65,8 @@ static void im2col_cuda_f32(const float * x, float * dst,
 void ggml_cuda_op_im2col(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
-    const float * src1_d = (const float *)src1->data;
-    float * dst_d = (float *)dst->data;
+    const float * src1_d = (const float *)tensor_data(src1);
+    float * dst_d = (float *)tensor_data(dst);
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32);

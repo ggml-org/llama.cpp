@@ -589,7 +589,7 @@ static enum ggml_status ggml_backend_cuda_buffer_init_tensor(ggml_backend_buffer
 
         if (padded_size > original_size) {
             ggml_cuda_set_device(ctx->device);
-            CUDA_CHECK(cudaMemset((char *)tensor->data + original_size, 0, padded_size - original_size));
+            CUDA_CHECK(cudaMemset((char *)tensor_data(tensor) + original_size, 0, padded_size - original_size));
         }
     }
     return GGML_STATUS_SUCCESS;
@@ -599,7 +599,7 @@ static void ggml_backend_cuda_buffer_memset_tensor(ggml_backend_buffer_t buffer,
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemsetAsync((char *)tensor->data + offset, value, size, cudaStreamPerThread));
+    CUDA_CHECK(cudaMemsetAsync((char *)tensor_data(tensor) + offset, value, size, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
@@ -607,7 +607,7 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
+    CUDA_CHECK(cudaMemcpyAsync((char *)tensor_data(tensor) + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
@@ -615,7 +615,7 @@ static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, co
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
+    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor_data(tensor) + offset, size, cudaMemcpyDeviceToHost, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
 
@@ -624,12 +624,12 @@ static bool ggml_backend_cuda_buffer_cpy_tensor(ggml_backend_buffer_t buffer, co
         ggml_backend_cuda_buffer_context * src_ctx = (ggml_backend_cuda_buffer_context *)src->buffer->context;
         ggml_backend_cuda_buffer_context * dst_ctx = (ggml_backend_cuda_buffer_context *)dst->buffer->context;
         if (src_ctx->device == dst_ctx->device) {
-            CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
+            CUDA_CHECK(cudaMemcpyAsync(tensor_data(dst), tensor_data(src), ggml_nbytes(src), cudaMemcpyDeviceToDevice, cudaStreamPerThread));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, dst_ctx->device, src->data, src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
+            CUDA_CHECK(cudaMemcpyPeerAsync(tensor_data(dst), dst_ctx->device, tensor_data(src), src_ctx->device, ggml_nbytes(src), cudaStreamPerThread));
 #endif
         }
         CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
@@ -1172,7 +1172,7 @@ typedef void (*ggml_cuda_op_mul_mat_t)(
 static cudaError_t ggml_cuda_cpy_tensor_2d(
     void * dst, const struct ggml_tensor * src, int64_t i3, int64_t i2, int64_t i1_low, int64_t i1_high, cudaStream_t stream) {
 
-    const char * src_ptr = (const char *) src->data;
+    const char * src_ptr = (const char *) tensor_data(src);
     char       * dst_ptr = (char       *) dst;
 
     const int64_t ne0 = src->ne[0];
@@ -1556,7 +1556,7 @@ static void ggml_cuda_op_mul_mat(
         cudaStream_t stream = ctx.stream(id, 0);
 
         if (src0_is_contiguous) {
-            dev[id].src0_dd = split ? (char *) src0_extra->data_device[id] : (char *) src0->data;
+            dev[id].src0_dd = split ? (char *) src0_extra->data_device[id] : (char *) tensor_data(src0);
         } else {
             // If src0 is not contiguous it will be copied to a temporary buffer.
             // This buffer needs to be cleared entirely because multiple regions will function as padding.
@@ -1576,7 +1576,7 @@ static void ggml_cuda_op_mul_mat(
         }
 
         if (src1_on_device && src1_is_contiguous) {
-            dev[id].src1_ddf = (float *) src1->data;
+            dev[id].src1_ddf = (float *) tensor_data(src1);
         } else {
             dev[id].src1_ddf = dev[id].src1_ddf_alloc.alloc(ctx.pool(id), ggml_nelements(src1));
         }
@@ -1598,7 +1598,7 @@ static void ggml_cuda_op_mul_mat(
         }
 
         if (dst_on_device) {
-            dev[id].dst_dd = (float *) dst->data;
+            dev[id].dst_dd = (float *) tensor_data(dst);
         } else {
             const size_t size_dst_ddf = split ? (dev[id].row_high - dev[id].row_low)*ne1 : ggml_nelements(dst);
             dev[id].dst_dd = dev[id].dst_dd_alloc.alloc(ctx.pool(id), size_dst_ddf);
@@ -1673,7 +1673,7 @@ static void ggml_cuda_op_mul_mat(
                                     src1_ddq_i, id, src1_ddq_i_source, ctx.device, src1_ncols*src1_padded_col_size*q8_1_ts/q8_1_bs, stream));
                             }
                         } else {
-                            float * src1_ddf_i_source = (float *) src1->data;
+                            float * src1_ddf_i_source = (float *) tensor_data(src1);
                             src1_ddf_i_source += (i0*ne11 + src1_col_0) * ne10;
                             CUDA_CHECK(cudaMemcpyPeerAsync(src1_ddf_i, id, src1_ddf_i_source, ctx.device,
                                                             src1_ncols*ne10*sizeof(float), stream));
@@ -1705,7 +1705,7 @@ static void ggml_cuda_op_mul_mat(
 
                 // copy dst to host or other device if necessary
                 if (!dst_on_device) {
-                    void * dst_off_device = dst->data;
+                    void * dst_off_device = tensor_data(dst);
                     if (split) {
                         // src0 = weight matrix is saved as a transposed matrix for better memory layout.
                         // dst is NOT transposed.
@@ -1837,7 +1837,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     cudaStream_t main_stream = ctx.stream();
     CUBLAS_CHECK(cublasSetStream(ctx.cublas_handle(), main_stream));
 
-    float * dst_ddf = (float *) dst->data;
+    float * dst_ddf = (float *) tensor_data(dst);
     const size_t ts_src1 = ggml_type_size(src1->type);
     GGML_ASSERT(nb10 == ts_src1);
     int64_t s11 = nb11 / ts_src1;
@@ -1851,11 +1851,11 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     ggml_cuda_pool_alloc<cuda_t> src1_alloc(ctx.pool());
 
     // Handle src0
-    src0_ptr = (const cuda_t *) src0->data;
+    src0_ptr = (const cuda_t *) tensor_data(src0);
 
     // Handle src1 - convert if necessary
     if (src1->type == src0_type) {
-        src1_ptr = (const cuda_t *) src1->data;
+        src1_ptr = (const cuda_t *) tensor_data(src1);
     } else {
         // Convert src1 to target type using traits conversion functions
         const int64_t ne_src1 = ggml_nelements(src1);
@@ -1863,7 +1863,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
 
         const auto convert_func = traits::get_nc_converter(src1->type);
         GGML_ASSERT(convert_func != nullptr);
-        convert_func(src1->data, src1_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, main_stream);
+        convert_func(tensor_data(src1), src1_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, main_stream);
         src1_ptr = src1_alloc.get();
         s11 = ne10;
         s12 = ne11*s11;
@@ -2119,7 +2119,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     ggml_cuda_pool_alloc<char>  dst_sorted(ctx.pool(), ne2 *n_expert_used* ne0*ts_dst_sorted);
 
     std::vector<char> ids_host(ggml_nbytes(ids));
-    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), ids->data, ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
+    CUDA_CHECK(cudaMemcpyAsync(ids_host.data(), tensor_data(ids), ggml_nbytes(ids), cudaMemcpyDeviceToHost, stream));
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     for (int64_t i02 = 0; i02 < ne02; ++i02) { // expert matrices
@@ -2146,7 +2146,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int32_t * ids_to_sorted   = ids_buf_dev.ptr + 0*ne_get_rows;
     const int32_t * ids_from_sorted = ids_buf_dev.ptr + 1*ne_get_rows;
 
-    get_rows_cuda(src1->data, src1->type, ids_to_sorted, src1_sorted.ptr, type_src1_sorted,
+    get_rows_cuda(tensor_data(src1), src1->type, ids_to_sorted, src1_sorted.ptr, type_src1_sorted,
         ne10, nb11, nb12, nb13,
         ne_get_rows, 1, 1, sizeof(int32_t), ne_get_rows*sizeof(int32_t), ne_get_rows*sizeof(int32_t),
         ne10*ts_src1_sorted, ne_get_rows*ne10*ts_src1_sorted, ne_get_rows*ne10*ts_src1_sorted, stream);
@@ -2164,7 +2164,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         src0_slice.nb[3]    = src0_slice.nb[2];
         src0_slice.op       = GGML_OP_VIEW;
         src0_slice.view_src = dst->src[0]; // non-const pointer to src0
-        src0_slice.data     = (char *) src0->data + i02*nb02;
+        src0_slice.data     = (char *) tensor_data(src0) + i02*nb02;
 
         ggml_tensor src1_slice;
         memset(&src1_slice, 0, sizeof(src1_slice));
@@ -2201,7 +2201,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_data_cur  +=  dst_slice.nb[2];
     }
 
-    get_rows_cuda(dst_sorted.ptr, type_dst_sorted, ids_from_sorted, dst->data, dst->type,
+    get_rows_cuda(dst_sorted.ptr, type_dst_sorted, ids_from_sorted, tensor_data(dst), dst->type,
         ne0, ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted, ne_get_rows*ne0*ts_dst_sorted,
         ne_get_rows, 1, 1, sizeof(int32_t), ne_get_rows*sizeof(int32_t), ne_get_rows*sizeof(int32_t),
         nb1, nb2, nb3, stream);
@@ -2509,7 +2509,7 @@ static void ggml_backend_cuda_set_tensor_async(ggml_backend_t backend, ggml_tens
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
-    CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
+    CUDA_CHECK(cudaMemcpyAsync((char *)tensor_data(tensor) + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->stream()));
 }
 
 static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -2518,7 +2518,7 @@ static void ggml_backend_cuda_get_tensor_async(ggml_backend_t backend, const ggm
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
-    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
+    CUDA_CHECK(cudaMemcpyAsync(data, (const char *)tensor_data(tensor) + offset, size, cudaMemcpyDeviceToHost, cuda_ctx->stream()));
 }
 
 static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src, ggml_tensor * dst) {
@@ -2550,12 +2550,12 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
     if (backend_src != backend_dst) {
         // copy on src stream
         if (cuda_ctx_src->device == cuda_ctx_dst->device) {
-            CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
+            CUDA_CHECK(cudaMemcpyAsync(tensor_data(dst), tensor_data(src), ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
         } else {
 #ifdef GGML_CUDA_NO_PEER_COPY
             return false;
 #else
-            CUDA_CHECK(cudaMemcpyPeerAsync(dst->data, cuda_ctx_dst->device, src->data, cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
+            CUDA_CHECK(cudaMemcpyPeerAsync(tensor_data(dst), cuda_ctx_dst->device, tensor_data(src), cuda_ctx_src->device, ggml_nbytes(dst), cuda_ctx_src->stream()));
 #endif
         }
 
@@ -2571,7 +2571,7 @@ static bool ggml_backend_cuda_cpy_tensor_async(ggml_backend_t backend_src, ggml_
         CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx_dst->stream(), cuda_ctx_src->copy_event, 0));
     } else {
         // src and dst are on the same backend
-        CUDA_CHECK(cudaMemcpyAsync(dst->data, src->data, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
+        CUDA_CHECK(cudaMemcpyAsync(tensor_data(dst), tensor_data(src), ggml_nbytes(dst), cudaMemcpyDeviceToDevice, cuda_ctx_src->stream()));
     }
     return true;
 }
@@ -2631,7 +2631,7 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 
             // Store the pointers which are updated for each token, such that these can be sent
             // to the device and accessed using indirection from CUDA graph
-            cuda_ctx->cuda_graph->cpy_dest_ptrs.push_back((char *) node->src[1]->data);
+            cuda_ctx->cuda_graph->cpy_dest_ptrs.push_back((char *) tensor_data(node->src[1]));
 
             // store a pointer to each copy op CUDA kernel to identify it later
             void * ptr = ggml_cuda_cpy_fn(node->src[0], node->src[1]);
@@ -2658,20 +2658,20 @@ static bool check_node_graph_compatibility_and_refresh_copy_ops(ggml_backend_cud
 }
 
 static void set_ggml_graph_node_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
-    graph_node_properties->node_address = node->data;
+    graph_node_properties->node_address = tensor_data(node);
     graph_node_properties->node_op = node->op;
     for (int i = 0; i < GGML_MAX_DIMS; i++) {
         graph_node_properties->ne[i] = node->ne[i];
         graph_node_properties->nb[i] = node->nb[i];
     }
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        graph_node_properties->src_address[i] = node->src[i] ? node->src[i]->data : nullptr;
+        graph_node_properties->src_address[i] = node->src[i] ? tensor_data(node->src[i]) : nullptr;
     }
     memcpy(graph_node_properties->op_params, node->op_params, GGML_MAX_OP_PARAMS);
 }
 
 static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_graph_node_properties * graph_node_properties) {
-    if (node->data != graph_node_properties->node_address &&
+    if (tensor_data(node) != graph_node_properties->node_address &&
           node->op != GGML_OP_CPY &&
           node->op != GGML_OP_VIEW) {
         return false;
@@ -2692,7 +2692,7 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
 
     for (int i = 0; i < GGML_MAX_SRC; i++) {
         if (node->src[i] &&
-            node->src[i]->data != graph_node_properties->src_address[i] &&
+            tensor_data(node->src[i]) != graph_node_properties->src_address[i] &&
             node->op != GGML_OP_CPY &&
             node->op != GGML_OP_VIEW
         ) {

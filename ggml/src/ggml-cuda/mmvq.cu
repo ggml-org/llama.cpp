@@ -509,9 +509,9 @@ void ggml_cuda_mul_mat_vec_q(
 
     GGML_ASSERT(!ids || ne12 == 1); // Implementation is only correct for batch size 1.
 
-    const float   * src1_d =       (const float   *) src1->data;
-    const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
-    float         *  dst_d =       (float         *)  dst->data;
+    const float   * src1_d =       (const float   *) tensor_data(src1);
+    const int32_t *  ids_d = ids ? (const int32_t *)  tensor_data(ids) : nullptr;
+    float         *  dst_d =       (float         *)  tensor_data(dst);
 
     // If src0 is a temporary compute buffer, clear any potential padding.
     if (ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE) {
@@ -520,7 +520,7 @@ void ggml_cuda_mul_mat_vec_q(
         if (size_alloc > size_data) {
             GGML_ASSERT(ggml_is_contiguously_allocated(src0));
             GGML_ASSERT(!src0->view_src);
-            CUDA_CHECK(cudaMemsetAsync((char *) src0->data + size_data, 0, size_alloc - size_data, stream));
+            CUDA_CHECK(cudaMemsetAsync((char *) tensor_data(src0) + size_data, 0, size_alloc - size_data, stream));
         }
     }
 
@@ -554,7 +554,7 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t stride_channel_y   = ids ? s11  : s12;
 
     mul_mat_vec_q_switch_type(
-        src0->data, src0->type, src1_q8_1.get(), ids_d, dst_d, ne00,
+        tensor_data(src0), src0->type, src1_q8_1.get(), ids_d, dst_d, ne00,
         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
         ne03,              ne3,           s03, s13,              s3,                 stream);
