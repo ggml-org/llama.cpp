@@ -664,6 +664,13 @@ extern "C" {
     )
 #else
 // C++ implementation using function overloading
+static inline void * tensor_data(struct ggml_tensor * tensor);
+static inline void * tensor_data(const struct ggml_tensor * tensor);
+static inline void * tensor_data(struct ggml_tensor & tensor);
+static inline void * tensor_data(const struct ggml_tensor & tensor);
+static inline void tensor_set_data(struct ggml_tensor * tensor, void * value);
+static inline void tensor_set_data(struct ggml_tensor & tensor, void * value);
+
 static inline void * tensor_data(struct ggml_tensor * tensor) {
 #ifdef GGML_NUMA_MIRROR
     int n = ggml_current_numa_node == -1 ? 0 : ggml_current_numa_node;
@@ -681,20 +688,10 @@ static inline void * tensor_data(const struct ggml_tensor * tensor) {
 #endif
 }
 static inline void * tensor_data(struct ggml_tensor & tensor) {
-#ifdef GGML_NUMA_MIRROR
-    int n = ggml_current_numa_node == -1 ? 0 : ggml_current_numa_node;
-    return tensor.__data[n];
-#else
-    return tensor.data;
-#endif
+    return tensor_data(&tensor);
 }
 static inline void * tensor_data(const struct ggml_tensor & tensor) {
-#ifdef GGML_NUMA_MIRROR
-    int n = ggml_current_numa_node == -1 ? 0 : ggml_current_numa_node;
-    return tensor.__data[n];
-#else
-    return tensor.data;
-#endif
+    return tensor_data(&tensor);
 }
 
 static inline void tensor_set_data(struct ggml_tensor * tensor, void * value) {
@@ -714,46 +711,33 @@ static inline void tensor_set_data(struct ggml_tensor * tensor, void * value) {
 #endif
 }
 static inline void tensor_set_data(struct ggml_tensor & tensor, void * value) {
-#ifdef GGML_NUMA_MIRROR
-    void* data_ = value;
-    if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT && (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + 2 * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
-        data_ = (void*)((uint64_t)data_ - GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
-    }
-    tensor.__data[0] = data_;
-    if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET && (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) {
-        tensor.__data[1] = (void*)((uint64_t)data_ + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT);
-    } else {
-        tensor.__data[1] = data_;
-    }
-#else
-    tensor.data = value;
-#endif
+    tensor_set_data(&tensor, value);
 }
 #endif
 
 #if !defined(__cplusplus)
 #ifdef GGML_NUMA_MIRROR
-    #define _tensor_data_ptr(tensor) \
-        (ggml_current_numa_node == -1 ? (tensor)->__data[0] : (tensor)->__data[ggml_current_numa_node])
+    #define _tensor_data_ptr(p) \
+        (ggml_current_numa_node == -1 ? (p)->__data[0] : (p)->__data[ggml_current_numa_node])
 
-    #define _tensor_set_data_ptr(tensor, data_ptr) \
+    #define _tensor_set_data_ptr(p, d) \
         do { \
-            void* data_ = (data_ptr); \
+            void* data_ = (d); \
             if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT && \
                 (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + 2 * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) { \
                 data_ = (void*)((uint64_t)data_ - GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT); \
             } \
-            (tensor)->__data[0] = data_; \
+            (p)->__data[0] = data_; \
             if ((uint64_t)data_ >= GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET && \
                 (uint64_t)data_ < GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT) { \
-                (tensor)->__data[1] = (void*)((uint64_t)data_ + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT); \
+                (p)->__data[1] = (void*)((uint64_t)data_ + GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT); \
             } else { \
-                (tensor)->__data[1] = data_; \
+                (p)->__data[1] = data_; \
             } \
         } while (0)
 #else
-    #define _tensor_data_ptr(tensor) ((tensor)->data)
-    #define _tensor_set_data_ptr(tensor, value) ((tensor)->data = (value))
+    #define _tensor_data_ptr(p) ((p)->data)
+    #define _tensor_set_data_ptr(p, d) ((p)->data = (d))
 #endif
 #endif
     
