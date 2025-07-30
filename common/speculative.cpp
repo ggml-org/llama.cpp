@@ -157,7 +157,7 @@ static std::string replace_to_dft(
         struct common_speculative * spec,
         const std::string& input) {
     std::string result = input;
-    for (const auto& pair : spec->tgt_dft_replacements) {
+    for (const auto & pair : spec->tgt_dft_replacements) {
         size_t pos = result.find(pair.first);
         while (pos != std::string::npos) {
             result.replace(pos, pair.first.length(), pair.second);
