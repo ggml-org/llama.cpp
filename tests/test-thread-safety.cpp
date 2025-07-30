@@ -37,9 +37,6 @@ int main(int argc, char ** argv) {
     // each context has a single sequence
     cparams.n_seq_max = 1;
 
-    // prevent from launching too many threads
-    cparams.n_threads = std::min<int>(std::max(2u, std::thread::hardware_concurrency()/params.n_parallel), cparams.n_threads);
-
     int dev_count = ggml_backend_dev_count();
     int gpu_dev_count = 0;
     for (int i = 0; i < dev_count; ++i) {
