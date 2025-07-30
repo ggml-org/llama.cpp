@@ -1554,8 +1554,8 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
     ggml_opt_dataset_t result = ggml_opt_dataset_init(
         GGML_TYPE_I32, GGML_TYPE_I32, ne_datapoint, ne_datapoint, ndata, /*ndata_shard =*/ 1);
 
-    llama_token * data   = (llama_token *) ggml_opt_dataset_data(result)->data;
-    llama_token * labels = (llama_token *) ggml_opt_dataset_labels(result)->data;
+    llama_token * data   = (llama_token *) tensor_data(ggml_opt_dataset_data(result));
+    llama_token * labels = (llama_token *) tensor_data(ggml_opt_dataset_labels(result));
 
     for (int64_t idata = 0; idata < ndata; ++idata) {
         memcpy(data   + idata*ne_datapoint, tokens.data() + idata*stride + 0, ne_datapoint*sizeof(llama_token));

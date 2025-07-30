@@ -2586,7 +2586,7 @@ struct clip_model_loader {
                 size_t num_bytes = ggml_nbytes(cur);
                 if (ggml_backend_buft_is_host(buft)) {
                     // for the CPU and Metal backend, we can read directly into the tensor
-                    fin.read(reinterpret_cast<char *>(cur->data), num_bytes);
+                    fin.read(reinterpret_cast<char *>(tensor_data(cur)), num_bytes);
                 } else {
                     // read into a temporary buffer first, then copy to device memory
                     read_buf.resize(num_bytes);
@@ -3356,7 +3356,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         clip_image_f32_ptr img_f32(clip_image_f32_init());
         // clip_image_f32_ptr res(clip_image_f32_init());
         normalize_image_u8_to_f32(resized, *img_f32, params.image_mean, params.image_std);
-        // res_imgs->data[0] = *res;
+        // tensor_data(res_imgs)[0] = *res;
         res_imgs->entries.push_back(std::move(img_f32));
         return true;
     }
