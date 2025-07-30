@@ -338,6 +338,11 @@ struct llama_mmap::impl {
                 }
                 int hugefd = open(path, O_CREAT | O_RDWR, 0600);
                 if (hugefd < 0) {
+                    // Clean up any mappings we've already created before throwing
+                    for (const auto& mapping : numa_mappings) {
+                        munmap(mapping.addr, mapping.size);
+                        unlink(mapping.path.c_str());
+                    }
                     LLAMA_LOG_WARN("failed to open hugepage fd %s: %d %s\n",
                             path, errno, strerror(errno));
                     throw std::runtime_error(format("failed to open hugepage fd: %s", strerror(errno)));
@@ -351,6 +356,12 @@ struct llama_mmap::impl {
                 close(hugefd);
                 LLAMA_LOG_INFO("mmap(%s) desire=%p size=%llu result=%p is_new_mem[%d]=%s\n",
                         path, (void*)address, GGML_MMAP_HUGEPAGESZ, mm, node, is_new_mem[node] ? "yes" : "no");
+                
+                // Store mapping info for cleanup BEFORE checking for errors
+                if (mm != MAP_FAILED) {
+                    numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
+                }
+                
                 if (((uintptr_t)mm) != address) {
                     // Clean up any mappings we've already created before throwing
                     for (const auto& mapping : numa_mappings) {
@@ -363,9 +374,6 @@ struct llama_mmap::impl {
                 if (is_new_mem[node]) {
                     memset(mm, 0, GGML_MMAP_HUGEPAGESZ);
                 }
-
-                // Store mapping info for cleanup
-                numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
             }
         }
         base_address_offset += i * GGML_MMAP_HUGEPAGESZ;
