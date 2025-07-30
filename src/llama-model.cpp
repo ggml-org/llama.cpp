@@ -17158,10 +17158,18 @@ struct llm_build_smallthinker : public llm_graph_context{
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            ggml_tensor * ffn_out = build_moe_ffn_from_probs(cur, probs, model.layers[il].ffn_up_exps,
-                                                model.layers[il].ffn_gate_exps, model.layers[il].ffn_down_exps,
-                                                nullptr, n_expert, n_expert_used,
-                                                static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func), il);
+            ggml_tensor * ffn_out =
+                build_moe_ffn(cur,
+                        nullptr,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        nullptr,
+                        n_expert, n_expert_used,
+                        LLM_FFN_RELU, true,
+                        false, 0.0,
+                        static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
+                        il, probs);
 
             cb(ffn_out, "ffn_out", il);
             cur = ffn_out;
