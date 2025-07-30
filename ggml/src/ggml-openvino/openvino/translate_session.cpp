@@ -22,7 +22,6 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
-#include <openvino/core/preprocess/pre_post_process.hpp>
 
 #include "ggml-openvino/openvino/node_context.hpp"
 #include "ggml-openvino/openvino/utils.hpp"
@@ -269,12 +268,9 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
             manager.register_pass<ov::pass::MakeStateful>(kv_param_res_pairs);
         }
 
-        // SDPA is even worse on performance
         manager.register_pass<pass::FuseToSDPA>();
         manager.run_passes(model);
     }
-    auto preprocessor = ov::preprocess::PrePostProcessor(model);
-    model = preprocessor.build();
     return model;
 }
 
