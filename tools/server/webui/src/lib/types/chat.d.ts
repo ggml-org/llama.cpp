@@ -1,6 +1,11 @@
 export type ChatRole = 'user' | 'assistant' | 'system';
+
+// todo - currently we're processing <think>...</think> tags from the streamed 'text' response. Should this be done differently?
+export type ChatMessageType = 'root' | 'text' | 'think';
+
 export interface ChatMessageData {
 	role: ChatRole;
+	type: ChatMessageType
 	content: string;
 	thinking?: string; // Content between <think> and </think> tags
 	timestamp?: Date | number;

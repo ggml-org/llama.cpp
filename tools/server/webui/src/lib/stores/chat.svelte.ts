@@ -4,6 +4,7 @@ import type { Conversation, Message } from '$lib/types/database';
 import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { extractPartialThinking } from '$lib/utils/thinking';
+import type { ChatMessageType, ChatRole } from '$lib/app';
 
 class ChatStore {
 	activeConversation = $state<Conversation | null>(null);
@@ -23,6 +24,7 @@ class ChatStore {
 	async initialize() {
 		try {
 			await this.loadConversations();
+
 			this.isInitialized = true;
 		} catch (error) {
 			console.error('Failed to initialize chat store:', error);
@@ -35,7 +37,6 @@ class ChatStore {
 
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-
 		const conversation = await DatabaseService.createConversation(conversationName);
 
 		this.conversations.unshift(conversation);
@@ -51,27 +52,31 @@ class ChatStore {
 	async loadConversation(convId: string): Promise<boolean> {
 		try {
 			const conversation = await DatabaseService.getConversation(convId);
+
 			if (!conversation) {
 				return false;
 			}
 
 			this.activeConversation = conversation;
 			this.activeMessages = await DatabaseService.getConversationMessages(convId);
+
 			return true;
 		} catch (error) {
 			console.error('Failed to load conversation:', error);
+
 			return false;
 		}
 	}
 
 	async addMessage(
-		role: 'user' | 'assistant' | 'system',
+		role: ChatRole,
 		content: string,
-		type: 'root' | 'text' | 'think' = 'text',
+		type: ChatMessageType = 'text',
 		parent: string = '-1'
 	): Promise<Message | null> {
 		if (!this.activeConversation) {
 			console.error('No active conversation when trying to add message');
+
 			return null;
 		}
 
@@ -89,19 +94,113 @@ class ChatStore {
 
 			this.activeMessages.push(message);
 
-			// Update lastModified
-			const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-			if (convIndex !== -1) {
-				this.conversations[convIndex].lastModified = Date.now();
-
-				const updatedConv = this.conversations.splice(convIndex, 1)[0];
-				this.conversations.unshift(updatedConv);
-			}
+			// Update conversation timestamp
+			this.updateConversationTimestamp();
 
 			return message;
 		} catch (error) {
 			console.error('Failed to add message:', error);
+
 			return null;
+		}
+	}
+
+	/**
+	 * Private helper method to handle streaming chat completion
+	 * Reduces code duplication across sendMessage, updateMessage, and regenerateMessage
+	 */
+	private async streamChatCompletion(
+		allMessages: Message[],
+		assistantMessage: Message,
+		onComplete?: (content: string) => Promise<void>,
+		onError?: (error: Error) => void
+	): Promise<void> {
+		let streamedContent = '';
+
+		await this.chatService.sendChatCompletion(
+			allMessages,
+			{
+				stream: true,
+				temperature: 0.7, // todo - use Settings-based value stored in localStorage
+				max_tokens: 2048, // todo - same here
+				onChunk: (chunk: string) => {
+					streamedContent += chunk;
+					this.currentResponse = streamedContent;
+
+					// Parse thinking content during streaming
+					const partialThinking = extractPartialThinking(streamedContent);
+
+					const messageIndex = this.activeMessages.findIndex(
+						(m) => m.id === assistantMessage.id
+					);
+
+					if (messageIndex !== -1) {
+						// Update message with parsed content
+						this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
+					}
+				},
+				onComplete: async () => {
+					// Update assistant message in database
+					await DatabaseService.updateMessage(assistantMessage.id, {
+						content: streamedContent
+					});
+
+					// Call custom completion handler if provided
+					if (onComplete) {
+						await onComplete(streamedContent);
+					}
+
+					this.isLoading = false;
+					this.currentResponse = '';
+				},
+				onError: (error: Error) => {
+					// Don't log or show error if it's an AbortError (user stopped generation)
+					if (error.name === 'AbortError' || error instanceof DOMException) {
+						this.isLoading = false;
+						this.currentResponse = '';
+						return;
+					}
+
+					console.error('Streaming error:', error);
+					this.isLoading = false;
+					this.currentResponse = '';
+
+					const messageIndex = this.activeMessages.findIndex(
+						(m: Message) => m.id === assistantMessage.id
+					);
+
+					if (messageIndex !== -1) {
+						this.activeMessages[messageIndex].content = `Error: ${error.message}`;
+					}
+
+					// Call custom error handler if provided
+					if (onError) {
+						onError(error);
+					}
+				}
+			}
+		);
+	}
+
+	/**
+	 * Private helper to handle abort errors consistently
+	 */
+	private isAbortError(error: unknown): boolean {
+		return error instanceof Error && (error.name === 'AbortError' || error instanceof DOMException);
+	}
+
+	/**
+	 * Private helper to update conversation lastModified timestamp and move to top
+	 */
+	private updateConversationTimestamp(): void {
+		if (!this.activeConversation) return;
+
+		const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+
+		if (chatIndex !== -1) {
+			this.conversations[chatIndex].lastModified = Date.now();
+			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
+			this.conversations.unshift(updatedConv);
 		}
 	}
 
@@ -112,7 +211,6 @@ class ChatStore {
 
 		if (!this.activeConversation) {
 			await this.createConversation();
-
 			isNewConversation = true;
 		}
 
@@ -134,72 +232,19 @@ class ChatStore {
 			// If this is a new conversation, update the title with the first user prompt
 			if (isNewConversation && content) {
 				const title = content.trim();
-
 				await this.updateConversationName(this.activeConversation.id, title);
 			}
 
 			const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-
 			const assistantMessage = await this.addMessage('assistant', '');
+
 			if (!assistantMessage) {
 				throw new Error('Failed to create assistant message');
 			}
 
-			let streamedContent = '';
-			await this.chatService.sendChatCompletion(
-				allMessages,
-				{
-					stream: true,
-					temperature: 0.7,
-					max_tokens: 2048,
-					onChunk: (chunk: string) => {
-						streamedContent += chunk;
-						this.currentResponse = streamedContent;
-
-						// Parse thinking content during streaming
-						const partialThinking = extractPartialThinking(streamedContent);
-						
-						const messageIndex = this.activeMessages.findIndex(
-							(m) => m.id === assistantMessage.id
-						);
-						if (messageIndex !== -1) {
-							// Update message with parsed content
-							this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
-						}
-					},
-					onComplete: async () => {
-						// Update assistant message in database
-						await DatabaseService.updateMessage(assistantMessage.id, {
-							content: streamedContent
-						});
-
-						this.isLoading = false;
-						this.currentResponse = '';
-					},
-					onError: (error: Error) => {
-						// Don't log or show error if it's an AbortError (user stopped generation)
-						if (error.name === 'AbortError' || error instanceof DOMException) {
-							this.isLoading = false;
-							this.currentResponse = '';
-							return;
-						}
-
-						console.error('Streaming error:', error);
-						this.isLoading = false;
-						this.currentResponse = '';
-
-						const messageIndex = this.activeMessages.findIndex(
-							(m: Message) => m.id === assistantMessage.id
-						);
-						if (messageIndex !== -1) {
-							this.activeMessages[messageIndex].content = `Error: ${error.message}`;
-						}
-					}
-				}
-			);
+			await this.streamChatCompletion(allMessages, assistantMessage);
 		} catch (error) {
-			// Don't log or show error if it's an AbortError (user stopped generation)
-			if (error instanceof Error && (error.name === 'AbortError' || error instanceof DOMException)) {
+			if (this.isAbortError(error)) {
 				this.isLoading = false;
 				return;
 			}
@@ -231,33 +276,15 @@ class ChatStore {
 		this.currentResponse = '';
 	}
 
-	/**
-	 * Save partial response to database if there's content to save
-	 */
-	private async savePartialResponseIfNeeded() {
-		console.log('savePartialResponseIfNeeded called:', {
-			currentResponse: this.currentResponse,
-			activeMessagesLength: this.activeMessages.length
-		});
-		
+	private async savePartialResponseIfNeeded() {		
 		if (!this.currentResponse.trim() || !this.activeMessages.length) {
-			console.log('Early return: no current response or no messages');
 			return;
 		}
 
-		// Find the last assistant message that might be incomplete
 		const lastMessage = this.activeMessages[this.activeMessages.length - 1];
-		console.log('Last message:', {
-			role: lastMessage?.role,
-			content: lastMessage?.content,
-			contentLength: lastMessage?.content?.length
-		});
 		
-		// Check if the last message is an assistant message (regardless of current content)
-		// During streaming, the message content is updated in real-time, so we need to save it
 		if (lastMessage && lastMessage.role === 'assistant') {
 			try {
-				// Parse thinking content before saving
 				const partialThinking = extractPartialThinking(this.currentResponse);
 				
 				console.log('Saving partial response:', {
@@ -267,10 +294,10 @@ class ChatStore {
 					thinking: partialThinking.thinking
 				});
 				
-				// Update the assistant message with the partial response
 				const updateData: { content: string; thinking?: string } = {
 					content: partialThinking.remainingContent || this.currentResponse
 				};
+
 				if (partialThinking.thinking) {
 					updateData.thinking = partialThinking.thinking;
 				}
@@ -278,14 +305,10 @@ class ChatStore {
 				await DatabaseService.updateMessage(lastMessage.id, updateData);
 				console.log('Successfully saved partial response to database');
 
-				// Update the local state to reflect the saved content
 				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
-				if (partialThinking.thinking) {
-					// Note: thinking content is part of the message content now
-				}
 			} catch (error) {
 				console.error('Failed to save partial response:', error);
-				// In case of error, at least update the local state
+
 				lastMessage.content = this.currentResponse;
 			}
 		} else {
@@ -297,114 +320,58 @@ class ChatStore {
 		if (!this.activeConversation || this.isLoading) return;
 
 		try {
-			// Find the message to update
 			const messageIndex = this.activeMessages.findIndex((m: Message) => m.id === messageId);
+
 			if (messageIndex === -1) {
 				console.error('Message not found for update');
 				return;
 			}
 
 			const messageToUpdate = this.activeMessages[messageIndex];
-			const originalContent = messageToUpdate.content; // Store original content for rollback
+			const originalContent = messageToUpdate.content;
 			
-			// Only allow updating user messages
 			if (messageToUpdate.role !== 'user') {
 				console.error('Only user messages can be edited');
 				return;
 			}
 
-			// Update the message in local state immediately for UI responsiveness
 			this.activeMessages[messageIndex].content = newContent;
 
-			// Remove all messages after the updated message (including assistant responses)
 			const messagesToRemove = this.activeMessages.slice(messageIndex + 1);
 			for (const message of messagesToRemove) {
 				await DatabaseService.deleteMessage(message.id);
 			}
 
-			// Update local state to remove subsequent messages
 			this.activeMessages = this.activeMessages.slice(0, messageIndex + 1);
 
-			// Update chat message count
-			const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-			if (chatIndex !== -1) {
-				this.conversations[chatIndex].messageCount -= messagesToRemove.length;
-				this.conversations[chatIndex].updatedAt = Date.now();
-			}
+			// Update conversation timestamp
+			this.updateConversationTimestamp();
 
-			// Regenerate response to the updated message
-			// We need to generate a new assistant response based on the conversation history
 			this.isLoading = true;
 			this.currentResponse = '';
 
 			try {
 				const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-
 				const assistantMessage = await this.addMessage('assistant', '');
+
 				if (!assistantMessage) {
 					throw new Error('Failed to create assistant message');
 				}
 
-				let streamedContent = '';
-				await this.chatService.sendChatCompletion(
+				await this.streamChatCompletion(
 					allMessages,
-					{
-						stream: true,
-						temperature: 0.7,
-						max_tokens: 2048,
-						onChunk: (chunk: string) => {
-							streamedContent += chunk;
-							this.currentResponse = streamedContent;
-
-							// Parse thinking content during streaming
-							const partialThinking = extractPartialThinking(streamedContent);
-							
-							const messageIndex = this.activeMessages.findIndex(
-								(m: Message) => m.id === assistantMessage.id
-							);
-							if (messageIndex !== -1) {
-								// Update message with parsed content
-								this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
-							}
-						},
-						onComplete: async () => {
-							// Update assistant message in database
-							await DatabaseService.updateMessage(assistantMessage.id, {
-								content: streamedContent
-							});
-
-							// Only now update the edited user message in database after successful completion
-							await DatabaseService.updateMessage(messageId, { content: newContent });
-
-							this.isLoading = false;
-							this.currentResponse = '';
-						},
-						onError: (error: Error) => {
-							// Don't log or show error if it's an AbortError (user stopped generation)
-							if (error.name === 'AbortError' || error instanceof DOMException) {
-								this.isLoading = false;
-								this.currentResponse = '';
-								return;
-							}
-
-							console.error('Streaming error:', error);
-							this.isLoading = false;
-							this.currentResponse = '';
-
-							// Rollback the edited message to original content on error
-							const editedMessageIndex = this.activeMessages.findIndex(
-								(m: Message) => m.id === messageId
-							);
-							if (editedMessageIndex !== -1) {
-								this.activeMessages[editedMessageIndex].content = originalContent;
-							}
-
-							const assistantMessageIndex = this.activeMessages.findIndex(
-								(m: Message) => m.id === assistantMessage.id
-							);
-							if (assistantMessageIndex !== -1) {
-								this.activeMessages[assistantMessageIndex].content = `Error: ${error.message}`;
-							}
+					assistantMessage,
+					async () => {
+						// Update the original user message in database
+						await DatabaseService.updateMessage(messageId, { content: newContent });
+					},
+					(error: Error) => {
+						// Restore original content on error
+						const editedMessageIndex = this.activeMessages.findIndex(
+							(m: Message) => m.id === messageId
+						);
+						if (editedMessageIndex !== -1) {
+							this.activeMessages[editedMessageIndex].content = originalContent;
 						}
 					}
 				);
@@ -412,7 +379,6 @@ class ChatStore {
 				console.error('Failed to regenerate response:', regenerateError);
 				this.isLoading = false;
 				
-				// Rollback the edited message to original content on regeneration error
 				const messageIndex = this.activeMessages.findIndex(
 					(m: Message) => m.id === messageId
 				);
@@ -421,8 +387,7 @@ class ChatStore {
 				}
 			}
 		} catch (error) {
-			// Don't log or show error if it's an AbortError (user stopped generation)
-			if (error instanceof Error && (error.name === 'AbortError' || error instanceof DOMException)) {
+			if (this.isAbortError(error)) {
 				return;
 			}
 
@@ -434,7 +399,6 @@ class ChatStore {
 		if (!this.activeConversation || this.isLoading) return;
 
 		try {
-			// Find the assistant message to regenerate
 			const messageIndex = this.activeMessages.findIndex((m: Message) => m.id === messageId);
 			if (messageIndex === -1) {
 				console.error('Message not found for regeneration');
@@ -443,102 +407,40 @@ class ChatStore {
 
 			const messageToRegenerate = this.activeMessages[messageIndex];
 			
-			// Only allow regenerating assistant messages
 			if (messageToRegenerate.role !== 'assistant') {
 				console.error('Only assistant messages can be regenerated');
 				return;
 			}
 
-			// Remove the assistant message and all subsequent messages
 			const messagesToRemove = this.activeMessages.slice(messageIndex);
+
 			for (const message of messagesToRemove) {
 				await DatabaseService.deleteMessage(message.id);
 			}
 
-			// Update local state to remove the messages
 			this.activeMessages = this.activeMessages.slice(0, messageIndex);
 
-			// Update chat message count
-			const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-			if (chatIndex !== -1) {
-				this.conversations[chatIndex].messageCount -= messagesToRemove.length;
-				this.conversations[chatIndex].updatedAt = Date.now();
-			}
+			// Update conversation timestamp
+			this.updateConversationTimestamp();
 
-			// Generate a new response based on the conversation history
 			this.isLoading = true;
 			this.currentResponse = '';
 
 			try {
 				const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
-
 				const assistantMessage = await this.addMessage('assistant', '');
+				
 				if (!assistantMessage) {
 					throw new Error('Failed to create assistant message');
 				}
 
-				let streamedContent = '';
-				await this.chatService.sendChatCompletion(
-					allMessages,
-					{
-						stream: true,
-						temperature: 0.7,
-						max_tokens: 2048,
-						onChunk: (chunk: string) => {
-							streamedContent += chunk;
-							this.currentResponse = streamedContent;
-
-							// Parse thinking content during streaming
-							const partialThinking = extractPartialThinking(streamedContent);
-							
-							const messageIndex = this.activeMessages.findIndex(
-								(m: Message) => m.id === assistantMessage.id
-							);
-							if (messageIndex !== -1) {
-								// Update message with parsed content
-								this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
-								// Update thinking content if present
-								// Note: thinking content is now part of the message content
-							}
-						},
-						onComplete: async () => {
-							// Update assistant message in database
-							await DatabaseService.updateMessage(assistantMessage.id, {
-								content: streamedContent
-							});
-
-							this.isLoading = false;
-							this.currentResponse = '';
-						},
-						onError: (error: Error) => {
-							// Don't log or show error if it's an AbortError (user stopped generation)
-							if (error.name === 'AbortError' || error instanceof DOMException) {
-								this.isLoading = false;
-								this.currentResponse = '';
-								return;
-							}
-
-							console.error('Streaming error:', error);
-							this.isLoading = false;
-							this.currentResponse = '';
-
-							const assistantMessageIndex = this.activeMessages.findIndex(
-								(m: Message) => m.id === assistantMessage.id
-							);
-							if (assistantMessageIndex !== -1) {
-								// Update message with parsed content
-								this.activeMessages[assistantMessageIndex].content = `Error: ${error.message}`;
-							}
-						}
-					}
-				);
+				await this.streamChatCompletion(allMessages, assistantMessage);
 			} catch (regenerateError) {
 				console.error('Failed to regenerate response:', regenerateError);
 				this.isLoading = false;
 			}
 		} catch (error) {
-			// Don't log or show error if it's an AbortError (user stopped generation)
-			if (error instanceof Error && (error.name === 'AbortError' || error instanceof DOMException)) {
+			if (this.isAbortError(error)) {
 				return;
 			}
 
@@ -551,6 +453,7 @@ class ChatStore {
 			await DatabaseService.updateConversation(convId, { name });
 
 			const convIndex = this.conversations.findIndex((c) => c.id === convId);
+
 			if (convIndex !== -1) {
 				this.conversations[convIndex].name = name;
 			}
