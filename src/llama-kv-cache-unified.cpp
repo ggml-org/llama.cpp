@@ -1007,6 +1007,23 @@ uint32_t llama_kv_cache_unified::get_n_stream() const {
     return n_stream;
 }
 
+// Resizing the cells vector so we can have dynamic ctx.
+// Not modifying n_stream at the moment
+bool llama_kv_cache_unified::resize(uint32_t new_n_ctx){
+    try{
+        new_n_ctx = GGML_PAD(new_n_ctx, n_pad);
+        // v_cells.resize(n_stream);
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            assert(new_n_ctx > v_cells[s].size());
+            v_cells[s].resize(new_n_ctx);
+        }
+        return true;
+    }
+    catch (...){
+        return false;
+    }
+}
+
 bool llama_kv_cache_unified::get_has_shift() const {
     bool result = false;
 

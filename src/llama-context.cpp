@@ -439,11 +439,13 @@ void llama_context::mod_n_ctx(uint32_t new_n_ctx, llama_context_params params, c
             /*.type_k =*/ params.type_k,
             /*.type_v =*/ params.type_v,
         };
-    
+        /*
         // Resets the memory and sets it to new memory params with modified cparams 
         dump_state(this, dump_file_path); // Dump the state here.
         memory.reset(model.create_memory(params_mem, cparams));
         load_state(this, dump_file_path); // Load the state.
+        */
+        memory.get()->resize(new_n_ctx);
     }
     else{
         LLAMA_LOG_ERROR("%s: Cannot decrease the context size.", __func__);
