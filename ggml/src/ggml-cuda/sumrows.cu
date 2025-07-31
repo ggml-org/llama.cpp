@@ -2,7 +2,7 @@
 #include "reduce_rows.cuh"
 
 void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
-    const dim3 block_dims(WARP_SIZE, 1, 1);
+    constexpr dim3 block_dims(512, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
     reduce_rows_f32</*norm*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
 }
@@ -20,7 +20,7 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    const dim3 block_dims(WARP_SIZE, 1, 1);
+    constexpr dim3 block_dims(512, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
 
     reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
