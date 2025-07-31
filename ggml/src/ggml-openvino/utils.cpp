@@ -81,7 +81,7 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
         config = get_npu_config();
     }
 
-    if (cgraph->n_nodes == 1) {
+    if (is_naive(cgraph)) {
         return naive_compute(cgraph, core, device, config);
     }
 
@@ -250,11 +250,16 @@ ov::AnyMap get_npu_config() {
     return config;
 }
 
+bool is_naive(struct ggml_cgraph* cgraph) {
+    constexpr int naive_graph_size_threshold = 20;
+    return cgraph->n_nodes < naive_graph_size_threshold;
+}
+
 enum ggml_status naive_compute(struct ggml_cgraph* cgraph,
                                ov::Core& core,
                                const std::string& device,
                                const ov::AnyMap& config) {
-    if (cgraph->nodes[0]->op == GGML_OP_NONE) {
+    if (cgraph->n_nodes == 1 && cgraph->nodes[0]->op == GGML_OP_NONE) {
         return GGML_STATUS_SUCCESS;
     }
 
@@ -263,8 +268,6 @@ enum ggml_status naive_compute(struct ggml_cgraph* cgraph,
     auto naive = true;
     auto model = ov::frontend::ggml::FrontEnd::convert(input_model, naive);
     auto infer_request = core.compile_model(model, device, config).create_infer_request();
-
-    ov::serialize(model, "IR.xml");
 
     auto ov_params = model->get_parameters();
     for (size_t i = 0; i < ov_params.size(); i++) {
