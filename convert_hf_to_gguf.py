@@ -2949,6 +2949,9 @@ class LLaDAModel(TextModel):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_diffusion_shift_logits(False)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self._try_set_pooling_type()
@@ -2974,14 +2977,6 @@ class LLaDAModel(TextModel):
         feed_forward_length = self.hparams.get("mlp_hidden_size", 12288)
         self.gguf_writer.add_feed_forward_length(feed_forward_length)
 
-        # Set RoPE parameters
-        if "rope_theta" in self.hparams:
-            self.gguf_writer.add_rope_freq_base(self.hparams["rope_theta"])
-
-        # Set RMS norm epsilon
-        if "rms_norm_eps" in self.hparams:
-            self.gguf_writer.add_layer_norm_rms_eps(self.hparams["rms_norm_eps"])
-
         # LLaDA models use non-causal attention for diffusion, similar to Dream
         self.gguf_writer.add_causal_attention(False)
         # Handle RoPE scaling similar to LlamaModel and Dream
@@ -2991,11 +2986,6 @@ class LLaDAModel(TextModel):
 
         if mask_token_id is not None:
             self.gguf_writer.add_mask_token_id(mask_token_id)
-
-        self.gguf_writer.add_add_bos_token(True)
-
-        logging.info("Adding diffusion shift logits to False")
-        self.gguf_writer.add_diffusion_shift_logits(False)
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
