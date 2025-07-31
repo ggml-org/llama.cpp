@@ -1,4 +1,5 @@
 #include "sumrows.cuh"
+#include "reduce_rows.cuh"
 
 void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
     const dim3 block_dims(WARP_SIZE, 1, 1);
