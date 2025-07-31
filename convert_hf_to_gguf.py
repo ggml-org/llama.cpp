@@ -6620,40 +6620,6 @@ class Glm4MoeModel(TextModel):
         )
         special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
 
-        # Fix chat template syntax error
-        if special_vocab.chat_template and isinstance(special_vocab.chat_template, str):
-            # Fix multiple syntax issues in GLM-4.5 chat template
-            template = special_vocab.chat_template
-            # Fix missing closing parenthesis in conditional expression
-            template = template.replace(
-                'endswith("/nothink")) else',
-                'endswith("/nothink"))) else'
-            )
-            template = template.replace(
-                "endswith('/nothink')) else",
-                "endswith('/nothink'))) else"
-            )
-            # llama.cpp's C++ Jinja2 parser doesn't support visible_text() or .endswith()
-            template = template.replace(
-                "visible_text(m.content).endswith('/nothink')",
-                "'/nothink' in m.content"
-            )
-            template = template.replace(
-                "visible_text(m.content).endswith(\"/nothink\")",
-                "\"/nothink\" in m.content"
-            )
-            # Remove visible_text() function calls entirely as they're not supported
-            template = template.replace("visible_text(m.content)", "m.content")
-            # Fix parenthesis mismatch in chat template
-            template = template.replace(
-                'not "/nothink" in m.content)) else',
-                'not "/nothink" in m.content) else'
-            )  # Remove extra closing parenthesis
-            template = template.replace(
-                "not '/nothink' in m.content)) else",
-                "not '/nothink' in m.content) else"
-            )
-            special_vocab.chat_template = template
 
         special_vocab.add_to_gguf(self.gguf_writer)
 
