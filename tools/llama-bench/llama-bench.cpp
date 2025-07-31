@@ -950,6 +950,7 @@ struct cmd_params_instance {
                 }
                 static std::vector<ggml_backend_dev_t> devices;
                 devices.clear();
+                // RPC devices should always come first for performance reasons
                 for (const std::string & server : rpc_servers) {
                     ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
                     if (dev) {
@@ -957,6 +958,20 @@ struct cmd_params_instance {
                     } else {
                         fprintf(stderr, "%s: failed to add RPC device for server '%s'\n", __func__, server.c_str());
                         exit(1);
+                    }
+                }
+                // add local GPU devices if any
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                    switch (ggml_backend_dev_type(dev)) {
+                        case GGML_BACKEND_DEVICE_TYPE_CPU:
+                        case GGML_BACKEND_DEVICE_TYPE_ACCEL:
+                            // skip CPU backends since they are handled separately
+                            break;
+
+                        case GGML_BACKEND_DEVICE_TYPE_GPU:
+                            devices.push_back(dev);
+                            break;
                     }
                 }
                 devices.push_back(nullptr);
