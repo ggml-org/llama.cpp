@@ -1429,6 +1429,7 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                 ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used,    0);
                 ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared,  0);
                 ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, 0);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
 
                 // Expert gating function (GLM4_MOE uses sigmoid)
                 ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
@@ -13587,7 +13588,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                             model.layers[il].ffn_exp_probs_b,
                             n_expert, n_expert_used,
                             LLM_FFN_SILU, true,
-                            false, 0.0,
+                            true, hparams.expert_weights_scale,
                             (llama_expert_gating_func_type) hparams.expert_gating_func,
                             il);
                 cb(moe_out, "ffn_moe_out", il);
