@@ -517,14 +517,14 @@ if args.use_f32:
 # output in the same directory as the model if output_dir is None
 dir_model = args.model_dir
 
-# 如果没有指定 minicpmv_projector，但默认路径存在，则使用默认路径
+# If minicpmv_projector is not specified but the default path exists, use the default path
 if args.minicpmv_projector is None:
     default_projector_path = os.path.join(dir_model, "minicpmv.projector")
-    if os.path.exists(default_projector_path):
+    if os.path.isfile(default_projector_path):
         args.minicpmv_projector = default_projector_path
         print(f"Found default projector file: {default_projector_path}")
 
-# 如果没有指定 output_dir，使用 model_dir 作为默认值
+# If output_dir is not specified, use model_dir as the default value
 if args.output_dir is None:
     args.output_dir = dir_model
 
