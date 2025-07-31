@@ -34,6 +34,9 @@ int main(int argc, char ** argv) {
 
     auto cparams = common_context_params_to_llama(params);
 
+    // each context has a single sequence
+    cparams.n_seq_max = 1;
+
     int dev_count = ggml_backend_dev_count();
     int gpu_dev_count = 0;
     for (int i = 0; i < dev_count; ++i) {

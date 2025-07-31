@@ -32,16 +32,21 @@ enum llm_type {
     LLM_TYPE_190M,
     LLM_TYPE_220M,
     LLM_TYPE_250M,
+    LLM_TYPE_256M,
     LLM_TYPE_270M,
     LLM_TYPE_335M,
+    LLM_TYPE_350M,
     LLM_TYPE_410M,
     LLM_TYPE_450M,
     LLM_TYPE_475M,
+    LLM_TYPE_700M,
     LLM_TYPE_770M,
     LLM_TYPE_780M,
+    LLM_TYPE_0_3B,
     LLM_TYPE_0_5B,
     LLM_TYPE_0_6B,
     LLM_TYPE_1B,
+    LLM_TYPE_1_2B,
     LLM_TYPE_1_3B,
     LLM_TYPE_1_4B,
     LLM_TYPE_1_5B,
@@ -93,8 +98,13 @@ enum llm_type {
     LLM_TYPE_57B_A14B,
     LLM_TYPE_17B_16E, // llama4 Scout
     LLM_TYPE_17B_128E, // llama4 Maverick
+    LLM_TYPE_A13B,
+    LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_30B_A3B,
     LLM_TYPE_235B_A22B,
+    LLM_TYPE_300B_A47B, // Ernie MoE big
+    LLM_TYPE_E2B,
+    LLM_TYPE_E4B,
 };
 
 std::string llama_rope_scaling_type_name(llama_rope_scaling_type rope_scaling_type);
@@ -150,6 +160,12 @@ struct llama_layer_convnext {
     struct ggml_tensor * gamma = nullptr;
 };
 
+struct llama_layer_shortconv {
+    struct ggml_tensor * in_proj  = nullptr;
+    struct ggml_tensor * conv     = nullptr;
+    struct ggml_tensor * out_proj = nullptr;
+};
+
 struct llama_layer {
     // normalization
     struct ggml_tensor * attn_norm       = nullptr;
@@ -169,6 +185,10 @@ struct llama_layer {
     struct ggml_tensor * ffn_sub_norm    = nullptr;
     struct ggml_tensor * attn_norm_cross = nullptr;
     struct ggml_tensor * attn_norm_enc   = nullptr;
+    struct ggml_tensor * ssm_norm        = nullptr;
+    struct ggml_tensor * ssm_dt_norm     = nullptr;
+    struct ggml_tensor * ssm_b_norm      = nullptr;
+    struct ggml_tensor * ssm_c_norm      = nullptr;
 
     // attention
     struct ggml_tensor * wq        = nullptr;
@@ -316,9 +336,24 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_scale   = nullptr;
     struct ggml_tensor * ffn_down_scale = nullptr;
 
+    // altup & laurel
+    struct ggml_tensor * per_layer_inp_gate   = nullptr;
+    struct ggml_tensor * per_layer_proj       = nullptr;
+    struct ggml_tensor * per_layer_post_norm  = nullptr;
+    struct ggml_tensor * altup_correct_coef   = nullptr;
+    struct ggml_tensor * altup_correct_scale  = nullptr;
+    struct ggml_tensor * altup_predict_coef   = nullptr;
+    struct ggml_tensor * altup_router         = nullptr;
+    struct ggml_tensor * altup_router_norm    = nullptr;
+    struct ggml_tensor * laurel_l             = nullptr;
+    struct ggml_tensor * laurel_r             = nullptr;
+    struct ggml_tensor * laurel_post_norm     = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
+
+    struct llama_layer_shortconv shortconv;
 };
 
 struct llama_model {
@@ -353,6 +388,13 @@ struct llama_model {
 
     struct ggml_tensor * conv1d   = nullptr;
     struct ggml_tensor * conv1d_b = nullptr;
+
+    // gemma3n altup
+    struct ggml_tensor * tok_embd_per_layer   = nullptr;
+    struct ggml_tensor * altup_proj           = nullptr;
+    struct ggml_tensor * altup_unembd_proj    = nullptr;
+    struct ggml_tensor * per_layer_model_proj = nullptr;
+    struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
     std::vector<llama_layer> layers;
 
@@ -412,10 +454,7 @@ struct llama_model {
     llama_memory_i * create_memory(const llama_memory_params & params, llama_cparams & cparams) const;
 
     // TODO: move this to new llm_arch_model_i interface
-    llm_graph_result_ptr build_graph(
-            const llm_graph_params & params,
-                       ggml_cgraph * gf,
-                    llm_graph_type   type) const;
+    ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
 private:
     struct impl;

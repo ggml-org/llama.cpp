@@ -99,6 +99,7 @@ if (Vulkan_FOUND)
 
     if (GGML_VULKAN_SHADER_DEBUG_INFO)
         add_compile_definitions(GGML_VULKAN_SHADER_DEBUG_INFO)
+        list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DGGML_VULKAN_SHADER_DEBUG_INFO=ON)
     endif()
 
     if (GGML_VULKAN_VALIDATE)
@@ -143,7 +144,8 @@ if (Vulkan_FOUND)
                    -DCMAKE_BUILD_TYPE=$<CONFIG>
                    ${VULKAN_SHADER_GEN_CMAKE_ARGS}
 
-        BUILD_COMMAND   ${CMAKE_COMMAND} --build   . --config $<CONFIG>
+        BUILD_COMMAND ${CMAKE_COMMAND} --build . --config $<CONFIG>
+        BUILD_ALWAYS  TRUE
 
         # NOTE: When DESTDIR is set using Makefile generators and
         # "make install" triggers the build step, vulkan-shaders-gen
@@ -164,6 +166,14 @@ if (Vulkan_FOUND)
 
     file(GLOB _ggml_vk_shader_files CONFIGURE_DEPENDS "${_ggml_vk_input_dir}/*.comp")
 
+    # Because external projects do not provide source-level tracking,
+    # the vulkan-shaders-gen sources need to be explicitly added to
+    # ensure that changes will cascade into shader re-generation.
+
+    file(GLOB _ggml_vk_shaders_gen_sources
+              CONFIGURE_DEPENDS "${_ggml_vk_input_dir}/*.cpp"
+                                "${_ggml_vk_input_dir}/*.h")
+
     add_custom_command(
         OUTPUT ${_ggml_vk_header}
                ${_ggml_vk_source}
@@ -177,6 +187,7 @@ if (Vulkan_FOUND)
             --no-clean
 
         DEPENDS ${_ggml_vk_shader_files}
+                ${_ggml_vk_shaders_gen_sources}
                 vulkan-shaders-gen
 
         COMMENT "Generate vulkan shaders"
