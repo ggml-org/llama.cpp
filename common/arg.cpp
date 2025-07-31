@@ -2096,6 +2096,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_NO_KV_OFFLOAD"));
     add_opt(common_arg(
+        {"-nr", "--no-repack"},
+        "disable weight repacking",
+        [](common_params & params) {
+            params.no_extra_bufts = true;
+        }
+    ).set_env("LLAMA_ARG_NO_REPACK"));
+    add_opt(common_arg(
         {"-ctk", "--cache-type-k"}, "TYPE",
         string_format(
             "KV cache data type for K\n"
