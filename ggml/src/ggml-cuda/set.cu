@@ -1,60 +1,25 @@
 #include "ggml-cuda/common.cuh"
 #include "set.cuh"
 
-static __global__ void set_f32_cuda_copy(const float * __restrict__ src1,
+static __global__ void set_f32_cuda_copy(const float * __restrict__ src0,
                                          float * __restrict__ dst,
                                          const size_t ne0,
                                          const size_t ne1,
                                          const size_t ne2,
                                          const size_t ne3,
-                                         const int    offset,  // element‐offset
-                                         const int    nb1,     // stride in elements along dim1
-                                         const int    nb2,     // stride in elements along dim2
-                                         const int    nb3      // stride in elements along dim3
-) {
+                                         const size_t nb0,
+                                         const size_t nb1,
+                                         const size_t nb2,
+                                         const size_t nb3) {
     const size_t total = ne0 * ne1 * ne2 * ne3;
     const size_t gid   = blockIdx.x * blockDim.x + threadIdx.x;
     if (gid >= total) {
         return;
     }
 
-    // unravel into 4D indices (i0 fastest, then i1, i2, i3):
-    size_t       tmp = gid;
-    const size_t i0  = tmp % ne0;
-    tmp /= ne0;
-    const size_t i1 = tmp % ne1;
-    tmp /= ne1;
-    const size_t i2 = tmp % ne2;
-    tmp /= ne2;
-    const size_t i3 = tmp;  // < ne3
+    size_t tmp = gid;
 
-    // compute flat positions with strides + offset
-    const size_t pos = offset + i0 + i1 * (size_t) nb1 + i2 * (size_t) nb2 + i3 * (size_t) nb3;
-
-    dst[pos] = src1[pos];
-}
-
-static __global__ void set_f32_cuda(const float * __restrict__ src0,
-                                    float * __restrict__ dst,
-                                    const size_t ne0,
-                                    const size_t ne1,
-                                    const size_t ne2,
-                                    const size_t ne3,
-                                    const int    offset,  // element‐offset into	dst
-                                    const int    nb1,     // stride in elements along dim1
-                                    const int    nb2,     // stride in elements along dim2
-                                    const int    nb3      // stride in elements along dim3
-) {
-    // src0 is contiguous over ne0*ne1*ne2*ne3 elements
-    const size_t total = ne0 * ne1 * ne2 * ne3;
-    const size_t gid   = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= total) {
-        return;
-    }
-
-    // unravel gid to 4D (same as copy)
-    size_t       tmp = gid;
-    const size_t i0  = tmp % ne0;
+    const size_t i0 = tmp % ne0;
     tmp /= ne0;
     const size_t i1 = tmp % ne1;
     tmp /= ne1;
@@ -62,14 +27,52 @@ static __global__ void set_f32_cuda(const float * __restrict__ src0,
     tmp /= ne2;
     const size_t i3 = tmp;
 
-    // dst position has the same formula:
-    const size_t pos = offset + i0 + i1 * (size_t) nb1 + i2 * (size_t) nb2 + i3 * (size_t) nb3;
+    const size_t pos = (i0 * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3);
 
-    // src0 is contiguous: flat index = gid
-    dst[pos] = src0[gid];
+    *((float *) ((char *) dst + pos)) = *((const float *) ((const char *) src0 + pos));
+}
+
+static __global__ void set_f32_cuda(const float * __restrict__ src1,
+                                    float * __restrict__ dst,
+                                    const size_t ne10,
+                                    const size_t ne11,
+                                    const size_t ne12,
+                                    const size_t ne13,
+                                    const size_t nb10,
+                                    const size_t nb11,
+                                    const size_t nb12,
+                                    const size_t nb13,
+                                    const size_t nb0,
+                                    const size_t nb1,
+                                    const size_t nb2,
+                                    const size_t nb3,
+                                    const size_t offset
+
+) {
+    const size_t total = ne10 * ne11 * ne12 * ne13;
+    const size_t gid   = blockIdx.x * blockDim.x + threadIdx.x;
+    if (gid >= total) {
+        return;
+    }
+
+    size_t tmp = gid;
+
+    const size_t i0 = tmp % ne10;
+    tmp /= ne10;
+    const size_t i1 = tmp % ne11;
+    tmp /= ne11;
+    const size_t i2 = tmp % ne12;
+    tmp /= ne12;
+    const size_t i3 = tmp;
+
+    size_t dst_offset  = offset + i0 * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3;
+    size_t src1_offset = i0 * nb10 + i1 * nb11 + i2 * nb12 + i3 * nb13;
+
+    *((float *) ((char *) dst + dst_offset)) = *((const float *) ((const char *) src1 + src1_offset));
 }
 
 void ggml_cuda_op_set(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    // nb0 is implicitly element_size because src0 and dst are contiguous
     const int32_t nb1     = dst->op_params[0];
     const int32_t nb2     = dst->op_params[1];
     const int32_t nb3     = dst->op_params[2];
@@ -80,15 +83,14 @@ void ggml_cuda_op_set(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src1 = dst->src[1];
 
     GGML_ASSERT(ggml_are_same_shape(src0, dst));
+
+    // TODO: support more dtypes.
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
-    // dims
-    const size_t ne0 = dst->ne[0];
-    const size_t ne1 = dst->ne[1];
-    const size_t ne2 = dst->ne[2];
-    const size_t ne3 = dst->ne[3];
+    GGML_TENSOR_BINARY_OP_LOCALS01;
+    const int nb0 = ggml_element_size(dst);
 
     const float * src0_d = (const float *) src0->data;
     const float * src1_d = (const float *) src1->data;
@@ -96,15 +98,22 @@ void ggml_cuda_op_set(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     cudaStream_t stream = ctx.stream();
 
-    const size_t total   = ne0 * ne1 * ne2 * ne3;
-    const int    threads = 256;
-    const int    blocks  = (total + threads - 1) / threads;
-
     if (!inplace) {
-        // copy whole src1→dst
-        set_f32_cuda_copy<<<blocks, threads, 0, stream>>>(src1_d, dst_d, ne0, ne1, ne2, ne3, offset, nb1, nb2, nb3);
+        // copy whole src0 -> dst.
+        const size_t total = ne00 * ne01 * ne02 * ne03;
+
+        const int num_blocks = (total + CUDA_SET_BLOCK_SIZE - 1) / CUDA_SET_BLOCK_SIZE;
+
+        set_f32_cuda_copy<<<num_blocks, CUDA_SET_BLOCK_SIZE, 0, stream>>>(
+            src0_d, dst_d, ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03);
     }
 
-    // then overwrite from src0→dst at same offsets/strides
-    set_f32_cuda<<<blocks, threads, 0, stream>>>(src0_d, dst_d, ne0, ne1, ne2, ne3, offset, nb1, nb2, nb3);
+    // set: src1 -> dst
+    // set_f32_cuda
+
+    const size_t total      = ne10 * ne11 * ne12 * ne13;
+    const size_t num_blocks = (total + CUDA_SET_BLOCK_SIZE - 1) / CUDA_SET_BLOCK_SIZE;
+
+    set_f32_cuda<<<num_blocks, CUDA_SET_BLOCK_SIZE, 0, stream>>>(
+        src1_d, dst_d, ne10, ne11, ne12, ne13, nb10, nb11, nb12, nb13, nb0, nb1, nb2, nb3, offset);
 }
