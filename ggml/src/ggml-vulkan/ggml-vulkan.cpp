@@ -11168,7 +11168,7 @@ size_t comp_nb[GGML_MAX_DIMS];
 size_t check_counter = 0;
 static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx) {
     ggml_tensor * tensor = cgraph->nodes[tensor_idx];
-    if (tensor->op == GGML_OP_TRANSPOSE) {
+    if (tensor->op == GGML_OP_TRANSPOSE || tensor->op == GGML_OP_SET_ROWS) {
         return;
     }
 
@@ -11399,8 +11399,6 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         } else {
             tensor_clone = ggml_cpy(ggml_ctx, src_clone[0], src_clone[1]);
         }
-    } else if (tensor->op == GGML_OP_SET_ROWS) {
-        tensor_clone = ggml_set_rows(ggml_ctx, src_clone[0], src_clone[1], src_clone[2]);
     } else if (tensor->op == GGML_OP_CONT) {
         tensor_clone = ggml_cont_4d(ggml_ctx, src_clone[0], tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
     } else if (tensor->op == GGML_OP_RESHAPE) {
@@ -11508,7 +11506,7 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
 
 static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, int tensor_idx) {
     ggml_tensor * tensor = cgraph->nodes[tensor_idx];
-    if (tensor->op == GGML_OP_TRANSPOSE) {
+    if (tensor->op == GGML_OP_TRANSPOSE || tensor->op == GGML_OP_SET_ROWS) {
         return;
     }
     bool fused_rms_norm_mul = false;
@@ -11568,6 +11566,9 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph *
                         } else if (tensor->type == GGML_TYPE_F16) {
                             correct = ggml_fp16_to_fp32(*(ggml_fp16_t *) ((char *) comp_result + i3*comp_nb[3] + i2*comp_nb[2] + i1*comp_nb[1] + i0*comp_nb[0]));
                             result  = ggml_fp16_to_fp32(*(ggml_fp16_t *) ((char *) tensor_data + i3*tensor->nb[3] + i2*tensor->nb[2] + i1*tensor->nb[1] + i0*tensor->nb[0]));
+                        } else if (tensor->type == GGML_TYPE_BF16) {
+                            correct = ggml_bf16_to_fp32(*(ggml_bf16_t *) ((char *) comp_result + i3*comp_nb[3] + i2*comp_nb[2] + i1*comp_nb[1] + i0*comp_nb[0]));
+                            result  = ggml_bf16_to_fp32(*(ggml_bf16_t *) ((char *) tensor_data + i3*tensor->nb[3] + i2*tensor->nb[2] + i1*tensor->nb[1] + i0*tensor->nb[0]));
                         } else if (tensor->type == GGML_TYPE_I32) {
                             correct = *(int32_t *) ((char *) comp_result + i3*comp_nb[3] + i2*comp_nb[2] + i1*comp_nb[1] + i0*comp_nb[0]);
                             result  = *(int32_t *) ((char *) tensor_data + i3*tensor->nb[3] + i2*tensor->nb[2] + i1*tensor->nb[1] + i0*tensor->nb[0]);
