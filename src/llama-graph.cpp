@@ -970,13 +970,13 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 // glu = gate * torch.sigmoid(gate * self.alpha)
                 // next_states = torch.bmm(((up + 1) * glu), self.down_proj)
                 constexpr float alpha = 1.702f;
-                ggml_tensor * gate = cur;
+                ggml_tensor * gate = ggml_clamp(ctx0, cur, -9999.0f, 7.0f);
                 ggml_tensor * glu = ggml_mul(ctx0, gate,
                                         ggml_sigmoid(ctx0, ggml_scale(ctx0, gate, alpha)));
                 cb(cur, "ffn_moe_oai_glu", il);
 
                 // add extra bias of 1.0 to the up tensor
-                ggml_tensor * up_b = ggml_scale_bias(ctx0, up, 1.0f, 1.0f);
+                ggml_tensor * up_b = ggml_scale_bias(ctx0, ggml_clamp(ctx0, up, -7.0f, 7.0f), 1.0f, 1.0f);
 
                 cur = ggml_mul(ctx0, glu, up_b);
                 cb(cur, "ffn_moe_oai_swiglu", il);
