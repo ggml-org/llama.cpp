@@ -2949,6 +2949,9 @@ class LLaDAModel(TextModel):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
+        # LLaDA specific parameters
+        self.gguf_writer.add_add_bos_token(True)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self._try_set_pooling_type()
@@ -2977,8 +2980,7 @@ class LLaDAModel(TextModel):
         # LLaDA models use non-causal attention for diffusion, similar to Dream
         self.gguf_writer.add_causal_attention(False)
 
-        # LLaDA specific parameters
-        self.gguf_writer.add_add_bos_token(True)
+        # LLaDA models don't shift their logits
         self.gguf_writer.add_diffusion_shift_logits(False)
 
     @staticmethod
