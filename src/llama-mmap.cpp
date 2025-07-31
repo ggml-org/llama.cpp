@@ -319,15 +319,23 @@ struct llama_mmap::impl {
             oldpolicy = MPOL_DEFAULT;
         }
 
+        // Get the number of NUMA nodes
+        int num_nodes = numa_num_configured_nodes();
+        if (num_nodes <= 0) {
+            LLAMA_LOG_WARN("numa_num_configured_nodes returned %d, defaulting to 1\n", num_nodes);
+            num_nodes = 1;
+        }
+        LLAMA_LOG_INFO("Detected %d NUMA nodes\n", num_nodes);
+
         size_t total_size = file->size();
         char path[128];
-        bool is_new_mem[] = { false, false };
+        std::vector<bool> is_new_mem(num_nodes, false);
         int i;
         
         // Set addr to the first mapping for node 0
         addr = (void*)(GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + base_address_offset);
         
-        for (int node = 0; node < 2; ++node) {
+        for (int node = 0; node < num_nodes; ++node) {
             numa_set_preferred(node);
             LLAMA_LOG_INFO("numa_set_preferred(%d)\n", node);
 
@@ -394,7 +402,7 @@ struct llama_mmap::impl {
                 n += nn;
             }
         }
-        for (int node = 1; node < 2; ++node) {
+        for (int node = 1; node < num_nodes; ++node) {
             if (is_new_mem[node]) {
                 LLAMA_LOG_INFO("begin to copy from numa0 to numa%d ...\n", node);
                 memcpy((void*)((uintptr_t)addr + \

@@ -121,6 +121,8 @@ int32_t cpu_get_num_physical_cores() {
 
 #if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
 #include <pthread.h>
+#include <map>
+#include <set>
 
 static void cpuid(unsigned leaf, unsigned subleaf,
                   unsigned *eax, unsigned *ebx, unsigned *ecx, unsigned *edx) {
@@ -152,19 +154,115 @@ static bool is_running_on_efficiency_core(void) {
     return core_type == intel_atom;
 }
 
-static int cpu_count_math_cpus(int n_cpu) {
-    int result = 0;
-    for (int cpu = 0; cpu < n_cpu; ++cpu) {
-        if (pin_cpu(cpu)) {
-            return -1;
+// Structure to hold detailed CPU topology information
+struct cpu_topology_info {
+    int total_logical_cpus;
+    int total_physical_cores;
+    int performance_cores;
+    int efficiency_cores;
+    std::vector<std::vector<int>> core_siblings; // Groups of hyperthreaded CPUs
+    std::vector<int> performance_cpus;           // CPU IDs that are performance cores
+    std::vector<int> efficiency_cpus;            // CPU IDs that are efficiency cores
+};
+
+static cpu_topology_info detect_cpu_topology() {
+    cpu_topology_info info = {};
+    info.total_logical_cpus = sysconf(_SC_NPROCESSORS_ONLN);
+    
+    // Map to group CPUs by their thread siblings
+    std::map<std::string, std::vector<int>> sibling_groups;
+    
+    // Read topology information for each CPU
+    for (int cpu = 0; cpu < info.total_logical_cpus; ++cpu) {
+        // Read thread siblings to identify hyperthreading groups
+        std::ifstream siblings_file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/topology/thread_siblings_list");
+        if (siblings_file.is_open()) {
+            std::string siblings_str;
+            std::getline(siblings_file, siblings_str);
+            sibling_groups[siblings_str].push_back(cpu);
         }
-        if (is_running_on_efficiency_core()) {
-            continue; // efficiency cores harm lockstep threading
+        
+        // Test if this CPU is a performance or efficiency core
+        if (pin_cpu(cpu) == 0) {
+            if (is_running_on_efficiency_core()) {
+                info.efficiency_cpus.push_back(cpu);
+            } else {
+                info.performance_cpus.push_back(cpu);
+            }
         }
-        ++cpu; // hyperthreading isn't useful for linear algebra
-        ++result;
     }
-    return result;
+    
+    // Convert sibling groups to core_siblings vector
+    for (const auto& group : sibling_groups) {
+        info.core_siblings.push_back(group.second);
+    }
+    
+    info.total_physical_cores = info.core_siblings.size();
+    info.performance_cores = info.performance_cpus.size();
+    info.efficiency_cores = info.efficiency_cpus.size();
+    
+    return info;
+}
+
+static int cpu_count_math_cpus(int n_cpu, bool use_hyperthreading = false, bool use_efficiency_cores = false) {
+    cpu_topology_info topo = detect_cpu_topology();
+    
+    std::vector<int> selected_cpus;
+    
+    // First, select which types of cores to use
+    std::vector<int> candidate_cpus;
+    if (!use_efficiency_cores) {
+        // Use only performance cores
+        candidate_cpus = topo.performance_cpus;
+    } else {
+        // Use all cores
+        candidate_cpus.reserve(topo.total_logical_cpus);
+        candidate_cpus.insert(candidate_cpus.end(), topo.performance_cpus.begin(), topo.performance_cpus.end());
+        candidate_cpus.insert(candidate_cpus.end(), topo.efficiency_cpus.begin(), topo.efficiency_cpus.end());
+    }
+    
+    if (use_hyperthreading) {
+        // Use all candidate CPUs
+        selected_cpus = candidate_cpus;
+    } else {
+        // Select only one CPU per physical core
+        std::set<int> used_cores;
+        for (int cpu : candidate_cpus) {
+            // Find which core group this CPU belongs to
+            for (const auto& core_group : topo.core_siblings) {
+                if (std::find(core_group.begin(), core_group.end(), cpu) != core_group.end()) {
+                    // Use a hash of the core group to identify unique cores
+                    std::string core_id;
+                    for (int sibling : core_group) {
+                        core_id += std::to_string(sibling) + ",";
+                    }
+                    size_t core_hash = std::hash<std::string>{}(core_id);
+                    
+                    if (used_cores.find(core_hash) == used_cores.end()) {
+                        selected_cpus.push_back(cpu);
+                        used_cores.insert(core_hash);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    
+    // Validate selected CPUs by attempting to pin to them
+    int valid_count = 0;
+    cpu_set_t original_affinity;
+    pthread_getaffinity_np(pthread_self(), sizeof(original_affinity), &original_affinity);
+    
+    for (int cpu : selected_cpus) {
+        if (pin_cpu(cpu) == 0) {
+            valid_count++;
+        }
+    }
+    
+    // Restore original affinity
+    pthread_setaffinity_np(pthread_self(), sizeof(original_affinity), &original_affinity);
+    
+    return valid_count;
 }
 
 #endif // __x86_64__ && __linux__
@@ -178,10 +276,16 @@ int32_t cpu_get_num_math() {
     if (n_cpu < 1) {
         return cpu_get_num_physical_cores();
     }
+    
     if (is_hybrid_cpu()) {
         cpu_set_t affinity;
         if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {
-            int result = cpu_count_math_cpus(n_cpu);
+            // Default behavior: use hyperthreading but not efficiency cores for math
+            // This can be overridden by environment variables or command-line options
+            bool use_hyperthreading = std::getenv("LLAMA_NO_HYPERTHREADING") == nullptr;
+            bool use_efficiency_cores = std::getenv("LLAMA_USE_EFFICIENCY_CORES") != nullptr;
+            
+            int result = cpu_count_math_cpus(n_cpu, use_hyperthreading, use_efficiency_cores);
             pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);
             if (result > 0) {
                 return result;
@@ -190,6 +294,86 @@ int32_t cpu_get_num_math() {
     }
 #endif
     return cpu_get_num_physical_cores();
+}
+
+/**
+ * Returns number of CPUs on system that are useful for math, respecting cpu_params.
+ */
+int32_t cpu_get_num_math_from_params(const cpu_params & params) {
+#if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
+    int n_cpu = sysconf(_SC_NPROCESSORS_ONLN);
+    if (n_cpu < 1) {
+        return cpu_get_num_physical_cores();
+    }
+    
+    if (is_hybrid_cpu()) {
+        cpu_set_t affinity;
+        if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {
+            int result = cpu_count_math_cpus(n_cpu, params.use_hyperthreading, params.use_efficiency_cores);
+            pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);
+            if (result > 0) {
+                return result;
+            }
+        }
+    }
+#endif
+    return cpu_get_num_physical_cores();
+}
+
+/**
+ * Print CPU topology information for debugging
+ */
+void cpu_print_topology_info() {
+#if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
+    if (is_hybrid_cpu()) {
+        cpu_topology_info topo = detect_cpu_topology();
+        
+        printf("CPU Topology Information:\n");
+        printf("  Total logical CPUs: %d\n", topo.total_logical_cpus);
+        printf("  Total physical cores: %d\n", topo.total_physical_cores);
+        printf("  Performance cores: %d\n", topo.performance_cores);
+        printf("  Efficiency cores: %d\n", topo.efficiency_cores);
+        
+        printf("  Performance CPU IDs: ");
+        for (size_t i = 0; i < topo.performance_cpus.size(); ++i) {
+            if (i > 0) printf(", ");
+            printf("%d", topo.performance_cpus[i]);
+        }
+        printf("\n");
+        
+        if (!topo.efficiency_cpus.empty()) {
+            printf("  Efficiency CPU IDs: ");
+            for (size_t i = 0; i < topo.efficiency_cpus.size(); ++i) {
+                if (i > 0) printf(", ");
+                printf("%d", topo.efficiency_cpus[i]);
+            }
+            printf("\n");
+        }
+        
+        printf("  Core sibling groups (hyperthreading):\n");
+        for (size_t i = 0; i < topo.core_siblings.size(); ++i) {
+            printf("    Core %zu: ", i);
+            for (size_t j = 0; j < topo.core_siblings[i].size(); ++j) {
+                if (j > 0) printf(", ");
+                printf("%d", topo.core_siblings[i][j]);
+            }
+            printf("\n");
+        }
+        
+        // Show what would be selected with different options
+        printf("\n  Thread count recommendations:\n");
+        printf("    Default (P-cores + hyperthreading): %d\n", cpu_count_math_cpus(topo.total_logical_cpus, true, false));
+        printf("    Without hyperthreading: %d\n", cpu_count_math_cpus(topo.total_logical_cpus, false, false));
+        printf("    With E-cores (+ HT): %d\n", cpu_count_math_cpus(topo.total_logical_cpus, true, true));
+        printf("    With E-cores (no HT): %d\n", cpu_count_math_cpus(topo.total_logical_cpus, false, true));
+    } else {
+        printf("CPU Topology: Non-hybrid CPU detected\n");
+        printf("  Physical cores: %d\n", cpu_get_num_physical_cores());
+        printf("  Logical CPUs: %d\n", (int)std::thread::hardware_concurrency());
+    }
+#else
+    printf("CPU topology detection not available on this platform\n");
+#endif
 }
 
 // Helper for setting process priority
@@ -258,7 +442,7 @@ void postprocess_cpu_params(cpu_params& cpuparams, const cpu_params* role_model)
         if (role_model != nullptr) {
             cpuparams = *role_model;
         } else {
-            cpuparams.n_threads = cpu_get_num_math();
+            cpuparams.n_threads = cpu_get_num_math_from_params(cpuparams);
         }
     }
 

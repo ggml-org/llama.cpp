@@ -2853,7 +2853,15 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 #ifdef GGML_NUMA_MIRROR
     if (GGML_UNLIKELY(ggml_current_numa_node == -1)) {
         int thread_id = state->ith;
+        int n_threads = atomic_load_explicit(&tp->n_threads_cur, memory_order_relaxed);
 
+        // Distribute threads evenly across NUMA nodes first, then assign CPUs within each node
+        int num_numa_nodes = numa_num_configured_nodes();
+        if (num_numa_nodes <= 0) num_numa_nodes = 1;
+        
+        // Calculate which NUMA node this thread should use
+        int target_numa_node = thread_id % num_numa_nodes;
+        
         bool cpumask[GGML_MAX_N_THREADS];
         memset(cpumask, 0, sizeof(bool) * GGML_MAX_N_THREADS);
         for (int i = 0; i < GGML_MAX_N_THREADS; ++i) {
@@ -2863,17 +2871,34 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         }
 
         int cpuid = -1;
-        bool local_mask[GGML_MAX_N_THREADS];
-        int iter = 0;
-        for (int j = 0; j < thread_id; ++j) {
-            ggml_thread_cpumask_next(cpumask, local_mask, true, &iter);
+        
+        // Try to find a CPU on the target NUMA node
+        struct bitmask* node_cpus = numa_allocate_cpumask();
+        if (numa_node_to_cpus(target_numa_node, node_cpus) == 0) {
+            // Find the first available CPU on the target NUMA node that's also in our allowed set
+            for (int i = 0; i < GGML_MAX_N_THREADS; ++i) {
+                if (cpumask[i] && numa_bitmask_isbitset(node_cpus, i)) {
+                    cpuid = i;
+                    break;
+                }
+            }
         }
-        memset(local_mask, 0, sizeof(bool) * GGML_MAX_N_THREADS);
-        ggml_thread_cpumask_next(cpumask, local_mask, true, &iter);
-        for (int i = 0; i < GGML_MAX_N_THREADS; ++i) {
-            if (local_mask[i]) {
-                cpuid = i;
-                break;
+        numa_free_cpumask(node_cpus);
+        
+        // Fallback: if we couldn't find a CPU on the target node, use the original algorithm
+        if (cpuid == -1) {
+            bool local_mask[GGML_MAX_N_THREADS];
+            int iter = 0;
+            for (int j = 0; j < thread_id; ++j) {
+                ggml_thread_cpumask_next(cpumask, local_mask, true, &iter);
+            }
+            memset(local_mask, 0, sizeof(bool) * GGML_MAX_N_THREADS);
+            ggml_thread_cpumask_next(cpumask, local_mask, true, &iter);
+            for (int i = 0; i < GGML_MAX_N_THREADS; ++i) {
+                if (local_mask[i]) {
+                    cpuid = i;
+                    break;
+                }
             }
         }
 
@@ -2891,8 +2916,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
         struct bitmask* mask = numa_bitmask_alloc(numa_num_configured_nodes());
         numa_bitmask_setbit(mask, ggml_current_numa_node);
         numa_set_membind(mask);
+        numa_bitmask_free(mask);
 
-        GGML_LOG_INFO("thread_id = %02d, node = %d, cpuid = %02d\n", thread_id, ggml_current_numa_node, cpuid);
+        GGML_LOG_INFO("thread_id = %02d, target_node = %d, actual_node = %d, cpuid = %02d, n_threads = %d\n", 
+                     thread_id, target_numa_node, ggml_current_numa_node, cpuid, n_threads);
     }
 #endif // GGML_NUMA_MIRROR
 
