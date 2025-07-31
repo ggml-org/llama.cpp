@@ -615,6 +615,11 @@ class TensorNameMap:
             "model.layers.layers.{bid}.mixer.dt_proj",  # plamo2
         ),
 
+        MODEL_TENSOR.SSM_DT_NORM: (
+            "model.layers.layers.{bid}.mixer.dt_norm.weight",  # plamo2
+            "model.layers.{bid}.mamba.dt_layernorm",  # jamba
+        ),
+
         MODEL_TENSOR.SSM_A: (
             "model.layers.{bid}.A_log",               # mamba-hf
             "backbone.layers.{bid}.mixer.A_log",      # mamba
@@ -639,11 +644,6 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.D",      # mamba
             "model.layers.{bid}.mamba.D",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.D",  # plamo2
-        ),
-
-        MODEL_TENSOR.SSM_DT_NORM: (
-            "model.layers.layers.{bid}.mixer.dt_norm.weight",  # plamo2
-            "model.layers.{bid}.mamba.dt_layernorm",  # jamba
         ),
 
         MODEL_TENSOR.SSM_NORM: (
