@@ -13580,36 +13580,34 @@ struct llm_build_glm4_moe : public llm_graph_context {
                 const int64_t n_expert      = hparams.n_expert;
                 const int64_t n_expert_used = hparams.n_expert_used;
 
-                // Compute shared expert output first
-                ggml_tensor * cur_shexp = build_ffn(cur,
+                // Save original input for shared expert
+                ggml_tensor * residuals = cur;
+
+                // Process routed experts using existing MoE infrastructure
+                ggml_tensor * routed_out = build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        model.layers[il].ffn_exp_probs_b,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, hparams.expert_weights_norm,
+                        true, hparams.expert_weights_scale,
+                        (llama_expert_gating_func_type) hparams.expert_gating_func,
+                        il);
+                cb(routed_out, "ffn_moe_out", il);
+
+                // Process shared expert on original input
+                ggml_tensor * shared_out = build_ffn(residuals,
                         model.layers[il].ffn_up_shexp,   NULL, NULL,
                         model.layers[il].ffn_gate_shexp, NULL, NULL,
                         model.layers[il].ffn_down_shexp, NULL, NULL,
                         NULL,
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
-                cb(cur_shexp, "ffn_shexp_out", il);
+                cb(shared_out, "ffn_shexp_out", il);
 
-                ggml_tensor * moe_out =
-                    build_moe_ffn(cur,
-                            model.layers[il].ffn_gate_inp,
-                            model.layers[il].ffn_up_exps,
-                            model.layers[il].ffn_gate_exps,
-                            model.layers[il].ffn_down_exps,
-                            model.layers[il].ffn_exp_probs_b,
-                            n_expert, n_expert_used,
-                            LLM_FFN_SILU, hparams.expert_weights_norm,
-                            true, hparams.expert_weights_scale,
-                            (llama_expert_gating_func_type) hparams.expert_gating_func,
-                            il);
-                cb(moe_out, "ffn_moe_out", il);
-
-                // For GLM4_MOE: Shared expert is always active alongside routed experts
-                // Apply proper scaling to shared expert to match architectural design
-                cur_shexp = ggml_scale(ctx0, cur_shexp, hparams.expert_weights_scale);
-                cb(cur_shexp, "ffn_shexp_scaled", il);
-
-                // Combine with proper mathematical balance
-                cur = ggml_add(ctx0, moe_out, cur_shexp);
+                // Final output: routed_output + shared_output
+                cur = ggml_add(ctx0, routed_out, shared_out);
                 cb(cur, "ffn_out", il);
             }
 
