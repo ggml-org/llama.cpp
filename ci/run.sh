@@ -23,7 +23,7 @@
 # GG_BUILD_MUSA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
 # # with OPENVINO support
-# GG_BUILD_OPENVINO=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
+# GG_BUILD_OPENVINO=1 GG_BUILD_LOW_PERF=1 GGML_OPENVINO_DEVICE=CPU bash ./ci/run.sh ./tmp/results ./tmp/mnt
 #
 
 if [ -z "$2" ]; then
