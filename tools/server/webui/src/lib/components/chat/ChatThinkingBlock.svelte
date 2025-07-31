@@ -24,10 +24,12 @@
 	>
 		<div class="text-muted-foreground flex items-center gap-2">
 			<Brain class="h-4 w-4" />
+
 			<span class="text-sm">
 				{isStreaming ? 'Thinking...' : 'Thinking summary'}
 			</span>
 		</div>
+
 		<ChevronDown
 			class="text-muted-foreground h-4 w-4 transition-transform duration-200 {isExpanded
 				? 'rotate-180'

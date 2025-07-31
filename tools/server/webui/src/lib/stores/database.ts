@@ -1,7 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { Conversation, Message, DatabaseAppSettings } from '$lib/types/database';
 
-class ChatDatabase extends Dexie {
+class LlamacppDatabase extends Dexie {
 	conversations!: EntityTable<Conversation, 'id'>;
 	messages!: EntityTable<Message, 'id'>;
 	settings!: EntityTable<DatabaseAppSettings, 'id'>;
@@ -17,4 +17,4 @@ class ChatDatabase extends Dexie {
 	}
 }
 
-export const db = new ChatDatabase();
+export const db = new LlamacppDatabase();

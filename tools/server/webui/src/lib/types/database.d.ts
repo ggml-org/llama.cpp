@@ -1,7 +1,7 @@
 export interface Conversation {
+	currNode: string | null;
 	id: string;
 	lastModified: number;
-	currNode: string;
 	name: string;
 }
 

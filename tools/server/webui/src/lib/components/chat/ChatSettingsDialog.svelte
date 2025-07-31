@@ -1,19 +1,19 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
+	import { Input } from '$lib/components/ui/input';
+	import { ScrollArea } from '$lib/components/ui/scroll-area';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { Settings, Filter, Hand, MessageSquare, Plus, Beaker } from '@lucide/svelte';
 	import type { ConfigValue, FieldConfig } from '$lib/types/settings';
 
 	interface Props {
-		open?: boolean;
 		onOpenChange?: (open: boolean) => void;
+		open?: boolean;
 	}
 
-	let { open = false, onOpenChange }: Props = $props();
+	let { onOpenChange, open = false }: Props = $props();
 
 	// Mock configuration - will be replaced with real stores
 	let config: Record<string, ConfigValue> = $state({
@@ -164,7 +164,6 @@
 		}
 	];
 
-	// Get current section
 	const currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
@@ -179,9 +178,7 @@
 			</Dialog.Title>
 		</Dialog.Header>
 
-		<!-- Content with Sidebar Layout -->
 		<div class="flex flex-1 overflow-hidden">
-			<!-- Left Sidebar -->
 			<div class="bg-muted/30 w-64 border-r p-4">
 				<nav class="space-y-1">
 					{#each settingSections as section}
@@ -193,23 +190,20 @@
 							onclick={() => (activeSection = section.title)}
 						>
 							<section.icon class="h-4 w-4" />
-							{section.title}
+							<span class="ml-2">{section.title}</span>
 						</button>
 					{/each}
 				</nav>
 			</div>
 
-			<!-- Right Content Panel -->
 			<div class="flex flex-1 flex-col">
 				<ScrollArea class="flex-1 p-6">
 					<div class="space-y-6">
-						<!-- Section Header -->
 						<div class="flex items-center gap-2 border-b pb-2">
 							<currentSection.icon class="h-5 w-5" />
 							<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 						</div>
 
-						<!-- Section Fields -->
 						<div class="space-y-6">
 							{#each currentSection.fields as field}
 								<div class="space-y-2">
@@ -217,6 +211,7 @@
 										<label for={field.key} class="block text-sm font-medium">
 											{field.label}
 										</label>
+
 										<Input
 											id={field.key}
 											value={String(config[field.key] || '')}
@@ -234,6 +229,7 @@
 										<label for={field.key} class="block text-sm font-medium">
 											{field.label}
 										</label>
+
 										<Textarea
 											id={field.key}
 											value={String(config[field.key] || '')}
@@ -256,6 +252,7 @@
 													(config[field.key] = checked)}
 												class="mt-1"
 											/>
+
 											<div class="space-y-1">
 												<label
 													for={field.key}
@@ -263,6 +260,7 @@
 												>
 													{field.label}
 												</label>
+
 												{#if field.help}
 													<p class="text-muted-foreground text-xs">
 														{field.help}
@@ -275,7 +273,6 @@
 							{/each}
 						</div>
 
-						<!-- Footer Note -->
 						<div class="mt-8 border-t pt-6">
 							<p class="text-muted-foreground text-xs">
 								Settings are saved in browser's localStorage
@@ -286,12 +283,13 @@
 			</div>
 		</div>
 
-		<!-- Footer -->
 		<div class="flex justify-between border-t p-6">
 			<Button variant="outline" onclick={handleReset}>Reset to default</Button>
+
 			<div class="flex gap-2">
 				<Button variant="outline" onclick={handleClose}>Close</Button>
-				<Button onclick={handleSave}>Save</Button>
+
+				<Button variant="default" onclick={handleSave}>Save</Button>
 			</div>
 		</div>
 	</Dialog.Content>

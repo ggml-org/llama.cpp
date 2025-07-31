@@ -12,7 +12,6 @@
 
 	let { class: className = '', variant = 'header', showActions = false }: Props = $props();
 
-	// Real server status from store
 	const serverData = $derived(serverProps());
 	const loading = $derived(serverLoading());
 	const error = $derived(serverError());
@@ -34,13 +33,11 @@
 </script>
 
 <div class="flex items-center space-x-2 {className}">
-	<!-- Status Indicator -->
 	<div class="flex items-center space-x-2">
 		<div class="h-2 w-2 rounded-full {getStatusColor()}"></div>
 		<span class="text-muted-foreground text-sm">{getStatusText()}</span>
 	</div>
 
-	<!-- Server Info -->
 	{#if serverData && !error}
 		<Badge variant="outline" class="text-xs">
 			<Server class="mr-1 h-3 w-3" />
@@ -53,7 +50,6 @@
 		{/if}
 	{/if}
 
-	<!-- Error Action (if needed) -->
 	{#if showActions && error}
 		<Button variant="outline" size="sm" class="text-destructive">
 			<AlertTriangle class="mr-2 h-4 w-4" />

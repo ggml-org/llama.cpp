@@ -1,13 +1,13 @@
 <script lang="ts">
+	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { ChatThinkingBlock, MarkdownContent } from '$lib/components';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
-	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
 	import type { ChatRole } from '$lib/types/chat';
 	import type { Message } from '$lib/types/database';
-	import { ChatThinkingBlock, MarkdownContent } from '$lib/components';
-	import { parseThinkingContent } from '$lib/utils/thinking';
 	import { copyToClipboard } from '$lib/utils/copy';
+	import { parseThinkingContent } from '$lib/utils/thinking';
 
 	interface Props {
 		class?: string;
@@ -29,8 +29,7 @@
 
 	let isEditing = $state(false);
 	let editedContent = $state(message.content);
-	// svelte-ignore non_reactive_update
-	let textareaElement: HTMLTextAreaElement;
+	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
 	let thinkingContent = $derived.by(() => {
 		if (message.role === 'assistant') {
@@ -100,59 +99,6 @@
 	}
 </script>
 
-{#snippet messageActions(config?: { role: ChatRole })}
-	<div
-		class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
-	>
-		<Tooltip>
-			<TooltipTrigger>
-				<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={handleCopy}>
-					<Copy class="h-3 w-3" />
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent>
-				<p>Copy</p>
-			</TooltipContent>
-		</Tooltip>
-		{#if config?.role === 'user'}
-			<Tooltip>
-				<TooltipTrigger>
-					<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={handleEdit}>
-						<Edit class="h-3 w-3" />
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent>
-					<p>Edit</p>
-				</TooltipContent>
-			</Tooltip>
-		{:else if config?.role === 'assistant'}
-			<Tooltip>
-				<TooltipTrigger>
-					<Button
-						variant="ghost"
-						size="sm"
-						class="h-6 w-6 p-0"
-						onclick={handleRegenerate}
-					>
-						<RefreshCw class="h-3 w-3" />
-					</Button>
-				</TooltipTrigger>
-				<TooltipContent>
-					<p>Regenerate</p>
-				</TooltipContent>
-			</Tooltip>
-		{/if}
-	</div>
-
-	<div
-		class="{config?.role === 'user'
-			? 'right-0'
-			: 'left-0'} text-muted-foreground absolute text-xs transition-all duration-150 group-hover:pointer-events-none group-hover:opacity-0"
-	>
-		{message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
-	</div>
-{/snippet}
-
 {#if message.role === 'user'}
 	<div
 		class="group flex flex-col items-end gap-2 {className}"
@@ -160,7 +106,6 @@
 		aria-label="User message with actions"
 	>
 		{#if isEditing}
-			<!-- Editing mode -->
 			<div class="w-full max-w-[80%]">
 				<textarea
 					bind:this={textareaElement}
@@ -169,11 +114,13 @@
 					class="border-primary bg-foreground/3 dark:bg-muted text-foreground border-1 focus:ring-ring min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-offset-2"
 					placeholder="Edit your message..."
 				></textarea>
+
 				<div class="mt-2 flex justify-end gap-2">
 					<Button variant="outline" size="sm" class="h-8 px-3" onclick={handleCancelEdit}>
 						<X class="mr-1 h-3 w-3" />
 						Cancel
 					</Button>
+
 					<Button
 						size="sm"
 						class="h-8 px-3"
@@ -186,7 +133,6 @@
 				</div>
 			</div>
 		{:else}
-			<!-- Display mode -->
 			<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
 				<div class="text-md whitespace-pre-wrap">
 					{message.content}
@@ -223,3 +169,60 @@
 		{/if}
 	</div>
 {/if}
+
+
+{#snippet messageActions(config?: { role: ChatRole })}
+	<div
+		class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
+	>
+		<Tooltip>
+			<TooltipTrigger>
+				<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={handleCopy}>
+					<Copy class="h-3 w-3" />
+				</Button>
+			</TooltipTrigger>
+
+			<TooltipContent>
+				<p>Copy</p>
+			</TooltipContent>
+		</Tooltip>
+		{#if config?.role === 'user'}
+			<Tooltip>
+				<TooltipTrigger>
+					<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={handleEdit}>
+						<Edit class="h-3 w-3" />
+					</Button>
+				</TooltipTrigger>
+
+				<TooltipContent>
+					<p>Edit</p>
+				</TooltipContent>
+			</Tooltip>
+		{:else if config?.role === 'assistant'}
+			<Tooltip>
+				<TooltipTrigger>
+					<Button
+						variant="ghost"
+						size="sm"
+						class="h-6 w-6 p-0"
+						onclick={handleRegenerate}
+					>
+						<RefreshCw class="h-3 w-3" />
+					</Button>
+				</TooltipTrigger>
+
+				<TooltipContent>
+					<p>Regenerate</p>
+				</TooltipContent>
+			</Tooltip>
+		{/if}
+	</div>
+
+	<div
+		class="{config?.role === 'user'
+			? 'right-0'
+			: 'left-0'} text-muted-foreground absolute text-xs transition-all duration-150 group-hover:pointer-events-none group-hover:opacity-0"
+	>
+		{message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
+	</div>
+{/snippet}

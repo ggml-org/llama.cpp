@@ -7,8 +7,8 @@
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
-		onsend?: (message: string) => void;
-		onstop?: () => void;
+		onSend?: (message: string) => void;
+		onStop?: () => void;
 		showHelperText?: boolean;
 	}
 
@@ -16,8 +16,8 @@
 		class: className,
 		disabled = false,
 		isLoading = false,
-		onsend,
-		onstop,
+		onSend,
+		onStop,
 		showHelperText = true
 	}: Props = $props();
 
@@ -28,7 +28,7 @@
 		event.preventDefault();
 		if (!message.trim() || disabled || isLoading) return;
 
-		onsend?.(message.trim());
+		onSend?.(message.trim());
 		message = '';
 
 		if (textareaElement) {
@@ -42,7 +42,7 @@
 
 			if (!message.trim() || disabled || isLoading) return;
 
-			onsend?.(message.trim());
+			onSend?.(message.trim());
 			message = '';
 
 			if (textareaElement) {
@@ -52,7 +52,7 @@
 	}
 
 	function handleStop() {
-		onstop?.();
+		onStop?.();
 	}
 </script>
 
@@ -60,11 +60,9 @@
 	onsubmit={handleSubmit}
 	class="bg-background dark:bg-muted border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
 >
-	<!-- Input Container -->
 	<div
 		class="bg-muted/30 border-border/40 focus-within:border-primary/40 flex-column relative min-h-[48px] items-center rounded-3xl border px-5 py-3 shadow-sm transition-all focus-within:shadow-md"
 	>
-		<!-- Text Input -->
 		<div class="flex-1">
 			<textarea
 				bind:this={textareaElement}
@@ -77,9 +75,7 @@
 			></textarea>
 		</div>
 
-		<!-- Actions Bar -->
 		<div class="flex items-center justify-between gap-1">
-			<!-- Left Actions -->
 			<Button
 				type="button"
 				variant="ghost"
@@ -121,7 +117,6 @@
 	</div>
 </form>
 
-<!-- Helper Text -->
 {#if showHelperText}
 	<div class="mt-4 flex items-center justify-center">
 		<p class="text-muted-foreground text-xs">

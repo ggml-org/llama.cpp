@@ -10,11 +10,10 @@
 
 	let { children } = $props();
 
-	const isHomeRoute = $derived(page.route.id === '/');
-	const isChatRoute = $derived(page.route.id === '/chat/[id]');
-	const isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
-	const showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
-
+	let isChatRoute = $derived(page.route.id === '/chat/[id]');
+	let isHomeRoute = $derived(page.route.id === '/');
+	let isNewChatMode = $derived(page.url.searchParams.get('new_chat') === 'true');
+	let showSidebarByDefault = $derived(activeMessages().length > 0 || isLoading());
 	let sidebarOpen = $state(false);
 
 	$effect(() => {

@@ -13,10 +13,8 @@
 		stopGeneration,
 		gracefulStop
 	} from '$lib/stores/chat.svelte';
-	import { slide } from 'svelte/transition';
 
-	// Get chat ID from URL params
-	const chatId = $derived($page.params.id);
+	let chatId = $derived($page.params.id);
 	let currentChatId: string | undefined = undefined;
 
 	// Navigation guard to handle streaming abortion

@@ -12,7 +12,6 @@
 	import { fly, slide } from 'svelte/transition';
 
 	let { showCenteredEmpty = false } = $props();
-
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let scrollInterval: ReturnType<typeof setInterval> | undefined;
 	let autoScrollEnabled = $state(true);
@@ -24,7 +23,6 @@
 	async function handleSendMessage(message: string) {
 		await sendMessage(message);
 	}
-
 
 	function scrollChatToBottom() {
 		chatScrollContainer?.scrollTo({top: chatScrollContainer?.scrollHeight, behavior: 'instant'})
@@ -74,8 +72,8 @@
 					<ChatForm
 						isLoading={isLoading()}
 						showHelperText={false}
-						onsend={handleSendMessage}
-						onstop={() => stopGeneration()}
+						onSend={handleSendMessage}
+						onStop={() => stopGeneration()}
 					/>
 				</div>
 			</div>
@@ -85,6 +83,7 @@
 		<div class="w-full max-w-2xl px-4">
 			<div class="mb-8 text-center" in:fly={{ y: -30, duration: 600 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
+
 				<p class="text-muted-foreground text-lg">How can I help you today?</p>
 			</div>
 
@@ -99,8 +98,8 @@
 				<ChatForm
 					isLoading={isLoading()}
 					showHelperText={true}
-					onsend={handleSendMessage}
-					onstop={() => stopGeneration()}
+					onSend={handleSendMessage}
+					onStop={() => stopGeneration()}
 				/>
 			</div>
 		</div>

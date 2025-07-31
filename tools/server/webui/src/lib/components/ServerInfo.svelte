@@ -3,7 +3,6 @@
 	import { Server, Eye, Mic } from '@lucide/svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 
-	// Reactive server information
 	const props = $derived(serverStore.serverProps);
 	const model = $derived(serverStore.modelName);
 	const modalities = $derived(serverStore.supportedModalities);
@@ -19,14 +18,12 @@
 			</Badge>
 		{/if}
 
-		<!-- Context Length -->
 		{#if props.n_ctx}
 			<Badge variant="secondary" class="text-xs">
 				ctx: {props.n_ctx.toLocaleString()}
 			</Badge>
 		{/if}
 
-		<!-- Supported Modalities -->
 		{#if modalities.length > 0}
 			{#each modalities as modality}
 				<Badge variant="secondary" class="text-xs">

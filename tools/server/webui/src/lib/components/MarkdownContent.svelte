@@ -1,9 +1,9 @@
 <script lang="ts">
 	import { remark } from 'remark';
-	import remarkGfm from 'remark-gfm';
 	import remarkBreaks from 'remark-breaks';
-	import remarkRehype from 'remark-rehype';
+	import remarkGfm from 'remark-gfm';
 	import rehypeHighlight from 'rehype-highlight';
+	import remarkRehype from 'remark-rehype';
 	import rehypeStringify from 'rehype-stringify';
 	import 'highlight.js/styles/github-dark.css';
 
@@ -25,20 +25,6 @@
 			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeStringify); // Convert to HTML string
 	});
-
-	async function processMarkdown(text: string): Promise<string> {
-		try {
-			const result = await processor().process(text);
-			const html = String(result);
-
-			return enhanceCodeBlocks(html);
-		} catch (error) {
-			console.error('Markdown processing error:', error);
-			
-			// Fallback to plain text with line breaks
-			return text.replace(/\n/g, '<br>');
-		}
-	}
 
 	function enhanceCodeBlocks(html: string): string {
 		const tempDiv = document.createElement('div');
@@ -98,6 +84,20 @@
 		});
 		
 		return tempDiv.innerHTML;
+	}
+
+	async function processMarkdown(text: string): Promise<string> {
+		try {
+			const result = await processor().process(text);
+			const html = String(result);
+
+			return enhanceCodeBlocks(html);
+		} catch (error) {
+			console.error('Markdown processing error:', error);
+			
+			// Fallback to plain text with line breaks
+			return text.replace(/\n/g, '<br>');
+		}
 	}
 
 	function setupCopyButtons() {

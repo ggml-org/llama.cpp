@@ -1,4 +1,4 @@
-import type { DatabaseChatMessage } from '$lib/types/database';
+import type { Message } from '$lib/types/database';
 
 export interface LlamaCppServerProps {
 	build_info: string;
@@ -177,10 +177,10 @@ export class ChatService {
 	}
 
 	/**
-	 * Unified method to send chat completions supporting both ChatMessageData and DatabaseChatMessage types
+	 * Unified method to send chat completions supporting both ChatMessageData and Message types
 	 */
 	async sendChatCompletion(
-		messages: ChatMessageData[] | DatabaseChatMessage[],
+		messages: ChatMessageData[] | Message[],
 		options: {
 			stream?: boolean;
 			temperature?: number;
@@ -212,7 +212,7 @@ export class ChatService {
 	 * Static method for backward compatibility with ApiService
 	 */
 	static async sendChatCompletion(
-		messages: DatabaseChatMessage[],
+		messages: Message[],
 		onChunk?: (content: string) => void,
 		onComplete?: () => void,
 		onError?: (error: Error) => void

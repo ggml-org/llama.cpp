@@ -1,11 +1,10 @@
-export { default as ChatConversationsList } from './chat/ChatConversations/ChatConversationsList.svelte';
-export { default as ChatConversationsItem } from './chat/ChatConversations/ChatConversationsItem.svelte';
 export { default as ChatForm } from './chat/ChatForm.svelte';
 export { default as ChatMessage } from './chat/ChatMessage.svelte';
 export { default as ChatMessages } from './chat/ChatMessages.svelte';
 export { default as ChatHeader } from './chat/ChatHeader.svelte';
 export { default as ChatScreen } from './chat/ChatScreen.svelte';
 export { default as ChatSettingsDialog } from './chat/ChatSettingsDialog.svelte';
+export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
 export { default as ChatSettings } from './chat/ChatSettings/ChatSettings.svelte';
 export { default as ChatThinkingBlock } from './chat/ChatThinkingBlock.svelte';

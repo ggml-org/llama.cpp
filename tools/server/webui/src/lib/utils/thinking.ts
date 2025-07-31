@@ -10,14 +10,14 @@ export function parseThinkingContent(content: string): {
 	const incompleteMatch = content.includes('<think>') && !content.includes('</think>');
 
 	if (incompleteMatch) {
-		// Extract everything after <think> as thinking content
-		const thinkingContent = content.split('<think>')?.[1]?.trim();
 		// Remove the entire <think>... part from clean content
 		const cleanContent = content.split('</think>')?.[1]?.trim();
+		// Extract everything after <think> as thinking content
+		const thinkingContent = content.split('<think>')?.[1]?.trim();
 
 		return {
+			cleanContent,
 			thinking: thinkingContent,
-			cleanContent
 		};
 	}
 
