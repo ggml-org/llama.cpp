@@ -29,28 +29,28 @@ typedef bool (*diffusion_step_callback_t)(int32_t             step,
                                           void *              user_data);
 
 struct diffusion_params {
-    int32_t                   steps{};
-    float                     temperature{};
-    llama_token               mask_token_id{};
-    diffusion_step_callback_t step_callback{};
-    void *                    step_callback_user_data{};
-    int32_t                   seed{};
-    bool                      visual_mode{};
-    bool                      shift_logits{};  // Shift logits by -1 after decode
+    int32_t                   steps                   = 0;
+    float                     temperature             = 0;
+    llama_token               mask_token_id           = LLAMA_TOKEN_NULL;
+    diffusion_step_callback_t step_callback           = nullptr;
+    void *                    step_callback_user_data = nullptr;
+    int32_t                   seed                    = 0;
+    bool                      visual_mode             = false;
+    bool                      shift_logits            = false;  // Shift logits by -1 after decode
 
-    float   top_p{ 0 };
-    int32_t top_k{ 0 };
+    float   top_p = 0.;
+    int32_t top_k = 0.;
 
-    diffusion_algorithm algorithm{ CONFIDENCE_BASED };
-    transfer_schedule   schedule{ TIMESTEP_BASED };
+    diffusion_algorithm algorithm = CONFIDENCE_BASED;
+    transfer_schedule   schedule  = TIMESTEP_BASED;
 
-    float   cfg_scale{ 0 };             // Config scale for classifier-free guidance
-    float   eps{ 0 };                   // Timestep scheduling
-    int32_t block_length{ 0 };          // Block size (for block scheduling)
-    float   alg_temp{ 0 };              // algorithm temperature (0.0 = deterministic)
-    bool    add_gumbel_noise{ false };  // Add gumbel noise to the logits if temp > 0.0
+    float   cfg_scale        = 0.;     // Config scale for classifier-free guidance
+    float   eps              = 0.;     // Timestep scheduling
+    int32_t block_length     = 0;      // Block size (for block scheduling)
+    float   alg_temp         = 0;      // algorithm temperature (0.0 = deterministic)
+    bool    add_gumbel_noise = false;  // Add gumbel noise to the logits if temp > 0.0
 
-    int32_t max_length{};               // Maximum sequence length
+    int32_t max_length = 0;            // Maximum sequence length
 };
 
 struct callback_data {
@@ -271,7 +271,7 @@ static void diffusion_generate(llama_context *          ctx,
         steps_per_block = params.steps / num_blocks;
     }
 
-    std::vector<float>       confidence(params.max_length);
+    std::vector<float> confidence(params.max_length);
 
     int64_t total_sampling_time = 0;
     int64_t total_time          = 0;
