@@ -1659,6 +1659,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_GET_ROWS:
             ggml_cann_get_rows(ctx, dst);
             break;
+        case GGML_OP_SET_ROWS:
+            ggml_cann_set_rows(ctx, dst);
+            break;
         case GGML_OP_DUP:
             ggml_cann_dup(ctx, dst);
             break;
@@ -2191,13 +2194,15 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                     return false;
             }
         } break;
-        case GGML_OP_SET_ROWS:
-            {
-                // TODO: add support
-                // ref: https://github.com/ggml-org/llama.cpp/pull/14274
-#pragma message("TODO: implement F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, IQ4_NL support (https://github.com/ggml-org/llama.cpp/pull/14661)")
-                return false;
-            } break;
+        case GGML_OP_SET_ROWS: {
+            switch (op->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                    return true;
+                default:
+                    return false;
+            }
+        } break;
         case GGML_OP_CPY: {
             ggml_tensor *src = op->src[0];
             if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) ||

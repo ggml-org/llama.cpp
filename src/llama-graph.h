@@ -145,7 +145,7 @@ public:
 
     ggml_tensor * pos_bucket = nullptr; // I32 [n_batch, n_batch]
 
-    const llama_hparams & hparams;
+    const llama_hparams hparams;
 };
 
 class llm_graph_input_pos_bucket_kv : public llm_graph_input_i {
@@ -159,7 +159,7 @@ public:
 
     ggml_tensor * pos_bucket = nullptr; // I32 [n_kv, n_batch]
 
-    const llama_hparams & hparams;
+    const llama_hparams hparams;
 
     const llama_kv_cache_unified_context * mctx;
 };
@@ -178,8 +178,8 @@ public:
 
     ggml_tensor * out_ids; // I32 [n_outputs]
 
-    const llama_hparams & hparams;
-    const llama_cparams & cparams;
+    const llama_hparams hparams;
+    const llama_cparams cparams;
 
     const uint32_t n_outputs;
 };
@@ -193,7 +193,7 @@ public:
 
     ggml_tensor * mean; // F32 [n_batch, n_batch]
 
-    const llama_cparams & cparams;
+    const llama_cparams cparams;
 };
 
 class llm_graph_input_cls : public llm_graph_input_i {
@@ -205,7 +205,7 @@ public:
 
     ggml_tensor * cls; // I32 [n_batch]
 
-    const llama_cparams & cparams;
+    const llama_cparams cparams;
 };
 
 class llm_graph_input_rs : public llm_graph_input_i {
@@ -215,7 +215,12 @@ public:
 
     void set_input(const llama_ubatch * ubatch) override;
 
-    ggml_tensor * s_copy; // I32 [kv_size]
+    ggml_tensor * s_copy;  // I32 [n_rs]
+
+    // views of s_copy, computed once per graph
+    // and shared across layers which use build_rs
+    ggml_tensor * s_copy_main;   // I32 [n_seqs]
+    ggml_tensor * s_copy_extra;  // I32 [n_rs - n_seqs]
 
     const llama_memory_recurrent_context * mctx;
 };
@@ -248,8 +253,8 @@ public:
     ggml_tensor * kq_mask     = nullptr; // F32 [n_tokens, n_batch, 1, 1]
     ggml_tensor * kq_mask_cnv = nullptr; //     [n_tokens, n_batch, 1, 1]
 
-    const llama_hparams & hparams;
-    const llama_cparams & cparams;
+    const llama_hparams hparams;
+    const llama_cparams cparams;
 };
 
 class llm_graph_input_attn_kv_unified : public llm_graph_input_i {
@@ -279,8 +284,11 @@ public:
     ggml_tensor * self_kq_mask     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
-    const llama_hparams & hparams;
-    const llama_cparams & cparams;
+    // note: these have to be copies because in order to be able to reuse a graph, its inputs
+    //       need to carry these parameters with them. otherwise, they can point to freed
+    //       llm_graph_params from a previous batch, causing stack-use-after-return
+    const llama_hparams hparams;
+    const llama_cparams cparams;
 
     const llama_kv_cache_unified_context * mctx;
 };
@@ -319,8 +327,8 @@ public:
     ggml_tensor * self_kq_mask_swa     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
-    const llama_hparams & hparams;
-    const llama_cparams & cparams;
+    const llama_hparams hparams;
+    const llama_cparams cparams;
 
     const llama_kv_cache_unified_iswa_context * mctx;
 };
@@ -749,7 +757,6 @@ struct llm_graph_context {
     // recurrent
     //
 
-    // TODO: avoid notion of "kv"
     // TODO: move this implementation to llama_memory_recurrent.
     //       this is analogous to llama_kv_cache_unified::cpy_k / cpy_v
     //       when moving, avoid passing `ggml_cgraph` - only pass `ggml_context`. would likely need to split the
@@ -757,12 +764,13 @@ struct llm_graph_context {
     //         `llama_memory_recurrent`
     ggml_tensor * build_rs(
             ggml_tensor * s,
-            ggml_tensor * state_copy,
+            ggml_tensor * state_copy_main,
+            ggml_tensor * state_copy_extra,
                 int32_t   state_size,
                 int32_t   n_seqs,
-               uint32_t   n_kv,
-               uint32_t   kv_head,
-               uint32_t   kv_size,
+               uint32_t   n_rs,
+               uint32_t   rs_head,
+               uint32_t   rs_size,
                 int32_t   rs_zero,
             const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 

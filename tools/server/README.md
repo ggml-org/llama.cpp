@@ -644,6 +644,15 @@ The same as [the embedding example](../embedding) does.
 
 `image_data`: An array of objects to hold base64-encoded image `data` and its `id`s to be reference in `content`. You can determine the place of the image in the content as in the following: `Image: [img-21].\nCaption: This is a picture of a house`. In this case, `[img-21]` will be replaced by the embeddings of the image with id `21` in the following `image_data` array: `{..., "image_data": [{"data": "<BASE64_STRING>", "id": 21}]}`. Use `image_data` only with multimodal models, e.g., LLaVA.
 
+`embd_normalize`: Normalization for pooled embeddings. Can be one of the following values:
+```
+  -1: No normalization
+   0: Max absolute
+   1: Taxicab
+   2: Euclidean/L2
+  >2: P-Norm
+```
+
 ### POST `/reranking`: Rerank documents according to a given query
 
 Similar to https://jina.ai/reranker/ but might change in the future.
