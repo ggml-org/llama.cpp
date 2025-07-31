@@ -276,8 +276,6 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
                                                   bool                              submit_imm = false) {
     webgpu_param_bufs params_bufs = ctx->param_buf_pool.alloc_bufs();
 
-    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
-
     ggml_backend_webgpu_map_buffer(ctx, params_bufs.host_buf, wgpu::MapMode::Write, 0, params_bufs.host_buf.GetSize());
     uint32_t * _params = (uint32_t *) params_bufs.host_buf.GetMappedRange();
     for (size_t i = 0; i < params.size(); i++) {
@@ -318,6 +316,8 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
                                            ctx->param_buf_pool.free_bufs({ params_bufs });
                                        });
     } else {
+        // Lock the context mutex when pushing to the staging vectors.
+        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
         // Enqueue commands and only submit if we have enough staged commands
         ctx->staged_command_bufs.push_back(commands);
         ctx->staged_param_bufs.push_back(params_bufs);
@@ -564,7 +564,6 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
 
-    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
     webgpu_ctx->queue.WriteBuffer(buf_ctx->buffer, total_offset, data, (size / 4) * 4);
 
     if (size % 4 != 0) {
@@ -622,11 +621,8 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
     encoder.CopyBufferToBuffer(buf_ctx->buffer, total_offset, webgpu_ctx->get_tensor_staging_buf, 0, final_size);
     wgpu::CommandBuffer commands = encoder.Finish();
 
-    {
-        std::lock_guard<std::recursive_mutex> submit_lock(webgpu_ctx->mutex);
-        // Submit the command buffer to the queue
-        webgpu_ctx->queue.Submit(1, &commands);
-    }
+    // Submit the command buffer to the queue
+    webgpu_ctx->queue.Submit(1, &commands);
 
     // Map the staging buffer to read the data
     ggml_backend_webgpu_map_buffer(webgpu_ctx, webgpu_ctx->get_tensor_staging_buf, wgpu::MapMode::Read, 0, final_size);
@@ -775,7 +771,7 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
     std::lock_guard<std::mutex> lock(webgpu_ctx->init_mutex);
     if (!webgpu_ctx->device_init) {
         // Initialize device
-        std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16 };
+        std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16, wgpu::FeatureName::ImplicitDeviceSynchronization };
         wgpu::DeviceDescriptor         dev_desc;
         dev_desc.requiredLimits       = &webgpu_ctx->limits;
         dev_desc.requiredFeatures     = required_features.data();
