@@ -76,6 +76,9 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph) {
     m_cgraph = cgraph;
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         auto* cur_node = cgraph->nodes[node_n];
+        if (cur_node->op == GGML_OP_NONE) {
+            continue;
+        }
         m_nodes.push_back(cur_node);
         set_input_output(cur_node, true);
     }
