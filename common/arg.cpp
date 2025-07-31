@@ -2374,6 +2374,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--cpu-moe"},
+        "use CPU for Mixture of Experts (MoE) weights",
+        [](common_params & params) {
+            params.tensor_buft_overrides.push_back({"\\.ffn_up_exps\\.weight$",   ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_down_exps\\.weight$", ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_gate_exps\\.weight$", ggml_backend_cpu_buffer_type()});
+        }
+    ).set_env("LLAMA_ARG_CPU_MOE"));
+    add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
         "number of layers to store in VRAM",
         [](common_params & params, int value) {
