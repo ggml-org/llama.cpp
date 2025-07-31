@@ -224,7 +224,7 @@ struct common_params_diffusion {
     bool    visual_mode   = false;
 
     float   eps           = 0;        // epsilon for timesteps
-    int32_t block_length  = 32;       // block length for generation
+    int32_t block_length  = 0;        // block length for generation
 
     int32_t algorithm     = 4;        // default algorithm: low-confidence
     float   alg_temp      = 0.0f;     // algorithm temperature
