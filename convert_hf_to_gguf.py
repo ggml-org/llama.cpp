@@ -6604,29 +6604,54 @@ class Glm4MoeModel(TextModel):
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_types(toktypes)
 
-        # Set special tokens
+        # Special tokens
+        # BOS should be [gMASK] (151331), EOT should be <|endoftext|> (151329)
         special_vocab._set_special_token(
             "eos", tokenizer.get_added_vocab()["<|endoftext|>"]
         )
-        special_vocab._set_special_token("eot", tokenizer.get_added_vocab()["<|user|>"])
+        special_vocab._set_special_token(
+            "eot", tokenizer.get_added_vocab()["<|endoftext|>"]
+        )
         special_vocab._set_special_token(
             "unk", tokenizer.get_added_vocab()["<|endoftext|>"]
         )
         special_vocab._set_special_token(
-            "bos", tokenizer.get_added_vocab()["<|endoftext|>"]
+            "bos", tokenizer.get_added_vocab()["[gMASK]"]  # 151331
         )
         special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
 
-        # Fix chat template syntax error in GLM-4.5 models
+        # Fix chat template syntax error
         if special_vocab.chat_template and isinstance(special_vocab.chat_template, str):
             # Fix multiple syntax issues in GLM-4.5 chat template
             template = special_vocab.chat_template
-            # Fix nested double quotes issue
-            template = template.replace('endswith("/nothink")', "endswith('/nothink')")
-            # Fix any other potential parentheses/tuple issues
+            # Fix missing closing parenthesis in conditional expression
             template = template.replace(
-                "not visible_text(m.content).endswith('/nothink'))",
-                "not visible_text(m.content).endswith('/nothink')"
+                'endswith("/nothink")) else',
+                'endswith("/nothink"))) else'
+            )
+            template = template.replace(
+                "endswith('/nothink')) else",
+                "endswith('/nothink'))) else"
+            )
+            # llama.cpp's C++ Jinja2 parser doesn't support visible_text() or .endswith()
+            template = template.replace(
+                "visible_text(m.content).endswith('/nothink')",
+                "'/nothink' in m.content"
+            )
+            template = template.replace(
+                "visible_text(m.content).endswith(\"/nothink\")",
+                "\"/nothink\" in m.content"
+            )
+            # Remove visible_text() function calls entirely as they're not supported
+            template = template.replace("visible_text(m.content)", "m.content")
+            # Fix parenthesis mismatch in chat template
+            template = template.replace(
+                'not "/nothink" in m.content)) else',
+                'not "/nothink" in m.content) else'
+            )  # Remove extra closing parenthesis
+            template = template.replace(
+                "not '/nothink' in m.content)) else",
+                "not '/nothink' in m.content) else"
             )
             special_vocab.chat_template = template
 
@@ -6642,10 +6667,9 @@ class Glm4MoeModel(TextModel):
             int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5))
         )
 
-        # MoE parameters
-        if (n_experts := self.hparams.get("n_routed_experts")) is not None:
-            self.gguf_writer.add_expert_count(n_experts)
-        # Note: expert_used_count is already set by parent class using num_experts_per_tok
+        # MoE parameters - Use only routed expert count (shared experts handled separately)
+        if (n_routed_experts := self.hparams.get("n_routed_experts")) is not None:
+            self.gguf_writer.add_expert_count(n_routed_experts)
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
             self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
         if (n_shared_experts := self.hparams.get("n_shared_experts")) is not None:
@@ -6721,10 +6745,10 @@ class Glm4MoeModel(TextModel):
             else:
                 return []
 
-        # Handle expert gating input (routing gate)
+        # Handle expert gating input (routing gate) - routed experts only
         if ".mlp.gate.e_score_correction_bias" in name:
             new_name = name.replace("model.layers.", "blk.").replace(
-                ".mlp.gate.e_score_correction_bias", ".ffn_gate_inp.bias"
+                ".mlp.gate.e_score_correction_bias", ".exp_probs_b"
             )
             return [(new_name, data_torch)]
         elif ".mlp.gate.weight" in name:
