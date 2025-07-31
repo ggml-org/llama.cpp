@@ -1912,7 +1912,7 @@ static bool ggml_backend_cann_cpy_tensor_async(
 
     size_t copy_size = ggml_nbytes(dst);
     if (copy_size == 0) {
-    	return true;
+        return true;
     }
     if (backend_src != backend_dst) {
         ggml_backend_cann_buffer_context* buf_ctx_src =
