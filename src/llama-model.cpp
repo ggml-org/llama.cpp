@@ -13580,6 +13580,15 @@ struct llm_build_glm4_moe : public llm_graph_context {
                 const int64_t n_expert      = hparams.n_expert;
                 const int64_t n_expert_used = hparams.n_expert_used;
 
+                // Compute shared expert output first
+                ggml_tensor * cur_shexp = build_ffn(cur,
+                        model.layers[il].ffn_up_shexp,   NULL, NULL,
+                        model.layers[il].ffn_gate_shexp, NULL, NULL,
+                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(cur_shexp, "ffn_shexp_out", il);
+
                 ggml_tensor * moe_out =
                     build_moe_ffn(cur,
                             model.layers[il].ffn_gate_inp,
@@ -13594,16 +13603,12 @@ struct llm_build_glm4_moe : public llm_graph_context {
                             il);
                 cb(moe_out, "ffn_moe_out", il);
 
-                // Add shared expert computation
-                ggml_tensor * cur_shexp = build_ffn(cur,
-                        model.layers[il].ffn_up_shexp,   NULL, NULL,
-                        model.layers[il].ffn_gate_shexp, NULL, NULL,
-                        model.layers[il].ffn_down_shexp, NULL, NULL,
-                        NULL,
-                        LLM_FFN_SILU, LLM_FFN_PAR, il);
-                cb(cur_shexp, "ffn_shexp_out", il);
+                // For GLM4_MOE: Shared expert is always active alongside routed experts
+                // Apply proper scaling to shared expert to match architectural design
+                cur_shexp = ggml_scale(ctx0, cur_shexp, hparams.expert_weights_scale);
+                cb(cur_shexp, "ffn_shexp_scaled", il);
 
-                // Combine MoE output with shared expert output
+                // Combine with proper mathematical balance
                 cur = ggml_add(ctx0, moe_out, cur_shexp);
                 cb(cur, "ffn_out", il);
             }
