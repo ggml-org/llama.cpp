@@ -1,0 +1,122 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cmake-configure",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "-B", "build",
+                "-DCMAKE_BUILD_TYPE=Debug",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [],
+            "detail": "Configure CMake build"
+        },
+        {
+            "label": "cmake-build",
+            "type": "shell",
+            "command": "cmake",
+            "args": [
+                "--build", "build",
+                "--parallel"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "dependsOn": "cmake-configure",
+            "detail": "Build the project with CMake"
+        },
+        {
+            "label": "cmake-clean",
+            "type": "shell",
+            "command": "rm",
+            "args": [
+                "-rf", "build"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "detail": "Clean build directory"
+        },
+        {
+            "label": "cmake-release",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c", 
+                "cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON && cmake --build build --parallel"
+            ],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "detail": "Build release version"
+        },
+        {
+            "label": "test-cpu-topology",
+            "type": "shell",
+            "command": "./build/bin/llama-server",
+            "args": [
+                "--cpu-topology"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "dependsOn": "cmake-build",
+            "detail": "Test CPU topology detection"
+        },
+        {
+            "label": "check-numa",
+            "type": "shell",
+            "command": "bash",
+            "args": [
+                "-c",
+                "echo '=== NUMA Hardware ===' && numactl --hardware && echo -e '\\n=== CPU Info ===' && lscpu && echo -e '\\n=== Topology ===' && hwloc-info"
+            ],
+            "group": "test",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "detail": "Check NUMA and CPU topology information"
+        }
+    ]
+}

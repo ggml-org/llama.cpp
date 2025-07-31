@@ -1,0 +1,36 @@
+{
+	"name": "llama.cpp Development",
+	"dockerFile": "Dockerfile",
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"ms-vscode.cpptools-extension-pack",
+				"ms-vscode.cmake-tools",
+				"ms-python.python",
+				"ms-python.black-formatter",
+				"github.copilot",
+				"github.copilot-chat"
+			],
+			"settings": {
+				"cmake.configureOnOpen": true,
+				"cmake.buildDirectory": "${workspaceFolder}/build",
+				"C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+				"C_Cpp.default.cStandard": "c11",
+				"C_Cpp.default.cppStandard": "c++14"
+			}
+		}
+	},
+	"mounts": [
+		"source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
+	],
+	"postCreateCommand": "cmake -B build -DCMAKE_BUILD_TYPE=Debug",
+	"forwardPorts": [8080],
+	"runArgs": [
+		"--privileged",
+		"--cap-add=SYS_ADMIN"
+	],
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {},
+		"ghcr.io/devcontainers/features/github-cli:1": {}
+	}
+}
