@@ -707,7 +707,7 @@ int32_t llm_chat_apply_template(
             }
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_HUNYUAN_DENSE) {
-        // tencent/Hunyuan-4B
+        // tencent/Hunyuan-4B-Instruct
         for (size_t i = 0; i < chat.size(); i++) {
             std::string role(chat[i]->role);
             if (i == 0) {
@@ -719,13 +719,8 @@ int32_t llm_chat_apply_template(
             if (role == "assistant") {
                 ss << "<｜hy_Assistant｜>" << chat[i]->content << "<｜hy_place▁holder▁no▁2｜>";
             } else if (role == "user") {
-                ss << "<｜hy_User｜>" << chat[i]->content;
+                ss << "<｜hy_User｜>" << chat[i]->content << "<｜hy_Assistant｜>";
             }
-        }
-        if (add_ass) {
-            ss << "<｜hy_Assistant｜>";
-        } else {
-            ss << "<｜hy_place▁holder▁no▁8｜>";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_KIMI_K2) {
         // moonshotai/Kimi-K2-Instruct
