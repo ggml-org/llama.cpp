@@ -1156,7 +1156,6 @@ namespace {
  *       across calls. This reduces overhead from repeated memory allocation and deallocation.
  */
 static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
-    std::vector<int64_t> weightTransposedShape = {tensor->ne[1], tensor->ne[0]};
     aclTensor* weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne,
                                     tensor->nb, 2, ACL_FORMAT_ND, offset);
     uint64_t workspaceSize = 0;
@@ -1197,11 +1196,11 @@ static void ggml_backend_cann_buffer_set_tensor(
     // Why aclrtSynchronizeDevice?
 
     // Only check env once.
-    static bool wight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
-        if (wight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
+        if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
             GGML_ASSERT(tensor->ne[2] == 1);
             GGML_ASSERT(tensor->ne[3] == 1);
             weight_format_to_nz(tensor, data, offset);
@@ -1440,7 +1439,7 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(
     int64_t ne0 = tensor->ne[0];
 
     // Only check env once.
-    static bool wight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
 
     // last line must bigger than 32, because every single op deal at
     // least 32 bytes.
@@ -1453,7 +1452,7 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(
             size += ggml_row_size(
                 tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
-    } else if (wight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
+    } else if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
         // NZ format weight are not support quantized yet.
         // If ND tensor transform to NZ, size may changed.
         int64_t shape[] = {tensor->ne[1], tensor->ne[0]};
@@ -2091,7 +2090,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
         (ggml_backend_cann_context*)backend->context;
 
     ggml_cann_set_device(cann_ctx->device);
-    //release temp buffer create when load model.
+    //release temp buffer create by set tensor.
     release_nz_workspace();
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
