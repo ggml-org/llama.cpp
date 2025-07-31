@@ -5,8 +5,8 @@
 
 void example_multiple_images_progressive() {
     mtmd_ios_params params = mtmd_ios_params_default();
-    params.model_path = "/Users/tianchi/code/project/4o/3b/MiniCPM-4v-3b/model/ggml-model-Q4_0.gguf";
-    params.mmproj_path = "/Users/tianchi/code/project/4o/3b/MiniCPM-4v-3b/mmproj-model-f16.gguf";
+    params.model_path = "/Users/tianchi/code/tc_mb/deployment/gguf/MiniCPM-V-4-gguf/ggml-model-Q4_0.gguf";
+    params.mmproj_path = "/Users/tianchi/code/tc_mb/deployment/gguf/MiniCPM-V-4-gguf/mmproj-model-f16.gguf";
     params.n_predict = 100;  // 增加生成长度
     params.temperature = 0.6f;
     

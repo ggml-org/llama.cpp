@@ -1,7 +1,7 @@
 #import <CoreML/CoreML.h>
 #import <Accelerate/Accelerate.h>
 #import "ane.h"
-#import "ane_minicpm4v3b_vision_f16_b1.h"
+#import "ane_minicpmv4_vit_f16.h"
 #include <stdlib.h>
 
 #if __cplusplus
@@ -14,12 +14,12 @@ const void* loadModel() {
     NSFileManager *fileManager = [NSFileManager defaultManager];
     // 获取应用的 Documents 目录的 URL
     NSURL *documentsURL = [[fileManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
-    NSString *pathString = [documentsURL.absoluteString stringByAppendingString:@"ane_minicpm4v3b_vision_f16_b1.mlmodelc"];
+    NSString *pathString = [documentsURL.absoluteString stringByAppendingString:@"ane_minicpmv4_vit_f16.mlmodelc"];
     NSURL *modelURL = [NSURL URLWithString:pathString];
 
     NSLog(modelURL.absoluteString);
 
-    const void* model = CFBridgingRetain([[ane_minicpm4v3b_vision_f16_b1 alloc] initWithContentsOfURL:modelURL error:nil]);
+    const void* model = CFBridgingRetain([[ane_minicpmv4_vit_f16 alloc] initWithContentsOfURL:modelURL error:nil]);
     return model;
 }
 
@@ -31,7 +31,7 @@ void predictWith(const void* model, float* embed, float* encoderOutput) {
                                                                 deallocator: nil
                                                                       error: nil];
 
-    ane_minicpm4v3b_vision_f16_b1Output *modelOutput = [(__bridge id)model predictionFromInput:inMultiArray error:nil];
+    ane_minicpmv4_vit_f16Output *modelOutput = [(__bridge id)model predictionFromInput:inMultiArray error:nil];
 
     MLMultiArray *outMA = modelOutput.output;
 

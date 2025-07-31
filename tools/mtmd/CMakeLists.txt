@@ -18,15 +18,15 @@ add_library(mtmd
 # 在Apple平台上添加ANE相关文件
 if(APPLE)
     target_sources(mtmd PRIVATE
-        ane.h
-        ane.mm
-        ane_minicpm4v3b_vision_f16_b1.h
-        ane_minicpm4v3b_vision_f16_b1.m
+        ane/ane.h
+        ane/ane.mm
+        ane/ane_minicpmv4_vit_f16.h
+        ane/ane_minicpmv4_vit_f16.m
     )
     
     # 为Objective-C文件启用ARC
-    set_source_files_properties(ane.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    set_source_files_properties(ane_minicpm4v3b_vision_f16_b1.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(ane/ane.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(ane/ane_minicpmv4_vit_f16.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 endif()
 
 target_link_libraries     (mtmd PUBLIC ggml llama common)
@@ -65,7 +65,7 @@ set(MTMD_PUBLIC_HEADERS
 # 在Apple平台上添加ANE公共头文件
 if(APPLE)
     list(APPEND MTMD_PUBLIC_HEADERS
-        ${CMAKE_CURRENT_SOURCE_DIR}/ane.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/ane/ane.h
     )
 endif()
 

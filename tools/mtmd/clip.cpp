@@ -10,7 +10,9 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
-#include "ane.h"
+#ifdef __APPLE__
+#include "ane/ane.h"
+#endif
 
 #include <cassert>
 #include <cmath>
@@ -3186,7 +3188,7 @@ struct llava_uhd {
         bool has_slices    = original_size.width > slice_size || original_size.height > slice_size;
         const bool has_pinpoints = !ctx->model.hparams.image_res_candidates.empty();
 
-        has_slices = false;
+        // has_slices = false;
         if (!has_slices) {
             // skip slicing logic
             res.overview_size = clip_image_size{slice_size, slice_size};
@@ -3800,6 +3802,7 @@ static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, co
     return pos_embed_2d;
 }
 
+#ifdef __APPLE__
 static bool clip_image_encode_ane(float * data, float * vec) {
 
     static int flag = 0;
@@ -3810,6 +3813,7 @@ static bool clip_image_encode_ane(float * data, float * vec) {
     }
     predictWith(coremlEncoder, data, vec);
 }
+#endif
 
 bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f32 * img, float * vec) {
     clip_image_f32_batch imgs;
@@ -3817,6 +3821,7 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     *img_copy = *img;
     imgs.entries.push_back(std::move(img_copy));
 
+#ifdef __APPLE__
     bool ios_ctx = true;
     if (ios_ctx){
         printf("clip use ane\n");
@@ -3830,10 +3835,12 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
         free(vit_embedding2);
         return true;
     }
+#endif
 
     return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
 }
 
+#ifdef __APPLE__
 bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
@@ -4137,7 +4144,7 @@ bool ane_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_bat
 
     return true;
 }
-
+#endif
 
 bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;

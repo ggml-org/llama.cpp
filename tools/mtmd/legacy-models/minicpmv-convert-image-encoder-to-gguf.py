@@ -767,13 +767,17 @@ def _replace_name(s, v):
     if re.match("vision_model.embeddings.position_embedding", s):
         v = v.unsqueeze(0)
         return {s: v}
-
-    return {s: v}
+    print(s)
+    if "emb" in s:
+        return {s: v}
+    return None
 
 state_dict = model.state_dict()
 new_state_dict = {}
 for k, v in state_dict.items():
     kvs = _replace_name(k, v)
+    if kvs is None:
+        continue
     for nk, nv in kvs.items():
         new_state_dict[nk] = nv
 state_dict = new_state_dict
