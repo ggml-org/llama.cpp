@@ -428,6 +428,7 @@ struct ggml_backend_opencl_context {
     std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32_f16;
     std::map<std::pair<int, int>, cl_kernel> kernels_flash_attn_f32_f16_q1;
     std::map<std::pair<int, int>, int>       kernels_flash_attn_bm;
+    std::map<std::pair<int, int>, int>       kernels_flash_attn_bn;
     cl_kernel kernel_get_rows_f32, kernel_get_rows_f16, kernel_get_rows_q4_0;
     cl_kernel kernel_set_rows_f32, kernel_set_rows_f16;
     cl_kernel kernel_rope_norm_f32, kernel_rope_norm_f16, kernel_rope_neox_f32, kernel_rope_neox_f16;
@@ -1311,7 +1312,6 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
                 cl_kernel k_f16, k_f16_q1;
                 CL_CHECK((k_f16 = clCreateKernel(prog_f16, "flash_attn_f16", &err), err));
                 CL_CHECK((k_f16_q1 = clCreateKernel(prog_f16, "flash_attn_f16_q1", &err), err));
-                GGML_ASSERT(k_f16 != NULL && k_f16_q1 != NULL);
                 backend_ctx->kernels_flash_attn_f16[{dk, dv}] = k_f16;
                 backend_ctx->kernels_flash_attn_f16_q1[{dk, dv}] = k_f16_q1;
                 CL_CHECK(clReleaseProgram(prog_f16));
@@ -1320,7 +1320,6 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
                 cl_kernel k_f32, k_f32_q1;
                 CL_CHECK((k_f32 = clCreateKernel(prog_f32, "flash_attn_f32", &err), err));
                 CL_CHECK((k_f32_q1 = clCreateKernel(prog_f32, "flash_attn_f32_q1", &err), err));
-                GGML_ASSERT(k_f32 != NULL && k_f32_q1 != NULL);
                 backend_ctx->kernels_flash_attn_f32[{dk, dv}] = k_f32;
                 backend_ctx->kernels_flash_attn_f32_q1[{dk, dv}] = k_f32_q1;
                 CL_CHECK(clReleaseProgram(prog_f32));
@@ -1329,12 +1328,12 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
                 cl_kernel k_f32_f16, k_f32_f16_q1;
                 CL_CHECK((k_f32_f16 = clCreateKernel(prog_f32_f16, "flash_attn_f32_f16", &err), err));
                 CL_CHECK((k_f32_f16_q1 = clCreateKernel(prog_f32_f16, "flash_attn_f32_f16_q1", &err), err));
-                GGML_ASSERT(k_f32_f16 != NULL && k_f32_f16_q1 != NULL);
                 backend_ctx->kernels_flash_attn_f32_f16[{dk, dv}] = k_f32_f16;
                 backend_ctx->kernels_flash_attn_f32_f16_q1[{dk, dv}] = k_f32_f16_q1;
                 CL_CHECK(clReleaseProgram(prog_f32_f16));
 
                 backend_ctx->kernels_flash_attn_bm[{dk, dv}] = bm;
+                backend_ctx->kernels_flash_attn_bn[{dk, dv}] = bn;
             }
             GGML_LOG_CONT(".");
         }
