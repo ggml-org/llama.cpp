@@ -423,7 +423,9 @@ struct llm_graph_params {
                 (!ubatch.embd  && !other.ubatch.embd)
             );
 
-        if (can_reuse_ubatch && !ubatch.equal_seqs()) {
+        // when we split the batch using "equal_seqs" we have to verify that the participating sequences are the same
+        //   the reason is because the set of attention streams would be different for different sequences
+        if (can_reuse_ubatch && ubatch.equal_seqs()) {
             if (!ubatch.data) {
                 // if the old ubatch does not own it's data, then we cannot guarantee that it is still alive, and
                 //   therefore we cannot perform the sequence id check. normally should never happen

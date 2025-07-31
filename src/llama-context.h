@@ -291,6 +291,9 @@ private:
     // ref: https://github.com/ggml-org/llama.cpp/pull/14285
     bool supports_set_rows = false;
 
+    // env: LLAMA_GRAPH_REUSE_DISABLE
+    bool graph_reuse_disable = false;
+
     // perf
     mutable int64_t t_start_us  = 0;
     mutable int64_t t_load_us   = 0;
