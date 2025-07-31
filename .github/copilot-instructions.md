@@ -24,9 +24,6 @@ This is a fork of llama.cpp with **NUMA-aware improvements** for better CPU thre
 ### Quick Build Commands
 
 ```bash
-# Automated build and test
-./build-numa.sh
-
 # Manual build steps
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build build --parallel $(nproc)
@@ -34,6 +31,9 @@ cmake --build build --parallel $(nproc)
 # Debug build
 cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 cmake --build build --parallel $(nproc)
+
+# Run tests
+ctest --list --output-on-failure
 ```
 
 ### Available VS Code Tasks
@@ -198,7 +198,7 @@ taskset -cp $(pgrep llama-server)
       CMAKE_EXTRA="-DLLAMA_FATAL_WARNINGS=ON -DLLAMA_CURL=ON"
       time cmake -DCMAKE_BUILD_TYPE=Debug ${CMAKE_EXTRA} ..  2>&1 
       time make -j$(nproc) 2>&1 
-      time ctest --output-on-failure -L main -E test-opt 2>&1
+      time ctest --list --output-on-failure 2>&1
     ```
 
 ## 🐛 Common Issues and Solutions

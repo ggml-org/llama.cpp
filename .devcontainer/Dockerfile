@@ -39,6 +39,7 @@ RUN apt-get update && \
         ninja-build \
         gdb \
         valgrind \
+        sudo \
         gh && \
     update-ca-certificates && \
     apt-get autoremove -y && \
@@ -98,6 +99,9 @@ RUN mkdir -p /tmp/ccache
 RUN useradd -m -s /bin/bash developer && \
     usermod -aG sudo developer && \
     echo "developer ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+# Fix ownership of ccache directory for developer user
+RUN chown -R developer:developer /tmp/ccache
 
 # Set working directory
 WORKDIR /workspace

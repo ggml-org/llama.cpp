@@ -205,6 +205,7 @@ static cpu_topology_info detect_cpu_topology() {
 }
 
 static int cpu_count_math_cpus(int n_cpu, bool use_hyperthreading = false, bool use_efficiency_cores = false) {
+    GGML_UNUSED(n_cpu);
     cpu_topology_info topo = detect_cpu_topology();
     
     std::vector<int> selected_cpus;

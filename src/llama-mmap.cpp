@@ -443,6 +443,187 @@ struct llama_mmap::impl {
 #endif // ifndef GGML_NUMA_MIRROR
     }
 
+    // Constructor for unified multi-part file mapping (NUMA-aware)
+    impl(const std::vector<struct llama_file *> & files, size_t prefetch, bool numa) {
+#ifdef GGML_NUMA_MIRROR
+        GGML_UNUSED(prefetch);
+        GGML_UNUSED(numa);
+        
+        if (files.empty()) {
+            throw std::runtime_error("Cannot create unified mapping with empty file list");
+        }
+        
+        // Calculate total size across all files
+        size_t total_size = 0;
+        for (const auto * file : files) {
+            total_size += file->size();
+        }
+        size = total_size;
+        
+        int oldpolicy;
+        struct bitmask* oldmask = numa_allocate_nodemask();
+        if (get_mempolicy(&oldpolicy, oldmask->maskp,
+                          oldmask->size + 1, 0, 0) < 0) {
+            LLAMA_LOG_WARN("get_mempolicy failed, errno=%d %s\n", errno, strerror(errno));
+            oldpolicy = MPOL_DEFAULT;
+        }
+
+        // Get the number of NUMA nodes
+        int num_nodes = numa_num_configured_nodes();
+        if (num_nodes <= 0) {
+            LLAMA_LOG_WARN("numa_num_configured_nodes returned %d, defaulting to 1\n", num_nodes);
+            num_nodes = 1;
+        }
+        LLAMA_LOG_INFO("Detected %d NUMA nodes for unified multi-part mapping\n", num_nodes);
+        LLAMA_LOG_INFO("Total unified model size: %zu bytes across %zu files\n", total_size, files.size());
+
+        char path[128];
+        std::vector<bool> is_new_mem(num_nodes, false);
+        int i;
+        
+        // Set addr to the first mapping for node 0
+        addr = (void*)(GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + base_address_offset);
+        
+        for (int node = 0; node < num_nodes; ++node) {
+            numa_set_preferred(node);
+            LLAMA_LOG_INFO("numa_set_preferred(%d) for unified mapping\n", node);
+
+            for (i = 0; i * GGML_MMAP_HUGEPAGESZ < total_size; ++i) {
+                sprintf(path, "/dev/hugepages/llama-unified-node%d-%d", node, file_name_offset + i);
+                if (!is_new_mem[node]) {
+                    is_new_mem[node] = access(path, F_OK) != 0;
+                }
+                int hugefd = open(path, O_CREAT | O_RDWR, 0600);
+                if (hugefd < 0) {
+                    // Clean up any mappings we've already created before throwing
+                    for (const auto& mapping : numa_mappings) {
+                        munmap(mapping.addr, mapping.size);
+                        unlink(mapping.path.c_str());
+                    }
+                    LLAMA_LOG_WARN("failed to open hugepage fd %s: %d %s\n",
+                            path, errno, strerror(errno));
+                    throw std::runtime_error(format("failed to open hugepage fd: %s", strerror(errno)));
+                }
+                uintptr_t address = GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET \
+                                    + node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + \
+                                    base_address_offset + i * GGML_MMAP_HUGEPAGESZ;
+                void* mm = mmap((void*)address, GGML_MMAP_HUGEPAGESZ, PROT_READ | PROT_WRITE,
+                        MAP_SHARED | MAP_HUGETLB | MAP_POPULATE,
+                        hugefd, 0);
+                close(hugefd);
+                LLAMA_LOG_INFO("mmap(%s) desire=%p size=%llu result=%p is_new_mem[%d]=%s\n",
+                        path, (void*)address, GGML_MMAP_HUGEPAGESZ, mm, node, is_new_mem[node] ? "yes" : "no");
+                
+                if (((uintptr_t)mm) != address) {
+                    // If mmap failed completely, delete the file we just created
+                    if (mm == MAP_FAILED) {
+                        unlink(path);
+                    }
+                    
+                    // Clean up any mappings we've already created before throwing
+                    for (const auto& mapping : numa_mappings) {
+                        munmap(mapping.addr, mapping.size);
+                        unlink(mapping.path.c_str());
+                    }
+                    LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
+                    throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+                }
+                
+                // Only store valid mappings
+                numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
+                
+                if (is_new_mem[node]) {
+                    memset(mm, 0, GGML_MMAP_HUGEPAGESZ);
+                }
+            }
+        }
+        base_address_offset += i * GGML_MMAP_HUGEPAGESZ;
+        file_name_offset += i;
+        
+        if (is_new_mem[0]) {
+            LLAMA_LOG_INFO("begin to copy unified model data from disk to mem...\n");
+            size_t offset = 0;
+            for (const auto * file : files) {
+                LLAMA_LOG_INFO("copying file data at offset %zu, size %zu\n", offset, file->size());
+                int fd = file->file_id();
+                size_t file_size = file->size();
+                size_t n = 0;
+                while (n < file_size) {
+                    int nn = read(fd, (void*)((uintptr_t)addr + offset + n), std::min(size_t(1024 * 1024), file_size - n));
+                    if (nn < 0) {
+                        LLAMA_LOG_WARN("unable to read from file: %d %s\n", errno, strerror(errno));
+                        throw std::runtime_error(format("read failed: %s", strerror(errno)));
+                    }
+                    n += nn;
+                }
+                offset += file_size;
+            }
+        }
+        
+        for (int node = 1; node < num_nodes; ++node) {
+            if (is_new_mem[node]) {
+                LLAMA_LOG_INFO("begin to copy unified model from numa0 to numa%d...\n", node);
+                memcpy((void*)((uintptr_t)addr + \
+                            node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT), \
+                        addr, total_size);
+            }
+        }
+
+        if (oldpolicy == MPOL_DEFAULT) {
+            numa_set_localalloc();
+        } else {
+            set_mempolicy(oldpolicy, oldmask->maskp,
+                          oldmask->size + 1);
+        }
+        numa_free_cpumask(oldmask);
+#else
+        // For non-NUMA case, fall back to individual file mappings
+        // This is a simplified version - in practice you'd want to create
+        // one large mapping and read all files into it
+        if (files.empty()) {
+            throw std::runtime_error("Cannot create mapping with empty file list");
+        }
+        
+        // For now, just use the first file for non-NUMA case
+        // This is a limitation that could be improved later
+        struct llama_file * first_file = files[0];
+        size = first_file->size();
+        int fd = first_file->file_id();
+        
+        int flags = MAP_SHARED;
+        if (numa) { prefetch = 0; }
+#ifdef __linux__
+        if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
+            LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
+                    strerror(errno));
+        }
+        if (prefetch) { flags |= MAP_POPULATE; }
+#endif
+        
+        addr = mmap(NULL, first_file->size(), PROT_READ, flags, fd, 0);
+        if (addr == MAP_FAILED) {
+            throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+        }
+
+        if (prefetch > 0) {
+            if (posix_madvise(addr, std::min(first_file->size(), prefetch), POSIX_MADV_WILLNEED)) {
+                LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_WILLNEED) failed: %s\n",
+                        strerror(errno));
+            }
+        }
+        if (numa) {
+            if (posix_madvise(addr, first_file->size(), POSIX_MADV_RANDOM)) {
+                LLAMA_LOG_WARN("warning: posix_madvise(.., POSIX_MADV_RANDOM) failed: %s\n",
+                        strerror(errno));
+            }
+        }
+        
+        mapped_fragments.emplace_back(0, first_file->size());
+        
+        LLAMA_LOG_WARN("Multi-part unified mapping not fully supported in non-NUMA mode\n");
+#endif // GGML_NUMA_MIRROR
+    }
+
     static void align_range(size_t * first, size_t * last, size_t page_size) {
         size_t offset_in_page = *first & (page_size - 1);
         size_t offset_to_page = offset_in_page == 0 ? 0 : page_size - offset_in_page;
@@ -558,6 +739,60 @@ struct llama_mmap::impl {
         }
     }
 
+    // Constructor for unified multi-part file mapping (Windows)
+    impl(const std::vector<struct llama_file *> & files, size_t prefetch, bool numa) {
+        GGML_UNUSED(numa);
+        
+        if (files.empty()) {
+            throw std::runtime_error("Cannot create mapping with empty file list");
+        }
+        
+        // For Windows, we currently only support the first file in multi-part scenarios
+        // This is a limitation that could be improved by creating multiple mappings
+        struct llama_file * first_file = files[0];
+        size = first_file->size();
+
+        HANDLE hFile = (HANDLE) _get_osfhandle(first_file->file_id());
+
+        HANDLE hMapping = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+
+        if (hMapping == NULL) {
+            DWORD error = GetLastError();
+            throw std::runtime_error(format("CreateFileMappingA failed: %s", llama_format_win_err(error).c_str()));
+        }
+
+        addr = MapViewOfFile(hMapping, FILE_MAP_READ, 0, 0, 0);
+        DWORD error = GetLastError();
+        CloseHandle(hMapping);
+
+        if (addr == NULL) {
+            throw std::runtime_error(format("MapViewOfFile failed: %s", llama_format_win_err(error).c_str()));
+        }
+
+        if (prefetch > 0) {
+#if _WIN32_WINNT >= 0x602
+            BOOL (WINAPI *pPrefetchVirtualMemory) (HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+            HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+
+            pPrefetchVirtualMemory = (decltype(pPrefetchVirtualMemory))(void *) GetProcAddress(hKernel32, "PrefetchVirtualMemory");
+
+            if (pPrefetchVirtualMemory) {
+                WIN32_MEMORY_RANGE_ENTRY range;
+                range.VirtualAddress = addr;
+                range.NumberOfBytes = (SIZE_T) std::min(size, prefetch);
+                if (!pPrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0)) {
+                    LLAMA_LOG_WARN("warning: PrefetchVirtualMemory failed: %s\n",
+                            llama_format_win_err(GetLastError()).c_str());
+                }
+            }
+#else
+            LLAMA_LOG_DEBUG("skipping PrefetchVirtualMemory because _WIN32_WINNT < 0x602\n");
+#endif
+        }
+        
+        LLAMA_LOG_WARN("Multi-part unified mapping not fully supported on Windows - using first file only\n");
+    }
+
     void unmap_fragment(size_t first, size_t last) {
         GGML_UNUSED(first);
         GGML_UNUSED(last);
@@ -578,6 +813,15 @@ struct llama_mmap::impl {
         throw std::runtime_error("mmap not supported");
     }
 
+    // Constructor for unified multi-part file mapping (unsupported platforms)
+    impl(const std::vector<struct llama_file *> & files, size_t prefetch, bool numa) {
+        GGML_UNUSED(files);
+        GGML_UNUSED(prefetch);
+        GGML_UNUSED(numa);
+
+        throw std::runtime_error("mmap not supported");
+    }
+
     void unmap_fragment(size_t first, size_t last) {
         GGML_UNUSED(first);
         GGML_UNUSED(last);
@@ -591,6 +835,7 @@ struct llama_mmap::impl {
 };
 
 llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa) : pimpl(std::make_unique<impl>(file, prefetch, numa)) {}
+llama_mmap::llama_mmap(const std::vector<struct llama_file *> & files, size_t prefetch, bool numa) : pimpl(std::make_unique<impl>(files, prefetch, numa)) {}
 llama_mmap::~llama_mmap() = default;
 
 size_t llama_mmap::size() const { return pimpl->size; }

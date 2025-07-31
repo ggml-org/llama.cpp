@@ -1387,21 +1387,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--no-hyperthreading"}, "",
+        {"--no-hyperthreading"},
         "disable hyperthreading/SMT for math operations (use only physical cores)",
         [](common_params & params) {
             params.cpuparams.use_hyperthreading = false;
         }
     ));
     add_opt(common_arg(
-        {"--use-efficiency-cores"}, "",
+        {"--use-efficiency-cores"},
         "use efficiency cores (E-cores) for math operations (may degrade performance)",
         [](common_params & params) {
             params.cpuparams.use_efficiency_cores = true;
         }
     ));
     add_opt(common_arg(
-        {"--cpu-topology"}, "",
+        {"--cpu-topology"},
         "print detailed CPU topology information and exit",
         [](common_params & params) {
             cpu_print_topology_info();
