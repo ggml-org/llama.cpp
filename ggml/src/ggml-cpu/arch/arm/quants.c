@@ -36,11 +36,8 @@
 static const uint64_t table_b2b_0[1 << 8] = { B8(00, 10) }; // ( b) << 4
 static const uint64_t table_b2b_1[1 << 8] = { B8(10, 00) }; // (!b) << 4
 #endif
-#include<time.h>
-static clock_t total_time = 0;
-static int call_count = 0;
+
 void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
-     clock_t start = clock();
     assert(QK8_0 == 32);
     assert(k % QK8_0 == 0);
     const int nb = k / QK8_0;
@@ -118,15 +115,6 @@ void quantize_row_q8_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, i
     // scalar
     quantize_row_q8_0_ref(x, y, k);
 #endif
-    clock_t end = clock();
-
-    total_time += (end - start);
-    call_count++;
-
-    printf("my_function call %d, time this call: %.3f ms, total time: %.3f ms\n",
-           call_count,
-           1000.0 * (end - start) / CLOCKS_PER_SEC,
-           1000.0 * total_time / CLOCKS_PER_SEC);
 }
 
 void quantize_row_q8_1(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
