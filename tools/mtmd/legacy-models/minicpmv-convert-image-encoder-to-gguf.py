@@ -517,6 +517,17 @@ if args.use_f32:
 # output in the same directory as the model if output_dir is None
 dir_model = args.model_dir
 
+# 如果没有指定 minicpmv_projector，但默认路径存在，则使用默认路径
+if args.minicpmv_projector is None:
+    default_projector_path = os.path.join(dir_model, "minicpmv.projector")
+    if os.path.exists(default_projector_path):
+        args.minicpmv_projector = default_projector_path
+        print(f"Found default projector file: {default_projector_path}")
+
+# 如果没有指定 output_dir，使用 model_dir 作为默认值
+if args.output_dir is None:
+    args.output_dir = dir_model
+
 if args.clip_model_is_vision or not os.path.exists(dir_model + "/vocab.json") or args.clip_model_is_openclip:
     vocab = None
     tokens = None
@@ -564,6 +575,9 @@ elif minicpmv_version == 5:  # MiniCPM-V 4.0
 elif minicpmv_version == 6:  # MiniCPM-o 4.0
     emb_dim = 2560
     block_count = 27
+elif minicpmv_version == 7:  # MiniCPM-V 4.5
+    emb_dim = 4096
+    block_count = 27
 
 default_vision_config = {
         "hidden_size": 1152,
@@ -589,6 +603,9 @@ elif minicpmv_version == 5:
     model = SiglipVisionTransformer(vision_config)
 elif minicpmv_version == 6:
     default_vision_config["model_type"] = "siglip_vision_model"
+    vision_config = SiglipVisionConfig(**default_vision_config)
+    model = SiglipVisionTransformer(vision_config)
+elif minicpmv_version == 7:
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
     
@@ -617,7 +634,7 @@ elif args.vision_only:
 else:
     fname_middle = ""
 
-output_dir = args.output_dir if args.output_dir is not None else dir_model
+output_dir = args.output_dir
 os.makedirs(output_dir, exist_ok=True)
 output_prefix = os.path.basename(output_dir).replace("ggml_", "")
 fname_out = os.path.join(output_dir, f"{fname_middle}model-{ftype_str[ftype]}.gguf")
