@@ -283,8 +283,8 @@ struct common_params {
 
     struct common_params_sampling    sampling;
     struct common_params_speculative speculative;
-    struct common_params_vocoder            vocoder;
-    struct common_params_diffusion         diffusion;
+    struct common_params_vocoder     vocoder;
+    struct common_params_diffusion   diffusion;
 
     struct common_params_model model;
 

@@ -2949,9 +2949,6 @@ class LLaDAModel(TextModel):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
-        self.gguf_writer.add_add_bos_token(True)
-        self.gguf_writer.add_diffusion_shift_logits(False)
-
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         self._try_set_pooling_type()
@@ -2979,13 +2976,10 @@ class LLaDAModel(TextModel):
 
         # LLaDA models use non-causal attention for diffusion, similar to Dream
         self.gguf_writer.add_causal_attention(False)
-        # Handle RoPE scaling similar to LlamaModel and Dream
 
-        # Add LLaDA-specific parameters
-        mask_token_id = self.hparams.get("mask_token_id")
-
-        if mask_token_id is not None:
-            self.gguf_writer.add_mask_token_id(mask_token_id)
+        # LLaDA specific parameters
+        self.gguf_writer.add_add_bos_token(True)
+        self.gguf_writer.add_diffusion_shift_logits(False)
 
     @staticmethod
     def permute(weights: Tensor, n_head: int, n_head_kv: int | None):
