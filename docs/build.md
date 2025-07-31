@@ -604,7 +604,7 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
 
 - Linux or Windows system with Intel hardware (CPU, GPU, or NPU)
 - **For Intel GPU or NPU Usage**: Install the appropriate hardware drivers for your Intel GPU or NPU. For detailed instructions, see: [Additional Configurations for Hardware Acceleration](https://docs.openvino.ai/2025/get-started/install-openvino/configurations.html).
-- Git, CMake, and Ninja software tools are needed for building
+- Git, CMake, and Ninja software tools are needed for building.
 ```bash
   sudo apt-get update
   sudo apt-get install -y build-essential libcurl4-openssl-dev libtbb12 cmake ninja-build python3-pip curl wget tar
@@ -612,10 +612,10 @@ Follow the instructions below to install OpenVINO runtime and build llama.cpp wi
 
 ### 1. Install OpenVINO Runtime
 
-- Follow the guide to install OpenVINO Runtime from an archive file: **[Install OpenVINO™ Runtime on Linux from an Archive File.](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html)**
+- Follow the guide to install OpenVINO Runtime from an archive file: [Linux](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-linux.html) | [Windows](https://docs.openvino.ai/2025/get-started/install-openvino/install-openvino-archive-windows.html)
 
 <details>
-<summary>📦 Click to expand OpenVINO 2025.2 installation commands</summary>
+<summary>📦 Click to expand OpenVINO 2025.2 installation commands on Linux</summary>
 <br>
 
 ```bash
@@ -689,7 +689,6 @@ export GGML_OPENVINO_DEVICE=GPU
 To run in chat mode:
 ```bash
 export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
-
 ./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
 
 ```
@@ -715,6 +714,7 @@ export GGML_OPENVINO_PROFILING=1
 
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
 ```
+> **Note:** To apply your code changes, clear the `GGML_OPENVINO_CACHE_DIR` directory and rebuild the project.
 
 ### Using Llama.cpp's Built-in CPU Backend (for Comparison)
 
