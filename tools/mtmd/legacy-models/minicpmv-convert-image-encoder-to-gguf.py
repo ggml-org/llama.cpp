@@ -595,7 +595,7 @@ elif minicpmv_version == 5:
     default_vision_config["model_type"] = "siglip_vision_model"
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
-    
+
 processor = None
 # if model.attn_pool is not None:
 #     model.attn_pool = torch.nn.Identity()
