@@ -1,5 +1,10 @@
 FROM ubuntu:24.04
 
+# Build arguments for optional components (default: disabled)
+ARG INSTALL_CUDA=false
+ARG INSTALL_ROCM=false
+ARG INSTALL_PYTHON_DEPS=false
+
 # Avoid prompts from apt
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -36,30 +41,53 @@ RUN apt-get update && \
         valgrind \
         gh && \
     update-ca-certificates && \
-    mkdir -p --mode=0755 /etc/apt/keyrings && \
-    wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | \
-        gpg --dearmor | tee /etc/apt/keyrings/rocm.gpg > /dev/null && \
-    echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.4.2 noble main" \
-        | tee /etc/apt/sources.list.d/rocm.list && \
-    echo 'Package: *' \
-        | tee /etc/apt/preferences.d/rocm-pin-600 && \
-    echo 'Pin: release o=repo.radeon.com' \
-        | tee -a /etc/apt/preferences.d/rocm-pin-600 && \
-    echo 'Pin-Priority: 600' \
-        | tee -a /etc/apt/preferences.d/rocm-pin-600 && \
-    apt-get update && \
-    apt-get install -y rocm && \
     apt-get autoremove -y && \
-    apt-get clean 
+    apt-get clean
+    
+# Install CUDA 12.9 (conditional)
+RUN if [ "$INSTALL_CUDA" = "true" ]; then \
+        wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -O cuda-keyring.deb && \
+        dpkg -i cuda-keyring.deb && \
+        apt-get update && \
+        apt-get -y install cuda-toolkit-12-9 && \
+        rm cuda-keyring.deb; \
+    else \
+        echo "Skipping CUDA installation"; \
+    fi
 
-# Install Python dependencies for gguf conversion tools
-RUN python3 -m pip install --break-system-packages \
-    numpy \
-    torch \
-    transformers \
-    sentencepiece \
-    protobuf \
-    gguf
+# Install ROCm 6.4 (conditional)
+RUN if [ "$INSTALL_ROCM" = "true" ]; then \
+        mkdir -p --mode=0755 /etc/apt/keyrings && \
+        wget https://repo.radeon.com/rocm/rocm.gpg.key -O - | \
+            gpg --dearmor | tee /etc/apt/keyrings/rocm.gpg > /dev/null && \
+        echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/rocm/apt/6.4.2 noble main" \
+            | tee /etc/apt/sources.list.d/rocm.list && \
+        echo 'Package: *' \
+            | tee /etc/apt/preferences.d/rocm-pin-600 && \
+        echo 'Pin: release o=repo.radeon.com' \
+            | tee -a /etc/apt/preferences.d/rocm-pin-600 && \
+        echo 'Pin-Priority: 600' \
+            | tee -a /etc/apt/preferences.d/rocm-pin-600 && \
+        apt-get update && \
+        apt-get install -y rocm && \
+        apt-get autoremove -y && \
+        apt-get clean; \
+    else \
+        echo "Skipping ROCm installation"; \
+    fi
+
+# Install Python dependencies for gguf conversion tools (conditional)
+RUN if [ "$INSTALL_PYTHON_DEPS" = "true" ]; then \
+        python3 -m pip install --break-system-packages \
+            numpy \
+            torch \
+            transformers \
+            sentencepiece \
+            protobuf \
+            gguf; \
+    else \
+        echo "Skipping Python dependencies installation"; \
+    fi
 
 # Set up ccache for faster compilation
 ENV PATH="/usr/lib/ccache:${PATH}"

@@ -1,6 +1,14 @@
 {
 	"name": "llama.cpp Development",
 	"dockerFile": "Dockerfile",
+	"build": {
+		"args": {
+			// Enable/disable optional components (set to "true" to install)
+			"INSTALL_CUDA": "false",
+			"INSTALL_ROCM": "false", 
+			"INSTALL_PYTHON_DEPS": "false"
+		}
+	},
 	"customizations": {
 		"vscode": {
 			"extensions": [

@@ -56,22 +56,6 @@
             ],
             "preLaunchTask": "cmake-build",
             "miDebuggerPath": "/usr/bin/gdb"
-        },
-        {
-            "name": "Test CPU Topology",
-            "type": "cppdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/bin/llama-server",
-            "args": [
-                "--cpu-topology"
-            ],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false,
-            "MIMode": "gdb",
-            "preLaunchTask": "cmake-build",
-            "miDebuggerPath": "/usr/bin/gdb"
         }
     ]
 }
