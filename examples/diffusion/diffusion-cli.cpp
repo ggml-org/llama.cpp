@@ -272,7 +272,6 @@ static void diffusion_generate(llama_context *          ctx,
     }
 
     std::vector<float>       confidence(params.max_length);
-    std::vector<llama_token> argmax;
 
     int64_t total_sampling_time = 0;
     int64_t total_time          = 0;
