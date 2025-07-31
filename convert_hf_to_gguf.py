@@ -6616,6 +6616,20 @@ class Glm4MoeModel(TextModel):
             "bos", tokenizer.get_added_vocab()["<|endoftext|>"]
         )
         special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
+
+        # Fix chat template syntax error in GLM-4.5 models
+        if special_vocab.chat_template and isinstance(special_vocab.chat_template, str):
+            # Fix multiple syntax issues in GLM-4.5 chat template
+            template = special_vocab.chat_template
+            # Fix nested double quotes issue
+            template = template.replace('endswith("/nothink")', "endswith('/nothink')")
+            # Fix any other potential parentheses/tuple issues
+            template = template.replace(
+                "not visible_text(m.content).endswith('/nothink'))",
+                "not visible_text(m.content).endswith('/nothink')"
+            )
+            special_vocab.chat_template = template
+
         special_vocab.add_to_gguf(self.gguf_writer)
 
     def set_gguf_parameters(self):
