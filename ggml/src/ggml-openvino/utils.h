@@ -44,5 +44,7 @@ ov::AnyMap get_npu_config();
 
 ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, const std::string& param_name);
 
+bool is_naive(struct ggml_cgraph* cgraph);
+
 enum ggml_status naive_compute(struct ggml_cgraph* cgraph, ov::Core& core, const std::string& device,
                                const ov::AnyMap& config);

@@ -53,7 +53,7 @@ OutputVector translate_soft_max(const NodeContext& context) {
 
     auto mask_node = context.get_input(1);
 
-    auto token_len = context.get_input("token_len");
+    auto token_len = context.has_input("token_len") ? context.get_input("token_len") : get_dimensions(input_node, {1});
     auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
     auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
     std::shared_ptr<ov::Node> mask_node_sliced =

@@ -24,6 +24,6 @@ class TRANSFORMATIONS_API MarkCompressedFloatConstants;
 
 class ov::pass::MarkCompressedFloatConstants : public MatcherPass {
 public:
-    OPENVINO_MATCHER_PASS_RTTI("MarkCompressedFloatConstants");
+    OPENVINO_MATCHER_PASS_RTTI("MarkCompressedFloatConstants")
     MarkCompressedFloatConstants();
 };
