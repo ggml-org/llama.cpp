@@ -1,35 +1,35 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { ChatConversationsItem } from '$lib/components';
-	import type { Conversation } from '$lib/types/conversation';
+	import { ChatSidebarConversationItem } from '$lib/components';
+	import type { DatabaseConversation } from '$lib/types/database';
 
 	const { Story } = defineMeta({
-		title: 'Components/ChatSidebar/ChatConversationItem',
-		component: ChatConversationsItem,
+		title: 'Components/ChatSidebar/ChatSidebarConversationItem',
+		component: ChatSidebarConversationItem,
 		parameters: {
 			layout: 'centered'
 		}
 	});
 
-	const sampleConversation: Conversation = {
+	const sampleConversation: DatabaseConversation = {
 		id: '1',
 		name: 'Hello World Chat',
 		lastModified: Date.now() - 1000 * 60 * 5, // 5 minutes ago
-		messageCount: 12
+		currNode: null,
 	};
 
-	const longNameConversation: Conversation = {
+	const longNameConversation: DatabaseConversation = {
 		id: '2',
 		name: 'This is a very long conversation name that should be truncated when displayed in the sidebar',
 		lastModified: Date.now() - 1000 * 60 * 60 * 2, // 2 hours ago
-		messageCount: 24
+		currNode: null,
 	};
 
-	const recentConversation: Conversation = {
+	const recentConversation: DatabaseConversation = {
 		id: '3',
 		name: 'Recent Chat',
 		lastModified: Date.now() - 1000 * 30, // 30 seconds ago
-		messageCount: 3
+		currNode: null,
 	};
 </script>
 
@@ -37,7 +37,6 @@
 	name="Default"
 	args={{
 		conversation: sampleConversation,
-		class: 'w-80'
 	}}
 />
 
@@ -46,7 +45,6 @@
 	args={{
 		conversation: sampleConversation,
 		isActive: true,
-		class: 'w-80'
 	}}
 />
 
@@ -54,7 +52,6 @@
 	name="LongName"
 	args={{
 		conversation: longNameConversation,
-		class: 'w-80'
 	}}
 />
 
@@ -62,7 +59,6 @@
 	name="Recent"
 	args={{
 		conversation: recentConversation,
-		class: 'w-80'
 	}}
 />
 
@@ -70,7 +66,6 @@
 	name="WithActions"
 	args={{
 		conversation: sampleConversation,
-		class: 'w-80',
 		onSelect: (id: string) => console.log('Selected:', id),
 		onEdit: (id: string) => console.log('Edit:', id),
 		onDelete: (id: string) => console.log('Delete:', id)
