@@ -235,17 +235,15 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
 
 ov::AnyMap get_npu_config() {
     ov::AnyMap config = {
-        { "NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean" },
-        { "NPU_USE_NPUW",                "YES"                                             },
-        { "NPUW_DEVICES",                "NPU"                                             },
-        { "NPUW_FOLD",                   "YES"                                             },
-        { "NPUW_HOST_GATHER",            "YES"                                             },
-        { "NPUW_DQ",                     "YES"                                             },
-        { "NPUW_FUNCALL_ASYNC",          "YES"                                             },
-        { "NPUW_WEIGHTS_BANK",           "shared"                                          },
-        // Option 'CACHE_DIR' is not supported with MLIR compiler type
-        // {"NPUW_CACHE_DIR", getenv("GGML_OPENVINO_CACHE_DIR") ? getenv("GGML_OPENVINO_CACHE_DIR") : ""},
-        { "NPU_COMPILER_TYPE",           "MLIR"                                            },
+        {"NPU_COMPILATION_MODE_PARAMS", "compute-layers-with-higher-precision=ReduceMean"                         },
+        {"NPU_USE_NPUW",                "YES"                                                                     },
+        {"NPUW_DEVICES",                "NPU"                                                                     },
+        {"NPUW_FOLD",                   "YES"                                                                     },
+        {"NPUW_HOST_GATHER",            "YES"                                                                     },
+        {"NPUW_DQ",                     "YES"                                                                     },
+        {"NPUW_FUNCALL_ASYNC",          "YES"                                                                     },
+        {"NPUW_WEIGHTS_BANK",           "shared"                                                                  },
+        {"NPUW_CACHE_DIR",              getenv("GGML_OPENVINO_CACHE_DIR") ? getenv("GGML_OPENVINO_CACHE_DIR") : ""},
     };
     return config;
 }
