@@ -2330,13 +2330,6 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // @ngxson : quick hack for gpt-oss
-        for (const auto & t : token_to_id) {
-            if (t.first == "<|channel|>" || t.first == "<|message|>") {
-                id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_NORMAL;
-            }
-        }
-
         // sanity checks
         if (special_eos_id != LLAMA_TOKEN_NULL && special_eog_ids.count(special_eos_id) == 0) {
             special_eog_ids.insert(special_eos_id);
