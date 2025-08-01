@@ -3,12 +3,13 @@
 	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
 	import { Square, Paperclip, Mic, ArrowUp, Upload, X } from '@lucide/svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
+	import { ChatAttachmentsList } from '$lib/components';
 
 	interface Props {
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
-		onSend?: (message: string) => void;
+		onSend?: (message: string, files?: ChatUploadedFile[]) => void;
 		onStop?: () => void;
 		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
@@ -36,7 +37,7 @@
 		event.preventDefault();
 		if (!message.trim() || disabled || isLoading) return;
 
-		onSend?.(message.trim());
+		onSend?.(message.trim(), uploadedFiles);
 		message = '';
 
 		if (textareaElement) {
@@ -50,7 +51,7 @@
 
 			if (!message.trim() || disabled || isLoading) return;
 
-			onSend?.(message.trim());
+			onSend?.(message.trim(), uploadedFiles);
 			message = '';
 
 			if (textareaElement) {
@@ -73,14 +74,6 @@
 			onFileUpload?.(Array.from(input.files));
 		}
 	}
-
-	function formatFileSize(bytes: number): string {
-		if (bytes === 0) return '0 Bytes';
-		const k = 1024;
-		const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-		const i = Math.floor(Math.log(bytes) / Math.log(k));
-		return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-	}
 </script>
 
 <!-- Hidden file input -->
@@ -98,56 +91,11 @@
 	class="border bg-muted/30 border-border/40 focus-within:border-primary/40 bg-background dark:bg-muted border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
 >
 	<!-- File previews -->
-	{#if uploadedFiles.length > 0}
-		<div class="mb-3 flex flex-wrap items-start gap-3 px-5 pt-3">
-			{#each uploadedFiles as file (file.id)}
-				{#if file.preview}
-					<!-- Image file with thumbnail -->
-					<div class="bg-muted border-border relative rounded-lg border overflow-hidden">
-						<img 
-							src={file.preview} 
-							alt={file.name} 
-							class="h-24 w-24 object-cover" 
-						/>
-						<div class="absolute top-1 right-1 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								class="h-6 w-6 p-0 bg-white/20 hover:bg-white/30 text-white"
-								onclick={() => onFileRemove?.(file.id)}
-							>
-								<X class="h-3 w-3" />
-							</Button>
-						</div>
-						<div class="absolute bottom-0 left-0 right-0 bg-black/60 text-white p-1">
-							<p class="text-xs opacity-80">{formatFileSize(file.size)}</p>
-						</div>
-					</div>
-				{:else}
-					<!-- Non-image file with badge -->
-					<div class="bg-muted border-border flex items-center gap-2 rounded-lg border p-2">
-						<div class="bg-primary/10 text-primary flex h-8 w-8 items-center justify-center rounded text-xs font-medium">
-							{file.name.split('.').pop()?.toUpperCase() || 'FILE'}
-						</div>
-						<div class="flex flex-col">
-							<span class="text-foreground text-sm font-medium truncate max-w-48">{file.name}</span>
-							<span class="text-muted-foreground text-xs">{formatFileSize(file.size)}</span>
-						</div>
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							class="h-6 w-6 p-0"
-							onclick={() => onFileRemove?.(file.id)}
-						>
-							<X class="h-3 w-3" />
-						</Button>
-					</div>
-				{/if}
-			{/each}
-		</div>
-	{/if}
+	<ChatAttachmentsList 
+		uploadedFiles={uploadedFiles}
+		onFileRemove={onFileRemove}
+		class="mb-3 px-5 pt-3"
+	/>
 
 	<div
 		class="flex-column relative min-h-[48px] items-center rounded-3xl px-5 py-3 shadow-sm transition-all focus-within:shadow-md"

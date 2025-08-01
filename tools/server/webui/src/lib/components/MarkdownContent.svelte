@@ -32,9 +32,9 @@
 		
 		const preElements = tempDiv.querySelectorAll('pre');
 		
-		preElements.forEach((pre, index) => {
+		for (const [index, pre] of Array.from(preElements).entries()) {
 			const codeElement = pre.querySelector('code');
-			if (!codeElement) return;
+			if (!codeElement) continue;
 			
 			let language = 'text';
 			const classList = Array.from(codeElement.classList);
@@ -81,7 +81,7 @@
 			wrapper.appendChild(clonedPre);
 			
 			pre.parentNode?.replaceChild(wrapper, pre);
-		});
+		}
 		
 		return tempDiv.innerHTML;
 	}
@@ -106,7 +106,7 @@
 		const copyButtons = containerRef.querySelectorAll('.copy-code-btn');
 		console.log('Found copy buttons:', copyButtons.length);
 
-		copyButtons.forEach((button, index) => {
+		for (const [index, button] of Array.from(copyButtons).entries()) {
 			console.log(`Setting up button ${index}:`, button);
 			button.addEventListener('click', async (e) => {
 				e.preventDefault();
@@ -147,7 +147,7 @@
 					console.error('Failed to copy code:', error);
 				}
 			});
-		});
+		}
 	}
 
 	$effect(() => {

@@ -1,3 +1,4 @@
+export { default as ChatAttachmentsList } from './chat/ChatAttachmentsList.svelte';
 export { default as ChatForm } from './chat/ChatForm.svelte';
 export { default as ChatMessage } from './chat/ChatMessage.svelte';
 export { default as ChatMessages } from './chat/ChatMessages.svelte';

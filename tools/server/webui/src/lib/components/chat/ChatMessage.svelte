@@ -2,20 +2,20 @@
 	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatThinkingBlock, MarkdownContent } from '$lib/components';
+	import { ChatAttachmentsList, ChatThinkingBlock, MarkdownContent } from '$lib/components';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import type { ChatRole } from '$lib/types/chat';
-	import type { Message } from '$lib/types/database';
+	import type { DatabaseMessage } from '$lib/types/database';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 
 	interface Props {
 		class?: string;
-		message: Message;
-		onEdit?: (message: Message) => void;
-		onCopy?: (message: Message) => void;
-		onRegenerate?: (message: Message) => void;
-		onUpdateMessage?: (message: Message, newContent: string) => void;
+		message: DatabaseMessage;
+		onEdit?: (message: DatabaseMessage) => void;
+		onCopy?: (message: DatabaseMessage) => void;
+		onRegenerate?: (message: DatabaseMessage) => void;
+		onUpdateMessage?: (message: DatabaseMessage, newContent: string) => void;
 	}
 
 	let {
@@ -133,6 +133,15 @@
 				</div>
 			</div>
 		{:else}
+			{#if message.extra && message.extra.length > 0}
+				<div class="max-w-[80%] mb-2">
+					<ChatAttachmentsList 
+						attachments={message.extra}
+						readonly={true}
+					/>
+				</div>
+			{/if}
+			
 			<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
 				<div class="text-md whitespace-pre-wrap">
 					{message.content}

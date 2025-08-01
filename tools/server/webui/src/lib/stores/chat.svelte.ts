@@ -1,15 +1,15 @@
 import { ChatService } from '$lib/services/chat';
 import { DatabaseService } from '$lib/services';
-import type { Conversation, Message } from '$lib/types/database';
+import type { DatabaseConversation, DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
 import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { extractPartialThinking } from '$lib/utils/thinking';
 import type { ChatMessageType, ChatRole } from '$lib/app';
 
 class ChatStore {
-	activeConversation = $state<Conversation | null>(null);
-	activeMessages = $state<Message[]>([]);
-	conversations = $state<Conversation[]>([]);
+	activeConversation = $state<DatabaseConversation | null>(null);
+	activeMessages = $state<DatabaseMessage[]>([]);
+	conversations = $state<DatabaseConversation[]>([]);
 	currentResponse = $state('');
 	isInitialized = $state(false);
 	isLoading = $state(false);
@@ -72,8 +72,9 @@ class ChatStore {
 		role: ChatRole,
 		content: string,
 		type: ChatMessageType = 'text',
-		parent: string = '-1'
-	): Promise<Message | null> {
+		parent: string = '-1',
+		extras?: DatabaseMessageExtra[]
+	): Promise<DatabaseMessage | null> {
 		if (!this.activeConversation) {
 			console.error('No active conversation when trying to add message');
 
@@ -89,7 +90,8 @@ class ChatStore {
 				timestamp: Date.now(),
 				parent,
 				thinking: '',
-				children: []
+				children: [],
+				extra: extras
 			});
 
 			this.activeMessages.push(message);
@@ -110,8 +112,8 @@ class ChatStore {
 	 * Reduces code duplication across sendMessage, updateMessage, and regenerateMessage
 	 */
 	private async streamChatCompletion(
-		allMessages: Message[],
-		assistantMessage: Message,
+		allMessages: DatabaseMessage[],
+		assistantMessage: DatabaseMessage,
 		onComplete?: (content: string) => Promise<void>,
 		onError?: (error: Error) => void
 	): Promise<void> {
@@ -166,7 +168,7 @@ class ChatStore {
 					this.currentResponse = '';
 
 					const messageIndex = this.activeMessages.findIndex(
-						(m: Message) => m.id === assistantMessage.id
+						(m: DatabaseMessage) => m.id === assistantMessage.id
 					);
 
 					if (messageIndex !== -1) {
@@ -204,7 +206,7 @@ class ChatStore {
 		}
 	}
 
-	async sendMessage(content: string): Promise<void> {
+	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() || this.isLoading) return;
 
 		let isNewConversation = false;
@@ -223,7 +225,7 @@ class ChatStore {
 		this.currentResponse = '';
 
 		try {
-			const userMessage = await this.addMessage('user', content);
+			const userMessage = await this.addMessage('user', content, 'text', '-1', extras);
 
 			if (!userMessage) {
 				throw new Error('Failed to add user message');
@@ -320,7 +322,7 @@ class ChatStore {
 		if (!this.activeConversation || this.isLoading) return;
 
 		try {
-			const messageIndex = this.activeMessages.findIndex((m: Message) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex((m: DatabaseMessage) => m.id === messageId);
 
 			if (messageIndex === -1) {
 				console.error('Message not found for update');
@@ -368,7 +370,7 @@ class ChatStore {
 					(error: Error) => {
 						// Restore original content on error
 						const editedMessageIndex = this.activeMessages.findIndex(
-							(m: Message) => m.id === messageId
+							(m: DatabaseMessage) => m.id === messageId
 						);
 						if (editedMessageIndex !== -1) {
 							this.activeMessages[editedMessageIndex].content = originalContent;
@@ -380,7 +382,7 @@ class ChatStore {
 				this.isLoading = false;
 				
 				const messageIndex = this.activeMessages.findIndex(
-					(m: Message) => m.id === messageId
+					(m: DatabaseMessage) => m.id === messageId
 				);
 				if (messageIndex !== -1) {
 					this.activeMessages[messageIndex].content = originalContent;
@@ -399,7 +401,7 @@ class ChatStore {
 		if (!this.activeConversation || this.isLoading) return;
 
 		try {
-			const messageIndex = this.activeMessages.findIndex((m: Message) => m.id === messageId);
+			const messageIndex = this.activeMessages.findIndex((m: DatabaseMessage) => m.id === messageId);
 			if (messageIndex === -1) {
 				console.error('Message not found for regeneration');
 				return;

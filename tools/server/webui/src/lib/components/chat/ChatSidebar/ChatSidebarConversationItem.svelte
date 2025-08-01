@@ -2,10 +2,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { Trash2, Pencil } from '@lucide/svelte';
-	import type { Conversation } from '$lib/types/database';
+	import type { DatabaseConversation } from '$lib/types/database';
 
 	interface Props {
-		conversation: Conversation;
+		conversation: DatabaseConversation;
 		isActive?: boolean;
 		onSelect?: (id: string) => void;
 		onEdit?: (id: string) => void;

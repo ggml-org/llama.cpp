@@ -1,11 +1,11 @@
 <script lang="ts">
-	import type { Message } from '$lib/types/database';
+	import type { DatabaseMessage } from '$lib/types/database';
 	import { updateMessage, regenerateMessage } from '$lib/stores/chat.svelte';
 	import { ChatMessage } from '$lib/components';
 
 	interface Props {
 		class?: string;
-		messages?: Message[];
+		messages?: DatabaseMessage[];
 	}
 
 	let { class: className, messages = [] }: Props = $props();

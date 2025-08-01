@@ -1,9 +1,9 @@
-import type { Conversation, Message, DatabaseAppSettings } from '$lib/types/database';
+import type { DatabaseConversation, DatabaseMessage, DatabaseAppSettings } from '$lib/types/database';
 import { db } from '$lib/stores/database';
 
 export class DatabaseService {
-	static async createConversation(name: string): Promise<Conversation> {
-		const conversation: Conversation = {
+	static async createConversation(name: string): Promise<DatabaseConversation> {
+		const conversation: DatabaseConversation = {
 			id: crypto.randomUUID(),
 			name,
 			lastModified: Date.now(),
@@ -14,15 +14,15 @@ export class DatabaseService {
 		return conversation;
 	}
 
-	static async getConversation(id: string): Promise<Conversation | undefined> {
+	static async getConversation(id: string): Promise<DatabaseConversation | undefined> {
 		return await db.conversations.get(id);
 	}
 
-	static async getAllConversations(): Promise<Conversation[]> {
+	static async getAllConversations(): Promise<DatabaseConversation[]> {
 		return await db.conversations.orderBy('lastModified').reverse().toArray();
 	}
 
-	static async updateConversation(id: string, updates: Partial<Omit<Conversation, 'id'>>): Promise<void> {
+	static async updateConversation(id: string, updates: Partial<Omit<DatabaseConversation, 'id'>>): Promise<void> {
 		await db.conversations.update(id, {
 			...updates,
 			lastModified: Date.now()
@@ -37,9 +37,9 @@ export class DatabaseService {
 	}
 
 	static async addMessage(
-		message: Omit<Message, 'id'>
-	): Promise<Message> {
-		const newMessage: Message = {
+		message: Omit<DatabaseMessage, 'id'>
+	): Promise<DatabaseMessage> {
+		const newMessage: DatabaseMessage = {
 			...message,
 			id: crypto.randomUUID()
 		};
@@ -48,13 +48,13 @@ export class DatabaseService {
 		return newMessage;
 	}
 
-	static async getConversationMessages(convId: string): Promise<Message[]> {
+	static async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
 		return await db.messages.where('convId').equals(convId).sortBy('timestamp');
 	}
 
 	static async updateMessage(
 		id: string,
-		updates: Partial<Omit<Message, 'id'>>
+		updates: Partial<Omit<DatabaseMessage, 'id'>>
 	): Promise<void> {
 		await db.messages.update(id, updates);
 	}

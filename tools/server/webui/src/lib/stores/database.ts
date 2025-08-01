@@ -1,9 +1,9 @@
 import Dexie, { type EntityTable } from 'dexie';
-import type { Conversation, Message, DatabaseAppSettings } from '$lib/types/database';
+import type { DatabaseConversation, DatabaseMessage, DatabaseAppSettings } from '$lib/types/database';
 
 class LlamacppDatabase extends Dexie {
-	conversations!: EntityTable<Conversation, 'id'>;
-	messages!: EntityTable<Message, 'id'>;
+	conversations!: EntityTable<DatabaseConversation, 'id'>;
+	messages!: EntityTable<DatabaseMessage, 'id'>;
 	settings!: EntityTable<DatabaseAppSettings, 'id'>;
 
 	constructor() {

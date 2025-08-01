@@ -12,6 +12,7 @@
 	import { fly, slide } from 'svelte/transition';
 	import { Upload } from '@lucide/svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
+	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -25,8 +26,30 @@
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
 
-	async function handleSendMessage(message: string) {
-		await sendMessage(message);
+	async function handleSendMessage(message: string, files?: ChatUploadedFile[]) {
+		const extras = files ? await convertFilesToExtras(files) : undefined;
+		
+		await sendMessage(message, extras);
+		uploadedFiles = [];
+	}
+
+	async function convertFilesToExtras(files: ChatUploadedFile[]): Promise<DatabaseMessageExtra[]> {
+		const extras: DatabaseMessageExtra[] = [];
+		
+		for (const file of files) {
+			if (file.type.startsWith('image/')) {
+				if (file.preview) {
+					extras.push({
+						type: 'imageFile',
+						name: file.name,
+						base64Url: file.preview
+					});
+				}
+			}
+			// TODO: Handle other file types
+		}
+		
+		return extras;
 	}
 
 	function scrollChatToBottom() {
@@ -65,7 +88,7 @@
 	})
 
 	function processFiles(files: File[]) {
-		files.forEach((file) => {
+		for (const file of files) {
 			const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
 			const uploadedFile: ChatUploadedFile = {
 				id,
@@ -75,20 +98,17 @@
 				file
 			};
 
-			// Create preview for images
 			if (file.type.startsWith('image/')) {
 				const reader = new FileReader();
 				reader.onload = (e) => {
 					uploadedFile.preview = e.target?.result as string;
-					// Add file to array after preview is ready
 					uploadedFiles = [...uploadedFiles, uploadedFile];
 				};
 				reader.readAsDataURL(file);
 			} else {
-				// For non-image files, add immediately
 				uploadedFiles = [...uploadedFiles, uploadedFile];
 			}
-		});
+		}
 	}
 
 	function handleFileUpload(files: File[]) {
@@ -130,7 +150,6 @@
 	}
 </script>
 
-<!-- Drag and drop overlay -->
 {#if isDragOver}
 	<div class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
 		<div class="bg-background border-border flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-12 shadow-lg">

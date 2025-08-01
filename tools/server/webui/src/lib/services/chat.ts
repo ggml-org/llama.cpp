@@ -205,21 +205,21 @@ export class ChatService {
 
 		// Add image files
 		const imageFiles = message.extra.filter((extra): extra is DatabaseMessageExtraImageFile => extra.type === 'imageFile');
-		imageFiles.forEach((image) => {
+		for (const image of imageFiles) {
 			contentParts.push({
 				type: 'image_url',
 				image_url: { url: image.base64Url }
 			});
-		});
+		}
 
 		// Add text files as additional text content
 		const textFiles = message.extra.filter((extra): extra is DatabaseMessageExtraTextFile => extra.type === 'textFile');
-		textFiles.forEach((textFile) => {
+		for (const textFile of textFiles) {
 			contentParts.push({
 				type: 'text',
 				text: `\n\n--- File: ${textFile.name} ---\n${textFile.content}`
 			});
-		});
+		}
 
 		return {
 			role: message.role as 'user' | 'assistant' | 'system',
@@ -243,13 +243,18 @@ export class ChatService {
 	): Promise<string | void> {
 		// Handle both array formats and convert messages with extras
 		const normalizedMessages: ApiChatMessageData[] = messages.map((msg) => {
-			// Check if this is already a ApiChatMessageData object
-			if ('content' in msg && (typeof msg.content === 'string' || Array.isArray(msg.content))) {
+			// Check if this is already a ApiChatMessageData object by checking for DatabaseMessage-specific fields
+			if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
+				// This is a DatabaseMessage, convert it
+				const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
+				console.log('Converting message to API format:', { role: dbMsg.role, content: dbMsg.content, extra: dbMsg.extra });
+				const converted = ChatService.convertMessageToChatData(dbMsg);
+				console.log('Converted message:', converted);
+				return converted;
+			} else {
+				// This is already an ApiChatMessageData object
 				return msg as ApiChatMessageData;
 			}
-			
-			// Convert DatabaseMessage with extras to ApiChatMessageData
-			return ChatService.convertMessageToChatData(msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] });
 		});
 
 		// Set default options for API compatibility
