@@ -281,10 +281,10 @@ int32_t cpu_get_num_math() {
     if (is_hybrid_cpu()) {
         cpu_set_t affinity;
         if (!pthread_getaffinity_np(pthread_self(), sizeof(affinity), &affinity)) {
-            // Default behavior: use hyperthreading but not efficiency cores for math
+            // Default behavior: use hyperthreading and efficiency cores for math
             // This can be overridden by environment variables or command-line options
-            bool use_hyperthreading = std::getenv("LLAMA_NO_HYPERTHREADING") == nullptr;
-            bool use_efficiency_cores = std::getenv("LLAMA_USE_EFFICIENCY_CORES") != nullptr;
+            bool use_hyperthreading = std::getenv("LLAMA_CPU_NO_HYPERTHREADING") == nullptr;
+            bool use_efficiency_cores = std::getenv("LLAMA_CPU_NO_EFFICIENCY_CORES") == nullptr;
             
             int result = cpu_count_math_cpus(n_cpu, use_hyperthreading, use_efficiency_cores);
             pthread_setaffinity_np(pthread_self(), sizeof(affinity), &affinity);

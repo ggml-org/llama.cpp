@@ -56,7 +56,7 @@ struct cpu_params {
     bool     strict_cpu                  = false;   // Use strict CPU placement
     uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
     bool     use_hyperthreading          = true;    // Use hyperthreading/SMT for math operations (enabled by default)
-    bool     use_efficiency_cores        = false;   // Use efficiency cores (E-cores) for math operations
+    bool     use_efficiency_cores        = true;    // Use efficiency cores (E-cores) for math operations (enabled by default)
 };
 
 int32_t cpu_get_num_physical_cores();
