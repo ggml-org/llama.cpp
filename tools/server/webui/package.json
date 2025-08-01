@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev & storybook dev -p 6006 --ci",
-		"build": "./scripts/build.sh",
+		"build": "vite build && ./scripts/post-build-cleanup.sh",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
