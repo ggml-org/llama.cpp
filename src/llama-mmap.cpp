@@ -335,59 +335,86 @@ struct llama_mmap::impl {
         // Set addr to the first mapping for node 0
         addr = (void*)(GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + base_address_offset);
         
+        // Calculate number of hugepages needed and total mapping size
+        size_t hugepages_needed = (total_size + GGML_MMAP_HUGEPAGESZ - 1) / GGML_MMAP_HUGEPAGESZ;
+        size_t total_mapping_size = hugepages_needed * GGML_MMAP_HUGEPAGESZ;
+        
+        LLAMA_LOG_INFO("Creating %zu hugepages (%zu bytes total) for %zu bytes of model data\n", 
+                      hugepages_needed, total_mapping_size, total_size);
+
         for (int node = 0; node < num_nodes; ++node) {
             numa_set_preferred(node);
-            LLAMA_LOG_INFO("numa_set_preferred(%d)\n", node);
+            LLAMA_LOG_INFO("numa_set_preferred(%d) - creating single large mapping\n", node);
 
-            for (i = 0; i * GGML_MMAP_HUGEPAGESZ < total_size; ++i) {
-                sprintf(path, "/dev/hugepages/llama-node%d-%d", node, file_name_offset + i);
-                if (!is_new_mem[node]) {
-                    is_new_mem[node] = access(path, F_OK) != 0;
+            // Create one large hugepage file for this entire NUMA node
+            sprintf(path, "/dev/hugepages/llama-node%d-unified-%d", node, file_name_offset);
+            if (!is_new_mem[node]) {
+                is_new_mem[node] = access(path, F_OK) != 0;
+            }
+            
+            int hugefd = open(path, O_CREAT | O_RDWR, 0600);
+            if (hugefd < 0) {
+                // Clean up any mappings we've already created before throwing
+                for (const auto& mapping : numa_mappings) {
+                    munmap(mapping.addr, mapping.size);
+                    unlink(mapping.path.c_str());
                 }
-                int hugefd = open(path, O_CREAT | O_RDWR, 0600);
-                if (hugefd < 0) {
-                    // Clean up any mappings we've already created before throwing
-                    for (const auto& mapping : numa_mappings) {
-                        munmap(mapping.addr, mapping.size);
-                        unlink(mapping.path.c_str());
-                    }
-                    LLAMA_LOG_WARN("failed to open hugepage fd %s: %d %s\n",
-                            path, errno, strerror(errno));
-                    throw std::runtime_error(format("failed to open hugepage fd: %s", strerror(errno)));
-                }
-                uintptr_t address = GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET \
-                                    + node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + \
-                                    base_address_offset + i * GGML_MMAP_HUGEPAGESZ;
-                void* mm = mmap((void*)address, GGML_MMAP_HUGEPAGESZ, PROT_READ | PROT_WRITE,
-                        MAP_SHARED | MAP_HUGETLB | MAP_POPULATE,
-                        hugefd, 0);
+                LLAMA_LOG_WARN("failed to open hugepage fd %s: %d %s\n",
+                        path, errno, strerror(errno));
+                throw std::runtime_error(format("failed to open hugepage fd: %s", strerror(errno)));
+            }
+
+            // Resize the hugepage file to accommodate the entire mapping
+            if (ftruncate(hugefd, total_mapping_size) != 0) {
                 close(hugefd);
-                LLAMA_LOG_INFO("mmap(%s) desire=%p size=%llu result=%p is_new_mem[%d]=%s\n",
-                        path, (void*)address, GGML_MMAP_HUGEPAGESZ, mm, node, is_new_mem[node] ? "yes" : "no");
-                
-                if (((uintptr_t)mm) != address) {
-                    // If mmap failed completely, delete the file we just created
-                    if (mm == MAP_FAILED) {
-                        unlink(path);
-                    }
-                    
-                    // Clean up any mappings we've already created before throwing
-                    for (const auto& mapping : numa_mappings) {
-                        munmap(mapping.addr, mapping.size);
-                        unlink(mapping.path.c_str());
-                    }
-                    LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
-                    throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+                unlink(path);
+                // Clean up any mappings we've already created before throwing
+                for (const auto& mapping : numa_mappings) {
+                    munmap(mapping.addr, mapping.size);
+                    unlink(mapping.path.c_str());
+                }
+                LLAMA_LOG_WARN("failed to resize hugepage file %s: %d %s\n",
+                        path, errno, strerror(errno));
+                throw std::runtime_error(format("ftruncate failed: %s", strerror(errno)));
+            }
+
+            // Create one large mapping for the entire model on this NUMA node
+            uintptr_t address = GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + 
+                               node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + 
+                               base_address_offset;
+                               
+            void* mm = mmap((void*)address, total_mapping_size, PROT_READ | PROT_WRITE,
+                           MAP_SHARED | MAP_HUGETLB | MAP_POPULATE, hugefd, 0);
+            close(hugefd);
+            
+            LLAMA_LOG_INFO("mmap(%s) desire=%p size=%zu result=%p is_new_mem[%d]=%s\n",
+                          path, (void*)address, total_mapping_size, mm, node, is_new_mem[node] ? "yes" : "no");
+            
+            if (((uintptr_t)mm) != address) {
+                // If mmap failed completely, delete the file we just created
+                if (mm == MAP_FAILED) {
+                    unlink(path);
                 }
                 
-                // Only store valid mappings
-                numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
-                
-                if (is_new_mem[node]) {
-                    memset(mm, 0, GGML_MMAP_HUGEPAGESZ);
+                // Clean up any mappings we've already created before throwing
+                for (const auto& mapping : numa_mappings) {
+                    munmap(mapping.addr, mapping.size);
+                    unlink(mapping.path.c_str());
                 }
+                LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
+                throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+            }
+            
+            // Store the single large mapping
+            numa_mappings.push_back({mm, total_mapping_size, std::string(path)});
+            
+            if (is_new_mem[node]) {
+                memset(mm, 0, total_mapping_size);
             }
         }
+        
+        // Update global offset tracking
+        i = hugepages_needed;
         base_address_offset += i * GGML_MMAP_HUGEPAGESZ;
         file_name_offset += i;
         if (is_new_mem[0]) {
@@ -484,59 +511,86 @@ struct llama_mmap::impl {
         // Set addr to the first mapping for node 0
         addr = (void*)(GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + base_address_offset);
         
+        // Calculate number of hugepages needed and total mapping size
+        size_t hugepages_needed = (total_size + GGML_MMAP_HUGEPAGESZ - 1) / GGML_MMAP_HUGEPAGESZ;
+        size_t total_mapping_size = hugepages_needed * GGML_MMAP_HUGEPAGESZ;
+        
+        LLAMA_LOG_INFO("Creating unified mapping: %zu hugepages (%zu bytes total) for %zu bytes across %zu files\n", 
+                      hugepages_needed, total_mapping_size, total_size, files.size());
+
         for (int node = 0; node < num_nodes; ++node) {
             numa_set_preferred(node);
-            LLAMA_LOG_INFO("numa_set_preferred(%d) for unified mapping\n", node);
+            LLAMA_LOG_INFO("numa_set_preferred(%d) - creating single unified mapping\n", node);
 
-            for (i = 0; i * GGML_MMAP_HUGEPAGESZ < total_size; ++i) {
-                sprintf(path, "/dev/hugepages/llama-unified-node%d-%d", node, file_name_offset + i);
-                if (!is_new_mem[node]) {
-                    is_new_mem[node] = access(path, F_OK) != 0;
+            // Create one large hugepage file for this entire unified mapping
+            sprintf(path, "/dev/hugepages/llama-unified-node%d-%d", node, file_name_offset);
+            if (!is_new_mem[node]) {
+                is_new_mem[node] = access(path, F_OK) != 0;
+            }
+            
+            int hugefd = open(path, O_CREAT | O_RDWR, 0600);
+            if (hugefd < 0) {
+                // Clean up any mappings we've already created before throwing
+                for (const auto& mapping : numa_mappings) {
+                    munmap(mapping.addr, mapping.size);
+                    unlink(mapping.path.c_str());
                 }
-                int hugefd = open(path, O_CREAT | O_RDWR, 0600);
-                if (hugefd < 0) {
-                    // Clean up any mappings we've already created before throwing
-                    for (const auto& mapping : numa_mappings) {
-                        munmap(mapping.addr, mapping.size);
-                        unlink(mapping.path.c_str());
-                    }
-                    LLAMA_LOG_WARN("failed to open hugepage fd %s: %d %s\n",
-                            path, errno, strerror(errno));
-                    throw std::runtime_error(format("failed to open hugepage fd: %s", strerror(errno)));
-                }
-                uintptr_t address = GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET \
-                                    + node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + \
-                                    base_address_offset + i * GGML_MMAP_HUGEPAGESZ;
-                void* mm = mmap((void*)address, GGML_MMAP_HUGEPAGESZ, PROT_READ | PROT_WRITE,
-                        MAP_SHARED | MAP_HUGETLB | MAP_POPULATE,
-                        hugefd, 0);
+                LLAMA_LOG_WARN("failed to open hugepage fd %s: %d %s\n",
+                        path, errno, strerror(errno));
+                throw std::runtime_error(format("failed to open hugepage fd: %s", strerror(errno)));
+            }
+
+            // Resize the hugepage file to accommodate the entire unified mapping
+            if (ftruncate(hugefd, total_mapping_size) != 0) {
                 close(hugefd);
-                LLAMA_LOG_INFO("mmap(%s) desire=%p size=%llu result=%p is_new_mem[%d]=%s\n",
-                        path, (void*)address, GGML_MMAP_HUGEPAGESZ, mm, node, is_new_mem[node] ? "yes" : "no");
-                
-                if (((uintptr_t)mm) != address) {
-                    // If mmap failed completely, delete the file we just created
-                    if (mm == MAP_FAILED) {
-                        unlink(path);
-                    }
-                    
-                    // Clean up any mappings we've already created before throwing
-                    for (const auto& mapping : numa_mappings) {
-                        munmap(mapping.addr, mapping.size);
-                        unlink(mapping.path.c_str());
-                    }
-                    LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
-                    throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+                unlink(path);
+                // Clean up any mappings we've already created before throwing
+                for (const auto& mapping : numa_mappings) {
+                    munmap(mapping.addr, mapping.size);
+                    unlink(mapping.path.c_str());
+                }
+                LLAMA_LOG_WARN("failed to resize hugepage file %s: %d %s\n",
+                        path, errno, strerror(errno));
+                throw std::runtime_error(format("ftruncate failed: %s", strerror(errno)));
+            }
+
+            // Create one large mapping for the entire unified model on this NUMA node
+            uintptr_t address = GGML_MMAP_VIRTUAL_MEMORY_BASE_OFFSET + 
+                               node * GGML_MMAP_VIRTUAL_MEMORY_NUMA_INCREMENT + 
+                               base_address_offset;
+                               
+            void* mm = mmap((void*)address, total_mapping_size, PROT_READ | PROT_WRITE,
+                           MAP_SHARED | MAP_HUGETLB | MAP_POPULATE, hugefd, 0);
+            close(hugefd);
+            
+            LLAMA_LOG_INFO("mmap(%s) desire=%p size=%zu result=%p is_new_mem[%d]=%s\n",
+                          path, (void*)address, total_mapping_size, mm, node, is_new_mem[node] ? "yes" : "no");
+            
+            if (((uintptr_t)mm) != address) {
+                // If mmap failed completely, delete the file we just created
+                if (mm == MAP_FAILED) {
+                    unlink(path);
                 }
                 
-                // Only store valid mappings
-                numa_mappings.push_back({mm, GGML_MMAP_HUGEPAGESZ, std::string(path)});
-                
-                if (is_new_mem[node]) {
-                    memset(mm, 0, GGML_MMAP_HUGEPAGESZ);
+                // Clean up any mappings we've already created before throwing
+                for (const auto& mapping : numa_mappings) {
+                    munmap(mapping.addr, mapping.size);
+                    unlink(mapping.path.c_str());
                 }
+                LLAMA_LOG_WARN("unable to mmap memory: %d %s\n", errno, strerror(errno));
+                throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
+            }
+            
+            // Store the single large mapping
+            numa_mappings.push_back({mm, total_mapping_size, std::string(path)});
+            
+            if (is_new_mem[node]) {
+                memset(mm, 0, total_mapping_size);
             }
         }
+        
+        // Update global offset tracking
+        i = hugepages_needed;
         base_address_offset += i * GGML_MMAP_HUGEPAGESZ;
         file_name_offset += i;
         
