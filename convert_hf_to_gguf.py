@@ -7738,9 +7738,9 @@ class GptOssModel(TextModel):
         blocks,
         scales,
         *,
-        dtype: torch.dtype = torch.float16,
+        dtype: torch.dtype = torch.float32,
         rows_per_chunk: int = 32768 * 1024,
-    ):
+    ) -> tuple[str, Tensor]:
         import math
 
         scales = scales.to(torch.int32) - 127
@@ -7795,9 +7795,8 @@ class GptOssModel(TextModel):
             del idx_lo, idx_hi, blk, exp
 
         out = out.reshape(*prefix_shape, G, B * 2).view(*prefix_shape, G * B * 2)
-        out = out.numpy()
-        logger.info(f"Unpacked {new_name} with shape {out.shape} from MXFP4 to F16")
-        self.gguf_writer.add_tensor(new_name, out)
+        logger.info(f"Unpacked {new_name} with shape {out.shape} from MXFP4")
+        return new_name, out
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         blocks0: Tensor = torch.zeros(1)
@@ -7809,7 +7808,7 @@ class GptOssModel(TextModel):
             elif "mlp.experts.down_proj_scales" in name:
                 new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
                 # self.repack_mxfp4(new_name, blocks0, data_torch)
-                self.convert_moe_packed_tensors(new_name, blocks0, data_torch)
+                yield self.convert_moe_packed_tensors(new_name, blocks0, data_torch)
             elif "mlp.experts.gate_up_proj_blocks" in name:
                 blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
             elif "mlp.experts.gate_up_proj_scales" in name:
@@ -7818,8 +7817,8 @@ class GptOssModel(TextModel):
                 new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
                 # self.repack_mxfp4(new_name_gate, blocks0, scales0)
                 # self.repack_mxfp4(new_name_up, blocks1, scales1)
-                self.convert_moe_packed_tensors(new_name_gate, blocks0, scales0)
-                self.convert_moe_packed_tensors(new_name_up, blocks1, scales1)
+                yield self.convert_moe_packed_tensors(new_name_gate, blocks0, scales0)
+                yield self.convert_moe_packed_tensors(new_name_up, blocks1, scales1)
         return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
