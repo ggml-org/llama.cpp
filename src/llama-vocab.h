@@ -115,6 +115,8 @@ struct llama_vocab {
     llama_token token_fim_rep() const;
     llama_token token_fim_sep() const;
 
+    llama_token token_image() const;
+    llama_token token_audio() const;
     bool get_add_space_prefix          () const;
     bool get_add_bos                   () const;
     bool get_add_eos                   () const;

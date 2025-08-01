@@ -254,8 +254,10 @@ struct mtmd_context {
 
         } else if (proj == PROJECTOR_TYPE_QWEN2VL || proj == PROJECTOR_TYPE_QWEN25VL) {
             // <|vision_start|> ... (image embeddings) ... <|vision_end|>
-            img_beg = "<|vision_start|>";
-            img_end = "<|vision_end|>";
+            //There is a valid reason why they are commented here. QWENVL and Qwen Omni has their own tokens for image.\
+            // The jinja produce something like that <|vision_bos|><|IMAGE|><|vision_eos|>.
+            // img_beg = "<|vision_start|>";
+            // img_end = "<|vision_end|>";
 
         } else if (proj == PROJECTOR_TYPE_LLAMA4) {
             // (more details in mtmd_context constructor)
@@ -389,10 +391,21 @@ struct mtmd_tokenizer {
 
     int32_t tokenize(mtmd_input_chunks * output) {
         cur.entries.clear();
-        std::vector<std::string> parts = split_text(input_text, ctx->media_marker);
+
         size_t i_bm = 0; // index of the current bitmap
+        llama_token imageTokenID =llama_vocab_image_token(vocab);
+        std::string imageToken;
+        std::vector<std::string> delimiters;
+        delimiters.push_back(ctx->media_marker);
+
+        if (imageTokenID!=LLAMA_TOKEN_NULL) {
+            imageToken = llama_vocab_get_text(vocab,imageTokenID);
+            delimiters.push_back(imageToken);
+        }
+
+        std::vector<std::string> parts = split_text_multi(input_text, delimiters);
         for (auto & part : parts) {
-            if (part == ctx->media_marker) {
+            if (part == ctx->media_marker || part==imageToken) {
                 // this is a marker, we should add the next bitmap
                 if (i_bm >= bitmaps.size()) {
                     LOG_ERR("%s: error: number of bitmaps (%zu) does not match number of markers (%zu)\n",
@@ -708,6 +721,51 @@ struct mtmd_tokenizer {
         if (start < input.length()) {
             result.push_back(input.substr(start));
         }
+        return result;
+    }
+
+    static std::vector<std::string> split_text_multi(const std::string& input,
+                                                const std::vector<std::string>& delimiters) {
+        std::vector<std::string> result;
+        if (input.empty()) {
+            return result;
+        }
+
+        size_t pos = 0;
+        while (pos < input.length()) {
+            // Find the earliest occurring delimiter
+            size_t best_match_pos = std::string::npos;
+            std::string best_delimiter;
+
+            for (const auto& delimiter : delimiters) {
+                size_t match_pos = input.find(delimiter, pos);
+                if (match_pos != std::string::npos &&
+                    (best_match_pos == std::string::npos || match_pos < best_match_pos)) {
+                    best_match_pos = match_pos;
+                    best_delimiter = delimiter;
+                    }
+            }
+
+            if (best_match_pos == std::string::npos) {
+                // No more delimiters found, add remaining text
+                if (pos < input.length()) {
+                    result.push_back(input.substr(pos));
+                }
+                break;
+            }
+
+            // Add text before delimiter (if any)
+            if (best_match_pos > pos) {
+                result.push_back(input.substr(pos, best_match_pos - pos));
+            }
+
+            // Add the delimiter itself
+            result.push_back(best_delimiter);
+
+            // Move past the delimiter
+            pos = best_match_pos + best_delimiter.length();
+        }
+
         return result;
     }
 

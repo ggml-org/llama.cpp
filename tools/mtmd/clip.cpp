@@ -164,7 +164,7 @@ enum patch_merge_type {
 
 struct clip_hparams {
     int32_t image_size;
-    int32_t patch_size;
+    int32_t patch_size=INT_MAX;
     int32_t n_embd;
     int32_t n_ff;
     int32_t projection_dim;
