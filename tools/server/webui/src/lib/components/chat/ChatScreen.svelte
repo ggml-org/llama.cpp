@@ -10,11 +10,16 @@
 	} from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 	import { fly, slide } from 'svelte/transition';
+	import { Upload } from '@lucide/svelte';
+	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
 	let scrollInterval: ReturnType<typeof setInterval> | undefined;
 	let autoScrollEnabled = $state(true);
+	let uploadedFiles = $state<ChatUploadedFile[]>([]);
+	let isDragOver = $state(false);
+	let dragCounter = $state(0);
 
 	const isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
@@ -58,10 +63,96 @@
 			scrollInterval = undefined;
 		}
 	})
+
+	function processFiles(files: File[]) {
+		files.forEach((file) => {
+			const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
+			const uploadedFile: ChatUploadedFile = {
+				id,
+				name: file.name,
+				size: file.size,
+				type: file.type,
+				file
+			};
+
+			// Create preview for images
+			if (file.type.startsWith('image/')) {
+				const reader = new FileReader();
+				reader.onload = (e) => {
+					uploadedFile.preview = e.target?.result as string;
+					// Add file to array after preview is ready
+					uploadedFiles = [...uploadedFiles, uploadedFile];
+				};
+				reader.readAsDataURL(file);
+			} else {
+				// For non-image files, add immediately
+				uploadedFiles = [...uploadedFiles, uploadedFile];
+			}
+		});
+	}
+
+	function handleFileUpload(files: File[]) {
+		processFiles(files);
+	}
+
+	function handleFileRemove(fileId: string) {
+		uploadedFiles = uploadedFiles.filter(f => f.id !== fileId);
+	}
+
+	function handleDragEnter(event: DragEvent) {
+		event.preventDefault();
+		dragCounter++;
+		if (event.dataTransfer?.types.includes('Files')) {
+			isDragOver = true;
+		}
+	}
+
+	function handleDragLeave(event: DragEvent) {
+		event.preventDefault();
+		dragCounter--;
+		if (dragCounter === 0) {
+			isDragOver = false;
+		}
+	}
+
+	function handleDragOver(event: DragEvent) {
+		event.preventDefault();
+	}
+
+	function handleDrop(event: DragEvent) {
+		event.preventDefault();
+		isDragOver = false;
+		dragCounter = 0;
+		
+		if (event.dataTransfer?.files) {
+			processFiles(Array.from(event.dataTransfer.files));
+		}
+	}
 </script>
 
+<!-- Drag and drop overlay -->
+{#if isDragOver}
+	<div class="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+		<div class="bg-background border-border flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-12 shadow-lg">
+			<Upload class="text-muted-foreground mb-4 h-12 w-12" />
+			<p class="text-foreground text-lg font-medium">Attach a file</p>
+			<p class="text-muted-foreground text-sm">Drop your files here to upload</p>
+		</div>
+	</div>
+{/if}
+
 {#if !isEmpty}
-	<div class="flex h-full flex-col overflow-y-auto" bind:this={chatScrollContainer} onscroll={handleScroll}>
+	<div 
+		class="flex h-full flex-col overflow-y-auto" 
+		bind:this={chatScrollContainer} 
+		onscroll={handleScroll}
+		ondragenter={handleDragEnter}
+		ondragleave={handleDragLeave}
+		ondragover={handleDragOver}
+		ondrop={handleDrop}
+		role="main"
+		aria-label="Chat interface with file drop zone"
+	>
 			<ChatMessages class="mb-36" messages={activeMessages()} />
 
 			<div
@@ -74,12 +165,23 @@
 						showHelperText={false}
 						onSend={handleSendMessage}
 						onStop={() => stopGeneration()}
+						uploadedFiles={uploadedFiles}
+						onFileUpload={handleFileUpload}
+						onFileRemove={handleFileRemove}
 					/>
 				</div>
 			</div>
 	</div>
 {:else}
-	<div class="flex h-full items-center justify-center">
+	<div 
+		class="flex h-full items-center justify-center"
+		ondragenter={handleDragEnter}
+		ondragleave={handleDragLeave}
+		ondragover={handleDragOver}
+		ondrop={handleDrop}
+		role="main"
+		aria-label="Welcome screen with file drop zone"
+	>
 		<div class="w-full max-w-2xl px-4">
 			<div class="mb-8 text-center" in:fly={{ y: -30, duration: 600 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
@@ -100,6 +202,9 @@
 					showHelperText={true}
 					onSend={handleSendMessage}
 					onStop={() => stopGeneration()}
+					uploadedFiles={uploadedFiles}
+					onFileUpload={handleFileUpload}
+					onFileRemove={handleFileRemove}
 				/>
 			</div>
 		</div>
