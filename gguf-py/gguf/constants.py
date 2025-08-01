@@ -2802,7 +2802,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.BF16:    (1, 2),
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
-    GGMLQuantizationType.MXFP4:   (1, 1), # quick hack to write MXFP4 as U8
+    GGMLQuantizationType.MXFP4:   (32, 1 + 16),
 }
 
 

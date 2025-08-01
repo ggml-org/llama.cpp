@@ -7723,11 +7723,14 @@ class GptOssModel(TextModel):
         scales = scales.unsqueeze(-1)
         assert len(blocks.shape) == 4
         assert len(scales.shape) == 4
-        new_data = torch.cat([scales, blocks], dim=-1)
-        new_data = new_data.numpy()
-        new_shape = [scales.shape[0], scales.shape[1], scales.shape[2] * 32]
+        scales = scales.numpy()
+        blocks = blocks.numpy()
+        new_data = np.concatenate([scales, blocks], axis=-1)
+        new_shape = [new_data.shape[0], new_data.shape[1], new_data.shape[2] * 32]
         logger.info(f"Repacked {new_name} with shape {new_shape} and quantization MXFP4")
-        self.gguf_writer.add_tensor(new_name, new_data, new_shape, gguf.GGMLQuantizationType.MXFP4)
+        # flatten last dim
+        new_data = new_data.reshape(new_data.shape[0], new_data.shape[1], new_data.shape[2] * new_data.shape[3])
+        self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.MXFP4)
 
     def convert_moe_packed_tensors(
         self,
@@ -7794,7 +7797,6 @@ class GptOssModel(TextModel):
         out = out.reshape(*prefix_shape, G, B * 2).view(*prefix_shape, G * B * 2)
         out = out.numpy()
         logger.info(f"Unpacked {new_name} with shape {out.shape} from MXFP4 to F16")
-        print(out.dtype, out.device, out.shape)
         self.gguf_writer.add_tensor(new_name, out)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
@@ -7806,7 +7808,7 @@ class GptOssModel(TextModel):
                 blocks0 = data_torch
             elif "mlp.experts.down_proj_scales" in name:
                 new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
-                #self.repack_mxfp4(new_name, blocks0, data_torch)
+                # self.repack_mxfp4(new_name, blocks0, data_torch)
                 self.convert_moe_packed_tensors(new_name, blocks0, data_torch)
             elif "mlp.experts.gate_up_proj_blocks" in name:
                 blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
