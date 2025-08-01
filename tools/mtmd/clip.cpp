@@ -1669,11 +1669,8 @@ private:
             auto & layer = model.layers[il];
             ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 
-            // Check if this is COGVLM projector type for post-norm layernorm order
-            const bool is_cogvlm = ctx->proj_type() == PROJECTOR_TYPE_COGVLM;
-
-            // layernorm1 (only for non-COGVLM)
-            if (!is_cogvlm) {
+            // layernorm1
+            if (ctx->proj_type() != PROJECTOR_TYPE_COGVLM) {
                 cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
                 cb(cur, "layer_inp_normed", il);
             }
@@ -1730,8 +1727,8 @@ private:
                 cb(cur, "attn_out_scaled", il);
             }
 
-            // Apply layernorm AFTER attention for COGVLM (post-norm)
-            if (is_cogvlm) {
+            // Apply layernorm after attention for cogvlm
+            if (ctx->proj_type() == PROJECTOR_TYPE_COGVLM) {
                 cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
                 cb(cur, "attn_post_norm", il);
             }
@@ -1743,8 +1740,8 @@ private:
 
             cb(cur, "ffn_inp", il);
 
-            // layernorm2 (only for non-COGVLM)
-            if (!is_cogvlm) {
+            // layernorm2
+            if (ctx->proj_type() != PROJECTOR_TYPE_COGVLM) {
                 cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
                 cb(cur, "ffn_inp_normed", il);
             }
@@ -1763,8 +1760,8 @@ private:
                 cb(cur, "ffn_out_scaled", il);
             }
 
-            // Apply layernorm AFTER MLP for COGVLM (post-norm)
-            if (is_cogvlm) {
+            // Apply layernorm after mlp for cogvlm
+            if (ctx->proj_type() == PROJECTOR_TYPE_COGVLM) {
                 cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
                 cb(cur, "ffn_post_norm", il);
             }
