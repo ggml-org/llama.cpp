@@ -138,6 +138,7 @@
 					<ChatAttachmentsList 
 						attachments={message.extra}
 						readonly={true}
+						imageHeight="h-80"
 					/>
 				</div>
 			{/if}

@@ -16,8 +16,8 @@
 
 	let containerRef = $state<HTMLDivElement>();
 	let processedHtml = $state('');
-
-	const processor = $derived(() => {
+	
+	let processor = $derived(() => {
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
 			.use(remarkBreaks) // Convert line breaks to <br>

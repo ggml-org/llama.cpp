@@ -24,7 +24,7 @@
 		onSend,
 		onStop,
 		showHelperText = true,
-		uploadedFiles = [],
+		uploadedFiles = $bindable([]),
 		onFileUpload,
 		onFileRemove
 	}: Props = $props();
@@ -39,6 +39,7 @@
 
 		onSend?.(message.trim(), uploadedFiles);
 		message = '';
+		uploadedFiles = [];
 
 		if (textareaElement) {
 			textareaElement.style.height = 'auto';
@@ -53,6 +54,7 @@
 
 			onSend?.(message.trim(), uploadedFiles);
 			message = '';
+			uploadedFiles = [];
 
 			if (textareaElement) {
 				textareaElement.style.height = 'auto';
@@ -90,9 +92,8 @@
 	onsubmit={handleSubmit}
 	class="border bg-muted/30 border-border/40 focus-within:border-primary/40 bg-background dark:bg-muted border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
 >
-	<!-- File previews -->
 	<ChatAttachmentsList 
-		uploadedFiles={uploadedFiles}
+		bind:uploadedFiles={uploadedFiles}
 		onFileRemove={onFileRemove}
 		class="mb-3 px-5 pt-3"
 	/>

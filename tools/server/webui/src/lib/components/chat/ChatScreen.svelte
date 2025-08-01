@@ -28,9 +28,7 @@
 
 	async function handleSendMessage(message: string, files?: ChatUploadedFile[]) {
 		const extras = files ? await convertFilesToExtras(files) : undefined;
-		
 		await sendMessage(message, extras);
-		uploadedFiles = [];
 	}
 
 	async function convertFilesToExtras(files: ChatUploadedFile[]): Promise<DatabaseMessageExtra[]> {
@@ -184,7 +182,7 @@
 						showHelperText={false}
 						onSend={handleSendMessage}
 						onStop={() => stopGeneration()}
-						uploadedFiles={uploadedFiles}
+						bind:uploadedFiles={uploadedFiles}
 						onFileUpload={handleFileUpload}
 						onFileRemove={handleFileRemove}
 					/>
