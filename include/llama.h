@@ -1412,6 +1412,28 @@ extern "C" {
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
     
+    // LoRA training parameters
+    enum llama_lora_target_module {
+        LLAMA_LORA_TARGET_ATTN_Q    = 1 << 0,
+        LLAMA_LORA_TARGET_ATTN_V    = 1 << 1,
+    };
+
+    struct llama_lora_training_params {
+        uint32_t target_modules;
+        int32_t  rank;
+        float    alpha;
+        float    dropout;
+        float    init_std;
+    };
+
+    // Initialize LoRA training with the given parameters
+    // Creates LoRA tensors and adds them to the model context
+    LLAMA_API bool llama_lora_training_init(
+            struct llama_context * ctx,
+            struct llama_model * model,
+            const struct llama_lora_training_params * params
+    );
+
     // LoRA parameter filter (returns true for LoRA tensors only)
     LLAMA_API bool llama_opt_param_filter_lora(const struct ggml_tensor * tensor, void * userdata);
 

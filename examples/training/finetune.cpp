@@ -54,13 +54,29 @@ int main(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
+    struct llama_lora_training_params lora_params = {
+        /*target_modules =*/ LLAMA_LORA_TARGET_ATTN_Q | LLAMA_LORA_TARGET_ATTN_V,  // Train Q and V attention
+        /*rank          =*/ 16,        // LoRA rank
+        /*alpha         =*/ 32.0f,     // LoRA alpha (often 2 * rank)
+        /*dropout       =*/ 0.0f,      // No dropout for now
+        /*init_std      =*/ 0.02f,     // Weight initialization std
+    };
+
     // Check if LoRA adapters are loaded?
     bool has_existing_lora = !params.lora_adapters.empty();
     if (has_existing_lora) {
         LOG_INF("Finetuning existing LoRA adapters\n");
         LOG_INF("Found %zu existing LoRA adapters to train\n", params.lora_adapters.size());
     } else {
-        LOG_INF("Training full model");
+        LOG_INF("Target modules: Q=%s, V=%s, rank=%d, alpha=%.1f\n",
+            (lora_params.target_modules & LLAMA_LORA_TARGET_ATTN_Q) ? "yes" : "no",
+            (lora_params.target_modules & LLAMA_LORA_TARGET_ATTN_V) ? "yes" : "no",
+            lora_params.rank, lora_params.alpha);
+        // Initialize new LoRA adapters
+        if (!llama_lora_training_init(ctx.get(), model.get(), &lora_params)) {
+            LOG_ERR("%s: LoRA training initialization failed\n", __func__);
+            return 1;
+        }
     }
 
     constexpr float val_split = 0.05f;
