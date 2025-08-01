@@ -844,6 +844,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         // do not quantize Mamba's small yet 2D weights
         // NOTE: can't use LLM_TN here because the layer number is not known
         quantize &= name.find("ssm_conv1d.weight") == std::string::npos;
+        quantize &= name.find("shortconv.conv.weight") == std::string::npos;
 
         // do not quantize RWKV's small yet 2D weights
         quantize &= name.find("time_mix_first.weight") == std::string::npos;
@@ -874,23 +875,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
             if (!params->pure && ggml_is_quantized(default_type)) {
+                int fallback = qs.n_fallback;
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
-                // unless the user specifies a type
-                if (params->tensor_types) {
+                // unless the user specifies a type, and the tensor geometry will not require fallback quantisation
+                if (params->tensor_types && qs.n_fallback - fallback == 0) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
                     const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
                         if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
                             if  (qtype != new_type) {
                                 LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
-                                new_type = qtype;
-                                break; // if two or more types are specified for the tensor, first match wins
+                                new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
                             }
                         }
                     }
                 }
             }
-
             if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
                 new_type = params->token_embedding_type;
             }

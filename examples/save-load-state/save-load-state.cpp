@@ -15,6 +15,12 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    if (params.n_parallel == 1) {
+        // the example uses 2 sequences, so when n_parallel == 1, we need to enable unified kv cache
+        printf("%s: n_parallel == 1, enabling unified kv cache\n", __func__);
+        params.kv_unified = true;
+    }
+
     common_init();
 
     if (params.n_predict < 0) {

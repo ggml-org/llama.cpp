@@ -132,6 +132,28 @@ def test_chat_template():
     assert res.body["__verbose"]["prompt"] == "<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
 
 
+@pytest.mark.parametrize("prefill,re_prefill", [
+    ("Whill", "Whill"),
+    ([{"type": "text", "text": "Wh"}, {"type": "text", "text": "ill"}], "Whill"),
+])
+def test_chat_template_assistant_prefill(prefill, re_prefill):
+    global server
+    server.chat_template = "llama3"
+    server.debug = True  # to get the "__verbose" object in the response
+    server.start()
+    res = server.make_request("POST", "/chat/completions", data={
+        "max_tokens": 8,
+        "messages": [
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+            {"role": "assistant", "content": prefill},
+        ]
+    })
+    assert res.status_code == 200
+    assert "__verbose" in res.body
+    assert res.body["__verbose"]["prompt"] == f"<s> <|start_header_id|>system<|end_header_id|>\n\nBook<|eot_id|><|start_header_id|>user<|end_header_id|>\n\nWhat is the best book<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n{re_prefill}"
+
+
 def test_apply_chat_template():
     global server
     server.chat_template = "command-r"
@@ -228,6 +250,7 @@ def test_completion_with_grammar(jinja: bool, grammar: str, n_predicted: int, re
     [{"role": "system", "content": 123}],
     # [{"content": "hello"}], # TODO: should not be a valid case
     [{"role": "system", "content": "test"}, {}],
+    [{"role": "user", "content": "test"}, {"role": "assistant", "content": "test"}, {"role": "assistant", "content": "test"}],
 ])
 def test_invalid_chat_completion_req(messages):
     global server
@@ -328,3 +351,32 @@ def test_logprobs_stream():
                     assert token.top_logprobs is not None
                     assert len(token.top_logprobs) > 0
     assert aggregated_text == output_text
+
+
+def test_logit_bias():
+    global server
+    server.start()
+
+    exclude = ["i", "I", "the", "The", "to", "a", "an", "be", "is", "was", "but", "But", "and", "And", "so", "So", "you", "You", "he", "He", "she", "She", "we", "We", "they", "They", "it", "It", "his", "His", "her", "Her", "book", "Book"]
+
+    res = server.make_request("POST", "/tokenize", data={
+        "content": " " + " ".join(exclude) + " ",
+    })
+    assert res.status_code == 200
+    tokens = res.body["tokens"]
+    logit_bias = {tok: -100 for tok in tokens}
+
+    client = OpenAI(api_key="dummy", base_url=f"http://{server.server_host}:{server.server_port}/v1")
+    res = client.chat.completions.create(
+        model="gpt-3.5-turbo-instruct",
+        temperature=0.0,
+        messages=[
+            {"role": "system", "content": "Book"},
+            {"role": "user", "content": "What is the best book"},
+        ],
+        max_tokens=64,
+        logit_bias=logit_bias
+    )
+    output_text = res.choices[0].message.content
+    assert output_text
+    assert all(output_text.find(" " + tok + " ") == -1 for tok in exclude)
