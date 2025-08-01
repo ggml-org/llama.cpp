@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ggml.h"
+#include "ggml-impl.h"
 #include "ggml-cuda.h"
 
 #include <cstdint>

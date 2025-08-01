@@ -964,20 +964,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             } break;
         case LLM_FFN_SWIGLU_OAI_MOE:
             {
-                // ref python code:
-                // glu = gate * torch.sigmoid(gate * self.alpha)
-                // next_states = torch.bmm(((up + 1) * glu), self.down_proj)
+                // TODO: move to hparams?
                 constexpr float alpha = 1.702f;
-                ggml_tensor * gate = ggml_clamp(ctx0, cur, -9999.0f, 7.0f);
-                ggml_tensor * glu = ggml_mul(ctx0, gate,
-                                        ggml_sigmoid(ctx0, ggml_scale(ctx0, gate, alpha)));
-                cb(cur, "ffn_moe_oai_glu", il);
-
-                // add extra bias of 1.0 to the up tensor
-                ggml_tensor * up_b = ggml_scale_bias(ctx0, ggml_clamp(ctx0, up, -7.0f, 7.0f), 1.0f, 1.0f);
-
-                cur = ggml_mul(ctx0, glu, up_b);
-                cb(cur, "ffn_moe_oai_swiglu", il);
+                constexpr float limit = 7.0f;
+                cur = ggml_swiglu_oai(ctx0, cur, up, alpha, limit);
+                cb(cur, "ffn_moe_swiglu_oai", il);
             } break;
         case LLM_FFN_RELU:
             if (gate_exps) {
@@ -1239,6 +1230,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * kq_b,
          ggml_tensor * kq_mask,
          ggml_tensor * v_mla,
+         ggml_tensor * sinks,
              float     kq_scale) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
@@ -1275,7 +1267,8 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         cur = ggml_flash_attn_ext(ctx0, q, k, v, kq_mask, kq_scale, hparams.f_max_alibi_bias,
                                   hparams.attn_soft_cap ? hparams.f_attn_logit_softcapping : 0.0f);
 
-        ggml_flash_attn_ext_set_prec(cur, GGML_PREC_F32);
+        ggml_flash_attn_ext_add_sinks(cur, sinks);
+        ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
         if (v_mla) {
 #if 0
@@ -1323,6 +1316,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
 
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
+        ggml_soft_max_add_sinks(kq, sinks);
 
         if (!v_trans) {
             // note: avoid this branch
@@ -1393,7 +1387,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, nullptr, kq_scale);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1481,7 +1475,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, nullptr, kq_scale);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1508,6 +1502,32 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * v_cur,
         ggml_tensor * kq_b,
         ggml_tensor * v_mla,
+            float     kq_scale,
+            int       il) const {
+    return build_attn_with_sinks(
+            inp,
+            wo,
+            wo_b,
+            q_cur,
+            k_cur,
+            v_cur,
+            kq_b,
+            v_mla,
+            nullptr,
+            kq_scale,
+            il);
+}
+
+ggml_tensor * llm_graph_context::build_attn_with_sinks(
+        llm_graph_input_attn_kv_unified_iswa * inp,
+        ggml_tensor * wo,
+        ggml_tensor * wo_b,
+        ggml_tensor * q_cur,
+        ggml_tensor * k_cur,
+        ggml_tensor * v_cur,
+        ggml_tensor * kq_b,
+        ggml_tensor * v_mla,
+        ggml_tensor * sinks,
             float     kq_scale,
             int       il) const {
     // these nodes are added to the graph together so that they are not reordered
@@ -1547,7 +1567,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, sinks, kq_scale);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -1601,7 +1621,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, kq_scale);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, v_mla, nullptr, kq_scale);
     cb(cur, "kqv_out", il);
 
     if (wo) {

@@ -444,6 +444,8 @@ typedef struct{
     uint64_t nb1;
     int32_t  i00;
     int32_t  i10;
+    float    alpha;
+    float    limit;
 } ggml_metal_kargs_glu;
 
 typedef struct {

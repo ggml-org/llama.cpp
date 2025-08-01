@@ -579,6 +579,7 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_REGLU,
     GGML_METAL_KERNEL_TYPE_GEGLU,
     GGML_METAL_KERNEL_TYPE_SWIGLU,
+    GGML_METAL_KERNEL_TYPE_SWIGLU_OAI,
     GGML_METAL_KERNEL_TYPE_GEGLU_ERF,
     GGML_METAL_KERNEL_TYPE_GEGLU_QUICK,
     GGML_METAL_KERNEL_TYPE_SUM_ROWS,
@@ -1583,6 +1584,7 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_REGLU,                           reglu,                           true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_GEGLU,                           geglu,                           true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SWIGLU,                          swiglu,                          true);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SWIGLU_OAI,                      swiglu_oai,                      true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_GEGLU_ERF,                       geglu_erf,                       true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_GEGLU_QUICK,                     geglu_quick,                     true);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_SUM_ROWS,                        sum_rows,                        true);
@@ -1774,6 +1776,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
                 case GGML_GLU_OP_REGLU:
                 case GGML_GLU_OP_GEGLU:
                 case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
                     return ggml_is_contiguous_1(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
@@ -2710,6 +2713,9 @@ static int ggml_metal_encode_node(
                     case GGML_GLU_OP_SWIGLU:
                         pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SWIGLU].pipeline;
                         break;
+                    case GGML_GLU_OP_SWIGLU_OAI:
+                        pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_SWIGLU_OAI].pipeline;
+                        break;
                     case GGML_GLU_OP_GEGLU_ERF:
                         pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_GEGLU_ERF].pipeline;
                         break;
@@ -2720,7 +2726,9 @@ static int ggml_metal_encode_node(
                         GGML_ABORT("fatal error");
                 }
 
-                const int32_t swp = ((const int32_t *) dst->op_params)[1];
+                const int32_t swp = ggml_get_op_params_i32(dst, 1);
+                const float alpha = ggml_get_op_params_f32(dst, 2);
+                const float limit = ggml_get_op_params_f32(dst, 3);
 
                 const int32_t i00 = swp ? ne0 : 0;
                 const int32_t i10 = swp ? 0 : ne0;
@@ -2734,6 +2742,8 @@ static int ggml_metal_encode_node(
                     /*.nb1  =*/ nb1,
                     /*.i00  =*/ src1 ? 0 : i00,
                     /*.i10  =*/ src1 ? 0 : i10,
+                    /*.alpha=*/ alpha,
+                    /*.limit=*/ limit
                 };
 
                 [encoder setComputePipelineState:pipeline];
@@ -2992,8 +3002,13 @@ static int ggml_metal_encode_node(
                 } else {
                     [encoder setBuffer:h_src0 offset:offs_src0  atIndex:1];
                 }
-                [encoder setBuffer:id_dst offset:offs_dst       atIndex:2];
-                [encoder setBytes:&args   length:sizeof(args)   atIndex:3];
+                if (id_src2) {
+                    [encoder setBuffer:id_src2 offset:offs_src2 atIndex:2];
+                } else {
+                    [encoder setBuffer:h_src0 offset:offs_src0  atIndex:2];
+                }
+                [encoder setBuffer:id_dst offset:offs_dst       atIndex:3];
+                [encoder setBytes:&args   length:sizeof(args)   atIndex:4];
 
                 [encoder setThreadgroupMemoryLength:32*sizeof(float) atIndex:0];
 
@@ -4980,11 +4995,14 @@ static int ggml_metal_encode_node(
                 GGML_ASSERT(ne11 == ne21);
                 GGML_ASSERT(ne12 == ne22);
 
-                struct ggml_tensor * src3 = node->src[3];
+                struct ggml_tensor * src3 = node->src[3]; // mask
+                struct ggml_tensor * src4 = node->src[4]; // sinks
 
                 size_t offs_src3 = 0;
+                size_t offs_src4 = 0;
 
                 id<MTLBuffer> id_src3 = src3 ? ggml_metal_get_buffer(src3, &offs_src3) : nil;
+                id<MTLBuffer> id_src4 = src4 ? ggml_metal_get_buffer(src4, &offs_src4) : nil;
 
                 GGML_ASSERT(!src3 || src3->type == GGML_TYPE_F16);
                 GGML_ASSERT(!src3 || src3->ne[1] >= GGML_PAD(src0->ne[1], 8) &&
@@ -5389,7 +5407,12 @@ static int ggml_metal_encode_node(
                 } else {
                     [encoder setBuffer:id_src0 offset:offs_src0 atIndex:4];
                 }
-                [encoder setBuffer:id_dst offset:offs_dst       atIndex:5];
+                if (id_src4) {
+                    [encoder setBuffer:id_src4 offset:offs_src4 atIndex:5];
+                } else {
+                    [encoder setBuffer:id_src0 offset:offs_src0 atIndex:5];
+                }
+                [encoder setBuffer:id_dst offset:offs_dst       atIndex:6];
 
                 if (!use_vec_kernel) {
                     // half8x8 kernel

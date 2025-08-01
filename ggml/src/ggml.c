@@ -1140,11 +1140,12 @@ static const char * GGML_GLU_OP_NAME[GGML_GLU_OP_COUNT] = {
     "REGLU",
     "GEGLU",
     "SWIGLU",
+    "SWIGLU_OAI",
     "GEGLU_ERF",
     "GEGLU_QUICK",
 };
 
-static_assert(GGML_GLU_OP_COUNT == 5, "GGML_GLU_OP_COUNT != 5");
+static_assert(GGML_GLU_OP_COUNT == 6, "GGML_GLU_OP_COUNT != 6");
 
 
 static_assert(sizeof(struct ggml_object)%GGML_MEM_ALIGN == 0, "ggml_object size must be a multiple of GGML_MEM_ALIGN");
@@ -2812,6 +2813,19 @@ struct ggml_tensor * ggml_geglu_quick_split(
     return ggml_glu_impl(ctx, a, b, GGML_GLU_OP_GEGLU_QUICK, false);
 }
 
+struct ggml_tensor * ggml_swiglu_oai(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        float                 alpha,
+        float                 limit) {
+    struct ggml_tensor * result = ggml_glu_impl(ctx, a, b, GGML_GLU_OP_SWIGLU_OAI, false);
+    ggml_set_op_params_f32(result, 2, alpha);
+    ggml_set_op_params_f32(result, 3, limit);
+
+    return result;
+}
+
 // ggml_norm
 
 static struct ggml_tensor * ggml_norm_impl(
@@ -3777,6 +3791,22 @@ struct ggml_tensor * ggml_soft_max_ext(
         float                 scale,
         float                 max_bias) {
     return ggml_soft_max_impl(ctx, a, mask, scale, max_bias, false);
+}
+
+void ggml_soft_max_add_sinks(
+        struct ggml_tensor * a,
+        struct ggml_tensor * sinks) {
+    if (!sinks) {
+        a->src[2] = NULL;
+        return;
+    }
+
+    GGML_ASSERT(a->op == GGML_OP_SOFT_MAX);
+    GGML_ASSERT(a->src[2] == NULL);
+    GGML_ASSERT(a->src[0]->ne[2] == sinks->ne[0]);
+    GGML_ASSERT(sinks->type == GGML_TYPE_F32);
+
+    a->src[2] = sinks;
 }
 
 // ggml_soft_max_ext_back
@@ -4810,6 +4840,22 @@ enum ggml_prec ggml_flash_attn_ext_get_prec(
     const int32_t prec_i32 = ggml_get_op_params_i32(a, 3);
 
     return (enum ggml_prec) prec_i32;
+}
+
+void ggml_flash_attn_ext_add_sinks(
+        struct ggml_tensor * a,
+        struct ggml_tensor * sinks) {
+    if (!sinks) {
+        a->src[4] = NULL;
+        return;
+    }
+
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(a->src[4] == NULL);
+    GGML_ASSERT(a->src[0]->ne[2] == sinks->ne[0]);
+    GGML_ASSERT(sinks->type == GGML_TYPE_F32);
+
+    a->src[4] = sinks;
 }
 
 // ggml_flash_attn_back

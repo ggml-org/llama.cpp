@@ -557,6 +557,7 @@ extern "C" {
         GGML_GLU_OP_REGLU,
         GGML_GLU_OP_GEGLU,
         GGML_GLU_OP_SWIGLU,
+        GGML_GLU_OP_SWIGLU_OAI,
         GGML_GLU_OP_GEGLU_ERF,
         GGML_GLU_OP_GEGLU_QUICK,
 
@@ -1198,6 +1199,13 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    GGML_API struct ggml_tensor * ggml_swiglu_oai(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            float                 alpha,
+            float                 limit);
+
     // normalize along rows
     GGML_API struct ggml_tensor * ggml_norm(
             struct ggml_context * ctx,
@@ -1569,6 +1577,10 @@ extern "C" {
             struct ggml_tensor  * mask,
             float                 scale,
             float                 max_bias);
+
+    GGML_API void ggml_soft_max_add_sinks(
+            struct ggml_tensor * a,
+            struct ggml_tensor * sinks);
 
     GGML_API struct ggml_tensor * ggml_soft_max_ext_back(
             struct ggml_context * ctx,
@@ -2051,6 +2063,10 @@ extern "C" {
 
     GGML_API enum ggml_prec ggml_flash_attn_ext_get_prec(
             const struct ggml_tensor * a);
+
+    GGML_API void ggml_flash_attn_ext_add_sinks(
+            struct ggml_tensor * a,
+            struct ggml_tensor * sinks);
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(

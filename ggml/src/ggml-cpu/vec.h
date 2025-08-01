@@ -992,9 +992,9 @@ void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * 
 
 inline static void ggml_vec_swiglu_f16(const int n, ggml_fp16_t * y, const ggml_fp16_t * x, const ggml_fp16_t * g) {
     for (int i = 0; i < n; ++i) {
-        float v = GGML_CPU_FP16_TO_FP32(x[i]);
-        float w = GGML_CPU_FP16_TO_FP32(g[i]);
-        y[i] = GGML_CPU_FP32_TO_FP16((v/(1.0f + expf(-v))) * w);
+        float xi = GGML_CPU_FP16_TO_FP32(x[i]);
+        float gi = GGML_CPU_FP16_TO_FP32(g[i]);
+        y[i] = GGML_CPU_FP32_TO_FP16((xi/(1.0f + expf(-xi))) * gi);
     }
 }
 

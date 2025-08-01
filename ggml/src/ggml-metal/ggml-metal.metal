@@ -1431,6 +1431,32 @@ kernel void kernel_swiglu(
     }
 }
 
+kernel void kernel_swiglu_oai(
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        constant ggml_metal_kargs_glu & args,
+        uint tgpig[[threadgroup_position_in_grid]],
+        uint tpitg[[thread_position_in_threadgroup]],
+        uint   ntg[[threads_per_threadgroup]]) {
+    device const float * src0_row = (device const float *) ((device const char *) src0 + tgpig*args.nb01) + args.i00;
+    device const float * src1_row = (device const float *) ((device const char *) src1 + tgpig*args.nb11) + args.i10;
+    device       float * dst_row  = (device       float *) ((device       char *) dst  + tgpig*args.nb1);
+
+    for (int i0 = tpitg; i0 < args.ne0; i0 += ntg) {
+        float x0 = src0_row[i0];
+        float x1 = src1_row[i0];
+
+        x0 = min(x0, args.limit);
+        x1 = max(min(x1, args.limit), -args.limit);
+
+        float out_glu = x0 / (1.0f + exp(-x0 * args.alpha));
+        out_glu = out_glu * (1.0f + x1);
+
+        dst_row[i0] = out_glu;
+    }
+}
+
 kernel void kernel_geglu_erf(
         device const char * src0,
         device const char * src1,
@@ -1534,6 +1560,7 @@ template<typename T>
 kernel void kernel_soft_max(
         device const  char * src0,
         device const  char * src1,
+        device const  char * src2,
         device        char * dst,
         constant ggml_metal_kargs_soft_max & args,
         threadgroup  float * buf [[threadgroup(0)]],
@@ -1552,6 +1579,7 @@ kernel void kernel_soft_max(
 
     device const float * psrc0 =                (device const float *) (src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
     device const     T * pmask = src1 != src0 ? (device const T *    ) (src1 + i11*args.nb11 + i12*args.nb12 + i13*args.nb13) : nullptr;
+    device const float * psrc2 = src2 != src0 ? (device const float *) (src2)                                                 : nullptr;
     device       float * pdst  =                (device       float *) (dst  + i01*args.nb1  + i02*args.nb2  + i03*args.nb3);
 
     float slope = 1.0f;
@@ -1567,7 +1595,7 @@ kernel void kernel_soft_max(
     }
 
     // parallel max
-    float lmax = -INFINITY;
+    float lmax = psrc2 ? psrc2[i02] : -INFINITY;
 
     for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
         lmax = MAX(lmax, psrc0[i00]*args.scale + (pmask ? slope*pmask[i00] : 0.0f));
@@ -1623,6 +1651,10 @@ kernel void kernel_soft_max(
         sum = simd_sum(sum);
     }
 
+    if (psrc2) {
+        sum += exp(psrc2[i02] - max_val);
+    }
+
     const float inv_sum = 1.0f/sum;
 
     for (int i00 = tpitg.x; i00 < args.ne00; i00 += tptg.x) {
@@ -1634,6 +1666,7 @@ template<typename T>
 kernel void kernel_soft_max_4(
         device const  char * src0,
         device const  char * src1,
+        device const  char * src2,
         device        char * dst,
         constant ggml_metal_kargs_soft_max & args,
         threadgroup  float * buf [[threadgroup(0)]],
@@ -1652,6 +1685,7 @@ kernel void kernel_soft_max_4(
 
     device const float4 * psrc4 =                (device const float4 *) (src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
     device const      T * pmask = src1 != src0 ? (device const T *     ) (src1 + i11*args.nb11 + i12*args.nb12 + i13*args.nb13) : nullptr;
+    device const float *  psrc2 = src2 != src0 ? (device const float * ) (src2)                                                 : nullptr;
     device       float4 * pdst4 =                (device       float4 *) (dst  + i01*args.nb1  + i02*args.nb2  + i03*args.nb3);
 
     float slope = 1.0f;
@@ -1666,7 +1700,7 @@ kernel void kernel_soft_max_4(
     }
 
     // parallel max
-    float4 lmax4 = -INFINITY;
+    float4 lmax4 = psrc2 ? psrc2[i02] : -INFINITY;
 
     for (int i00 = tpitg.x; i00 < args.ne00/4; i00 += tptg.x) {
         lmax4 = fmax(lmax4, psrc4[i00]*args.scale + (float4)((pmask ? slope*pmask[i00] : 0.0f)));
@@ -1723,6 +1757,10 @@ kernel void kernel_soft_max_4(
 
         sum = buf[tiisg];
         sum = simd_sum(sum);
+    }
+
+    if (psrc2) {
+        sum += exp(psrc2[i02] - max_val);
     }
 
     const float inv_sum = 1.0f/sum;
@@ -4092,6 +4130,7 @@ kernel void kernel_flash_attn_ext(
         device const char * k,
         device const char * v,
         device const char * mask,
+        device const char * sinks,
         device       char * dst,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
@@ -4407,6 +4446,35 @@ kernel void kernel_flash_attn_ext(
             }
         }
 
+        if (sinks != q && sgitg == 0) {
+            for (ushort j = 0; j < Q; ++j) {
+                const float m = M[j];
+                const float s = tiisg == 0 ? ((device const float *) sinks)[iq2] : -FLT_MAX/2;
+
+                M[j] = simd_max(max(M[j], s));
+
+                const float ms = exp(m - M[j]);
+                const float vs = exp(s - M[j]);
+
+                S[j] = S[j]*ms + simd_sum(vs);
+
+                if (tiisg == j) {
+                    ss[j*TS + 2*C + j] = ms;
+                }
+            }
+
+            // O = diag(ms)*O
+            {
+                s8x8_t ms;
+                simdgroup_load(ms, ss + 2*C, TS, 0, false);
+
+                #pragma unroll(DV8)
+                for (short i = 0; i < DV8; ++i) {
+                    simdgroup_multiply(lo[i], ms, lo[i]);
+                }
+            }
+        }
+
         // these are needed for reducing the results from the simdgroups (reuse the ss buffer)
         for (short j = tiisg; j < Q; j += NW) {
             ss[j*TS + 0] = S[j];
@@ -4618,6 +4686,7 @@ kernel void kernel_flash_attn_ext_vec(
         device const char * k,
         device const char * v,
         device const char * mask,
+        device const char * sinks,
         device       char * dst,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
@@ -4832,6 +4901,23 @@ kernel void kernel_flash_attn_ext_vec(
                         lo[ii/NL] += o4_t(float4(mv)*float4(ms));
                     }
                 }
+            }
+        }
+
+        if (sinks != q && sgitg == 0) {
+            const float m = M;
+            const float s = tiisg == 0 ? ((device const float *) sinks)[iq2] : -FLT_MAX/2;
+
+            M = simd_max(max(M, s));
+
+            const float ms = exp(m - M);
+            const float vs = exp(s - M);
+
+            S = S*ms + simd_sum(vs);
+
+#pragma unroll(DV4/NL)
+            for (short ii = 0; ii < DV4; ii += NL) {
+                lo[ii/NL] *= ms;
             }
         }
 

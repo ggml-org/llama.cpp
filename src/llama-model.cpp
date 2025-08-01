@@ -258,11 +258,9 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 ggml_tensor * b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, n_embd, w->ne[1], 1, 1);
                 op_tensor = ggml_im2col(ctx, w, b, 1, 0, 0, 0, 1, 0, false, GGML_TYPE_F16);
             } break;
-        case GGML_OP_CONCAT:
+        case GGML_OP_SCALE:
             {
-                ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16, 16);
-                ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 16, 16);
-                op_tensor = ggml_concat(ctx, a, b, 0);
+                op_tensor = ggml_scale(ctx, w, 1.0f);
             } break;
         default:
             GGML_ABORT("%s: missing test for op %s for tensor %s", __func__, ggml_op_name(op), w->name);
@@ -17189,14 +17187,9 @@ struct llm_build_openai_moe_iswa : public llm_graph_context {
                 cb(Kcur, "Kcur", il);
                 cb(Vcur, "Vcur", il);
 
-                // cur = build_attn(inp_attn, gf,
-                //         model.layers[il].wo, model.layers[il].bo,
-                //         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_rot)), il);
-
-                ggml_tensor * sink = model.layers[il].attn_sinks;
-                cur = build_attn_sink(inp_attn,
+                cur = build_attn_with_sinks(inp_attn,
                         model.layers[il].wo, model.layers[il].bo,
-                        Qcur, Kcur, Vcur, sink, 1.0f/sqrtf(float(n_rot)), il);
+                        Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].attn_sinks, 1.0f/sqrtf(float(n_rot)), il);
 
                 cb(cur, "attn_out", il);
             }
@@ -17256,107 +17249,6 @@ struct llm_build_openai_moe_iswa : public llm_graph_context {
         res->t_logits = cur;
 
         ggml_build_forward_expand(gf, cur);
-    }
-
-    // TODO @ngxson : this is a hack
-    ggml_tensor * build_attn_sink(
-                llm_graph_input_attn_kv_unified_iswa * inp,
-                ggml_tensor * wo,
-                ggml_tensor * wo_b,
-                ggml_tensor * q_cur,
-                ggml_tensor * k_cur,
-                ggml_tensor * v_cur,
-                ggml_tensor * sink,  // [n_rot]
-                    float     kq_scale,
-                    int       il) const {
-        // these nodes are added to the graph together so that they are not reordered
-        // by doing so, the number of splits in the graph is reduced
-        ggml_build_forward_expand(gf, q_cur);
-
-        if (k_cur) {
-            ggml_build_forward_expand(gf, k_cur);
-        }
-
-        if (v_cur) {
-            ggml_build_forward_expand(gf, v_cur);
-        }
-
-        const auto * mctx_iswa = static_cast<const llama_kv_cache_unified_iswa_context *>(mctx);
-
-        const bool is_swa = hparams.is_swa(il);
-
-        const auto * mctx_cur = is_swa ? mctx_iswa->get_swa() : mctx_iswa->get_base();
-
-        // optionally store to KV cache
-        if (k_cur) {
-            const auto & k_idxs = is_swa ? inp->get_k_idxs_swa() : inp->get_k_idxs();
-
-            ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
-        }
-
-        if (v_cur) {
-            const auto & v_idxs = is_swa ? inp->get_v_idxs_swa() : inp->get_v_idxs();
-
-            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
-        }
-
-        const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
-
-        ggml_tensor * q = q_cur;
-        ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-        ggml_tensor * v = mctx_cur->get_v(ctx0, il);
-
-        // attn implementation
-        ggml_tensor * cur = nullptr;
-        {
-            q = ggml_permute(ctx0, q, 0, 2, 1, 3);
-            k = ggml_permute(ctx0, k, 0, 2, 1, 3);
-            v = ggml_permute(ctx0, v, 0, 2, 1, 3);
-
-            ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
-            ggml_mul_mat_set_prec(kq, GGML_PREC_F32);
-
-            // !! ATTN SINK !!
-            ggml_tensor * kq_mask_v = ggml_view_2d(ctx0, kq_mask,
-                                            kq_mask->ne[0], n_tokens,
-                                            ggml_row_size(kq_mask->type, kq_mask->ne[0]), 0);
-            kq = ggml_add(ctx0, kq, kq_mask_v);
-            kq = ggml_scale(ctx0, kq, kq_scale);
-            cb(kq, "kq_masked", il);
-
-            sink = ggml_reshape_3d(ctx0, sink, 1, 1, n_head); // reshape for broadcasting
-            sink = ggml_repeat_4d(ctx0, sink, 1, n_tokens, n_head, 1);
-            kq = ggml_concat(ctx0, sink, kq, 0); // append the sinks
-            cb(kq, "kq_with_sink", il);
-
-            kq = ggml_soft_max_ext(ctx0, kq, nullptr, 1.0f, hparams.f_max_alibi_bias);
-            kq = ggml_view_3d(ctx0, kq, kq_mask->ne[0], n_tokens, n_head,
-                        ggml_row_size(kq->type, kq->ne[0]),
-                        ggml_row_size(kq->type, kq->ne[0]*n_tokens),
-                        ggml_element_size(kq)); // ignore the sinks
-            cb(kq, "kq_sink_ignored", il);
-
-            ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
-
-            cur = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-            cur = ggml_cont_2d(ctx0, cur, cur->ne[0]*n_head, n_tokens);
-            if (!cparams.offload_kqv) {
-                // all nodes between the KV store and the attention output are run on the CPU
-                ggml_backend_sched_set_tensor_backend(sched, cur, backend_cpu);
-            }
-        }
-
-        cb(cur, "kqv_out", il);
-
-        if (wo) {
-            cur = build_lora_mm(wo, cur);
-        }
-
-        if (wo_b) {
-            cur = ggml_add(ctx0, cur, wo_b);
-        }
-
-        return cur;
     }
 };
 

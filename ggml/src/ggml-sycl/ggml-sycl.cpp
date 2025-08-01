@@ -4350,6 +4350,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
             if (op->src[0]->ne[3] != 1) {
                 return false;
             }
+            // TODO: support attention sinks [TAG_ATTN_SINKS]
+            if (op->src[2]) {
+                return false;
+            }
             // TODO: support broadcast
             // ref: https://github.com/ggml-org/llama.cpp/pull/14435
             return !op->src[1] || (op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1);

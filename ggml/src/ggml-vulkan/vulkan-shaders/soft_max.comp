@@ -20,6 +20,7 @@ layout (push_constant) uniform parameter
     float m1;
     uint n_head_log2;
     uint nrows_x;
+    uint has_sinks;
 } p;
 
 #include "types.comp"
@@ -29,7 +30,8 @@ layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer X {A_TYPE data_a[];};
 layout (binding = 1) readonly buffer Y {B_TYPE data_b[];};
-layout (binding = 2) buffer D {D_TYPE data_d[];};
+layout (binding = 2) readonly buffer Z {float data_c[];};
+layout (binding = 3) buffer D {D_TYPE data_d[];};
 
 shared FLOAT_TYPE vals[BLOCK_SIZE];
 
@@ -60,13 +62,13 @@ void soft_max(uint num_iters) {
         const uint h = (rowx / p.ne01) % p.ne02; // head index
 
         const float base = h < p.n_head_log2 ? p.m0 : p.m1;
-        const uint   exp  = h < p.n_head_log2 ? h + 1 : 2*(h - p.n_head_log2) + 1;
+        const uint   exp = h < p.n_head_log2 ? h + 1 : 2*(h - p.n_head_log2) + 1;
 
         slope = pow(base, exp);
     }
 
     // Find max
-    FLOAT_TYPE max_val = uintBitsToFloat(0xFF800000);
+    FLOAT_TYPE max_val = p.has_sinks == 0 ? uintBitsToFloat(0xFF800000) : data_c[i02];
 
     // Cache values while we compute the max, so we don't need to read them
     // again when we're ready to compute exp(x-max).
@@ -147,6 +149,10 @@ void soft_max(uint num_iters) {
         barrier();
     }
     sum = vals[0];
+
+    if (p.has_sinks != 0) {
+        sum += FLOAT_TYPE(exp(FLOAT_TYPE(data_c[i02]) - max_val));
+    }
 
     FLOAT_TYPE rcpdivisor = 1.0/sum;
 
