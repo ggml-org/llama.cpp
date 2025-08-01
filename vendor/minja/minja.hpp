@@ -1246,7 +1246,7 @@ public:
             }
             return result;
 
-          } else if (target_value.is_array()) {            
+          } else if (target_value.is_array()) {
             auto result = Value::array();
             for (int64_t i = start; step > 0 ? i < end : i > end; i += step) {
               result.push_back(target_value.at(i));
@@ -2145,7 +2145,7 @@ private:
               }
             }
           }
-  
+
           if ((has_first_colon || has_second_colon)) {
             index = std::make_shared<SliceExpr>(slice_loc, std::move(start), std::move(end), std::move(step));
           } else {
