@@ -40,7 +40,7 @@
             "args": [
                 "--model", "/path/to/your/model.gguf",
                 "--prompt", "Hello, world!",
-                "--no-hyperthreading"
+                "--cpu-no-hyperthreading"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

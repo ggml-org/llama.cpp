@@ -49,8 +49,9 @@ llama_mmap(const std::vector<struct llama_file *> & files, size_t prefetch = (si
 
 ### 4. Command Line Arguments Enhanced
 Fixed and improved argument parsing for:
-- `--no-hyperthreading` - Disable hyperthreading for math operations
-- `--use-efficiency-cores` - Use E-cores (may degrade performance)
+### Command Line Options
+- `--cpu-no-hyperthreading` - Disable hyperthreading for math operations
+- `--cpu-no-efficiency-cores` - Disable E-cores (use P-cores only)
 - `--cpu-topology` - Display detailed CPU topology and exit
 
 ## Benefits Achieved

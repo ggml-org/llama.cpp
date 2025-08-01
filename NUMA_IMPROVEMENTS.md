@@ -63,26 +63,27 @@ struct cpu_topology_info {
 
 #### 3. Configurable Hyperthreading Usage
 **Before**: Hyperthreading disabled by default, no user control
-**After**: Hyperthreading enabled by default, user can disable with `--no-hyperthreading`
+**After**: Hyperthreading enabled by default, user can disable with `--cpu-no-hyperthreading`
 
 ```bash
 # Default behavior (hyperthreading enabled)
 ./llama-server --model model.gguf
 
 # Disable hyperthreading
-./llama-server --model model.gguf --no-hyperthreading
+# Test without hyperthreading
+./llama-server --model model.gguf --cpu-no-hyperthreading
 
-# Use efficiency cores too
-./llama-server --model model.gguf --use-efficiency-cores
+# Test with efficiency cores disabled  
+./llama-server --model model.gguf --cpu-no-efficiency-cores
 ```
 
 #### 4. Environment Variable Support
 ```bash
-# Disable hyperthreading via environment
-LLAMA_NO_HYPERTHREADING=1 ./llama-server --model model.gguf
+# Use environment variables
+LLAMA_CPU_NO_HYPERTHREADING=1 ./llama-server --model model.gguf
 
-# Enable efficiency cores
-LLAMA_USE_EFFICIENCY_CORES=1 ./llama-server --model model.gguf
+# Disable efficiency cores via environment
+LLAMA_CPU_NO_EFFICIENCY_CORES=1 ./llama-server --model model.gguf
 ```
 
 ## 🔧 Technical Details
@@ -145,7 +146,7 @@ lscpu
 ./build/bin/llama-bench -m model.gguf
 
 # Benchmark without hyperthreading
-./build/bin/llama-bench -m model.gguf --no-hyperthreading
+./build/bin/llama-bench -m model.gguf --cpu-no-hyperthreading
 
 # Test different thread counts
 for threads in 4 8 16; do
@@ -190,7 +191,7 @@ Test on your system and compare:
 
 ```bash
 # Before improvements (simulation)
-LLAMA_NO_HYPERTHREADING=1 ./llama-bench --threads $(nproc --ignore=1)
+LLAMA_CPU_NO_HYPERTHREADING=1 ./llama-bench --threads $(nproc --ignore=1)
 
 # After improvements (default)
 ./llama-bench --threads $(nproc)

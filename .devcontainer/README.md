@@ -172,7 +172,7 @@ numactl --hardware
 ./build/bin/llama-bench -m model.gguf
 
 # Test without hyperthreading
-./build/bin/llama-bench -m model.gguf --no-hyperthreading
+./build/bin/llama-bench -m model.gguf --cpu-no-hyperthreading
 
 # Test with specific thread count
 ./build/bin/llama-bench -m model.gguf --threads 8
@@ -184,10 +184,10 @@ numactl --cpunodebind=0 --membind=0 ./build/bin/llama-bench -m model.gguf
 ### Environment Variables
 ```bash
 # Disable hyperthreading via environment
-LLAMA_NO_HYPERTHREADING=1 ./build/bin/llama-server --model model.gguf
+LLAMA_CPU_NO_HYPERTHREADING=1 ./build/bin/llama-server --model model.gguf
 
-# Enable efficiency cores
-LLAMA_USE_EFFICIENCY_CORES=1 ./build/bin/llama-server --model model.gguf
+# Disable efficiency cores
+LLAMA_CPU_NO_EFFICIENCY_CORES=1 ./build/bin/llama-server --model model.gguf
 ```
 
 ## Development Workflow

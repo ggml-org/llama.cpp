@@ -7,7 +7,7 @@ This document provides instructions for AI assistants (GitHub Copilot, Claude, e
 This is a fork of llama.cpp with **NUMA-aware improvements** for better CPU threading and memory allocation. The project includes:
 
 - **Fixed NUMA thread assignment** - Proper CPU topology detection instead of naive modulo arithmetic
-- **Configurable hyperthreading** - Default enabled, user can disable with `--no-hyperthreading`
+- **Configurable hyperthreading** - Default enabled, user can disable with `--cpu-no-hyperthreading`
 - **Intel hybrid CPU support** - Detects P-cores vs E-cores
 - **Development container** - Ubuntu 24.04 with all dependencies for consistent building
 
@@ -63,14 +63,14 @@ cpu_print_topology_info()     // Debug information display
 **Files**: `common/arg.cpp`
 
 New arguments added:
-- `--no-hyperthreading` - Disable hyperthreading (default: enabled)
-- `--use-efficiency-cores` - Include E-cores in thread pool
+- `--cpu-no-hyperthreading` - Disable hyperthreading (default: enabled)
+- `--cpu-no-efficiency-cores` - Disable E-cores in thread pool (default: enabled)
 - `--cpu-topology` - Display CPU topology and exit
 
 ### 4. Environment Variables
 ```bash
-LLAMA_NO_HYPERTHREADING=1     # Disable hyperthreading
-LLAMA_USE_EFFICIENCY_CORES=1  # Enable efficiency cores
+LLAMA_CPU_NO_HYPERTHREADING=1     # Disable hyperthreading
+LLAMA_CPU_NO_EFFICIENCY_CORES=1   # Disable efficiency cores
 ```
 
 ## 🧪 Testing Strategy
@@ -93,7 +93,7 @@ numactl --hardware
 ```bash
 # Compare hyperthreading on/off
 ./build/bin/llama-bench -m model.gguf
-./build/bin/llama-bench -m model.gguf --no-hyperthreading
+./build/bin/llama-bench -m model.gguf --cpu-no-hyperthreading
 
 # Test different thread counts
 for threads in 4 8 16; do
