@@ -5,24 +5,37 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
+#include <ctime>
 #include <string>
 #include <vector>
+#include <cstring>
 
 static void print_usage(int, char ** argv) {
     LOG("\nexample usage:\n");
     LOG("\n    %s -m model.gguf -p \"Hello my name is\" -n 32 -np 4\n", argv[0]);
     LOG("\n");
+    LOG("  --upload              enable to submit benchmark results to public repository\n");
+    LOG("\n");
 }
 
 int main(int argc, char ** argv) {
-    common_params params;
+common_params params;
 
-    params.prompt = "Hello my name is";
-    params.n_predict = 32;
+params.prompt = "Hello my name is";
+params.n_predict = 32;
+params.upload = false;
 
-    if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON, print_usage)) {
-        return 1;
+if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON, print_usage)) {
+    return 1;
+}
+
+// Parse --upload flag after common_params_parse
+for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--upload") == 0) {
+        params.upload = true;
     }
+}
 
     common_init();
 
@@ -241,6 +254,29 @@ int main(int argc, char ** argv) {
     llama_model_free(model);
 
     llama_backend_free();
+
+    if (params.upload) {
+        // Get current time for filename
+        time_t now = time(nullptr);
+        char timestamp[20];
+        strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", localtime(&now));
+        std::string filename = "llama-bench-" + std::string(timestamp) + ".json";
+        FILE * f = fopen(filename.c_str(), "w");
+        if (f) {
+            fprintf(f, "{\n");
+            fprintf(f, "  \"model\": \"%s\",\n", params.model.path.c_str());
+            fprintf(f, "  \"n_predict\": %d,\n", params.n_predict);
+            fprintf(f, "  \"n_parallel\": %d,\n", params.n_parallel);
+            fprintf(f, "  \"tokens_per_second\": %f,\n", n_decode / ((t_main_end - t_main_start) / 1000000.0f));
+            fprintf(f, "  \"system_info\": \"%s\"\n", common_params_get_system_info(params).c_str());
+            fprintf(f, "}\n");
+            fclose(f);
+            LOG_INF("Benchmark results saved to %s\n", filename.c_str());
+            LOG_INF("To upload, please visit https://github.com/ggerganov/llamacpp-bench and follow the instructions.\n");
+        } else {
+            LOG_ERR("Failed to open %s for writing\n", filename.c_str());
+        }
+    }
 
     return 0;
 }
