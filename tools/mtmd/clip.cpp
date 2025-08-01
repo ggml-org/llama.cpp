@@ -1607,7 +1607,7 @@ struct clip_graph {
 
         // Apply silu
         gate = ggml_silu_inplace(ctx0, gate);
-        
+
         // Multiply together
         cur = ggml_mul(ctx0, gate, h_to_4h);
 
@@ -1615,7 +1615,6 @@ struct clip_graph {
         cur = ggml_mul_mat(ctx0, model.mm_4h_to_h_w, cur);
 
         // Concatenate with boi and eoi
-        // TODO: The shape may be incorrect
         cur = ggml_concat(ctx0, model.mm_boi, cur, 1);
         cur = ggml_concat(ctx0, cur, model.mm_eoi, 1);
 
