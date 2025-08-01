@@ -433,9 +433,9 @@ class TensorNameMap:
             "model.layers.{bid}.residual_mlp.w1",             # arctic
             "transformer.h.{bid}.mlp.c_fc_0",                 # exaone
             "model.layers.{bid}.feed_forward.gate_proj",      # llama4 jamba granite-hybrid
-            "model.layers.{bid}.block_sparse_moe.gate",   # smallthinker
-            "model.transformer.blocks.{bid}.ff_proj",     # llada
-            "layers.{bid}.mlp.gate_proj",                 # qwen3-embedding
+            "model.layers.{bid}.block_sparse_moe.gate",       # smallthinker
+            "model.transformer.blocks.{bid}.ff_proj",         # llada
+            "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
             "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
         ),
 

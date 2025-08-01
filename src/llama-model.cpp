@@ -5549,12 +5549,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
-
-                    // if output is NULL, init from the input tok embed
-                    if (output == NULL) {
-                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
-                    }
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -18146,7 +18141,6 @@ struct llm_build_cogvlm : public llm_graph_context {
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                // TODO: Check Rope because this might not be the same as cogvlm
                 Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
                 Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
 
@@ -18160,12 +18154,6 @@ struct llm_build_cogvlm : public llm_graph_context {
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            // Make a standard ffn without the build_ffn function
-            //ggml_tensor * tmp = build_lora_mm(ffn_up, cur);
-            //ggml_tensor * gate = build_lora_mm(ffn_gate, cur);
-            //gate = ggml_silu(ctx0, gate);
-            //cur = ggml_mul(ctx0, gate, tmp);
-            //cur = build_lora_mm(ffn_down, cur);
             cur = build_ffn(cur,
                     ffn_up,   NULL, NULL,
                     ffn_gate, NULL, NULL,
