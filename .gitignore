@@ -32,6 +32,8 @@
 .swiftpm
 .vs/
 .vscode/
+.devcontainer/
+.github/copilot-instructions.md
 nppBackup
 
 
@@ -147,3 +149,4 @@ poetry.toml
 /run-vim.sh
 /run-chat.sh
 Testing/Temporary/CTestCostData.txt
+

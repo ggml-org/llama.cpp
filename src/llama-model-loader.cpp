@@ -874,9 +874,9 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
             
             // The unified mapping represents all files, so we need to store it
             // for each file index to maintain compatibility with existing code
-            size_t total_size = unified_mapping->size();
             for (size_t i = 0; i < files.size(); ++i) {
-                mmaps_used.emplace_back(total_size, 0);
+                // For mmaps_used, store the individual file size, not the total unified size
+                mmaps_used.emplace_back(files[i]->size(), 0);
                 if (mlock_mmaps && i == 0) { // Only lock once for the unified mapping
                     std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
                     mlock_mmap->init(unified_mapping->addr());
@@ -1253,6 +1253,11 @@ bool llama_model_loader::load_all_data(
             for (uint32_t idx = 0; idx < mappings.size(); idx++) {
                 const auto & mmap_used = mmaps_used.at(idx);
                 auto & mapping = mappings.at(idx);
+                
+                // Skip null mappings (can happen with unified NUMA mappings)
+                if (!mapping) {
+                    continue;
+                }
                 
                 // Check if this mapping uses NUMA mirroring
                 // If so, skip the unmap_fragment calls as cleanup is handled in the destructor
