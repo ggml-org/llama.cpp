@@ -62,7 +62,8 @@ export default function ChatMessage({
       return { content: msg.content };
     }
     const REGEX_THINK_OPEN = /<think>|<\|channel\|>analysis<\|message\|>/;
-    const REGEX_THINK_CLOSE = /<\/think>|<\|channel\|>final<\|message\|>/;
+    const REGEX_THINK_CLOSE =
+      /<\/think>|assistant<\|channel\|>final<\|message\|>/;
     let actualContent = '';
     let thought = '';
     let isThinking = false;
