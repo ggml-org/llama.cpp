@@ -276,7 +276,7 @@ export default function SettingDialog({
   show: boolean;
   onClose: () => void;
 }) {
-  const { config, saveConfig } = useAppContext();
+  const { config, saveConfig, serverProps } = useAppContext();
   const [sectionIdx, setSectionIdx] = useState(0);
 
   // clone the config object to prevent direct mutation
@@ -287,15 +287,22 @@ export default function SettingDialog({
 
   // get default client settings
   useEffect(() => {
-    StorageUtils.setDefaultConfig().then((wasChanged: boolean) => {
-      if (wasChanged) {
-        console.log('Setting default config');
+    if (
+      serverProps &&
+      serverProps.default_client_config &&
+      Object.keys(serverProps.default_client_config).length > 0
+    ) {
+      if (StorageUtils.setDefaultConfig(serverProps.default_client_config)) {
+        console.log(
+          'Setting default config:',
+          serverProps.default_client_config
+        );
         const newConfig = StorageUtils.getConfig();
         saveConfig(newConfig);
         setLocalConfig(JSON.parse(JSON.stringify(newConfig)));
       }
-    });
-  }, []);
+    }
+  }, [serverProps, saveConfig]);
 
   const resetConfig = async () => {
     if (await showConfirm('Are you sure you want to reset all settings?')) {

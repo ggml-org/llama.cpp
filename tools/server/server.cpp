@@ -3862,11 +3862,6 @@ int main(int argc, char ** argv) {
         res_ok(res, health);
     };
 
-    const auto handle_default_config = [&](const httplib::Request &, httplib::Response & res) {
-        // default client-side config
-        res_ok(res, ctx_server.default_client_config);
-    };
-
     const auto handle_slots = [&](const httplib::Request & req, httplib::Response & res) {
         if (!params.endpoint_slots) {
             res_error(res, format_error_response("This server does not support slots endpoint. Start it with `--slots`", ERROR_TYPE_NOT_SUPPORTED));
@@ -4134,6 +4129,7 @@ int main(int argc, char ** argv) {
             { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_bos(ctx_server.vocab), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_eos(ctx_server.vocab), /* special= */ true)},
             { "build_info",                  build_info },
+            { "default_client_config",       ctx_server.default_client_config },
         };
         if (ctx_server.params_base.use_jinja) {
             if (auto tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
@@ -4846,7 +4842,6 @@ int main(int argc, char ** argv) {
 
     // register API routes
     svr->Get ("/health",              handle_health); // public endpoint (no API key check)
-    svr->Get ("/defaultConfig.json",  handle_default_config); // public endpoint (no API key check)
     svr->Get ("/metrics",             handle_metrics);
     svr->Get ("/props",               handle_props);
     svr->Post("/props",               handle_props_change);

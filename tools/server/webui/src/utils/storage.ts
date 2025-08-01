@@ -213,12 +213,9 @@ const StorageUtils = {
       localStorage.setItem('theme', theme);
     }
   },
-  async setDefaultConfig(): Promise<boolean> {
+  setDefaultConfig(defaultConfig: object | null | undefined): boolean {
     if (localStorage.getItem('config') === null) {
       try {
-        const response = await fetch('/defaultConfig.json');
-        const defaultConfig = await response.json();
-
         // Ensure there still is no config when we overwrite it
         if (localStorage.getItem('config') === null) {
           localStorage.setItem('config', JSON.stringify(defaultConfig));

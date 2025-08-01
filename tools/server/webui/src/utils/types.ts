@@ -134,5 +134,6 @@ export interface LlamaCppServerProps {
     vision: boolean;
     audio: boolean;
   };
+  default_client_config: Record<string, number | string | boolean>;
   // TODO: support params
 }
