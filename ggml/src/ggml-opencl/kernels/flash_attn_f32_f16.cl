@@ -128,8 +128,8 @@ __kernel void flash_attn_f32_f16(
             ACC_TYPE4 dot_acc0 = (ACC_TYPE4)(0.0f);
             ACC_TYPE4 dot_acc1 = (ACC_TYPE4)(0.0f);
             for (int k = 0; k < DK_VEC; k++) {
-                dot_acc0 = fma(q_priv[k], CONVERT_KV_ACC4(l_k[j][k]), dot_acc0);
-                dot_acc1 = fma(q_priv[k], CONVERT_KV_ACC4(l_k[j+1][k]), dot_acc1);
+                dot_acc0 = mad(q_priv[k], CONVERT_KV_ACC4(l_k[j][k]), dot_acc0);
+                dot_acc1 = mad(q_priv[k], CONVERT_KV_ACC4(l_k[j+1][k]), dot_acc1);
             }
             ACC_TYPE score0 = (dot_acc0.s0 + dot_acc0.s1 + dot_acc0.s2 + dot_acc0.s3) * scale;
             ACC_TYPE score1 = (dot_acc1.s0 + dot_acc1.s1 + dot_acc1.s2 + dot_acc1.s3) * scale;
@@ -254,7 +254,7 @@ __kernel void flash_attn_f32_f16_q1(
         const global KV_DATA_TYPE4* k_ptr = (const global KV_DATA_TYPE4*)(k_base + k_row_offset);
         ACC_TYPE4 dot_acc = (ACC_TYPE4)(0.0f);
         for (int k = 0; k < DK_VEC; k++) {
-            dot_acc = fma(q_priv[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
+            dot_acc = mad(q_priv[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
         if (mask_base != NULL) {
@@ -287,7 +287,7 @@ __kernel void flash_attn_f32_f16_q1(
         const global KV_DATA_TYPE4* v_ptr = (const global KV_DATA_TYPE4*)(v_base + v_row_offset);
         ACC_TYPE4 dot_acc = (ACC_TYPE4)(0.0f);
         for (int k = 0; k < DK_VEC; k++) {
-            dot_acc = fma(q_priv[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
+            dot_acc = mad(q_priv[k], CONVERT_KV_ACC4(k_ptr[k]), dot_acc);
         }
         ACC_TYPE score = (dot_acc.s0 + dot_acc.s1 + dot_acc.s2 + dot_acc.s3) * scale;
         if (mask_base != NULL) {
@@ -300,7 +300,7 @@ __kernel void flash_attn_f32_f16_q1(
         const ACC_TYPE p = exp(score - m_final);
         l_i += p;
         for (int i = 0; i < DV_VEC; i++) {
-            o_acc[i] = fma(p, CONVERT_KV_ACC4(v_ptr[i]), o_acc[i]);
+            o_acc[i] = mad(p, CONVERT_KV_ACC4(v_ptr[i]), o_acc[i]);
         }
     }
 
