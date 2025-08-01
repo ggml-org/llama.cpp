@@ -6605,12 +6605,12 @@ class Glm4MoeModel(TextModel):
         self.gguf_writer.add_token_types(toktypes)
 
         # Special tokens
-        # BOS should be [gMASK] (151331), EOT should be <|endoftext|> (151329)
+        # BOS should be [gMASK] (151331), EOS should be <|endoftext|> (151329) as per official config
         special_vocab._set_special_token(
-            "eos", tokenizer.get_added_vocab()["<|endoftext|>"]
+            "eos", tokenizer.get_added_vocab()["<|endoftext|>"]  # 151329 - official EOS token
         )
         special_vocab._set_special_token(
-            "eot", tokenizer.get_added_vocab()["<|endoftext|>"]
+            "eot", tokenizer.get_added_vocab()["<|endoftext|>"]  # 151329 - same as EOS
         )
         special_vocab._set_special_token(
             "unk", tokenizer.get_added_vocab()["<|endoftext|>"]
@@ -6620,6 +6620,9 @@ class Glm4MoeModel(TextModel):
         )
         special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
 
+        if "/nothink" in tokenizer.get_added_vocab():
+            special_vocab._set_special_token("nothink", tokenizer.get_added_vocab()["/nothink"])  # 151360
+        # Note: <think> and </think> are regular tokens (special=false in official config), not special tokens
 
         special_vocab.add_to_gguf(self.gguf_writer)
 
@@ -6653,6 +6656,9 @@ class Glm4MoeModel(TextModel):
         # Normalise topk probabilities
         if (norm_topk_prob := self.hparams.get("norm_topk_prob")) is not None:
             self.gguf_writer.add_expert_weights_norm(norm_topk_prob)
+
+        # GLM models should not prepend BOS token
+        self.gguf_writer.add_add_bos_token(False)
 
     _experts: list[dict[str, Tensor]] | None = None
     _shared_experts: list[dict[str, Tensor]] | None = None
