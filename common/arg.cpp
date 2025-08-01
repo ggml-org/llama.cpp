@@ -1403,7 +1403,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--cpu-topology"},
         "print detailed CPU topology information and exit",
-        [](common_params & params) {
+        [](common_params & /*params*/) {
             cpu_print_topology_info();
             exit(0);
         }
