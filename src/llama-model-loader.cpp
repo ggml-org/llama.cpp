@@ -1250,22 +1250,32 @@ bool llama_model_loader::load_all_data(
     if (size_done >= size_data) {
         // unmap offloaded tensors and metadata
         if (use_mmap) {
-            for (uint32_t idx = 0; idx < mappings.size(); idx++) {
-                const auto & mmap_used = mmaps_used.at(idx);
-                auto & mapping = mappings.at(idx);
-                
-                // Skip null mappings (can happen with unified NUMA mappings)
-                if (!mapping) {
-                    continue;
+            // Check if this is a unified mapping (mapping[0] exists but others are null)
+            bool is_unified_mapping = mappings.size() > 1 && mappings[0];
+            if (is_unified_mapping) {
+                for (size_t i = 1; i < mappings.size(); ++i) {
+                    if (mappings[i]) {
+                        is_unified_mapping = false;
+                        break;
+                    }
                 }
-                
-                // Check if this mapping uses NUMA mirroring
-                // If so, skip the unmap_fragment calls as cleanup is handled in the destructor
-                bool is_numa_mirrored = false;
-#ifdef GGML_NUMA_MIRROR
-                is_numa_mirrored = true;
-#endif
-                if (!is_numa_mirrored) {
+            }
+            
+            if (is_unified_mapping) {
+                // For unified mappings, skip unmap_fragment calls entirely
+                // Cleanup will be handled by the unified mapping destructor
+                LLAMA_LOG_DEBUG("Skipping unmap_fragment calls for unified mapping\n");
+            } else {
+                // Original per-file mapping cleanup
+                for (uint32_t idx = 0; idx < mappings.size(); idx++) {
+                    const auto & mmap_used = mmaps_used.at(idx);
+                    auto & mapping = mappings.at(idx);
+                    
+                    // Skip null mappings
+                    if (!mapping) {
+                        continue;
+                    }
+                    
                     mapping->unmap_fragment(0, mmap_used.first);
                     if (mmap_used.second != 0) {
                         mapping->unmap_fragment(mmap_used.second, mapping->size());
