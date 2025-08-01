@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - master
-      - workflow-updates
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-linux-cross.yml',
