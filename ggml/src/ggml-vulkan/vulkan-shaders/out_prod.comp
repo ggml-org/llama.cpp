@@ -1,0 +1,54 @@
+#version 450
+
+#include "generic_binary_head.comp"
+#include "types.comp"
+
+const uint num_threads = 256;
+
+layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
+
+void get_dst_indices(uint idx, out uint i20, out uint i21, out uint i22, out uint i23) {
+    i23 = fastdiv(idx, (p.ne22*p.ne21*p.ne20));
+    const uint i23_offset = i23 * p.ne22*p.ne21*p.ne20;
+    i22 = fastdiv((idx - i23_offset), (p.ne21*p.ne20));
+    const uint i22_offset = i22*p.ne21*p.ne20;
+    i21 = (idx - i23_offset - i22_offset) / p.ne20;
+    i20 = idx - i23_offset - i22_offset - i21*p.ne20;
+}
+
+void main() {
+    // num_threads * num_iter must equal 512 to match the wg_denoms and get_idx
+    const uint num_iter = 2;
+
+    const uint broadcast2 = uint(p.param2);
+    const uint broadcast3 = p.param3;
+
+    uint idx = get_idx();
+
+    [[unroll]] for (uint i = 0; i < num_iter; ++i) {
+        if (idx >= p.ne) {
+            continue;
+        }
+
+        uint i0, i1, i2, i3;
+        get_dst_indices(idx, i0, i1, i2, i3);
+
+        FLOAT_TYPE acc = FLOAT_TYPE(0.0);
+
+        for (uint i01 = 0; i01 < p.ne01; ++i01) {
+            uint a_idx = src0_idx(i0, i01, i2 / broadcast2, i3 / broadcast3);
+            uint b_idx = src1_idx(i1, i01, i2, i3);
+
+            FLOAT_TYPE a_val = FLOAT_TYPE(data_a[get_aoffset() + a_idx]);
+            FLOAT_TYPE b_val = FLOAT_TYPE(data_b[get_boffset() + b_idx]);
+
+            acc += a_val * b_val;
+        }
+
+        uint d_idx = dst_idx(i0, i1, i2, i3);
+        data_d[get_doffset() + d_idx] = D_TYPE(acc);
+
+        idx += num_threads;
+    }
+}
+
