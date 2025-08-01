@@ -473,6 +473,33 @@ struct server_task {
                         }
                     }
                 }
+           } else if (logit_bias != data.end() && logit_bias->is_object()) {
+                const int n_vocab = llama_vocab_n_tokens(vocab);
+                for (const auto & el : logit_bias->items()) {
+                    float bias;
+                    const auto & key = el.key();
+                    const auto & value = el.value();
+                    if (value.is_number()) {
+                        bias = value.get<float>();
+                    } else if (value.is_boolean() && !value.get<bool>()) {
+                        bias = -INFINITY;
+                    } else {
+                        continue;
+                    }
+
+                    char *end;
+                    llama_token tok = strtol(key.c_str(), &end, 10);
+                    if (*end == 0) {
+                        if (tok >= 0 && tok < n_vocab) {
+                            params.sampling.logit_bias.push_back({tok, bias});
+                        }
+                    } else {
+                        auto toks = common_tokenize(vocab, key, false);
+                        for (auto tok : toks) {
+                            params.sampling.logit_bias.push_back({tok, bias});
+                        }
+                    }
+                }
             }
 
             params.sampling.ignore_eos = json_value(data, "ignore_eos", params_base.sampling.ignore_eos);
@@ -1902,6 +1929,7 @@ struct server_context {
     mtmd_context * mctx = nullptr;
 
     const llama_vocab * vocab = nullptr;
+    bool vocab_dft_compatible = true;
 
     llama_model * model_dft = nullptr;
 
@@ -1992,10 +2020,9 @@ struct server_context {
                 return false;
             }
 
-            if (!common_speculative_are_compatible(ctx, llama_init_dft.context.get())) {
-                SRV_ERR("the draft model '%s' is not compatible with the target model '%s'\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
-
-                return false;
+            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft.context.get());
+            if (!vocab_dft_compatible) {
+                SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
             }
 
             const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
@@ -2085,10 +2112,13 @@ struct server_context {
                     return;
                 }
 
-                slot.spec = common_speculative_init(slot.ctx_dft);
+                slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return;
+                }
+                for (auto &pair : params_base.speculative.replacements) {
+                    common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
             }
 
