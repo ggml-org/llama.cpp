@@ -592,6 +592,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_1_LLAMA_3_1: return "Functionary v3.1 Llama 3.1";
         case COMMON_CHAT_FORMAT_HERMES_2_PRO: return "Hermes 2 Pro";
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
+        case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1289,6 +1290,26 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
         tool_calls_end);
 }
 
+static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    auto prompt = apply(tmpl, inputs);
+
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_GPT_OSS;
+
+    // TODO: support tool calls in GPT-OSS?
+
+    return data;
+}
+static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
+    // TODO @ngxson : this won't work with --special enabled, we should fix that
+    builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+}
+
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
@@ -1774,6 +1795,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_hermes_2_pro(tmpl, params);
     }
 
+    // GPT-OSS
+    if (src.find("<|channel|>") != std::string::npos && params.json_schema.is_null()) {
+        return common_chat_params_init_gpt_oss(tmpl, params);
+    }
+
     // Use generic handler when mixing tools + JSON schema.
     // TODO: support that mix in handlers below.
     if ((params.tools.is_array() && params.json_schema.is_object())) {
@@ -1924,6 +1950,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_COMMAND_R7B:
             common_chat_parse_command_r7b(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GPT_OSS:
+            common_chat_parse_gpt_oss(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));

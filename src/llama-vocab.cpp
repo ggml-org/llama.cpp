@@ -2330,9 +2330,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             }
         }
 
-        // @ngxson : quick hack for gpt-oss
+        // @ngxson : quick hack for gpt-oss, always render these tokens
         for (const auto & t : token_to_id) {
-            if (t.first == "<|channel|>" || t.first == "<|message|>") {
+            if (t.first == "<|channel|>" || t.first == "<|message|>" || t.first == "<|start|>") {
                 id_to_token[t.second].attr = LLAMA_TOKEN_ATTR_USER_DEFINED;
             }
         }
