@@ -1,37 +1,6 @@
 #include "ggml-cuda/common.cuh"
 #include "set.cuh"
 
-static __global__ void set_f32_cuda_copy(const float * __restrict__ src0,
-                                         float * __restrict__ dst,
-                                         const size_t ne0,
-                                         const size_t ne1,
-                                         const size_t ne2,
-                                         const size_t ne3,
-                                         const size_t nb0,
-                                         const size_t nb1,
-                                         const size_t nb2,
-                                         const size_t nb3) {
-    const size_t total = ne0 * ne1 * ne2 * ne3;
-    const size_t gid   = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid >= total) {
-        return;
-    }
-
-    size_t tmp = gid;
-
-    const size_t i0 = tmp % ne0;
-    tmp /= ne0;
-    const size_t i1 = tmp % ne1;
-    tmp /= ne1;
-    const size_t i2 = tmp % ne2;
-    tmp /= ne2;
-    const size_t i3 = tmp;
-
-    const size_t pos = (i0 * nb0 + i1 * nb1 + i2 * nb2 + i3 * nb3);
-
-    *((float *) ((char *) dst + pos)) = *((const float *) ((const char *) src0 + pos));
-}
-
 static __global__ void set_f32_cuda(const float * __restrict__ src1,
                                     float * __restrict__ dst,
                                     const size_t ne10,
@@ -100,16 +69,10 @@ void ggml_cuda_op_set(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     if (!inplace) {
         // copy whole src0 -> dst.
-        const size_t total = ne00 * ne01 * ne02 * ne03;
-
-        const int num_blocks = (total + CUDA_SET_BLOCK_SIZE - 1) / CUDA_SET_BLOCK_SIZE;
-
-        set_f32_cuda_copy<<<num_blocks, CUDA_SET_BLOCK_SIZE, 0, stream>>>(
-            src0_d, dst_d, ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03);
+        CUDA_CHECK(cudaMemcpyAsync(dst_d, src0_d, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, stream));
     }
 
     // set: src1 -> dst
-    // set_f32_cuda
 
     const size_t total      = ne10 * ne11 * ne12 * ne13;
     const size_t num_blocks = (total + CUDA_SET_BLOCK_SIZE - 1) / CUDA_SET_BLOCK_SIZE;
