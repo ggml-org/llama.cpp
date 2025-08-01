@@ -165,7 +165,7 @@ class chat_template {
         auto out_empty = try_raw_render(json::array({dummy_user_msg, {{"role", "assistant"}, {"content", ""}}}), {}, false);
         auto out_null = try_raw_render(json::array({dummy_user_msg, {{"role", "assistant"}, {"content", nullptr}}}), {}, false);
         caps_.requires_non_null_content = contains(out_empty, user_needle) && !contains(out_null, user_needle);
-        
+
         json j_null;
         auto make_tool_calls_msg = [&](const json & tool_calls) {
             return json {
