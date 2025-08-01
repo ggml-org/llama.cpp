@@ -66,7 +66,7 @@ static const std::map<std::string, llm_chat_template> LLM_CHAT_TEMPLATES = {
     { "llama4",            LLM_CHAT_TEMPLATE_LLAMA4            },
     { "smolvlm",           LLM_CHAT_TEMPLATE_SMOLVLM           },
     { "hunyuan-moe",       LLM_CHAT_TEMPLATE_HUNYUAN_MOE       },
-    { "openai-moe",        LLM_CHAT_TEMPLATE_OPENAI_MOE        },
+    { "gpt-oss",           LLM_CHAT_TEMPLATE_OPENAI_MOE        },
     { "kimi-k2",           LLM_CHAT_TEMPLATE_KIMI_K2           },
 };
 

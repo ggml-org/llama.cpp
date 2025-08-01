@@ -377,7 +377,7 @@ class MODEL_ARCH(IntEnum):
     ERNIE4_5_MOE     = auto()
     HUNYUAN_MOE      = auto()
     SMOLLM3          = auto()
-    OPENAI_MOE       = auto()
+    GPT_OSS          = auto()
     LFM2             = auto()
     DREAM            = auto()
     SMALLTHINKER     = auto()
@@ -700,7 +700,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.FALCON_H1:        "falcon-h1",
     MODEL_ARCH.HUNYUAN_MOE:      "hunyuan-moe",
     MODEL_ARCH.SMOLLM3:          "smollm3",
-    MODEL_ARCH.OPENAI_MOE:       "openai-moe",
+    MODEL_ARCH.GPT_OSS:          "gpt-oss",
     MODEL_ARCH.LFM2:             "lfm2",
     MODEL_ARCH.DREAM:            "dream",
     MODEL_ARCH.SMALLTHINKER:     "smallthinker",
@@ -2491,7 +2491,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
     ],
-    MODEL_ARCH.OPENAI_MOE: [
+    MODEL_ARCH.GPT_OSS: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
@@ -2661,6 +2661,7 @@ class GGMLQuantizationType(IntEnum):
     BF16    = 30
     TQ1_0   = 34
     TQ2_0   = 35
+    MXFP4   = 39
 
 
 class ExpertGatingFuncType(IntEnum):
@@ -2801,6 +2802,7 @@ GGML_QUANT_SIZES: dict[GGMLQuantizationType, tuple[int, int]] = {
     GGMLQuantizationType.BF16:    (1, 2),
     GGMLQuantizationType.TQ1_0:   (256, 2 + 4 * 13),
     GGMLQuantizationType.TQ2_0:   (256, 2 + 64),
+    GGMLQuantizationType.MXFP4:   (1, 1), # quick hack to write MXFP4 as U8
 }
 
 

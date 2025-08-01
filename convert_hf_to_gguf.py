@@ -7713,9 +7713,112 @@ class SmolLM3Model(LlamaModel):
             self.gguf_writer.add_chat_template(chat_template)
 
 
-@ModelBase.register("OpenAIMoeForCausalLM")
-class OpenAIMoeModel(TextModel):
-    model_arch = gguf.MODEL_ARCH.OPENAI_MOE
+@ModelBase.register("GptOssForCausalLM")
+class GptOssModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.GPT_OSS
+
+    def repack_mxfp4(self, new_name: str, blocks: Tensor, scales: Tensor):
+        assert blocks.dtype == torch.uint8
+        assert scales.dtype == torch.uint8
+        scales = scales.unsqueeze(-1)
+        assert len(blocks.shape) == 4
+        assert len(scales.shape) == 4
+        new_data = torch.cat([scales, blocks], dim=-1)
+        new_data = new_data.numpy()
+        new_shape = [scales.shape[0], scales.shape[1], scales.shape[2] * 32]
+        logger.info(f"Repacked {new_name} with shape {new_shape} and quantization MXFP4")
+        self.gguf_writer.add_tensor(new_name, new_data, new_shape, gguf.GGMLQuantizationType.MXFP4)
+
+    def convert_moe_packed_tensors(
+        self,
+        new_name: str,
+        blocks,
+        scales,
+        *,
+        dtype: torch.dtype = torch.float16,
+        rows_per_chunk: int = 32768 * 1024,
+    ):
+        import math
+
+        scales = scales.to(torch.int32) - 127
+
+        assert blocks.shape[:-1] == scales.shape, f"{blocks.shape=} does not match {scales.shape=}"
+
+        FP4_VALUES = [
+            +0.0,
+            +0.5,
+            +1.0,
+            +1.5,
+            +2.0,
+            +3.0,
+            +4.0,
+            +6.0,
+            -0.0,
+            -0.5,
+            -1.0,
+            -1.5,
+            -2.0,
+            -3.0,
+            -4.0,
+            -6.0,
+        ]
+        blocks = blocks.to(device="cpu")
+        scales = scales.to(device="cpu")
+        lut = torch.tensor(FP4_VALUES, dtype=dtype, device=blocks.device)
+
+        *prefix_shape, G, B = blocks.shape
+        rows_total = math.prod(prefix_shape) * G
+
+        blocks = blocks.reshape(rows_total, B)
+        scales = scales.reshape(rows_total, 1)
+
+        out = torch.empty(rows_total, B * 2, dtype=dtype, device="cpu")
+
+        for r0 in range(0, rows_total, rows_per_chunk):
+            r1 = min(r0 + rows_per_chunk, rows_total)
+
+            blk = blocks[r0:r1]
+            exp = scales[r0:r1]
+
+            # nibble indices -> int64
+            idx_lo = (blk & 0x0F).to(torch.long)
+            idx_hi = (blk >> 4).to(torch.long)
+
+            sub = out[r0:r1]
+            sub[:, 0::2] = lut[idx_lo]
+            sub[:, 1::2] = lut[idx_hi]
+
+            torch.ldexp(sub, exp, out=sub)
+            del idx_lo, idx_hi, blk, exp
+
+        out = out.reshape(*prefix_shape, G, B * 2).view(*prefix_shape, G * B * 2)
+        out = out.numpy()
+        logger.info(f"Unpacked {new_name} with shape {out.shape} from MXFP4 to F16")
+        print(out.dtype, out.device, out.shape)
+        self.gguf_writer.add_tensor(new_name, out)
+
+    def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        blocks0: Tensor = torch.zeros(1)
+        blocks1: Tensor = torch.zeros(1)
+        # we assume that tensors are loaded in the correct order
+        for name, data_torch in self.get_tensors():
+            if "mlp.experts.down_proj_blocks" in name:
+                blocks0 = data_torch
+            elif "mlp.experts.down_proj_scales" in name:
+                new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
+                #self.repack_mxfp4(new_name, blocks0, data_torch)
+                self.convert_moe_packed_tensors(new_name, blocks0, data_torch)
+            elif "mlp.experts.gate_up_proj_blocks" in name:
+                blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
+            elif "mlp.experts.gate_up_proj_scales" in name:
+                scales0, scales1 = data_torch[:, ::2, :], data_torch[:, 1::2, :]
+                new_name_gate = self.map_tensor_name(name.replace("gate_up_proj_scales", "gate_proj.weight"))
+                new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
+                # self.repack_mxfp4(new_name_gate, blocks0, scales0)
+                # self.repack_mxfp4(new_name_up, blocks1, scales1)
+                self.convert_moe_packed_tensors(new_name_gate, blocks0, scales0)
+                self.convert_moe_packed_tensors(new_name_up, blocks1, scales1)
+        return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -7728,32 +7831,20 @@ class OpenAIMoeModel(TextModel):
             if name.endswith("_bias"):
                 name = name.replace("down_proj_bias", "down_proj.bias")
             else:
-                name = name.replace("down_proj", "down_proj.weight")
-                data_torch = data_torch.transpose(-1, -2)
+                return []
 
         # split the gate_up into gate and up
         if "gate_up_proj" in name:
             if name.endswith("_bias"):
                 name_up = name.replace("gate_up_proj_bias", "up_proj.bias")
                 name_gate = name.replace("gate_up_proj_bias", "gate_proj.bias")
-                #dim_half = data_torch.shape[-1] // 2
-                #gate_proj_bias, up_proj_bias = data_torch.split(dim_half, dim=-1)
                 gate_proj_bias, up_proj_bias = data_torch[..., ::2], data_torch[..., 1::2]
                 return [
                     (self.map_tensor_name(name_gate), gate_proj_bias),
                     (self.map_tensor_name(name_up), up_proj_bias)
                 ]
             else:
-                name_up = name.replace("gate_up_proj", "up_proj.weight")
-                name_gate = name.replace("gate_up_proj", "gate_proj.weight")
-                #dim_half = data_torch.shape[-1] // 2
-                #gate_proj_weight, up_proj_weight = data_torch.transpose(-1, -2).split(dim_half, dim=-2)
-                data_torch = data_torch.transpose(-1, -2)
-                gate_proj_weight, up_proj_weight = data_torch[:, ::2, :], data_torch[:, 1::2, :]
-                return [
-                    (self.map_tensor_name(name_gate), gate_proj_weight),
-                    (self.map_tensor_name(name_up), up_proj_weight)
-                ]
+                return []
 
         return [(self.map_tensor_name(name), data_torch)]
 
@@ -7767,7 +7858,7 @@ class OpenAIMoeModel(TextModel):
 
         rope_scaling = self.hparams.get("rope_scaling") or {}
         rope_type = rope_scaling.get("rope_type", rope_scaling.get("type"))
-        assert rope_type == "yarn", f"OpenAI MoE only supports yarn rope scaling, got {rope_type}"
+        assert rope_type == "yarn", f"GPT-OSS only supports yarn rope scaling, got {rope_type}"
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.YARN)
         self.gguf_writer.add_rope_scaling_factor(rope_scaling["factor"])
         self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling.get("original_max_position_embeddings", 4096))
@@ -7912,6 +8003,7 @@ class LazyTorchTensor(gguf.LazyBase):
     _dtype_map: dict[torch.dtype, type] = {
         torch.float16: np.float16,
         torch.float32: np.float32,
+        torch.uint8: np.uint8,
     }
 
     # used for safetensors slices
