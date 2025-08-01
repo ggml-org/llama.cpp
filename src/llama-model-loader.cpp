@@ -918,7 +918,16 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
     
 #ifdef GGML_NUMA_MIRROR
     // Check if this is a unified mapping (mapping[0] exists but others are null)  
-    bool is_unified_mapping = mappings.size() > 1 && mappings[0] && !mappings[1];
+    bool is_unified_mapping = mappings.size() > 1 && mappings[0];
+    // Verify it's truly unified by checking that all other mappings are null
+    if (is_unified_mapping) {
+        for (size_t i = 1; i < mappings.size(); ++i) {
+            if (mappings[i]) {
+                is_unified_mapping = false;
+                break;
+            }
+        }
+    }
     
     if (is_unified_mapping) {
         // For unified mapping, use the first (and only real) mapping
@@ -978,7 +987,16 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     if (use_mmap) {
 #ifdef GGML_NUMA_MIRROR
         // Check if this is a unified mapping (mapping[0] exists but others are null)
-        bool is_unified_mapping = mappings.size() > 1 && mappings[0] && !mappings[1];
+        bool is_unified_mapping = mappings.size() > 1 && mappings[0];
+        // Verify it's truly unified by checking that all other mappings are null
+        if (is_unified_mapping) {
+            for (size_t i = 1; i < mappings.size(); ++i) {
+                if (mappings[i]) {
+                    is_unified_mapping = false;
+                    break;
+                }
+            }
+        }
         
         if (is_unified_mapping) {
             // For unified mapping, calculate offset within the unified mapping
