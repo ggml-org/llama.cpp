@@ -1,14 +1,18 @@
-import type { Message } from '$lib/types/database';
+import type {
+	ApiChatMessageContentPart,
+	ApiChatMessageData,
+	ApiChatCompletionRequest,
+	ApiChatCompletionStreamChunk,
+	ApiChatCompletionResponse,
+	ApiLlamaCppServerProps
+} from '$lib/types/api';
 
-export interface LlamaCppServerProps {
-	build_info: string;
-	model_path: string;
-	n_ctx: number;
-	modalities?: {
-		vision: boolean;
-		audio: boolean;
-	};
-}
+import type {
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraImageFile,
+	DatabaseMessageExtraTextFile
+} from '$lib/types/database'
 
 export class ChatService {
 	private baseUrl: string;
@@ -19,7 +23,7 @@ export class ChatService {
 	}
 
 	async sendMessage(
-		messages: ChatMessageData[],
+		messages: ApiChatMessageData[],
 		options: {
 			stream?: boolean;
 			temperature?: number;
@@ -35,7 +39,7 @@ export class ChatService {
 		this.abort();
 		this.abortController = new AbortController();
 
-		const requestBody: ChatCompletionRequest = {
+		const requestBody: ApiChatCompletionRequest = {
 			messages: messages.map((msg) => ({
 				role: msg.role,
 				content: msg.content
@@ -119,7 +123,7 @@ export class ChatService {
 						}
 
 						try {
-							const parsed: ChatCompletionStreamChunk = JSON.parse(data);
+							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
 							const content = parsed.choices[0]?.delta?.content;
 							if (content) {
 								fullResponse += content;
@@ -161,7 +165,7 @@ export class ChatService {
 		onError?: (error: Error) => void
 	): Promise<string> {
 		try {
-			const data: ChatCompletionResponse = await response.json();
+			const data: ApiChatCompletionResponse = await response.json();
 			const content = data.choices[0]?.message?.content || '';
 
 			onComplete?.(content);
@@ -177,10 +181,57 @@ export class ChatService {
 	}
 
 	/**
-	 * Unified method to send chat completions supporting both ChatMessageData and Message types
+	 * Convert Message with extras to ApiChatMessageData format for API requests
+	 */
+	private static convertMessageToChatData(message: DatabaseMessage & { extra?: DatabaseMessageExtra[] }): ApiChatMessageData {
+		// If no extras, return simple text message
+		if (!message.extra || message.extra.length === 0) {
+			return {
+				role: message.role as 'user' | 'assistant' | 'system',
+				content: message.content
+			};
+		}
+
+		// Build multimodal content array
+		const contentParts: ApiChatMessageContentPart[] = [];
+
+		// Add text content first
+		if (message.content) {
+			contentParts.push({
+				type: 'text',
+				text: message.content
+			});
+		}
+
+		// Add image files
+		const imageFiles = message.extra.filter((extra): extra is DatabaseMessageExtraImageFile => extra.type === 'imageFile');
+		imageFiles.forEach((image) => {
+			contentParts.push({
+				type: 'image_url',
+				image_url: { url: image.base64Url }
+			});
+		});
+
+		// Add text files as additional text content
+		const textFiles = message.extra.filter((extra): extra is DatabaseMessageExtraTextFile => extra.type === 'textFile');
+		textFiles.forEach((textFile) => {
+			contentParts.push({
+				type: 'text',
+				text: `\n\n--- File: ${textFile.name} ---\n${textFile.content}`
+			});
+		});
+
+		return {
+			role: message.role as 'user' | 'assistant' | 'system',
+			content: contentParts
+		};
+	}
+
+	/**
+	 * Unified method to send chat completions supporting both ApiChatMessageData and Message types
 	 */
 	async sendChatCompletion(
-		messages: ChatMessageData[] | Message[],
+		messages: (ApiChatMessageData[] | DatabaseMessage[]) | (DatabaseMessage & { extra?: DatabaseMessageExtra[] })[],
 		options: {
 			stream?: boolean;
 			temperature?: number;
@@ -190,12 +241,16 @@ export class ChatService {
 			onError?: (error: Error) => void;
 		} = {}
 	): Promise<string | void> {
-		// Normalize messages to ChatMessageData format
-		const normalizedMessages: ChatMessageData[] = messages.map((msg) => ({
-			role: msg.role as ChatMessageData['role'],
-			content: msg.content,
-			timestamp: 'timestamp' in msg ? msg.timestamp : undefined
-		}));
+		// Handle both array formats and convert messages with extras
+		const normalizedMessages: ApiChatMessageData[] = messages.map((msg) => {
+			// Check if this is already a ApiChatMessageData object
+			if ('content' in msg && (typeof msg.content === 'string' || Array.isArray(msg.content))) {
+				return msg as ApiChatMessageData;
+			}
+			
+			// Convert DatabaseMessage with extras to ApiChatMessageData
+			return ChatService.convertMessageToChatData(msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] });
+		});
 
 		// Set default options for API compatibility
 		const finalOptions = {
@@ -212,7 +267,7 @@ export class ChatService {
 	 * Static method for backward compatibility with ApiService
 	 */
 	static async sendChatCompletion(
-		messages: Message[],
+		messages: DatabaseMessage[],
 		onChunk?: (content: string) => void,
 		onComplete?: () => void,
 		onError?: (error: Error) => void
@@ -232,7 +287,7 @@ export class ChatService {
 	/**
 	 * Get server properties - static method for API compatibility
 	 */
-	static async getServerProps(): Promise<LlamaCppServerProps> {
+	static async getServerProps(): Promise<ApiLlamaCppServerProps> {
 		try {
 			const response = await fetch(`${import.meta.env.VITE_BASE_URL}/props`, {
 				headers: {
