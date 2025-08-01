@@ -194,7 +194,7 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_DOTS1;
     } else if (tmpl_contains("<|startoftext|>") && tmpl_contains("<|extra_4|>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_MOE;
-    } else if (tmpl_contains("<|start|>") && tmpl_contains("<|return|>")) {
+    } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
         return LLM_CHAT_TEMPLATE_OPENAI_MOE;
     } else if (tmpl_contains("<|im_assistant|>assistant<|im_middle|>")) {
         return LLM_CHAT_TEMPLATE_KIMI_K2;
@@ -714,7 +714,7 @@ int32_t llm_chat_apply_template(
             ss << (role == "assistant" ? "<|return|>" : "<|end|>");
         }
         if (add_ass) {
-            ss << "<|start|>assistant<|message|>";
+            ss << "<|start|>assistant";
         }
     } else if (tmpl == LLM_CHAT_TEMPLATE_KIMI_K2) {
         // moonshotai/Kimi-K2-Instruct
