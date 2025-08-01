@@ -37,6 +37,10 @@ private:
 struct llama_mmap {
     llama_mmap(const llama_mmap &) = delete;
     llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1, bool numa = false);
+    
+    // Constructor for unified multi-part file mapping (NUMA-aware)
+    llama_mmap(const std::vector<struct llama_file *> & files, size_t prefetch = (size_t) -1, bool numa = false);
+    
     ~llama_mmap();
 
     size_t size() const;

@@ -55,10 +55,14 @@ struct cpu_params {
     enum ggml_sched_priority  priority   = GGML_SCHED_PRIO_NORMAL;  // Scheduling prio : (0 - normal, 1 - medium, 2 - high, 3 - realtime)
     bool     strict_cpu                  = false;   // Use strict CPU placement
     uint32_t poll                        = 50;      // Polling (busywait) level (0 - no polling, 100 - mostly polling)
+    bool     use_hyperthreading          = true;    // Use hyperthreading/SMT for math operations (enabled by default)
+    bool     use_efficiency_cores        = true;    // Use efficiency cores (E-cores) for math operations (enabled by default)
 };
 
 int32_t cpu_get_num_physical_cores();
 int32_t cpu_get_num_math();
+int32_t cpu_get_num_math_from_params(const cpu_params & params);
+void cpu_print_topology_info();
 
 //
 // Common params
