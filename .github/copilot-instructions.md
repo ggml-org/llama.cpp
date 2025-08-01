@@ -25,26 +25,16 @@ This is a fork of llama.cpp with **NUMA-aware improvements** for better CPU thre
 
 ```bash
 # Manual build steps
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGGML_NUMA_MIRROR=ON
 cmake --build build --parallel $(nproc)
 
 # Debug build
-cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGGML_NUMA_MIRROR=ON
 cmake --build build --parallel $(nproc)
 
 # Run tests
 ctest --list --output-on-failure
 ```
-
-### Available VS Code Tasks
-
-- **Ctrl+Shift+P** → "Tasks: Run Task":
-  - `cmake-configure` - Configure CMake
-  - `cmake-build` - Build project (default)
-  - `cmake-release` - Release build
-  - `cmake-clean` - Clean build directory
-  - `test-cpu-topology` - Test CPU topology detection
-  - `check-numa` - Display NUMA hardware info
 
 ## 🧠 Key Areas of Focus
 

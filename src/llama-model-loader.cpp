@@ -927,7 +927,7 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
         // Calculate the offset for this file within the unified mapping
         size_t file_offset = 0;
         for (int i = 0; i < idx; ++i) {
-            file_offset += files[i]->size;
+            file_offset += files[i]->size();
         }
         
         *first = mapping->size();  // Start with full mapping size
@@ -946,10 +946,10 @@ void llama_model_loader::get_mapping_range(size_t * first, size_t * last, void *
         
         // Adjust first and last to be relative to this file's start
         if (*first != mapping->size()) {
-            *first = std::min(*first, files[idx]->size);
+            *first = std::min(*first, files[idx]->size());
         }
         if (*last != 0) {
-            *last = std::min(*last, files[idx]->size);
+            *last = std::min(*last, files[idx]->size());
         }
     } else {
 #endif
@@ -984,7 +984,7 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
             // For unified mapping, calculate offset within the unified mapping
             size_t unified_offset = w.offs;
             for (int i = 0; i < w.idx; ++i) {
-                unified_offset += files[i]->size;
+                unified_offset += files[i]->size();
             }
             
             const auto & mapping = mappings[0];
