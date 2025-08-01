@@ -13476,6 +13476,7 @@ struct llm_build_glm4 : public llm_graph_context {
 struct llm_build_glm4_moe : public llm_graph_context {
     llm_build_glm4_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
+        const int64_t n_embd_gqa  = hparams.n_embd_v_gqa();
 
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
 
@@ -13549,7 +13550,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                 cb(Vcur, "Vcur", il);
 
                 cur = build_attn(inp_attn,
-                        model.layers[il].wo, model.layers[il].bo,
+                        model.layers[il].wo, NULL,
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
 
