@@ -43,8 +43,25 @@
 						base64Url: file.preview
 					});
 				}
+			} else {
+				// Handle text files and other non-image files
+				try {
+					const content = await readFileAsText(file.file);
+					
+					// Check if content is likely text (not binary)
+					if (isLikelyTextFile(content)) {
+						extras.push({
+							type: 'textFile',
+							name: file.name,
+							content: content
+						});
+					} else {
+						console.warn(`File ${file.name} appears to be binary and will be skipped`);
+					}
+				} catch (error) {
+					console.error(`Failed to read file ${file.name}:`, error);
+				}
 			}
-			// TODO: Handle other file types
 		}
 		
 		return extras;
@@ -145,6 +162,64 @@
 		if (event.dataTransfer?.files) {
 			processFiles(Array.from(event.dataTransfer.files));
 		}
+	}
+
+	/**
+	 * Read a file as text content
+	 */
+	async function readFileAsText(file: File): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = (event) => {
+				if (event.target?.result) {
+					resolve(event.target.result as string);
+				} else {
+					reject(new Error('Failed to read file'));
+				}
+			};
+			reader.onerror = () => reject(new Error('File reading error'));
+			reader.readAsText(file);
+		});
+	}
+
+	/**
+	 * Simple heuristic to determine if content is likely text (not binary)
+	 * Based on webui-old's isLikelyNotBinary function but simplified
+	 */
+	function isLikelyTextFile(content: string): boolean {
+		if (!content) return true;
+		
+		// Check first 1000 characters for binary indicators
+		const sample = content.substring(0, 1000);
+		let suspiciousCount = 0;
+		let nullCount = 0;
+		
+		for (let i = 0; i < sample.length; i++) {
+			const charCode = sample.charCodeAt(i);
+			
+			// Count null bytes
+			if (charCode === 0) {
+				nullCount++;
+				suspiciousCount++;
+				continue;
+			}
+			
+			// Count suspicious control characters (excluding common ones like tab, newline, carriage return)
+			if (charCode < 32 && charCode !== 9 && charCode !== 10 && charCode !== 13) {
+				suspiciousCount++;
+			}
+			
+			// Count replacement characters (indicates encoding issues)
+			if (charCode === 0xFFFD) {
+				suspiciousCount++;
+			}
+		}
+		
+		// Reject if too many null bytes or suspicious characters
+		if (nullCount > 2) return false;
+		if (suspiciousCount / sample.length > 0.1) return false;
+		
+		return true;
 	}
 </script>
 

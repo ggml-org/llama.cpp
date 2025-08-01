@@ -15,6 +15,8 @@
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: (files: File[]) => void;
 		onFileRemove?: (fileId: string) => void;
+		// Paste configuration
+		pasteLongTextToFileLen?: number;
 	}
 
 	let {
@@ -26,7 +28,8 @@
 		showHelperText = true,
 		uploadedFiles = $bindable([]),
 		onFileUpload,
-		onFileRemove
+		onFileRemove,
+		pasteLongTextToFileLen = 2500
 	}: Props = $props();
 
 	let message = $state('');
@@ -76,6 +79,39 @@
 			onFileUpload?.(Array.from(input.files));
 		}
 	}
+
+	function handlePaste(event: ClipboardEvent) {
+		if (!event.clipboardData) return;
+
+		// Handle pasted files
+		const files = Array.from(event.clipboardData.items)
+			.filter((item) => item.kind === 'file')
+			.map((item) => item.getAsFile())
+			.filter((file): file is File => file !== null);
+
+		if (files.length > 0) {
+			event.preventDefault();
+			onFileUpload?.(files);
+			return;
+		}
+
+		// Handle long text conversion to file
+		const text = event.clipboardData.getData('text/plain');
+		if (
+			text.length > 0 &&
+			pasteLongTextToFileLen > 0 &&
+			text.length > pasteLongTextToFileLen
+		) {
+			event.preventDefault();
+			
+			// Create a text file from the pasted content
+			const textFile = new File([text], 'Pasted Content.txt', {
+				type: 'text/plain'
+			});
+			
+			onFileUpload?.([textFile]);
+		}
+	}
 </script>
 
 <!-- Hidden file input -->
@@ -100,6 +136,7 @@
 
 	<div
 		class="flex-column relative min-h-[48px] items-center rounded-3xl px-5 py-3 shadow-sm transition-all focus-within:shadow-md"
+		onpaste={handlePaste}
 	>
 		<div class="flex-1">
 			<textarea
