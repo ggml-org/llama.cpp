@@ -974,6 +974,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CONV_TRANSPOSE_1D",
     "IM2COL",
     "IM2COL_BACK",
+    "IM2COL_3D",
     "CONV_2D",
     "CONV_3D",
     "CONV_2D_DW",
@@ -1077,6 +1078,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "conv_transpose_1d(x)",
     "im2col(x)",
     "im2col_back(x)",
+    "im2col_3d(x)"
     "conv_2d(x)",
     "conv_3d(x)",
     "conv_2d_dw(x)",
@@ -4379,7 +4381,6 @@ struct ggml_tensor * ggml_im2col_3d(
         int                   d1, // dilation height
         int                   d2, // dilation depth
         enum ggml_type        dst_type) {
-
     const int64_t N = b->ne[3] / IC;
     const int64_t ID = b->ne[2];
     const int64_t IH = b->ne[1];
@@ -4390,22 +4391,25 @@ struct ggml_tensor * ggml_im2col_3d(
     const int64_t KH = a->ne[1];
     const int64_t KW = a->ne[0];
     const int64_t OD = ggml_calc_conv_output_size(ID, KD, s2, p2, d2);
+    const int64_t OH = ggml_calc_conv_output_size(IH, KH, s1, p1, d1);
+    const int64_t OW = ggml_calc_conv_output_size(IW, KW, s0, p0, d0);
 
-    struct ggml_tensor* img = ggml_reshape_4d(ctx, b, IW*IH, ID, IC, N); // [N, IC, ID, IH * IW]
-    img = ggml_cont(ctx, ggml_permute(ctx, img, 2, 0, 1, 3)); // [N, IH*IW, IC, ID]
-    img = ggml_reshape_3d(ctx, b, ID, IC, IW*IH*N); // [N*IH*IW, IC, ID]
+    GGML_ASSERT((OD > 0)  && "b too small compared to a");
+    GGML_ASSERT((OH > 0)  && "b too small compared to a");
+    GGML_ASSERT((OW > 0)  && "b too small compared to a");
 
-    a = ggml_reshape_3d(ctx, a, KD, IC, OC*KW*KH); // [OC*KW*KH, IC, KD]
-    img = ggml_im2col(ctx, a, img, s2, 1, p2, 0, d2, 1, false, GGML_TYPE_F32); // [N*IH*IW, OD, IC*KD]
 
-    img = ggml_reshape_4d(ctx, img, IC*KD, OD, IW*IH, N); // [N, IH*IW, OD, IC*KD]
-    img = ggml_cont(ctx, ggml_permute(ctx, img, 1, 2, 0, 3)); // [N, OD, IC*KD, IH*IW]
-    img = ggml_reshape_4d(ctx, img, IW, IH, IC*KD, OD*N); // [N*OD, IC*KD, IH, IW]
+    const int64_t ne[4] = {KW*KH*KD*IC, OW, OH, OD*N};
 
-    a = ggml_reshape_4d(ctx, a, KW, KH, IC*KD, OC); // [OC, KD*IC, KH, KW]
+    struct ggml_tensor * result = ggml_new_tensor(ctx, dst_type, 4, ne);
+    int32_t params[] = { s0, s1, s2, p0, p1, p2, d0, d1, d2, (int32_t)IC};
+    ggml_set_op_params(result, params, sizeof(params));
 
-    img = ggml_im2col(ctx, a, img, s0, s1, p0, p1, d0, d1, true, dst_type); // [N * OD, OH, OW, IC * KD * KH * KW]
-    return img;
+    result->op     = GGML_OP_IM2COL_3D;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
 }
 
 // a: [OC*IC, KD, KH, KW]

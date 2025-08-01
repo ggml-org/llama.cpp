@@ -7027,6 +7027,209 @@ void ggml_compute_forward_im2col_back_f32(
     }
 }
 
+
+// ggml_compute_forward_im2col_3d_f16
+// src0: kernel [OC*IC, KD, KH, KW]
+// src1: image [N*IC, ID, IH, IW]
+// dst:  result [N*OD, OH, OW, IC * KD * KH * KW]
+static void ggml_compute_forward_im2col_3d_f16(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F16);
+
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    const int32_t s0 = ((const int32_t *)(dst->op_params))[0];
+    const int32_t s1 = ((const int32_t *)(dst->op_params))[1];
+    const int32_t s2 = ((const int32_t *)(dst->op_params))[2];
+    const int32_t p0 = ((const int32_t *)(dst->op_params))[3];
+    const int32_t p1 = ((const int32_t *)(dst->op_params))[4];
+    const int32_t p2 = ((const int32_t *)(dst->op_params))[5];
+    const int32_t d0 = ((const int32_t *)(dst->op_params))[6];
+    const int32_t d1 = ((const int32_t *)(dst->op_params))[7];
+    const int32_t d2 = ((const int32_t *)(dst->op_params))[8];
+    const int32_t IC = ((const int32_t *)(dst->op_params))[9];
+
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t N  = ne13 / IC;
+    const int64_t ID = ne12;
+    const int64_t IH = ne11;
+    const int64_t IW = ne10;
+
+    const int64_t OC = ne03 / IC;
+    const int64_t KD = ne02;
+    const int64_t KH = ne01;
+    const int64_t KW = ne00;
+
+    const int64_t OD = ne3 / N;
+    const int64_t OH = ne2;
+    const int64_t OW = ne1;
+    const int64_t OH_OW = OH*OW;
+    const int64_t KD_KH_KW = KD*KH*KW;
+    const int64_t ID_IH_IW = ID*IH*IW;
+    const int64_t KH_KW = KH*KW;
+    const int64_t IH_IW = IH*IW;
+    const int64_t IC_KD_KH_KW = IC*KD*KH*KW;
+
+    GGML_ASSERT(nb10 == sizeof(float));
+
+    // im2col: [N*IC, ID, IH, IW] => [N*OD, OH, OW, IC * KD * KH * KW]
+    {
+        ggml_fp16_t * const wdata = (ggml_fp16_t *) dst->data;
+
+        for (int64_t in = 0; in < N; in++) {
+            for (int64_t iod = 0; iod < OD; iod++) {
+                for (int64_t ioh = 0; ioh < OH; ioh++) {
+                    for (int64_t iow = 0; iow < OW; iow++) {
+                        for (int64_t iic = ith; iic < IC; iic += nth) {
+
+                            // micro kernel
+                            ggml_fp16_t * dst_data = wdata + (in*OH_OW + ioh*OW + iow)*IC_KD_KH_KW; // [IC, KD, KH, KW]
+                            const float * const src_data = (float *) src1->data + (in*IC + iic)*ID_IH_IW; // [ID, IH, IW]
+
+                            for (int64_t ikd = 0; ikd < KD; ikd++) {
+                                for (int64_t ikh = 0; ikh < KH; ikh++) {
+                                    for (int64_t ikw = 0; ikw < KW; ikw++) {
+                                        const int64_t iiw = iow*s0 + ikw*d0 - p0;
+                                        const int64_t iih = ioh*s1 + ikh*d1 - p1;
+                                        const int64_t iid = iod*s2 + ikd*d2 - p2;
+
+                                        if (iid < 0 || iid >= ID || iih < 0 || iih >= IH || iiw < 0 || iiw >= IW) {
+                                            dst_data[iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw] = 0;
+                                        } else {
+                                            dst_data[iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw] = GGML_CPU_FP32_TO_FP16(src_data[iid*IH_IW + iih*IW + iiw]);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ggml_compute_forward_im2col_3d_f32
+// src0: kernel [OC*IC, KD, KH, KW]
+// src1: image [N*IC, ID, IH, IW]
+// dst:  result [N*OD, OH, OW, IC * KD * KH * KW]
+static void ggml_compute_forward_im2col_3d_f32(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    const int32_t s0 = ((const int32_t *)(dst->op_params))[0];
+    const int32_t s1 = ((const int32_t *)(dst->op_params))[1];
+    const int32_t s2 = ((const int32_t *)(dst->op_params))[2];
+    const int32_t p0 = ((const int32_t *)(dst->op_params))[3];
+    const int32_t p1 = ((const int32_t *)(dst->op_params))[4];
+    const int32_t p2 = ((const int32_t *)(dst->op_params))[5];
+    const int32_t d0 = ((const int32_t *)(dst->op_params))[6];
+    const int32_t d1 = ((const int32_t *)(dst->op_params))[7];
+    const int32_t d2 = ((const int32_t *)(dst->op_params))[8];
+    const int32_t IC = ((const int32_t *)(dst->op_params))[9];
+
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t N  = ne13 / IC;
+    const int64_t ID = ne12;
+    const int64_t IH = ne11;
+    const int64_t IW = ne10;
+
+    const int64_t OC = ne03 / IC;
+    const int64_t KD = ne02;
+    const int64_t KH = ne01;
+    const int64_t KW = ne00;
+
+    const int64_t OD = ne3 / N;
+    const int64_t OH = ne2;
+    const int64_t OW = ne1;
+
+    const int64_t OH_OW = OH*OW;
+    const int64_t KD_KH_KW = KD*KH*KW;
+    const int64_t ID_IH_IW = ID*IH*IW;
+    const int64_t KH_KW = KH*KW;
+    const int64_t IH_IW = IH*IW;
+    const int64_t IC_KD_KH_KW = IC*KD*KH*KW;
+
+    GGML_ASSERT(nb10 == sizeof(float));
+
+    // im2col: [N*IC, ID, IH, IW] => [N*OD, OH, OW, IC * KD * KH * KW]
+    {
+        float * const wdata = (float *) dst->data;
+
+        for (int64_t in = 0; in < N; in++) {
+            for (int64_t iod = 0; iod < OD; iod++) {
+                for (int64_t ioh = 0; ioh < OH; ioh++) {
+                    for (int64_t iow = 0; iow < OW; iow++) {
+                        for (int64_t iic = ith; iic < IC; iic += nth) {
+
+                            // micro kernel
+                            float * dst_data = wdata + (in*OH_OW + ioh*OW + iow)*IC_KD_KH_KW; // [IC, KD, KH, KW]
+                            const float * const src_data = (float *) src1->data + (in*IC + iic)*ID_IH_IW; // [ID, IH, IW]
+
+                            for (int64_t ikd = 0; ikd < KD; ikd++) {
+                                for (int64_t ikh = 0; ikh < KH; ikh++) {
+                                    for (int64_t ikw = 0; ikw < KW; ikw++) {
+                                        const int64_t iiw = iow*s0 + ikw*d0 - p0;
+                                        const int64_t iih = ioh*s1 + ikh*d1 - p1;
+                                        const int64_t iid = iod*s2 + ikd*d2 - p2;
+
+                                        if (iid < 0 || iid >= ID || iih < 0 || iih >= IH || iiw < 0 || iiw >= IW) {
+                                            dst_data[iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw] = 0;
+                                        } else {
+                                            dst_data[iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw] = src_data[iid*IH_IW + iih*IW + iiw];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+void ggml_compute_forward_im2col_3d(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+    switch (dst->type) {
+        case GGML_TYPE_F16:
+            {
+                ggml_compute_forward_im2col_3d_f16(params, dst);
+            } break;
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_im2col_3d_f32(params, dst);
+            } break;
+        default:
+            {
+                GGML_ABORT("fatal error");
+            }
+    }
+}
+
 static void ggml_call_mul_mat(ggml_type type, const ggml_compute_params * params, int64_t m, int64_t n, int64_t k,
                               void * a, void * b, float * c) {
     const ggml_type_traits * traits = ggml_get_type_traits(type);
