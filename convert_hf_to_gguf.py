@@ -7807,14 +7807,42 @@ class SmolLM3Model(LlamaModel):
 class GptOssModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GPT_OSS
 
+    def transform_nibble_layout(self, tensor):
+        assert tensor.dtype == torch.uint8
+        assert tensor.shape[-1] == 16
+        tensor = tensor.clone().to(device="cpu")
+        # swap nibbles
+        t_lo = tensor & 0x0F
+        t_hi = tensor & 0xF0
+        t_swapped = (t_lo << 4) | (t_hi >> 4)
+        tensor = t_swapped
+        # transform aaaa...bbbb... to abababab...
+        blk_a, blk_b = tensor.chunk(2, dim=-1)
+        # get a_
+        blk_a0 = (blk_a & 0xF0).view(-1, 1)
+        blk_a1 = (blk_a << 4).view(-1, 1)
+        blk_a = torch.stack((blk_a0, blk_a1), dim=2).view(tensor.shape)
+        # get _b
+        blk_b0 = (blk_b >> 4).view(-1, 1)
+        blk_b1 = (blk_b & 0x0F).view(-1, 1)
+        blk_b = torch.stack((blk_b0, blk_b1), dim=2).view(tensor.shape)
+        # swap once more
+        out = blk_a | blk_b
+        out_h = out & 0xF0
+        out_l = out & 0x0F
+        out = (out_h >> 4) | (out_l << 4)
+        return out
+
     def repack_mxfp4(self, new_name: str, blocks: Tensor, scales: Tensor):
         assert blocks.dtype == torch.uint8
         assert scales.dtype == torch.uint8
         scales = scales.unsqueeze(-1)
         assert len(blocks.shape) == 4
         assert len(scales.shape) == 4
-        scales = scales.numpy()
-        blocks = blocks.numpy()
+        # convert to numpy
+        scales = scales.to_eager(scales).numpy()
+        blocks = blocks.to_eager(blocks)
+        blocks = self.transform_nibble_layout(blocks).numpy()
         new_data = np.concatenate([scales, blocks], axis=-1)
         new_shape = [new_data.shape[0], new_data.shape[1], new_data.shape[2] * 32]
         logger.info(f"Repacked {new_name} with shape {new_shape} and quantization MXFP4")
@@ -7897,18 +7925,18 @@ class GptOssModel(TextModel):
                 blocks0 = data_torch
             elif "mlp.experts.down_proj_scales" in name:
                 new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
-                # self.repack_mxfp4(new_name, blocks0, data_torch)
-                yield self.convert_moe_packed_tensors(new_name, blocks0, data_torch)
+                self.repack_mxfp4(new_name, blocks0, data_torch)
+                # yield self.convert_moe_packed_tensors(new_name, blocks0, data_torch)
             elif "mlp.experts.gate_up_proj_blocks" in name:
                 blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
             elif "mlp.experts.gate_up_proj_scales" in name:
                 scales0, scales1 = data_torch[:, ::2, :], data_torch[:, 1::2, :]
                 new_name_gate = self.map_tensor_name(name.replace("gate_up_proj_scales", "gate_proj.weight"))
                 new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
-                # self.repack_mxfp4(new_name_gate, blocks0, scales0)
-                # self.repack_mxfp4(new_name_up, blocks1, scales1)
-                yield self.convert_moe_packed_tensors(new_name_gate, blocks0, scales0)
-                yield self.convert_moe_packed_tensors(new_name_up, blocks1, scales1)
+                self.repack_mxfp4(new_name_gate, blocks0, scales0)
+                self.repack_mxfp4(new_name_up, blocks1, scales1)
+                # yield self.convert_moe_packed_tensors(new_name_gate, blocks0, scales0)
+                # yield self.convert_moe_packed_tensors(new_name_up, blocks1, scales1)
         return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
