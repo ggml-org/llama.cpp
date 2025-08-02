@@ -340,7 +340,7 @@ if __name__ == '__main__':
             sys.exit(1)
     else:
         logger.info(f"Loading base model: {dir_base_model.name}")
-        hparams = ModelBase.load_hparams(dir_base_model)
+        hparams = ModelBase.load_hparams(dir_base_model, False)
 
     with torch.inference_mode():
         try:
