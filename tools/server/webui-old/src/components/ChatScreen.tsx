@@ -1,11 +1,14 @@
 import { ClipboardEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { CallbackGeneratedChunk, useAppContext } from '../utils/app.context';
-import ChatMessage from './ChatMessage';
-import { CanvasType, Message, PendingMessage } from '../utils/types';
-import { classNames, cleanCurrentUrl } from '../utils/misc';
-import CanvasPyInterpreter from './CanvasPyInterpreter';
-import StorageUtils from '../utils/storage';
-import { useVSCodeContext } from '../utils/llama-vscode';
+import {
+  CallbackGeneratedChunk,
+  useAppContext,
+} from '../utils/app.context.tsx';
+import ChatMessage from './ChatMessage.tsx';
+import { CanvasType, Message, PendingMessage } from '../utils/types.ts';
+import { classNames, cleanCurrentUrl } from '../utils/misc.ts';
+import CanvasPyInterpreter from './CanvasPyInterpreter.tsx';
+import StorageUtils from '../utils/storage.ts';
+import { useVSCodeContext } from '../utils/llama-vscode.ts';
 import { useChatTextarea, ChatTextareaApi } from './useChatTextarea.ts';
 import {
   ArrowUpIcon,
