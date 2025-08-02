@@ -162,10 +162,15 @@ class chat_template {
         }), false);
         caps_.supports_tools = contains(out, "some_tool");
 
+        auto out_empty = try_raw_render(json::array({dummy_user_msg, {{"role", "assistant"}, {"content", ""}}}), {}, false);
+        auto out_null = try_raw_render(json::array({dummy_user_msg, {{"role", "assistant"}, {"content", nullptr}}}), {}, false);
+        caps_.requires_non_null_content = contains(out_empty, user_needle) && !contains(out_null, user_needle);
+
+        json j_null;
         auto make_tool_calls_msg = [&](const json & tool_calls) {
             return json {
                 {"role", "assistant"},
-                {"content", nullptr},
+                {"content", caps_.requires_non_null_content? "" : j_null},
                 {"tool_calls", tool_calls},
             };
         };
@@ -195,9 +200,6 @@ class chat_template {
 
         caps_.supports_tool_calls = tool_call_renders_str_arguments || tool_call_renders_obj_arguments;
         caps_.requires_object_arguments = !tool_call_renders_str_arguments && tool_call_renders_obj_arguments;
-        auto out_empty = try_raw_render(json::array({dummy_user_msg, {{"role", "assistant"}, {"content", ""}}}), {}, false);
-        auto out_null = try_raw_render(json::array({dummy_user_msg, {{"role", "assistant"}, {"content", nullptr}}}), {}, false);
-        caps_.requires_non_null_content = contains(out_empty, user_needle) && !contains(out_null, user_needle);
 
         if (caps_.supports_tool_calls) {
             auto dummy_args = caps_.requires_object_arguments ? dummy_args_obj : json(dummy_args_obj.dump());
@@ -234,7 +236,7 @@ class chat_template {
                 };
                 const json tool_call_msg {
                     {"role", "assistant"},
-                    {"content", nullptr},
+                    {"content", caps_.requires_non_null_content ? "" : j_null},
                     {"tool_calls", json::array({
                         {
                             // TODO: detect if requires numerical id or fixed length == 6 like Nemo

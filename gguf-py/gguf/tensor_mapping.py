@@ -32,6 +32,8 @@ class TensorNameMap:
             "model.word_embeddings",                     # bailingmoe
             "language_model.model.embed_tokens",         # llama4
             "encoder",                                   # neobert
+            "model.transformer.wte",                     # llada
+            "embed_tokens",                              # qwen3-embedding
         ),
 
         # Token type embeddings
@@ -71,6 +73,7 @@ class TensorNameMap:
             "head",                      # rwkv
             "head.out",                  # wavtokenizer
             "lm_head",                   # llama4
+            "model.transformer.ff_out",  # llada
         ),
 
         # Output norm
@@ -94,6 +97,7 @@ class TensorNameMap:
             "model.ln_out",                            # rwkv7
             "backbone.final_layer_norm",               # wavtokenizer
             "model.norm",                              # llama4
+            "model.transformer.ln_f",                  # llada
         ),
 
         # Rope frequencies
@@ -139,6 +143,8 @@ class TensorNameMap:
             "model.layers.{bid}.input_layernorm",                   # llama4
             "transformer_encoder.{bid}.attention_norm",             # neobert
             "model.layers.{bid}.operator_norm",                     # lfm2
+            "model.transformer.blocks.{bid}.attn_norm",             # llada
+            "layers.{bid}.input_layernorm",                         # qwen3-embedding
         ),
 
         # Attention norm 2
@@ -183,6 +189,8 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.query",# Grok
             "transformer.h.{bid}.attn.attention.q_proj",                 # exaone
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
+            "model.transformer.blocks.{bid}.q_proj",                     # llada
+            "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
         ),
 
         # Attention key
@@ -199,6 +207,8 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.key",# Grok
             "transformer.h.{bid}.attn.attention.k_proj",               # exaone
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
+            "model.transformer.blocks.{bid}.k_proj",                   # llada
+            "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
         ),
 
         # Attention value
@@ -214,6 +224,8 @@ class TensorNameMap:
             "transformer.decoder_layer.{bid}.multi_head_attention.value",# Grok
             "transformer.h.{bid}.attn.attention.v_proj",                 # exaone
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
+            "model.transformer.blocks.{bid}.v_proj",                     # llada
+            "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
         ),
 
         # Attention output
@@ -246,6 +258,8 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.attention.out_proj",                  # exaone
             "model.layers.{bid}.self_attn.o_proj",                          # llama4
             "transformer_encoder.{bid}.wo",                                 # neobert
+            "model.transformer.blocks.{bid}.attn_out",                      # llada
+            "layers.{bid}.self_attn.o_proj",                                # qwen3-embedding
         ),
 
         # Attention output norm
@@ -291,6 +305,8 @@ class TensorNameMap:
             "model.layers.{bid}.post_attention_layernorm",                   # llama4
             "transformer_encoder.{bid}.ffn_norm",                            # neobert
             "model.layers.layers.{bid}.pre_mlp_norm",                        # plamo2
+            "model.transformer.blocks.{bid}.ff_norm",                        # llada
+            "layers.{bid}.post_attention_layernorm",                         # qwen3-embedding
         ),
 
         # Post feed-forward norm
@@ -364,6 +380,8 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.up_proj",                # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w12",                      # neobert
             "model.layers.{bid}.block_sparse_moe.up",                 # smallthinker
+            "model.transformer.blocks.{bid}.up_proj",                 # llada
+            "layers.{bid}.mlp.up_proj",                               # qwen3-embedding
         ),
 
         MODEL_TENSOR.FFN_UP_EXP: (
@@ -405,6 +423,8 @@ class TensorNameMap:
             "transformer.h.{bid}.mlp.c_fc_0",             # exaone
             "model.layers.{bid}.feed_forward.gate_proj",  # llama4 jamba granite-hybrid
             "model.layers.{bid}.block_sparse_moe.gate",   # smallthinker
+            "model.transformer.blocks.{bid}.ff_proj",     # llada
+            "layers.{bid}.mlp.gate_proj",                 # qwen3-embedding
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -454,6 +474,8 @@ class TensorNameMap:
             "model.layers.{bid}.feed_forward.down_proj",              # llama4 jamba granite-hybrid
             "transformer_encoder.{bid}.ffn.w3",                       # neobert
             "model.layers.{bid}.block_sparse_moe.down",               # smallthinker
+            "model.transformer.blocks.{bid}.ff_out",                  # llada
+            "layers.{bid}.mlp.down_proj",                             # qwen3-embedding
         ),
 
         MODEL_TENSOR.FFN_DOWN_EXP: (
@@ -485,6 +507,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.attention.self.layer_norm_q",                # jina-bert-v2
             "transformer.layers.{bid}.attn.q_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.q",                              # plamo2
+            "layers.{bid}.self_attn.q_norm",                                  # qwen3-embedding
         ),
 
         MODEL_TENSOR.ATTN_K_NORM: (
@@ -496,6 +519,7 @@ class TensorNameMap:
             "encoder.layer.{bid}.attention.self.layer_norm_k",                # jina-bert-v2
             "transformer.layers.{bid}.attn.k_norm",                           # openelm
             "model.layers.layers.{bid}.mixer.k",                              # plamo2
+            "layers.{bid}.self_attn.k_norm",                                  # qwen3-embedding
         ),
 
         MODEL_TENSOR.ROPE_FREQS: (
@@ -604,6 +628,7 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.SSM_DT_NORM: (
+            "model.layers.layers.{bid}.mixer.dt_norm.weight",  # plamo2
             "model.layers.{bid}.mamba.dt_layernorm",  # jamba
         ),
 
@@ -631,10 +656,6 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.D",      # mamba
             "model.layers.{bid}.mamba.D",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.D",  # plamo2
-        ),
-
-        MODEL_TENSOR.SSM_DT_NORM: (
-            "model.layers.layers.{bid}.mixer.dt_norm.weight",  # plamo2
         ),
 
         MODEL_TENSOR.SSM_NORM: (

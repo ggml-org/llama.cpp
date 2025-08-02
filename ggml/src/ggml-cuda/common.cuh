@@ -227,9 +227,9 @@ typedef float2 dfloat2;
 #define FP16_MMA_AVAILABLE
 #endif // defined(GGML_HIP_ROCWMMA_FATTN) && (defined(CDNA) || defined(RDNA3) || (defined(GGML_HIP_ROCWMMA_FATTN_GFX12) && defined(RDNA4)))
 
-#if defined(GGML_USE_HIP) && defined(CDNA3) && !defined(GGML_HIP_NO_MMQ_MFMA)
+#if defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 #define AMD_MFMA_AVAILABLE
-#endif // defined(GGML_USE_HIP) && defined(CDNA3) && !defined(GGML_HIP_NO_MMQ_MFMA)
+#endif // defined(GGML_USE_HIP) && defined(CDNA) && !defined(GGML_HIP_NO_MMQ_MFMA)
 
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_TURING
 #define NEW_MMA_AVAILABLE
@@ -293,10 +293,9 @@ static bool fp32_mma_hardware_available(const int cc) {
     return GGML_CUDA_CC_IS_CDNA(cc);
 }
 
-// AMD CDNA3 matrix cores.. Will add support for other CDNA generations later.
 static bool amd_mfma_available(const int cc) {
 #if !defined(GGML_HIP_NO_MMQ_MFMA)
-    return GGML_CUDA_CC_IS_CDNA3(cc);
+    return GGML_CUDA_CC_IS_CDNA(cc);
 #else
     return false;
 #endif //!defined(GGML_HIP_NO_MMQ_MFMA)
@@ -430,6 +429,20 @@ static __global__ void reduce_rows_f32(const float * x, float * dst, const int n
     }
 
     dst[row] = norm ? sum / ncols : sum;
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ int warp_reduce_all(int x) {
+#ifdef GGML_USE_HIP
+#pragma unroll
+    for (int offset = width/2; offset > 0; offset >>= 1) {
+        x = x && __shfl_xor_sync(0xffffffff, x, offset, width);
+    }
+    return x;
+#else
+    static_assert(width == WARP_SIZE, "width != WARP_SIZE not implemented");
+    return __all_sync(0xffffffff, x);
+#endif // GGML_USE_HIP
 }
 
 template<int width = WARP_SIZE>
