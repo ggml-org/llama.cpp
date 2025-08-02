@@ -111,6 +111,8 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_235B_A22B:     return "235B.A22B";
         case LLM_TYPE_300B_A47B:     return "300B.A47B";
+        case LLM_TYPE_355B_A32B:     return "355B.A32B (GLM-4.5)";
+        case LLM_TYPE_106B_A12B:     return "106B.A12B (GLM-4.5)";
         case LLM_TYPE_E2B:           return "E2B";
         case LLM_TYPE_E4B:           return "E4B";
         default:                     return "?B";
@@ -18153,6 +18155,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_PLM:
         case LLM_ARCH_CHATGLM:
         case LLM_ARCH_GLM4:
+        case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GRANITE:
         case LLM_ARCH_GRANITE_MOE:
         case LLM_ARCH_GRANITE_HYBRID:
