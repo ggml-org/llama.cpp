@@ -39,6 +39,10 @@ llama_kv_cache_unified::llama_kv_cache_unified(
     if (model.arch == LLM_ARCH_GEMMA3N) {
         n_layer_cache = 20;
     }
+    if (model.arch == LLM_ARCH_GLM4_MOE) {
+        // GLM4_MOE: Only process first 46 transformer layers, skip NextN layer
+        n_layer_cache = hparams.n_layer - 1;
+    }
 
     // create a context for each buffer type
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
