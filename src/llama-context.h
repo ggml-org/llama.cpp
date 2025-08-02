@@ -289,7 +289,7 @@ private:
 
     // env: LLAMA_SET_ROWS (temporary)
     // ref: https://github.com/ggml-org/llama.cpp/pull/14285
-    bool supports_set_rows = false;
+    bool supports_set_rows = true;
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;

@@ -60,6 +60,10 @@ parser.add_argument(
     help="download full list of models - make sure you have access to all of them",
 )
 parser.add_argument(
+    "--check-missing", action="store_true",
+    help="only check for missing pre-tokenizer hashes",
+)
+parser.add_argument(
     "hf_token",
     help="optional HF token",
     nargs="?",
@@ -69,6 +73,10 @@ hf_token = args.hf_token if args.hf_token is not None else hf_token
 
 if hf_token is None:
     logger.warning("HF token not found. You can provide it as an argument or set it in ~/.cache/huggingface/token")
+
+if args.check_missing and args.full:
+    logger.warning("Downloading full list of models requested, ignoring --check-missing!")
+    args.check_missing = False
 
 # TODO: this string has to exercise as much pre-tokenizer functionality as possible
 #       will be updated with time - contributions welcome
@@ -147,6 +155,7 @@ pre_computed_hashes = [
     {"name": "falcon-h1", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/tiiuae/Falcon-H1-7B-Base", "chkhsh": "3eda48b4c4dc7de733d1a8b3e3b4a85243dbbf704da2ee9d42c6beced8897896"},
     {"name": "falcon-h1", "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/tiiuae/Falcon-H1-34B-Base", "chkhsh": "48f8e02c0359c0bbdd82f26909171fac1c18a457bb47573ed1fe3bbb2c1cfd4b"},
     {"name": "kimi-k2",   "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/moonshotai/Kimi-K2-Base",   "chkhsh": "81212dc7cdb7e0c1074ca62c5aeab0d43c9f52b8a737be7b12a777c953027890"},
+    {"name": "qwen2",     "tokt": TOKENIZER_TYPE.BPE, "repo": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B", "chkhsh": "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c"},
 ]
 
 
@@ -221,12 +230,13 @@ if not args.full:
     all_models = models.copy()
     models = [model for model in all_models if model["name"] not in existing_models]
 
-logging.info(f"Downloading {len(models)} models...")
-for model in models:
-    try:
-        download_model(model)
-    except Exception as e:
-        logger.error(f"Failed to download model {model['name']}. Error: {e}")
+if not args.check_missing:
+    logging.info(f"Downloading {len(models)} models...")
+    for model in models:
+        try:
+            download_model(model)
+        except Exception as e:
+            logger.error(f"Failed to download model {model['name']}. Error: {e}")
 
 
 # generate the source code for the convert_hf_to_gguf.py:get_vocab_base_pre() function:

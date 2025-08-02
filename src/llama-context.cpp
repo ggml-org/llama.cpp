@@ -105,7 +105,7 @@ llama_context::llama_context(
 
     {
         const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
-        supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : false;
+        supports_set_rows = LLAMA_SET_ROWS ? (atoi(LLAMA_SET_ROWS) != 0) : supports_set_rows;
 
         if (!supports_set_rows && !cparams.kv_unified) {
             LLAMA_LOG_WARN("%s: non-unified KV cache requires ggml_set_rows() - forcing unified KV cache\n", __func__);

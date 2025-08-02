@@ -702,6 +702,9 @@ class TextModel(ModelBase):
         if chkhsh == "81212dc7cdb7e0c1074ca62c5aeab0d43c9f52b8a737be7b12a777c953027890":
             # ref: https://huggingface.co/moonshotai/Kimi-K2-Base
             res = "kimi-k2"
+        if chkhsh == "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c":
+            # ref: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
+            res = "qwen2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -849,9 +852,6 @@ class TextModel(ModelBase):
         if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
             # ref: https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B
             res = "exaone4"
-        if chkhsh == "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c":
-            # ref: https://huggingface.co/Qwen/Qwen3-Embedding-8B
-            res = "qwen2"
 
         if res is None:
             logger.warning("\n")
