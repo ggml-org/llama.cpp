@@ -1,8 +1,9 @@
+#include "../../src/llama-impl.h"
 #include "arg.h"
 #include "common.h"
-#include "log.h"
-#include "llama.h"
 #include "gguf.h"
+#include "llama.h"
+#include "log.h"
 
 #include <algorithm>
 #include <chrono>
@@ -10,14 +11,14 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <thread>
-#include <mutex>
-#include <vector>
 #include <fstream>
-#include <unordered_map>
 #include <map>
-#include <regex>
+#include <mutex>
 #include <numeric>
+#include <regex>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -43,7 +44,6 @@ struct Stats {
     std::vector<int64_t> counts;
 };
 
-//ToDo: rename sqract variables to be more generic like 'values'
 struct tensor_statistics {
     std::string tensor;
     Stats stats;
@@ -57,6 +57,7 @@ struct tensor_statistics {
     float entropy      = 0.0f;
     float zd_score     = 0.0f;
     float cossim       = 0.0f;
+    float l2_norm      = 0.0f;
 };
 
 class IMatrixCollector {
@@ -253,6 +254,7 @@ static void compute_layer_statistics(std::vector<tensor_statistics> & tstats) {
         }
         return v;
     };
+
     // compute the cosine similarity between the same tensors in consecutive layers
     for (auto & ts : tstats) {
         ts.cossim = 0;
@@ -278,6 +280,30 @@ static void compute_layer_statistics(std::vector<tensor_statistics> & tstats) {
             }
         }
     }
+
+    // compute the L2 norm between the same tensors in consecutive layers
+    for (auto & ts : tstats) {
+        ts.l2_norm = 0.0f;
+        if (ts.stats.in_sum.empty()) continue;
+
+        if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
+            const int blk = std::stoi(match[1]);
+            if (blk <= 0) continue;
+            std::string tname(ts.tensor);
+            tname.replace(match.position(1), match.length(1), std::to_string(blk - 1));
+            auto prev = std::find_if(tstats.begin(), tstats.end(),
+                [tname](const tensor_statistics & t) { return t.tensor == tname; });
+            if (prev == tstats.end()) continue;
+            const auto cur_avg = build_avg(ts.stats);
+            const auto prev_avg = build_avg(prev->stats);
+            if (cur_avg.empty() || prev_avg.empty() || cur_avg.size() != prev_avg.size()) continue;
+
+            float dist = 0.0;
+            for (size_t i = 0; i < cur_avg.size(); ++i) {
+                const float act = cur_avg[i] - prev_avg[i];
+                dist += act * act;
+            }
+            ts.l2_norm = std::sqrt(dist);
         }
     }
 }
