@@ -7928,11 +7928,13 @@ class SmallThinkerModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+
 @ModelBase.register("CogVLMForCausalLM")
 class CogVLMVisionModel(MmprojModel):
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.hparams_vision['num_attention_heads'] = self.hparams['num_heads']
+        self.hparams['num_attention_heads'] = self.hparams['num_heads']
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -7955,6 +7957,7 @@ class CogVLMVisionModel(MmprojModel):
             ]
 
         return [(self.map_tensor_name(name), data_torch)]
+
 
 @ModelBase.register("CogVLMForCausalLM")
 class CogVLMModel(LlamaModel):
