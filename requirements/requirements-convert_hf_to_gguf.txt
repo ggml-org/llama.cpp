@@ -1,3 +1,5 @@
+mistral-common>=1.8.3
+
 -r ./requirements-convert_legacy_llama.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch~=2.2.1; platform_machine != "s390x"
