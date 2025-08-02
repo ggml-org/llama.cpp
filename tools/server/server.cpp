@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cinttypes>
 #include <deque>
+#include <fstream>
 #include <memory>
 #include <mutex>
 #include <signal.h>
@@ -1945,6 +1946,7 @@ struct server_context {
     // slots / clients
     std::vector<server_slot> slots;
     json default_generation_settings_for_props;
+    json default_client_config = json::object();
 
     server_queue    queue_tasks;
     server_response queue_results;
@@ -2137,6 +2139,15 @@ struct server_context {
         }
 
         default_generation_settings_for_props = slots[0].to_json();
+
+        if (!params_base.public_default_client_config.empty()) {
+            std::ifstream file(params_base.public_default_client_config);
+            LOG_INF("%s: Loading default client config from %s\n", __func__, params_base.public_default_client_config.c_str());
+            if (!file.is_open()) {
+                throw std::runtime_error("Error: default client config file not open");
+            }
+            file >> default_client_config;
+        }
 
         // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
         // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
@@ -4157,6 +4168,7 @@ int main(int argc, char ** argv) {
             { "bos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_bos(ctx_server.vocab), /* special= */ true)},
             { "eos_token",                   common_token_to_piece(ctx_server.ctx, llama_vocab_eos(ctx_server.vocab), /* special= */ true)},
             { "build_info",                  build_info },
+            { "default_client_config",       ctx_server.default_client_config },
         };
         if (ctx_server.params_base.use_jinja) {
             if (auto tool_use_src = common_chat_templates_source(ctx_server.chat_templates.get(), "tool_use")) {
