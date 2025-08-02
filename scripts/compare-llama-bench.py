@@ -326,7 +326,7 @@ class LlamaBenchDataSQLite3(LlamaBenchData):
 
         # Set table name and schema based on tool
         if self.tool == "llama-bench":
-            self.table_name = "test"
+            self.table_name = "llama_bench"
             db_fields = LLAMA_BENCH_DB_FIELDS
             db_types = LLAMA_BENCH_DB_TYPES
         elif self.tool == "test-backend-ops":
@@ -409,8 +409,8 @@ class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
 
         # Tool selection logic
         if tool is None:
-            if "test" in table_names:
-                self.table_name = "test"
+            if "llama_bench" in table_names:
+                self.table_name = "llama_bench"
                 self.tool = "llama-bench"
             elif "test_backend_ops" in table_names:
                 self.table_name = "test_backend_ops"
@@ -418,8 +418,8 @@ class LlamaBenchDataSQLite3File(LlamaBenchDataSQLite3):
             else:
                 raise RuntimeError(f"No suitable table found in database. Available tables: {table_names}")
         elif tool == "llama-bench":
-            if "test" in table_names:
-                self.table_name = "test"
+            if "llama_bench" in table_names:
+                self.table_name = "llama_bench"
                 self.tool = "llama-bench"
             else:
                 raise RuntimeError(f"Table 'test' not found for tool 'llama-bench'. Available tables: {table_names}")

@@ -222,6 +222,7 @@ enum vk_device_architecture {
     AMD_RDNA2,
     AMD_RDNA3,
     INTEL_XE2,
+    NVIDIA_PRE_TURING,
 };
 
 // HSK x HSV
@@ -315,9 +316,32 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             // https://www.intel.com/content/www/us/en/docs/oneapi/optimization-guide-gpu/2025-0/intel-xe-gpu-architecture.html
             return vk_device_architecture::INTEL_XE2;
         }
+    } else if (props.vendorID == VK_VENDOR_ID_NVIDIA) {
+        const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
+
+        bool cooperative_matrix = false;
+
+        // Detect "pre-turing" based on lack of coopmat support.
+        for (const auto& properties : ext_props) {
+            if (strcmp("VK_KHR_cooperative_matrix", properties.extensionName) == 0) {
+                cooperative_matrix = true;
+                break;
+            }
+        }
+
+        if (!cooperative_matrix) {
+            return vk_device_architecture::NVIDIA_PRE_TURING;
+        }
     }
     return vk_device_architecture::OTHER;
 }
+
+enum vk_conv_shapes {
+    CONV_SHAPE_128x128,
+    CONV_SHAPE_64x32,
+    CONV_SHAPE_32x256,
+    CONV_SHAPE_COUNT,
+};
 
 struct vk_device_struct {
     std::recursive_mutex mutex;
@@ -484,8 +508,8 @@ struct vk_device_struct {
     vk_pipeline pipeline_rwkv_wkv6_f32;
     vk_pipeline pipeline_rwkv_wkv7_f32;
     vk_pipeline pipeline_opt_step_adamw_f32;
-    vk_pipeline pipeline_conv2d_f32;
-    vk_pipeline pipeline_conv2d_f16_f32;
+    vk_pipeline pipeline_conv2d_f32[CONV_SHAPE_COUNT];
+    vk_pipeline pipeline_conv2d_f16_f32[CONV_SHAPE_COUNT];
     vk_pipeline pipeline_conv2d_dw_whcn_f32;
     vk_pipeline pipeline_conv2d_dw_cwhn_f32;
 
@@ -912,7 +936,21 @@ struct vk_op_conv2d_push_constants {
     uint32_t nb1;
     uint32_t nb2;
     uint32_t nb3;
+
+    // init_fastdiv_values constants for dividing by KW, KW*KH, OW, OW*OH
+    uint32_t KWmp;   uint32_t KWL;
+    uint32_t KWKHmp; uint32_t KWKHL;
+    uint32_t OWmp;   uint32_t OWL;
+    uint32_t OWOHmp; uint32_t OWOHL;
 };
+
+template <> void init_pushconst_fastdiv(vk_op_conv2d_push_constants &p) {
+    // Compute magic values to divide by KW, KW*KH, OW, OW*OH
+    init_fastdiv_values(p.KW,       p.KWmp,    p.KWL);
+    init_fastdiv_values(p.KW*p.KH,  p.KWKHmp,  p.KWKHL);
+    init_fastdiv_values(p.OW,       p.OWmp,    p.OWL);
+    init_fastdiv_values(p.OW*p.OH,  p.OWOHmp,  p.OWOHL);
+}
 
 struct vk_op_conv2d_dw_push_constants {
     uint32_t ne;
@@ -2072,12 +2110,12 @@ static void ggml_vk_load_shaders(vk_device& device) {
         s_mmq_wg_denoms = { 32,  64,  1 };
 
         // spec constants and tile sizes for quant matmul (Qi_K)
-        l_warptile_mmq_k = { 256, 64, 128, 64,  1 };
-        m_warptile_mmq_k = { 256, 32,  64, 64,  0 };
-        s_warptile_mmq_k = { 256, 32,  32, 128, 0 };
-        l_mmq_wg_denoms_k = { 64, 128, 1 };
-        m_mmq_wg_denoms_k = { 32,  64, 1 };
-        s_mmq_wg_denoms_k = { 32,  32, 1 };
+        l_warptile_mmq_k = { 256, 128, 256, 64, 1 };
+        m_warptile_mmq_k = { 256, 128, 128, 64, 1 };
+        s_warptile_mmq_k = { 256, 32,  64, 128, 0 };
+        l_mmq_wg_denoms_k = { 128, 256, 1 };
+        m_mmq_wg_denoms_k = { 128, 128, 1 };
+        s_mmq_wg_denoms_k = { 32,  64,  1 };
 
         // spec constants and tile sizes for quant matmul_id
         l_warptile_mmqid = { 256, 128, 128, 16, 0 };
@@ -2851,7 +2889,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
             ggml_vk_create_pipeline(device, device->pipeline_mul_mat_vec_p021_f16_f32[i], "mul_mat_vec_p021_f16_f32"+std::to_string(i+1), mul_mat_vec_p021_f16_f32_len,              mul_mat_vec_p021_f16_f32_data,              "main", 3, 6 * sizeof(uint32_t), {1, 1, 1}, {device->subgroup_size, i + 1}, 1, true);
         }
     }
-    ggml_vk_create_pipeline(device, device->pipeline_mul_mat_vec_nc_f16_f32, "mul_mat_vec_nc_f16_f32", mul_mat_vec_nc_f16_f32_len, mul_mat_vec_nc_f16_f32_data, "main", 3, 9 * sizeof(uint32_t), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_mul_mat_vec_nc_f16_f32, "mul_mat_vec_nc_f16_f32", mul_mat_vec_nc_f16_f32_len, mul_mat_vec_nc_f16_f32_data, "main", 3, 12 * sizeof(uint32_t), {1, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_norm_f32, "norm_f32", norm_f32_len, norm_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_group_norm_f32, "group_norm_f32", group_norm_f32_len, group_norm_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, {}, 1);
@@ -3053,48 +3091,89 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_opt_step_adamw_f32, "opt_step_adamw_f32", opt_step_adamw_f32_len, opt_step_adamw_f32_data, "main", 5, sizeof(vk_op_push_constants), {512, 1, 1}, {}, 1);
 
     // conv2d
-    uint32_t conv2d_WG_SIZE  = 256;
-    uint32_t conv2d_BS_K     = 128;
-    uint32_t conv2d_BS_CRS   = 16;
-    uint32_t use_collectives = 0;  // Enables subgroup ops for preventing the re-calculation of indices.
-    if (device->subgroup_shuffle &&
-        device->vendor_id != VK_VENDOR_ID_INTEL) {  // Do not enable collectives on Intel, see PR 14316
-        use_collectives = 1;
-        conv2d_BS_CRS   = std::min(
-            device->subgroup_size,
-            conv2d_BS_CRS);  // CRS block size should be capped at sugroup size for correctness when shuffle is used.
-    }
-    uint32_t conv2d_BS_NPQ = 128;
-    uint32_t conv2d_TS_K   = 8;
-    uint32_t conv2d_shmem_req =
-        (conv2d_BS_K * (conv2d_BS_CRS + 1) + conv2d_BS_CRS * (conv2d_BS_NPQ + 1)) * sizeof(float);
-    if (device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req) {
-        conv2d_BS_CRS = 8;
-        if (use_collectives) {
-            conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
-        }
-    }
+    for (uint32_t s = 0; s < CONV_SHAPE_COUNT; ++s) {
+        uint32_t conv2d_WG_SIZE  = 256;
+        uint32_t conv2d_BS_K     = 128;
+        uint32_t conv2d_BS_CRS   = 16;
+        uint32_t use_collectives = 0;  // Enables subgroup ops for preventing the re-calculation of indices.
+        uint32_t conv2d_BS_NPQ = 128;
+        uint32_t conv2d_TS_K   = 8;
+        uint32_t conv2d_SHMEM_PAD = 4;
+        bool conv2d_UNROLL = true;
 
-    if (use_collectives) {
-        ggml_vk_create_pipeline(
-            device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3,
-            sizeof(vk_op_conv2d_push_constants), { conv2d_BS_K, conv2d_BS_NPQ, 1 },
-            { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives }, 1, true, true);
-        ggml_vk_create_pipeline(
-            device, device->pipeline_conv2d_f16_f32, "conv2d_f16_f32", conv2d_f16_f32_len, conv2d_f16_f32_data, "main", 3,
-            sizeof(vk_op_conv2d_push_constants), { conv2d_BS_K, conv2d_BS_NPQ, 1 },
-            { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives }, 1, true, true);
-    } else {
-        ggml_vk_create_pipeline(
-            device, device->pipeline_conv2d_f32, "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3,
-            sizeof(vk_op_conv2d_push_constants), { conv2d_BS_K, conv2d_BS_NPQ, 1 },
-            { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives }, 1, true,
-            false);
-        ggml_vk_create_pipeline(
-            device, device->pipeline_conv2d_f16_f32, "conv2d_f16_f32", conv2d_f16_f32_len, conv2d_f16_f32_data, "main", 3,
-            sizeof(vk_op_conv2d_push_constants), { conv2d_BS_K, conv2d_BS_NPQ, 1 },
-            { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives }, 1, true,
-            false);
+        if (device->vendor_id == VK_VENDOR_ID_INTEL) {
+            conv2d_SHMEM_PAD = 0;
+            conv2d_UNROLL = false;
+        } else if (device->vendor_id == VK_VENDOR_ID_AMD) {
+            conv2d_SHMEM_PAD = device->architecture == vk_device_architecture::AMD_GCN ? 1 : 4;
+        }
+
+        switch (s) {
+        default:
+        case CONV_SHAPE_128x128:
+            conv2d_BS_K = 128;
+            conv2d_BS_NPQ = 128;
+            conv2d_BS_CRS = 16;
+            if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != vk_device_architecture::AMD_GCN) {
+                conv2d_UNROLL = false;
+            }
+            break;
+        case CONV_SHAPE_64x32:
+            conv2d_BS_K = 64;
+            conv2d_BS_NPQ = 32;
+            conv2d_BS_CRS = 32;
+            conv2d_TS_K   = 4;
+            break;
+        case CONV_SHAPE_32x256:
+            conv2d_BS_K = 32;
+            conv2d_BS_NPQ = 256;
+            conv2d_BS_CRS = 16;
+            break;
+        }
+
+        // Use collectives on pre-Turing NVIDIA GPUs and GCN AMD cards, which had slower integer math.
+        bool allow_collectives_nv = device->vendor_id != VK_VENDOR_ID_NVIDIA ||
+                                    device->architecture == vk_device_architecture::NVIDIA_PRE_TURING;
+        bool allow_collectives_amd = device->vendor_id != VK_VENDOR_ID_AMD ||
+                                     device->architecture == vk_device_architecture::AMD_GCN;
+
+        if (device->subgroup_shuffle &&
+            device->vendor_id != VK_VENDOR_ID_INTEL &&   // Do not enable collectives on Intel, see PR 14316.
+            allow_collectives_nv &&
+            allow_collectives_amd) {
+            use_collectives = 1;
+            conv2d_BS_CRS   = std::min(
+                device->subgroup_size,
+                conv2d_BS_CRS);  // CRS block size should be capped at subgroup size for correctness when shuffle is used.
+        }
+
+        uint32_t conv2d_shmem_req =
+            (conv2d_BS_K * (conv2d_BS_CRS + conv2d_SHMEM_PAD) + conv2d_BS_CRS * (conv2d_BS_NPQ + conv2d_SHMEM_PAD)) * sizeof(float);
+        if (device->properties.limits.maxComputeSharedMemorySize < conv2d_shmem_req) {
+            conv2d_BS_CRS = 8;
+            if (use_collectives) {
+                conv2d_BS_CRS = std::min(device->subgroup_size, conv2d_BS_CRS);
+            }
+        }
+
+        std::array<uint32_t, 3> wg_denoms = { conv2d_BS_K, conv2d_BS_NPQ, 1 };
+        std::vector<uint32_t> spec_constants = { conv2d_WG_SIZE, conv2d_BS_K, conv2d_BS_CRS, conv2d_BS_NPQ, conv2d_TS_K, use_collectives, conv2d_SHMEM_PAD };
+
+        if (conv2d_UNROLL) {
+            ggml_vk_create_pipeline(
+                device, device->pipeline_conv2d_f32[s], "conv2d_f32", conv2d_f32_unroll_len, conv2d_f32_unroll_data, "main", 3,
+                sizeof(vk_op_conv2d_push_constants), wg_denoms, spec_constants, 1, true, use_collectives);
+            ggml_vk_create_pipeline(
+                device, device->pipeline_conv2d_f16_f32[s], "conv2d_f16_f32", conv2d_f16_f32_unroll_len, conv2d_f16_f32_unroll_data, "main", 3,
+                sizeof(vk_op_conv2d_push_constants), wg_denoms, spec_constants, 1, true, use_collectives);
+        } else {
+            ggml_vk_create_pipeline(
+                device, device->pipeline_conv2d_f32[s], "conv2d_f32", conv2d_f32_len, conv2d_f32_data, "main", 3,
+                sizeof(vk_op_conv2d_push_constants), wg_denoms, spec_constants, 1, true, use_collectives);
+            ggml_vk_create_pipeline(
+                device, device->pipeline_conv2d_f16_f32[s], "conv2d_f16_f32", conv2d_f16_f32_len, conv2d_f16_f32_data, "main", 3,
+                sizeof(vk_op_conv2d_push_constants), wg_denoms, spec_constants, 1, true, use_collectives);
+        }
     }
 
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -4949,26 +5028,37 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     ggml_vk_queue_command_pools_cleanup(dst->device);
 }
 
-static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, int m, int n, int k, const vk_pipeline& pipeline) {
+static uint32_t ggml_vk_guess_split_k(ggml_backend_vk_context * ctx, uint32_t m, uint32_t n, uint32_t k, const vk_pipeline& pipeline) {
     VK_LOG_DEBUG("ggml_vk_guess_split_k(" << m << ", " << n << ", " << k << ")");
 
     uint32_t split_k = 1;
-    if (ctx->device->shader_core_count != 0 && m >= (int)pipeline->wg_denoms[0] && n >= (int)pipeline->wg_denoms[1]) {
+    if (ctx->device->shader_core_count != 0 && m >= pipeline->wg_denoms[0] && n >= pipeline->wg_denoms[1]) {
         // If k is 'large' and the SMs will fill less than halfway, use split_k.
         uint32_t m_tiles = CEIL_DIV(m, pipeline->wg_denoms[0]);
         uint32_t n_tiles = CEIL_DIV(n, pipeline->wg_denoms[1]);
-        if (k >= 2048 && m_tiles * n_tiles < ctx->device->shader_core_count / 2) {
-            split_k = ctx->device->shader_core_count / (m_tiles * n_tiles);
-            // Clamp to 2 or 4
-            split_k = std::min(split_k, 4u);
-            if (split_k == 3) {
-                split_k = 2;
+
+        if (k >= 2048) {
+            if (m_tiles * n_tiles <= ctx->device->shader_core_count / 2) {
+                split_k = ctx->device->shader_core_count / (m_tiles * n_tiles);
+            } else if (m_tiles * n_tiles <= ctx->device->shader_core_count * 2 / 3) {
+                split_k = 3;
             }
-            if (ctx->device->coopmat2) {
-                // coopmat2 shader expects splits to be aligned to 256
-                while (split_k > 1 && ((k / split_k) % 256) != 0) {
-                    split_k /= 2;
+            // Cap the split at 8x. Unless k is huge this is a lot of overhead.
+            split_k = std::min(split_k, 8u);
+
+            // ggml_vk_matmul will align the splits to be a multiple of 256.
+            // If this rounded up size would cause the last split to be empty,
+            // then reduce the split count.
+            while (true) {
+                if (split_k == 1) {
+                    break;
                 }
+                uint32_t k_split = CEIL_DIV(k, split_k);
+                k_split = ROUNDUP_POW2(k_split, 256);
+                if (k_split * (split_k - 1) < k) {
+                    break;
+                }
+                split_k--;
             }
         }
     }
@@ -4980,9 +5070,22 @@ static vk_pipeline ggml_vk_guess_matmul_pipeline(ggml_backend_vk_context * ctx, 
     VK_LOG_DEBUG("ggml_vk_guess_matmul_pipeline(" << m << ", " << n << ", " << aligned << ", " << ggml_type_name(src0_type) << ", " << ggml_type_name(src1_type) << ")");
 
     if (ctx->device->coopmat2) {
+        const uint32_t shader_core_count = ctx->device->shader_core_count;
+        const uint32_t tiles_l = CEIL_DIV(m, mmp->a_l->wg_denoms[0]) * CEIL_DIV(n, mmp->a_l->wg_denoms[1]);
+        const uint32_t tiles_m = CEIL_DIV(m, mmp->a_m->wg_denoms[0]) * CEIL_DIV(n, mmp->a_m->wg_denoms[1]);
+
         // Use large shader when the N dimension is greater than the medium shader's tile size
         uint32_t crossover_large = mmp->m->wg_denoms[1];
-        if ((ctx->device->mul_mat_l[src0_type] && (n > crossover_large)) || (!ctx->device->mul_mat_m[src0_type] && !ctx->device->mul_mat_s[src0_type])) {
+
+        // Prefer large over medium if either:
+        // - medium or large tiles would overfill the GPU
+        // - large tiles with a split_k==3 fits in the GPU and medium tiles with split_k==2 does not
+        //   (medium with split_k==2 is probably better if it fits - more workgroups running and less split_k overhead)
+        bool prefer_large = tiles_m > shader_core_count || tiles_l > shader_core_count ||
+                            // split_k==3 with large tiles likely better than medium tiles with no split_k.
+                            (tiles_l <= shader_core_count / 3 && tiles_m > shader_core_count / 2);
+
+        if ((ctx->device->mul_mat_l[src0_type] && (n > crossover_large && prefer_large)) || (!ctx->device->mul_mat_m[src0_type] && !ctx->device->mul_mat_s[src0_type])) {
             return aligned ? mmp->a_l : mmp->l;
         }
         // Use medium shader when the N dimension is greater than the small shader's tile size
@@ -5026,7 +5129,11 @@ static void ggml_vk_matmul(
 
     GGML_ASSERT(batch_stride_d == m * n);
 
-    const vk_mat_mat_push_constants pc1 = { m, n, k, stride_a, stride_b, stride_d, batch_stride_a, batch_stride_b, batch_stride_d, CEIL_DIV(k, split_k), ne02, ne12, broadcast2, broadcast3, padded_n };
+    // Round the split size up to a multiple of 256 (k-quant alignment)
+    uint32_t k_split = CEIL_DIV(k, split_k);
+    k_split = ROUNDUP_POW2(k_split, 256);
+
+    const vk_mat_mat_push_constants pc1 = { m, n, k, stride_a, stride_b, stride_d, batch_stride_a, batch_stride_b, batch_stride_d, k_split, ne02, ne12, broadcast2, broadcast3, padded_n };
     // Make sure enough workgroups get assigned for split k to work
     ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { a, b, split_k_buffer }, pc1, { (CEIL_DIV(m, pipeline->wg_denoms[0]) * pipeline->wg_denoms[0]) * split_k, n, batch });
     ggml_vk_sync_buffers(subctx);
@@ -5748,7 +5855,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     const uint64_t ne00 = src0->ne[0];
     const uint64_t ne01 = src0->ne[1];
     const uint64_t ne02 = src0->ne[2];
-    // const uint64_t ne03 = src0->ne[3];
+    const uint64_t ne03 = src0->ne[3];
 
     const uint64_t nb01 = src0->nb[1];
     const uint64_t nb02 = src0->nb[2];
@@ -5760,7 +5867,12 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     const uint64_t ne12 = src1->ne[2];
     // const uint64_t ne13 = src1->ne[3];
 
+    const uint32_t nb03 = (uint32_t)(src0->nb[3] / sizeof(ggml_fp16_t));
+    const uint32_t nb13 = (uint32_t)(src1->nb[3] / sizeof(float));
+    const uint32_t nb23 = (uint32_t)(dst->nb[3] / sizeof(float));
+
     GGML_ASSERT(ne11 == 1);
+    GGML_ASSERT(src0->ne[3] == src1->ne[3]); // checked in supports_op
 
     ggml_backend_vk_buffer_context * dst_buf_ctx = (ggml_backend_vk_buffer_context *)dst->buffer->context;
     ggml_backend_vk_buffer_context * src0_buf_ctx = (ggml_backend_vk_buffer_context *)src0->buffer->context;
@@ -5776,7 +5888,7 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
         src1_uma = d_Qy != nullptr;
     }
 
-    const uint64_t d_ne = ne01 * ne11 * ne12;
+    const uint64_t d_ne = ne01 * ne11 * ne12 * ne03;
 
     const uint32_t row_stride_x = nb01 / sizeof(ggml_fp16_t);
     const uint32_t channel_stride_x = nb02 / sizeof(ggml_fp16_t);
@@ -5811,10 +5923,10 @@ static void ggml_vk_mul_mat_vec_nc_f16_f32(ggml_backend_vk_context * ctx, vk_con
     const uint64_t d_shader_offset = d_buf_offset - d_buffer_offset;
 
     // compute
-    const std::array<uint32_t, 9> pc = { (uint32_t)ne00, (uint32_t)ne01, row_stride_x, channel_stride_x, channel_stride_y, (uint32_t)(ne12 / ne02), (uint32_t)ne12, (uint32_t)(qy_shader_offset / ggml_type_size(src1->type)), (uint32_t)(d_shader_offset / ggml_type_size(dst->type)) };
+    const std::array<uint32_t, 12> pc = { (uint32_t)ne00, (uint32_t)ne01, row_stride_x, channel_stride_x, channel_stride_y, (uint32_t)(ne12 / ne02), (uint32_t)ne12, (uint32_t)(qy_shader_offset / ggml_type_size(src1->type)), (uint32_t)(d_shader_offset / ggml_type_size(dst->type)), nb03, nb13, nb23 };
     ggml_vk_sync_buffers(subctx);
     ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_mul_mat_vec_nc_f16_f32,
-        { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_Qy, qy_buffer_offset, qy_sz + qy_shader_offset }, vk_subbuffer{ d_D, d_buffer_offset, d_sz + d_shader_offset } }, pc, { 1, (uint32_t)ne01, (uint32_t)ne12 });
+        { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz }, vk_subbuffer{ d_Qy, qy_buffer_offset, qy_sz + qy_shader_offset }, vk_subbuffer{ d_D, d_buffer_offset, d_sz + d_shader_offset } }, pc, { (uint32_t)ne03, (uint32_t)ne01, (uint32_t)ne12 });
 }
 
 static void ggml_vk_mul_mat(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, bool dryrun = false) {
@@ -6647,6 +6759,34 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     }
 }
 
+static std::array<uint32_t, 3> ggml_vk_get_conv_elements(const ggml_tensor *dst) {
+    const ggml_tensor *src0 = dst->src[0];
+    const ggml_tensor *src1 = dst->src[1];
+
+    // src0 - kernel:   [KW, KH, Cin, Cout]
+    // src1 - input:    [W, H, Cin, N]
+    // dst - result:    [OW, OH, Cout, N]
+
+    // Copied from ggml.c: int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d)
+    auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+        return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+    };
+    // parallelize in {OW/BS_K, OH/BS_NPQ, 1}
+    int64_t W    = src1->ne[0];
+    int64_t H    = src1->ne[1];
+    int64_t KW   = src0->ne[0];
+    int64_t KH   = src0->ne[1];
+    int64_t Cout = src0->ne[3];
+    int64_t N    = src1->ne[3];
+    int64_t OH   = calc_conv_output_size(H, KH, dst->op_params[1], dst->op_params[3], dst->op_params[5]);
+    int64_t OW   = calc_conv_output_size(W, KW, dst->op_params[0], dst->op_params[2], dst->op_params[4]);
+    int64_t NPQ  = N * OW * OH;
+
+    // Tile output matrix to (K/NB_K, NPQ/NB_NPQ, 1) workgroups
+    std::array<uint32_t, 3> elements = { static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1 };
+    return elements;
+}
+
 static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, ggml_tensor * dst, ggml_op op) {
     switch (op) {
     case GGML_OP_GET_ROWS:
@@ -6979,10 +7119,30 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_CONV_2D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
             ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
+            auto elements = ggml_vk_get_conv_elements(dst);
+            vk_conv_shapes shape;
+
+            uint32_t tiles[CONV_SHAPE_COUNT];
+            for (uint32_t i = 0; i < CONV_SHAPE_COUNT; ++i) {
+                tiles[i] = CEIL_DIV(elements[0], ctx->device->pipeline_conv2d_f32[i]->wg_denoms[0]) * CEIL_DIV(elements[1], ctx->device->pipeline_conv2d_f32[i]->wg_denoms[1]);
+            }
+
+            // We can't query number of shader cores on Intel, use 32 as a placeholder
+            // so small convolutions will still choose a smaller tile.
+            const uint32_t shader_core_count = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
+
+            if (elements[0] > 64 && tiles[CONV_SHAPE_128x128] >= shader_core_count * 2) {
+                shape = CONV_SHAPE_128x128;
+            } else if (elements[0] <= 32 && tiles[CONV_SHAPE_32x256] >= shader_core_count * 2) {
+                shape = CONV_SHAPE_32x256;
+            } else {
+                shape = CONV_SHAPE_64x32;
+            }
+
             if (src0->type == GGML_TYPE_F32) {
-                return ctx->device->pipeline_conv2d_f32;
+                return ctx->device->pipeline_conv2d_f32[shape];
             } else if (src0->type == GGML_TYPE_F16) {
-                return ctx->device->pipeline_conv2d_f16_f32;
+                return ctx->device->pipeline_conv2d_f16_f32[shape];
             }
         }
         return nullptr;
@@ -7310,29 +7470,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         } break;
     case GGML_OP_CONV_2D:
         {
-            // src0 - kernel:   [KW, KH, Cin, Cout]
-            // src1 - input:    [W, H, Cin, N]
-            // dst - result:    [OW, OH, Cout, N]
-
-            // Copied from ggml.c: int64_t ggml_calc_conv_output_size(int64_t ins, int64_t ks, int s, int p, int d)
-            auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
-                return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
-            };
-            // parallelize in {OW/BS_K, OH/BS_NPQ, 1}
-            int64_t W    = src1->ne[0];
-            int64_t H    = src1->ne[1];
-            int64_t KW   = src0->ne[0];
-            int64_t KH   = src0->ne[1];
-            int64_t Cout = src0->ne[3];
-            int64_t N    = src1->ne[3];
-            int64_t OH   = calc_conv_output_size(H, KH, dst->op_params[1], dst->op_params[3], dst->op_params[5]);
-            int64_t OW   = calc_conv_output_size(W, KW, dst->op_params[0], dst->op_params[2], dst->op_params[4]);
-            int64_t NPQ  = N * OW * OH;
-
-            // Tile output matrix to (K/NB_K, NPQ/NB_NPQ, 1) workgroups
-            elements = { static_cast<uint32_t>(Cout), static_cast<uint32_t>(NPQ), 1 };
-        }
-        break;
+            elements = ggml_vk_get_conv_elements(dst);
+        } break;
     case GGML_OP_ADD:
     case GGML_OP_SUB:
     case GGML_OP_DIV:

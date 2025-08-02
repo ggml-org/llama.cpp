@@ -1355,8 +1355,13 @@ public:
               case Op::Gt:        return l > r;
               case Op::Le:        return l <= r;
               case Op::Ge:        return l >= r;
-              case Op::In:        return (r.is_array() || r.is_object()) && r.contains(l);
-              case Op::NotIn:     return !(r.is_array() && r.contains(l));
+              case Op::In:        return (((r.is_array() || r.is_object()) && r.contains(l)) ||
+                                          (l.is_string() && r.is_string() &&
+                                            r.to_str().find(l.to_str()) != std::string::npos));
+              case Op::NotIn:
+                                  return !(((r.is_array() || r.is_object()) && r.contains(l)) ||
+                                            (l.is_string() && r.is_string() &&
+                                              r.to_str().find(l.to_str()) != std::string::npos));
               default:            break;
           }
           throw std::runtime_error("Unknown binary operator");
@@ -1552,6 +1557,19 @@ public:
               else res[i] = std::tolower(res[i]);
             }
             return res;
+          } else if (method->get_name() == "replace") {
+            vargs.expectArgs("replace method", {2, 3}, {0, 0});
+            auto before = vargs.args[0].get<std::string>();
+            auto after = vargs.args[1].get<std::string>();
+            auto count = vargs.args.size() == 3 ? vargs.args[2].get<int64_t>()
+                                                : str.length();
+            size_t start_pos = 0;
+            while ((start_pos = str.find(before, start_pos)) != std::string::npos &&
+                  count-- > 0) {
+              str.replace(start_pos, before.length(), after);
+              start_pos += after.length();
+            }
+            return str;
           }
         }
         throw std::runtime_error("Unknown method: " + method->get_name());
@@ -2128,7 +2146,7 @@ private:
             }
           }
 
-          if ((has_first_colon || has_second_colon) && (start || end || step)) {
+          if ((has_first_colon || has_second_colon)) {
             index = std::make_shared<SliceExpr>(slice_loc, std::move(start), std::move(end), std::move(step));
           } else {
             index = std::move(start);
