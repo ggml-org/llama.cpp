@@ -136,3 +136,10 @@ export interface LlamaCppServerProps {
   };
   // TODO: support params
 }
+
+export interface SettingsPreset {
+  id: string; // format: `preset-{timestamp}`
+  name: string;
+  createdAt: number; // timestamp from Date.now()
+  config: Record<string, string | number | boolean>; // partial CONFIG_DEFAULT
+}
