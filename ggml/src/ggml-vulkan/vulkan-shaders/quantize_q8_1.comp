@@ -23,7 +23,11 @@ layout(constant_id = 0) const uint GROUP_SIZE = 32;
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {vec4 data_a[];};
+#ifndef QBLOCK_X4
 layout (binding = 1) writeonly buffer D {block_q8_1_packed32 data_b[];};
+#else
+layout (binding = 1) writeonly buffer D {block_q8_1_x4 data_b[];};
+#endif
 
 #ifndef USE_SUBGROUPS
 shared float shmem[GROUP_SIZE];
@@ -44,6 +48,11 @@ void quantize() {
     if (ib >= gl_NumWorkGroups.x * blocks_per_group) {
         return;
     }
+
+#ifdef QBLOCK_X4
+    const uint ibx4_outer = ib / 4;
+    const uint ibx4_inner = ib % 4;
+#endif
 
     const uint a_idx = ib * 8 + iqs;
 
@@ -70,7 +79,13 @@ void quantize() {
     const float d = amax / 127.0;
     const float d_inv = d != 0.0 ? 1.0 / d : 0.0;
     vals = round(vals * d_inv);
+
+#ifndef QBLOCK_X4
     data_b[ib].qs[iqs] = pack32(i8vec4(round(vals)));
+#else
+    data_b[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack32(i8vec4(round(vals)));
+#endif
+
     barrier();
 
     // Calculate the sum for each block
@@ -92,7 +107,11 @@ void quantize() {
         const float sum = shmem[tid];
 #endif
 
+#ifndef QBLOCK_X4
         data_b[ib].ds = f16vec2(vec2(d, sum * d));
+#else
+        data_b[ibx4_outer].ds[ibx4_inner] = f16vec2(vec2(d, sum * d));
+#endif
     }
 }
 

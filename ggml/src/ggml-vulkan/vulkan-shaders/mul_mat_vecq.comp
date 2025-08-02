@@ -13,7 +13,7 @@
 #endif
 
 #define MMQ
-#define B_TYPE block_q8_1_packed32
+#define B_TYPE block_q8_1_x4_packed128
 
 #include "mul_mat_vec_base.comp"
 
@@ -80,7 +80,7 @@ void reduce_result_grouped(const in FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const i
 }
 #endif
 
-int32_t cache_b_qs[8];
+ivec4 cache_b_qs[2];
 vec2 cache_b_ds;
 
 void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const uint num_rows, const uint tid_in_group, const uint i) {
@@ -89,10 +89,11 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 
         // Preload data_b block
         const uint b_block_idx = (j*p.batch_stride_b + col) / QUANT_K_Q8_1 + b_offset;
-        cache_b_ds = vec2(data_b[b_block_idx].ds);
-        [[unroll]] for (uint k = 0; k < 8; k++) {
-            cache_b_qs[k] = data_b[b_block_idx].qs[k];
-        }
+        const uint b_block_idx_outer = b_block_idx / 4;
+        const uint b_block_idx_inner = b_block_idx % 4;
+        cache_b_ds = vec2(data_b[b_block_idx_outer].ds[b_block_idx_inner]);
+        cache_b_qs[0] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 2];
+        cache_b_qs[1] = data_b[b_block_idx_outer].qs[b_block_idx_inner * 2 + 1];
 
         uint ibi = first_row*p.ncols;
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
@@ -101,19 +102,51 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 
             int32_t q_sum = 0;
 #if QUANT_R == 2
-            [[unroll]] for (uint k = 0; k < 4; k++) {
-                const i32vec2 data_a_qs = repack(a_block_idx, k);
-                q_sum += dotPacked4x8EXT(data_a_qs.x,
-                                         cache_b_qs[k]);
-                q_sum += dotPacked4x8EXT(data_a_qs.y,
-                                         cache_b_qs[k + 4]);
-            }
+            i32vec2 data_a_qs = repack(a_block_idx, 0);
+            q_sum += dotPacked4x8EXT(data_a_qs.x,
+                                     cache_b_qs[0].x);
+            q_sum += dotPacked4x8EXT(data_a_qs.y,
+                                     cache_b_qs[1].x);
+            data_a_qs = repack(a_block_idx, 1);
+            q_sum += dotPacked4x8EXT(data_a_qs.x,
+                                     cache_b_qs[0].y);
+            q_sum += dotPacked4x8EXT(data_a_qs.y,
+                                     cache_b_qs[1].y);
+            data_a_qs = repack(a_block_idx, 2);
+            q_sum += dotPacked4x8EXT(data_a_qs.x,
+                                     cache_b_qs[0].z);
+            q_sum += dotPacked4x8EXT(data_a_qs.y,
+                                     cache_b_qs[1].z);
+            data_a_qs = repack(a_block_idx, 3);
+            q_sum += dotPacked4x8EXT(data_a_qs.x,
+                                     cache_b_qs[0].w);
+            q_sum += dotPacked4x8EXT(data_a_qs.y,
+                                     cache_b_qs[1].w);
 #else
-            [[unroll]] for (uint k = 0; k < 8; k++) {
-                const int32_t data_a_qs = repack(a_block_idx, k);
-                q_sum += dotPacked4x8EXT(data_a_qs,
-                                         cache_b_qs[k]);
-            }
+            int32_t data_a_qs = repack(a_block_idx, 0);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[0].x);
+            data_a_qs = repack(a_block_idx, 1);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[0].y);
+            data_a_qs = repack(a_block_idx, 2);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[0].z);
+            data_a_qs = repack(a_block_idx, 3);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[0].w);
+            data_a_qs = repack(a_block_idx, 4);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[1].x);
+            data_a_qs = repack(a_block_idx, 5);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[1].y);
+            data_a_qs = repack(a_block_idx, 6);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[1].z);
+            data_a_qs = repack(a_block_idx, 7);
+            q_sum += dotPacked4x8EXT(data_a_qs,
+                                     cache_b_qs[1].w);
 #endif
 
 #if QUANT_AUXF == 1
