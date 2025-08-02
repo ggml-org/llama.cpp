@@ -169,7 +169,7 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
     const float sqr_sum         = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
     const float variance        = (sqr_sum / activations.size()) - (mean * mean);
     const float std_deviation   = std::sqrt(std::max(0.0f, variance));
-    const float threshold       = 1e-5f;
+    const float threshold       = 1e-5f * std_deviation;
     const int inactive_count    = std::count_if(activations.begin(), activations.end(), [threshold](const float v) { return fabsf(v) <= threshold; });
     const float active_ratio    = 1 - static_cast<float>(inactive_count) / activations.size();
 
@@ -1199,7 +1199,7 @@ static bool show_statistics(const common_params & params) {
         return false;
     }
     if (!ts.empty()) {
-        compute_cossim(ts);
+        compute_layer_statistics(ts);
     } else {
         LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
         return false;
