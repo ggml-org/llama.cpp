@@ -173,10 +173,28 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
     const float active_ratio    = 1 - static_cast<float>(inactive_count) / activations.size();
 
     float entropy = 0;
-    if (sum > 0) {
-        for (const auto act : activations) {
-            if (const float p = act / sum; p > 0) {
-                entropy -= p * std::log2(p);
+
+    if (calc_mode == 1) {
+        float div = 0.0;
+        std::vector<float> weights(activations.size());
+        for (size_t i = 0; i < activations.size(); ++i) {
+            const float w = activations[i] * activations[i];
+            weights[i] = w;
+            div += w;
+        }
+
+        if (div > 0.0) {
+            for (float w : weights) {
+                const float p = w / div;
+                if (p > 0.0) entropy -= p * std::log2(p);
+            }
+        }
+    } else {
+        if (sum > 0) {
+            for (const auto act : activations) {
+                if (const float p = act / sum; p > 0) {
+                    entropy -= p * std::log2(p);
+                }
             }
         }
     }
@@ -202,6 +220,8 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
     ts.active       = active_ratio;
     ts.entropy      = entropy;
     ts.zd_score     = static_cast<float>(z_score) / ts.elements;
+
+    return calc_mode;
 }
 
 static void compute_cossim(std::vector<tensor_statistics> & tstats) {
