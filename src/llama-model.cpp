@@ -1436,6 +1436,36 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_GLM4_MOE:
+            {
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+                ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead);
+                ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+                ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
+                ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
+
+                GGML_ASSERT(hparams.n_expert_shared == 1);
+                GGML_ASSERT(hparams.expert_weights_scale > 0.0);
+
+                // NOTE: currently only two models use this arch - we need to update the switch
+                //       statement below if more are released
+
+                switch (hparams.n_expert) {
+                    // ref: https://github.com/ggml-org/llama.cpp/pull/15026#issue-3285604563
+                    case 128: {
+                        type = LLM_TYPE_106B_A12B;
+                        hparams.use_kq_norm = false;
+                    }; break;
+                    case 160: {
+                        type = LLM_TYPE_355B_A32B;
+                        hparams.use_kq_norm = true;
+                    }; break;
+                    default: {
+                        type = LLM_TYPE_UNKNOWN;
+                        hparams.use_kq_norm = false;
+                    };
+                }
+            } break;
         case LLM_ARCH_BITNET:
             {
                 ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
