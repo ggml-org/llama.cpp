@@ -62,6 +62,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_DEEPSEEK2,        "deepseek2"        },
     { LLM_ARCH_CHATGLM,          "chatglm"          },
     { LLM_ARCH_GLM4,             "glm4"             },
+    { LLM_ARCH_GLM4_MOE,         "glm4_moe"         },
     { LLM_ARCH_BITNET,           "bitnet"           },
     { LLM_ARCH_T5,               "t5"               },
     { LLM_ARCH_T5ENCODER,        "t5encoder"        },
@@ -1398,8 +1399,8 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_OUTPUT_NORM,        "output_norm" },
             { LLM_TENSOR_OUTPUT,             "output" },
             { LLM_TENSOR_ATTN_NORM,          "blk.%d.attn_norm" },
-            { LLM_TENSOR_ATTN_Q_NORM,        "blk.%d.attn_q_norm" },
-            { LLM_TENSOR_ATTN_K_NORM,        "blk.%d.attn_k_norm" },
+            { LLM_TENSOR_ATTN_Q_NORM,        "blk.%d.attn_q_norm" }, // optional
+            { LLM_TENSOR_ATTN_K_NORM,        "blk.%d.attn_k_norm" }, // optional
             { LLM_TENSOR_ATTN_Q,             "blk.%d.attn_q" },
             { LLM_TENSOR_ATTN_K,             "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_V,             "blk.%d.attn_v" },
