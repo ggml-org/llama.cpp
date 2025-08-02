@@ -2688,8 +2688,8 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     const size_t       type_size_src0 = ggml_type_size(src0->type);
     const size_t       type_size_src1 = ggml_type_size(src1->type);
 
-    bool is_src0_cont_2 = ggml_is_contiguous(src0);
-    bool is_src1_cont_2 = ggml_is_contiguous(src1);
+    bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
+    bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
 
     // SRC1 strides
     int64_t                          s11 = nb11 / type_size_src1;

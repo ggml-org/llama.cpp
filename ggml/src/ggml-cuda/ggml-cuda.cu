@@ -1852,8 +1852,8 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     ggml_cuda_pool_alloc<cuda_t> src0_alloc(ctx.pool());
     ggml_cuda_pool_alloc<cuda_t> src1_alloc(ctx.pool());
 
-    bool is_src0_cont_2 = ggml_is_contiguous(src0);
-    bool is_src1_cont_2 = ggml_is_contiguous(src1);
+    bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
+    bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
 
     // Handle src0
     src0_ptr = (const cuda_t *) src0->data;
