@@ -1219,25 +1219,23 @@ static bool show_statistics(const common_params & params) {
     std::map<int, weighted_stats> ws;
 
     LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
-    LOG_INF(
-        "\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-        " Layer",
-        "       Tensor",
-        tensor_calc_mode == 1 ? "          L₂ Norm" : "          Σ(Act²)",
-        "  Min",
-        "            Max",
-        "           μ",
-        "   σ",
-        " % Active",
+    LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%12s\t%s\t%5s\t%10s\n",
+        "Layer",
+        "Tensor",
+        tensor_calc_mode == 1 ? "L₂ Norm" : "Σ(Act²)",
+        "Min",
+        "Max",
+        "μ",
+        "σ",
         "N",
-        "   Entropy",
+        "Entropy",
         "E (norm)",
         "ZD",
-        "  CosSim"
+        "CosSim"
         );
     LOG_INF(
         "=============================================================================================================="
-        "===========================================================\n");
+        "=============================================================\n");
     for (const auto & tstat : ts) {
         std::string layer, name;
         process_tensor_name(tstat.tensor, layer, name);
@@ -1249,10 +1247,20 @@ static bool show_statistics(const common_params & params) {
             blk = -1;  // not a block layer
         }
 
-        LOG_INF("%5s\t%-20s\t%10.2f\t%8.4f\t%11.4f\t%6.2f\t%6.2f\t%8.2f%%\t%6d\t%10.4f\t%6.2f%%\t%10.2f%%\t%8.4f\n",
-                layer.c_str(), name.c_str(), tstat.sum_values, tstat.min_values, tstat.max_values, tstat.mean_values,
-                tstat.stddev, tstat.active * 100.0f, tstat.elements, tstat.entropy,
-                100.0f * (tstat.entropy / std::log2(tstat.elements)), 100.0f * tstat.zd_score, tstat.cossim);
+        LOG_INF("%5s\t%-20s\t%11.2f\t%10.4f\t%10.4f\t%8.2f\t%8.2f\t%7d\t%12.4f\t%7.2f%%\t%6.2f%%\t%10.4f\n",
+                layer.c_str(),
+                name.c_str(),
+                tstat.sum_values,
+                tstat.min_values,
+                tstat.max_values,
+                tstat.mean_values,
+                tstat.stddev,
+                tstat.elements,
+                tstat.entropy,
+                100.0f * (tstat.entropy / std::log2(tstat.elements)),
+                100.0f * tstat.zd_score,
+                tstat.cossim
+                );
 
         const float weighted_bias   = tstat.elements * tstat.sum_values;
         const float weighted_zd     = tstat.elements * tstat.zd_score;
