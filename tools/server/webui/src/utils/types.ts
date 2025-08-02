@@ -40,6 +40,7 @@ export interface Message {
   type: 'text' | 'root';
   timestamp: number; // timestamp from Date.now()
   role: 'user' | 'assistant' | 'system';
+  reasoningContent?: string;
   content: string;
   timings?: TimingReport;
   extra?: MessageExtra[];

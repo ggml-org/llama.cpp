@@ -58,9 +58,25 @@ export default function ChatMessage({
   // for reasoning model, we split the message into content and thought
   // TODO: implement this as remark/rehype plugin in the future
   const { content, thought, isThinking }: SplitMessage = useMemo(() => {
-    if (msg.content === null || msg.role !== 'assistant') {
+    if (msg.role !== 'assistant') {
       return { content: msg.content };
     }
+
+    // Handle case where we have reasoningContent (content can be null or empty)
+    if (msg.reasoningContent !== null) {
+      return {
+        content: msg.content || '',
+        thought: msg.reasoningContent,
+        isThinking: msg.content === null || msg.content === '',
+      };
+    }
+
+    // If content is null or empty, return as-is
+    if (msg.content === null || msg.content === '') {
+      return { content: msg.content };
+    }
+
+    // perhaps there are <think>...</think> tags in the regular content
     let actualContent = '';
     let thought = '';
     let isThinking = false;

@@ -188,6 +188,7 @@ export const AppContextProvider = ({
       content: null,
       parent: leafNodeId,
       children: [],
+      reasoningContent: '',
     };
     setPending(convId, pendingMsg);
 
@@ -254,13 +255,23 @@ export const AppContextProvider = ({
         if (chunk.error) {
           throw new Error(chunk.error?.message || 'Unknown error');
         }
-        const addedContent = chunk.choices[0].delta.content;
-        const lastContent = pendingMsg.content || '';
-        if (addedContent) {
+
+        const reasoningContent = chunk.choices[0].delta.reasoning_content;
+        if (reasoningContent) {
+          const lastContent = pendingMsg.reasoningContent || '';
           pendingMsg = {
             ...pendingMsg,
-            content: lastContent + addedContent,
+            reasoningContent: lastContent + reasoningContent,
           };
+        } else {
+          const addedContent = chunk.choices[0].delta.content;
+          const lastContent = pendingMsg.content || '';
+          if (addedContent) {
+            pendingMsg = {
+              ...pendingMsg,
+              content: lastContent + addedContent,
+            };
+          }
         }
         const timings = chunk.timings;
         if (timings && config.showTokensPerSecond) {
