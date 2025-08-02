@@ -825,8 +825,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         for (int64_t j = 0; j < ncounts; j++) {
             e.counts[j] += std::lround(((const float *) counts->data)[j]);
         }
-        // ToDo: fix blow up when GGUF does not have in_sum
-        if (in_sum->data != nullptr) {
+        if (in_sum != nullptr) {
             for (int64_t j = 0; j < nval; j++) {
                 e.in_sum[j] += ((const float *) in_sum->data)[j];
             }
