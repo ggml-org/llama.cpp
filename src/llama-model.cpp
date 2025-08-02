@@ -13566,6 +13566,12 @@ struct llm_build_glm4 : public llm_graph_context {
     }
 };
 
+struct llm_build_glm4_moe : public llm_graph_context {
+    llm_build_glm4_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+        // TODO
+    };
+};
+
 struct llm_build_nemotron : public llm_graph_context {
     llm_build_nemotron(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -17877,6 +17883,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
         case LLM_ARCH_GLM4:
             {
                 llm = std::make_unique<llm_build_glm4>(*this, params);
+            } break;
+        case LLM_ARCH_GLM4_MOE:
+            {
+                llm = std::make_unique<llm_build_glm4_moe>(*this, params);
             } break;
         case LLM_ARCH_BITNET:
             {
