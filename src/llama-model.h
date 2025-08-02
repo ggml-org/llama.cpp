@@ -349,6 +349,15 @@ struct llama_layer {
     struct ggml_tensor * laurel_r             = nullptr;
     struct ggml_tensor * laurel_post_norm     = nullptr;
 
+    // cogvlm
+    struct ggml_tensor * visexp_attn_wq = nullptr;
+    struct ggml_tensor * visexp_attn_wk = nullptr;
+    struct ggml_tensor * visexp_attn_wv = nullptr;
+    struct ggml_tensor * visexp_attn_wo = nullptr;
+    struct ggml_tensor * visexp_ffn_gate = nullptr;
+    struct ggml_tensor * visexp_ffn_down = nullptr;
+    struct ggml_tensor * visexp_ffn_up = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;

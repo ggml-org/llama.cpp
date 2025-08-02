@@ -355,6 +355,15 @@ struct clip_model {
     ggml_tensor * mm_norm_pre_w = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
 
+    // cogvlm
+    ggml_tensor * mm_post_fc_norm_w = nullptr;
+    ggml_tensor * mm_post_fc_norm_b = nullptr;
+    ggml_tensor * mm_h_to_4h_w = nullptr;
+    ggml_tensor * mm_gate_w = nullptr;
+    ggml_tensor * mm_4h_to_h_w = nullptr;
+    ggml_tensor * mm_boi = nullptr;
+    ggml_tensor * mm_eoi = nullptr;
+
     bool audio_has_avgpool() const {
         return proj_type == PROJECTOR_TYPE_QWEN2A
             || proj_type == PROJECTOR_TYPE_VOXTRAL;
@@ -1556,6 +1565,65 @@ struct clip_graph {
         return gf;
     }
 
+    // cogvlm vision encoder
+    ggml_cgraph * build_cogvlm() {
+        GGML_ASSERT(model.class_embedding != nullptr);
+        GGML_ASSERT(model.position_embeddings != nullptr);
+
+        const int n_pos = n_patches + 1; // +1 for [CLS]
+
+        // build input and concatenate class embedding
+        ggml_tensor * inp = build_inp();
+        inp = ggml_concat(ctx0, inp, model.class_embedding, 1);
+
+        // build ViT transformer
+        ggml_tensor * cur = build_vit(
+                                inp, n_pos,
+                                NORM_TYPE_NORMAL,
+                                hparams.ffn_op,
+                                model.position_embeddings,
+                                nullptr);
+
+        // remove CLS token (like build_llama4 does)
+        cur = ggml_view_2d(ctx0, cur,
+            n_embd, n_patches,
+            ggml_row_size(cur->type, n_embd), 0);
+
+        // Multiply with mm_model_proj
+        cur = ggml_mul_mat(ctx0, model.mm_model_proj, cur);
+
+        // Apply layernorm, weight, bias
+        cur = build_norm(cur, model.mm_post_fc_norm_w, model.mm_post_fc_norm_b, NORM_TYPE_NORMAL, 1e-5, -1);
+
+        // Apply GELU
+        // TODO: Not 100% sure about gelu and silu configuration
+        cur = ggml_gelu_inplace(ctx0, cur);
+
+        // Branch 1: multiply with mm_h_to_4h_w
+        ggml_tensor * h_to_4h = ggml_mul_mat(ctx0, model.mm_h_to_4h_w, cur);
+
+        // Branch 2: multiply with mm_gate_w
+        ggml_tensor * gate = ggml_mul_mat(ctx0, model.mm_gate_w, cur);
+
+        // Apply silu
+        gate = ggml_silu_inplace(ctx0, gate);
+
+        // Multiply together
+        cur = ggml_mul(ctx0, gate, h_to_4h);
+
+        // Apply mm_4h_to_h_w
+        cur = ggml_mul_mat(ctx0, model.mm_4h_to_h_w, cur);
+
+        // Concatenate with boi and eoi
+        cur = ggml_concat(ctx0, model.mm_boi, cur, 1);
+        cur = ggml_concat(ctx0, cur, model.mm_eoi, 1);
+
+        // build the graph
+        ggml_build_forward_expand(gf, cur);
+
+        return gf;
+    }
+
 private:
     //
     // utility functions
@@ -1602,8 +1670,10 @@ private:
             ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 
             // layernorm1
-            cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
-            cb(cur, "layer_inp_normed", il);
+            if (ctx->proj_type() != PROJECTOR_TYPE_COGVLM) {
+                cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
+                cb(cur, "layer_inp_normed", il);
+            }
 
             // self-attention
             {
@@ -1657,6 +1727,12 @@ private:
                 cb(cur, "attn_out_scaled", il);
             }
 
+            // Apply layernorm after attention for cogvlm
+            if (ctx->proj_type() == PROJECTOR_TYPE_COGVLM) {
+                cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
+                cb(cur, "attn_post_norm", il);
+            }
+
             // re-add the layer input, e.g., residual
             cur = ggml_add(ctx0, cur, inpL);
 
@@ -1665,8 +1741,10 @@ private:
             cb(cur, "ffn_inp", il);
 
             // layernorm2
-            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
-            cb(cur, "ffn_inp_normed", il);
+            if (ctx->proj_type() != PROJECTOR_TYPE_COGVLM) {
+                cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
+                cb(cur, "ffn_inp_normed", il);
+            }
 
             // ffn
             cur = build_ffn(cur,
@@ -1680,6 +1758,12 @@ private:
             if (layer.ls_2_w) {
                 cur = ggml_mul(ctx0, cur, layer.ls_2_w);
                 cb(cur, "ffn_out_scaled", il);
+            }
+
+            // Apply layernorm after mlp for cogvlm
+            if (ctx->proj_type() == PROJECTOR_TYPE_COGVLM) {
+                cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
+                cb(cur, "ffn_post_norm", il);
             }
 
             // residual 2
@@ -2007,6 +2091,10 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
         case PROJECTOR_TYPE_QWEN2A:
             {
                 res = graph.build_whisper_enc();
+            } break;
+        case PROJECTOR_TYPE_COGVLM:
+            {
+                res = graph.build_cogvlm();
             } break;
         default:
             {
@@ -2588,6 +2676,17 @@ struct clip_model_loader {
                     model.mm_model_proj    = get_tensor(TN_MM_PROJECTOR);
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 1, "weight"));
                     model.mm_model_mlp_2_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 2, "weight"));
+                } break;
+            case PROJECTOR_TYPE_COGVLM:
+                {
+                    model.mm_model_proj = get_tensor(TN_MM_PROJECTOR);
+                    model.mm_post_fc_norm_w = get_tensor(string_format(TN_MM_POST_FC_NORM, "weight"));
+                    model.mm_post_fc_norm_b = get_tensor(string_format(TN_MM_POST_FC_NORM, "bias"));
+                    model.mm_h_to_4h_w = get_tensor(string_format(TN_MM_H_TO_4H, "weight"));
+                    model.mm_gate_w = get_tensor(string_format(TN_MM_GATE, "weight"));
+                    model.mm_4h_to_h_w = get_tensor(string_format(TN_MM_4H_TO_H, "weight"));
+                    model.mm_boi = get_tensor(TN_TOK_BOI);
+                    model.mm_eoi = get_tensor(TN_TOK_EOI);
                 } break;
             default:
                 GGML_ASSERT(false && "unknown projector type");
@@ -3627,6 +3726,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     n_patches_sq /= 2;
                 }
             } break;
+        case PROJECTOR_TYPE_COGVLM:
+            {
+                n_patches_sq += 2;
+            } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
@@ -4032,6 +4135,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_VOXTRAL:
+        case PROJECTOR_TYPE_COGVLM:
             {
                 // do nothing
             } break;
@@ -4146,6 +4250,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
             return ctx->model.mm_fc_w->ne[1];
+        case PROJECTOR_TYPE_COGVLM:
+            return ctx->model.mm_4h_to_h_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }
