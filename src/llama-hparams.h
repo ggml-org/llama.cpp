@@ -43,8 +43,6 @@ struct llama_hparams {
     uint32_t n_rot;
     uint32_t n_embd_head_k; // dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
     uint32_t n_embd_head_v; // dimension of values (d_v) aka n_embd_head
-    uint32_t n_expert = 0;
-    uint32_t n_expert_used = 0;
     uint32_t n_rel_attn_bkts = 0;
 
     // note: deepseek2 using MLA converts into MQA with larger heads, then decompresses to MHA
@@ -61,14 +59,17 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 
-    uint32_t n_layer_dense_lead = 0;
     uint32_t n_lora_q           = 0;
     uint32_t n_lora_kv          = 0;
-    uint32_t n_ff_exp           = 0;
-    uint32_t n_ff_shexp         = 0;
-    uint32_t n_expert_shared    = 0;
     uint32_t n_norm_groups      = 0;
 
+    // these params are specific to MoE models
+    uint32_t n_expert             = 0;
+    uint32_t n_expert_used        = 0;
+    uint32_t n_expert_shared      = 0;
+    uint32_t n_layer_dense_lead   = 0;
+    uint32_t n_ff_exp             = 0;
+    uint32_t n_ff_shexp           = 0;
     float    expert_weights_scale = 0.0;
     bool     expert_weights_norm  = false;
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
