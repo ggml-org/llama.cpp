@@ -6605,9 +6605,9 @@ class Glm4MoeModel(TextModel):
         self.gguf_writer.add_token_types(toktypes)
 
         # Special tokens
-        # BOS should be [gMASK] (151331), EOS should be <|endoftext|> (151329) as per official config
+        # BOS should be [gMASK] (151331), EOS should be <|endoftext|> (151329) as per tokenizer analysis
         special_vocab._set_special_token(
-            "eos", tokenizer.get_added_vocab()["<|endoftext|>"]  # 151329 - official EOS token
+            "eos", tokenizer.get_added_vocab()["<|endoftext|>"]  # 151329 - correct EOS token
         )
         special_vocab._set_special_token(
             "eot", tokenizer.get_added_vocab()["<|endoftext|>"]  # 151329 - same as EOS
@@ -6620,9 +6620,25 @@ class Glm4MoeModel(TextModel):
         )
         special_vocab._set_special_token("eom", tokenizer.get_added_vocab()["<|observation|>"])  # 151338
 
-        if "/nothink" in tokenizer.get_added_vocab():
-            special_vocab._set_special_token("nothink", tokenizer.get_added_vocab()["/nothink"])  # 151360
+        if "<sop>" in tokenizer.get_added_vocab():
+            special_vocab._set_special_token("sop", tokenizer.get_added_vocab()["<sop>"])  # 151333
+        if "<eop>" in tokenizer.get_added_vocab():
+            special_vocab._set_special_token("eop", tokenizer.get_added_vocab()["<eop>"])  # 151334
+        if "[sMASK]" in tokenizer.get_added_vocab():
+            special_vocab._set_special_token("smask", tokenizer.get_added_vocab()["[sMASK]"])  # 151332
+
+        # TODO: clean up once decided on an approach to think and /nothink
+        #
+        # Previously:
+        # if "/nothink" in tokenizer.get_added_vocab():
+        #     special_vocab._set_special_token("nothink", tokenizer.get_added_vocab()["/nothink"])  # 151360
         # Note: <think> and </think> are regular tokens (special=false in official config), not special tokens
+        #
+        # Latest thinking is:
+        # NOTE: /nothink token exists but causes generation issues as mentioned in
+        # https://huggingface.co/zai-org/GLM-4.5/discussions/9
+        # "it is a very special token. Even as input, it will be encoded into a special token, causing generation issues."
+        # Therefore we do NOT add it to avoid generation problems
 
         special_vocab.add_to_gguf(self.gguf_writer)
 
@@ -6639,6 +6655,8 @@ class Glm4MoeModel(TextModel):
         # MoE parameters - Use only routed expert count (shared experts handled separately)
         if (n_routed_experts := self.hparams.get("n_routed_experts")) is not None:
             self.gguf_writer.add_expert_count(n_routed_experts)
+        if (num_experts_per_tok := self.hparams.get("num_experts_per_tok")) is not None:
+            self.gguf_writer.add_expert_used_count(num_experts_per_tok)
         if (moe_intermediate_size := self.hparams.get("moe_intermediate_size")) is not None:
             self.gguf_writer.add_expert_feed_forward_length(moe_intermediate_size)
         if (n_shared_experts := self.hparams.get("n_shared_experts")) is not None:

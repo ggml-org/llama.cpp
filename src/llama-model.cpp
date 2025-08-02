@@ -4397,6 +4397,8 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                     create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, final_layer), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
                     create_tensor(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, final_layer), { n_embd }, TENSOR_NOT_REQUIRED);
 
+                    // Load ALL tensors including NextN layer to satisfy tensor count (803)
+                    // but only PROCESS first 46 transformer layers in forward pass
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
 
@@ -13492,7 +13494,10 @@ struct llm_build_glm4_moe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-        for (int il = 0; il < n_layer; ++il) {
+        // Only process first 46 transformer layers (skip NextN layer 46)
+        // Layer 46 tensors are loaded but not processed in forward pass
+        const int n_transformer_layers = n_layer - 1;
+        for (int il = 0; il < n_transformer_layers; ++il) {
             ggml_tensor * inpSA = inpL;
 
             // Pre-attention norm
@@ -13554,7 +13559,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                         Qcur, Kcur, Vcur, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), il);
             }
 
-            if (il == n_layer - 1 && inp_out_ids) {
+            if (il == n_transformer_layers - 1 && inp_out_ids) {
                 cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
                 inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
             }
