@@ -749,8 +749,10 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down) {
         cur = build_lora_mm(down, cur);
-        if (arch == LLM_ARCH_GLM4) {
-            // GLM4 seems to have numerical issues with half-precision accumulators
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
+            // GLM4 FFNs seem to have numerical issues with half-precision accumulators
+            // -- ref: https://github.com/ggml-org/llama.cpp/pull/13101
+            // (GLM4_MOE uses some GLM4 FFNs, so we need to match it too)
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
     }
@@ -1391,8 +1393,10 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
-        if (arch == LLM_ARCH_GLM4) {
-            // GLM4 seems to have numerical issues with half-precision accumulators
+        if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE) {
+            // GLM4 FFNs seem to have numerical issues with half-precision accumulators
+            // -- ref: https://github.com/ggml-org/llama.cpp/pull/13101
+            // (GLM4_MOE uses some GLM4 FFNs, so we need to match it too)
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
     }
