@@ -7850,75 +7850,10 @@ class GptOssModel(TextModel):
         new_data = new_data.reshape(new_data.shape[0], new_data.shape[1], new_data.shape[2] * new_data.shape[3])
         self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.MXFP4)
 
-    def convert_moe_packed_tensors(
-        self,
-        new_name: str,
-        blocks,
-        scales,
-        *,
-        dtype: torch.dtype = torch.float32,
-        rows_per_chunk: int = 32768 * 1024,
-    ) -> tuple[str, Tensor]:
-        import math
-
-        scales = scales.to(torch.int32) - 127
-
-        assert blocks.shape[:-1] == scales.shape, f"{blocks.shape=} does not match {scales.shape=}"
-
-        FP4_VALUES = [
-            +0.0,
-            +0.5,
-            +1.0,
-            +1.5,
-            +2.0,
-            +3.0,
-            +4.0,
-            +6.0,
-            -0.0,
-            -0.5,
-            -1.0,
-            -1.5,
-            -2.0,
-            -3.0,
-            -4.0,
-            -6.0,
-        ]
-        blocks = blocks.to(device="cpu")
-        scales = scales.to(device="cpu")
-        lut = torch.tensor(FP4_VALUES, dtype=dtype, device=blocks.device)
-
-        *prefix_shape, G, B = blocks.shape
-        rows_total = math.prod(prefix_shape) * G
-
-        blocks = blocks.reshape(rows_total, B)
-        scales = scales.reshape(rows_total, 1)
-
-        out = torch.empty(rows_total, B * 2, dtype=dtype, device="cpu")
-
-        for r0 in range(0, rows_total, rows_per_chunk):
-            r1 = min(r0 + rows_per_chunk, rows_total)
-
-            blk = blocks[r0:r1]
-            exp = scales[r0:r1]
-
-            # nibble indices -> int64
-            idx_lo = (blk & 0x0F).to(torch.long)
-            idx_hi = (blk >> 4).to(torch.long)
-
-            sub = out[r0:r1]
-            sub[:, 0::2] = lut[idx_lo]
-            sub[:, 1::2] = lut[idx_hi]
-
-            torch.ldexp(sub, exp, out=sub)
-            del idx_lo, idx_hi, blk, exp
-
-        out = out.reshape(*prefix_shape, G, B * 2).view(*prefix_shape, G * B * 2)
-        logger.info(f"Unpacked {new_name} with shape {out.shape} from MXFP4")
-        return new_name, out
-
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         blocks0: Tensor = torch.zeros(1)
         blocks1: Tensor = torch.zeros(1)
+        found_mxfp4_tensors = False
         # we assume that tensors are loaded in the correct order
         for name, data_torch in self.get_tensors():
             if "mlp.experts.down_proj_blocks" in name:
@@ -7926,7 +7861,7 @@ class GptOssModel(TextModel):
             elif "mlp.experts.down_proj_scales" in name:
                 new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
                 self.repack_mxfp4(new_name, blocks0, data_torch)
-                # yield self.convert_moe_packed_tensors(new_name, blocks0, data_torch)
+                found_mxfp4_tensors = True
             elif "mlp.experts.gate_up_proj_blocks" in name:
                 blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
             elif "mlp.experts.gate_up_proj_scales" in name:
@@ -7935,8 +7870,9 @@ class GptOssModel(TextModel):
                 new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
                 self.repack_mxfp4(new_name_gate, blocks0, scales0)
                 self.repack_mxfp4(new_name_up, blocks1, scales1)
-                # yield self.convert_moe_packed_tensors(new_name_gate, blocks0, scales0)
-                # yield self.convert_moe_packed_tensors(new_name_up, blocks1, scales1)
+                found_mxfp4_tensors = True
+        if not found_mxfp4_tensors:
+            raise ValueError("No MXFP4 tensors found in the model. Please make sure you are using MXFP4 model.")
         return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
