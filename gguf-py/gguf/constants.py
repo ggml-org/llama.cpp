@@ -382,6 +382,7 @@ class MODEL_ARCH(IntEnum):
     DREAM            = auto()
     SMALLTHINKER     = auto()
     LLADA            = auto()
+    GLM4_MOE         = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
