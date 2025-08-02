@@ -224,27 +224,60 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
     return calc_mode;
 }
 
-static void compute_cossim(std::vector<tensor_statistics> & tstats) {
+static void compute_layer_statistics(std::vector<tensor_statistics> & tstats) {
     static const std::regex pattern(R"(blk\.(\d+)\.)");
+
+    auto build_avg = [](const Stats & s) -> std::vector<float> {
+        if (s.counts.empty()) return {};
+        const size_t n_mat = s.counts.size();
+        const size_t len = !s.in_sum.empty() ? s.in_sum.size()
+                                             : s.in_sum2.size();
+        if (len == 0 || len % n_mat != 0) return {};
+        const size_t row = len / n_mat;
+        std::vector<float> v;
+        v.reserve(len);
+        if (!s.in_sum.empty()) {
+            for (size_t m = 0; m < n_mat; ++m) {
+                const float c = (float)s.counts[m];
+                if (c <= 0) return {};
+                const size_t off = m*row;
+                for (size_t j = 0; j < row; ++j) v.push_back(s.in_sum[off+j]/c);
+            }
+        } else {
+            for (size_t m = 0; m < n_mat; ++m) {
+                const float c = (float)s.counts[m];
+                if (c <= 0) return {};
+                const size_t off = m*row;
+                for (size_t j = 0; j < row; ++j) v.push_back(s.in_sum2[off+j]/c);
+            }
+        }
+        return v;
+    };
+    // compute the cosine similarity between the same tensors in consecutive layers
     for (auto & ts : tstats) {
+        ts.cossim = 0;
+
         if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
             const int blk = std::stoi(match[1]);
+            if (blk <= 0) continue;
             std::string tname(ts.tensor);
             tname.replace(match.position(1), match.length(1), std::to_string(blk-1));
             auto prev = std::find_if(tstats.begin(), tstats.end(),
                 [tname](const tensor_statistics & t) { return t.tensor == tname; });
-            if (prev != tstats.end()) {
-                const float dot_product = std::inner_product(ts.stats.in_sum2.begin(), ts.stats.in_sum2.end(),
-                    prev->stats.in_sum2.begin(), 0.0f);
-                const float magnitude = std::sqrt(std::inner_product(ts.stats.in_sum2.begin(), ts.stats.in_sum2.end(),
-                    ts.stats.in_sum2.begin(), 0.0f));
-                const float prev_magnitude = std::sqrt(std::inner_product(prev->stats.in_sum2.begin(), prev->stats.in_sum2.end(),
-                    prev->stats.in_sum2.begin(), 0.0f));
-                const float cos_sim = dot_product / (magnitude * prev_magnitude);
-                ts.cossim = cos_sim;
+            if (prev == tstats.end()) continue;
+            const auto curr_avg = build_avg(ts.stats);
+            const auto prev_avg = build_avg(prev->stats);
+            if (curr_avg.size() == prev_avg.size() && !curr_avg.empty()) {
+                float dot_prod = 0.0f, vec1 = 0.0f, vec2 = 0.0f;
+                for (size_t i = 0; i < curr_avg.size(); ++i) {
+                    dot_prod += curr_avg[i]*prev_avg[i];
+                    vec1  += curr_avg[i]*curr_avg[i];
+                    vec2  += prev_avg[i]*prev_avg[i];
+                }
+                if (vec1 > 0 && vec2 > 0) ts.cossim = dot_prod / (std::sqrt(vec1)*std::sqrt(vec2));
             }
-        } else {
-            ts.cossim = 0;
+        }
+    }
         }
     }
 }
