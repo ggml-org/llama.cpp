@@ -53,7 +53,6 @@ struct tensor_statistics {
     float min_values   = 0.0f;
     int   elements     = 0;
     float stddev       = 0.0f;
-    float active       = 0.0f;
     float entropy      = 0.0f;
     float zd_score     = 0.0f;
     float cossim       = 0.0f;
@@ -169,11 +168,7 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
     const float sqr_sum         = std::inner_product(activations.begin(), activations.end(), activations.begin(), 0.0f);
     const float variance        = (sqr_sum / activations.size()) - (mean * mean);
     const float std_deviation   = std::sqrt(std::max(0.0f, variance));
-    const float threshold       = 1e-5f * std_deviation;
-    const int inactive_count    = std::count_if(activations.begin(), activations.end(), [threshold](const float v) { return fabsf(v) <= threshold; });
-    const float active_ratio    = 1 - static_cast<float>(inactive_count) / activations.size();
-
-    float entropy = 0;
+    float entropy               = 0;
 
     if (calc_mode == 1) {
         float div = 0.0;
@@ -218,7 +213,6 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
     ts.min_values   = min;
     ts.elements     = static_cast<int>(activations.size());
     ts.stddev       = std_deviation;
-    ts.active       = active_ratio;
     ts.entropy      = entropy;
     ts.zd_score     = static_cast<float>(z_score) / ts.elements;
 
