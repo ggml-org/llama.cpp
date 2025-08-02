@@ -466,6 +466,7 @@ struct ggml_backend_opencl_context {
         }
 
         // Populate profiling info
+        CL_CHECK(clFinish(queue));
         for (ProfilingInfo & info : profiling_info) {
             cl_ulong cmd_queued;
             cl_ulong cmd_submit;
@@ -473,7 +474,6 @@ struct ggml_backend_opencl_context {
             cl_ulong cmd_end;
             cl_ulong cmd_complete;
 
-            CL_CHECK(clWaitForEvents(1, &info.evt));
             CL_CHECK(clGetEventProfilingInfo(
                 info.evt, CL_PROFILING_COMMAND_QUEUED, sizeof(cl_ulong), &cmd_queued, NULL));
             CL_CHECK(clGetEventProfilingInfo(
@@ -484,7 +484,6 @@ struct ggml_backend_opencl_context {
                 info.evt, CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &cmd_end, NULL));
             CL_CHECK(clGetEventProfilingInfo(
                 info.evt, CL_PROFILING_COMMAND_COMPLETE, sizeof(cl_ulong), &cmd_complete, NULL));
-            CL_CHECK(clReleaseEvent(info.evt));
 
             char kernel_name[512];
             CL_CHECK(clGetKernelInfo(info.kernel, CL_KERNEL_FUNCTION_NAME,
