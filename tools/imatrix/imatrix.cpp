@@ -1225,9 +1225,22 @@ static bool show_statistics(const common_params & params) {
     std::map<int, weighted_stats> ws;
 
     LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
-    LOG_INF("\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", " Layer", "       Tensor", "          Σ(Act²)",
-            "  Min", "            Max", "           μ", "   σ", " % Active", "N", "   Entropy", "E (norm)", "ZD",
-            "  CosSim");
+    LOG_INF(
+        "\n%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+        " Layer",
+        "       Tensor",
+        tensor_calc_mode == 1 ? "          L₂ Norm" : "          Σ(Act²)",
+        "  Min",
+        "            Max",
+        "           μ",
+        "   σ",
+        " % Active",
+        "N",
+        "   Entropy",
+        "E (norm)",
+        "ZD",
+        "  CosSim"
+        );
     LOG_INF(
         "=============================================================================================================="
         "===========================================================\n");
