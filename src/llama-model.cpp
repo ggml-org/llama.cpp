@@ -13651,7 +13651,142 @@ struct llm_build_glm4 : public llm_graph_context {
 
 struct llm_build_glm4_moe : public llm_graph_context {
     llm_build_glm4_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
-        // TODO
+        const int64_t n_embd_head = hparams.n_embd_head_v;
+        const int64_t n_rot       = hparams.n_rot;
+
+        GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
+        GGML_ASSERT(n_rot == n_embd_head / 2);
+
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        inpL = build_inp_embd(model.tok_embd);
+
+        ggml_tensor * inp_pos     = build_inp_pos();
+        auto        * inp_attn    = build_attn_inp_kv_unified();
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        for (int il = 0; il < n_layer; ++il) {
+            ggml_tensor * inpSA = inpL;
+
+            // pre-attention norm
+            cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            // self-attention block
+            {
+                ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                // optional QK norm
+                if (hparams.use_kq_norm) {
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+
+                    Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+                    Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+                    cb(Qcur, "Qcur_normed", il);
+                    cb(Kcur, "Kcur_normed", il);
+                }
+
+                // reshape QKV
+                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+                
+                // apply RoPE
+                Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+                Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Qcur, "Qcur_roped", il);
+                cb(Kcur, "Kcur_roped", il);
+
+                const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+
+                cur = build_attn(inp_attn, model.layers[il].wo, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                cb(cur, "attn_out", il);
+            }
+
+            // first residual
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
+
+            // pre-ffn RMSnorm
+            cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "ffn_norm", il);
+
+            // 
+            if (static_cast<uint32_t>(il) < hparams.n_layer_dense_lead) {
+                // dense FFN
+                cur = build_ffn(cur,
+                        model.layers[il].ffn_up,   NULL, NULL,
+                        model.layers[il].ffn_gate, NULL, NULL,
+                        model.layers[il].ffn_down, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(cur, "ffn_dense_out", il);
+            } else {
+                // shared expert
+                ggml_tensor * shexp_out = build_ffn(cur,
+                        model.layers[il].ffn_up_shexp,   NULL, NULL,
+                        model.layers[il].ffn_gate_shexp, NULL, NULL,
+                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(shexp_out, "ffn_shexp_out", il);
+
+                // conditional experts
+                ggml_tensor * moe_out = build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        model.layers[il].ffn_exp_probs_b,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU,
+                        true, // norm_topk_prob
+                        true, // use expert bias
+                        hparams.expert_weights_scale,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID, // IMPORTANT -- MUST USE SIGMOID
+                        il);
+                cb(moe_out, "ffn_moe_out", il);
+                
+                // combine output from shared and routed experts
+                cur = ggml_add(ctx0, moe_out, shexp_out);
+                cb(cur, "ffn_moe_combined", il);
+            }
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur     = ggml_get_rows(ctx0, cur, inp_out_ids);
+                ffn_inp = ggml_get_rows(ctx0, ffn_inp, inp_out_ids);
+            }
+
+            // second residual
+            cur = ggml_add(ctx0, cur, ffn_inp);
+            
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+            
+            // input for next layer
+            inpL = cur;
+        }
+
+        cur = inpL;
+
+        // output norm
+        cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+        cb(cur, "output_norm", -1);
+        res->t_embd = cur;
+
+        // final output
+        cur = build_lora_mm(model.output, cur);
+        cb(cur, "output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
     }
 };
 
