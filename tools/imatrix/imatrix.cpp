@@ -311,52 +311,43 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
 static void compute_layer_statistics(const std::vector<tensor_statistics> & tstats,
                                               std::map<int, float> & layer_cossim,
                                               const std::unordered_map<std::string, Stats> & stats_map) {
-        struct layer_aggregation {
+    struct layer_aggregation {
         std::vector<float> curr_avg;
         std::vector<float> prev_avg;
     };
-
     static const std::regex pattern(R"(blk\.(\d+)\.)");
-
-    // index tensor stats by name for quick lookup
     std::unordered_map<std::string, const tensor_statistics*> tidx;
     tidx.reserve(tstats.size());
     for (const auto & ts : tstats) tidx[ts.tensor] = &ts;
+    std::map<int, layer_aggregation> taggr;
 
-    // concatenate per-layer
-    std::map<int, layer_aggregation> taggr; // ordered by layer
     for (const auto & ts : tstats) {
         std::smatch match;
         if (!std::regex_search(ts.tensor, match, pattern)) continue;
         const int blk = std::stoi(match[1]);
         if (blk <= 0) continue;
-
         std::string prev_lyr(ts.tensor);
         prev_lyr.replace(match.position(1), match.length(1), std::to_string(blk-1));
-
         if (auto it_prev = tidx.find(prev_lyr); it_prev == tidx.end()) continue;
-
-        // use stored Stats to rebuild averages
         const auto curr_avg = compute_tensor_averages(stats_map.at(ts.tensor));
         const auto prev_avg = compute_tensor_averages(stats_map.at(prev_lyr));
         if (curr_avg.empty() || prev_avg.empty() || curr_avg.size() != prev_avg.size()) continue;
-
         auto & [curr, prev] = taggr[blk];
         curr.insert(curr.end(), curr_avg.begin(), curr_avg.end());
         prev.insert(prev.end(), prev_avg.begin(), prev_avg.end());
     }
 
-    // compute cosine per layer
+    // compute the cosine similarity between consecutive layers
     for (auto & kv : taggr) {
         const auto & curr = kv.second.curr_avg;
         const auto & prev = kv.second.prev_avg;
         if (curr.size() != prev.size() || curr.empty()) continue;
         float dot_prod = 0.0, lyr1 = 0.0, lyr2 = 0.0;
         for (size_t i = 0; i < curr.size(); ++i) {
-            const double a = curr[i], b = prev[i];
-            dot_prod += a*b;
-            lyr1  += a*a;
-            lyr2  += b*b;
+            float crr = curr[i], prv = prev[i];
+            dot_prod += crr * prv;
+            lyr1  += crr * crr;
+            lyr2  += prv * prv;
         }
         float cossim = 0.0f;
         if (lyr1 > 0.0 && lyr2 > 0.0) cossim = dot_prod / (std::sqrt(lyr1) * std::sqrt(lyr2));
