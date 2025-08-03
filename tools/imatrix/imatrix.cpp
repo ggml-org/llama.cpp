@@ -127,6 +127,39 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
     }
 }
 
+static std::vector<float> compute_tensor_averages(const Stats & tstats) {
+    if (tstats.counts.empty()) return {};
+    const size_t n_mat = tstats.counts.size();
+    const size_t len = !tstats.in_sum.empty() ? tstats.in_sum.size() : tstats.in_sum2.size();
+
+    if (len == 0 || len % n_mat != 0) return {};
+    const size_t row = len / n_mat;
+    std::vector<float> vec;
+    vec.reserve(len);
+
+    if (!tstats.in_sum.empty()) {
+        for (size_t m = 0; m < n_mat; ++m) {
+            const float c = (float)tstats.counts[m];
+            if (c <= 0) return {};
+            const size_t off = m * row;
+            for (size_t j = 0; j < row; ++j) {
+                vec.push_back(tstats.in_sum[off + j] / c);
+            }
+        }
+    } else {
+        for (size_t m = 0; m < n_mat; ++m) {
+            const float c = (float)tstats.counts[m];
+            if (c <= 0) return {};
+            const size_t off = m * row;
+            for (size_t j = 0; j < row; ++j) {
+                vec.push_back(tstats.in_sum2[off + j] / c);
+            }
+        }
+    }
+
+    return vec;
+}
+
 static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
     if (e.in_sum2.size() % e.counts.size() != 0) {
         LOG_ERR("%s: activation size mismatch for tensor %s (%zu vs %zu)\n", __func__, name.c_str(), e.counts.size(), e.in_sum2.size());
@@ -222,33 +255,6 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
 static void compute_layer_statistics(std::vector<tensor_statistics> & tstats) {
     static const std::regex pattern(R"(blk\.(\d+)\.)");
 
-    auto build_avg = [](const Stats & s) -> std::vector<float> {
-        if (s.counts.empty()) return {};
-        const size_t n_mat = s.counts.size();
-        const size_t len = !s.in_sum.empty() ? s.in_sum.size()
-                                             : s.in_sum2.size();
-        if (len == 0 || len % n_mat != 0) return {};
-        const size_t row = len / n_mat;
-        std::vector<float> v;
-        v.reserve(len);
-        if (!s.in_sum.empty()) {
-            for (size_t m = 0; m < n_mat; ++m) {
-                const float c = (float)s.counts[m];
-                if (c <= 0) return {};
-                const size_t off = m*row;
-                for (size_t j = 0; j < row; ++j) v.push_back(s.in_sum[off+j]/c);
-            }
-        } else {
-            for (size_t m = 0; m < n_mat; ++m) {
-                const float c = (float)s.counts[m];
-                if (c <= 0) return {};
-                const size_t off = m*row;
-                for (size_t j = 0; j < row; ++j) v.push_back(s.in_sum2[off+j]/c);
-            }
-        }
-        return v;
-    };
-
     // compute the cosine similarity between the same tensors in consecutive layers
     for (auto & ts : tstats) {
         ts.cossim = 0;
@@ -261,8 +267,8 @@ static void compute_layer_statistics(std::vector<tensor_statistics> & tstats) {
             auto prev = std::find_if(tstats.begin(), tstats.end(),
                 [tname](const tensor_statistics & t) { return t.tensor == tname; });
             if (prev == tstats.end()) continue;
-            const auto curr_avg = build_avg(ts.stats);
-            const auto prev_avg = build_avg(prev->stats);
+            const auto curr_avg = compute_tensor_averages(ts.stats);
+            const auto prev_avg = compute_tensor_averages(prev->stats);
             if (curr_avg.size() == prev_avg.size() && !curr_avg.empty()) {
                 float dot_prod = 0.0f, vec1 = 0.0f, vec2 = 0.0f;
                 for (size_t i = 0; i < curr_avg.size(); ++i) {
@@ -288,8 +294,8 @@ static void compute_layer_statistics(std::vector<tensor_statistics> & tstats) {
             auto prev = std::find_if(tstats.begin(), tstats.end(),
                 [tname](const tensor_statistics & t) { return t.tensor == tname; });
             if (prev == tstats.end()) continue;
-            const auto cur_avg = build_avg(ts.stats);
-            const auto prev_avg = build_avg(prev->stats);
+            const auto cur_avg = compute_tensor_averages(ts.stats);
+            const auto prev_avg = compute_tensor_averages(prev->stats);
             if (cur_avg.empty() || prev_avg.empty() || cur_avg.size() != prev_avg.size()) continue;
 
             float dist = 0.0;
