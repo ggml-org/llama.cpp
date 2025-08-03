@@ -160,7 +160,7 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     return vec;
 }
 
-static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
+static int compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
     if (e.in_sum2.size() % e.counts.size() != 0) {
         LOG_ERR("%s: activation size mismatch for tensor %s (%zu vs %zu)\n", __func__, name.c_str(), e.counts.size(), e.in_sum2.size());
         return -1;;
@@ -252,7 +252,7 @@ static int compute_tensor_statistics(std::vector<tensor_statistics> & tstats, co
     return calc_mode;
 }
 
-static void compute_layer_statistics(std::vector<tensor_statistics> & tstats) {
+static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
     static const std::regex pattern(R"(blk\.(\d+)\.)");
 
     // compute the cosine similarity between the same tensors in consecutive layers
@@ -1192,14 +1192,14 @@ static bool show_statistics(const common_params & params) {
     }
     if (g_collector.load_imatrix(params.in_files[0].c_str())) {
         for (const auto & [name, stats] :g_collector.get_mstats()) {
-            tensor_calc_mode =compute_tensor_statistics(ts, name, stats);
+            tensor_calc_mode =compute_vector_statistics(ts, name, stats);
         }
     } else {
         LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
         return false;
     }
     if (!ts.empty()) {
-        compute_layer_statistics(ts);
+        compute_tensor_statistics(ts);
     } else {
         LOG_ERR("Error: cannot compute statistics for %s\n\n", params.in_files[0].c_str());
         return false;
