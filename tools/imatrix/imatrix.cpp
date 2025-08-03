@@ -1211,10 +1211,10 @@ static bool show_statistics(const common_params & params) {
     std::sort(ts.begin(), ts.end(), tensor_comparer());
 
     struct weighted_stats {
-        float weighted_bias   = 0.0f;
-        float weighted_zd     = 0.0f;
-        float weighted_cossim = 0.0f;
-        int   total_elements  = 0;
+        float w_sum    = 0.0f;
+        float w_zd     = 0.0f;
+        float w_cossim = 0.0f;
+        int   n        = 0;
     };
     std::map<int, weighted_stats> ws;
 
@@ -1262,22 +1262,22 @@ static bool show_statistics(const common_params & params) {
                 tstat.cossim
                 );
 
-        const float weighted_bias   = tstat.elements * tstat.sum_values;
-        const float weighted_zd     = tstat.elements * tstat.zd_score;
-        const float weighted_cossim = tstat.elements * tstat.cossim;
+        const float w_sum    = tstat.elements * tstat.sum_values;
+        const float w_zd     = tstat.elements * tstat.zd_score;
+        const float w_cossim = tstat.elements * tstat.cossim;
 
         if (ws.find(blk) != ws.end()) {
-            ws[blk].weighted_bias += weighted_bias;
-            ws[blk].weighted_zd += weighted_zd;
-            ws[blk].weighted_cossim += weighted_cossim;
-            ws[blk].total_elements += tstat.elements;
+            ws[blk].w_sum    += w_sum;
+            ws[blk].w_zd     += w_zd;
+            ws[blk].w_cossim += w_cossim;
+            ws[blk].n        += tstat.elements;
         } else {
             weighted_stats temp_ws;
-            temp_ws.weighted_bias   = weighted_bias;
-            temp_ws.weighted_zd     = weighted_zd;
-            temp_ws.weighted_cossim = weighted_cossim;
-            temp_ws.total_elements  = tstat.elements;
-            ws[blk]                 = temp_ws;
+            temp_ws.w_sum    = w_sum;
+            temp_ws.w_zd     = w_zd;
+            temp_ws.w_cossim = w_cossim;
+            temp_ws.n        = tstat.elements;
+            ws[blk]          = temp_ws;
         }
     }
 
@@ -1289,14 +1289,14 @@ static bool show_statistics(const common_params & params) {
         const auto & layer = first;
         const auto & stats = second;
 
-        if (stats.total_elements == 0) {
+        if (stats.n == 0) {
             continue;
         }
 
         if (layer >= 0) {
-            const float bias   = stats.weighted_bias / stats.total_elements;
-            const float zd     = stats.weighted_zd / stats.total_elements;
-            const float cossim = stats.weighted_cossim / stats.total_elements;
+            const float w_sum   = stats.w_sum / stats.n;
+            const float w_zd     = stats.w_zd / stats.n;
+            const float w_cossim = stats.w_cossim / stats.n;
 
             LOG_INF("%5d\t%14.2f\t%10.4f%%\t%6.4f\n", layer, bias, 100.0f * zd, cossim);
         }
