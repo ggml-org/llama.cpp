@@ -1302,7 +1302,7 @@ static bool show_statistics(const common_params & params) {
         LOG_INF("%5s\t%-20s\t%11.2f\t%10.4f\t%10.4f\t%8.2f\t%8.2f\t%7d\t%12.4f\t%7.2f%%\t%6.2f%%\t%10.4f\n",
                 layer.c_str(),
                 name.c_str(),
-                tstat.sum_values,
+                tensor_calc_mode == 1 ? tstat.l2_norm : tstat.sum_values,
                 tstat.min_values,
                 tstat.max_values,
                 tstat.mean_values,
