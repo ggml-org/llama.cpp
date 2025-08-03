@@ -4459,6 +4459,59 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
                     }
                 } break;
+            case LLM_ARCH_GLM4_MOE:
+            {
+                const auto tn = LLM_TN(arch);
+
+                tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+
+                for (int i = 0; i < n_layer; ++i) {
+                    auto & layer = layers[i];
+
+                    // self-attention
+                    layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+                    layer.wq        = create_tensor(tn(LLM_TENSOR_ATTN_Q,    "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                    layer.wk        = create_tensor(tn(LLM_TENSOR_ATTN_K,    "weight", i), {n_embd, n_embd_k_gqa}, 0);
+                    layer.wv        = create_tensor(tn(LLM_TENSOR_ATTN_V,    "weight", i), {n_embd, n_embd_v_gqa}, 0);
+                    layer.wo        = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                    // optional QK norms
+                    layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k, n_head}, TENSOR_NOT_REQUIRED);
+                    layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k, n_head_kv}, TENSOR_NOT_REQUIRED);
+
+                    // pre-FFN norm
+                    layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                    if (static_cast<uint32_t>(i) < hparams.n_layer_dense_lead) {
+                        // this layer uses a dense FFN block
+                        const int64_t n_ff_dense = hparams.n_ff(i);
+
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd, n_ff_dense}, 0);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff_dense, n_embd}, 0);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, n_ff_dense}, 0);
+                    } else {
+                        // this layer uses a MoE FFN block (1 group of conditional experts + 1 shared expert)
+                        const int64_t n_ff_exp = hparams.n_ff_exp;
+                        
+                        // router input and expert biases
+                        layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+                        layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "bias",   i), {n_expert}, 0);
+
+                        // conditional experts
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd, n_expert}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd, n_ff_exp, n_expert}, 0);
+
+                        // shared expert
+                        layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd, n_ff_exp}, 0);
+                        layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_exp, n_embd}, 0);
+                        layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp}, 0);
+                    }
+                }
+            } break;
             case LLM_ARCH_NEMOTRON:
                 {
                     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
@@ -13599,7 +13652,7 @@ struct llm_build_glm4 : public llm_graph_context {
 struct llm_build_glm4_moe : public llm_graph_context {
     llm_build_glm4_moe(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         // TODO
-    };
+    }
 };
 
 struct llm_build_nemotron : public llm_graph_context {
