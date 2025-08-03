@@ -6113,6 +6113,19 @@ class DeepseekV2Model(TextModel):
             self.gguf_writer.add_token_merges(merges)
 
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
+
+            # fix for Kimi-VL: Use <|im_end|> as EOS token instead of [EOS]
+            # This ensures text generation stops correctly at sentence boundaries, rather than at commas (which would happen with wrong EOS token)
+            if self.hf_arch == "KimiVLForConditionalGeneration":
+                im_end_id = None
+                for i, token in enumerate(tokens):
+                    if token == "<|im_end|>":
+                        im_end_id = i
+                        break
+                if im_end_id is not None:
+                    logger.info(f"Kimi-VL: Overriding EOS token from {special_vocab.special_token_ids.get('eos', 'N/A')} to <|im_end|> (ID: {im_end_id})")
+                    special_vocab.special_token_ids["eos"] = im_end_id
+
             special_vocab.add_to_gguf(self.gguf_writer)
         else:
             raise NotImplementedError(f"Deepseek pre-tokenizer {tokpre!r} is not supported yet!")
