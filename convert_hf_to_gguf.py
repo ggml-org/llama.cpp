@@ -7810,7 +7810,6 @@ class GptOssModel(TextModel):
     def transform_nibble_layout(self, tensor):
         assert tensor.dtype == torch.uint8
         assert tensor.shape[-1] == 16
-        tensor = tensor.clone().to(device="cpu")
         # swap nibbles
         t_lo = tensor & 0x0F
         t_hi = tensor & 0xF0
@@ -7839,15 +7838,13 @@ class GptOssModel(TextModel):
         scales = scales.unsqueeze(-1)
         assert len(blocks.shape) == 4
         assert len(scales.shape) == 4
-        # convert to numpy
-        scales = scales.to_eager(scales).numpy()
-        blocks = blocks.to_eager(blocks)
-        blocks = self.transform_nibble_layout(blocks).numpy()
-        new_data = np.concatenate([scales, blocks], axis=-1)
+        blocks = self.transform_nibble_layout(blocks)
+        new_data = torch.concat((scales, blocks), dim=-1)
         new_shape = [new_data.shape[0], new_data.shape[1], new_data.shape[2] * 32]
         logger.info(f"Repacked {new_name} with shape {new_shape} and quantization MXFP4")
         # flatten last dim
-        new_data = new_data.reshape(new_data.shape[0], new_data.shape[1], new_data.shape[2] * new_data.shape[3])
+        new_data = new_data.view(new_data.shape[0], new_data.shape[1], new_data.shape[2] * new_data.shape[3])
+        new_data = new_data.numpy()
         self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.MXFP4)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
