@@ -1231,8 +1231,7 @@ static bool show_statistics(const common_params & params) {
         "Entropy",
         "E (norm)",
         "ZD",
-        "CosSim"
-        );
+        "CosSim");
     LOG_INF(
         "=============================================================================================================="
         "=============================================================\n");
@@ -1259,8 +1258,7 @@ static bool show_statistics(const common_params & params) {
                 tstat.entropy,
                 100.0f * (tstat.entropy / std::log2(tstat.elements)),
                 100.0f * tstat.zd_score,
-                tstat.cossim
-                );
+                tstat.cossim);
 
         const float w_sum    = tstat.elements * tstat.sum_values;
         const float w_zd     = tstat.elements * tstat.zd_score;
@@ -1283,8 +1281,12 @@ static bool show_statistics(const common_params & params) {
 
     const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
-    LOG_INF("\n%s\t%s\t%s\t%s\n", "  Layer", "     μΣ(Act²)", "      μZD", "μCosSim");
-    LOG_INF("================================================\n");
+    LOG_INF("\n%6s\t%16s\t%7s\t%11s\n",
+    "Layer",
+    tensor_calc_mode == 1 ? "μL₂ Norm" : "μΣ(Act²)",
+    "μZD",
+    "μCosSim");
+    LOG_INF("============================================\n");
     for (const auto & [first, second] : ws) {
         const auto & layer = first;
         const auto & stats = second;
@@ -1298,7 +1300,11 @@ static bool show_statistics(const common_params & params) {
             const float w_zd     = stats.w_zd / stats.n;
             const float w_cossim = stats.w_cossim / stats.n;
 
-            LOG_INF("%5d\t%14.2f\t%10.4f%%\t%6.4f\n", layer, bias, 100.0f * zd, cossim);
+            LOG_INF("%5d\t%11.2f\t%6.2f%%\t%10.4f\n",
+                layer,
+                w_sum,
+                100.0f * w_zd,
+                w_cossim);
         }
     }
     LOG_INF("\n");
