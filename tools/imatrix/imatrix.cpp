@@ -1324,50 +1324,42 @@ static bool show_statistics(const common_params & params) {
 
         const float w_sum    = tstat.elements * tstat.sum_values;
         const float w_zd     = tstat.elements * tstat.zd_score;
-        const float w_cossim = tstat.elements * tstat.cossim;
 
         if (ws.find(blk) != ws.end()) {
             ws[blk].w_sum    += w_sum;
             ws[blk].w_zd     += w_zd;
-            ws[blk].w_cossim += w_cossim;
             ws[blk].n        += tstat.elements;
         } else {
             weighted_stats temp_ws;
             temp_ws.w_sum    = w_sum;
             temp_ws.w_zd     = w_zd;
-            temp_ws.w_cossim = w_cossim;
             temp_ws.n        = tstat.elements;
             ws[blk]          = temp_ws;
         }
     }
 
-    const int layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
-    LOG_INF("\nComputing weighted average statistics per layer (%d layers)\n", layers);
+    std::map<int, float> layer_cossim;
+    compute_layer_statistics(ts, layer_cossim, g_collector.get_mstats());
+
+    const auto layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
+    LOG_INF("\nComputing aggregated statistics per layer (%ld layers)\n", layers);
     LOG_INF("\n%6s\t%16s\t%7s\t%11s\n",
     "Layer",
-    tensor_calc_mode == 1 ? "μL₂ Norm" : "μΣ(Act²)",
-    "μZD",
-    "μCosSim");
+    tensor_calc_mode == 1 ? "L₂ Norm" : "Σ(Act²)",
+    "ZD",
+    "CosSim");
     LOG_INF("============================================\n");
-    for (const auto & [first, second] : ws) {
-        const auto & layer = first;
-        const auto & stats = second;
-
-        if (stats.n == 0) {
-            continue;
-        }
-
-        if (layer >= 0) {
-            const float w_sum   = stats.w_sum / stats.n;
-            const float w_zd     = stats.w_zd / stats.n;
-            const float w_cossim = stats.w_cossim / stats.n;
-
-            LOG_INF("%5d\t%11.2f\t%6.2f%%\t%10.4f\n",
-                layer,
-                w_sum,
-                100.0f * w_zd,
-                w_cossim);
-        }
+    for (const auto & [layer, stats] : ws) {
+        if (layer < 0 || stats.n == 0) continue;
+        const float w_sum = stats.w_sum / stats.n;
+        const float w_zd = stats.w_zd / stats.n;
+        const auto lcs = layer_cossim.find(layer);
+        const float cossim = (lcs != layer_cossim.end()) ? lcs->second : 0.0f;
+        LOG_INF("%5d\t%11.2f\t%6.2f%%\t%10.4f\n",
+            layer,
+            w_sum,
+            100.0f * w_zd,
+            cossim);
     }
     LOG_INF("\n");
 
