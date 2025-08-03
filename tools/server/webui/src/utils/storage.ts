@@ -2,7 +2,7 @@
 // format: { [convId]: { id: string, lastModified: number, messages: [...] } }
 
 import { CONFIG_DEFAULT } from '../Config';
-import { Conversation, Message, TimingReport } from './types';
+import { Conversation, Message, TimingReport, SettingsPreset } from './types';
 import Dexie, { Table } from 'dexie';
 
 const event = new EventTarget();
@@ -212,6 +212,44 @@ const StorageUtils = {
     } else {
       localStorage.setItem('theme', theme);
     }
+  },
+
+  // manage presets
+  getPresets(): SettingsPreset[] {
+    const presetsJson = localStorage.getItem('presets');
+    if (!presetsJson) return [];
+    try {
+      return JSON.parse(presetsJson);
+    } catch (e) {
+      console.error('Failed to parse presets', e);
+      return [];
+    }
+  },
+  savePreset(name: string, config: typeof CONFIG_DEFAULT): SettingsPreset {
+    const presets = StorageUtils.getPresets();
+    const now = Date.now();
+    const preset: SettingsPreset = {
+      id: `preset-${now}`,
+      name,
+      createdAt: now,
+      config: { ...config }, // copy the config
+    };
+    presets.push(preset);
+    localStorage.setItem('presets', JSON.stringify(presets));
+    return preset;
+  },
+  updatePreset(id: string, config: typeof CONFIG_DEFAULT): void {
+    const presets = StorageUtils.getPresets();
+    const index = presets.findIndex((p) => p.id === id);
+    if (index !== -1) {
+      presets[index].config = { ...config };
+      localStorage.setItem('presets', JSON.stringify(presets));
+    }
+  },
+  deletePreset(id: string): void {
+    const presets = StorageUtils.getPresets();
+    const filtered = presets.filter((p) => p.id !== id);
+    localStorage.setItem('presets', JSON.stringify(filtered));
   },
 };
 
