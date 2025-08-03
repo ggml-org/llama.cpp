@@ -356,7 +356,7 @@ void main() {
                                                      cache_b_qs[cc * (BK / 4) + idx_k]);
                         }
 
-                        sums[sums_idx] += mul_q8_1(q_sum, cache_a_dm[cache_a_idx], cache_b_ds[cc]);
+                        sums[sums_idx] += mul_q8_1(q_sum, cache_a_dm[cache_a_idx], cache_b_ds[cc], 1);
                     }
                 }
             }

@@ -86,7 +86,9 @@ void quantize() {
     data_b[ibx4_outer].qs[ibx4_inner * 8 + iqs] = pack32(i8vec4(round(vals)));
 #endif
 
+#ifndef USE_SUBGROUPS
     barrier();
+#endif
 
     // Calculate the sum for each block
     const float thread_sum = vals.x + vals.y + vals.z + vals.w;
