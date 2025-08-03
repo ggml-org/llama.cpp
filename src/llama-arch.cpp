@@ -164,6 +164,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_SCALE,                        "%s.attention.scale"                        },
     { LLM_KV_ATTENTION_KEY_LENGTH_MLA,               "%s.attention.key_length_mla"               },
     { LLM_KV_ATTENTION_VALUE_LENGTH_MLA,             "%s.attention.value_length_mla"             },
+    { LLM_KV_ATTENTION_USE_KQ_NORM,                  "%s.attention.use_kq_norm"                  },
 
     { LLM_KV_ROPE_DIMENSION_COUNT,      "%s.rope.dimension_count"                 },
     { LLM_KV_ROPE_DIMENSION_SECTIONS,   "%s.rope.dimension_sections"              },
@@ -1405,7 +1406,6 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
             { LLM_TENSOR_ATTN_K,             "blk.%d.attn_k" },
             { LLM_TENSOR_ATTN_V,             "blk.%d.attn_v" },
             { LLM_TENSOR_ATTN_OUT,           "blk.%d.attn_output" },
-            { LLM_TENSOR_FFN_NORM,           "blk.%d.ffn_norm" },
             { LLM_TENSOR_FFN_GATE,           "blk.%d.ffn_gate" },
             { LLM_TENSOR_FFN_UP,             "blk.%d.ffn_up" },
             { LLM_TENSOR_FFN_DOWN,           "blk.%d.ffn_down" },
