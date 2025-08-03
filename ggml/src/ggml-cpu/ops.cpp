@@ -9072,6 +9072,9 @@ static void ggml_compute_forward_ssm_scan_f32(
                         }
 
                         sumf = GGML_F32xt_REDUCE_ONE(sum);
+    #elif defined(__riscv_v_intrinsic)
+                        // todo: RVV implementation
+                        const int np = 0;
     #else
                         const int np = (nc & ~(GGML_F32_STEP - 1));
 
@@ -10023,8 +10026,8 @@ static void ggml_compute_forward_rwkv_wkv7_f32(
     int64_t h_stride_2d = head_size * head_size;
 
     #if defined(GGML_SIMD)
-        #if defined(__ARM_FEATURE_SVE)
-            // scalar Route to scalar implementation       //TODO: Write SVE code
+        #if defined(__ARM_FEATURE_SVE) || defined(__riscv_v_intrinsic)
+            // scalar Route to scalar implementation       //TODO: Write SVE code and RVV code
             for (int64_t t = 0; t < T; t++) {
                 int64_t t_offset = t * t_stride;
                 int64_t state_offset = head_size * C * (t / (T / n_seqs));
