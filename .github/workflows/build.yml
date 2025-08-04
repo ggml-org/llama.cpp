@@ -179,6 +179,7 @@ jobs:
       - name: Test
         id: cmake_test
         run: |
+          export LLAMA_SET_ROWS=0
           cd build
           ctest -L main --verbose --timeout 900
 
@@ -437,6 +438,7 @@ jobs:
       - name: Test
         id: cmake_test
         run: |
+          export LLAMA_SET_ROWS=0
           cd build
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
