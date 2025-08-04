@@ -289,7 +289,7 @@
 			class="z-999 sticky bottom-0 mx-auto mt-auto max-w-[56rem]"
 			in:slide={{ duration: 400, axis: 'y' }}
 		>
-			<div class="bg-background m-auto min-w-[56rem] rounded-t-3xl border-t pb-4">
+			<div class="bg-background m-auto min-w-[56rem] rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
 					showHelperText={false}

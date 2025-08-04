@@ -11,7 +11,9 @@
 	let currentChatId = $derived(page.params.id);
 	let searchQuery = $state('');
 	let filteredConversations = $derived(
-		conversations().filter((conversation: { name: string }) => conversation.name.toLowerCase().includes(searchQuery.toLowerCase()))
+		conversations().filter((conversation: { name: string }) =>
+			conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
+		)
 	);
 
 	async function selectConversation(id: string) {
@@ -27,22 +29,20 @@
 	}
 </script>
 
-<Sidebar.Header>
-	<div class="px-2 py-2">
+<Sidebar.Header class="px-0 pb-4">
+	<div class="py-2">
 		<a href="/">
 			<h1 class="text-xl font-semibold">llama.cpp</h1>
 		</a>
 	</div>
 </Sidebar.Header>
 
-<div class="px-2 pb-4">
-	<div class="relative">
-		<Search class="text-muted-foreground absolute left-2 top-2.5 h-4 w-4" />
-		<Input bind:value={searchQuery} placeholder="Search conversations..." class="pl-8" />
-	</div>
+<div class="relative pb-4">
+	<Search class="text-muted-foreground absolute left-2 top-2.5 h-4 w-4" />
+	<Input bind:value={searchQuery} placeholder="Search conversations..." class="pl-8" />
 </div>
 
-<div class="px-2 pb-4">
+<div class="pb-4">
 	<Button
 		href="/?new_chat=true"
 		class="border-muted-foreground/25 hover:bg-accent hover:border-accent-foreground/25 w-full justify-start gap-2 rounded-lg border-2 border-dashed bg-transparent transition-colors"
@@ -54,11 +54,11 @@
 	</Button>
 </div>
 
-<Sidebar.Group class="space-y-2">
+<Sidebar.Group class="space-y-2 p-0">
 	<Sidebar.GroupLabel>Conversations</Sidebar.GroupLabel>
 
 	<Sidebar.GroupContent>
-		<Sidebar.Menu class="space-y-2">
+		<Sidebar.Menu class="space-y-0.5">
 			{#each filteredConversations as conversation (conversation.id)}
 				<Sidebar.MenuItem>
 					<ChatSidebarConversationItem

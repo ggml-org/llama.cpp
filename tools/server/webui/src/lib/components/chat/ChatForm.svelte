@@ -4,6 +4,7 @@
 	import { Square, Paperclip, Mic, ArrowUp, Upload, X } from '@lucide/svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import { ChatAttachmentsList } from '$lib/components';
+	import { inputClasses } from '$lib/constants/input-classes';
 
 	interface Props {
 		class?: string;
@@ -39,15 +40,25 @@
 		event.preventDefault();
 		if (!message.trim() || disabled || isLoading) return;
 
-		const success = await onSend?.(message.trim(), uploadedFiles);
+		// Store the message and files before clearing
+		const messageToSend = message.trim();
+		const filesToSend = [...uploadedFiles];
 
-		if (success) {
-			message = '';
-			uploadedFiles = [];
+		// Clear the form immediately to hide message and attachments
+		message = '';
+		uploadedFiles = [];
 
-			if (textareaElement) {
-				textareaElement.style.height = 'auto';
-			}
+		if (textareaElement) {
+			textareaElement.style.height = 'auto';
+		}
+
+		// Send the message with the stored data
+		const success = await onSend?.(messageToSend, filesToSend);
+
+		// If sending failed, restore the form state
+		if (!success) {
+			message = messageToSend;
+			uploadedFiles = filesToSend;
 		}
 	}
 
@@ -57,15 +68,25 @@
 
 			if (!message.trim() || disabled || isLoading) return;
 
-			const success = await onSend?.(message.trim(), uploadedFiles);
+			// Store the message and files before clearing
+			const messageToSend = message.trim();
+			const filesToSend = [...uploadedFiles];
 
-			if (success) {
-				message = '';
-				uploadedFiles = [];
+			// Clear the form immediately to hide message and attachments
+			message = '';
+			uploadedFiles = [];
 
-				if (textareaElement) {
-					textareaElement.style.height = 'auto';
-				}
+			if (textareaElement) {
+				textareaElement.style.height = 'auto';
+			}
+
+			// Send the message with the stored data
+			const success = await onSend?.(messageToSend, filesToSend);
+
+			// If sending failed, restore the form state
+			if (!success) {
+				message = messageToSend;
+				uploadedFiles = filesToSend;
 			}
 		}
 	}
@@ -127,7 +148,7 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="bg-muted/30 border-border/40 focus-within:border-primary/40 bg-background dark:bg-muted border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl border {className}"
+	class="{inputClasses} border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
 >
 	<ChatAttachmentsList bind:uploadedFiles {onFileRemove} class="mb-3 px-5 pt-5" />
 

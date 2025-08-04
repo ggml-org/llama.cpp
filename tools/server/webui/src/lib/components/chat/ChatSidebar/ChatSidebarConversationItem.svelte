@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Trash2, Pencil } from '@lucide/svelte';
+	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
 	import type { DatabaseConversation } from '$lib/types/database';
 
 	interface Props {
@@ -21,6 +22,8 @@
 		onDelete,
 		showLastModified = false
 	}: Props = $props();
+
+	let showDeleteDialog = $state(false);
 
 	function formatLastModified(timestamp: number) {
 		const now = Date.now();
@@ -55,9 +58,9 @@
 </script>
 
 <button
-	class="hover:bg-accent group flex w-full cursor-pointer items-center justify-between space-x-3 rounded-lg p-3 text-left transition-colors {isActive
-		? 'bg-accent text-accent-foreground border-border border'
-		: 'border border-transparent'}"
+	class="hover:bg-foreground/10 group flex w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-3 py-1.5 text-left transition-colors {isActive
+		? 'bg-foreground/5 text-accent-foreground'
+		: ''}"
 	onclick={handleSelect}
 >
 	<div class="text flex min-w-0 flex-1 items-center space-x-3">
@@ -74,20 +77,36 @@
 		</div>
 	</div>
 
-	<div class="actions flex items-center space-x-1">
-		<Button size="sm" variant="ghost" class="h-6 w-6 p-0" onclick={handleEdit}>
-			<Pencil class="h-3 w-3" />
-		</Button>
-		<AlertDialog.Root>
-			<AlertDialog.Trigger onclick={handleDeleteClick}>
-				<Button
-					size="sm"
-					variant="ghost"
-					class="text-destructive hover:text-destructive h-6 w-6 p-0"
+	<div class="actions flex items-center">
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger
+				class="flex h-6 w-6 items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
+				onclick={(e) => e.stopPropagation()}
+			>
+				<MoreHorizontal class="h-3 w-3" />
+				<span class="sr-only">More actions</span>
+			</DropdownMenu.Trigger>
+			<DropdownMenu.Content align="end" class="w-48">
+				<DropdownMenu.Item onclick={handleEdit} class="flex items-center gap-2">
+					<Pencil class="h-4 w-4" />
+					Edit
+				</DropdownMenu.Item>
+				<DropdownMenu.Separator />
+				<DropdownMenu.Item
+					variant="destructive"
+					class="flex items-center gap-2"
+					onclick={(e) => {
+						e.stopPropagation();
+						showDeleteDialog = true;
+					}}
 				>
-					<Trash2 class="h-3 w-3" />
-				</Button>
-			</AlertDialog.Trigger>
+					<Trash2 class="h-4 w-4" />
+					Delete
+				</DropdownMenu.Item>
+			</DropdownMenu.Content>
+		</DropdownMenu.Root>
+
+		<AlertDialog.Root bind:open={showDeleteDialog}>
 			<AlertDialog.Content>
 				<AlertDialog.Header>
 					<AlertDialog.Title>Delete Conversation</AlertDialog.Title>
@@ -110,12 +129,13 @@
 
 <style lang="postcss">
 	.actions {
-		button & {
+		& > * {
 			width: 0;
 			opacity: 0;
+			transition: all 0.2s ease;
 		}
 
-		button:hover & {
+		button:hover & > * {
 			width: auto;
 			opacity: 1;
 		}

@@ -57,11 +57,6 @@
 		previewDialogOpen = true;
 	}
 
-	function closePreview() {
-		previewDialogOpen = false;
-		previewItem = null;
-	}
-
 	function getDisplayItems() {
 		const items: Array<{
 			id: string;
@@ -135,7 +130,7 @@
 </script>
 
 {#if displayItems.length > 0}
-	<div class="flex flex-wrap items-start gap-3 {className}">
+	<div class="flex flex-wrap items-start justify-end gap-3 {className}">
 		{#each displayItems as item (item.id)}
 			{#if item.isImage && item.preview}
 				<ChatAttachmentImagePreview
@@ -171,7 +166,6 @@
 {#if previewItem}
 	<ChatAttachmentPreviewDialog
 		bind:open={previewDialogOpen}
-		onClose={closePreview}
 		uploadedFile={previewItem.uploadedFile}
 		attachment={previewItem.attachment}
 		preview={previewItem.preview}
