@@ -950,6 +950,7 @@ struct cmd_params_instance {
                 }
                 static std::vector<ggml_backend_dev_t> devices;
                 devices.clear();
+                // RPC devices should always come first for performance reasons
                 for (const std::string & server : rpc_servers) {
                     ggml_backend_dev_t dev = ggml_backend_rpc_add_device_fn(server.c_str());
                     if (dev) {
@@ -957,6 +958,20 @@ struct cmd_params_instance {
                     } else {
                         fprintf(stderr, "%s: failed to add RPC device for server '%s'\n", __func__, server.c_str());
                         exit(1);
+                    }
+                }
+                // add local GPU devices if any
+                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+                    ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                    switch (ggml_backend_dev_type(dev)) {
+                        case GGML_BACKEND_DEVICE_TYPE_CPU:
+                        case GGML_BACKEND_DEVICE_TYPE_ACCEL:
+                            // skip CPU backends since they are handled separately
+                            break;
+
+                        case GGML_BACKEND_DEVICE_TYPE_GPU:
+                            devices.push_back(dev);
+                            break;
                     }
                 }
                 devices.push_back(nullptr);
@@ -1723,7 +1738,7 @@ struct sql_printer : public printer {
 
     void print_header(const cmd_params & params) override {
         std::vector<std::string> fields = test::get_fields();
-        fprintf(fout, "CREATE TABLE IF NOT EXISTS test (\n");
+        fprintf(fout, "CREATE TABLE IF NOT EXISTS llama_bench (\n");
         for (size_t i = 0; i < fields.size(); i++) {
             fprintf(fout, "  %s %s%s\n", fields.at(i).c_str(), get_sql_field_type(fields.at(i)).c_str(),
                     i < fields.size() - 1 ? "," : "");
@@ -1734,7 +1749,7 @@ struct sql_printer : public printer {
     }
 
     void print_test(const test & t) override {
-        fprintf(fout, "INSERT INTO test (%s) ", join(test::get_fields(), ", ").c_str());
+        fprintf(fout, "INSERT INTO llama_bench (%s) ", join(test::get_fields(), ", ").c_str());
         fprintf(fout, "VALUES (");
         std::vector<std::string> values = t.get_values();
         for (size_t i = 0; i < values.size(); i++) {

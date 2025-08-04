@@ -424,14 +424,24 @@ void ggml_cann_softmax(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  *
  * @details This function retrieves rows from a source tensor src0 according to
  *          the indices provided in another tensor src1 and stores the result in
- *          a destination tensor (\p dst). It supports different data types
- *          including F32, F16, Q4_0, and Q8_0.
+ *          a destination tensor (\p dst).
  *
  * @param ctx The backend CANN context for executing operations.
  * @param dst The destination tensor where the extracted rows will be stored.
- *            dst->op is `GGML_OP_GET_ROWS`.
  */
 void ggml_cann_get_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
+/**
+ * @brief   Writes specific rows into a tensor at positions specified by indices.
+ *
+ * @details This function copies rows from a source tensor into a destination
+ *          tensor (\p dst) at the positions indicated by the indices in another
+ *          tensor.
+ *
+ * @param ctx The backend CANN context for executing operations.
+ * @param dst The destination tensor where the specified rows will be updated.
+ */
+void ggml_cann_set_rows(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
 /**
  * @brief   Executes matrix multiplication for the given tensor.

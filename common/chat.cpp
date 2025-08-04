@@ -1646,7 +1646,7 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
         "|<function name=\"([^\"]+)\">"  // match 5 (function name again)
     );
 
-    if (auto res = builder.try_find_regex(open_regex)) {
+    while (auto res = builder.try_find_regex(open_regex)) {
         const auto & block_start = res->groups[1];
         std::string block_end = block_start.empty() ? "" : "```";
 
@@ -1668,7 +1668,6 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
                     builder.consume_literal(block_end);
                     builder.consume_spaces();
                 }
-                builder.add_content(builder.consume_rest());
             } else {
                 throw common_chat_msg_partial_exception("failed to parse tool call");
             }
@@ -1693,11 +1692,10 @@ static void common_chat_parse_hermes_2_pro(common_chat_msg_parser & builder) {
                     builder.consume_spaces();
                 }
             }
-            builder.add_content(builder.consume_rest());
         }
-    } else {
-        builder.add_content(builder.consume_rest());
     }
+
+    builder.add_content(builder.consume_rest());
 }
 
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
@@ -1944,6 +1942,8 @@ common_chat_msg common_chat_parse(const std::string & input, bool is_partial, co
         }
     }
     auto msg = builder.result();
-    LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
+    if (!is_partial) {
+        LOG_DBG("Parsed message: %s\n", common_chat_msgs_to_json_oaicompat<json>({msg}).at(0).dump().c_str());
+    }
     return msg;
 }

@@ -875,9 +875,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
             // get more optimal quantization type based on the tensor shape, layer, etc.
             if (!params->pure && ggml_is_quantized(default_type)) {
+                int fallback = qs.n_fallback;
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
-                // unless the user specifies a type
-                if (params->tensor_types) {
+                // unless the user specifies a type, and the tensor geometry will not require fallback quantisation
+                if (params->tensor_types && qs.n_fallback - fallback == 0) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
                     const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
@@ -890,7 +891,6 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     }
                 }
             }
-
             if (params->token_embedding_type < GGML_TYPE_COUNT && strcmp(tensor->name, "token_embd.weight") == 0) {
                 new_type = params->token_embedding_type;
             }

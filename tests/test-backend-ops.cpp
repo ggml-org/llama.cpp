@@ -35,6 +35,7 @@
 #include <random>
 #include <regex>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -868,16 +869,30 @@ struct sql_printer : public printer {
 
 struct csv_printer : public printer {
     void print_header() override {
-        std::vector<std::string> fields = test_result::get_fields();
+
+        std::vector<std::string> fields     = test_result::get_fields();
+        std::vector<std::string> fields_csv = get_fields_csv();
         for (size_t i = 0; i < fields.size(); i++) {
+            if (std::find(std::begin(fields_csv), std::end(fields_csv), fields[i]) == std::end(fields_csv)) {
+                continue;
+            }
             printf("\"%s\"%s", fields[i].c_str(), i < fields.size() - 1 ? "," : "");
         }
         printf("\n");
     }
 
     void print_test_result(const test_result & result) override {
-        std::vector<std::string> values = result.get_values();
+
+        std::vector<std::string> values     = result.get_values();
+        std::vector<std::string> fields     = test_result::get_fields();
+        std::vector<std::string> fields_csv = get_fields_csv();
+
         for (size_t i = 0; i < values.size(); i++) {
+
+            if (std::find(std::begin(fields_csv), std::end(fields_csv), fields[i]) == std::end(fields_csv)) {
+                continue;
+            }
+
             // Escape quotes and wrap in quotes for CSV
             std::string escaped_value = values[i];
             size_t pos = 0;
@@ -889,6 +904,19 @@ struct csv_printer : public printer {
         }
         printf("\n");
     }
+
+    static std::vector<std::string> get_fields_csv() {
+        return {
+            "op_name",
+            "op_params",
+            "supported",
+            "error_message",
+            "test_mode",
+            "backend_reg_name",
+            "backend_name",
+        };
+    }
+
 };
 
 static std::unique_ptr<printer> create_printer(output_formats format) {
@@ -1020,7 +1048,37 @@ struct test_case {
         return t;
     }
 
-    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_name, printer * output_printer) {
+    // Checks an op against the test filter, which is a comma separated list of OP names or specific variations
+    bool matches_filter(ggml_tensor * op, const char * op_names_filter) {
+        if (op_names_filter) {
+            const auto op_name = op_desc(op);
+            const auto op_full_name = op_name + "(" + vars() + ")";
+            std::string_view filter(op_names_filter);
+            while (!filter.empty()) {
+                auto comma_pos = filter.find_first_of(',');
+                const auto lparen_pos = filter.find_first_of('(');
+                if (lparen_pos < comma_pos) {
+                    auto rparen_pos = filter.find_first_of(')');
+                    comma_pos = filter.find_first_of(',', rparen_pos);
+                    const auto op_filter = filter.substr(0, comma_pos);
+                    if (op_filter == op_full_name) {
+                        return true;
+                    }
+                } else {
+                    const auto op_filter = filter.substr(0, comma_pos);
+                    if (op_filter == op_name) {
+                        return true;
+                    }
+                }
+                filter = comma_pos != std::string_view::npos ? filter.substr(comma_pos + 1) : "";
+            }
+            return false;
+        } else {
+            return true;
+        }
+    }
+
+    bool eval(ggml_backend_t backend1, ggml_backend_t backend2, const char * op_names_filter, printer * output_printer) {
         mode = MODE_TEST;
 
         ggml_init_params params = {
@@ -1038,7 +1096,7 @@ struct test_case {
 
         ggml_tensor * out = build_graph(ctx);
         std::string current_op_name = op_desc(out);
-        if (op_name != nullptr && current_op_name != op_name) {
+        if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
             ggml_free(ctx);
             return true;
@@ -1185,7 +1243,7 @@ struct test_case {
         return test_passed;
     }
 
-    bool eval_perf(ggml_backend_t backend, const char * op_name, printer * output_printer) {
+    bool eval_perf(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) {
         mode = MODE_PERF;
 
         static const size_t graph_nodes = 8192;
@@ -1200,7 +1258,7 @@ struct test_case {
 
         ggml_tensor * out             = build_graph(ctx.get());
         std::string   current_op_name = op_desc(out);
-        if (op_name != nullptr && current_op_name != op_name) {
+        if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
             return true;
         }
@@ -1315,7 +1373,7 @@ struct test_case {
         return true;
     }
 
-    bool eval_support(ggml_backend_t backend, const char * op_name, printer * output_printer) {
+    bool eval_support(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) {
         mode = MODE_SUPPORT;
 
         static const size_t graph_nodes = 8192;
@@ -1330,7 +1388,7 @@ struct test_case {
 
         ggml_tensor * out             = build_graph(ctx.get());
         std::string   current_op_name = op_desc(out);
-        if (op_name != nullptr && current_op_name != op_name) {
+        if (!matches_filter(out, op_names_filter)) {
             return true;
         }
 
@@ -1347,7 +1405,7 @@ struct test_case {
         return true;
     }
 
-    bool eval_grad(ggml_backend_t backend, const char * op_name, printer * output_printer) {
+    bool eval_grad(ggml_backend_t backend, const char * op_names_filter, printer * output_printer) {
         mode = MODE_GRAD;
         const std::vector<float> expect = grad_expect();
 
@@ -1364,7 +1422,7 @@ struct test_case {
 
         ggml_tensor * out = build_graph(ctx.get());
 
-        if ((op_name != nullptr && op_desc(out) != op_name) || out->op == GGML_OP_OPT_STEP_ADAMW) {
+        if (!matches_filter(out, op_names_filter) || out->op == GGML_OP_OPT_STEP_ADAMW) {
             return true;
         }
 
@@ -2481,6 +2539,41 @@ struct test_scale : public test_case {
         ggml_set_name(a, "a");
 
         ggml_tensor * out = ggml_scale_bias(ctx, a, scale, bias);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+};
+
+// GGML_OP_SCALE + GGML_UNARY_OP_TANH + GGML_OP_SCALE
+struct test_softcap : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    float softcap;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "SOFTCAP";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    std::string vars() override {
+        return VARS_TO_STR3(type, ne, softcap);
+    }
+
+    test_softcap(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {10, 10, 10, 10},
+            float softcap = 30.0f)
+        : type(type), ne(ne), softcap(softcap) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+
+        ggml_set_param(a);
+        ggml_set_name(a, "a");
+
+        ggml_tensor * out = ggml_scale(ctx, ggml_tanh(ctx, ggml_scale(ctx, a, 1.0f / softcap)), softcap);
         ggml_set_name(out, "out");
 
         return out;
@@ -3707,6 +3800,7 @@ struct test_im2col : public test_case {
 struct test_conv_2d : public test_case {
     const std::array<int64_t, 4> ne_input;
     const std::array<int64_t, 4> ne_kernel;
+    const ggml_type              type_kernel;
     const int                    stride0;
     const int                    stride1;
     const int                    padding0;
@@ -3724,7 +3818,11 @@ struct test_conv_2d : public test_case {
     // IM2COL -> MUL_MM graph will be built.
 
     std::string vars() override {
-        return VARS_TO_STR9(ne_input, ne_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
+        return VARS_TO_STR10(ne_input, ne_kernel, type_kernel, stride0, stride1, padding0, padding1, dilation0, dilation1, cwhn);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
     }
 
     uint64_t op_flops(ggml_tensor * t) override {
@@ -3755,10 +3853,11 @@ struct test_conv_2d : public test_case {
     }
 
     test_conv_2d(std::array<int64_t, 4> ne_input  = { 64, 64, 16, 1 },
-                 std::array<int64_t, 4> ne_kernel = { 3, 3, 1, 16 }, int stride0 = 1, int stride1 = 1, int padding0 = 0,
-                 int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false) :
+                 std::array<int64_t, 4> ne_kernel = { 3, 3, 1, 16 }, ggml_type type_kernel = GGML_TYPE_F32, int stride0 = 1,
+                 int stride1 = 1, int padding0 = 0, int padding1 = 0, int dilation0 = 1, int dilation1 = 1, bool cwhn = false) :
         ne_input(ne_input),
         ne_kernel(ne_kernel),
+        type_kernel(type_kernel),
         stride0(stride0),
         stride1(stride1),
         padding0(padding0),
@@ -3771,7 +3870,7 @@ struct test_conv_2d : public test_case {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
         ggml_set_name(input, "input");
 
-        ggml_tensor * kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
+        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
         ggml_set_name(kernel, "kernel");
 
         if (cwhn) {
@@ -5138,10 +5237,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         { 16,  3, 256,  128, 8 }
     };
 
-    for (auto act_case : cases) {
-        test_cases.emplace_back(new test_conv_2d(
-            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
+    for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (auto act_case : cases) {
+            test_cases.emplace_back(new test_conv_2d(
+                { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+                { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
+                kernel_type, 1, 1, 0, 0, 1, 1, false));
+        }
     }
 #endif
 
@@ -5167,8 +5269,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
                                 for (uint32_t W : { 1, 141 }) {
                                     if (calc_conv_output_size(W, KW, s0, p0, d0) > 0 &&
                                         calc_conv_output_size(H, KH, s1, p1, d1) > 0) {
-                                        test_cases.emplace_back(new test_conv_2d(
-                                            { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, s0, s1, p0, p1, d0, d1, false));
+                                        for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+                                            test_cases.emplace_back(new test_conv_2d(
+                                                { W, H, Cin, 2 }, { KW, KH, Cin, Cout }, kernel_type, s0, s1, p0, p1, d0, d1, false));
+                                        }
                                     }
                                 }
                             }
@@ -5352,6 +5456,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_add1());
     test_cases.emplace_back(new test_scale());
     test_cases.emplace_back(new test_scale(GGML_TYPE_F32, {10, 10, 10, 10}, 2.0f, 1.0f));
+    test_cases.emplace_back(new test_softcap(GGML_TYPE_F32, {10, 10, 10, 10}, 50.0f));
     test_cases.emplace_back(new test_silu_back());
 
     for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f}) {
@@ -5487,13 +5592,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 1056, 1, 193, {1,  1}, {4, 1}, {0, 2, 1, 3}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F16, GGML_TYPE_F32, 1056, 1, 67,  {1,  1}, {4, 1}, {0, 2, 1, 3}));
 
-    for (auto bs : {1,2,4,8}) {
-        for (auto nr : {1,4}) {
-            for (uint32_t m = 0; m < 2; ++m) {
-                for (uint32_t k = 0; k < 2; ++k) {
-                    for (ggml_type type: {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
-                        test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 1056 + m, 1, 128 + k,  {bs,  1}, {nr, 1}, {0, 2, 1, 3}));
-                        test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 128 + m,  1, 1056 + k, {bs,  1}, {nr, 1}, {0, 1, 2, 3}, true));
+    for (auto bs2 : {1,3}) {
+        for (auto bs : {1,2,4,8}) {
+            for (auto nr : {1,4}) {
+                for (uint32_t m = 0; m < 2; ++m) {
+                    for (uint32_t k = 0; k < 2; ++k) {
+                        for (ggml_type type: {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
+                            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 1056 + m, 1, 128 + k,  {bs,  bs2}, {nr, 1}, {0, 2, 1, 3}));
+                            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 128 + m,  1, 1056 + k, {bs,  bs2}, {nr, 1}, {0, 1, 2, 3}, true));
+                        }
                     }
                 }
             }
@@ -5813,11 +5920,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         { 16,  3, 512,  128, 8 },
     };
 
-    for (auto act_case : cases) {
-        // Direct CONV_2D
-        test_cases.emplace_back(new test_conv_2d(
-            { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
-            { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] }, 1, 1, 0, 0, 1, 1, false));
+    for (auto kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (auto act_case : cases) {
+            // Direct CONV_2D
+            test_cases.emplace_back(new test_conv_2d(
+                { act_case[iwh_idx], act_case[iwh_idx], act_case[Cin_idx], act_case[B_idx] },
+                { act_case[kwh_idx], act_case[kwh_idx], act_case[Cin_idx], act_case[Cout_idx] },
+                kernel_type, 1, 1, 0, 0, 1, 1, false));
+        }
     }
 
     test_cases.emplace_back(new test_bin_bcast(ggml_add, GGML_TYPE_F32, {4096, 1, 1, 1}, {1,   1, 1, 1}));
@@ -5881,7 +5991,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     return test_cases;
 }
 
-static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_name, const char * params_filter,
+static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op_names_filter, const char * params_filter,
                          printer * output_printer) {
     auto filter_test_cases = [](std::vector<std::unique_ptr<test_case>> & test_cases, const char * params_filter) {
         if (params_filter == nullptr) {
@@ -5913,7 +6023,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
 
         size_t n_ok = 0;
         for (auto & test : test_cases) {
-            if (test->eval(backend, backend_cpu, op_name, output_printer)) {
+            if (test->eval(backend, backend_cpu, op_names_filter, output_printer)) {
                 n_ok++;
             }
         }
@@ -5929,7 +6039,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         filter_test_cases(test_cases, params_filter);
         size_t n_ok = 0;
         for (auto & test : test_cases) {
-            if (test->eval_grad(backend, op_name, output_printer)) {
+            if (test->eval_grad(backend, op_names_filter, output_printer)) {
                 n_ok++;
             }
         }
@@ -5942,7 +6052,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         auto test_cases = make_test_cases_perf();
         filter_test_cases(test_cases, params_filter);
         for (auto & test : test_cases) {
-            test->eval_perf(backend, op_name, output_printer);
+            test->eval_perf(backend, op_names_filter, output_printer);
         }
         return true;
     }
@@ -5951,7 +6061,7 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
         auto test_cases = make_test_cases_eval();
         filter_test_cases(test_cases, params_filter);
         for (auto & test : test_cases) {
-            test->eval_support(backend, op_name, output_printer);
+            test->eval_support(backend, op_names_filter, output_printer);
         }
         return true;
     }
@@ -5960,20 +6070,21 @@ static bool test_backend(ggml_backend_t backend, test_mode mode, const char * op
 }
 
 static void usage(char ** argv) {
-    printf("Usage: %s [mode] [-o <op>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>]\n", argv[0]);
+    printf("Usage: %s [mode] [-o <op,..>] [-b <backend>] [-p <params regex>] [--output <console|sql|csv>]\n", argv[0]);
     printf("    valid modes:\n");
     printf("      - test (default, compare with CPU backend for correctness)\n");
     printf("      - grad (compare gradients from backpropagation with method of finite differences)\n");
     printf("      - perf (performance evaluation)\n");
     printf("      - support (probe backend operation support)\n");
-    printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc)\n");
+    printf("    op names for -o are as given by ggml_op_desc() (e.g. ADD, MUL_MAT, etc),\n");
+    printf("        optionally including the full test case string (e.g. \"ADD(type=f16,ne=[1,1,8,1],nr=[1,1,1,1],nf=1)\")\n");
     printf("    --output specifies output format (default: console, options: console, sql, csv)\n");
 }
 
 int main(int argc, char ** argv) {
     test_mode mode = MODE_TEST;
     output_formats output_format = CONSOLE;
-    const char * op_name_filter = nullptr;
+    const char * op_names_filter = nullptr;
     const char * backend_filter = nullptr;
     const char * params_filter = nullptr;
 
@@ -5988,7 +6099,7 @@ int main(int argc, char ** argv) {
             mode = MODE_SUPPORT;
         } else if (strcmp(argv[i], "-o") == 0) {
             if (i + 1 < argc) {
-                op_name_filter = argv[++i];
+                op_names_filter = argv[++i];
             } else {
                 usage(argv);
                 return 1;
@@ -6069,7 +6180,7 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend, mode, op_name_filter, params_filter, output_printer.get());
+        bool ok = test_backend(backend, mode, op_names_filter, params_filter, output_printer.get());
 
         if (ok) {
             n_ok++;

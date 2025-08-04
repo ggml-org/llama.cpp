@@ -1116,61 +1116,59 @@ static enum ggml_status ggml_backend_cann_buffer_init_tensor(
     return GGML_STATUS_SUCCESS;
 }
 
-static int CreateAclTensorWeight(const void *hostData, const std::vector<int64_t> &shape, void **deviceAddr,
-                      aclDataType dataType, aclTensor **tensor)
-{
-    uint64_t size = 1;
-    for (auto i : shape) {
-        size *= i;
+// ND to NZ Workspace Cache Management. Thread-safety: Not guaranteed
+namespace {
+    void* g_nz_workspace = nullptr;
+    size_t g_nz_workspace_allocated = 0;
+
+    void release_nz_workspace() {
+        if (g_nz_workspace) {
+            aclrtFree(g_nz_workspace);
+            g_nz_workspace = nullptr;
+            g_nz_workspace_allocated = 0;
+        }
     }
 
-    const aclIntArray *mat2Size = aclCreateIntArray(shape.data(), shape.size());
-    ACL_CHECK(aclnnCalculateMatmulWeightSizeV2(mat2Size, dataType, &size));
-
-    size *= sizeof(int16_t);
-
-    ACL_CHECK(aclrtMalloc(deviceAddr, size, ACL_MEM_MALLOC_HUGE_FIRST));
-    aclrtMemcpy(*deviceAddr, size, hostData, size, ACL_MEMCPY_HOST_TO_DEVICE);
-
-    std::vector<int64_t> strides(shape.size(), 1);
-    for (int64_t i = shape.size() - 2; i >= 0; i--) {
-        strides[i] = shape[i + 1] * strides[i + 1];
+    void relloc_nz_workspace(size_t new_size) {
+        if (new_size > g_nz_workspace_allocated) {
+        if (g_nz_workspace) {
+            aclrtFree(g_nz_workspace);
+            g_nz_workspace = nullptr;
+        }
+        ACL_CHECK(aclrtMalloc(&g_nz_workspace, new_size, ACL_MEM_MALLOC_HUGE_FIRST));
+        g_nz_workspace_allocated = new_size;
     }
-
-    *tensor = aclCreateTensor(shape.data(), shape.size(), dataType, strides.data(), 0, aclFormat::ACL_FORMAT_ND,
-                              shape.data(), shape.size(), *deviceAddr);
-    return 0;
+    }
 }
 
+/**
+ * @brief Convert tensor weights to NZ format using Ascend CANN API.
+ *
+ * This function creates a transposed tensor descriptor and performs the
+ * TransMatmulWeight operation. Converting tensor formats can significantly
+ * improve performance on certain hardware.
+ *
+ * @param tensor Pointer to the input ggml_tensor containing the weights.
+ * @param data Pointer to the raw data buffer for the tensor weights.
+ * @param offset Byte offset within the tensor data buffer where weights start.
+ *
+ * @note The workspace buffer used in this function is managed globally and reused
+ *       across calls. This reduces overhead from repeated memory allocation and deallocation.
+ */
 static void weight_format_to_nz(ggml_tensor *tensor, const void *data, size_t offset) {
-    aclrtStream stream;
-    ACL_CHECK(aclrtCreateStream(&stream));
-
-    std::vector<int64_t> weightTransposedShape = {tensor->ne[1], tensor->ne[0]};
-    void *weightTransposedDeviceAddr = nullptr;
-    aclTensor *weightTransposed = nullptr;
-    CreateAclTensorWeight(data, weightTransposedShape, &weightTransposedDeviceAddr,
-                          ggml_cann_type_mapping(tensor->type), &weightTransposed);
-
+    aclTensor* weightTransposed = ggml_cann_create_tensor(tensor, tensor->ne,
+                                    tensor->nb, 2, ACL_FORMAT_ND, offset);
     uint64_t workspaceSize = 0;
     aclOpExecutor *executor;
-    void *workspaceAddr = nullptr;
 
     // TransMatmulWeight
-    ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed, &workspaceSize, &executor));
-    std::unique_ptr<void, aclError (*)(void *)> workspaceAddrPtrTrans(nullptr, aclrtFree);
-    if (workspaceSize > 0) {
-        ACL_CHECK(aclrtMalloc(&workspaceAddr, workspaceSize, ACL_MEM_MALLOC_HUGE_FIRST));
-        workspaceAddrPtrTrans.reset(workspaceAddr);
-    }
-    ACL_CHECK(aclnnTransMatmulWeight(workspaceAddr, workspaceSize, executor, stream));
+    ACL_CHECK(aclnnTransMatmulWeightGetWorkspaceSize(weightTransposed,
+                                                    &workspaceSize, &executor));
+    // Avoid frequent malloc/free of the workspace.
+    relloc_nz_workspace(workspaceSize);
 
-    size_t size = ggml_nelements(tensor) * ggml_element_size(tensor);
-
-    aclrtMemcpy((char *)tensor->data + offset, size,
-                weightTransposedDeviceAddr, size, ACL_MEMCPY_HOST_TO_DEVICE);
+    ACL_CHECK(aclnnTransMatmulWeight(g_nz_workspace, workspaceSize, executor, nullptr));
     ACL_CHECK(aclDestroyTensor(weightTransposed));
-    aclrtFree(weightTransposedDeviceAddr);
 }
 
 // TODO: need handle tensor which has paddings.
@@ -1197,14 +1195,14 @@ static void ggml_backend_cann_buffer_set_tensor(
     // For acl, synchronous functions use this default stream.
     // Why aclrtSynchronizeDevice?
 
-    bool weightToNZ = false;
-#ifdef ASCEND_310P
-    weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
-#endif
+    // Only check env once.
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
     if (!need_transform(tensor->type)) {
         ACL_CHECK(aclrtMemcpy((char *)tensor->data + offset, size, data, size,
                               ACL_MEMCPY_HOST_TO_DEVICE));
-        if (weightToNZ && is_matmul_weight((const ggml_tensor*)tensor)) {
+        if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
+            GGML_ASSERT(tensor->ne[2] == 1);
+            GGML_ASSERT(tensor->ne[3] == 1);
             weight_format_to_nz(tensor, data, offset);
         }
     } else {
@@ -1440,20 +1438,32 @@ static size_t ggml_backend_cann_buffer_type_get_alloc_size(
     size_t size = ggml_nbytes(tensor);
     int64_t ne0 = tensor->ne[0];
 
+    // Only check env once.
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+
     // last line must bigger than 32, because every single op deal at
     // least 32 bytes.
     // TODO: quantized type?
     // int64_t line_size = ne0 * ggml_element_size(tensor);
     // int64_t line_size_align_32 = (line_size + 31) & ~31;
     // size += (line_size_align_32 - line_size);
-
-    // TODO: not support quantized yet.
-    // TODO: consider un-continue tensor.
     if (ggml_is_quantized(tensor->type)) {
         if (ne0 % MATRIX_ROW_PADDING != 0) {
             size += ggml_row_size(
                 tensor->type, MATRIX_ROW_PADDING - ne0 % MATRIX_ROW_PADDING);
         }
+    } else if (weight_to_nz && is_matmul_weight((const ggml_tensor*)tensor)) {
+        // NZ format weight are not support quantized yet.
+        // If ND tensor transform to NZ, size may changed.
+        int64_t shape[] = {tensor->ne[1], tensor->ne[0]};
+        GGML_ASSERT(tensor->ne[2] == 1);
+        GGML_ASSERT(tensor->ne[3] == 1);
+        const aclIntArray *acl_shape = aclCreateIntArray(shape, 2);
+        size_t new_size;
+        ACL_CHECK(aclnnCalculateMatmulWeightSizeV2(acl_shape,
+                    ggml_cann_type_mapping(tensor->type), &new_size));
+        ACL_CHECK(aclDestroyIntArray(acl_shape));
+        size = std::max(size, new_size);
     }
 
     return size;
@@ -1658,6 +1668,9 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
             break;
         case GGML_OP_GET_ROWS:
             ggml_cann_get_rows(ctx, dst);
+            break;
+        case GGML_OP_SET_ROWS:
+            ggml_cann_set_rows(ctx, dst);
             break;
         case GGML_OP_DUP:
             ggml_cann_dup(ctx, dst);
@@ -2003,6 +2016,9 @@ static bool ggml_backend_cann_cpy_tensor_async(
         (ggml_backend_cann_context*)backend_dst->context;
 
     size_t copy_size = ggml_nbytes(dst);
+    if (copy_size == 0) {
+        return true;
+    }
     if (backend_src != backend_dst) {
         ggml_backend_cann_buffer_context* buf_ctx_src =
             (ggml_backend_cann_buffer_context*)buf_src->context;
@@ -2077,6 +2093,8 @@ static enum ggml_status ggml_backend_cann_graph_compute(
         (ggml_backend_cann_context*)backend->context;
 
     ggml_cann_set_device(cann_ctx->device);
+    //release temp buffer create by set tensor.
+    release_nz_workspace();
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor* node = cgraph->nodes[i];
@@ -2191,13 +2209,15 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                     return false;
             }
         } break;
-        case GGML_OP_SET_ROWS:
-            {
-                // TODO: add support
-                // ref: https://github.com/ggml-org/llama.cpp/pull/14274
-#pragma message("TODO: implement F32, F16, BF16, Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, IQ4_NL support (https://github.com/ggml-org/llama.cpp/pull/14661)")
-                return false;
-            } break;
+        case GGML_OP_SET_ROWS: {
+            switch (op->type) {
+                case GGML_TYPE_F32:
+                case GGML_TYPE_F16:
+                    return true;
+                default:
+                    return false;
+            }
+        } break;
         case GGML_OP_CPY: {
             ggml_tensor *src = op->src[0];
             if ((op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_F16) ||
