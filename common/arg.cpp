@@ -24,6 +24,7 @@
 #include <cstdarg>
 #include <filesystem>
 #include <fstream>
+#include <list>
 #include <regex>
 #include <set>
 #include <string>
@@ -2375,7 +2376,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     }
                     throw std::invalid_argument("unknown buffer type");
                 }
-                params.tensor_buft_overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+                // keep strings alive and avoid leaking memory by storing them in a static vector
+                static std::list<std::string> buft_overrides;
+                buft_overrides.push_back(tensor_name);
+                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
             }
         }
     ));
@@ -2383,7 +2387,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--cpu-moe", "-cmoe"},
         "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
-            params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps"), ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
     add_opt(common_arg(
@@ -2394,7 +2398,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("invalid value");
             }
             for (int i = 0; i < value; ++i) {
-                params.tensor_buft_overrides.push_back({strdup(string_format("\\.%d\\.ffn_(up|down|gate)_exps", i).c_str()), ggml_backend_cpu_buffer_type()});
+                // keep strings alive and avoid leaking memory by storing them in a static vector
+                static std::list<std::string> buft_overrides;
+                buft_overrides.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
             }
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
