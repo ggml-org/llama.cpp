@@ -24,6 +24,7 @@
 #include <openvino/runtime/tensor.hpp>
 #include <ostream>
 #include <set>
+#include <stdexcept>
 #include <string>
 
 #include "ggml-backend-impl.h"
@@ -391,53 +392,12 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
 }
 
 std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor) {
-    std::shared_ptr<ov::Node> weight_node;
     auto node_type = get_ov_type(tensor);
     auto node_shape = get_shape(tensor);
     auto ne_total = ggml_nelements(tensor);
-    switch (tensor->type) {
-    case GGML_TYPE_I32: {
-        const auto* ptr = reinterpret_cast<const int32_t*>(tensor->data);
-        std::vector<int32_t> data(ptr, ptr + ne_total);
-        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data);
-        break;
-    }
-    case GGML_TYPE_I64: {
-        const auto* ptr = reinterpret_cast<const int64_t*>(tensor->data);
-        std::vector<int64_t> data(ptr, ptr + ne_total);
-        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data);
-        break;
-    }
-    case GGML_TYPE_F32: {
-        const auto* ptr = reinterpret_cast<const float*>(tensor->data);
-        std::vector<float> data(ptr, ptr + ne_total);
-        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data);
-        break;
-    }
-    case GGML_TYPE_F16: {
-        const auto* ptr = reinterpret_cast<const uint16_t*>(tensor->data);
-        std::vector<ov::float16> data_f16;
-        data_f16.reserve(ne_total);
-        for (int i = 0; i < ne_total; ++i) {
-            data_f16.push_back(ov::float16::from_bits(ptr[i]));
-        }
-        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_f16);
-        break;
-    }
-    case GGML_TYPE_BF16: {
-        const auto* ptr = reinterpret_cast<const uint16_t*>(tensor->data);
-        std::vector<ov::bfloat16> data_bf16;
-        data_bf16.reserve(ne_total);
-        for (int i = 0; i < ne_total; ++i) {
-            data_bf16.push_back(ov::bfloat16::from_bits(ptr[i]));
-        }
-        weight_node = std::make_shared<ov::op::v0::Constant>(node_type, node_shape, data_bf16);
-        break;
-    }
-    default:
-        throw std::invalid_argument("Unsupported tensor type");
-    }
-    return weight_node;
+    ov::Tensor weights(node_type, node_shape);
+    memcpy(weights.data(), tensor->data, ne_total * node_type.size());
+    return std::make_shared<ov::op::v0::Constant>(weights);
 }
 
 void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename) {
@@ -549,27 +509,26 @@ std::vector<size_t> GgmlOvDecoder::get_stride(const ggml_tensor* tensor) {
 }
 
 ov::element::Type GgmlOvDecoder::get_ov_type(const ggml_tensor* tensor) {
-    ov::element::Type type = ov::element::dynamic;
     switch (tensor->type) {
+    case GGML_TYPE_F64:
+        return ov::element::f64;
     case GGML_TYPE_F32:
-        type = ov::element::f32;
-        break;
+        return ov::element::f32;
     case GGML_TYPE_F16:
-        type = ov::element::f16;
-        break;
+        return ov::element::f16;
     case GGML_TYPE_BF16:
-        type = ov::element::bf16;
-        break;
-    case GGML_TYPE_I64:
-        type = ov::element::i64;
-        break;
+        return ov::element::bf16;
+    case GGML_TYPE_I8:
+        return ov::element::i8;
+    case GGML_TYPE_I16:
+        return ov::element::i16;
     case GGML_TYPE_I32:
-        type = ov::element::i32;
-        break;
+        return ov::element::i32;
+    case GGML_TYPE_I64:
+        return ov::element::i64;
     default:
-        break;
+        throw std::runtime_error("Unsupported tensor type");
     }
-    return type;
 }
 
 ov::PartialShape GgmlOvDecoder::get_input_shape(const std::string& name) const {
