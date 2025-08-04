@@ -1565,3 +1565,9 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
 
     return result;
 }
+
+common_params::~common_params() {
+    for (auto & ot : tensor_buft_overrides) {
+        free(const_cast<char *>(ot.pattern));
+    }
+}

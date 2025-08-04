@@ -2375,20 +2375,29 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     }
                     throw std::invalid_argument("unknown buffer type");
                 }
-                // FIXME: this leaks memory
                 params.tensor_buft_overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
             }
         }
     ));
     add_opt(common_arg(
-        {"--cpu-moe"},
-        "use CPU for Mixture of Experts (MoE) weights",
+        {"--cpu-moe", "-cmoe"},
+        "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
-            params.tensor_buft_overrides.push_back({"\\.ffn_up_exps\\.weight$",   ggml_backend_cpu_buffer_type()});
-            params.tensor_buft_overrides.push_back({"\\.ffn_down_exps\\.weight$", ggml_backend_cpu_buffer_type()});
-            params.tensor_buft_overrides.push_back({"\\.ffn_gate_exps\\.weight$", ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({strdup("\\.ffn_(up|down|gate)_exps"), ggml_backend_cpu_buffer_type()});
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
+    add_opt(common_arg(
+        {"--n-cpu-moe", "-ncmoe"}, "N",
+        "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            for (int i = 0; i < value; ++i) {
+                params.tensor_buft_overrides.push_back({strdup(string_format("\\.%d\\.ffn_(up|down|gate)_exps", i).c_str()), ggml_backend_cpu_buffer_type()});
+            }
+        }
+    ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
         "number of layers to store in VRAM",
