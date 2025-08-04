@@ -79,6 +79,10 @@ enum ggml_status openvino_frontend_compute(ggml_backend_t backend, struct ggml_c
     ov::AnyMap config;
     if (device == "NPU") {
         config = get_npu_config();
+    } else if (device == "GPU") {
+        config = {
+            {"GPU_ENABLE_SDPA_OPTIMIZATION", "0"}
+        };
     }
 
     if (is_naive(cgraph)) {
