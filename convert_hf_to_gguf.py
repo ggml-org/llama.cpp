@@ -684,6 +684,9 @@ class TextModel(ModelBase):
         if chkhsh == "7e57df22b1fe23a7b1e1c7f3dc4e3f96d43a4eb0836d0c6bdc3436d7b2f1c664":
             # ref: https://huggingface.co/tencent/Hunyuan-A13B-Instruct
             res = "hunyuan"
+        if chkhsh == "bba3b3366b646dbdded5dbc42d59598b849371afc42f7beafa914afaa5b70aa6":
+            # ref: https://huggingface.co/tencent/Hunyuan-4B-Instruct
+            res = "hunyuan-dense"
         if chkhsh == "a6b57017d60e6edb4d88ecc2845188e0eb333a70357e45dcc9b53964a73bbae6":
             # ref: https://huggingface.co/tiiuae/Falcon-H1-0.5B-Base
             res = "falcon-h1"
@@ -699,6 +702,9 @@ class TextModel(ModelBase):
         if chkhsh == "81212dc7cdb7e0c1074ca62c5aeab0d43c9f52b8a737be7b12a777c953027890":
             # ref: https://huggingface.co/moonshotai/Kimi-K2-Base
             res = "kimi-k2"
+        if chkhsh == "d4540891389ea895b53b399da6ac824becc30f2fba0e9ddbb98f92e55ca0e97c":
+            # ref: https://huggingface.co/Qwen/Qwen3-Embedding-0.6B
+            res = "qwen2"
         if chkhsh == "0ef9807a4087ebef797fc749390439009c3b9eda9ad1a097abbe738f486c01e5":
             # ref: https://huggingface.co/meta-llama/Meta-Llama-3-8B
             res = "llama-bpe"
@@ -846,6 +852,9 @@ class TextModel(ModelBase):
         if chkhsh == "2085e1638f6c377a0aa4ead21b27bb4cb941bf800df86ed391011769c1758dfb":
             # ref: https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B
             res = "exaone4"
+        if chkhsh == "a1e163ecab2e718a4c829d1148b6e86824ec36163bb71941c3dca9cd5ac25756":
+            # ref: https://huggingface.co/JetBrains/Mellum-4b-base
+            res = "mellum"
 
         if res is None:
             logger.warning("\n")
@@ -6053,6 +6062,7 @@ class DeepseekModel(TextModel):
 
 @ModelBase.register("DeepseekV2ForCausalLM")
 @ModelBase.register("DeepseekV3ForCausalLM")
+@ModelBase.register("KimiVLForConditionalGeneration")
 class DeepseekV2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
 
@@ -6155,6 +6165,13 @@ class DeepseekV2Model(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # skip vision tensors and remove "language_model." for Kimi-VL
+        if "vision_tower" in name or "multi_modal_projector" in name:
+            return []
+
+        if name.startswith("language_model."):
+            name = name.replace("language_model.", "")
+
         # rename e_score_correction_bias tensors
         if name.endswith("e_score_correction_bias"):
             name = name.replace("e_score_correction_bias", "e_score_correction.bias")
@@ -7553,11 +7570,6 @@ class FalconH1Model(Mamba2Model):
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # For handling tied embeddings
-        self._tok_embd = None
-
     def set_vocab(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
@@ -7651,9 +7663,6 @@ class HunYuanMoEModel(TextModel):
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name == "model.embed_tokens.weight":
-            self._tok_embd = data_torch.clone()
-
         if name == "lm_head.weight":
             if self.hparams.get("tie_word_embeddings", False):
                 logger.info("Skipping tied output layer 'lm_head.weight'")
@@ -7696,6 +7705,98 @@ class HunYuanMoEModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("HunYuanDenseV1ForCausalLM")
+class HunYuanModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.HUNYUAN_DENSE
+
+    def set_vocab(self):
+        if (self.dir_model / "tokenizer.json").is_file():
+            self._set_vocab_gpt2()
+        else:
+            from transformers import AutoTokenizer
+            tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+
+            # 1. Get the pre-tokenizer identifier hash
+            tokpre = self.get_vocab_base_pre(tokenizer)
+
+            # 2. Reverse-engineer the merges list from mergeable_ranks
+            merges = []
+            vocab = {}
+            mergeable_ranks = tokenizer.mergeable_ranks
+            for token, rank in mergeable_ranks.items():
+                vocab[QwenModel.token_bytes_to_string(token)] = rank
+                if len(token) == 1:
+                    continue
+                merged = QwenModel.bpe(mergeable_ranks, token, max_rank=rank)
+                if len(merged) == 2:
+                    merges.append(' '.join(map(QwenModel.token_bytes_to_string, merged)))
+
+            # 3. Generate the tokens and toktypes lists
+            vocab_size = self.hparams["vocab_size"]
+            assert tokenizer.vocab_size == vocab_size
+            special_tokens = tokenizer.special_tokens
+            reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
+            tokens: list[str] = []
+            toktypes: list[int] = []
+            for i in range(vocab_size):
+                if i not in reverse_vocab:
+                    tokens.append(f"[PAD{i}]")
+                    toktypes.append(gguf.TokenType.UNUSED)
+                else:
+                    token = reverse_vocab[i]
+                    tokens.append(token)
+                    if i in special_tokens.values():
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.NORMAL)
+
+            # 4. Write all vocab-related fields to the GGUF writer
+            self.gguf_writer.add_tokenizer_model("gpt2")
+            self.gguf_writer.add_tokenizer_pre(tokpre)
+            self.gguf_writer.add_token_list(tokens)
+            self.gguf_writer.add_token_types(toktypes)
+            self.gguf_writer.add_token_merges(merges)
+
+            # 5. Add special tokens and chat templates
+            special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
+            special_vocab.add_to_gguf(self.gguf_writer)
+            # FIX for BOS token: Overwrite incorrect id read from config.json
+            if self.hparams['hidden_size'] == 4096:
+                self.gguf_writer.add_bos_token_id(127958) # only for 7b dense, fix <|bos|> token
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        hparams = self.hparams
+
+        # Rope
+        rope_scaling = hparams.get("rope_scaling", {})
+        if rope_scaling.get("type") == "dynamic":
+            # HunYuan uses NTK Aware Alpha based scaling. Original implementation: https://www.reddit.com/r/LocalLLaMA/comments/14lz7j5/ntkaware_scaled_rope_allows_llama_models_to_have/
+            # 1000 corresponds to a usable context length of 256k (https://github.com/Tencent-Hunyuan/Hunyuan-A13B/blob/main/report/Hunyuan_A13B_Technical_Report.pdf)
+            alpha = rope_scaling.get("alpha", 50)
+            base = hparams.get("rope_theta", 10000.0)
+            dim = hparams["head_dim"]
+            scaled_base = base * (alpha ** (dim / (dim - 2)))
+            self.gguf_writer.add_rope_freq_base(scaled_base)
+            self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+            self.gguf_writer.add_rope_scaling_factor(1)
+            # There is no consistent way to calculate ctx from alpha, and the config is incorrectly set to 32k
+            self.gguf_writer.add_rope_scaling_orig_ctx_len(256 * 1024) # 256k context length
+            self.gguf_writer.add_context_length(256 * 1024) # 256k context length
+
+            # if any of our assumptions about the values are wrong, something has changed and this may need to be updated
+            assert base == 10000.0 and self.hparams["max_position_embeddings"] in [32 * 1024, 256 * 1024] , \
+                "HunYuan dynamic RoPE scaling assumptions changed, please update the logic or context length manually"
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name == "lm_head.weight":
+            if self.hparams.get("tie_word_embeddings", False):
+                logger.info("Skipping tied output layer 'lm_head.weight'")
+                return []
+
+        return [(self.map_tensor_name(name), data_torch)]
 
 
 @ModelBase.register("SmolLM3ForCausalLM")
