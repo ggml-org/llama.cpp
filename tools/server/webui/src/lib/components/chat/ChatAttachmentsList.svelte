@@ -41,6 +41,10 @@
 			preview?: string;
 			type: string;
 			isImage: boolean;
+			uploadedFile?: ChatUploadedFile;
+			attachment?: DatabaseMessageExtra;
+			attachmentIndex?: number;
+			textContent?: string;
 		}> = [];
 
 		// Add uploaded files (ChatForm)
@@ -51,7 +55,9 @@
 				size: file.size,
 				preview: file.preview,
 				type: file.type,
-				isImage: file.type.startsWith('image/')
+				isImage: file.type.startsWith('image/'),
+				uploadedFile: file,
+				textContent: file.textContent
 			});
 		}
 
@@ -70,7 +76,10 @@
 					id: `attachment-${index}`,
 					name: attachment.name,
 					type: 'text',
-					isImage: false
+					isImage: false,
+					attachment,
+					attachmentIndex: index,
+					textContent: attachment.content
 				});
 			} else if (attachment.type === 'audioFile') {
 				items.push({
@@ -109,6 +118,7 @@
 					size={item.size}
 					readonly={readonly}
 					onRemove={onFileRemove}
+					textContent={item.textContent}
 				/>
 			{/if}
 		{/each}

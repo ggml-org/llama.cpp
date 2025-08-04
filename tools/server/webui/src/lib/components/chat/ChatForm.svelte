@@ -97,18 +97,14 @@
 
 		// Handle long text conversion to file
 		const text = event.clipboardData.getData('text/plain');
-		if (
-			text.length > 0 &&
-			pasteLongTextToFileLen > 0 &&
-			text.length > pasteLongTextToFileLen
-		) {
+		if (text.length > 0 && pasteLongTextToFileLen > 0 && text.length > pasteLongTextToFileLen) {
 			event.preventDefault();
-			
+
 			// Create a text file from the pasted content
-			const textFile = new File([text], 'Pasted Content.txt', {
+			const textFile = new File([text], 'Pasted', {
 				type: 'text/plain'
 			});
-			
+
 			onFileUpload?.([textFile]);
 		}
 	}
@@ -126,13 +122,9 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="border bg-muted/30 border-border/40 focus-within:border-primary/40 bg-background dark:bg-muted border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
+	class="bg-muted/30 border-border/40 focus-within:border-primary/40 bg-background dark:bg-muted border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl border {className}"
 >
-	<ChatAttachmentsList 
-		bind:uploadedFiles={uploadedFiles}
-		onFileRemove={onFileRemove}
-		class="mb-3 px-5 pt-3"
-	/>
+	<ChatAttachmentsList bind:uploadedFiles {onFileRemove} class="mb-3 px-5 pt-5" />
 
 	<div
 		class="flex-column relative min-h-[48px] items-center rounded-3xl px-5 py-3 shadow-sm transition-all focus-within:shadow-md"
@@ -197,8 +189,7 @@
 	<div class="mt-4 flex items-center justify-center">
 		<p class="text-muted-foreground text-xs">
 			Press <kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Enter</kbd> to send,
-			<kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Shift + Enter</kbd> for new
-			line
+			<kbd class="bg-muted rounded px-1 py-0.5 font-mono text-xs">Shift + Enter</kbd> for new line
 		</p>
 	</div>
 {/if}

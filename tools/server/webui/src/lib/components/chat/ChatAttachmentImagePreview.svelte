@@ -39,28 +39,21 @@
 	}
 </script>
 
-<div class="bg-muted border-border relative rounded-lg border overflow-hidden {className}">
-	<img 
-		src={preview} 
-		alt={name} 
-		class="{height} {width} object-cover {imageClass}" 
-	/>
+<div class="bg-muted border-border relative overflow-hidden rounded-lg border {className}">
+	<img src={preview} alt={name} class="{height} {width} object-cover {imageClass}" />
 	{#if !readonly}
-		<div class="absolute top-1 right-1 opacity-0 hover:opacity-100 transition-opacity flex items-center justify-center">
+		<div
+			class="absolute right-1 top-1 flex items-center justify-center opacity-0 transition-opacity hover:opacity-100"
+		>
 			<Button
 				type="button"
 				variant="ghost"
 				size="sm"
-				class="h-6 w-6 p-0 bg-white/20 hover:bg-white/30 text-white"
+				class="h-6 w-6 bg-white/20 p-0 text-white hover:bg-white/30"
 				onclick={() => onRemove?.(id)}
 			>
 				<X class="h-3 w-3" />
 			</Button>
 		</div>
 	{/if}
-	<div class="absolute bottom-0 left-0 right-0 bg-black/60 text-white p-1">
-		{#if size}
-			<p class="text-xs opacity-80">{formatFileSize(size)}</p>
-		{/if}
-	</div>
 </div>

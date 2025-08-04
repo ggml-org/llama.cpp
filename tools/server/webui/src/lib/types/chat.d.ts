@@ -8,4 +8,5 @@ export interface ChatUploadedFile {
 	type: string;
 	file: File;
 	preview?: string;
+	textContent?: string;
 }

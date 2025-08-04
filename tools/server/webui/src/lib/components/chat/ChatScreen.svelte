@@ -120,6 +120,21 @@
 					uploadedFiles = [...uploadedFiles, uploadedFile];
 				};
 				reader.readAsDataURL(file);
+			} else if (file.type.startsWith('text/') || isTextFileByName(file.name)) {
+				// Read text content for text files to enable preview
+				const reader = new FileReader();
+				reader.onload = (e) => {
+					const content = e.target?.result as string;
+					if (content) {
+						uploadedFile.textContent = content;
+					}
+					uploadedFiles = [...uploadedFiles, uploadedFile];
+				};
+				reader.onerror = () => {
+					// If reading fails, still add the file without text content
+					uploadedFiles = [...uploadedFiles, uploadedFile];
+				};
+				reader.readAsText(file);
 			} else {
 				uploadedFiles = [...uploadedFiles, uploadedFile];
 			}
@@ -162,6 +177,19 @@
 		if (event.dataTransfer?.files) {
 			processFiles(Array.from(event.dataTransfer.files));
 		}
+	}
+
+	/**
+	 * Check if a file is likely a text file based on its filename extension
+	 */
+	function isTextFileByName(filename: string): boolean {
+		const textExtensions = [
+			'.txt', '.md', '.js', '.ts', '.jsx', '.tsx', '.css', '.html', '.htm',
+			'.json', '.xml', '.yaml', '.yml', '.csv', '.log', '.py', '.java',
+			'.cpp', '.c', '.h', '.php', '.rb', '.go', '.rs', '.sh', '.bat',
+			'.sql', '.r', '.scala', '.kt', '.swift', '.dart', '.vue', '.svelte'
+		];
+		return textExtensions.some(ext => filename.toLowerCase().endsWith(ext));
 	}
 
 	/**
