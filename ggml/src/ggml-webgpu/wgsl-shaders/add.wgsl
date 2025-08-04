@@ -10,7 +10,7 @@ var<storage, read_write> src1: array<f32>;
 var<storage, read_write> dst: array<f32>;
 
 struct Params {
-    ne: u32,             // total number of elements
+    ne: u32,
 
     stride_src0_0: u32,
     stride_src0_1: u32,
@@ -27,10 +27,15 @@ struct Params {
     stride_dst_2: u32,
     stride_dst_3: u32,
 
-    ne0: u32,
-    ne1: u32,
-    ne2: u32,
-    ne3: u32,
+    a_ne0: u32,
+    a_ne1: u32,
+    a_ne2: u32,
+    a_ne3: u32,
+
+    b_ne0: u32,
+    b_ne1: u32,
+    b_ne2: u32,
+    b_ne3: u32,
 
     // offsets in elements
     offset_src0: u32,
@@ -48,31 +53,41 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
 
-    var i = gid.x; // i = thread id
+    // i = thread id, ranges from 0 --> total ne - 1 
+    // represents the position in the flat array a we are adding with array b
+    var i = gid.x;  
 
-    // compute indexes for each dimension of the tensor 
-    let i3 = i / (params.ne2 * params.ne1 * params.ne0);
-    i = i % (params.ne2 * params.ne1 * params.ne0);
+    // given the index of linear a, we want to compute the 4d index [a_i0, a_i1, a_i2, a_i3]
+    // we need this because tensor a and b are different shapes 
+    // so the same linear index won't work for b, and we can only compute b's linear index from the 4d index of a
+ 
+    let a_i3 = i / (params.a_ne2 * params.a_ne1 * params.a_ne0);
+    i = i % (params.a_ne2 * params.a_ne1 * params.a_ne0);
 
-    let i2 = i / (params.ne1 * params.ne0);
-    i = i % (params.ne1 * params.ne0);
+    let a_i2 = i / (params.a_ne1 * params.a_ne0);
+    i = i % (params.a_ne1 * params.a_ne0);
 
-    let i1 = i / params.ne0;
+    let a_i1 = i / params.a_ne0;
 
-    let i0 = i % params.ne0;
-
-    // compute indexes for position in each flat array
-    let src0_idx = i0 * params.stride_src0_0 + i1 * params.stride_src0_1 +
-                   i2 * params.stride_src0_2 + i3 * params.stride_src0_3;
-
-    let src1_idx = i0 * params.stride_src1_0 + i1 * params.stride_src1_1 +
-                   i2 * params.stride_src1_2 + i3 * params.stride_src1_3;
-
-    let dst_idx = i0 * params.stride_dst_0 + i1 * params.stride_dst_1 +
-                  i2 * params.stride_dst_2 + i3 * params.stride_dst_3;
+    let a_i0 = i % params.a_ne0;
 
 
-    // dst[dst_idx] = src0[src0_idx] + src1[src1_idx];
+    // handle repetition of b 
+        // index loops back to the beginning and repeats after elements are exhausted = modulo
+    let b_i0 = a_i0 % params.b_ne0;
+    let b_i1 = a_i1 % params.b_ne1;
+    let b_i2 = a_i2 % params.b_ne2;
+    let b_i3 = a_i3 % params.b_ne3;
 
-    dst[params.offset_dst + dst_idx] = src0[params.offset_src0 + src0_idx] + src1[params.offset_src1 + src1_idx];
+
+    // compute index for position in b's flat array
+    let src1_idx = b_i0 * params.stride_src1_0 +
+                b_i1 * params.stride_src1_1 +
+                b_i2 * params.stride_src1_2 +
+                b_i3 * params.stride_src1_3;
+
+    // actual addition operation, now that the indexes are all figured out
+    // ensuring that the offsets are included
+    // gid.x used for flat indexing into dst and a, since variable i was modified during calcs
+    dst[params.offset_dst + gid.x] = src0[params.offset_src0 + gid.x] + src1[params.offset_src1 + src1_idx];
 }

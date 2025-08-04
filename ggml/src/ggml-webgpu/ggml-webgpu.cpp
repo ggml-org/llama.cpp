@@ -451,6 +451,16 @@ static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_t
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->mul_mat_pipeline, params, entries, wg_x);
 }
 
+// sample test
+// ADD(type=f32, ne=[10,5,4,3], nr=[2,1,1,1], nf=1)
+    // ne: number of elements in each dimension of tensor b
+    // nr: number of repetitions in each dimension
+        // tensor b is the smaller tensor, and is broadcasted with repetitions to match the size of a 
+        // broadcasted with ne * nr
+            // 10*2, 5*1, 4*1, 3*1 = [20, 5, 4, 3] is the shape of dst and a
+            // essentially, if nr[x] is > 1, that dimension of b is repeated 
+    // nf: number of fused operations (1 means singular addition)
+
 // adds src0 and src1 and puts in dst
 static void ggml_webgpu_add(webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst) {
     // each tensor in GGML is stored inside a buffer on the GPU
@@ -464,15 +474,13 @@ static void ggml_webgpu_add(webgpu_context & ctx, ggml_tensor * src0, ggml_tenso
     src0_offset &= ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
 
     size_t src1_offset = ggml_backend_webgpu_tensor_offset(src1);
-    // assumes power of 2 offset alignment
     size_t src1_misalignment = src1_offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
-    // align to minimum offset alignment
     src1_offset &= ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
 
     size_t dst_offset = ggml_backend_webgpu_tensor_offset(dst);
     size_t dst_misalignment = dst_offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
     dst_offset &= ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
-    
+
     // set up parameters
     std::vector<uint32_t> params = {
         // number of elements-- determines how many threads to dispatch (one for each addition operation)
@@ -480,11 +488,13 @@ static void ggml_webgpu_add(webgpu_context & ctx, ggml_tensor * src0, ggml_tenso
         
         // even though tensors are 4d, the actual data is stored linearly
         // stride = how many elements (or bytes) we must skip in memory to move from one value to another along a certain dimension
-            // i.e.
-            // nb[0] = 1                   // each element is next to the previous
-            // nb[1] = nb[0] * ne[0] = 5   // to move to next row, skip 5 elements
-            // nb[2] = nb[1] * ne[1] = 20  // to next matrix, skip 20 elements
-            // nb[3] = nb[2] * ne[2] = 60  // to next batch, skip 60 elements
+            // i.e. tensor: [5, 6, 3, 2], ggml_type_size: 4 (each number is 4 bytes) 
+                // (nb = number of bytes to skip for each element (stride))
+                // (ne = number of elements in that dimension)
+            // nb[0] = 4                                // each element is next to the previous, so only 4 bytes in between
+            // nb[1] = nb[0] * ne[0] = 4 * 5 = 20       // to move to next row, skip 20 bytes
+            // nb[2] = nb[1] * ne[1] = 20 * 6 = 120     // to next matrix, skip 120 elements
+            // nb[3] = nb[2] * ne[2] = 120 * 3 = 360    // to next batch, skip 60 elements
 
         // calculate element strides for each tensor
         (uint32_t) (src0->nb[0] / ggml_type_size(src0->type)),
@@ -502,16 +512,24 @@ static void ggml_webgpu_add(webgpu_context & ctx, ggml_tensor * src0, ggml_tenso
         (uint32_t) (dst->nb[2] / ggml_type_size(dst->type)),
         (uint32_t) (dst->nb[3] / ggml_type_size(dst->type)),
 
-        // number of elements in each dimension
+        // number of elements in each dimension of larger tensors (src0 and dst)
         (uint32_t) dst->ne[0],
         (uint32_t) dst->ne[1],
         (uint32_t) dst->ne[2],
         (uint32_t) dst->ne[3],
 
+        // number of elements in each dimension of smaller tensor to be broadcasted (src1)
+        (uint32_t) src1->ne[0],
+        (uint32_t) src1->ne[1],
+        (uint32_t) src1->ne[2],
+        (uint32_t) src1->ne[3],
+
         // offsets in terms of elements instead of bytes
         (uint32_t) (src0_misalignment / ggml_type_size(src0->type)),
         (uint32_t) (src1_misalignment / ggml_type_size(src1->type)),
         (uint32_t) (dst_misalignment / ggml_type_size(dst->type)),
+
+        
     };
 
     // bind group = groups together several GPU resources that shaders will use (e.g., buffers holding tensor data)
