@@ -212,10 +212,12 @@ class ModelsManagementViewModel @Inject constructor(
         } catch (_: InvalidFileFormatException) {
             _managementState.value = Importation.Error(
                 message = "Not a valid GGUF model!",
+                learnMoreUrl = "https://huggingface.co/docs/hub/en/gguf",
             )
         } catch (e: InsufficientStorageException) {
             _managementState.value = Importation.Error(
                 message = e.message ?: "Insufficient storage space to import $fileName",
+                learnMoreUrl = "https://support.google.com/android/answer/7431795?hl=en",
             )
         } catch (e: Exception) {
             Log.e(TAG, "Unknown exception importing $fileName", e)
@@ -382,8 +384,7 @@ sealed class ModelManagementState {
         data class Confirming(val uri: Uri, val fileName: String, val fileSize: Long) : Importation()
         data class Importing(val progress: Float = 0f, val fileName: String, val fileSize: Long, val isCancelling: Boolean = false) : Importation()
         data class Success(val model: ModelInfo) : Importation()
-        // TODO-han.yin: Add an optional explanation URL for more info!
-        data class Error(val message: String) : Importation()
+        data class Error(val message: String, val learnMoreUrl: String? = null) : Importation()
     }
 
     sealed class Download: ModelManagementState() {

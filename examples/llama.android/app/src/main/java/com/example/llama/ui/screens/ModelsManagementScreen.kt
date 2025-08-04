@@ -1,5 +1,6 @@
 package com.example.llama.ui.screens
 
+import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ContactSupport
 import androidx.compose.material.icons.filled.Attribution
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
@@ -45,14 +47,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.net.toUri
 import com.example.llama.data.model.ModelInfo
 import com.example.llama.data.source.remote.HuggingFaceModel
+import com.example.llama.ui.components.InfoAction
 import com.example.llama.ui.components.InfoView
 import com.example.llama.ui.components.ModelCardFullExpandable
 import com.example.llama.ui.scaffold.ScaffoldEvent
@@ -185,6 +190,7 @@ fun ModelsManagementScreen(
                 ErrorDialog(
                     title = "Import Failed",
                     message = state.message,
+                    learnMoreUrl = state.learnMoreUrl,
                     onDismiss = { viewModel.resetManagementState() }
                 )
             }
@@ -662,8 +668,22 @@ private fun BatchDeleteConfirmationDialog(
 private fun ErrorDialog(
     title: String,
     message: String,
+    learnMoreUrl: String? = null,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+
+    val action = learnMoreUrl?.let { url ->
+         InfoAction(
+            label = "Learn More",
+            icon = Icons.AutoMirrored.Outlined.ContactSupport,
+            onAction = {
+                val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                context.startActivity(intent)
+            }
+        )
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         text = {
@@ -672,6 +692,7 @@ private fun ErrorDialog(
                 title = title,
                 icon = Icons.Default.Error,
                 message = message,
+                action = action
             )
         },
         confirmButton = {
