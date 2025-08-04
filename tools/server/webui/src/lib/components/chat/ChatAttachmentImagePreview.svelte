@@ -9,6 +9,7 @@
 		size?: number;
 		readonly?: boolean;
 		onRemove?: (id: string) => void;
+		onClick?: () => void;
 		class?: string;
 		// Customizable size props
 		width?: string;
@@ -23,24 +24,36 @@
 		size,
 		readonly = false,
 		onRemove,
+		onClick,
 		class: className = '',
 		// Default to small size for form previews
 		width = 'w-auto',
 		height = 'h-24',
 		imageClass = ''
 	}: Props = $props();
-
-	function formatFileSize(bytes: number): string {
-		if (bytes === 0) return '0 Bytes';
-		const k = 1024;
-		const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-		const i = Math.floor(Math.log(bytes) / Math.log(k));
-		return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-	}
 </script>
 
 <div class="bg-muted border-border relative overflow-hidden rounded-lg border {className}">
-	<img src={preview} alt={name} class="{height} {width} object-cover {imageClass}" />
+	{#if onClick}
+		<button
+			type="button"
+			class="focus:ring-primary block h-full w-full rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2"
+			onclick={onClick}
+			aria-label="Preview {name}"
+		>
+			<img
+				src={preview}
+				alt={name}
+				class="{height} {width} cursor-pointer object-cover {imageClass}"
+			/>
+		</button>
+	{:else}
+		<img
+			src={preview}
+			alt={name}
+			class="{height} {width} cursor-pointer object-cover {imageClass}"
+		/>
+	{/if}
 	{#if !readonly}
 		<div
 			class="absolute right-1 top-1 flex items-center justify-center opacity-0 transition-opacity hover:opacity-100"

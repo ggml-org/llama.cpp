@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components';
+	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';
 
@@ -31,7 +32,35 @@
 
 	let displayItems = $derived(getDisplayItems());
 
+	// Preview dialog state
+	let previewDialogOpen = $state(false);
+	let previewItem = $state<{
+		uploadedFile?: ChatUploadedFile;
+		attachment?: DatabaseMessageExtra;
+		preview?: string;
+		name?: string;
+		type?: string;
+		size?: number;
+		textContent?: string;
+	} | null>(null);
 
+	function openPreview(item: (typeof displayItems)[0]) {
+		previewItem = {
+			uploadedFile: item.uploadedFile,
+			attachment: item.attachment,
+			preview: item.preview,
+			name: item.name,
+			type: item.type,
+			size: item.size,
+			textContent: item.textContent
+		};
+		previewDialogOpen = true;
+	}
+
+	function closePreview() {
+		previewDialogOpen = false;
+		previewItem = null;
+	}
 
 	function getDisplayItems() {
 		const items: Array<{
@@ -110,27 +139,45 @@
 		{#each displayItems as item (item.id)}
 			{#if item.isImage && item.preview}
 				<ChatAttachmentImagePreview
+					class="cursor-pointer"
 					id={item.id}
 					name={item.name}
 					preview={item.preview}
 					size={item.size}
-					readonly={readonly}
+					{readonly}
 					onRemove={onFileRemove}
 					height={imageHeight}
 					width={imageWidth}
-					imageClass={imageClass}
+					{imageClass}
+					onClick={() => openPreview(item)}
 				/>
 			{:else}
 				<ChatAttachmentFilePreview
+					class="cursor-pointer"
 					id={item.id}
 					name={item.name}
 					type={item.type}
 					size={item.size}
-					readonly={readonly}
+					{readonly}
 					onRemove={onFileRemove}
 					textContent={item.textContent}
+					onClick={() => openPreview(item)}
 				/>
 			{/if}
 		{/each}
 	</div>
+{/if}
+
+{#if previewItem}
+	<ChatAttachmentPreviewDialog
+		bind:open={previewDialogOpen}
+		onClose={closePreview}
+		uploadedFile={previewItem.uploadedFile}
+		attachment={previewItem.attachment}
+		preview={previewItem.preview}
+		name={previewItem.name}
+		type={previewItem.type}
+		size={previewItem.size}
+		textContent={previewItem.textContent}
+	/>
 {/if}
