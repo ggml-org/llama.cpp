@@ -130,7 +130,7 @@
 </script>
 
 {#if displayItems.length > 0}
-	<div class="flex flex-wrap items-start justify-end gap-3 {className}">
+	<div class="flex flex-wrap items-start {readonly ? 'justify-end' : ''} gap-3 {className}">
 		{#each displayItems as item (item.id)}
 			{#if item.isImage && item.preview}
 				<ChatAttachmentImagePreview

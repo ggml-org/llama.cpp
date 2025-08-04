@@ -7,6 +7,15 @@
 	import { conversations, deleteConversation } from '$lib/stores/chat.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { useSidebar } from '$lib/components/ui/sidebar';
+
+	const sidebar = useSidebar();
+
+	export function handleMobileSidebarItemClick() {
+		if (sidebar.isMobile) {
+			sidebar.toggle();
+		}
+	}
 
 	let currentChatId = $derived(page.params.id);
 	let searchQuery = $state('');
@@ -31,7 +40,7 @@
 
 <Sidebar.Header class="px-0 pb-4">
 	<div class="py-2">
-		<a href="/">
+		<a href="/" onclick={handleMobileSidebarItemClick}>
 			<h1 class="text-xl font-semibold">llama.cpp</h1>
 		</a>
 	</div>
@@ -47,6 +56,7 @@
 		href="/?new_chat=true"
 		class="border-muted-foreground/25 hover:bg-accent hover:border-accent-foreground/25 w-full justify-start gap-2 rounded-lg border-2 border-dashed bg-transparent transition-colors"
 		variant="ghost"
+		onclick={handleMobileSidebarItemClick}
 	>
 		<Plus class="h-4 w-4" />
 
@@ -60,7 +70,7 @@
 	<Sidebar.GroupContent>
 		<Sidebar.Menu class="space-y-0.5">
 			{#each filteredConversations as conversation (conversation.id)}
-				<Sidebar.MenuItem>
+				<Sidebar.MenuItem onclick={handleMobileSidebarItemClick}>
 					<ChatSidebarConversationItem
 						conversation={{
 							id: conversation.id,

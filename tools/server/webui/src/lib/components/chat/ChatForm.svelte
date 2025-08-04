@@ -148,7 +148,7 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{inputClasses} border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl {className}"
+	class="{inputClasses} border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl backdrop-blur-md {className}"
 >
 	<ChatAttachmentsList bind:uploadedFiles {onFileRemove} class="mb-3 px-5 pt-5" />
 

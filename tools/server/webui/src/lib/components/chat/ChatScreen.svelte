@@ -22,6 +22,7 @@
 		readFileAsText,
 		svgBase64UrlToPngDataURL
 	} from '$lib/utils';
+	import { ChatHeader } from '$lib/components';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -271,9 +272,11 @@
 	</div>
 {/if}
 
+<ChatHeader />
+
 {#if !isEmpty}
 	<div
-		class="flex h-full flex-col overflow-y-auto"
+		class="flex h-full flex-col overflow-y-auto px-4"
 		bind:this={chatScrollContainer}
 		onscroll={handleScroll}
 		ondragenter={handleDragEnter}
@@ -283,13 +286,10 @@
 		role="main"
 		aria-label="Chat interface with file drop zone"
 	>
-		<ChatMessages class="mb-36" messages={activeMessages()} />
+		<ChatMessages class="mb-16 md:mb-32" messages={activeMessages()} />
 
-		<div
-			class="z-999 sticky bottom-0 mx-auto mt-auto max-w-[56rem]"
-			in:slide={{ duration: 400, axis: 'y' }}
-		>
-			<div class="bg-background m-auto min-w-[56rem] rounded-t-3xl pb-4">
+		<div class="sticky bottom-0 left-0 right-0 mt-auto" in:slide={{ duration: 400, axis: 'y' }}>
+			<div class="rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
 					showHelperText={false}

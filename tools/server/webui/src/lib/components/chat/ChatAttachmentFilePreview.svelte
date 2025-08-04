@@ -121,7 +121,9 @@
 			{getFileTypeLabel(type)}
 		</div>
 		<div class="flex flex-col">
-			<span class="text-foreground max-w-72 truncate text-sm font-medium">{name}</span>
+			<span class="text-foreground max-w-36 truncate text-sm font-medium md:max-w-72"
+				>{name}</span
+			>
 			{#if size}
 				<span class="text-muted-foreground text-xs">{formatFileSize(size)}</span>
 			{/if}

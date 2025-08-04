@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
@@ -47,11 +46,6 @@
 		onEdit?.(conversation.id);
 	}
 
-	function handleDeleteClick(event: Event) {
-		event.stopPropagation();
-		// Alert dialog will handle the actual delete confirmation
-	}
-
 	function handleConfirmDelete() {
 		onDelete?.(conversation.id);
 	}
@@ -80,7 +74,7 @@
 	<div class="actions flex items-center">
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger
-				class="flex h-6 w-6 items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
+				class="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground flex h-6 w-6 items-center justify-center rounded-md p-0 text-sm font-medium transition-colors focus:outline-none disabled:pointer-events-none disabled:opacity-50"
 				onclick={(e) => e.stopPropagation()}
 			>
 				<MoreHorizontal class="h-3 w-3" />

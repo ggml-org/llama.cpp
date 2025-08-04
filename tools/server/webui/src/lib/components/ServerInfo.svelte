@@ -9,12 +9,12 @@
 </script>
 
 {#if props}
-	<div class="flex items-center justify-center gap-3 text-sm text-muted-foreground">
+	<div class="text-muted-foreground flex items-center justify-center gap-3 text-sm">
 		<!-- Model Name -->
 		{#if model}
 			<Badge variant="outline" class="text-xs">
 				<Server class="mr-1 h-3 w-3" />
-				{model}
+				<span class="block max-w-[50vw] truncate">{model}</span>
 			</Badge>
 		{/if}
 

@@ -3,8 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { beforeNavigate } from '$app/navigation';
 	import { onDestroy } from 'svelte';
-	import ChatScreen from '$lib/components/chat/ChatScreen.svelte';
-	import ChatHeader from '$lib/components/chat/ChatHeader.svelte';
+	import { ChatScreen } from '$lib/components';
 	import {
 		chatStore,
 		activeConversation,
@@ -79,9 +78,5 @@
 <svelte:head>
 	<title>{activeConversation()?.name || 'Chat'} - llama.cpp</title>
 </svelte:head>
-
-{#if activeConversation() && (activeMessages().length > 0 || isLoading())}
-	<ChatHeader />
-{/if}
 
 <ChatScreen />

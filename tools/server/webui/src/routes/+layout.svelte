@@ -48,7 +48,12 @@
 			<ChatSidebar />
 		</Sidebar.Root>
 
-		<Sidebar.Trigger class="z-50 h-8 w-8" style="translate: 1rem 1rem" />
+		<Sidebar.Trigger
+			class="transition-left absolute h-8 w-8 duration-200 ease-linear {sidebarOpen
+				? 'md:left-[var(--sidebar-width)]'
+				: 'left-0'}"
+			style="translate: 1rem 1rem; z-index: 99999;"
+		/>
 
 		<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden">
 			{@render children?.()}
