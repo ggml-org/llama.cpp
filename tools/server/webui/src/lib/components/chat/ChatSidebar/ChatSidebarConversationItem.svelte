@@ -23,6 +23,7 @@
 	}: Props = $props();
 
 	let showDeleteDialog = $state(false);
+	let showDropdown = $state(false);
 
 	function formatLastModified(timestamp: number) {
 		const now = Date.now();
@@ -72,16 +73,18 @@
 	</div>
 
 	<div class="actions flex items-center">
-		<DropdownMenu.Root>
+		<DropdownMenu.Root bind:open={showDropdown}>
 			<DropdownMenu.Trigger
-				class="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground flex h-6 w-6 items-center justify-center rounded-md p-0 text-sm font-medium transition-colors focus:outline-none disabled:pointer-events-none disabled:opacity-50"
+				class="{showDropdown
+					? 'show-dropdown'
+					: ''} hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors focus:outline-none disabled:pointer-events-none disabled:opacity-50"
 			>
 				<MoreHorizontal class="h-3 w-3" />
 
 				<span class="sr-only">More actions</span>
 			</DropdownMenu.Trigger>
 
-			<DropdownMenu.Content align="end" class="w-48">
+			<DropdownMenu.Content align="end" class="z-999 w-48">
 				<DropdownMenu.Item onclick={handleEdit} class="flex items-center gap-2">
 					<Pencil class="h-4 w-4" />
 					Edit
@@ -124,17 +127,13 @@
 	</div>
 </button>
 
-<style lang="postcss">
-	.actions {
-		& > * {
-			width: 0;
+<style>
+	button {
+		:global([data-slot='dropdown-menu-trigger']:not([data-state='open'])) {
 			opacity: 0;
-			transition: all 0.2s ease;
-			overflow: hidden;
 		}
 
-		:global(button:hover) & > * {
-			width: auto;
+		&:is(:hover) :global([data-slot='dropdown-menu-trigger']) {
 			opacity: 1;
 		}
 	}
