@@ -14,6 +14,7 @@
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';
 	import { isLikelyTextFile, isTextFileByName, readFileAsText } from '$lib/utils/text-files';
+	import { svgBase64UrlToPngDataURL, isSvgMimeType } from '$lib/utils/svg-to-png';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -63,10 +64,23 @@
 		for (const file of files) {
 			if (file.type.startsWith('image/')) {
 				if (file.preview) {
+					let base64Url = file.preview;
+
+					if (isSvgMimeType(file.type)) {
+						try {
+							base64Url = await svgBase64UrlToPngDataURL(base64Url);
+						} catch (error) {
+							console.error(
+								'Failed to convert SVG to PNG for database storage:',
+								error
+							);
+						}
+					}
+
 					extras.push({
 						type: 'imageFile',
 						name: file.name,
-						base64Url: file.preview
+						base64Url
 					});
 				}
 			} else {
@@ -141,8 +155,20 @@
 
 			if (file.type.startsWith('image/')) {
 				const reader = new FileReader();
-				reader.onload = (e) => {
-					uploadedFile.preview = e.target?.result as string;
+				reader.onload = async (e) => {
+					let preview = e.target?.result as string;
+
+					// Convert SVG to PNG if necessary
+					if (isSvgMimeType(file.type)) {
+						try {
+							preview = await svgBase64UrlToPngDataURL(preview);
+						} catch (error) {
+							console.error('Failed to convert SVG to PNG:', error);
+							// Use original SVG preview if conversion fails
+						}
+					}
+
+					uploadedFile.preview = preview;
 					uploadedFiles = [...uploadedFiles, uploadedFile];
 				};
 				reader.readAsDataURL(file);
