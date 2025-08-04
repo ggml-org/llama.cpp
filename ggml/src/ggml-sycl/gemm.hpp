@@ -32,19 +32,31 @@ public:
         else static_assert(0);
     }
 
-    static inline void row_gemm(ggml_backend_sycl_context & ctx, bool a_trans, bool b_trans, int m, int n, int k,
-                                const void * a, dt at, const void * b, dt bt, void * c, dt ct, const queue_ptr & q) {
+    static void gemm(ggml_backend_sycl_context & ctx, int m, int n, int k,
+        const void * a, dt at, dnnl_dim_t stra0, dnnl_dim_t stra1, dnnl_dim_t stra2,
+        const void * b, dt bt, dnnl_dim_t strb0, dnnl_dim_t strb1, dnnl_dim_t strb2,
+        void * c, dt ct, const queue_ptr & q, dnnl_dim_t batches_a, dnnl_dim_t batches_b) {
+
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
-        dnnl::memory::dims a_dims = { m, k };
-        dnnl::memory::dims b_dims = { k, n };
-        dnnl::memory::dims c_dims = { m, n };
-        const auto a_in_md = dnnl::memory::desc(a_dims, at, a_trans ? tag::ba : tag::ab);
-        const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_trans ? tag::ba : tag::ab);
-        const auto c_md    = dnnl::memory::desc(c_dims, ct, tag::ab);
 
+        dnnl::memory::dims a_dims = {batches_a, m, k };
+        dnnl::memory::dims a_strides = {stra2, stra1, stra0};
+        const auto a_in_md = dnnl::memory::desc(a_dims, at, a_strides);
+
+        dnnl::memory::dims b_dims = {batches_b, k, n };
+        dnnl::memory::dims b_strides = {strb2, strb0, strb1};
+        const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_strides);
+
+        dnnl::memory::dims c_dims = { std::max(batches_a, batches_b), m, n};
+        dnnl::memory::dims c_strides = {m*n, 1,  m };
+        const auto c_md    = dnnl::memory::desc(c_dims, ct, c_strides);
         dnnl::primitive_attr primitive_attr;
         primitive_attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);
+
+#ifdef GGML_SYCL_F16
+        primitive_attr.set_fpmath_mode(dnnl::fpmath_mode::f16);
+#endif
 
         auto a_mem = dnnl::memory(a_in_md, eng, const_cast<void*>(a));
         auto b_mem = dnnl::memory(b_in_md, eng, const_cast<void*>(b));
@@ -53,15 +65,23 @@ public:
 
         auto scratchpad_md = matmul_pd.scratchpad_desc();
         auto scratchpad_mem = ctx.get_scratchpad_mem(scratchpad_md, eng, q);
+
         auto matmul_prim = dnnl::matmul(matmul_pd);
 
         std::unordered_map<int, dnnl::memory> matmul_args;
         matmul_args.insert({ DNNL_ARG_SRC, a_mem });
         matmul_args.insert({ DNNL_ARG_WEIGHTS, b_mem });
+
         matmul_args.insert({ DNNL_ARG_DST, c_mem });
         matmul_args.insert({ DNNL_ARG_SCRATCHPAD, scratchpad_mem });
 
         matmul_prim.execute(stream, matmul_args);
+    }
+
+    static void row_gemm(ggml_backend_sycl_context & ctx, int m, int n, int k,
+        const void * a, dt at, const void * b, dt bt, void * c, dt ct, const queue_ptr & q) {
+
+        gemm(ctx, m, n, k, a, at, 1, k, k * m, b, bt, 1, k, n * k, c, ct, q, 1, 1);
     }
 };
 

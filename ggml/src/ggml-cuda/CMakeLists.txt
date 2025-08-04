@@ -12,12 +12,30 @@ if (CUDAToolkit_FOUND)
         # 61     == Pascal, __dp4a instruction (per-byte integer dot product)
         # 70     == V100, FP16 tensor cores
         # 75     == Turing, int8 tensor cores
+        # 80     == Ampere, asynchronous data loading, faster tensor core instructions
+        # 86     == RTX 3000, needs CUDA v11.1
+        # 89     == RTX 4000, needs CUDA v11.8
+        #
+        # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
+        # XX-real    == compile CUDA code as device code for this specific architecture
+        # no suffix  == compile as both PTX and device code
+        #
+        # The default behavior for a non-native is to build virtual architectures as needed to cover all features needed
+        #     for best performance and to also build real architectures for the most commonly used GPUs.
         if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
             set(CMAKE_CUDA_ARCHITECTURES "native")
         elseif(GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-            set(CMAKE_CUDA_ARCHITECTURES "60;61;70;75;80")
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
+            else()
+                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
+            endif()
         else()
-            set(CMAKE_CUDA_ARCHITECTURES "50;61;70;75;80")
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
+                set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
+            else()
+                set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
+            endif()
         endif()
     endif()
     message(STATUS "Using CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
@@ -84,12 +102,12 @@ if (CUDAToolkit_FOUND)
     if (GGML_STATIC)
         if (WIN32)
             # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
-            target_link_libraries(ggml-cuda PRIVATE CUDA::cudart_static CUDA::cublas CUDA::cublasLt)
+            target_link_libraries(ggml-cuda PRIVATE CUDA::cudart_static CUDA::cublas)
         else ()
-            target_link_libraries(ggml-cuda PRIVATE  CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
+            target_link_libraries(ggml-cuda PRIVATE  CUDA::cudart_static CUDA::cublas_static)
         endif()
     else()
-        target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas CUDA::cublasLt)
+        target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas)
     endif()
 
     if (GGML_CUDA_NO_VMM)
@@ -100,7 +118,7 @@ if (CUDAToolkit_FOUND)
 
     set(CUDA_CXX_FLAGS "")
 
-    set(CUDA_FLAGS -use_fast_math)
+    set(CUDA_FLAGS -use_fast_math -extended-lambda)
 
     if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
         # Options are:

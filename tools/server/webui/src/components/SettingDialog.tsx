@@ -13,6 +13,7 @@ import {
   SquaresPlusIcon,
 } from '@heroicons/react/24/outline';
 import { OpenInNewTab } from '../utils/common';
+import { useModals } from './ModalProvider';
 
 type SettKey = keyof typeof CONFIG_DEFAULT;
 
@@ -100,6 +101,16 @@ const SETTING_SECTIONS: SettingSection[] = [
             key,
           }) as SettingFieldInput
       ),
+      {
+        type: SettingInputType.SHORT_INPUT,
+        label: 'Paste length to file',
+        key: 'pasteLongTextToFileLen',
+      },
+      {
+        type: SettingInputType.CHECKBOX,
+        label: 'Parse PDF as image instead of text',
+        key: 'pdfAsImage',
+      },
     ],
   },
   {
@@ -272,14 +283,15 @@ export default function SettingDialog({
   const [localConfig, setLocalConfig] = useState<typeof CONFIG_DEFAULT>(
     JSON.parse(JSON.stringify(config))
   );
+  const { showConfirm, showAlert } = useModals();
 
-  const resetConfig = () => {
-    if (window.confirm('Are you sure you want to reset all settings?')) {
+  const resetConfig = async () => {
+    if (await showConfirm('Are you sure you want to reset all settings?')) {
       setLocalConfig(CONFIG_DEFAULT);
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     // copy the local config to prevent direct mutation
     const newConfig: typeof CONFIG_DEFAULT = JSON.parse(
       JSON.stringify(localConfig)
@@ -292,14 +304,14 @@ export default function SettingDialog({
       const mustBeNumeric = isNumeric(CONFIG_DEFAULT[key as SettKey]);
       if (mustBeString) {
         if (!isString(value)) {
-          alert(`Value for ${key} must be string`);
+          await showAlert(`Value for ${key} must be string`);
           return;
         }
       } else if (mustBeNumeric) {
         const trimmedValue = value.toString().trim();
         const numVal = Number(trimmedValue);
         if (isNaN(numVal) || !isNumeric(numVal) || trimmedValue.length === 0) {
-          alert(`Value for ${key} must be numeric`);
+          await showAlert(`Value for ${key} must be numeric`);
           return;
         }
         // force conversion to number
@@ -307,7 +319,7 @@ export default function SettingDialog({
         newConfig[key] = numVal;
       } else if (mustBeBoolean) {
         if (!isBoolean(value)) {
-          alert(`Value for ${key} must be boolean`);
+          await showAlert(`Value for ${key} must be boolean`);
           return;
         }
       } else {
@@ -325,14 +337,22 @@ export default function SettingDialog({
   };
 
   return (
-    <dialog className={classNames({ modal: true, 'modal-open': show })}>
+    <dialog
+      className={classNames({ modal: true, 'modal-open': show })}
+      aria-label="Settings dialog"
+    >
       <div className="modal-box w-11/12 max-w-3xl">
         <h3 className="text-lg font-bold mb-6">Settings</h3>
         <div className="flex flex-col md:flex-row h-[calc(90vh-12rem)]">
           {/* Left panel, showing sections - Desktop version */}
-          <div className="hidden md:flex flex-col items-stretch pr-4 mr-4 border-r-2 border-base-200">
+          <div
+            className="hidden md:flex flex-col items-stretch pr-4 mr-4 border-r-2 border-base-200"
+            role="complementary"
+            aria-description="Settings sections"
+            tabIndex={0}
+          >
             {SETTING_SECTIONS.map((section, idx) => (
-              <div
+              <button
                 key={idx}
                 className={classNames({
                   'btn btn-ghost justify-start font-normal w-44 mb-1': true,
@@ -342,12 +362,16 @@ export default function SettingDialog({
                 dir="auto"
               >
                 {section.title}
-              </div>
+              </button>
             ))}
           </div>
 
           {/* Left panel, showing sections - Mobile version */}
-          <div className="md:hidden flex flex-row gap-2 mb-4">
+          {/* This menu is skipped on a11y, otherwise it's repeated the desktop version */}
+          <div
+            className="md:hidden flex flex-row gap-2 mb-4"
+            aria-disabled={true}
+          >
             <details className="dropdown">
               <summary className="btn bt-sm w-full m-1">
                 {SETTING_SECTIONS[sectionIdx].title}
@@ -452,10 +476,10 @@ function SettingsModalLongInput({
   label?: string;
 }) {
   return (
-    <label className="form-control mb-2">
-      <div className="label inline">{label || configKey}</div>
+    <label className="form-control">
+      <div className="label inline text-sm">{label || configKey}</div>
       <textarea
-        className="textarea textarea-bordered h-24"
+        className="textarea textarea-bordered h-24 mb-2"
         placeholder={`Default: ${CONFIG_DEFAULT[configKey] || 'none'}`}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -482,9 +506,7 @@ function SettingsModalShortInput({
     <>
       {/* on mobile, we simply show the help message here */}
       {helpMsg && (
-        <div className="block md:hidden mb-1">
-          <b>{label || configKey}</b>
-          <br />
+        <div className="block mb-1 opacity-75">
           <p className="text-xs">{helpMsg}</p>
         </div>
       )}
@@ -493,11 +515,6 @@ function SettingsModalShortInput({
           <div tabIndex={0} role="button" className="font-bold hidden md:block">
             {label || configKey}
           </div>
-          {helpMsg && (
-            <div className="dropdown-content menu bg-base-100 rounded-box z-10 w-64 p-2 shadow mt-4">
-              {helpMsg}
-            </div>
-          )}
         </div>
         <input
           type="text"

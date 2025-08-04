@@ -1,8 +1,8 @@
 #include "ggml-backend.h"
 #include "ggml-backend-impl.h"
 #include "ggml-cpu.h"
-#include "ggml-cpu-aarch64.h"
-#include "ggml-cpu-traits.h"
+#include "repack.h"
+#include "traits.h"
 #include "ggml-impl.h"
 #include "amx/amx.h"
 
@@ -11,24 +11,26 @@
 #include <vector>
 
 #ifdef GGML_USE_CPU_HBM
-#include "ggml-cpu-hbm.h"
+#    include "hbm.h"
 #endif
 
 #ifdef GGML_USE_CPU_KLEIDIAI
-#include "kleidiai/kleidiai.h"
-#endif
-
-#if defined(__APPLE__)
-#include <sys/types.h>
-#include <sys/sysctl.h>
+#    include "kleidiai/kleidiai.h"
 #endif
 
 #if defined(_WIN32)
-#define WIN32_LEAN_AND_MEAN
-#ifndef NOMINMAX
-    #define NOMINMAX
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#        define NOMINMAX
+#    endif
+#    include <windows.h>
+#else
+#    include <unistd.h>
 #endif
-#include <windows.h>
+
+#if defined(__APPLE__)
+#    include <sys/sysctl.h>
+#    include <sys/types.h>
 #endif
 
 // ggml-backend interface
@@ -49,9 +51,9 @@ std::vector<ggml_backend_buffer_type_t>& ggml_backend_cpu_get_extra_buffers_type
         }
 #endif
 
-#ifdef GGML_USE_CPU_AARCH64
-        if (ggml_backend_cpu_aarch64_buffer_type()) {
-            bufts.push_back(ggml_backend_cpu_aarch64_buffer_type());
+#ifdef GGML_USE_CPU_REPACK
+        if (ggml_backend_cpu_repack_buffer_type()) {
+            bufts.push_back(ggml_backend_cpu_repack_buffer_type());
         }
 #endif
 
@@ -70,8 +72,10 @@ static ggml_backend_buffer_type_t * ggml_backend_cpu_device_get_extra_buffers_ty
 }
 
 static bool ggml_backend_cpu_is_extra_buffer_type(ggml_backend_buffer_type_t buft) {
-    for (auto extra : ggml_backend_cpu_get_extra_buffers_type()) {
-        if (extra && extra == buft) return true;
+    for (auto * extra : ggml_backend_cpu_get_extra_buffers_type()) {
+        if (extra && extra == buft) {
+            return true;
+        }
     }
     return false;
 }
@@ -330,9 +334,18 @@ static const char * ggml_backend_cpu_device_get_description(ggml_backend_dev_t d
 }
 
 static void ggml_backend_cpu_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    // TODO
-    *free = 0;
-    *total = 0;
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    GlobalMemoryStatusEx(&status);
+    *total = status.ullTotalPhys;
+    *free = status.ullAvailPhys;
+#else
+    long pages = sysconf(_SC_PHYS_PAGES);
+    long page_size = sysconf(_SC_PAGE_SIZE);
+    *total = pages * page_size;
+    *free = *total;
+#endif
 
     GGML_UNUSED(dev);
 }
@@ -403,6 +416,7 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
 
     switch (op->op) {
         case GGML_OP_CPY:
+        case GGML_OP_SET_ROWS:
             return
                 op->type != GGML_TYPE_IQ3_XXS &&
                 op->type != GGML_TYPE_IQ3_S   &&
@@ -565,6 +579,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
         if (ggml_cpu_has_vxe()) {
             features.push_back({ "VXE", "1" });
         }
+        if (ggml_cpu_has_nnpa()) {
+            features.push_back({ "NNPA", "1" });
+        }
         if (ggml_cpu_has_wasm_simd()) {
             features.push_back({ "WASM_SIMD", "1" });
         }
@@ -583,8 +600,8 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
     #ifdef GGML_USE_CPU_KLEIDIAI
         features.push_back({ "KLEIDIAI", "1" });
     #endif
-    #ifdef GGML_USE_CPU_AARCH64
-        features.push_back({ "AARCH64_REPACK", "1" });
+    #ifdef GGML_USE_CPU_REPACK
+        features.push_back({ "REPACK", "1" });
     #endif
 
         features.push_back({ nullptr, nullptr });

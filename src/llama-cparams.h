@@ -4,13 +4,15 @@
 
 #include <cstdint>
 
+#define LLAMA_MAX_SEQ 64
+
 struct llama_cparams {
     uint32_t n_ctx;           // context size used during inference
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;
-    int      n_threads;       // number of threads to use for generation
-    int      n_threads_batch; // number of threads to use for batch processing
+    int32_t  n_threads;       // number of threads to use for generation
+    int32_t  n_threads_batch; // number of threads to use for batch processing
 
     float rope_freq_base;
     float rope_freq_scale;
@@ -30,6 +32,8 @@ struct llama_cparams {
     bool flash_attn;
     bool no_perf;
     bool warmup;
+    bool op_offload;
+    bool kv_unified;
 
     enum llama_pooling_type pooling_type;
 

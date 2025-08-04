@@ -823,6 +823,7 @@ class GGUFEditorWindow(QMainWindow):
         self.modified = False
         self.metadata_changes = {}  # Store changes to apply when saving
         self.metadata_to_remove = set()  # Store keys to remove when saving
+        self.on_metadata_changed_is_connected = False
 
         self.setup_ui()
 
@@ -941,9 +942,11 @@ class GGUFEditorWindow(QMainWindow):
             return
 
         # Disconnect to prevent triggering during loading
-        with warnings.catch_warnings():
-            warnings.filterwarnings('ignore')
-            self.metadata_table.itemChanged.disconnect(self.on_metadata_changed)
+        if self.on_metadata_changed_is_connected:
+            with warnings.catch_warnings():
+                warnings.filterwarnings('ignore')
+                self.metadata_table.itemChanged.disconnect(self.on_metadata_changed)
+            self.on_metadata_changed_is_connected = False
 
         for i, (key, field) in enumerate(self.reader.fields.items()):
             self.metadata_table.insertRow(i)
@@ -1021,6 +1024,7 @@ class GGUFEditorWindow(QMainWindow):
 
         # Reconnect after loading
         self.metadata_table.itemChanged.connect(self.on_metadata_changed)
+        self.on_metadata_changed_is_connected = True
 
     def extract_array_values(self, field: ReaderField) -> list:
         """Extract all values from an array field."""
@@ -1517,19 +1521,21 @@ class GGUFEditorWindow(QMainWindow):
                     continue
 
                 # Apply changes if any
+                sub_type = None
                 if field.name in self.metadata_changes:
                     value_type, value = self.metadata_changes[field.name]
                     if value_type == GGUFValueType.ARRAY:
                         # Handle array values
-                        element_type, array_values = value
-                        writer.add_array(field.name, array_values)
-                    else:
-                        writer.add_key_value(field.name, value, value_type)
+                        sub_type, value = value
                 else:
                     # Copy original value
                     value = field.contents()
-                    if value is not None and field.types:
-                        writer.add_key_value(field.name, value, field.types[0])
+                    value_type = field.types[0]
+                    if value_type == GGUFValueType.ARRAY:
+                        sub_type = field.types[-1]
+
+                if value is not None:
+                    writer.add_key_value(field.name, value, value_type, sub_type=sub_type)
 
             # Add new metadata
             for key, (value_type, value) in self.metadata_changes.items():
@@ -1537,7 +1543,12 @@ class GGUFEditorWindow(QMainWindow):
                 if self.reader.get_field(key) is not None:
                     continue
 
-                writer.add_key_value(key, value, value_type)
+                sub_type = None
+                if value_type == GGUFValueType.ARRAY:
+                    # Handle array values
+                    sub_type, value = value
+
+                writer.add_key_value(key, value, value_type, sub_type=sub_type)
 
             # Add tensors (including data)
             for tensor in self.reader.tensors:

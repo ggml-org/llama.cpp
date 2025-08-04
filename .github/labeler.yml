@@ -1,10 +1,4 @@
 # https://github.com/actions/labeler
-Kompute:
-    - changed-files:
-        - any-glob-to-any-file:
-            - ggml/include/ggml-kompute.h
-            - ggml/src/ggml-kompute/**
-            - README-kompute.md
 Apple Metal:
     - changed-files:
         - any-glob-to-any-file:
@@ -86,3 +80,15 @@ nix:
 embedding:
     - changed-files:
         - any-glob-to-any-file: examples/embedding/
+
+Ascend NPU:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-cann.h
+            - ggml/src/ggml-cann/**
+            - docs/backend/CANN.md
+OpenCL:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-opencl.h
+            - ggml/src/ggml-opencl/**

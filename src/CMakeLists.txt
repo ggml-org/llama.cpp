@@ -14,15 +14,20 @@ add_library(llama
             llama-batch.cpp
             llama-chat.cpp
             llama-context.cpp
+            llama-cparams.cpp
             llama-grammar.cpp
             llama-graph.cpp
             llama-hparams.cpp
             llama-impl.cpp
             llama-io.cpp
-            llama-kv-cache.cpp
+            llama-kv-cache-unified.cpp
+            llama-kv-cache-unified-iswa.cpp
             llama-memory.cpp
+            llama-memory-hybrid.cpp
+            llama-memory-recurrent.cpp
             llama-mmap.cpp
             llama-model-loader.cpp
+            llama-model-saver.cpp
             llama-model.cpp
             llama-quant.cpp
             llama-sampling.cpp

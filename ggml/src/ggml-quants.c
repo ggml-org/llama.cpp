@@ -19,12 +19,6 @@
 #define GROUP_MAX_EPS_IQ1_M 1e-7f
 #define GROUP_MAX_EPS_IQ1_S 1e-12f
 
-#if defined(_MSC_VER)
-// disable "possible loss of data" to avoid warnings for hundreds of casts
-// we should just be careful :)
-#pragma warning(disable: 4244 4267)
-#endif
-
 #define UNUSED GGML_UNUSED
 
 // reference implementation for deterministic creation of model files
@@ -574,14 +568,14 @@ static float make_qkx2_quants(int n, int nmax, const float * GGML_RESTRICT x, co
     }
     float iscale = nmax/(max - min);
     float scale = 1/iscale;
-    float best_mad = 0;
+    float best_error = 0;
     for (int i = 0; i < n; ++i) {
         int l = nearest_int(iscale*(x[i] - min));
         L[i] = MAX(0, MIN(nmax, l));
         float diff = scale * L[i] + min - x[i];
         diff = use_mad ? fabsf(diff) : diff * diff;
         float w = weights[i];
-        best_mad += w * diff;
+        best_error += w * diff;
     }
     if (nstep < 1) {
         *the_min = -min;
@@ -607,18 +601,18 @@ static float make_qkx2_quants(int n, int nmax, const float * GGML_RESTRICT x, co
                 this_min = 0;
                 this_scale = sum_xl / sum_l2;
             }
-            float mad = 0;
+            float cur_error = 0;
             for (int i = 0; i < n; ++i) {
                 float diff = this_scale * Laux[i] + this_min - x[i];
                 diff = use_mad ? fabsf(diff) : diff * diff;
                 float w = weights[i];
-                mad += w * diff;
+                cur_error += w * diff;
             }
-            if (mad < best_mad) {
+            if (cur_error < best_error) {
                 for (int i = 0; i < n; ++i) {
                     L[i] = Laux[i];
                 }
-                best_mad = mad;
+                best_error = cur_error;
                 scale = this_scale;
                 min = this_min;
             }
@@ -2430,8 +2424,6 @@ void dequantize_row_iq1_m(const block_iq1_m * GGML_RESTRICT x, float * GGML_REST
         }
     }
 }
-
-static const int8_t kvalues_iq4nl[16] = {-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
 
 void dequantize_row_iq4_nl(const block_iq4_nl * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     assert(k % QK4_NL == 0);

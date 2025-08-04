@@ -234,6 +234,8 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
     markdown_content += '## Key Value Metadata Store\n\n'
     markdown_content += f'There are {len(reader.fields)} key-value pairs in this file\n'
     markdown_content += '\n'
+    total_model_bytes = 0
+    total_model_elements = 0
 
     kv_dump_table: list[dict[str, str | int]] = []
     for n, field in enumerate(reader.fields.values(), 1):
@@ -377,6 +379,8 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             tensors = tensor_groups[group]
             group_elements = sum(tensor.n_elements for tensor in tensors)
             group_percentage = group_elements / total_elements * 100
+            total_group_bytes = 0
+            total_group_elements = 0
             markdown_content += f"### <a name=\"{group.replace('.', '_')}\">{translate_tensor_name(group)} Tensor Group : {element_count_rounded_notation(group_elements)} Elements</a>\n\n"
 
             # Precalculate column sizing for visual consistency
@@ -397,7 +401,13 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
                 element_count_est = f"({element_count_rounded_notation(tensor.n_elements):>{prettify_element_est_count_size}})"
                 element_count_string = f"{element_count_est} {tensor.n_elements:>{prettify_element_count_size}}"
                 type_name_string = f"{tensor.tensor_type.name}"
-                tensor_dump_table.append({"t_id":tensor_name_to_key[tensor.name], "layer_name":tensor.name, "human_layer_name":human_friendly_name, "element_count":element_count_string, "pretty_dimension":pretty_dimension, "tensor_type":type_name_string})
+                if tensor.n_elements > 0:
+                    bpw = (tensor.n_bytes * 8) / tensor.n_elements
+                else:
+                    bpw = float('nan')
+                tensor_dump_table.append({"t_id":tensor_name_to_key[tensor.name], "layer_name":tensor.name, "human_layer_name":human_friendly_name, "element_count":element_count_string, "pretty_dimension":pretty_dimension, "tensor_type":type_name_string, "bpw": f"{bpw:.4f}"})
+                total_group_bytes += tensor.n_bytes
+                total_group_elements += tensor.n_elements
 
             tensor_dump_table_header_map = [
                 {'key_name':'t_id',             'header_name':'T_ID',                             'align':'right'},
@@ -406,6 +416,7 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
                 {'key_name':'element_count',    'header_name':'Elements',                         'align':'left'},
                 {'key_name':'pretty_dimension', 'header_name':'Shape',                            'align':'left'},
                 {'key_name':'tensor_type',      'header_name':'Type',                             'align':'left'},
+                {'key_name':'bpw',              'header_name':'BPW',                              'align':'right'},
             ]
 
             markdown_content += markdown_table_with_alignment_support(tensor_dump_table_header_map, tensor_dump_table)
@@ -413,8 +424,20 @@ def dump_markdown_metadata(reader: GGUFReader, args: argparse.Namespace) -> None
             markdown_content += "\n"
             markdown_content += f"- Total elements in {group}: ({element_count_rounded_notation(group_elements):>4}) {group_elements}\n"
             markdown_content += f"- Percentage of total elements: {group_percentage:.2f}%\n"
+            if total_group_elements > 0:
+                total_group_bpw = (total_group_bytes * 8) / total_group_elements
+                markdown_content += f"- Bits per Weight (BPW) for {group}: {total_group_bpw:.4f} bits\n"
+            else:
+                markdown_content += f"- Bits per Weight (BPW) for {group}: undefined (no elements)\n"
             markdown_content += "\n\n"
+            total_model_bytes += total_group_bytes
+            total_model_elements += total_group_elements
 
+    if total_model_elements > 0:
+        total_model_bpw = (total_model_bytes * 8) / total_model_elements
+        markdown_content += f"Total BPW for {os.path.basename(args.model)}: {total_model_bpw:.4f} bits"
+    else:
+        markdown_content += f"Total BPW for {os.path.basename(args.model)}: undefined (no elements)"
     print(markdown_content)  # noqa: NP100
 
 

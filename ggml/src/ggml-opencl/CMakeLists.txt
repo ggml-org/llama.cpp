@@ -55,14 +55,18 @@ endfunction()
 
 set(GGML_OPENCL_KERNELS
     add
+    argsort
     clamp
     cpy
     cvt
     diag_mask_inf
+    div
     gelu
     gemv_noshuffle_general
     gemv_noshuffle
     get_rows
+    glu
+    group_norm
     im2col_f32
     im2col_f16
     mul_mat_Ab_Bi_8x4
@@ -77,18 +81,34 @@ set(GGML_OPENCL_KERNELS
     mul_mv_q4_0_f32_1d_8x_flat
     mul_mv_q4_0_f32_1d_16x_flat
     mul_mv_q6_k
+    mul_mv_id_q4_0_f32_8x_flat
+    mul_mm_f32_f32_l4_lm
+    mul_mm_f16_f32_l4_lm
     mul
     norm
     relu
     rms_norm
     rope
     scale
+    set_rows
+    sigmoid
     silu
     softmax_4_f32
     softmax_4_f16
     softmax_f32
     softmax_f16
+    sub
+    sum_rows
     transpose
+    concat
+    tsembd
+    upscale
+    tanh
+    pad
+    repeat
+    mul_mat_f16_f32
+    conv2d
+    conv2d_f16_f32
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})

@@ -45,19 +45,14 @@ static void timestep_embedding_f32_sycl(
     int num_blocks = (half_ceil + SYCL_TIMESTEP_EMBEDDING_BLOCK_SIZE - 1) / SYCL_TIMESTEP_EMBEDDING_BLOCK_SIZE;
     sycl::range<3> block_dims(1, 1, SYCL_TIMESTEP_EMBEDDING_BLOCK_SIZE);
     sycl::range<3> gridDim(1, ne00, num_blocks);
-    stream->parallel_for(
-        sycl::nd_range<3>(
-            gridDim * block_dims, block_dims),
-        [=](sycl::nd_item<3> item_ct1) {
-            timestep_embedding_f32(
-                x, dst, nb1, dim, max_period, item_ct1
-            );
-        });
+    sycl_parallel_for(stream, sycl::nd_range<3>(gridDim * block_dims, block_dims), [=](sycl::nd_item<3> item_ct1) {
+        timestep_embedding_f32(x, dst, nb1, dim, max_period, item_ct1);
+    });
 }
 
 void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    const ggml_tensor *src0 = dst->src[0];
-    const ggml_tensor *src1 = dst->src[1];
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    const ggml_tensor *  src0   = dst->src[0];
     const float * src0_d = (const float *)src0->data;
     float * dst_d = (float *)dst->data;
     dpct::queue_ptr stream = ctx.stream();
@@ -69,5 +64,4 @@ void ggml_sycl_op_timestep_embedding(ggml_backend_sycl_context & ctx, ggml_tenso
     const int max_period = dst->op_params[1];
 
     timestep_embedding_f32_sycl(src0_d, dst_d, src0->ne[0], dst->nb[1], dim, max_period, stream);
-    GGML_UNUSED(src1);
 }

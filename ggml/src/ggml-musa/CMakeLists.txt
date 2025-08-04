@@ -27,12 +27,19 @@ if (MUSAToolkit_FOUND)
 
     file(GLOB   GGML_HEADERS_MUSA "../ggml-cuda/*.cuh")
     list(APPEND GGML_HEADERS_MUSA "../../include/ggml-cuda.h")
+    list(APPEND GGML_HEADERS_MUSA "../ggml-musa/mudnn.cuh")
 
     file(GLOB   GGML_SOURCES_MUSA "../ggml-cuda/*.cu")
     file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-mma*.cu")
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
     file(GLOB   SRCS "../ggml-cuda/template-instances/mmq*.cu")
     list(APPEND GGML_SOURCES_MUSA ${SRCS})
+
+    if (GGML_MUSA_MUDNN_COPY)
+        file(GLOB   SRCS "../ggml-musa/*.cu")
+        list(APPEND GGML_SOURCES_MUSA ${SRCS})
+        add_compile_definitions(GGML_MUSA_MUDNN_COPY)
+    endif()
 
     if (GGML_CUDA_FA_ALL_QUANTS)
         file(GLOB   SRCS "../ggml-cuda/template-instances/fattn-vec*.cu")
@@ -62,10 +69,16 @@ if (MUSAToolkit_FOUND)
                             )
 
     # TODO: do not use CUDA definitions for MUSA
-    target_compile_definitions(ggml PUBLIC GGML_USE_CUDA)
+    if (NOT GGML_BACKEND_DL)
+        target_compile_definitions(ggml PUBLIC GGML_USE_CUDA)
+    endif()
 
     add_compile_definitions(GGML_USE_MUSA)
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
+
+    if (GGML_MUSA_GRAPHS)
+        add_compile_definitions(GGML_MUSA_GRAPHS)
+    endif()
 
     if (GGML_CUDA_FORCE_MMQ)
         add_compile_definitions(GGML_CUDA_FORCE_MMQ)
@@ -93,8 +106,15 @@ if (MUSAToolkit_FOUND)
 
     if (GGML_STATIC)
         target_link_libraries(ggml-musa PRIVATE MUSA::musart_static MUSA::mublas_static)
+        # TODO: mudnn has not provided static libraries yet
+        # if (GGML_MUSA_MUDNN_COPY)
+        #     target_link_libraries(ggml-musa PRIVATE mudnn_static)
+        # endif()
     else()
         target_link_libraries(ggml-musa PRIVATE MUSA::musart MUSA::mublas)
+        if (GGML_MUSA_MUDNN_COPY)
+            target_link_libraries(ggml-musa PRIVATE mudnn)
+        endif()
     endif()
 
     if (GGML_CUDA_NO_VMM)

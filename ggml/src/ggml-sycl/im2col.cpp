@@ -26,7 +26,7 @@ static void im2col_kernel(const float * x, T * dst, int64_t batch_offset, int64_
 
     // make each work-item deal with more elements since sycl global range can not exceed max int
     for (int64_t i = global_id; i < pelements; i += (work_group_size * item_ct1.get_group_range(2))) {
-        const int64_t ksize = OW * (KH > 1 ? KW : 1);
+        const int64_t ksize = OW * KH;
         const int64_t kx    = i / ksize;
         const int64_t kd    = kx * ksize;
         const int64_t ky    = (i - kd) / OW;
@@ -70,7 +70,7 @@ static void im2col_sycl_internal(const float * x, T * dst, int64_t IW, int64_t I
 
     const int64_t CHW = IC * KH * KW;
 
-    stream->parallel_for(sycl::nd_range<3>(block_nums * local_range, local_range), [=](sycl::nd_item<3> item_ct1) {
+    sycl_parallel_for(stream, sycl::nd_range<3>(block_nums * local_range, local_range), [=](sycl::nd_item<3> item_ct1) {
         im2col_kernel<T>(x, dst, batch_offset, offset_delta, IC, IW, IH, OH, OW, KW, KH, parallel_elements, CHW, s0, s1,
                          p0, p1, d0, d1, item_ct1);
     });

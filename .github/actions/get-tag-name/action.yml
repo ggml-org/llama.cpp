@@ -1,0 +1,22 @@
+name: "Determine tag name"
+description: "Determine the tag name to use for a release"
+outputs:
+  name:
+    description: "The name of the tag"
+    value: ${{ steps.tag.outputs.name }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Determine tag name
+      id: tag
+      shell: bash
+      run: |
+        BUILD_NUMBER="$(git rev-list --count HEAD)"
+        SHORT_HASH="$(git rev-parse --short=7 HEAD)"
+        if [[ "${{ env.BRANCH_NAME }}" == "master" ]]; then
+          echo "name=b${BUILD_NUMBER}" >> $GITHUB_OUTPUT
+        else
+          SAFE_NAME=$(echo "${{ env.BRANCH_NAME }}" | tr '/' '-')
+          echo "name=${SAFE_NAME}-b${BUILD_NUMBER}-${SHORT_HASH}" >> $GITHUB_OUTPUT
+        fi

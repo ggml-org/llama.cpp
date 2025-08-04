@@ -4,21 +4,25 @@ import Sidebar from './components/Sidebar';
 import { AppContextProvider, useAppContext } from './utils/app.context';
 import ChatScreen from './components/ChatScreen';
 import SettingDialog from './components/SettingDialog';
+import { Toaster } from 'react-hot-toast';
+import { ModalProvider } from './components/ModalProvider';
 
 function App() {
   return (
-    <HashRouter>
-      <div className="flex flex-row drawer lg:drawer-open">
-        <AppContextProvider>
-          <Routes>
-            <Route element={<AppLayout />}>
-              <Route path="/chat/:convId" element={<ChatScreen />} />
-              <Route path="*" element={<ChatScreen />} />
-            </Route>
-          </Routes>
-        </AppContextProvider>
-      </div>
-    </HashRouter>
+    <ModalProvider>
+      <HashRouter>
+        <div className="flex flex-row drawer lg:drawer-open">
+          <AppContextProvider>
+            <Routes>
+              <Route element={<AppLayout />}>
+                <Route path="/chat/:convId" element={<ChatScreen />} />
+                <Route path="*" element={<ChatScreen />} />
+              </Route>
+            </Routes>
+          </AppContextProvider>
+        </div>
+      </HashRouter>
+    </ModalProvider>
   );
 }
 
@@ -27,19 +31,20 @@ function AppLayout() {
   return (
     <>
       <Sidebar />
-      <div
-        className="drawer-content grow flex flex-col h-screen w-screen mx-auto px-4 overflow-auto bg-base-100"
+      <main
+        className="drawer-content grow flex flex-col h-screen mx-auto px-4 overflow-auto bg-base-100"
         id="main-scroll"
       >
         <Header />
         <Outlet />
-      </div>
+      </main>
       {
         <SettingDialog
           show={showSettings}
           onClose={() => setShowSettings(false)}
         />
       }
+      <Toaster />
     </>
   );
 }
