@@ -31,6 +31,7 @@ string(REGEX MATCH "[0-9]+[a-zA-Z]" SOC_TYPE_MAJOR_SN "${SOC_VERSION}")
 set(SOC_TYPE_COMPILE_OPTION "ASCEND_${SOC_TYPE_MAJOR_SN}")
 string(TOUPPER ${SOC_TYPE_COMPILE_OPTION} SOC_TYPE_COMPILE_OPTION)
 message(STATUS "CANN: SOC_VERSION =  ${SOC_VERSION}")
+option(USE_CANN_GRAPH "Enable CANN graph execution (ACL graph mode)" OFF)
 
 if (CANN_INSTALL_DIR)
     # Only Support Linux.
@@ -67,6 +68,13 @@ if (CANN_INSTALL_DIR)
     target_link_directories(ggml-cann PRIVATE ${CANN_INSTALL_DIR}/lib64)
 
     target_compile_definitions(ggml-cann PRIVATE "-D${SOC_TYPE_COMPILE_OPTION}")
+
+    if (USE_CANN_GRAPH)
+        target_compile_definitions(ggml-cann PRIVATE USE_CANN_GRAPH)
+        message(STATUS "CANN: USE_CANN_GRAPH is enabled.")
+    else()
+        message(STATUS "CANN: USE_CANN_GRAPH is disabled.")
+    endif()
 
     message(STATUS "CANN: CANN_INCLUDE_DIRS =  ${CANN_INCLUDE_DIRS}")
     message(STATUS "CANN: CANN_LIBRARIES =  ${CANN_LIBRARIES}")

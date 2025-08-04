@@ -337,6 +337,29 @@ private:
     int32_t device_;
 };
 
+#ifdef USE_CANN_GRAPH
+struct ggml_graph_node_properties {
+    void * node_address;
+    ggml_op node_op;
+    int64_t ne[GGML_MAX_DIMS];
+    size_t nb[GGML_MAX_DIMS];
+    void * src_address[GGML_MAX_SRC];
+    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+};
+
+struct ggml_cann_graph {
+    ~ggml_cann_graph() {
+        if (graph != nullptr) {
+            aclmdlRIDestroy(graph);
+        }
+    }
+
+    aclmdlRI graph = nullptr;
+
+    std::vector<ggml_graph_node_properties> ggml_graph_properties;
+};
+#endif  // USE_CANN_GRAPH
+
 /**
  * @brief Context for managing CANN backend operations.
  */
@@ -345,6 +368,10 @@ struct ggml_backend_cann_context {
     std::string name;                /**< Name of the device. */
     std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+#ifdef USE_CANN_GRAPH
+    std::unique_ptr<ggml_cann_graph> cann_graph; /**< Cached CANN ACL graph used for executing the current ggml computation graph. */
+    bool set_row_log = true;
+#endif
     cann_task_queue task_queue;
     bool async_mode;
 
