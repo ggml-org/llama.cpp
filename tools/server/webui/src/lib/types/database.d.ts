@@ -32,7 +32,15 @@ export interface DatabaseMessageExtraTextFile {
 	content: string;
 }
 
-export type DatabaseMessageExtra = DatabaseMessageExtraImageFile | DatabaseMessageExtraTextFile | DatabaseMessageExtraAudioFile;
+export interface DatabaseMessageExtraPdfFile {
+	type: 'pdfFile';
+	name: string;
+	content: string; // Text content extracted from PDF
+	images?: string[]; // Optional: PDF pages as base64 images
+	processedAsImages: boolean; // Whether PDF was processed as images
+}
+
+export type DatabaseMessageExtra = DatabaseMessageExtraImageFile | DatabaseMessageExtraTextFile | DatabaseMessageExtraAudioFile | DatabaseMessageExtraPdfFile;
 
 export interface DatabaseMessage {
 	id: string;

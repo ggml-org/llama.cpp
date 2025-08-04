@@ -88,6 +88,16 @@
 					type: attachment.mimeType || 'audio',
 					isImage: false
 				});
+			} else if (attachment.type === 'pdfFile') {
+				items.push({
+					id: `attachment-${index}`,
+					name: attachment.name,
+					type: 'application/pdf',
+					isImage: false,
+					attachment,
+					attachmentIndex: index,
+					textContent: attachment.content
+				});
 			}
 		}
 

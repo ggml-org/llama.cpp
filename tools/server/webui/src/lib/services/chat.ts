@@ -11,7 +11,8 @@ import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraImageFile,
-	DatabaseMessageExtraTextFile
+	DatabaseMessageExtraTextFile,
+	DatabaseMessageExtraPdfFile
 } from '$lib/types/database'
 
 export class ChatService {
@@ -219,6 +220,26 @@ export class ChatService {
 				type: 'text',
 				text: `\n\n--- File: ${textFile.name} ---\n${textFile.content}`
 			});
+		}
+
+		// Add PDF files as text content
+		const pdfFiles = message.extra.filter((extra): extra is DatabaseMessageExtraPdfFile => extra.type === 'pdfFile');
+		for (const pdfFile of pdfFiles) {
+			if (pdfFile.processedAsImages && pdfFile.images) {
+				// If PDF was processed as images, add each page as an image
+				for (let i = 0; i < pdfFile.images.length; i++) {
+					contentParts.push({
+						type: 'image_url',
+						image_url: { url: pdfFile.images[i] }
+					});
+				}
+			} else {
+				// If PDF was processed as text, add as text content
+				contentParts.push({
+					type: 'text',
+					text: `\n\n--- PDF File: ${pdfFile.name} ---\n${pdfFile.content}`
+				});
+			}
 		}
 
 		return {

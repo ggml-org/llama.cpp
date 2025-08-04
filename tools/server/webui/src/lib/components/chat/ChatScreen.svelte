@@ -13,8 +13,15 @@
 	import { Upload } from '@lucide/svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';
-	import { isLikelyTextFile, isTextFileByName, readFileAsText } from '$lib/utils/text-files';
-	import { svgBase64UrlToPngDataURL, isSvgMimeType } from '$lib/utils/svg-to-png';
+	import {
+		convertPDFToText,
+		isLikelyTextFile,
+		isPdfMimeType,
+		isSvgMimeType,
+		isTextFileByName,
+		readFileAsText,
+		svgBase64UrlToPngDataURL
+	} from '$lib/utils';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -82,6 +89,21 @@
 						name: file.name,
 						base64Url
 					});
+				}
+			} else if (isPdfMimeType(file.type)) {
+				try {
+					// For now, always process PDF as text
+					// todo: Add settings to allow PDF as images for vision models
+					const content = await convertPDFToText(file.file);
+
+					extras.push({
+						type: 'pdfFile',
+						name: file.name,
+						content: content,
+						processedAsImages: false
+					});
+				} catch (error) {
+					console.error(`Failed to process PDF file ${file.name}:`, error);
 				}
 			} else {
 				try {
@@ -186,6 +208,10 @@
 					uploadedFiles = [...uploadedFiles, uploadedFile];
 				};
 				reader.readAsText(file);
+			} else if (isPdfMimeType(file.type)) {
+				// For PDF files, we'll process them during conversion to extras
+				// Just add them to the list for now
+				uploadedFiles = [...uploadedFiles, uploadedFile];
 			} else {
 				uploadedFiles = [...uploadedFiles, uploadedFile];
 			}
