@@ -58,8 +58,9 @@ struct llama_model_loader {
         }
     };
 
-    static const int TENSOR_NOT_REQUIRED = 1;
-    static const int TENSOR_DUPLICATED   = 2;
+    static const int TENSOR_NOT_REQUIRED = 1 << 1;
+    static const int TENSOR_DUPLICATED   = 1 << 2;
+    static const int TENSOR_SKIP         = 1 << 3;
 
     int n_kv      = 0;
     int n_tensors = 0;
