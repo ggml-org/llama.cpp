@@ -938,7 +938,9 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         int64_t nval = ggml_nelements(in_sum2);
         if (e.values.empty()) {
             e.values.resize(nval, 0.0f);
-            e.in_sum.resize(nval, 0.0f);
+            if (in_sum != nullptr) {
+                e.in_sum.resize(nval, 0.0f);
+            }
         } else if ((size_t) nval != e.values.size()) {
             LOG_ERR("%s: mismatched sums size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) nval, e.values.size());
             gguf_free(ctx_gguf);
