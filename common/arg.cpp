@@ -2648,6 +2648,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--output-format"}, "{gguf,dat}",
+        string_format("output format for imatrix file (default: %s)", params.imat_dat ? "dat" : "gguf"),
+        [](common_params & params, const std::string & value) {
+            /**/ if (value == "gguf") { params.imat_dat = false; }
+            else if (value == "dat")  { params.imat_dat = true;  }
+            else { throw std::invalid_argument("invalid output format"); }
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--save-frequency"}, "N",
         string_format("save an imatrix copy every N iterations (default: %d)", params.n_save_freq),
         [](common_params & params, int value) {
