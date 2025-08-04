@@ -9,7 +9,7 @@
 		stopGeneration
 	} from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
-	import { fly, slide } from 'svelte/transition';
+	import { fade, fly, slide } from 'svelte/transition';
 	import { Upload } from '@lucide/svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';
@@ -288,7 +288,7 @@
 	>
 		<ChatMessages class="mb-16 md:mb-24" messages={activeMessages()} />
 
-		<div class="sticky bottom-0 left-0 right-0 mt-auto" in:slide={{ duration: 400, axis: 'y' }}>
+		<div class="sticky bottom-0 left-0 right-0 mt-auto" in:slide={{ duration: 150, axis: 'y' }}>
 			<div class="conversation-chat-form rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
@@ -313,20 +313,17 @@
 		aria-label="Welcome screen with file drop zone"
 	>
 		<div class="w-full max-w-2xl px-4">
-			<div class="mb-8 text-center" in:fly={{ y: -30, duration: 600 }}>
+			<div class="mb-8 text-center" in:fade={{ duration: 300 }}>
 				<h1 class="mb-2 text-3xl font-semibold tracking-tight">llama.cpp</h1>
 
 				<p class="text-muted-foreground text-lg">How can I help you today?</p>
 			</div>
 
-			<div
-				class="mb-6 flex justify-center"
-				in:slide={{ duration: 500, delay: 300, axis: 'y' }}
-			>
+			<div class="mb-6 flex justify-center" in:fly={{ y: 10, duration: 300, delay: 200 }}>
 				<ServerInfo />
 			</div>
 
-			<div in:slide={{ duration: 600, delay: 500, axis: 'y' }}>
+			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
 					isLoading={isLoading()}
 					showHelperText={true}
