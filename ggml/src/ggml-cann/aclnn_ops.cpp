@@ -777,9 +777,9 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
         src_reshape_nb[i] = src_reshape_nb[i - 1] * dst->ne[i - 1];
     }
-    
-    aclTensor* trans_acl_src = ggml_cann_create_tensor(src_trans_buffer, 
-        ggml_cann_type_mapping(src0->type),ggml_type_size(src0->type), 
+
+    aclTensor* trans_acl_src = ggml_cann_create_tensor(src_trans_buffer,
+        ggml_cann_type_mapping(src0->type),ggml_type_size(src0->type),
         dst->ne, src_reshape_nb, GGML_MAX_DIMS, ACL_FORMAT_ND);
     aclTensor* acl_dst = ggml_cann_create_tensor(dst);
 
