@@ -286,10 +286,10 @@
 		role="main"
 		aria-label="Chat interface with file drop zone"
 	>
-		<ChatMessages class="mb-16 md:mb-32" messages={activeMessages()} />
+		<ChatMessages class="mb-16 md:mb-24" messages={activeMessages()} />
 
 		<div class="sticky bottom-0 left-0 right-0 mt-auto" in:slide={{ duration: 400, axis: 'y' }}>
-			<div class="rounded-t-3xl pb-4">
+			<div class="conversation-chat-form rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
 					showHelperText={false}
@@ -340,3 +340,21 @@
 		</div>
 	</div>
 {/if}
+
+<style>
+	.conversation-chat-form {
+		position: relative;
+
+		&::after {
+			content: '';
+			position: fixed;
+			bottom: 0;
+			z-index: -1;
+			left: 0;
+			right: 0;
+			width: 100%;
+			height: 2.375rem;
+			background-color: var(--background);
+		}
+	}
+</style>

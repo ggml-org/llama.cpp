@@ -75,17 +75,20 @@
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger
 				class="hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground flex h-6 w-6 items-center justify-center rounded-md p-0 text-sm font-medium transition-colors focus:outline-none disabled:pointer-events-none disabled:opacity-50"
-				onclick={(e) => e.stopPropagation()}
 			>
 				<MoreHorizontal class="h-3 w-3" />
+
 				<span class="sr-only">More actions</span>
 			</DropdownMenu.Trigger>
+
 			<DropdownMenu.Content align="end" class="w-48">
 				<DropdownMenu.Item onclick={handleEdit} class="flex items-center gap-2">
 					<Pencil class="h-4 w-4" />
 					Edit
 				</DropdownMenu.Item>
+
 				<DropdownMenu.Separator />
+
 				<DropdownMenu.Item
 					variant="destructive"
 					class="flex items-center gap-2"
@@ -127,9 +130,10 @@
 			width: 0;
 			opacity: 0;
 			transition: all 0.2s ease;
+			overflow: hidden;
 		}
 
-		button:hover & > * {
+		:global(button:hover) & > * {
 			width: auto;
 			opacity: 1;
 		}
