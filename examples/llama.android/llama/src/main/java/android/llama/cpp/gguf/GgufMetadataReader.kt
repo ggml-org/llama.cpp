@@ -1,6 +1,8 @@
 package android.llama.cpp.gguf
 
+import android.content.Context
 import android.llama.cpp.internal.gguf.GgufMetadataReaderImpl
+import android.net.Uri
 import java.io.IOException
 
 /**
@@ -9,12 +11,22 @@ import java.io.IOException
  */
 interface GgufMetadataReader {
     /**
+     * Reads the magic number from the specified file path.
+     *
+     * @param context Context for obtaining ContentResolver
+     * @param uri Uri to the GGUF file provided by ContentProvider
+     * @return true if file is valid GGUF, otherwise false
+     * @throws InvalidFileFormatException if file format is invalid
+     */
+    suspend fun ensureSourceFileFormat(context: Context, uri: Uri): Boolean
+
+    /**
      * Reads and parses GGUF metadata from the specified file path.
      *
      * @param path The absolute path to the GGUF file
      * @return Structured metadata extracted from the file
-     * @throws IOException if file cannot be read
-     * @throws IllegalArgumentException if file format is invalid
+     * @throws IOException if file is damaged or cannot be read
+     * @throws InvalidFileFormatException if file format is invalid
      */
     suspend fun readStructuredMetadata(path: String): GgufMetadata
 
@@ -50,3 +62,5 @@ interface GgufMetadataReader {
         )
     }
 }
+
+class InvalidFileFormatException : IOException()

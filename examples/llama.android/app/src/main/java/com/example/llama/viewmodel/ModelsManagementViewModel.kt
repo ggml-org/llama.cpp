@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Context.RECEIVER_EXPORTED
 import android.content.Intent
 import android.content.IntentFilter
+import android.llama.cpp.gguf.InvalidFileFormatException
 import android.net.Uri
 import android.util.Log
 import androidx.lifecycle.ViewModel
@@ -208,13 +209,18 @@ class ModelsManagementViewModel @Inject constructor(
                 _managementState.value = Importation.Importing(progress, fileName, fileSize)
             }
             _managementState.value = Importation.Success(model)
+        } catch (_: InvalidFileFormatException) {
+            _managementState.value = Importation.Error(
+                message = "Not a valid GGUF model!",
+            )
         } catch (e: InsufficientStorageException) {
             _managementState.value = Importation.Error(
-                message = e.message ?: "Insufficient storage space to import $uri",
+                message = e.message ?: "Insufficient storage space to import $fileName",
             )
         } catch (e: Exception) {
+            Log.e(TAG, "Unknown exception importing $fileName", e)
             _managementState.value = Importation.Error(
-                message = e.message ?: "Unknown error importing $uri",
+                message = e.message ?: "Unknown error importing $fileName",
             )
         }
     }
@@ -376,6 +382,7 @@ sealed class ModelManagementState {
         data class Confirming(val uri: Uri, val fileName: String, val fileSize: Long) : Importation()
         data class Importing(val progress: Float = 0f, val fileName: String, val fileSize: Long, val isCancelling: Boolean = false) : Importation()
         data class Success(val model: ModelInfo) : Importation()
+        // TODO-han.yin: Add an optional explanation URL for more info!
         data class Error(val message: String) : Importation()
     }
 

@@ -1,7 +1,10 @@
 package android.llama.cpp.internal.gguf
 
+import android.content.Context
 import android.llama.cpp.gguf.GgufMetadata
 import android.llama.cpp.gguf.GgufMetadataReader
+import android.llama.cpp.gguf.InvalidFileFormatException
+import android.net.Uri
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -25,7 +28,7 @@ internal class GgufMetadataReaderImpl(
         UINT32(4), INT32(5), FLOAT32(6), BOOL(7),
         STRING(8), ARRAY(9), UINT64(10), INT64(11), FLOAT64(12);
         companion object {
-            private val codeMap = values().associateBy(MetadataType::code)
+            private val codeMap = entries.associateBy(MetadataType::code)
             fun fromCode(code: Int): MetadataType = codeMap[code]
                 ?: throw IOException("Unknown metadata value type code: $code")
         }
@@ -63,6 +66,23 @@ internal class GgufMetadataReaderImpl(
         is MetadataValue.Int64     -> value
         is MetadataValue.Float64   -> value
         is MetadataValue.ArrayVal  -> elements.map { it.toPrimitive() }
+    }
+
+    /**
+     * Reads the magic number from the specified file path.
+     *
+     * @param context Context for obtaining ContentResolver
+     * @param uri Uri to the GGUF file provided by ContentProvider
+     * @return true if file is valid GGUF, otherwise false
+     */
+    override suspend fun ensureSourceFileFormat(context: Context, uri: Uri): Boolean =
+        context.contentResolver.openInputStream(uri)?.buffered()?.use { ensureMagic(it) } == true
+
+    /** Reads the 4‑byte magic; throws if magic ≠ "GGUF". */
+    private fun ensureMagic(input: InputStream): Boolean {
+        val magic = ByteArray(4)
+        if (input.read(magic) != 4) throw IOException("Not a valid file!")
+        return magic.contentEquals(byteArrayOf(0x47, 0x47, 0x55, 0x46)) // "GGUF"
     }
 
     /**
@@ -104,10 +124,7 @@ internal class GgufMetadataReaderImpl(
 
     /** Reads the 4‑byte magic + 4‑byte version; throws if magic ≠ "GGUF". */
     private fun ensureMagicAndVersion(input: InputStream): GgufMetadata.GgufVersion {
-        val magic = ByteArray(4)
-        if (input.read(magic) != 4) throw IOException("File too short (no magic)")
-        if (!magic.contentEquals(byteArrayOf(0x47, 0x47, 0x55, 0x46)))  // "GGUF"
-            throw IOException("Not a GGUF file (bad magic)")
+        if (!ensureMagic(input)) throw InvalidFileFormatException()
         return GgufMetadata.GgufVersion.fromCode(readLEUInt32(input))
     }
 

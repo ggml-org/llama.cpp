@@ -2,6 +2,7 @@ package com.example.llama.data.repo
 
 import android.content.Context
 import android.llama.cpp.gguf.GgufMetadataReader
+import android.llama.cpp.gguf.InvalidFileFormatException
 import android.net.Uri
 import android.os.StatFs
 import android.util.Log
@@ -171,9 +172,15 @@ class ModelRepositoryImpl @Inject constructor(
             throw IllegalStateException("Another import is already in progress!")
         }
 
+        // Check file info
         val fileInfo = localFileDataSource.getFileInfo(uri)
         val fileSize = size ?: fileInfo?.size ?: throw FileNotFoundException("File size N/A")
         val fileName = name ?: fileInfo?.name ?: throw FileNotFoundException("File name N/A")
+        if (!ggufMetadataReader.ensureSourceFileFormat(context, uri)) {
+            throw InvalidFileFormatException()
+        }
+
+        // Check for enough storage
         if (!hasEnoughSpaceForImport(fileSize)) {
             throw InsufficientStorageException(
                 "Not enough storage space! " +
@@ -182,7 +189,6 @@ class ModelRepositoryImpl @Inject constructor(
             )
         }
         val modelFile = File(modelsDir, fileName)
-
         importJob = coroutineContext[Job]
         currentModelFile = modelFile
 
