@@ -2,8 +2,8 @@ export { default as ChatAttachmentsList } from './chat/ChatAttachmentsList.svelt
 export { default as ChatAttachmentFilePreview } from './chat/ChatAttachmentFilePreview.svelte';
 export { default as ChatAttachmentImagePreview } from './chat/ChatAttachmentImagePreview.svelte';
 export { default as ChatForm } from './chat/ChatForm.svelte';
-export { default as ChatMessage } from './chat/ChatMessage.svelte';
-export { default as ChatMessages } from './chat/ChatMessages.svelte';
+export { default as ChatMessage } from './chat/ChatMessages/ChatMessage.svelte';
+export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
 export { default as ChatHeader } from './chat/ChatHeader.svelte';
 export { default as ChatScreen } from './chat/ChatScreen.svelte';
 export { default as ChatSettingsDialog } from './chat/ChatSettingsDialog.svelte';

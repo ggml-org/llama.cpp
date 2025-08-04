@@ -9,14 +9,13 @@
 		class?: string;
 		disabled?: boolean;
 		isLoading?: boolean;
-		onSend?: (message: string, files?: ChatUploadedFile[]) => void;
+		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
 		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 		onFileUpload?: (files: File[]) => void;
 		onFileRemove?: (fileId: string) => void;
-		// Paste configuration
-		pasteLongTextToFileLen?: number;
+		pasteLongTextToFileLength?: number;
 	}
 
 	let {
@@ -29,38 +28,44 @@
 		uploadedFiles = $bindable([]),
 		onFileUpload,
 		onFileRemove,
-		pasteLongTextToFileLen = 2500
+		pasteLongTextToFileLength = 2500
 	}: Props = $props();
 
 	let message = $state('');
 	let textareaElement: HTMLTextAreaElement | undefined;
 	let fileInputElement: HTMLInputElement | undefined;
 
-	function handleSubmit(event: SubmitEvent) {
+	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
 		if (!message.trim() || disabled || isLoading) return;
 
-		onSend?.(message.trim(), uploadedFiles);
-		message = '';
-		uploadedFiles = [];
+		const success = await onSend?.(message.trim(), uploadedFiles);
 
-		if (textareaElement) {
-			textareaElement.style.height = 'auto';
-		}
-	}
-
-	function handleKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-
-			if (!message.trim() || disabled || isLoading) return;
-
-			onSend?.(message.trim(), uploadedFiles);
+		if (success) {
 			message = '';
 			uploadedFiles = [];
 
 			if (textareaElement) {
 				textareaElement.style.height = 'auto';
+			}
+		}
+	}
+
+	async function handleKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter' && !event.shiftKey) {
+			event.preventDefault();
+
+			if (!message.trim() || disabled || isLoading) return;
+
+			const success = await onSend?.(message.trim(), uploadedFiles);
+
+			if (success) {
+				message = '';
+				uploadedFiles = [];
+
+				if (textareaElement) {
+					textareaElement.style.height = 'auto';
+				}
 			}
 		}
 	}
@@ -83,7 +88,6 @@
 	function handlePaste(event: ClipboardEvent) {
 		if (!event.clipboardData) return;
 
-		// Handle pasted files
 		const files = Array.from(event.clipboardData.items)
 			.filter((item) => item.kind === 'file')
 			.map((item) => item.getAsFile())
@@ -95,12 +99,14 @@
 			return;
 		}
 
-		// Handle long text conversion to file
 		const text = event.clipboardData.getData('text/plain');
-		if (text.length > 0 && pasteLongTextToFileLen > 0 && text.length > pasteLongTextToFileLen) {
+		if (
+			text.length > 0 &&
+			pasteLongTextToFileLength > 0 &&
+			text.length > pasteLongTextToFileLength
+		) {
 			event.preventDefault();
 
-			// Create a text file from the pasted content
 			const textFile = new File([text], 'Pasted', {
 				type: 'text/plain'
 			});
@@ -110,7 +116,6 @@
 	}
 </script>
 
-<!-- Hidden file input -->
 <input
 	bind:this={fileInputElement}
 	type="file"

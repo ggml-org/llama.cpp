@@ -134,15 +134,15 @@
 			</div>
 		{:else}
 			{#if message.extra && message.extra.length > 0}
-				<div class="max-w-[80%] mb-2">
-					<ChatAttachmentsList 
+				<div class="mb-2 max-w-[80%]">
+					<ChatAttachmentsList
 						attachments={message.extra}
 						readonly={true}
 						imageHeight="h-80"
 					/>
 				</div>
 			{/if}
-			
+
 			<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
 				<div class="text-md whitespace-pre-wrap">
 					{message.content}
@@ -163,7 +163,7 @@
 		{#if thinkingContent}
 			<ChatThinkingBlock thinking={thinkingContent} isStreaming={!message.timestamp} />
 		{/if}
-		
+
 		{#if message.role === 'assistant'}
 			<MarkdownContent content={messageContent} />
 		{:else}
@@ -179,7 +179,6 @@
 		{/if}
 	</div>
 {/if}
-
 
 {#snippet messageActions(config?: { role: ChatRole })}
 	<div
