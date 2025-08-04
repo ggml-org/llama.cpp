@@ -2544,6 +2544,68 @@ struct test_bin_bcast : public test_case {
     }
 };
 
+// GGML_OP_ADD_ID
+struct test_add_id : public test_case {
+    const ggml_type type_a;
+    const ggml_type type_b;
+    const int64_t n_embd;
+    const int64_t n_experts;
+    const int64_t n_experts_used;
+    const int64_t n_token;
+
+    std::string vars() override {
+        return VARS_TO_STR6(type_a, type_b, n_embd, n_experts, n_experts_used, n_token);
+    }
+
+    size_t op_size(ggml_tensor * t) override {
+        return ggml_nbytes(t) + ggml_nbytes(t->src[0]) + ggml_nbytes(t->src[2]);
+    }
+
+    test_add_id(ggml_type type_a = GGML_TYPE_F32,
+            ggml_type type_b = GGML_TYPE_F32,
+            int64_t n_embd = 128,
+            int64_t n_experts = 16,
+            int64_t n_experts_used = 8,
+            int64_t n_token = 10)
+        : type_a(type_a), type_b(type_b), n_embd(n_embd),
+          n_experts(n_experts), n_experts_used(n_experts_used), n_token(n_token) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_3d(ctx, type_a, n_embd, n_experts_used, n_token);
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, type_b, n_embd, n_experts);
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_experts, n_token);
+        if (n_experts_used != n_experts) {
+            ids = ggml_view_2d(ctx, ids, n_experts_used, n_token, ids->nb[1], 0);
+            ggml_set_name(ids, "view_of_ids");
+        }
+
+        ggml_tensor * out = ggml_add_id(ctx, a, b, ids);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (t->type == GGML_TYPE_I32) {
+                if (ggml_is_view_op(t->op)) { continue; }
+                std::random_device rd;
+                std::default_random_engine rng(rd());
+                // ids
+                for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                    std::vector<int32_t> data(t->ne[0]);
+                    for (int i = 0; i < t->ne[0]; i++) {
+                        data[i] = i % n_experts;
+                    }
+                    std::shuffle(data.begin(), data.end(), rng);
+                    ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+                }
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_ADD1
 struct test_add1 : public test_case {
     const ggml_type type;
@@ -3183,11 +3245,11 @@ struct test_mul_mat_id : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        std::random_device rd;
-        std::default_random_engine rng(rd());
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->type == GGML_TYPE_I32) {
                 if (ggml_is_view_op(t->op)) { continue; }
+                std::random_device rd;
+                std::default_random_engine rng(rd());
                 // ids
                 for (int64_t r = 0; r < ggml_nrows(t); r++) {
                     std::vector<int32_t> data(t->ne[0]);
@@ -5772,6 +5834,21 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // add_id
+    for (ggml_type type_a : {GGML_TYPE_F32}) {
+        for (ggml_type type_b : {GGML_TYPE_F32}) {
+            for (int n_mats : {4, 8}) {
+                for (int n_used : {1, 2, 4}) {
+                    for (int n_embd : {32, 129}) {
+                        for (int n_token : {1, 32, 129}) {
+                            test_cases.emplace_back(new test_add_id(type_a, type_b, n_embd, n_mats, n_used, n_token));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
         test_cases.emplace_back(new test_sqr(type));
         test_cases.emplace_back(new test_sqrt(type));
@@ -6095,6 +6172,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_conv_transpose_2d({256, 256, 256, 1}, {3, 3, 16, 256}, 1));
 
     test_cases.emplace_back(new test_mean(GGML_TYPE_F32, {256, 256, 3, 1}));
+
+
+    for (int n_token : {1, 512}) {
+        test_cases.emplace_back(new test_add_id(GGML_TYPE_F32, GGML_TYPE_F32, 2880, 128, 4, n_token));
+        test_cases.emplace_back(new test_add_id(GGML_TYPE_F32, GGML_TYPE_F32, 2880, 32, 4, n_token));
+    }
 
     return test_cases;
 }

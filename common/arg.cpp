@@ -2384,9 +2384,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--cpu-moe"},
         "use CPU for Mixture of Experts (MoE) weights",
         [](common_params & params) {
-            params.tensor_buft_overrides.push_back({"\\.ffn_up_exps\\.weight$",   ggml_backend_cpu_buffer_type()});
-            params.tensor_buft_overrides.push_back({"\\.ffn_down_exps\\.weight$", ggml_backend_cpu_buffer_type()});
-            params.tensor_buft_overrides.push_back({"\\.ffn_gate_exps\\.weight$", ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_up_exps\\.",   ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_down_exps\\.", ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_gate_exps\\.", ggml_backend_cpu_buffer_type()});
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
     add_opt(common_arg(

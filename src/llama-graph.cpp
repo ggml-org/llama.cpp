@@ -924,9 +924,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     cb(up, "ffn_moe_up", il);
 
     if (up_exps_b) {
-        up_exps_b = ggml_repeat_4d(ctx0, up_exps_b,
-                        up_exps_b->ne[0], up_exps_b->ne[1], selected_experts->ne[1], 1);
-        up = ggml_add(ctx0, up, ggml_get_rows(ctx0, up_exps_b, selected_experts));
+        up = ggml_add_id(ctx0, up, up_exps_b, selected_experts);
         cb(up, "ffn_moe_up_biased", il);
     }
 
@@ -939,9 +937,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     }
 
     if (gate_exps_b) {
-        gate_exps_b = ggml_repeat_4d(ctx0, gate_exps_b,
-                        gate_exps_b->ne[0], gate_exps_b->ne[1], selected_experts->ne[1], 1);
-        cur = ggml_add(ctx0, cur, ggml_get_rows(ctx0, gate_exps_b, selected_experts));
+        cur = ggml_add_id(ctx0, cur, gate_exps_b, selected_experts);
         cb(cur, "ffn_moe_gate_biased", il);
     }
 
@@ -986,9 +982,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_b) {
-        down_exps_b = ggml_repeat_4d(ctx0, down_exps_b,
-                        down_exps_b->ne[0], down_exps_b->ne[1], selected_experts->ne[1], 1);
-        experts = ggml_add(ctx0, experts, ggml_get_rows(ctx0, down_exps_b, selected_experts));
+        experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
         cb(experts, "ffn_moe_down_biased", il);
     }
 

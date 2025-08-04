@@ -190,6 +190,13 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
                 ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], w->ne[1], w->ne[2], w->ne[3]);
                 op_tensor = ggml_add(ctx, a, w);
             } break;
+        case GGML_OP_ADD_ID:
+            {
+                int n_expert_used = hparams.n_expert_used;
+                ggml_tensor * a = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, w->ne[0], n_expert_used, 512);
+                ggml_tensor * c = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_expert_used, 512);
+                op_tensor = ggml_add_id(ctx, a, w, c);
+            } break;
         case GGML_OP_MUL:
             {
                 ggml_tensor * a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, w->ne[0], w->ne[1], w->ne[2], w->ne[3]);
@@ -2029,11 +2036,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 return nullptr;
             }
 
-            // tensors with "bias" suffix are always used with GGML_OP_ADD
+            // tensors with "bias" suffix are always used with GGML_OP_ADD or GGML_OP_ADD_ID
             ggml_op op;
             bool bias = tn.suffix != nullptr && strcmp(tn.suffix, "bias") == 0;
             if (bias) {
-                op = GGML_OP_ADD;
+                if (info.op == GGML_OP_MUL_MAT_ID) {
+                    op = GGML_OP_ADD_ID;
+                } else {
+                    op = GGML_OP_ADD;
+                }
             } else {
                 op = info.op;
             }

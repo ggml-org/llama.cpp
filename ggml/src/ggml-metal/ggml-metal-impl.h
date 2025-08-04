@@ -133,6 +133,15 @@ typedef struct {
 } ggml_metal_kargs_bin;
 
 typedef struct {
+    int64_t ne0;
+    int64_t ne1;
+    size_t nb01;
+    size_t nb02;
+    size_t nb11;
+    size_t nb21;
+} ggml_metal_kargs_add_id;
+
+typedef struct {
     int32_t  ne00;
     int32_t  ne01;
     int32_t  ne02;
