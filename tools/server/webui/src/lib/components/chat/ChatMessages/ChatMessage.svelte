@@ -232,6 +232,6 @@
 			? 'right-0'
 			: 'left-0'} text-muted-foreground absolute text-xs transition-all duration-150 group-hover:pointer-events-none group-hover:opacity-0"
 	>
-		{message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : ''}
+		{message.timestamp ? new Date(message.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
 	</div>
 {/snippet}
