@@ -25,7 +25,6 @@ __global__ void __launch_bounds__(splitD, 2)
     const int stride_s0 = src0_nb2 / sizeof(float);
     const int stride_x  = src1_nb2 / sizeof(float);
     const int stride_dt = src2_nb1 / sizeof(float);
-    const int stride_A  = src3_nb1 / sizeof(float);
     const int stride_B  = src4_nb2 / sizeof(float);
     const int stride_C  = src5_nb2 / sizeof(float);
     const int stride_s  = stride_s0;
