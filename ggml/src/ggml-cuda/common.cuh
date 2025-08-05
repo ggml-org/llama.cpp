@@ -551,7 +551,7 @@ static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, i
 }
 
 static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
-#if CUDART_VERSION >= 12050
+#if CUDART_VERSION >= 12080
     const nv_bfloat16 e = __nv_cvt_e8m0_to_bf16raw(x);
     return (float) e;
 #else
