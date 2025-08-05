@@ -255,7 +255,7 @@ static int compute_vector_statistics(std::vector<tensor_statistics> & tstats, co
 static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
     static const std::regex pattern(R"(blk\.(\d+)\.)");
 
-    // compute the cosine similarity between the same tensors in consecutive layers
+    // compute the Cosine Similarity between the same tensors in consecutive layers
     for (auto & ts : tstats) {
         ts.cossim = 0;
 
@@ -281,7 +281,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
         }
     }
 
-    // compute the L2 norm between the same tensors in consecutive layers
+    // compute the L2 Norm (Euclidian Distance) between the same tensors in consecutive layers
     for (auto & ts : tstats) {
         ts.l2_norm = 0.0f;
         if (ts.stats.in_sum.empty()) continue;
@@ -310,6 +310,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
 
 static void compute_layer_statistics(const std::vector<tensor_statistics> & tstats,
                                               std::map<int, float> & layer_cossim,
+                                              std::map<int, float> & layer_l2_norm,
                                               const std::unordered_map<std::string, Stats> & stats_map) {
     struct layer_aggregation {
         std::vector<float> curr_avg;
@@ -337,21 +338,32 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         prev.insert(prev.end(), prev_avg.begin(), prev_avg.end());
     }
 
-    // compute the cosine similarity between consecutive layers
+    // compute the aggregated Cosine Similarity between consecutive layers
     for (auto & kv : taggr) {
         const auto & curr = kv.second.curr_avg;
         const auto & prev = kv.second.prev_avg;
         if (curr.size() != prev.size() || curr.empty()) continue;
         float dot_prod = 0.0, lyr1 = 0.0, lyr2 = 0.0;
         for (size_t i = 0; i < curr.size(); ++i) {
-            float crr = curr[i], prv = prev[i];
-            dot_prod += crr * prv;
-            lyr1  += crr * crr;
-            lyr2  += prv * prv;
+            dot_prod += curr[i] * prev[i];
+            lyr1  += curr[i] * curr[i];
+            lyr2  += prev[i] * prev[i];
         }
         float cossim = 0.0f;
         if (lyr1 > 0.0 && lyr2 > 0.0) cossim = dot_prod / (std::sqrt(lyr1) * std::sqrt(lyr2));
         layer_cossim[kv.first] = cossim;
+    }
+
+    // compute the aggregated L2 Norm (Euclidian Distance) between consecutive layers
+    for (auto & kv : taggr) {
+        const auto & curr = kv.second.curr_avg;
+        const auto & prev = kv.second.prev_avg;
+        if (curr.size() != prev.size() || curr.empty()) continue;
+        float dist = 0.0f;
+        for (size_t i = 0; i < curr.size(); ++i) {
+            dist += (curr[i] - prev[i]) * (curr[i] - prev[i]);
+        }
+        layer_l2_norm[kv.first] = std::sqrt(dist);
     }
 }
 
@@ -1346,7 +1358,8 @@ static bool show_statistics(const common_params & params) {
     }
 
     std::map<int, float> layer_cossim;
-    compute_layer_statistics(ts, layer_cossim, g_collector.get_mstats());
+    std::map<int, float> layer_l2_norm;
+    compute_layer_statistics(ts, layer_cossim, layer_l2_norm, g_collector.get_mstats());
 
     const auto layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing aggregated statistics per layer (%ld layers)\n", layers);
@@ -1362,9 +1375,11 @@ static bool show_statistics(const common_params & params) {
         const float w_zd = stats.w_zd / stats.n;
         const auto lcs = layer_cossim.find(layer);
         const float cossim = (lcs != layer_cossim.end()) ? lcs->second : 0.0f;
+        const auto ll2n = layer_l2_norm.find(layer);
+        const float l2_norm = (ll2n != layer_l2_norm.end()) ? ll2n->second : 0.0f;
         LOG_INF("%5d\t%11.2f\t%6.2f%%\t%10.4f\n",
             layer,
-            w_sum,
+            tensor_calc_mode == 1 ? l2_norm: w_sum,
             100.0f * w_zd,
             cossim);
     }
