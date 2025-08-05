@@ -458,7 +458,7 @@ jobs:
           ctest -L main --verbose --timeout 3600
 
       - name: Debugging with tmate
-        if: ${{ failure() }}
+        #if: ${{ failure() }}
         uses: mxschmitt/action-tmate@v3.22
 
   ubuntu-22-cmake-hip:
