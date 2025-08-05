@@ -269,8 +269,8 @@ static inline __m256 quad_fp16_delta_float(const float x0, const float y0, const
 }
 
 static inline __m256 quad_mx_delta_float(const int8_t x0, const float y0, const int8_t x1, const float y1) {
-    return _mm256_set_m128(_mm_set1_ps(GGML_E8M0(x1) * GGML_CPU_FP16_TO_FP32(y1)),
-                           _mm_set1_ps(GGML_E8M0(x0) * GGML_CPU_FP16_TO_FP32(y0)));
+    return _mm256_set_m128(_mm_set1_ps(GGML_E8M0_TO_FP32_HALF(x1) * GGML_CPU_FP16_TO_FP32(y1)),
+                           _mm_set1_ps(GGML_E8M0_TO_FP32_HALF(x0) * GGML_CPU_FP16_TO_FP32(y0)));
 }
 #endif
 #elif defined(__SSSE3__)
