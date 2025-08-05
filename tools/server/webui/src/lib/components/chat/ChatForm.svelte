@@ -5,6 +5,7 @@
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import { ChatAttachmentsList } from '$lib/components';
 	import { inputClasses } from '$lib/constants/input-classes';
+	import { onMount } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -35,6 +36,21 @@
 	let message = $state('');
 	let textareaElement: HTMLTextAreaElement | undefined;
 	let fileInputElement: HTMLInputElement | undefined;
+	let previousIsLoading = $state(isLoading);
+
+	onMount(() => {
+		if (textareaElement) {
+			textareaElement.focus();
+		}
+	});
+
+	$effect(() => {
+		if (previousIsLoading && !isLoading && textareaElement) {
+			textareaElement.focus();
+		}
+
+		previousIsLoading = isLoading;
+	});
 
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
