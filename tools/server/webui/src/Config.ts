@@ -4,9 +4,18 @@ import { isNumeric } from './utils/misc';
 export const isDev = import.meta.env.MODE === 'development';
 
 // constants
-export const BASE_URL = new URL('.', document.baseURI).href
-  .toString()
-  .replace(/\/$/, '');
+let baseFromStorage = '';
+try {
+  baseFromStorage = new URL(localStorage.getItem('base') ?? '')
+    .toString()
+    .replace(/\/$/, '');
+} catch {
+  baseFromStorage = '';
+}
+
+export const BASE_URL =
+  baseFromStorage ||
+  new URL('.', document.baseURI).href.toString().replace(/\/$/, '');
 
 export const CONFIG_DEFAULT = {
   // Note: in order not to introduce breaking changes, please keep the same data type (number, string, etc) if you want to change the default value. Do not use null or undefined for default value.
