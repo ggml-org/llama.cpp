@@ -249,14 +249,37 @@ export const AppContextProvider = ({
         throw new Error(body?.error?.message || 'Unknown error');
       }
       const chunks = getSSEStreamAsync(fetchResponse);
+      let thinkingTagOpen = false;
       for await (const chunk of chunks) {
         // const stop = chunk.stop;
         if (chunk.error) {
           throw new Error(chunk.error?.message || 'Unknown error');
         }
+
+        const reasoningContent = chunk.choices[0].delta.reasoning_content;
+        if (reasoningContent) {
+          if (pendingMsg.content === null || pendingMsg.content === '') {
+            thinkingTagOpen = true;
+            pendingMsg = {
+              ...pendingMsg,
+              content: '<think>' + reasoningContent,
+            };
+          } else {
+            pendingMsg = {
+              ...pendingMsg,
+              content: pendingMsg.content + reasoningContent,
+            };
+          }
+        }
+
         const addedContent = chunk.choices[0].delta.content;
-        const lastContent = pendingMsg.content || '';
+        let lastContent = pendingMsg.content || '';
         if (addedContent) {
+          if (thinkingTagOpen) {
+            lastContent = lastContent + '</think>';
+            thinkingTagOpen = false;
+          }
+
           pendingMsg = {
             ...pendingMsg,
             content: lastContent + addedContent,
