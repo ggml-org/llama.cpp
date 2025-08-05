@@ -118,8 +118,6 @@ struct webgpu_context_struct {
     wgpu::Limits   limits;
 
     std::recursive_mutex mutex;
-    std::mutex           get_tensor_mutex;
-    std::mutex           init_mutex;
 
     bool device_init = false;
 
@@ -228,10 +226,19 @@ static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_wait_on_submission()");
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
     if (ctx->callback_futures.empty()) {
-        return;
+        // no existing callbacks, wait on queue submission
+        ctx->queue.OnSubmittedWorkDone(
+            wgpu::CallbackMode::AllowSpontaneous,
+            [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
+                if (status != wgpu::QueueWorkDoneStatus::Success) {
+                    GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
+                }
+            });
+    } else {
+        // existing callbacks, wait on them
+        ctx->instance.WaitAny(ctx->callback_futures.size(), ctx->callback_futures.data(), UINT64_MAX);
+        ctx->callback_futures.clear();
     }
-    ctx->instance.WaitAny(ctx->callback_futures.size(), ctx->callback_futures.data(), UINT64_MAX);
-    ctx->callback_futures.clear();
 }
 
 static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
@@ -576,6 +583,8 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
 
+    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
+
     webgpu_ctx->queue.WriteBuffer(buf_ctx->buffer, total_offset, data, (size / 4) * 4);
 
     if (size % 4 != 0) {
@@ -592,6 +601,8 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
         ggml_backend_webgpu_buffer_memset(
             webgpu_ctx, buf_ctx->buffer, val32, total_offset + (size - remaining_size), remaining_size);
     }
+
+    ggml_backend_webgpu_wait_on_submission(webgpu_ctx);
 }
 
 static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
@@ -614,7 +625,7 @@ static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
         final_size = size + (4 - (size % 4));
     }
 
-    std::lock_guard<std::mutex> lock(webgpu_ctx->get_tensor_mutex);
+    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
 
     if (webgpu_ctx->get_tensor_staging_buf == nullptr || webgpu_ctx->get_tensor_staging_buf.GetSize() < final_size) {
         // Create a new staging buffer if it doesn't exist or is too small
@@ -780,7 +791,7 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
     webgpu_context                       webgpu_ctx = dev_ctx->webgpu_ctx;
 
     // Multiple threads may try to initialize the device
-    std::lock_guard<std::mutex> lock(webgpu_ctx->init_mutex);
+    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
     if (!webgpu_ctx->device_init) {
         // Initialize device
         std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16, wgpu::FeatureName::ImplicitDeviceSynchronization };
