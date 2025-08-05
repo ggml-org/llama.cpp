@@ -446,7 +446,7 @@ jobs:
         id: cmake_build
         run: |
           export Dawn_DIR=dawn/lib64/cmake/Dawn
-          cmake -B build -DGGML_WEBGPU=ON -DGGML_WEBGPU_DEBUG=ON
+          cmake -B build -DGGML_WEBGPU=ON
           cmake --build build --config Release -j $(nproc)
 
       - name: Test

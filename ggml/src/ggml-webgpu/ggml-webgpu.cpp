@@ -226,13 +226,14 @@ static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
     if (ctx->callback_futures.empty()) {
         // no existing callbacks, wait on queue submission
-        ctx->queue.OnSubmittedWorkDone(
-            wgpu::CallbackMode::AllowSpontaneous,
-            [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
-                if (status != wgpu::QueueWorkDoneStatus::Success) {
-                    GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
-                }
-            });
+        ctx->instance.WaitAny(ctx->queue.OnSubmittedWorkDone(
+                                  wgpu::CallbackMode::AllowSpontaneous,
+                                  [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
+                                      if (status != wgpu::QueueWorkDoneStatus::Success) {
+                                          GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
+                                      }
+                                  }),
+                              UINT64_MAX);
     } else {
         // existing callbacks, wait on them
         ctx->instance.WaitAny(ctx->callback_futures.size(), ctx->callback_futures.data(), UINT64_MAX);
@@ -250,6 +251,7 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
     ctx->queue.Submit(ctx->staged_command_bufs.size(), ctx->staged_command_bufs.data());
     ctx->staged_command_bufs.clear();
     std::vector<webgpu_param_bufs> staged_param_bufs = std::move(ctx->staged_param_bufs);
+
     // Free the staged parameter buffers once the submission completes
     wgpu::Future f = ctx->queue.OnSubmittedWorkDone(
         wgpu::CallbackMode::AllowSpontaneous,
@@ -286,7 +288,7 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
                                                   std::vector<uint32_t>             params,
                                                   std::vector<wgpu::BindGroupEntry> bind_group_entries,
                                                   uint32_t                          wg_x,
-                                                  bool                              submit_imm = false) {
+                                                  bool                              submit_and_wait = false) {
     webgpu_param_bufs params_bufs = ctx->param_buf_pool.alloc_bufs();
 
     ggml_backend_webgpu_map_buffer(ctx, params_bufs.host_buf, wgpu::MapMode::Write, 0, params_bufs.host_buf.GetSize());
@@ -317,19 +319,18 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
     pass.DispatchWorkgroups(wg_x, 1, 1);
     pass.End();
     wgpu::CommandBuffer commands = encoder.Finish();
-    if (submit_imm) {
-        // Submit immediately
+    if (submit_and_wait) {
+        // Submit and wait immediately
         ctx->queue.Submit(1, &commands);
-        wgpu::Future f = ctx->queue.OnSubmittedWorkDone(wgpu::CallbackMode::AllowSpontaneous,
-                                       [ctx, params_bufs](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
-                                           if (status != wgpu::QueueWorkDoneStatus::Success) {
-                                               GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n",
-                                                              message.data);
-                                           }
-                                           ctx->param_buf_pool.free_bufs({ params_bufs });
-                                       });
-        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
-        ctx->callback_futures.push_back({ f });
+        ctx->instance.WaitAny(ctx->queue.OnSubmittedWorkDone(
+                                  wgpu::CallbackMode::AllowSpontaneous,
+                                  [ctx, params_bufs](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
+                                      if (status != wgpu::QueueWorkDoneStatus::Success) {
+                                          GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
+                                      }
+                                      ctx->param_buf_pool.free_bufs({ params_bufs });
+                                  }),
+                              UINT64_MAX);
     } else {
         // Lock the context mutex when pushing to the staging vectors.
         std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
@@ -354,7 +355,6 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_context & ctx,
     size_t   bytes_per_wg = ctx->limits.maxComputeWorkgroupSizeX * ctx->memset_bytes_per_thread;
     uint32_t wg_x         = ((size + 3) + bytes_per_wg - 1) / bytes_per_wg;
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->memset_pipeline, params, entries, wg_x, true);
-    ggml_backend_webgpu_wait_on_submission(ctx);
 }
 
 static size_t ggml_backend_webgpu_tensor_offset(const ggml_tensor * tensor) {
@@ -790,7 +790,8 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
     std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
     if (!webgpu_ctx->device_init) {
         // Initialize device
-        std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16, wgpu::FeatureName::ImplicitDeviceSynchronization };
+        std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16,
+                                                             wgpu::FeatureName::ImplicitDeviceSynchronization };
         wgpu::DeviceDescriptor         dev_desc;
         dev_desc.requiredLimits       = &webgpu_ctx->limits;
         dev_desc.requiredFeatures     = required_features.data();
