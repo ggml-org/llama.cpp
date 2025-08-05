@@ -225,6 +225,7 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 
 // Wait for the queue to finish processing all submitted work
 static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_wait_on_submission()");
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
     if (ctx->callback_futures.empty()) {
         return;
@@ -235,6 +236,7 @@ static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
 
 static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_submit_queue()");
     if (ctx->staged_command_bufs.empty()) {
         // Nothing to submit
         return;
@@ -376,6 +378,8 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 }
 
 static void ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
+    WEBGPU_LOG_DEBUG("ggml_webgpu_cpy(" << src << ", " << dst << ")");
+
     size_t src_offset       = ggml_backend_webgpu_tensor_offset(src);
     // assumes power of 2 offset alignment
     size_t src_misalignment = src_offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
