@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - master
+      - webgpu-ci-debug
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-linux-cross.yml',
@@ -442,6 +443,9 @@ jobs:
           cd build
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
+
+      - name: Debugging with tmate
+        uses: mxschmitt/action-tmate@v3.22
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
