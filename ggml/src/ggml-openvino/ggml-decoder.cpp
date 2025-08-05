@@ -20,6 +20,7 @@
 #include <openvino/core/type/element_type.hpp>
 #include <openvino/core/type/float16.hpp>
 #include <openvino/op/constant.hpp>
+#include <openvino/op/convert.hpp>
 #include <openvino/op/parameter.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <ostream>
@@ -29,6 +30,7 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
+#include "ggml-quant.hpp"
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
                              int context_size, int num_heads, int num_heads_kv, int head_size) :
@@ -402,12 +404,78 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
 }
 
 std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor) {
+    std::set<ggml_type> weight_types = {
+        GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_K, GGML_TYPE_Q6_K};
+    if (weight_types.find(tensor->type) == weight_types.end()) {
+        throw std::runtime_error("Unexpected weight tensor type: " + std::string(tensor->name) + " with type " +
+                                 ggml_type_name(tensor->type));
+    }
+
     auto node_type = get_ov_type(tensor);
     auto node_shape = get_shape(tensor);
     auto ne_total = ggml_nelements(tensor);
-    ov::Tensor weights(node_type, node_shape);
-    memcpy(weights.data(), tensor->data, ne_total * node_type.size());
-    return std::make_shared<ov::op::v0::Constant>(weights);
+
+    if (node_type != ov::element::dynamic) {
+        ov::Tensor weights(node_type, node_shape);
+        memcpy(weights.data(), tensor->data, ne_total * node_type.size());
+        std::shared_ptr<ov::Node> weight_node = std::make_shared<ov::op::v0::Constant>(weights);
+        if (node_type == ov::element::f16) {
+            weight_node = std::make_shared<ov::op::v0::Convert>(weight_node, ov::element::f32);
+        }
+        weight_node->set_friendly_name(tensor->name);
+        return weight_node;
+    }
+
+    uint64_t weights_per_byte;
+    if (tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_1 || tensor->type == GGML_TYPE_Q4_K) {
+        weights_per_byte = 2;
+    } else {  // tensor.type == GGUF_TYPE_Q8_0 || tensor.type == GGUF_TYPE_Q6_K
+        weights_per_byte = 1;
+    }
+
+    uint64_t weights_per_block;
+    // here we only consider sub block, q6k:16 q4k:32
+    if (tensor->type == GGML_TYPE_Q6_K) {
+        weights_per_block = 16;
+    } else {
+        weights_per_block = 32;
+    }
+
+    OPENVINO_ASSERT(node_shape.back() % weights_per_block == 0,
+                    "[load_gguf] tensor ",
+                    tensor->name,
+                    " has incompatible last dim shape: ",
+                    node_shape.back());
+
+    auto weights_shape = node_shape;
+    weights_shape.back() /= (weights_per_byte * 4);  // means u32 type can store 8 q4 or 4 q8
+
+    ov::Tensor weights(ov::element::u32, weights_shape);
+    // For scales and bias
+    node_shape[node_shape.size() - 1] = node_shape[node_shape.size() - 1] / weights_per_block;
+
+    ov::Tensor scales(ov::element::f16, node_shape);
+    ov::Tensor biases(ov::element::f16, node_shape);
+    ov::Output<ov::Node> weight_node;
+    if (tensor->type == GGML_TYPE_Q4_0) {
+        extract_q4_0_data(tensor, weights, scales, biases);
+        weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
+    } else if (tensor->type == GGML_TYPE_Q4_1) {
+        extract_q4_1_data(tensor, weights, scales, biases);
+        weight_node = make_int4_weights(weights, scales, biases, weights_per_block);
+    } else if (tensor->type == GGML_TYPE_Q8_0) {
+        extract_q8_0_data(tensor, weights, scales, biases);
+        weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
+    } else if (tensor->type == GGML_TYPE_Q6_K) {
+        // due to WA #2135, this case will not be used, extract_q6_k_data temporarily disabled.
+        extract_q6_k_data(tensor, weights, scales, biases);
+        weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
+    } else if (tensor->type == GGML_TYPE_Q4_K) {
+        extract_q4_k_data(tensor, weights, scales, biases);
+        weight_node = make_int4_weights(weights, scales, biases, weights_per_block);
+    }
+    weight_node.get_node_shared_ptr()->set_friendly_name(tensor->name);
+    return weight_node.get_node_shared_ptr();
 }
 
 void GgmlOvDecoder::dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename) {
@@ -537,7 +605,7 @@ ov::element::Type GgmlOvDecoder::get_ov_type(const ggml_tensor* tensor) {
     case GGML_TYPE_I64:
         return ov::element::i64;
     default:
-        throw std::runtime_error("Unsupported tensor type");
+        return ov::element::dynamic;
     }
 }
 
