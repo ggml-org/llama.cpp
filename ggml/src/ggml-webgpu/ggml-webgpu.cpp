@@ -139,6 +139,8 @@ struct webgpu_context_struct {
 
     // Parameter buffers associated with the staged command buffers
     std::vector<webgpu_param_bufs> staged_param_bufs;
+
+    std::vector<wgpu::FutureWaitInfo> callback_futures;
 };
 
 typedef std::shared_ptr<webgpu_context_struct> webgpu_context;
@@ -221,16 +223,14 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 
 /** WebGPU Actions */
 
+// Wait for the queue to finish processing all submitted work
 static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
-    // Wait for the queue to finish processing all commands
-    ctx->instance.WaitAny(ctx->queue.OnSubmittedWorkDone(
-                              wgpu::CallbackMode::AllowSpontaneous,
-                              [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
-                                  if (status != wgpu::QueueWorkDoneStatus::Success) {
-                                      GGML_LOG_ERROR("ggml_webgpu: Failed to wait on queue: %s\n", message.data);
-                                  }
-                              }),
-                          UINT64_MAX);
+    std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    if (ctx->callback_futures.empty()) {
+        return;
+    }
+    ctx->instance.WaitAny(ctx->callback_futures.size(), ctx->callback_futures.data(), UINT64_MAX);
+    ctx->callback_futures.clear();
 }
 
 static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
@@ -243,7 +243,7 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
     ctx->staged_command_bufs.clear();
     std::vector<webgpu_param_bufs> staged_param_bufs = std::move(ctx->staged_param_bufs);
     // Free the staged parameter buffers once the submission completes
-    ctx->queue.OnSubmittedWorkDone(
+    wgpu::Future f = ctx->queue.OnSubmittedWorkDone(
         wgpu::CallbackMode::AllowSpontaneous,
         [ctx, staged_param_bufs](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
             if (status != wgpu::QueueWorkDoneStatus::Success) {
@@ -252,6 +252,7 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
             // Free the staged parameter buffers
             ctx->param_buf_pool.free_bufs(staged_param_bufs);
         });
+    ctx->callback_futures.push_back({ f });
 }
 
 static void ggml_backend_webgpu_map_buffer(webgpu_context & ctx,
@@ -311,7 +312,7 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
     if (submit_imm) {
         // Submit immediately
         ctx->queue.Submit(1, &commands);
-        ctx->queue.OnSubmittedWorkDone(wgpu::CallbackMode::AllowSpontaneous,
+        wgpu::Future f = ctx->queue.OnSubmittedWorkDone(wgpu::CallbackMode::AllowSpontaneous,
                                        [ctx, params_bufs](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
                                            if (status != wgpu::QueueWorkDoneStatus::Success) {
                                                GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n",
@@ -319,6 +320,8 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
                                            }
                                            ctx->param_buf_pool.free_bufs({ params_bufs });
                                        });
+        std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+        ctx->callback_futures.push_back({ f });
     } else {
         // Lock the context mutex when pushing to the staging vectors.
         std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
