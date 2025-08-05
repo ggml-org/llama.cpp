@@ -31,7 +31,13 @@ string(REGEX MATCH "[0-9]+[a-zA-Z]" SOC_TYPE_MAJOR_SN "${SOC_VERSION}")
 set(SOC_TYPE_COMPILE_OPTION "ASCEND_${SOC_TYPE_MAJOR_SN}")
 string(TOUPPER ${SOC_TYPE_COMPILE_OPTION} SOC_TYPE_COMPILE_OPTION)
 message(STATUS "CANN: SOC_VERSION =  ${SOC_VERSION}")
-option(USE_CANN_GRAPH "Enable CANN graph execution (ACL graph mode)" OFF)
+option(CANN_GRAPH "Enable CANN graph execution (ACL graph mode)" OFF)
+
+if(CANN_GRAPH AND (SOC_TYPE_MAJOR_SN STREQUAL "310P" OR SOC_TYPE_COMPILE_OPTION STREQUAL "ASCEND_310P"))
+    message(FATAL_ERROR
+        "CANN Graph (ACL graph mode) is not supported on 310P devices. "
+        "Please build with -DCANN_GRAPH=OFF or use a supported SOC.")
+endif()
 
 if (CANN_INSTALL_DIR)
     # Only Support Linux.
@@ -69,11 +75,11 @@ if (CANN_INSTALL_DIR)
 
     target_compile_definitions(ggml-cann PRIVATE "-D${SOC_TYPE_COMPILE_OPTION}")
 
-    if (USE_CANN_GRAPH)
-        target_compile_definitions(ggml-cann PRIVATE USE_CANN_GRAPH)
-        message(STATUS "CANN: USE_CANN_GRAPH is enabled.")
+    if (CANN_GRAPH)
+        target_compile_definitions(ggml-cann PRIVATE CANN_GRAPH)
+        message(STATUS "CANN: CANN_GRAPH is enabled.")
     else()
-        message(STATUS "CANN: USE_CANN_GRAPH is disabled.")
+        message(STATUS "CANN: CANN_GRAPH is disabled.")
     endif()
 
     message(STATUS "CANN: CANN_INCLUDE_DIRS =  ${CANN_INCLUDE_DIRS}")

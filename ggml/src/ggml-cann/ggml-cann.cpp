@@ -2075,7 +2075,7 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
     ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
 }
 
-#ifdef USE_CANN_GRAPH
+#ifdef CANN_GRAPH
 /**
  * @brief Populate the internal CANN graph node properties from the ggml computation graph.
  *
@@ -2171,7 +2171,7 @@ static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, 
     }
     return false;
 }
-#endif  // USE_CANN_GRAPH
+#endif  // CANN_GRAPH
 
 /**
  * @brief Evaluate the computation graph and optionally capture or execute it using CANN graph API.
@@ -2188,7 +2188,7 @@ static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, 
  */
 static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph,
     bool & use_cann_graph, bool & cann_graph_update_required) {
-#ifdef USE_CANN_GRAPH
+#ifdef CANN_GRAPH
     if (use_cann_graph && cann_graph_update_required) {
         if (cann_ctx->cann_graph->graph != nullptr) {
             ACL_CHECK(aclmdlRIDestroy(cann_ctx->cann_graph->graph));
@@ -2196,7 +2196,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
         }
         ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
     }
-#endif // USE_CANN_GRAPH
+#endif // CANN_GRAPH
 
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
@@ -2216,7 +2216,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
         }
     }
 
-#ifdef USE_CANN_GRAPH
+#ifdef CANN_GRAPH
     if (use_cann_graph && cann_graph_update_required) { // End CANN graph capture
         ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &cann_ctx->cann_graph->graph));
     }
@@ -2243,29 +2243,16 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
  */
 static enum ggml_status ggml_backend_cann_graph_compute(
     ggml_backend_t backend, ggml_cgraph* cgraph) {
-
     ggml_backend_cann_context* cann_ctx =
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
     release_nz_workspace();
-#ifdef USE_CANN_GRAPH
+#ifdef CANN_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
     // check environment LLAMA_SET_ROWS
-    const char* LLAMA_SET_ROWS_ENV = std::getenv("LLAMA_SET_ROWS");
-    bool supports_set_rows = LLAMA_SET_ROWS_ENV ? (std::atoi(LLAMA_SET_ROWS_ENV) != 0) : false;
-
-    if (!supports_set_rows) {
-        if(cann_ctx->set_row_log) {
-            GGML_LOG_ERROR(
-                "%s: CANN Graph disabled — environment variable LLAMA_SET_ROWS not set or invalid. "
-                "To enable CANN ACL Graph execution, export LLAMA_SET_ROWS=1. "
-                "Falling back to non-graph mode on device %d.\n",
-                __func__, cann_ctx->device
-            );
-            cann_ctx->set_row_log = false;
-        }
+    if (!cann_ctx->support_set_rows) {
         use_cann_graph = false;
     }
 
@@ -2273,7 +2260,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
         if (cann_ctx->cann_graph == nullptr) {
             cann_ctx->cann_graph.reset(new ggml_cann_graph());
             cann_graph_update_required = true;
-        }
+        } 
 
         cann_graph_update_required = is_cann_graph_update_required(cann_ctx, cgraph);
         set_ggml_graph_node_properties(cann_ctx, cgraph);
@@ -2281,7 +2268,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
 #else
     bool use_cann_graph = false;
     bool cann_graph_update_required = false;
-#endif  // USE_CANN_GRAPH
+#endif  // CANN_GRAPH
 
     evaluate_and_capture_cann_graph(
         cann_ctx,
