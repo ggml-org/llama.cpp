@@ -2,8 +2,6 @@
 
 #include "common.cuh"
 
-#include <cuda_fp8.h>
-
 #include <cstdint>
 
 static __device__ __forceinline__ int get_int_b1(const void * x, const int & i32) {
@@ -259,7 +257,7 @@ static __device__ __forceinline__ float vec_dot_mxfp4_q8_1(
         sumi = ggml_cuda_dp4a(v.y, q8[l + 4], sumi);
     }
 
-    const nv_bfloat16 e = __nv_cvt_e8m0_to_bf16raw(bq4->e);
+    const nv_bfloat16 e = ggml_cuda_e8m0_to_fp32(bq4->e);
     const float d =  (float)e * 0.5f * __low2float(bq8_1->ds);
     return d * sumi;
 }

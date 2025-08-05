@@ -4,8 +4,6 @@
 #include "vecdotq.cuh"
 #include "mma.cuh"
 
-#include <cuda_fp8.h>
-
 #include <climits>
 #include <cstdint>
 
@@ -756,9 +754,9 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
         const block_mxfp4 * bxi = (const block_mxfp4 *) x + kbx0 + i*stride + kbxd;
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE)
-        x_df[i*MMQ_MMA_TILE_X_K_Q8_1                 + kbxd] = __bfloat162float(__nv_cvt_e8m0_to_bf16raw(bxi->e))*0.5f;
+        x_df[i*MMQ_MMA_TILE_X_K_Q8_1                 + kbxd] = __bfloat162float(ggml_cuda_e8m0_to_fp32(bxi->e))*0.5f;
 #else
-        x_df[i*(MMQ_TILE_NE_K/QI_MXFP4) + i/QI_MXFP4 + kbxd] = __bfloat162float(__nv_cvt_e8m0_to_bf16raw(bxi->e))*0.5f;
+        x_df[i*(MMQ_TILE_NE_K/QI_MXFP4) + i/QI_MXFP4 + kbxd] = __bfloat162float(ggml_cuda_e8m0_to_fp32(bxi->e))*0.5f;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(NEW_MMA_AVAILABLE)
     }
 }
