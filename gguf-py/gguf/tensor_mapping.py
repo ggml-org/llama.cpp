@@ -1369,6 +1369,31 @@ class TensorNameMap:
         MODEL_TENSOR.A_MM_NORM_MID: (
             "audio.multi_modal_projector.ln_mid", # ultravox
         ),
+
+        # NextN/MTP tensors for GLM4_MOE
+        MODEL_TENSOR.NEXTN_EH_PROJ: (
+            "model.layers.{bid}.eh_proj",
+        ),
+
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS: (
+            "model.layers.{bid}.embed_tokens",
+        ),
+
+        MODEL_TENSOR.NEXTN_ENORM: (
+            "model.layers.{bid}.enorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_HNORM: (
+            "model.layers.{bid}.hnorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD: (
+            "model.layers.{bid}.shared_head.head",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
+            "model.layers.{bid}.shared_head.norm",
+        ),
     }
 
     # architecture-specific block mappings
