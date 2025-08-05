@@ -31,7 +31,24 @@ html {
   hr {
     @apply my-4 border-base-content/20 border-1;
   }
-  /* TODO: fix markdown table */
+  table {
+    @apply w-full border-collapse text-sm font-sans my-4;
+  }
+  thead {
+    @apply bg-gray-200 text-gray-800;
+  }
+  th {
+    @apply border border-gray-200 px-4 py-2 text-left text-gray-700 font-semibold;
+  }
+  td {
+    @apply border border-gray-100 px-4 py-2 text-gray-700 align-top;
+  }
+  tbody tr:nth-child(even) {
+    @apply bg-gray-50;
+  }
+  tbody tr:hover {
+    @apply bg-gray-100;
+  }
 }
 
 .btn-mini {
