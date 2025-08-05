@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - master
-      - webgpu-ci-debug
     paths: [
       '.github/workflows/build.yml',
       '.github/workflows/build-linux-cross.yml',
