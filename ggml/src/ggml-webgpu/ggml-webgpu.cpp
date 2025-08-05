@@ -26,7 +26,7 @@
 
 /* Constants */
 
-#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 1
+#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 16
 #define WEBGPU_MUL_MAT_WG_SIZE           64
 #define WEBGPU_NUM_PARAM_BUFS            100
 #define WEBGPU_PARAMS_BUF_SIZE_BYTES     256
@@ -223,7 +223,6 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 
 // Wait for the queue to finish processing all submitted work
 static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
-    WEBGPU_LOG_DEBUG("ggml_backend_webgpu_wait_on_submission()");
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
     if (ctx->callback_futures.empty()) {
         // no existing callbacks, wait on queue submission
@@ -341,7 +340,6 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
             ggml_backend_webgpu_submit_queue(ctx);
         }
     }
-    ggml_backend_webgpu_wait_on_submission(ctx);
 }
 
 static void ggml_backend_webgpu_buffer_memset(webgpu_context & ctx,
@@ -356,6 +354,7 @@ static void ggml_backend_webgpu_buffer_memset(webgpu_context & ctx,
     size_t   bytes_per_wg = ctx->limits.maxComputeWorkgroupSizeX * ctx->memset_bytes_per_thread;
     uint32_t wg_x         = ((size + 3) + bytes_per_wg - 1) / bytes_per_wg;
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->memset_pipeline, params, entries, wg_x, true);
+    ggml_backend_webgpu_wait_on_submission(ctx);
 }
 
 static size_t ggml_backend_webgpu_tensor_offset(const ggml_tensor * tensor) {
@@ -385,8 +384,6 @@ static void ggml_backend_webgpu_free(ggml_backend_t backend) {
 }
 
 static void ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, ggml_tensor * dst) {
-    WEBGPU_LOG_DEBUG("ggml_webgpu_cpy(" << src << ", " << dst << ")");
-
     size_t src_offset       = ggml_backend_webgpu_tensor_offset(src);
     // assumes power of 2 offset alignment
     size_t src_misalignment = src_offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
@@ -583,8 +580,6 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     size_t total_offset = webgpu_tensor_offset(tensor) + tensor->view_offs + offset;
 
-    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
-
     webgpu_ctx->queue.WriteBuffer(buf_ctx->buffer, total_offset, data, (size / 4) * 4);
 
     if (size % 4 != 0) {
@@ -600,9 +595,10 @@ static void ggml_backend_webgpu_buffer_set_tensor(ggml_backend_buffer_t buffer,
         // memset the remaining bytes
         ggml_backend_webgpu_buffer_memset(
             webgpu_ctx, buf_ctx->buffer, val32, total_offset + (size - remaining_size), remaining_size);
+    } else {
+        // wait for WriteBuffer to complete
+        ggml_backend_webgpu_wait_on_submission(webgpu_ctx);
     }
-
-    ggml_backend_webgpu_wait_on_submission(webgpu_ctx);
 }
 
 static void ggml_backend_webgpu_buffer_get_tensor(ggml_backend_buffer_t buffer,
