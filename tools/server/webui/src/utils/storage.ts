@@ -213,6 +213,20 @@ const StorageUtils = {
       localStorage.setItem('theme', theme);
     }
   },
+  setDefaultConfig(defaultConfig: object | null | undefined): boolean {
+    if (localStorage.getItem('config') === null) {
+      try {
+        // Ensure there still is no config when we overwrite it
+        if (localStorage.getItem('config') === null) {
+          localStorage.setItem('config', JSON.stringify(defaultConfig));
+        }
+        return true;
+      } catch (e) {
+        console.error(e);
+      }
+    }
+    return false;
+  },
 };
 
 export default StorageUtils;

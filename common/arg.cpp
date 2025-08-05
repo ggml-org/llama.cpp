@@ -3491,6 +3491,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
 
     add_opt(common_arg(
+        {"--default-client-config"}, "JSON_FNAME",
+        string_format("JSON file containing the default client config"),
+        [](common_params & params, const std::string & value) {
+            params.public_default_client_config = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_DEFAULT_CLIENT_CONFIG"));
+
+    add_opt(common_arg(
         { "--diffusion-steps" }, "N",
         string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
         [](common_params & params, int value) { params.diffusion.steps = value; }
@@ -3534,7 +3542,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
         [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
     ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
-
 
     return ctx_arg;
 }

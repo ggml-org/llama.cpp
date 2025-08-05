@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAppContext } from '../utils/app.context';
 import { CONFIG_DEFAULT, CONFIG_INFO } from '../Config';
 import { isDev } from '../Config';
@@ -276,7 +276,7 @@ export default function SettingDialog({
   show: boolean;
   onClose: () => void;
 }) {
-  const { config, saveConfig } = useAppContext();
+  const { config, saveConfig, serverProps } = useAppContext();
   const [sectionIdx, setSectionIdx] = useState(0);
 
   // clone the config object to prevent direct mutation
@@ -284,6 +284,25 @@ export default function SettingDialog({
     JSON.parse(JSON.stringify(config))
   );
   const { showConfirm, showAlert } = useModals();
+
+  // get default client settings
+  useEffect(() => {
+    if (
+      serverProps &&
+      serverProps.default_client_config &&
+      Object.keys(serverProps.default_client_config).length > 0
+    ) {
+      if (StorageUtils.setDefaultConfig(serverProps.default_client_config)) {
+        console.log(
+          'Setting default config:',
+          serverProps.default_client_config
+        );
+        const newConfig = StorageUtils.getConfig();
+        saveConfig(newConfig);
+        setLocalConfig(JSON.parse(JSON.stringify(newConfig)));
+      }
+    }
+  }, [serverProps, saveConfig]);
 
   const resetConfig = async () => {
     if (await showConfirm('Are you sure you want to reset all settings?')) {
