@@ -101,8 +101,10 @@ enum llm_type {
     LLM_TYPE_A13B,
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_30B_A3B,
+    LLM_TYPE_106B_A12B, // GLM-4.5-Air
     LLM_TYPE_235B_A22B,
     LLM_TYPE_300B_A47B, // Ernie MoE big
+    LLM_TYPE_355B_A32B, // GLM-4.5
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };
@@ -164,6 +166,15 @@ struct llama_layer_shortconv {
     struct ggml_tensor * in_proj  = nullptr;
     struct ggml_tensor * conv     = nullptr;
     struct ggml_tensor * out_proj = nullptr;
+};
+
+struct llama_layer_nextn {
+    struct ggml_tensor * eh_proj          = nullptr;
+    struct ggml_tensor * embed_tokens     = nullptr;
+    struct ggml_tensor * enorm            = nullptr;
+    struct ggml_tensor * hnorm            = nullptr;
+    struct ggml_tensor * shared_head_head = nullptr;
+    struct ggml_tensor * shared_head_norm = nullptr;
 };
 
 struct llama_layer {
@@ -241,10 +252,14 @@ struct llama_layer {
     struct ggml_tensor * ffn_up_enc   = nullptr;
 
     // ff MoE
-    struct ggml_tensor * ffn_gate_inp  = nullptr;
-    struct ggml_tensor * ffn_gate_exps = nullptr;
-    struct ggml_tensor * ffn_down_exps = nullptr;
-    struct ggml_tensor * ffn_up_exps   = nullptr;
+    struct ggml_tensor * ffn_gate_inp    = nullptr;
+    struct ggml_tensor * ffn_gate_exps   = nullptr;
+    struct ggml_tensor * ffn_down_exps   = nullptr;
+    struct ggml_tensor * ffn_up_exps     = nullptr;
+    struct ggml_tensor * ffn_gate_inp_b  = nullptr;
+    struct ggml_tensor * ffn_gate_exps_b = nullptr;
+    struct ggml_tensor * ffn_down_exps_b = nullptr;
+    struct ggml_tensor * ffn_up_exps_b   = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
@@ -349,11 +364,16 @@ struct llama_layer {
     struct ggml_tensor * laurel_r             = nullptr;
     struct ggml_tensor * laurel_post_norm     = nullptr;
 
+    // openai-moe
+    struct ggml_tensor * attn_sinks = nullptr;
+
     struct llama_layer_posnet posnet;
 
     struct llama_layer_convnext convnext;
 
     struct llama_layer_shortconv shortconv;
+
+    struct llama_layer_nextn nextn;
 };
 
 struct llama_model {
