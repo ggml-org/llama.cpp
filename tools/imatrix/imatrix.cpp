@@ -1294,7 +1294,6 @@ static bool show_statistics(const common_params & params) {
     struct weighted_stats {
         float w_sum    = 0.0f;
         float w_zd     = 0.0f;
-        float w_cossim = 0.0f;
         int   n        = 0;
     };
     std::map<int, weighted_stats> ws;
@@ -1341,16 +1340,15 @@ static bool show_statistics(const common_params & params) {
                 100.0f * tstat.zd_score,
                 tstat.cossim);
 
-        const float w_sum    = tstat.elements * tstat.sum_values;
         const float w_zd     = tstat.elements * tstat.zd_score;
 
         if (ws.find(blk) != ws.end()) {
-            ws[blk].w_sum    += w_sum;
+            ws[blk].w_sum    += tstat.sum_values;
             ws[blk].w_zd     += w_zd;
             ws[blk].n        += tstat.elements;
         } else {
             weighted_stats temp_ws;
-            temp_ws.w_sum    = w_sum;
+            temp_ws.w_sum    = tstat.sum_values;
             temp_ws.w_zd     = w_zd;
             temp_ws.n        = tstat.elements;
             ws[blk]          = temp_ws;
@@ -1371,7 +1369,7 @@ static bool show_statistics(const common_params & params) {
     LOG_INF("============================================\n");
     for (const auto & [layer, stats] : ws) {
         if (layer < 0 || stats.n == 0) continue;
-        const float w_sum = stats.w_sum / stats.n;
+        const float w_sum = stats.w_sum;
         const float w_zd = stats.w_zd / stats.n;
         const auto lcs = layer_cossim.find(layer);
         const float cossim = (lcs != layer_cossim.end()) ? lcs->second : 0.0f;
