@@ -13800,10 +13800,6 @@ struct llm_build_glm4_moe : public llm_graph_context {
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(cur, "ffn_out", il);
             } else {
-                // MoE layer with shared experts
-                const int64_t n_expert      = hparams.n_expert;
-                const int64_t n_expert_used = hparams.n_expert_used;
-
                 // Process routed experts using existing MoE infrastructure
                 ggml_tensor * routed_out = build_moe_ffn(cur,
                         model.layers[il].ffn_gate_inp,
