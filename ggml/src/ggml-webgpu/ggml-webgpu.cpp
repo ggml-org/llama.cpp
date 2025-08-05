@@ -235,6 +235,10 @@ static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
 
 static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
     std::lock_guard<std::recursive_mutex> lock(ctx->mutex);
+    if (ctx->staged_command_bufs.empty()) {
+        // Nothing to submit
+        return;
+    }
     ctx->queue.Submit(ctx->staged_command_bufs.size(), ctx->staged_command_bufs.data());
     ctx->staged_command_bufs.clear();
     std::vector<webgpu_param_bufs> staged_param_bufs = std::move(ctx->staged_param_bufs);
