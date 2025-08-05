@@ -1112,7 +1112,7 @@ jobs:
   windows-latest-cmake-hip:
     if: false
 
-    if: ${{ github.event.inputs.create_release != 'true' }}
+    #if: ${{ github.event.inputs.create_release != 'true' }}
     runs-on: windows-2022
 
     steps:
@@ -1236,7 +1236,7 @@ jobs:
   openEuler-latest-cmake-cann:
     if: false
 
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'Ascend NPU') }}
+    #if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'Ascend NPU') }}
     defaults:
       run:
         shell: bash -el {0}
