@@ -15,7 +15,7 @@ add_library(mtmd
             mtmd-ios.h
             )
 
-# 在Apple平台上添加ANE相关文件
+# Add ANE related files on Apple platforms
 if(APPLE)
     target_sources(mtmd PRIVATE
         ane/ane.h
@@ -24,7 +24,7 @@ if(APPLE)
         ane/ane_minicpmv4_vit_f16.m
     )
     
-    # 为Objective-C文件启用ARC
+    # Enable ARC for Objective-C files
     set_source_files_properties(ane/ane.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
     set_source_files_properties(ane/ane_minicpmv4_vit_f16.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 endif()
@@ -40,7 +40,7 @@ target_include_directories(mtmd PRIVATE ../../src)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
-# 在Apple平台上链接CoreML和Accelerate框架
+# Link CoreML and Accelerate frameworks on Apple platforms
 if(APPLE)
     target_link_libraries(mtmd PRIVATE 
         "-framework Foundation" 
@@ -62,7 +62,7 @@ set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-ios.h
     )
 
-# 在Apple平台上添加ANE公共头文件
+# Add ANE public headers on Apple platforms
 if(APPLE)
     list(APPEND MTMD_PUBLIC_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/ane/ane.h
@@ -97,7 +97,7 @@ install                (TARGETS ${TARGET} RUNTIME BUNDLE DESTINATION .)
 target_link_libraries  (${TARGET} PRIVATE common mtmd Threads::Threads)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
-# iOS接口测试
+# iOS interface testing
 set(TARGET_IOS llama-mtmd-ios-test)
 add_executable         (${TARGET_IOS} mtmd-ios-example.cpp)
 set_target_properties  (${TARGET_IOS} PROPERTIES OUTPUT_NAME llama-mtmd-ios-test)
@@ -111,13 +111,13 @@ target_include_directories(${TARGET_IOS} PRIVATE ../../vendor)
 target_link_libraries  (${TARGET_IOS} PRIVATE mtmd common llama ggml Threads::Threads)
 target_compile_features(${TARGET_IOS} PRIVATE cxx_std_17)
 
-# 确保依赖库先构建
+# Ensure dependent libraries are built first
 add_dependencies(${TARGET_IOS} mtmd)
 if (TARGET common)
     add_dependencies(${TARGET_IOS} common)
 endif()
 
-# 在Apple平台上为iOS测试添加额外的链接设置
+# Add additional linking settings for iOS testing on Apple platforms
 if(APPLE)
     target_link_libraries(${TARGET_IOS} PRIVATE 
         "-framework Foundation" 
