@@ -231,9 +231,7 @@ static int compute_vector_statistics(std::vector<tensor_statistics> & tstats, co
     int z_score = 0;
     if (std_deviation > 0.0f) {
         for (const auto act : activations) {
-            if (const float p = (act - mean) / std_deviation; p > 1) {
-                z_score++;
-            }
+            if (const float z = (act - mean) / std_deviation; std::fabs(z) > 1.0f) z_score++;
         }
     }
 
