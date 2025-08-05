@@ -126,6 +126,8 @@ std::vector<common_chat_msg_diff> common_chat_msg_diff::compute_diffs(const comm
 typedef minja::chat_template common_chat_template;
 
 struct common_chat_templates {
+    bool add_bos;
+    bool add_eos;
     bool has_explicit_template; // Model had builtin template or template overridde was specified.
     std::unique_ptr<common_chat_template> template_default; // always set (defaults to chatml)
     std::unique_ptr<common_chat_template> template_tool_use;
@@ -143,6 +145,8 @@ struct templates_params {
     bool enable_thinking = true;
     std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
     json extra_context;
+    bool add_bos;
+    bool add_eos;
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -445,6 +449,8 @@ std::string common_chat_format_single(
 
     common_chat_templates_inputs inputs;
     inputs.use_jinja = use_jinja;
+    inputs.add_bos = tmpls->add_bos;
+    inputs.add_eos = tmpls->add_eos;
 
     std::string fmt_past_msg;
     if (!past_msg.empty()) {
@@ -469,6 +475,8 @@ std::string common_chat_format_single(
 std::string common_chat_format_example(const struct common_chat_templates * tmpls, bool use_jinja) {
     common_chat_templates_inputs inputs;
     inputs.use_jinja = use_jinja;
+    inputs.add_bos = tmpls->add_bos;
+    inputs.add_eos = tmpls->add_eos;
     auto add_simple_msg = [&](auto role, auto content) {
         common_chat_msg msg;
         msg.role = role;
@@ -546,6 +554,8 @@ common_chat_templates_ptr common_chat_templates_init(
     }
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
+    bool add_bos = false;
+    bool add_eos = false;
     if (model) {
         const auto * vocab = llama_model_get_vocab(model);
         const auto get_token = [&](llama_token token, const char * name, const char * jinja_variable_name) {
@@ -560,9 +570,13 @@ common_chat_templates_ptr common_chat_templates_init(
         };
         token_bos = get_token(llama_vocab_bos(vocab), "BOS", "bos_token");
         token_eos = get_token(llama_vocab_eos(vocab), "EOS", "eos_token");
+        add_bos = llama_vocab_get_add_bos(vocab);
+        add_eos = llama_vocab_get_add_eos(vocab);
     }
     common_chat_templates_ptr tmpls(new common_chat_templates());
     tmpls->has_explicit_template = has_explicit_template;
+    tmpls->add_bos = add_bos;
+    tmpls->add_eos = add_eos;
     try {
         tmpls->template_default = std::make_unique<minja::chat_template>(default_template_src, token_bos, token_eos);
     } catch (const std::exception & e) {
@@ -748,10 +762,10 @@ static std::string apply(
     // instead of using `chat_template_options.use_bos_token = false`, since these tokens
     // may be needed inside the template / between messages too.
     auto result = tmpl.apply(tmpl_inputs, tmpl_opts);
-    if (string_starts_with(result, tmpl.bos_token())) {
+    if (inputs.add_bos && string_starts_with(result, tmpl.bos_token())) {
         result = result.substr(tmpl.bos_token().size());
     }
-    if (string_ends_with(result, tmpl.eos_token())) {
+    if (inputs.add_eos && string_ends_with(result, tmpl.eos_token())) {
         result = result.substr(0, result.size() - tmpl.eos_token().size());
     }
     return result;
@@ -1731,6 +1745,8 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.enable_thinking = inputs.enable_thinking;
     params.grammar = inputs.grammar;
     params.now = inputs.now;
+    params.add_bos = inputs.add_bos;
+    params.add_eos = inputs.add_eos;
 
     params.extra_context = json::object();
     for (auto el : inputs.chat_template_kwargs) {
