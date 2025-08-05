@@ -7,6 +7,8 @@
 #include "ggml.h"
 
 
+bool llama_lora_validate_training_params(const struct llama_lora_training_params * params);
+
 ggml_context * llama_lora_create_context(size_t mem_size);
 
 bool llama_lora_create_tensor_pair(
@@ -30,6 +32,3 @@ bool llama_lora_allocate_buffers(
     struct llama_adapter_lora * adapter, 
     struct llama_model * model);
 
-bool llama_lora_register_adapter(
-    struct llama_context * ctx,
-    struct llama_adapter_lora * adapter);
