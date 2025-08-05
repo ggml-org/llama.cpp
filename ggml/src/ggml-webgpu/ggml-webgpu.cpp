@@ -495,9 +495,9 @@ static void ggml_webgpu_set_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
                                      (uint32_t) src->ne[1],
                                      (uint32_t) src->ne[2],
                                      (uint32_t) src->ne[3],
-                                     // broadcast shape of idx
-                                     (uint32_t) (src->ne[2] / idx->ne[1]),
-                                     (uint32_t) (src->ne[3] / idx->ne[2])
+                                     // Shape of idx
+                                     (uint32_t) (idx->ne[1]),
+                                     (uint32_t) (idx->ne[2])
     };
 
     std::vector<wgpu::BindGroupEntry> entries = {
@@ -512,18 +512,13 @@ static void ggml_webgpu_set_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
         { .binding = 2,
          .buffer  = ggml_backend_webgpu_tensor_buf(dst),
          .offset  = ggml_backend_webgpu_tensor_offset(dst),
-         .size    = ggml_nbytes(dst)  },
-        { .binding = 3,
-         .buffer  = ctx->debug_dev_buf,
-         .offset  = 0,
-         .size    = ctx->debug_dev_buf.GetSize() }
+         .size    = ggml_nbytes(dst)  }
     };
 
     size_t   max_wg_size = ctx->limits.maxComputeWorkgroupSizeX;
     uint32_t wg_x = (src->ne[1] * src->ne[2] * src->ne[3] + max_wg_size - 1) / max_wg_size;
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->set_rows_pipeline, params, entries, wg_x);
     ggml_backend_webgpu_submit_queue(ctx);
-    ggml_backend_webgpu_debug(ctx);
 }
 
 static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst) {
