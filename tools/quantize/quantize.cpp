@@ -611,7 +611,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
         if (!try_parse_ftype(argv[arg_idx], params.ftype, ftype_str)) {
-            fprintf(stderr, "%s: invalid ftype '%s'\n", __func__, argv[3]);
+            fprintf(stderr, "%s: invalid ftype '%s'\n", __func__, argv[arg_idx]);
             return 1;
         }
         if (ftype_str == "COPY") {

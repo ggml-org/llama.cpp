@@ -106,7 +106,7 @@ if(NOT TARGET ggml::ggml)
 
     find_library(GGML_LIBRARY ggml
         REQUIRED
-        HINTS ${GGML_LIB_DIR}
+        HINTS ${GGML_LIB_DIR} ${GGML_BACKEND_DIR}
         NO_CMAKE_FIND_ROOT_PATH)
 
     add_library(ggml::ggml UNKNOWN IMPORTED)
