@@ -26,7 +26,7 @@
 
 /* Constants */
 
-#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 16
+#define WEBGPU_COMMAND_SUBMIT_BATCH_SIZE 1
 #define WEBGPU_MUL_MAT_WG_SIZE           64
 #define WEBGPU_NUM_PARAM_BUFS            100
 #define WEBGPU_PARAMS_BUF_SIZE_BYTES     256
@@ -329,6 +329,7 @@ static void ggml_backend_webgpu_build_and_enqueue(webgpu_context &              
             ggml_backend_webgpu_submit_queue(ctx);
         }
     }
+    ggml_backend_webgpu_wait_on_submission(ctx);
 }
 
 static void ggml_backend_webgpu_buffer_memset(webgpu_context & ctx,
