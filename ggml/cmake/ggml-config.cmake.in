@@ -106,7 +106,7 @@ if(NOT TARGET ggml::ggml)
 
     find_library(GGML_LIBRARY ggml
         REQUIRED
-        HINTS ${GGML_LIB_DIR} ${GGML_BACKEND_DIR}
+        HINTS ${GGML_LIB_DIR}
         NO_CMAKE_FIND_ROOT_PATH)
 
     add_library(ggml::ggml UNKNOWN IMPORTED)
@@ -125,54 +125,56 @@ if(NOT TARGET ggml::ggml)
             IMPORTED_LOCATION "${GGML_BASE_LIBRARY}")
 
     set(_ggml_all_targets "")
-    foreach(_ggml_backend ${GGML_AVAILABLE_BACKENDS})
-        string(REPLACE "-" "_" _ggml_backend_pfx "${_ggml_backend}")
-        string(TOUPPER "${_ggml_backend_pfx}" _ggml_backend_pfx)
+    if (NOT GGML_BACKEND_DL)
+        foreach(_ggml_backend ${GGML_AVAILABLE_BACKENDS})
+            string(REPLACE "-" "_" _ggml_backend_pfx "${_ggml_backend}")
+            string(TOUPPER "${_ggml_backend_pfx}" _ggml_backend_pfx)
 
-        find_library(${_ggml_backend_pfx}_LIBRARY ${_ggml_backend}
-            REQUIRED
-            HINTS ${GGML_LIB_DIR}
-            NO_CMAKE_FIND_ROOT_PATH)
+            find_library(${_ggml_backend_pfx}_LIBRARY ${_ggml_backend}
+                REQUIRED
+                HINTS ${GGML_LIB_DIR}
+                NO_CMAKE_FIND_ROOT_PATH)
 
-        message(STATUS "Found ${${_ggml_backend_pfx}_LIBRARY}")
+            message(STATUS "Found ${${_ggml_backend_pfx}_LIBRARY}")
 
-        add_library(ggml::${_ggml_backend} UNKNOWN IMPORTED)
-        set_target_properties(ggml::${_ggml_backend}
-            PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "${GGML_INCLUDE_DIR}"
-                IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
-                IMPORTED_LOCATION "${${_ggml_backend_pfx}_LIBRARY}"
-                INTERFACE_COMPILE_FEATURES c_std_90
-                POSITION_INDEPENDENT_CODE ON)
-
-        string(REGEX MATCH "^ggml-cpu" is_cpu_variant "${_ggml_backend}")
-        if(is_cpu_variant)
-            list(APPEND GGML_CPU_INTERFACE_LINK_LIBRARIES "ggml::ggml-base")
-            set_target_properties(ggml::${_ggml_backend}
-            PROPERTIES
-                INTERFACE_LINK_LIBRARIES "${GGML_CPU_INTERFACE_LINK_LIBRARIES}")
-
-            if(GGML_CPU_INTERFACE_LINK_OPTIONS)
-                set_target_properties(ggml::${_ggml_backend}
-                    PROPERTIES
-                        INTERFACE_LINK_OPTIONS "${GGML_CPU_INTERFACE_LINK_OPTIONS}")
-            endif()
-
-        else()
-            list(APPEND ${_ggml_backend_pfx}_INTERFACE_LINK_LIBRARIES "ggml::ggml-base")
+            add_library(ggml::${_ggml_backend} UNKNOWN IMPORTED)
             set_target_properties(ggml::${_ggml_backend}
                 PROPERTIES
-                    INTERFACE_LINK_LIBRARIES "${${_ggml_backend_pfx}_INTERFACE_LINK_LIBRARIES}")
+                    INTERFACE_INCLUDE_DIRECTORIES "${GGML_INCLUDE_DIR}"
+                    IMPORTED_LINK_INTERFACE_LANGUAGES "CXX"
+                    IMPORTED_LOCATION "${${_ggml_backend_pfx}_LIBRARY}"
+                    INTERFACE_COMPILE_FEATURES c_std_90
+                    POSITION_INDEPENDENT_CODE ON)
 
-            if(${_ggml_backend_pfx}_INTERFACE_LINK_OPTIONS)
+            string(REGEX MATCH "^ggml-cpu" is_cpu_variant "${_ggml_backend}")
+            if(is_cpu_variant)
+                list(APPEND GGML_CPU_INTERFACE_LINK_LIBRARIES "ggml::ggml-base")
+                set_target_properties(ggml::${_ggml_backend}
+                PROPERTIES
+                    INTERFACE_LINK_LIBRARIES "${GGML_CPU_INTERFACE_LINK_LIBRARIES}")
+
+                if(GGML_CPU_INTERFACE_LINK_OPTIONS)
+                    set_target_properties(ggml::${_ggml_backend}
+                        PROPERTIES
+                            INTERFACE_LINK_OPTIONS "${GGML_CPU_INTERFACE_LINK_OPTIONS}")
+                endif()
+
+            else()
+                list(APPEND ${_ggml_backend_pfx}_INTERFACE_LINK_LIBRARIES "ggml::ggml-base")
                 set_target_properties(ggml::${_ggml_backend}
                     PROPERTIES
-                        INTERFACE_LINK_OPTIONS "${${_ggml_backend_pfx}_INTERFACE_LINK_OPTIONS}")
-            endif()
-        endif()
+                        INTERFACE_LINK_LIBRARIES "${${_ggml_backend_pfx}_INTERFACE_LINK_LIBRARIES}")
 
-        list(APPEND _ggml_all_targets ggml::${_ggml_backend})
-    endforeach()
+                if(${_ggml_backend_pfx}_INTERFACE_LINK_OPTIONS)
+                    set_target_properties(ggml::${_ggml_backend}
+                        PROPERTIES
+                            INTERFACE_LINK_OPTIONS "${${_ggml_backend_pfx}_INTERFACE_LINK_OPTIONS}")
+                endif()
+            endif()
+
+            list(APPEND _ggml_all_targets ggml::${_ggml_backend})
+        endforeach()
+    endif()
 
     list(APPEND GGML_INTERFACE_LINK_LIBRARIES ggml::ggml-base "${_ggml_all_targets}")
     set_target_properties(ggml::ggml
