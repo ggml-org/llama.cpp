@@ -1009,7 +1009,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     qtype->to_float(new_data_03, deq.data(), deq.size());
 
                     double err = 0.0f;
-                    for (int i = 0; i < deq.size(); ++i) {
+                    for (int i = 0; i < (int) deq.size(); ++i) {
                         err += fabsf(deq[i] - x[i]);
                         //if (fabsf(deq[i] - x[i]) > 0.00001 && i < 256) {
                         if (deq[i] != x[i]) {
