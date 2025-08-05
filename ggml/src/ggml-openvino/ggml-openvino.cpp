@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ggml-backend-impl.h"
+#include "ggml-backend.h"
 #include "ggml-impl.h"
 #include "ggml-openvino/utils.h"
 #include "ggml.h"
@@ -332,8 +333,16 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor* op) {
     GGML_ASSERT(dev->reg != nullptr);
 
-    static const std::set<ggml_type> supported_types{
-        GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_I64, GGML_TYPE_I32};
+    static const std::set<ggml_type> supported_types{GGML_TYPE_F32,
+                                                     GGML_TYPE_F16,
+                                                     GGML_TYPE_BF16,
+                                                     GGML_TYPE_I64,
+                                                     GGML_TYPE_I32,
+                                                     GGML_TYPE_Q4_0,
+                                                     GGML_TYPE_Q4_1,
+                                                     GGML_TYPE_Q4_K,
+                                                     GGML_TYPE_Q8_0,
+                                                     GGML_TYPE_Q6_K};
 
     static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
                                                  GGML_OP_ADD,
@@ -411,7 +420,8 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    return ggml_backend_buft_is_host(buft);
+    // TODO quantized weigts are cpu_repack_buffer_type which does not implement ggml_backend_buft_is_host
+    return ggml_backend_buft_is_host(buft) || strcmp(buft->device->iface.get_name(buft->device), "CPU") == 0;
     GGML_UNUSED(dev);
 }
 
