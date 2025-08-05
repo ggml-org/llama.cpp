@@ -1359,7 +1359,7 @@ static bool show_statistics(const common_params & params) {
 
     const auto layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing aggregated statistics per layer (%ld layers)\n", layers);
-    LOG_INF("\n%6s\t%16s\t%7s\t%11s\n",
+    LOG_INF("\n%6s\t%13s\t%5s\t%10s\n",
     "Layer",
     tensor_calc_mode == 1 ? "L₂ Norm" : "Σ(Act²)",
     "ZD",
