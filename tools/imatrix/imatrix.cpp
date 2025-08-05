@@ -39,7 +39,7 @@ static const char * const LLM_KV_IMATRIX_CHUNK_COUNT = "imatrix.chunk_count";
 static const char * const LLM_KV_IMATRIX_CHUNK_SIZE  = "imatrix.chunk_size";
 
 struct Stats {
-    std::vector<float>   in_sum;
+    std::vector<float>   activations;
     std::vector<float>   values;
     std::vector<int64_t> counts;
 };
@@ -130,20 +130,20 @@ static void process_tensor_name(const std::string & input, std::string & layer, 
 static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     if (tstats.counts.empty()) return {};
     const size_t n_mat = tstats.counts.size();
-    const size_t len = !tstats.in_sum.empty() ? tstats.in_sum.size() : tstats.values.size();
+    const size_t len = !tstats.activations.empty() ? tstats.activations.size() : tstats.values.size();
 
     if (len == 0 || len % n_mat != 0) return {};
     const size_t row = len / n_mat;
     std::vector<float> vec;
     vec.reserve(len);
 
-    if (!tstats.in_sum.empty()) {
+    if (!tstats.activations.empty()) {
         for (size_t m = 0; m < n_mat; ++m) {
             const float c = (float)tstats.counts[m];
             if (c <= 0) return {};
             const size_t off = m * row;
             for (size_t j = 0; j < row; ++j) {
-                vec.push_back(tstats.in_sum[off + j] / c);
+                vec.push_back(tstats.activations[off + j] / c);
             }
         }
     } else {
@@ -172,11 +172,11 @@ static int compute_vector_statistics(std::vector<tensor_statistics> & tstats, co
 
     const int n_mat = e.counts.size();
     const int row_size = e.values.size() / n_mat;
-    const int calc_mode = e.in_sum.empty() ? 2 : 1;
+    const int calc_mode = e.activations.empty() ? 2 : 1;
 
     std::vector<float> activations;
 
-    if (e.in_sum.empty()) {
+    if (e.activations.empty()) {
         activations.reserve(e.values.size());
 
         for (int i = 0; i < n_mat; ++i) {
@@ -185,11 +185,11 @@ static int compute_vector_statistics(std::vector<tensor_statistics> & tstats, co
             }
         }
     } else {
-        activations.reserve(e.in_sum.size());
+        activations.reserve(e.activations.size());
 
         for (int i = 0; i < n_mat; ++i) {
             for (int j = 0; j < row_size; ++j) {
-                activations.push_back(e.in_sum[i*row_size + j] / e.counts[i]);
+                activations.push_back(e.activations[i*row_size + j] / e.counts[i]);
             }
         }
     }
@@ -282,7 +282,7 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
     // compute the L2 Norm (Euclidian Distance) between the same tensors in consecutive layers
     for (auto & ts : tstats) {
         ts.l2_norm = 0.0f;
-        if (ts.stats.in_sum.empty()) continue;
+        if (ts.stats.activations.empty()) continue;
 
         if (std::smatch match; std::regex_search(ts.tensor, match, pattern)) {
             const int blk = std::stoi(match[1]);
@@ -430,7 +430,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             e.counts.resize(n_as, e.counts[0]);
         }
         if (e.values.empty()) {
-            e.in_sum.resize(src1->ne[0]*n_as, 0);
+            e.activations.resize(src1->ne[0]*n_as, 0);
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(n_as, 0);
         }
@@ -462,7 +462,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     e.counts[ex]++;
 
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
-                        e.in_sum[e_start + j] += x[j];
+                        e.activations[e_start + j] += x[j];
                         e.values[e_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[e_start + j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[e_start + j], wname.c_str());
@@ -502,7 +502,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             }
         }
         if (e.values.empty()) {
-            e.in_sum.resize(src1->ne[0] * n_mat, 0);
+            e.activations.resize(src1->ne[0] * n_mat, 0);
             e.values.resize(src1->ne[0] * n_mat, 0);
             e.counts.resize(1, 0);
         }
@@ -521,7 +521,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                 for (int64_t row = 0; row < src1->ne[1]; ++row) {
                     const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->nb[3]);
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
-                        e.in_sum[mat_start + j] += x[j];
+                        e.activations[mat_start + j] += x[j];
                         e.values[mat_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[j], wname.c_str());
@@ -699,7 +699,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         }
 
         to_store.push_back(kv.first);
-        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.in_sum.size(), GGML_MEM_ALIGN);
+        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
     }
@@ -753,12 +753,12 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             gguf_add_tensor(ctx_gguf, in_sum2);
             gguf_add_tensor(ctx_gguf, counts);
 
-            if (!stat.in_sum.empty()) {
-                const int32_t nact = (int32_t) stat.in_sum.size();
+            if (!stat.activations.empty()) {
+                const int32_t nact = (int32_t) stat.activations.size();
                 struct ggml_tensor * in_sum  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nact / nmat, nmat);
                 ggml_format_name(in_sum, "%s.in_sum", name.c_str());
                 for (int32_t j = 0; j < nval; ++j) {
-                    ((float *) in_sum->data)[j] = (float) stat.in_sum[j];
+                    ((float *) in_sum->data)[j] = (float) stat.activations[j];
                 }
                 gguf_add_tensor(ctx_gguf, in_sum);
             }
@@ -949,7 +949,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         if (e.values.empty()) {
             e.values.resize(nval, 0.0f);
             if (in_sum != nullptr) {
-                e.in_sum.resize(nval, 0.0f);
+                e.activations.resize(nval, 0.0f);
             }
         } else if ((size_t) nval != e.values.size()) {
             LOG_ERR("%s: mismatched sums size for %s: %zu != %zu\n", __func__, name.c_str(), (size_t) nval, e.values.size());
@@ -980,7 +980,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
         }
         if (in_sum != nullptr) {
             for (int64_t j = 0; j < nval; j++) {
-                e.in_sum[j] += ((const float *) in_sum->data)[j];
+                e.activations[j] += ((const float *) in_sum->data)[j];
             }
         }
     }
@@ -1289,12 +1289,12 @@ static bool show_statistics(const common_params & params) {
     };
     std::sort(ts.begin(), ts.end(), tensor_comparer());
 
-    struct weighted_stats {
-        float w_sum    = 0.0f;
-        float w_zd     = 0.0f;
+    struct layer_stats {
+        float lyr_sum    = 0.0f;
+        float lyr_zd     = 0.0f;
         int   n        = 0;
     };
-    std::map<int, weighted_stats> ws;
+    std::map<int, layer_stats> ls;
 
     LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
     LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%12s\t%s\t%5s\t%10s\n",
@@ -1338,26 +1338,26 @@ static bool show_statistics(const common_params & params) {
                 100.0f * tstat.zd_score,
                 tstat.cossim);
 
-        const float w_zd     = tstat.elements * tstat.zd_score;
+        const float zd     = tstat.elements * tstat.zd_score;
 
-        if (ws.find(blk) != ws.end()) {
-            ws[blk].w_sum    += tstat.sum_values;
-            ws[blk].w_zd     += w_zd;
-            ws[blk].n        += tstat.elements;
+        if (ls.find(blk) != ls.end()) {
+            ls[blk].lyr_sum    += tstat.sum_values;
+            ls[blk].lyr_zd     += zd;
+            ls[blk].n        += tstat.elements;
         } else {
-            weighted_stats temp_ws;
-            temp_ws.w_sum    = tstat.sum_values;
-            temp_ws.w_zd     = w_zd;
-            temp_ws.n        = tstat.elements;
-            ws[blk]          = temp_ws;
+            layer_stats temp_ls;
+            temp_ls.lyr_sum    = tstat.sum_values;
+            temp_ls.lyr_zd     = zd;
+            temp_ls.n        = tstat.elements;
+            ls[blk]          = temp_ls;
         }
     }
 
-    std::map<int, float> layer_cossim;
-    std::map<int, float> layer_l2_norm;
-    compute_layer_statistics(ts, layer_cossim, layer_l2_norm, g_collector.get_mstats());
+    std::map<int, float> lyr_cossim;
+    std::map<int, float> lyr_l2_norm;
+    compute_layer_statistics(ts, lyr_cossim, lyr_l2_norm, g_collector.get_mstats());
 
-    const auto layers = std::count_if(ws.begin(), ws.end(), [](const auto & kv) { return kv.first >= 0; });
+    const auto layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing aggregated statistics per layer (%ld layers)\n", layers);
     LOG_INF("\n%6s\t%16s\t%7s\t%11s\n",
     "Layer",
@@ -1365,19 +1365,19 @@ static bool show_statistics(const common_params & params) {
     "ZD",
     "CosSim");
     LOG_INF("============================================\n");
-    for (const auto & [layer, stats] : ws) {
+    for (const auto & [layer, stats] : ls) {
         if (layer < 0 || stats.n == 0) continue;
-        const float w_sum = stats.w_sum;
-        const float w_zd = stats.w_zd / stats.n;
-        const auto lcs = layer_cossim.find(layer);
-        const float cossim = (lcs != layer_cossim.end()) ? lcs->second : 0.0f;
-        const auto ll2n = layer_l2_norm.find(layer);
-        const float l2_norm = (ll2n != layer_l2_norm.end()) ? ll2n->second : 0.0f;
+        const float lyr_sum = stats.lyr_sum;
+        const float lyr_zd = stats.lyr_zd / stats.n;
+        const auto lcs = lyr_cossim.find(layer);
+        const float lyr_cs = (lcs != lyr_cossim.end()) ? lcs->second : 0.0f;
+        const auto ll2n = lyr_l2_norm.find(layer);
+        const float l2_norm = (ll2n != lyr_l2_norm.end()) ? ll2n->second : 0.0f;
         LOG_INF("%5d\t%11.2f\t%6.2f%%\t%10.4f\n",
             layer,
-            tensor_calc_mode == 1 ? l2_norm: w_sum,
-            100.0f * w_zd,
-            cossim);
+            tensor_calc_mode == 1 ? l2_norm: lyr_sum,
+            100.0f * lyr_zd,
+            lyr_cs);
     }
     LOG_INF("\n");
 
