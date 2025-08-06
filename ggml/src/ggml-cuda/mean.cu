@@ -15,11 +15,11 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t nrows = ggml_nrows(src0);
 
     const dim3 block_nums(nrows, 1, 1);
-    if ((nrows / ctx.sm_count)< 2){
+    if ((nrows / ctx.sm_count) < 2) {
         constexpr dim3 block_dims(512, 1, 1);
-        reduce_rows_f32</*norm=*/ true><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+        reduce_rows_f32</*norm=*/true><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
     } else {
         const dim3 block_dims(ncols < 1024 ? 32 : 128, 1, 1);
-        reduce_rows_f32</*norm=*/ true><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+        reduce_rows_f32</*norm=*/true><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
     }
 }
