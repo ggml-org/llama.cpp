@@ -1,10 +1,15 @@
 #include "sumrows.cuh"
 #include "reduce_rows.cuh"
 
-void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
-    constexpr dim3 block_dims(512, 1, 1);
+void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream, int & n_sm) {
     const dim3 block_nums(nrows, 1, 1);
-    reduce_rows_f32</*norm*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    if ((nrows / n_sm)< 2){
+        const dim3 block_dims(512, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    } else {
+        const dim3 block_dims(128, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
+    }
 }
 
 void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -20,8 +25,15 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
 
-    constexpr dim3 block_dims(512, 1, 1);
     const dim3 block_nums(nrows, 1, 1);
-
-    reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    
+    if ((nrows / ctx.sm_count)< 2){
+        // Increase num threads to 512 for small nrows to better hide the latency
+        const dim3 block_dims(512, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    } else {
+        // Enough active SMs to hide latency, use smaller blocks to allow better scheduling
+        const dim3 block_dims(128, 1, 1);
+        reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
+    }
 }

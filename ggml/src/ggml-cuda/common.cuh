@@ -844,6 +844,7 @@ struct ggml_cuda_graph {
 struct ggml_backend_cuda_context {
     int device;
     std::string name;
+    int sm_count;
     cudaEvent_t copy_event = nullptr;
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
@@ -853,7 +854,8 @@ struct ggml_backend_cuda_context {
 
     explicit ggml_backend_cuda_context(int device) :
         device(device),
-        name(GGML_CUDA_NAME + std::to_string(device)) {
+        name(GGML_CUDA_NAME + std::to_string(device)),
+        sm_count(ggml_cuda_info().devices[device].nsm) {
     }
 
     ~ggml_backend_cuda_context();

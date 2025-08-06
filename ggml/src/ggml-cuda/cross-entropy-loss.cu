@@ -131,7 +131,7 @@ void ggml_cuda_cross_entropy_loss(ggml_backend_cuda_context & ctx, ggml_tensor *
     CUDA_CHECK(cudaGetLastError());
 
     // Combine results from individual blocks:
-    sum_f32_cuda(pool, dst_tmp.ptr, dst_d, blocks_num.x, stream);
+    sum_f32_cuda(pool, dst_tmp.ptr, dst_d, blocks_num.x, stream, ctx.sm_count);
 }
 
 void ggml_cuda_cross_entropy_loss_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
