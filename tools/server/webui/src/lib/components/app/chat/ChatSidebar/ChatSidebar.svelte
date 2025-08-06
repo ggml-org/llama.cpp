@@ -38,6 +38,11 @@
 	});
 
 	async function selectConversation(id: string) {
+		if (isSearchModeActive) {
+			isSearchModeActive = false;
+			searchQuery = '';
+		}
+
 		await goto(`/chat/${id}`);
 	}
 
