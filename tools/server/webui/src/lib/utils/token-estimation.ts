@@ -23,6 +23,8 @@ export function estimateTokenCount(text: string): number {
 
 /**
  * Estimate token count for a single message including its extras (attachments)
+ * @param message - The message to estimate tokens for
+ * @returns The estimated token count for the message
  */
 export function estimateMessageTokens(message: DatabaseMessage): number {
 	let totalTokens = 0;
@@ -63,6 +65,8 @@ export function estimateMessageTokens(message: DatabaseMessage): number {
 
 /**
  * Estimate total token count for a conversation including all messages
+ * @param messages - The messages to estimate tokens for
+ * @returns The estimated token count for the conversation
  */
 export function estimateConversationTokens(messages: DatabaseMessage[]): number {
 	let totalTokens = 0;
@@ -82,6 +86,9 @@ export function estimateConversationTokens(messages: DatabaseMessage[]): number 
 
 /**
  * Estimate tokens for a new message with extras before sending
+ * @param content - The content of the new message
+ * @param extras - The extras (attachments) of the new message
+ * @returns The estimated token count for the new message
  */
 export function estimateNewMessageTokens(content: string, extras?: DatabaseMessageExtra[]): number {
 	let totalTokens = estimateTokenCount(content);
@@ -115,6 +122,12 @@ export function estimateNewMessageTokens(content: string, extras?: DatabaseMessa
 
 /**
  * Check if adding a new message would exceed the context length
+ * @param existingMessages - The existing messages in the conversation
+ * @param newMessageContent - The content of the new message
+ * @param newMessageExtras - The extras (attachments) of the new message
+ * @param maxContextLength - The maximum allowed context length
+ * @param reserveTokens - Number of tokens to reserve for response generation (default: 512)
+ * @returns An object containing the estimated tokens, whether it would exceed the context length, and the maximum allowed tokens
  */
 export function wouldExceedContextLength(
 	existingMessages: DatabaseMessage[],

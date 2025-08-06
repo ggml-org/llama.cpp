@@ -1,3 +1,8 @@
+/**
+ * Utility functions for the webui application
+ * Exports commonly used helper functions for file processing, UI interactions, and data manipulation
+ */
+
 import autoResizeTextarea from './autoresize-textarea';
 import { copyCodeToClipboard, copyToClipboard } from './copy';
 import { convertPDFToText, convertPDFToImage, isPdfMimeType } from './pdf-processing';

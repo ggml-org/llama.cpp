@@ -1,3 +1,8 @@
+/**
+ * PDF processing utilities using PDF.js
+ * Handles PDF text extraction and image conversion in the browser
+ */
+
 import { browser } from '$app/environment';
 
 // Types for PDF.js (imported conditionally)
@@ -12,7 +17,10 @@ type TextItem = {
 // PDF.js instance (loaded dynamically)
 let pdfjs: any = null;
 
-// Initialize PDF.js only on the client side
+/**
+ * Initialize PDF.js only on the client side
+ * Sets up the PDF.js library and worker for processing
+ */
 async function initializePdfJs() {
 	if (!browser || pdfjs) return;
 	
@@ -31,6 +39,11 @@ async function initializePdfJs() {
 	}
 }
 
+/**
+ * Convert a File object to ArrayBuffer for PDF.js processing
+ * @param file - The PDF file to convert
+ * @returns Promise resolving to the file's ArrayBuffer
+ */
 async function getFileAsBuffer(file: File): Promise<ArrayBuffer> {
 	return new Promise((resolve, reject) => {
 		const reader = new FileReader();
@@ -49,6 +62,11 @@ async function getFileAsBuffer(file: File): Promise<ArrayBuffer> {
 }
 
 
+/**
+ * Extract text content from a PDF file
+ * @param file - The PDF file to process
+ * @returns Promise resolving to the extracted text content
+ */
 export async function convertPDFToText(file: File): Promise<string> {
 	if (!browser) {
 		throw new Error('PDF processing is only available in the browser');
@@ -80,6 +98,12 @@ export async function convertPDFToText(file: File): Promise<string> {
 	}
 }
 
+/**
+ * Convert PDF pages to PNG images as data URLs
+ * @param file - The PDF file to convert
+ * @param scale - Rendering scale factor (default: 1.5)
+ * @returns Promise resolving to array of PNG data URLs
+ */
 export async function convertPDFToImage(file: File, scale: number = 1.5): Promise<string[]> {
 	if (!browser) {
 		throw new Error('PDF processing is only available in the browser');
@@ -124,10 +148,20 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 	}
 }
 
+/**
+ * Check if a file is a PDF based on its MIME type
+ * @param file - The file to check
+ * @returns True if the file is a PDF
+ */
 export function isPdfFile(file: File): boolean {
 	return file.type === 'application/pdf';
 }
 
+/**
+ * Check if a MIME type represents a PDF
+ * @param mimeType - The MIME type to check
+ * @returns True if the MIME type is application/pdf
+ */
 export function isPdfMimeType(mimeType: string): boolean {
 	return mimeType === 'application/pdf';
 }

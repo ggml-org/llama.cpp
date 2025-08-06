@@ -2,6 +2,8 @@
  * Parses thinking content from a message that may contain <think> tags
  * Returns an object with thinking content and cleaned message content
  * Handles both complete <think>...</think> blocks and incomplete <think> blocks (streaming)
+ * @param content - The message content to parse
+ * @returns An object containing the extracted thinking content and the cleaned message content
  */
 export function parseThinkingContent(content: string): {
 	thinking: string | null;
@@ -38,6 +40,8 @@ export function parseThinkingContent(content: string): {
 
 /**
  * Checks if content contains an opening <think> tag (for streaming)
+ * @param content - The message content to check
+ * @returns True if the content contains an opening <think> tag
  */
 export function hasThinkingStart(content: string): boolean {
 	return content.includes('<think>');
@@ -45,6 +49,8 @@ export function hasThinkingStart(content: string): boolean {
 
 /**
  * Checks if content contains a closing </think> tag (for streaming)
+ * @param content - The message content to check
+ * @returns True if the content contains a closing </think> tag
  */
 export function hasThinkingEnd(content: string): boolean {
 	return content.includes('</think>');
@@ -53,6 +59,8 @@ export function hasThinkingEnd(content: string): boolean {
 /**
  * Extracts partial thinking content during streaming
  * Used when we have <think> but not yet </think>
+ * @param content - The message content to extract partial thinking from
+ * @returns An object containing the extracted partial thinking content and the remaining content
  */
 export function extractPartialThinking(content: string): {
 	thinking: string | null;

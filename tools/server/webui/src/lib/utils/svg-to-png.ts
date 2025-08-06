@@ -1,3 +1,9 @@
+/**
+ * Convert an SVG base64 data URL to a PNG data URL
+ * @param base64UrlSvg - The SVG base64 data URL to convert
+ * @param backgroundColor - Background color for the PNG (default: 'white')
+ * @returns Promise resolving to PNG data URL
+ */
 export function svgBase64UrlToPngDataURL(
 	base64UrlSvg: string,
 	backgroundColor: string = 'white'
@@ -46,10 +52,20 @@ export function svgBase64UrlToPngDataURL(
 	});
 }
 
+/**
+ * Check if a file is an SVG based on its MIME type
+ * @param file - The file to check
+ * @returns True if the file is an SVG
+ */
 export function isSvgFile(file: File): boolean {
 	return file.type === 'image/svg+xml';
 }
 
+/**
+ * Check if a MIME type represents an SVG
+ * @param mimeType - The MIME type to check
+ * @returns True if the MIME type is image/svg+xml
+ */
 export function isSvgMimeType(mimeType: string): boolean {
 	return mimeType === 'image/svg+xml';
 }
