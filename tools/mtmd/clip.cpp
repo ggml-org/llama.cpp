@@ -212,6 +212,7 @@ struct clip_layer {
     ggml_tensor * v_w = nullptr;
     ggml_tensor * v_b = nullptr;
     ggml_tensor * qkv_w = nullptr;
+    ggml_tensor * qkv_b = nullptr;
 
     ggml_tensor * o_w = nullptr;
     ggml_tensor * o_b = nullptr;
@@ -1552,7 +1553,7 @@ struct clip_graph {
         } else if (ctx->proj_type() == PROJECTOR_TYPE_VOXTRAL) {
             // projector
             cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
-            cur = ggml_gelu_erf(ctx0, cur);
+            cur = ggml_gelu_erf(ctx0,ld cur);
             cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
 
         } else {
@@ -1577,18 +1578,109 @@ struct clip_graph {
         ggml_tensor * inp = build_inp();
         inp = ggml_concat(ctx0, inp, model.class_embedding, 1);
 
-        // build ViT transformer
-        ggml_tensor * cur = build_vit(
-                                inp, n_pos,
-                                NORM_TYPE_NORMAL,
-                                hparams.ffn_op,
-                                model.position_embeddings,
-                                nullptr);
+        // Add position embeddings
+        inp = ggml_add(ctx0, inp, model.position_embeddings);
+        cb(inp, "pos_embed", -1);
+
+        ggml_tensor * inpL = inp;
+
+        // pre-layernorm
+        if (model.pre_ln_w) {
+            inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, NORM_TYPE_NORMAL, eps, -1);
+            cb(inpL, "pre_ln", -1);
+        }
+
+        // loop over layers
+        for (int il = 0; il < n_layer; il++) {
+            auto & layer = model.layers[il];
+            ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
+
+            // Note: cogvlm applies layernorm after attention, not before
+            // So we skip the layernorm1 here
+
+            // self-attention
+            {
+                // Use combined qkv_w and qkv_b instead of separate Q, K, V tensors
+                ggml_tensor * qkv = ggml_mul_mat(ctx0, layer.qkv_w, cur);
+                if (layer.qkv_b) {
+                    qkv = ggml_add(ctx0, qkv, layer.qkv_b);
+                }
+
+                // Split qkv into Q, K, V along the first dimension
+                // qkv shape: [3 * n_embd, n_pos] -> split into [n_embd, n_pos] each
+                ggml_tensor * Qcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos, 
+                    ggml_row_size(qkv->type, n_embd), 0);
+                ggml_tensor * Kcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos, 
+                    ggml_row_size(qkv->type, n_embd), n_embd * ggml_element_size(qkv));
+                ggml_tensor * Vcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos, 
+                    ggml_row_size(qkv->type, n_embd), 2 * n_embd * ggml_element_size(qkv));
+
+                Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
+                Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                cur = build_attn(layer.o_w, layer.o_b,
+                    Qcur, Kcur, Vcur, nullptr, kq_scale, il);
+                cb(cur, "attn_out", il);
+            }
+
+            if (layer.ls_1_w) {
+                cur = ggml_mul(ctx0, cur, layer.ls_1_w);
+                cb(cur, "attn_out_scaled", il);
+            }
+
+            // Apply layernorm after attention for cogvlm
+            cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
+            cb(cur, "attn_post_norm", il);
+
+            // re-add the layer input, e.g., residual
+            cur = ggml_add(ctx0, cur, inpL);
+
+            inpL = cur; // inpL = residual, cur = hidden_states
+
+            cb(cur, "ffn_inp", il);
+
+            // Note: cogvlm applies layernorm after mlp, not before
+            // So we skip the layernorm2 here
+
+            // ffn
+            cur = build_ffn(cur,
+                layer.ff_up_w, layer.ff_up_b,
+                layer.ff_gate_w, layer.ff_gate_b,
+                layer.ff_down_w, layer.ff_down_b,
+                hparams.ffn_op, il);
+
+            cb(cur, "ffn_out", il);
+
+            if (layer.ls_2_w) {
+                cur = ggml_mul(ctx0, cur, layer.ls_2_w);
+                cb(cur, "ffn_out_scaled", il);
+            }
+
+            // Apply layernorm after mlp for cogvlm
+            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
+            cb(cur, "ffn_post_norm", il);
+
+            // residual 2
+            cur = ggml_add(ctx0, inpL, cur);
+            cb(cur, "layer_out", il);
+
+            inpL = cur;
+        }
+
+        // post-layernorm
+        if (model.post_ln_w) {
+            inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, NORM_TYPE_NORMAL, eps, -1);
+        }
 
         // remove CLS token (like build_llama4 does)
-        cur = ggml_view_2d(ctx0, cur,
+        cur = ggml_view_2d(ctx0, inpL,
             n_embd, n_patches,
-            ggml_row_size(cur->type, n_embd), 0);
+            ggml_row_size(inpL->type, n_embd), 0);
 
         // Multiply with mm_model_proj
         cur = ggml_mul_mat(ctx0, model.mm_model_proj, cur);
@@ -1671,10 +1763,8 @@ private:
             ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 
             // layernorm1
-            if (ctx->proj_type() != PROJECTOR_TYPE_COGVLM) {
-                cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
-                cb(cur, "layer_inp_normed", il);
-            }
+            cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
+            cb(cur, "layer_inp_normed", il);
 
             // self-attention
             {
@@ -1728,11 +1818,7 @@ private:
                 cb(cur, "attn_out_scaled", il);
             }
 
-            // Apply layernorm after attention for cogvlm
-            if (ctx->proj_type() == PROJECTOR_TYPE_COGVLM) {
-                cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
-                cb(cur, "attn_post_norm", il);
-            }
+
 
             // re-add the layer input, e.g., residual
             cur = ggml_add(ctx0, cur, inpL);
@@ -1742,10 +1828,8 @@ private:
             cb(cur, "ffn_inp", il);
 
             // layernorm2
-            if (ctx->proj_type() != PROJECTOR_TYPE_COGVLM) {
-                cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
-                cb(cur, "ffn_inp_normed", il);
-            }
+            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
+            cb(cur, "ffn_inp_normed", il);
 
             // ffn
             cur = build_ffn(cur,
@@ -1761,11 +1845,7 @@ private:
                 cb(cur, "ffn_out_scaled", il);
             }
 
-            // Apply layernorm after mlp for cogvlm
-            if (ctx->proj_type() == PROJECTOR_TYPE_COGVLM) {
-                cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
-                cb(cur, "ffn_post_norm", il);
-            }
+
 
             // residual 2
             cur = ggml_add(ctx0, inpL, cur);
