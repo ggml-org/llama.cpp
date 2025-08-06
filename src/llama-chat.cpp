@@ -625,8 +625,6 @@ int32_t llm_chat_apply_template(
     } else if (tmpl == LLM_CHAT_TEMPLATE_YANDEX) {
         // Yandex template ("\n\n" is defined as EOT token)
 
-        ss << "<s>";
-
         for (size_t i = 0; i < chat.size(); i++) {
             std::string role(chat[i]->role);
             if (role == "user") {
