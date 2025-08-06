@@ -14,6 +14,7 @@
 #include <map>
 #include <memory>
 #include <openvino/core/dimension.hpp>
+#include <openvino/core/except.hpp>
 #include <openvino/core/node.hpp>
 #include <openvino/core/partial_shape.hpp>
 #include <openvino/core/type/bfloat16.hpp>
@@ -22,6 +23,7 @@
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/parameter.hpp>
+#include <openvino/op/unsqueeze.hpp>
 #include <openvino/runtime/tensor.hpp>
 #include <ostream>
 #include <set>
@@ -415,6 +417,9 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
     auto node_shape = get_shape(tensor);
     auto ne_total = ggml_nelements(tensor);
 
+    OPENVINO_ASSERT(node_shape[0] == 1, "Got 3D weights, expect all weights to be 2D: ", tensor->name);
+
+    // F16 and F32 case
     if (node_type != ov::element::dynamic) {
         ov::Tensor weights(node_type, node_shape);
         memcpy(weights.data(), tensor->data, ne_total * node_type.size());
@@ -425,6 +430,9 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
         weight_node->set_friendly_name(tensor->name);
         return weight_node;
     }
+
+    // Quantized case
+    node_shape.erase(node_shape.begin());
 
     uint64_t weights_per_byte;
     if (tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q4_1 || tensor->type == GGML_TYPE_Q4_K) {
@@ -459,7 +467,7 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
     ov::Output<ov::Node> weight_node;
     if (tensor->type == GGML_TYPE_Q4_0) {
         extract_q4_0_data(tensor, weights, scales, biases);
-        weight_node = make_int8_weights(weights, scales, biases, weights_per_block);
+        weight_node = make_int4_weights(weights, scales, biases, weights_per_block);
     } else if (tensor->type == GGML_TYPE_Q4_1) {
         extract_q4_1_data(tensor, weights, scales, biases);
         weight_node = make_int4_weights(weights, scales, biases, weights_per_block);
@@ -474,7 +482,17 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
         extract_q4_k_data(tensor, weights, scales, biases);
         weight_node = make_int4_weights(weights, scales, biases, weights_per_block);
     }
+
+    OPENVINO_ASSERT(weight_node.get_shape().size() == 2, "Weight should be 2D");
+    // weight_node = std::make_shared<ov::op::v0::Unsqueeze>(
+    //     weight_node, ov::op::v0::Constant::create(ov::element::i64, ov::Shape{1}, {0}));
+
     weight_node.get_node_shared_ptr()->set_friendly_name(tensor->name);
+    // GGML_LOG_DEBUG("Created weight node: %s   %s %s%s\n",
+    //                tensor->name,
+    //                ggml_type_name(tensor->type),
+    //                weight_node.get_element_type().get_type_name().c_str(),
+    //                weight_node.get_partial_shape().to_string().c_str());
     return weight_node.get_node_shared_ptr();
 }
 

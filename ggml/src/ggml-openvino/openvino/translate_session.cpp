@@ -212,7 +212,6 @@ std::shared_ptr<Model> TranslateSession::apply_transformations(std::shared_ptr<M
         ov::pass::Manager manager;
         manager.set_per_pass_validation(true);
         manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
-        manager.register_pass<ov::pass::ConstantFolding>();
 
         if (!ggml_model_decoder->is_static()) {
             const auto kv_param_res_names = ggml_model_decoder->get_kv_param_res_names();

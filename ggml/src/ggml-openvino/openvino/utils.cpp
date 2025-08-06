@@ -17,6 +17,8 @@
 #include <openvino/op/transpose.hpp>
 #include <string>
 
+#include "ggml-impl.h"
+
 namespace ov {
 namespace frontend {
 namespace ggml {
