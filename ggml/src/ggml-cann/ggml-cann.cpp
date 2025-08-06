@@ -2260,7 +2260,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
         if (cann_ctx->cann_graph == nullptr) {
             cann_ctx->cann_graph.reset(new ggml_cann_graph());
             cann_graph_update_required = true;
-        } 
+        }
 
         cann_graph_update_required = is_cann_graph_update_required(cann_ctx, cgraph);
         set_ggml_graph_node_properties(cann_ctx, cgraph);

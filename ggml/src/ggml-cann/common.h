@@ -370,7 +370,7 @@ struct ggml_backend_cann_context {
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
-    std::unique_ptr<ggml_cann_graph> cann_graph; 
+    std::unique_ptr<ggml_cann_graph> cann_graph;
 #endif
     cann_task_queue task_queue;
     bool async_mode;
@@ -390,7 +390,7 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
-        
+
         support_set_rows = parse_bool(get_env("LLAMA_SET_ROWS").value_or(""));
         GGML_LOG_INFO("%s: LLAMA_SET_ROWS is %s\n", __func__, support_set_rows ? "ON" : "OFF");
 
