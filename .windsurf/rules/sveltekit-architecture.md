@@ -2,42 +2,43 @@
 trigger: manual
 ---
 
-# SvelteKit Architecture Rules
+# Coding rules
 
-## Services vs Stores Separation Pattern
+## Svelte & SvelteKit
 
-### `lib/services/` - Pure Business Logic
-- **Purpose**: Stateless business logic and external communication
-- **Contains**: 
-  - Database operations (DatabaseService)
-  - API calls to external services (ApiService) 
-  - Pure business logic functions (ChatService, etc.)
-- **Rules**:
-  - NO Svelte runes ($state, $derived, $effect)
-  - NO reactive state management
-  - Pure functions and classes only
-  - Can import types but not stores
-  - Focus on "how" - implementation details
+### Services vs Stores Separation Pattern
 
-### `lib/stores/` - Reactive State Management  
-- **Purpose**: Svelte-specific reactive state with runes
-- **Contains**:
-  - Reactive state classes with $state, $derived, $effect
-  - UI-focused state management
-  - Store orchestration logic
-- **Rules**:
-  - USE Svelte runes for reactivity
-  - Import and use services for business logic
-  - NO direct database operations
-  - NO direct API calls (use services)
-  - Focus on "what" - reactive state for UI
+#### `lib/services/` - Pure Business Logic
 
-### Enforcement
-- Services should be testable without Svelte
-- Stores should leverage Svelte's reactivity system
-- Clear separation: services handle data, stores handle state
-- Services can be reused across multiple stores
+-   **Purpose**: Stateless business logic and external communication
+-   **Contains**:
+    -   Database operations (DatabaseService)
+    -   API calls to external services (ApiService)
+    -   Pure business logic functions (ChatService, etc.)
+-   **Rules**:
+    -   NO Svelte runes ($state, $derived, $effect)
+    -   NO reactive state management
+    -   Pure functions and classes only
+    -   Can import types but not stores
+    -   Focus on "how" - implementation details
 
-### Tailwind & CSS
+#### `lib/stores/` - Reactive State Management
 
-- We are using Tailwind v4 which uses oklch colors so we now want to refer to the CSS vars directly, without wrapping it with any color function like `hsla/hsl`, `rgba` etc.
+-   **Purpose**: Svelte-specific reactive state with runes
+-   **Contains**:
+    -   Reactive state classes with $state, $derived, $effect
+    -   UI-focused state management
+    -   Store orchestration logic
+-   **Rules**:
+    -   USE Svelte runes for reactivity
+    -   Import and use services for business logic
+    -   NO direct database operations
+    -   NO direct API calls (use services)
+    -   Focus on "what" - reactive state for UI
+
+#### Enforcement
+
+-   Services should be testable without Svelte
+-   Stores should leverage Svelte's reactivity system
+-   Clear separation: services handle data, stores handle state
+-   Services can be reused across multiple stores
