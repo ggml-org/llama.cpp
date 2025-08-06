@@ -43,9 +43,9 @@
 			<Server class="mr-1 h-3 w-3" />
 			{model || 'Unknown Model'}
 		</Badge>
-		{#if serverData.n_ctx}
+		{#if serverData.default_generation_settings.n_ctx}
 			<Badge variant="secondary" class="text-xs">
-				ctx: {serverData.n_ctx.toLocaleString()}
+				ctx: {serverData.default_generation_settings.n_ctx.toLocaleString()}
 			</Badge>
 		{/if}
 	{/if}

@@ -1,19 +1,17 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Settings, Filter, Hand, MessageSquare, Plus, Beaker } from '@lucide/svelte';
-	import type { FieldConfig } from '$lib/types/settings';
+	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+	import { type SettingsConfigType, type FieldConfig } from '$lib/types/settings';
 	import {
-		getConfig,
-		setConfig,
-		resetConfig,
-		CONFIG_DEFAULT,
-		type ConfigType
-	} from '$lib/utils/settings';
+		config,
+		updateMultipleConfig,
+		resetConfig
+	} from '$lib/stores/settings.svelte';
 	import ChatSettingsFooter from './ChatSettingsFooter.svelte';
 	import ChatSettingsSection from './ChatSettingsSection.svelte';
 
@@ -24,22 +22,26 @@
 
 	let { onOpenChange, open = false }: Props = $props();
 
-	// Load configuration from localStorage
-	let config: ConfigType = $state(getConfig());
+	let localConfig: SettingsConfigType = $state({ ...config() });
 
-	// Use CONFIG_DEFAULT for placeholders to avoid state reference issues
-	const defaultConfig = CONFIG_DEFAULT;
+	$effect(() => {
+		if (open) {
+			localConfig = { ...config() };
+		}
+	});
+
+	const defaultConfig = SETTING_CONFIG_DEFAULT;
 
 	function handleSave() {
-		// Save configuration to localStorage
-		setConfig(config);
-		console.log('Settings saved to localStorage');
+		updateMultipleConfig(localConfig);
+
 		onOpenChange?.(false);
 	}
 
 	function handleReset() {
-		// Reset to default configuration
-		config = resetConfig();
+		resetConfig();
+
+		localConfig = { ...SETTING_CONFIG_DEFAULT };
 	}
 
 	function handleClose() {
@@ -136,7 +138,7 @@
 		}
 	];
 
-	const currentSection = $derived(
+	let currentSection = $derived(
 		settingSections.find((section) => section.title === activeSection) || settingSections[0]
 	);
 </script>
@@ -175,9 +177,9 @@
 
 									<Input
 										id={field.key}
-										value={String(config[field.key] || '')}
+										value={String(localConfig[field.key] || '')}
 										onchange={(e) =>
-											(config[field.key] = e.currentTarget.value)}
+											(localConfig[field.key] = e.currentTarget.value)}
 										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
 										class="max-w-md"
 									/>
@@ -193,9 +195,9 @@
 
 									<Textarea
 										id={field.key}
-										value={String(config[field.key] || '')}
+										value={String(localConfig[field.key] || '')}
 										onchange={(e) =>
-											(config[field.key] = e.currentTarget.value)}
+											(localConfig[field.key] = e.currentTarget.value)}
 										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
 										class="min-h-[100px] max-w-2xl"
 									/>
@@ -208,9 +210,9 @@
 									<div class="flex items-start space-x-3">
 										<Checkbox
 											id={field.key}
-											checked={Boolean(config[field.key])}
+											checked={Boolean(localConfig[field.key])}
 											onCheckedChange={(checked) =>
-												(config[field.key] = checked)}
+												(localConfig[field.key] = checked)}
 											class="mt-1"
 										/>
 
