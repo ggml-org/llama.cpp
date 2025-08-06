@@ -193,11 +193,11 @@ llm_chat_template llm_chat_detect_template(const std::string & tmpl) {
         return LLM_CHAT_TEMPLATE_LLAMA4;
     } else if (tmpl_contains("<|endofuserprompt|>")) {
         return LLM_CHAT_TEMPLATE_DOTS1;
-    } else if (tmpl_contains("<|startoftext|>") && tmpl_contains("<|extra_4|>")) {
+    } else if (tmpl_contains("<|extra_0|>") && tmpl_contains("<|extra_4|>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_MOE;
     } else if (tmpl_contains("<|start|>") && tmpl_contains("<|channel|>")) {
         return LLM_CHAT_TEMPLATE_OPENAI_MOE;
-    } else if (tmpl_contains("<｜hy_place▁holder▁no▁2｜>") && tmpl_contains("<｜hy_place▁holder▁no▁3｜>")) {
+    } else if (tmpl_contains("<｜hy_Assistant｜>") && tmpl_contains("<｜hy_place▁holder▁no▁3｜>")) {
         return LLM_CHAT_TEMPLATE_HUNYUAN_DENSE;
     } else if (tmpl_contains("<|im_assistant|>assistant<|im_middle|>")) {
         return LLM_CHAT_TEMPLATE_KIMI_K2;
