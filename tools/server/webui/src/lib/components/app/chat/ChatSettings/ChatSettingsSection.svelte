@@ -10,9 +10,11 @@
 	let { children, title, icon }: Props = $props();
 </script>
 
-<div class="flex-column flex items-center gap-2 border-b pb-2">
-	{@render icon({ class: 'h-5 w-5' })}
-	<h3 class="text-lg font-semibold">{title}</h3>
+<div>
+	<div class="border-border/30 flex items-center gap-2 border-b pb-2">
+		{@render icon({ class: 'h-5 w-5' })}
+		<h3 class="text-lg font-semibold">{title}</h3>
+	</div>
 
 	<div class="space-y-6">
 		{@render children()}

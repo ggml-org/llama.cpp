@@ -22,7 +22,7 @@
 	}
 </script>
 
-<div class="flex justify-between border-t p-6">
+<div class="border-border/30 flex justify-between border-t p-6">
 	<Button variant="outline" onclick={handleReset}>Reset to default</Button>
 	<div class="flex gap-2">
 		<Button variant="outline" onclick={handleClose}>Close</Button>

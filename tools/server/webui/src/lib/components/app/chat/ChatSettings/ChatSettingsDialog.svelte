@@ -6,7 +6,16 @@
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Settings, Filter, Hand, MessageSquare, Plus, Beaker } from '@lucide/svelte';
-	import type { ConfigValue, FieldConfig } from '$lib/types/settings';
+	import type { FieldConfig } from '$lib/types/settings';
+	import {
+		getConfig,
+		setConfig,
+		resetConfig,
+		CONFIG_DEFAULT,
+		type ConfigType
+	} from '$lib/utils/settings';
+	import ChatSettingsFooter from './ChatSettingsFooter.svelte';
+	import ChatSettingsSection from './ChatSettingsSection.svelte';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
@@ -15,59 +24,22 @@
 
 	let { onOpenChange, open = false }: Props = $props();
 
-	// Mock configuration - will be replaced with real stores
-	let config: Record<string, ConfigValue> = $state({
-		// General
-		apiKey: '',
-		systemMessage: '',
-		temperature: 0.8,
-		top_k: 40,
-		top_p: 0.95,
-		min_p: 0.05,
-		max_tokens: 2048,
-		pasteLongTextToFileLen: 2000,
-		pdfAsImage: false,
+	// Load configuration from localStorage
+	let config: ConfigType = $state(getConfig());
 
-		// Samplers
-		samplers: 'top_k;tfs_z;typical_p;top_p;min_p;temperature',
-		dynatemp_range: 0.0,
-		dynatemp_exponent: 1.0,
-		typical_p: 1.0,
-		xtc_probability: 0.0,
-		xtc_threshold: 0.1,
-
-		// Penalties
-		repeat_last_n: 64,
-		repeat_penalty: 1.0,
-		presence_penalty: 0.0,
-		frequency_penalty: 0.0,
-		dry_multiplier: 0.0,
-		dry_base: 1.75,
-		dry_allowed_length: 2,
-		dry_penalty_last_n: -1,
-
-		// Reasoning
-		showThoughtInProgress: true,
-		excludeThoughtOnReq: false,
-
-		// Advanced
-		showTokensPerSecond: false,
-		custom: '',
-
-		// Experimental
-		pyInterpreterEnabled: false
-	});
-
-	const defaultConfig = $state.snapshot(config);
+	// Use CONFIG_DEFAULT for placeholders to avoid state reference issues
+	const defaultConfig = CONFIG_DEFAULT;
 
 	function handleSave() {
-		// TODO: Save to stores and localStorage
-		console.log('Saving config:', config);
+		// Save configuration to localStorage
+		setConfig(config);
+		console.log('Settings saved to localStorage');
 		onOpenChange?.(false);
 	}
 
 	function handleReset() {
-		Object.assign(config, defaultConfig);
+		// Reset to default configuration
+		config = resetConfig();
 	}
 
 	function handleClose() {
@@ -172,7 +144,7 @@
 <Dialog.Root {open} {onOpenChange}>
 	<Dialog.Content class="flex h-[64vh] flex-col gap-0 p-0" style="max-width: 48rem;">
 		<div class="flex flex-1 overflow-hidden">
-			<div class="w-64 border-r p-6">
+			<div class="border-border/30 w-64 border-r p-6">
 				<nav class="space-y-1 py-2">
 					<Dialog.Title class="mb-6 flex items-center gap-2">Settings</Dialog.Title>
 
@@ -193,12 +165,7 @@
 
 			<ScrollArea class="flex-1">
 				<div class="space-y-6 p-6">
-					<div class="flex items-center gap-2 border-b pb-2">
-						<currentSection.icon class="h-5 w-5" />
-						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
-					</div>
-
-					<div class="space-y-6">
+					<ChatSettingsSection title={currentSection.title} icon={currentSection.icon}>
 						{#each currentSection.fields as field}
 							<div class="space-y-2">
 								{#if field.type === 'input'}
@@ -265,7 +232,7 @@
 								{/if}
 							</div>
 						{/each}
-					</div>
+					</ChatSettingsSection>
 
 					<div class="mt-8 border-t pt-6">
 						<p class="text-muted-foreground text-xs">
@@ -276,14 +243,6 @@
 			</ScrollArea>
 		</div>
 
-		<div class="flex justify-between border-t p-6">
-			<Button variant="outline" onclick={handleReset}>Reset to default</Button>
-
-			<div class="flex gap-2">
-				<Button variant="outline" onclick={handleClose}>Close</Button>
-
-				<Button variant="default" onclick={handleSave}>Save</Button>
-			</div>
-		</div>
+		<ChatSettingsFooter onSave={handleSave} onReset={handleReset} onClose={handleClose} />
 	</Dialog.Content>
 </Dialog.Root>

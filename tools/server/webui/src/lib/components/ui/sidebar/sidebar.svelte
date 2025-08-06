@@ -42,7 +42,7 @@
 			data-sidebar="sidebar"
 			data-slot="sidebar"
 			data-mobile="true"
-			class="z-99999 bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden"
+			class="z-99999 sm:z-99 bg-sidebar text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden"
 			style="--sidebar-width: {SIDEBAR_WIDTH_MOBILE};"
 			{side}
 		>
@@ -80,7 +80,7 @@
 		<div
 			data-slot="sidebar-container"
 			class={cn(
-				'w-(--sidebar-width) z-999 fixed inset-y-0 hidden h-svh transition-[left,right,width] duration-200 ease-linear md:flex',
+				'w-(--sidebar-width) z-999 fixed inset-y-0 hidden h-svh transition-[left,right,width] duration-200 ease-linear md:z-0 md:flex',
 				side === 'left'
 					? 'left-0 group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)]'
 					: 'right-0 group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)]',
