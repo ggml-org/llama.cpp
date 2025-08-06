@@ -4,7 +4,7 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"dev": "vite dev & storybook dev -p 6006 --ci",
+		"dev": "vite dev --host 0.0.0.0 & storybook dev -p 6006 --ci",
 		"build": "vite build && ./scripts/post-build-cleanup.sh",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
