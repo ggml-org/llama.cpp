@@ -170,17 +170,12 @@
 </script>
 
 <Dialog.Root {open} {onOpenChange}>
-	<Dialog.Content class="flex h-[64vh] flex-col" style="max-width: 48rem;">
-		<Dialog.Header>
-			<Dialog.Title class="flex items-center gap-2">
-				<Settings class="h-5 w-5" />
-				Settings
-			</Dialog.Title>
-		</Dialog.Header>
-
+	<Dialog.Content class="flex h-[64vh] flex-col gap-0 p-0" style="max-width: 48rem;">
 		<div class="flex flex-1 overflow-hidden">
-			<div class="bg-muted/30 w-64 border-r p-4">
-				<nav class="space-y-1">
+			<div class="w-64 border-r p-6">
+				<nav class="space-y-1 py-2">
+					<Dialog.Title class="mb-6 flex items-center gap-2">Settings</Dialog.Title>
+
 					{#each settingSections as section}
 						<button
 							class="hover:bg-accent flex w-full cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors {activeSection ===
@@ -196,91 +191,89 @@
 				</nav>
 			</div>
 
-			<div class="flex flex-1 flex-col">
-				<ScrollArea class="flex-1 p-6">
-					<div class="space-y-6">
-						<div class="flex items-center gap-2 border-b pb-2">
-							<currentSection.icon class="h-5 w-5" />
-							<h3 class="text-lg font-semibold">{currentSection.title}</h3>
-						</div>
-
-						<div class="space-y-6">
-							{#each currentSection.fields as field}
-								<div class="space-y-2">
-									{#if field.type === 'input'}
-										<label for={field.key} class="block text-sm font-medium">
-											{field.label}
-										</label>
-
-										<Input
-											id={field.key}
-											value={String(config[field.key] || '')}
-											onchange={(e) =>
-												(config[field.key] = e.currentTarget.value)}
-											placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
-											class="max-w-md"
-										/>
-										{#if field.help}
-											<p class="text-muted-foreground mt-1 text-xs">
-												{field.help}
-											</p>
-										{/if}
-									{:else if field.type === 'textarea'}
-										<label for={field.key} class="block text-sm font-medium">
-											{field.label}
-										</label>
-
-										<Textarea
-											id={field.key}
-											value={String(config[field.key] || '')}
-											onchange={(e) =>
-												(config[field.key] = e.currentTarget.value)}
-											placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
-											class="min-h-[100px] max-w-2xl"
-										/>
-										{#if field.help}
-											<p class="text-muted-foreground mt-1 text-xs">
-												{field.help}
-											</p>
-										{/if}
-									{:else if field.type === 'checkbox'}
-										<div class="flex items-start space-x-3">
-											<Checkbox
-												id={field.key}
-												checked={Boolean(config[field.key])}
-												onCheckedChange={(checked) =>
-													(config[field.key] = checked)}
-												class="mt-1"
-											/>
-
-											<div class="space-y-1">
-												<label
-													for={field.key}
-													class="cursor-pointer text-sm font-medium leading-none"
-												>
-													{field.label}
-												</label>
-
-												{#if field.help}
-													<p class="text-muted-foreground text-xs">
-														{field.help}
-													</p>
-												{/if}
-											</div>
-										</div>
-									{/if}
-								</div>
-							{/each}
-						</div>
-
-						<div class="mt-8 border-t pt-6">
-							<p class="text-muted-foreground text-xs">
-								Settings are saved in browser's localStorage
-							</p>
-						</div>
+			<ScrollArea class="flex-1">
+				<div class="space-y-6 p-6">
+					<div class="flex items-center gap-2 border-b pb-2">
+						<currentSection.icon class="h-5 w-5" />
+						<h3 class="text-lg font-semibold">{currentSection.title}</h3>
 					</div>
-				</ScrollArea>
-			</div>
+
+					<div class="space-y-6">
+						{#each currentSection.fields as field}
+							<div class="space-y-2">
+								{#if field.type === 'input'}
+									<label for={field.key} class="block text-sm font-medium">
+										{field.label}
+									</label>
+
+									<Input
+										id={field.key}
+										value={String(config[field.key] || '')}
+										onchange={(e) =>
+											(config[field.key] = e.currentTarget.value)}
+										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
+										class="max-w-md"
+									/>
+									{#if field.help}
+										<p class="text-muted-foreground mt-1 text-xs">
+											{field.help}
+										</p>
+									{/if}
+								{:else if field.type === 'textarea'}
+									<label for={field.key} class="block text-sm font-medium">
+										{field.label}
+									</label>
+
+									<Textarea
+										id={field.key}
+										value={String(config[field.key] || '')}
+										onchange={(e) =>
+											(config[field.key] = e.currentTarget.value)}
+										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
+										class="min-h-[100px] max-w-2xl"
+									/>
+									{#if field.help}
+										<p class="text-muted-foreground mt-1 text-xs">
+											{field.help}
+										</p>
+									{/if}
+								{:else if field.type === 'checkbox'}
+									<div class="flex items-start space-x-3">
+										<Checkbox
+											id={field.key}
+											checked={Boolean(config[field.key])}
+											onCheckedChange={(checked) =>
+												(config[field.key] = checked)}
+											class="mt-1"
+										/>
+
+										<div class="space-y-1">
+											<label
+												for={field.key}
+												class="cursor-pointer text-sm font-medium leading-none"
+											>
+												{field.label}
+											</label>
+
+											{#if field.help}
+												<p class="text-muted-foreground text-xs">
+													{field.help}
+												</p>
+											{/if}
+										</div>
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+
+					<div class="mt-8 border-t pt-6">
+						<p class="text-muted-foreground text-xs">
+							Settings are saved in browser's localStorage
+						</p>
+					</div>
+				</div>
+			</ScrollArea>
 		</div>
 
 		<div class="flex justify-between border-t p-6">
