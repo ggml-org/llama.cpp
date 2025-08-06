@@ -2,6 +2,7 @@ package android.llama.cpp.internal
 
 import android.llama.cpp.InferenceEngine
 import android.llama.cpp.LLamaTier
+import android.llama.cpp.UnsupportedArchitectureException
 import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -143,7 +144,7 @@ internal class InferenceEngineImpl private constructor(
                 _state.value = InferenceEngine.State.LoadingModel
                 load(pathToModel).let {
                     // TODO-han.yin: find a better way to pass other error codes
-                    if (it != 0) throw IOException("Unsupported architecture")
+                    if (it != 0) throw UnsupportedArchitectureException()
                 }
                 prepare().let {
                     if (it != 0) throw IOException("Failed to prepare resources")
@@ -152,9 +153,8 @@ internal class InferenceEngineImpl private constructor(
                 _readyForSystemPrompt = true
                 _state.value = InferenceEngine.State.ModelReady
             } catch (e: Exception) {
-                val msg = e.message ?: "Unknown error"
-                Log.e(TAG, msg + "\n" + pathToModel, e)
-                _state.value = InferenceEngine.State.Error(msg)
+                Log.e(TAG, (e.message ?: "Error loading model") + "\n" + pathToModel, e)
+                _state.value = InferenceEngine.State.Error(e)
                 throw e
             }
         }
@@ -177,9 +177,10 @@ internal class InferenceEngineImpl private constructor(
             _state.value = InferenceEngine.State.ProcessingSystemPrompt
             processSystemPrompt(prompt).let { result ->
                 if (result != 0) {
-                    val errorMessage = "Failed to process system prompt: $result"
-                    _state.value = InferenceEngine.State.Error(errorMessage)
-                    throw IllegalStateException(errorMessage)
+                    RuntimeException("Failed to process system prompt: $result").also {
+                        _state.value = InferenceEngine.State.Error(it)
+                        throw it
+                    }
                 }
             }
             Log.i(TAG, "System prompt processed! Awaiting user prompt...")
@@ -225,7 +226,7 @@ internal class InferenceEngineImpl private constructor(
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error during generation!", e)
-            _state.value = InferenceEngine.State.Error(e.message ?: "Unknown error")
+            _state.value = InferenceEngine.State.Error(e)
             throw e
         }
     }.flowOn(llamaDispatcher)

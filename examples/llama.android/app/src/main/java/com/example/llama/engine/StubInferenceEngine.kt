@@ -80,7 +80,7 @@ class StubInferenceEngine : InferenceEngine {
                 // If coroutine is cancelled, propagate cancellation
                 throw e
             } catch (e: Exception) {
-                _state.value = State.Error(e.message ?: "Unknown error during model loading")
+                _state.value = State.Error(e)
             }
         }
 
@@ -107,7 +107,7 @@ class StubInferenceEngine : InferenceEngine {
                 // If coroutine is cancelled, propagate cancellation
                 throw e
             } catch (e: Exception) {
-                _state.value = State.Error(e.message ?: "Unknown error during model loading")
+                _state.value = State.Error(e)
             }
         }
 
@@ -142,13 +142,13 @@ class StubInferenceEngine : InferenceEngine {
             _state.value = State.ModelReady
             throw e
         } catch (e: Exception) {
-            _state.value = State.Error(e.message ?: "Unknown error during generation")
+            _state.value = State.Error(e)
             throw e
         }
     }.catch { e ->
         // If it's not a cancellation, update state to error
         if (e !is CancellationException) {
-            _state.value = State.Error(e.message ?: "Unknown error during generation")
+            _state.value = State.Error(Exception(e))
         }
         throw e
     }
@@ -198,7 +198,7 @@ class StubInferenceEngine : InferenceEngine {
                 _state.value = State.ModelReady
                 throw e
             } catch (e: Exception) {
-                _state.value = State.Error(e.message ?: "Unknown error during benchmarking")
+                _state.value = State.Error(e)
                 "Error: ${e.message}"
             }
         }

@@ -15,6 +15,8 @@ interface InferenceEngine {
 
     /**
      * Load a model from the given path.
+     *
+     * @throws UnsupportedArchitectureException if model architecture not supported
      */
     suspend fun loadModel(pathToModel: String)
 
@@ -61,7 +63,7 @@ interface InferenceEngine {
 
         object Generating : State()
 
-        data class Error(val errorMessage: String = "") : State()
+        data class Error(val exception: Exception) : State()
     }
 
     companion object {
@@ -81,3 +83,5 @@ val State.isModelLoaded: Boolean
         this !is State.Initialized &&
         this !is State.LoadingModel &&
         this !is State.UnloadingModel
+
+class UnsupportedArchitectureException : Exception()

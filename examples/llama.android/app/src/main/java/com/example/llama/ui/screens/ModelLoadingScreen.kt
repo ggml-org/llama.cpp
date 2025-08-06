@@ -1,6 +1,7 @@
 package com.example.llama.ui.screens
 
 import android.llama.cpp.InferenceEngine.State
+import android.llama.cpp.UnsupportedArchitectureException
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -112,7 +113,7 @@ fun ModelLoadingScreen(
 
     // Check if we're in a loading state
     val isLoading = engineState !is State.Initialized && engineState !is State.ModelReady
-    val errorMessage = (engineState as? State.Error)?.errorMessage
+    val exception = (engineState as? State.Error)?.exception
 
     // Handle back navigation requests
     BackHandler {
@@ -331,7 +332,7 @@ fun ModelLoadingScreen(
                 }
             },
             modifier = Modifier.fillMaxWidth().height(56.dp),
-            colors = if (errorMessage != null)
+            colors = if (exception != null)
                 ButtonDefaults.buttonColors(
                     disabledContainerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
                     disabledContentColor   = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.7f)
@@ -340,15 +341,21 @@ fun ModelLoadingScreen(
                 (!useSystemPrompt || hasActiveSystemPrompt)
         ) {
             when {
-                errorMessage != null -> {
+                exception != null -> {
+                    val message = if (exception is UnsupportedArchitectureException) {
+                        "Unsupported architecture: ${selectedModel?.metadata?.architecture?.architecture}"
+                    } else {
+                        exception.message ?: "Unknown error"
+                    }
+
                     Icon(
                         imageVector = Icons.Default.Error,
-                        contentDescription = errorMessage,
+                        contentDescription = message,
                         tint = MaterialTheme.colorScheme.error
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = errorMessage,
+                        text = message,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
                 }
