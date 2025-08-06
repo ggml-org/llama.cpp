@@ -18098,21 +18098,17 @@ struct llm_build_cogvlm : public llm_graph_context {
 
         for (int il = 0; il < n_layer; ++il) {
             // get either the text or image weight tensors
-            ggml_tensor * wq, * wk, * wv, * wo;
+            ggml_tensor * wqkv, * wo;
             ggml_tensor * ffn_gate, * ffn_down, * ffn_up;
 
             if (is_text) {
-                wq = model.layers[il].wq;
-                wk = model.layers[il].wk;
-                wv = model.layers[il].wv;
+                wqkv = model.layers[il].wqkv;
                 wo = model.layers[il].wo;
                 ffn_gate = model.layers[il].ffn_gate;
                 ffn_down = model.layers[il].ffn_down;
                 ffn_up = model.layers[il].ffn_up;
             } else {
-                wq = model.layers[il].visexp_attn_wq;
-                wk = model.layers[il].visexp_attn_wk;
-                wv = model.layers[il].visexp_attn_wv;
+                wqkv = model.layers[il].visexp_attn_wqkv;
                 wo = model.layers[il].visexp_attn_wo;
                 ffn_gate = model.layers[il].visexp_ffn_gate;
                 ffn_down = model.layers[il].visexp_ffn_down;
@@ -18124,14 +18120,19 @@ struct llm_build_cogvlm : public llm_graph_context {
 
             // build self attention
             {
-                ggml_tensor * Qcur = build_lora_mm(wq, cur);
-                cb(Qcur, "Qcur", il);
+                ggml_tensor * qkv = build_lora_mm(wqkv, cur);
+                cb(qkv, "qkv", il);
 
-                ggml_tensor * Kcur = build_lora_mm(wk, cur);
-                cb(Kcur, "Kcur", il);
-
-                ggml_tensor * Vcur = build_lora_mm(wv, cur);
-                cb(Vcur, "Vcur", il);
+                // split qkv into Q, K, V along the first dimension
+                ggml_tensor * Qcur = ggml_view_2d(ctx0, qkv,
+                    n_embd, n_tokens,
+                    ggml_row_size(qkv->type, n_embd), 0);
+                ggml_tensor * Kcur = ggml_view_2d(ctx0, qkv,
+                    n_embd, n_tokens,
+                    ggml_row_size(qkv->type, n_embd), n_embd * ggml_element_size(qkv));
+                ggml_tensor * Vcur = ggml_view_2d(ctx0, qkv,
+                    n_embd, n_tokens,
+                    ggml_row_size(qkv->type, n_embd), 2 * n_embd * ggml_element_size(qkv));
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
