@@ -1,19 +1,18 @@
 <script lang="ts">
+	import { Settings, Filter, Hand, MessageSquare, Plus, Beaker } from '@lucide/svelte';
+	import { ChatSettingsFooter, ChatSettingsSection } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { Settings, Filter, Hand, MessageSquare, Plus, Beaker } from '@lucide/svelte';
 	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
-	import { type SettingsConfigType, type FieldConfig } from '$lib/types/settings';
 	import {
 		config,
 		updateMultipleConfig,
 		resetConfig
 	} from '$lib/stores/settings.svelte';
-	import ChatSettingsFooter from './ChatSettingsFooter.svelte';
-	import ChatSettingsSection from './ChatSettingsSection.svelte';
+	import { type SettingsConfigType, type FieldConfig } from '$lib/types/settings';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
