@@ -196,9 +196,21 @@ struct llama_adapter_lora * llama_lora_create_adapter(
             if (tensor_name.find("blk.") != std::string::npos) {
                 if ((params->target_modules & LLAMA_LORA_TARGET_ATTN_Q) && tensor_name.find("attn_q") != std::string::npos) {
                     should_create_lora = true;
+                } else if ((params->target_modules & LLAMA_LORA_TARGET_ATTN_K) && tensor_name.find("attn_k") != std::string::npos) {
+                    should_create_lora = true;
                 } else if ((params->target_modules & LLAMA_LORA_TARGET_ATTN_V) && tensor_name.find("attn_v") != std::string::npos) {
                     should_create_lora = true;
+                } else if ((params->target_modules & LLAMA_LORA_TARGET_ATTN_O) && tensor_name.find("attn_output") != std::string::npos) {
+                    should_create_lora = true;
+                } else if ((params->target_modules & LLAMA_LORA_TARGET_FFN_GATE) && tensor_name.find("ffn_gate") != std::string::npos) {
+                    should_create_lora = true;
+                } else if ((params->target_modules & LLAMA_LORA_TARGET_FFN_UP) && tensor_name.find("ffn_up") != std::string::npos) {
+                    should_create_lora = true;
+                } else if ((params->target_modules & LLAMA_LORA_TARGET_FFN_DOWN) && tensor_name.find("ffn_down") != std::string::npos) {
+                    should_create_lora = true;
                 }
+            } else if ((params->target_modules & LLAMA_LORA_TARGET_OUTPUT) && tensor_name.find("output") != std::string::npos) {
+                should_create_lora = true;
             }
 
             if (should_create_lora && base_tensor->ne[1] > 0) {
@@ -243,23 +255,23 @@ struct llama_adapter_lora * llama_lora_create_adapter(
     }
 }
 
-bool llama_lora_training_init(
+struct llama_adapter_lora * llama_lora_training_init(
         struct llama_context * ctx,
         struct llama_model * model,
         const struct llama_lora_training_params * params) {
     
     if (!ctx || !model || !params) {
         LLAMA_LOG_ERROR("LoRA training init: invalid parameters\n");
-        return false;
+        return nullptr;
     }
 
     if (!llama_lora_validate_training_params(params)) {
-        return false;
+        return nullptr;
     }
     
     struct llama_adapter_lora * adapter = llama_lora_create_adapter(model, params);
     if (!adapter) {
-        return false;
+        return nullptr;
     }
 
     llama_clear_adapter_lora(ctx);
@@ -267,14 +279,13 @@ bool llama_lora_training_init(
     if (llama_set_adapter_lora(ctx, adapter, 1.0f) < 0) {
         LLAMA_LOG_ERROR("Failed to apply LoRA adapter to context\n");
         delete adapter;
-        return false;
+        return nullptr;
     }
     
     LLAMA_LOG_INFO("LoRA adapter contains %zu tensor pairs and is now registered with context\n", adapter->ab_map.size());
 
-    return true;
+    return adapter;
 }
-
 
 bool llama_opt_param_filter_lora(const struct ggml_tensor * tensor, void * userdata) {
     (void) userdata; // Unused param
@@ -293,4 +304,56 @@ bool llama_opt_param_filter_lora(const struct ggml_tensor * tensor, void * userd
     }
 
     return false;
+}
+
+bool llama_lora_save_adapter(
+    const struct llama_adapter_lora * adapter, 
+    const char * filename,
+    const struct llama_model * model) {
+
+    if (!adapter || !filename || !model) {
+        LLAMA_LOG_ERROR("llama_lora_save_adapter: invalid parameters\n");
+        return false;
+    }
+
+    struct gguf_context * gguf_ctx = gguf_init_empty();
+    if (!gguf_ctx) {
+        LLAMA_LOG_ERROR("llama_lora_save_adapter: failed to create GGUF context\n");
+        return false;
+    }
+
+    std::string arch_name = model->arch_name();
+    if (arch_name.empty()) {
+        LLAMA_LOG_ERROR("llama_lora_save_adapter: failed to get model architecture\n");
+        gguf_free(gguf_ctx);
+        return false;
+    }
+
+    gguf_set_val_str(gguf_ctx, "general.architecture", arch_name.c_str());
+    gguf_set_val_str(gguf_ctx, "general.type", "adapter");
+    gguf_set_val_str(gguf_ctx, "general.name", "LoRA Adapter");
+    gguf_set_val_str(gguf_ctx, "adapter.type", "lora");
+    gguf_set_val_f32(gguf_ctx, "adapter.lora.alpha", adapter->alpha);
+
+    int tensor_count = 0;
+    for (const auto & kv : adapter->ab_map) {
+        const auto & lora_weight = kv.second;
+
+        if (lora_weight.a && lora_weight.b) {
+            gguf_add_tensor(gguf_ctx, lora_weight.a);
+            gguf_add_tensor(gguf_ctx, lora_weight.b);
+            tensor_count += 2;
+        }
+    }
+
+    bool success = gguf_write_to_file(gguf_ctx, filename, false);
+    if (success) {
+        LLAMA_LOG_INFO("Successfully saved LoRA adapter with %d tensors to: %s\n", 
+                       tensor_count, filename);
+    } else {
+        LLAMA_LOG_ERROR("Failed to write LoRA adapter to: %s\n", filename);
+    }
+
+    gguf_free(gguf_ctx);
+    return success;
 }
