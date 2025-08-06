@@ -1890,8 +1890,8 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_command_r7b(tmpl, params);
     }
 
-    // Granite (IBM) - detects thinking support
-    if (src.find("elif thinking") != std::string::npos && src.find("<think>") != std::string::npos) {
+    // Granite (IBM) - detects thinking / tools support
+    if (src.find("elif thinking") != std::string::npos && src.find("<|tool_call|>") != std::string::npos) {
         return common_chat_params_init_granite(tmpl, params);
     }
 
