@@ -1,4 +1,7 @@
+#include "ggml-quant.hpp"
+
 #include <cstdint>
+#include <openvino/core/parallel.hpp>
 #include <openvino/core/type/element_type_traits.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
@@ -6,7 +9,6 @@
 #include <openvino/op/reshape.hpp>
 #include <openvino/op/subtract.hpp>
 #include <openvino/runtime/tensor.hpp>
-#include <openvino/core/parallel.hpp>
 
 #include "ggml.h"
 
