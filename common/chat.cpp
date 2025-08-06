@@ -2094,6 +2094,7 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_GRANITE:
             common_chat_parse_granite(builder);
+            break;
         case COMMON_CHAT_FORMAT_GPT_OSS:
             common_chat_parse_gpt_oss(builder);
             break;
