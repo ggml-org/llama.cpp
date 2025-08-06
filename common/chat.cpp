@@ -1318,7 +1318,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 }
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     // TODO @ngxson : this won't work with --special enabled, we should fix that
-    builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
+    builder.try_parse_reasoning("<|message|>", "<|start|>assistant<|channel|>final<|message|>");
     if (!builder.syntax().parse_tool_calls) {
         builder.add_content(builder.consume_rest());
         return;
