@@ -659,7 +659,7 @@ inline static void ggml_vec_scale_f16(const int n, ggml_fp16_t * y, const float 
     GGML_F16x_VEC vx =  GGML_F16x_VEC_SET1(v);
     const int np = (n & ~(ggml_f16_step - 1));
     svfloat16_t ay1, ay2;
-    
+
     for (int i = 0; i < np; i += ggml_f16_step) {
         ay1 = GGML_F16x_VEC_LOAD(y + i + 0*ggml_f16_epr, 0);
         ay1 = GGML_F16x_VEC_MUL(ay1, vx);
