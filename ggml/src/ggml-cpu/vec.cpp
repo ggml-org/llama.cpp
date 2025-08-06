@@ -199,7 +199,7 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
 
 #if defined(GGML_SIMD)
     #if defined(__ARM_FEATURE_SVE)
-        const int sve_register_length = svcntb() * 8;
+        const int sve_register_length = svcntb() * 8; //get vector length 
         const int ggml_f16_epr = sve_register_length / 16; // running when 16
         const int ggml_f16_step = 8 * ggml_f16_epr; // choose 8 SVE registers
 
