@@ -1,6 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatSidebarSearch from '$lib/components/chat/ChatSidebar/ChatSidebarSearch.svelte';
+	import { ChatSidebarSearch } from '$lib/components/app';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatSidebar/ChatSidebarSearch',

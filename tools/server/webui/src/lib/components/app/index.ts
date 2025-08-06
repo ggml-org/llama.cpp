@@ -9,6 +9,7 @@ export { default as ChatScreen } from './chat/ChatScreen.svelte';
 export { default as ChatSettingsDialog } from './chat/ChatSettingsDialog.svelte';
 export { default as ChatSidebarConversationItem } from './chat/ChatSidebar/ChatSidebarConversationItem.svelte';
 export { default as ChatSidebar } from './chat/ChatSidebar/ChatSidebar.svelte';
+export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSearch.svelte';
 export { default as ChatSettings } from './chat/ChatSettings/ChatSettings.svelte';
 export { default as ChatThinkingBlock } from './chat/ChatThinkingBlock.svelte';
 export { default as MarkdownContent } from './MarkdownContent.svelte';

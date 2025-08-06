@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ChatScreen from '$lib/components/chat/ChatScreen.svelte';
+	import { ChatScreen } from '$lib/components/app';
 	import { chatStore, isInitialized } from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 

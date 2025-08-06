@@ -1,6 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { ChatSidebarConversationItem } from '$lib/components';
+	import { ChatSidebarConversationItem } from '$lib/components/app';
 	import type { DatabaseConversation } from '$lib/types/database';
 
 	const { Story } = defineMeta({
@@ -15,28 +15,28 @@
 		id: '1',
 		name: 'Hello World Chat',
 		lastModified: Date.now() - 1000 * 60 * 5, // 5 minutes ago
-		currNode: null,
+		currNode: null
 	};
 
 	const longNameConversation: DatabaseConversation = {
 		id: '2',
 		name: 'This is a very long conversation name that should be truncated when displayed in the sidebar',
 		lastModified: Date.now() - 1000 * 60 * 60 * 2, // 2 hours ago
-		currNode: null,
+		currNode: null
 	};
 
 	const recentConversation: DatabaseConversation = {
 		id: '3',
 		name: 'Recent Chat',
 		lastModified: Date.now() - 1000 * 30, // 30 seconds ago
-		currNode: null,
+		currNode: null
 	};
 </script>
 
 <Story
 	name="Default"
 	args={{
-		conversation: sampleConversation,
+		conversation: sampleConversation
 	}}
 />
 
@@ -44,21 +44,21 @@
 	name="Active"
 	args={{
 		conversation: sampleConversation,
-		isActive: true,
+		isActive: true
 	}}
 />
 
 <Story
 	name="LongName"
 	args={{
-		conversation: longNameConversation,
+		conversation: longNameConversation
 	}}
 />
 
 <Story
 	name="Recent"
 	args={{
-		conversation: recentConversation,
+		conversation: recentConversation
 	}}
 />
 

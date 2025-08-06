@@ -319,7 +319,12 @@ class ChatStore {
 	}
 
 	async updateMessage(messageId: string, newContent: string): Promise<void> {
-		if (!this.activeConversation || this.isLoading) return;
+		if (!this.activeConversation) return;
+		
+		// If currently loading, gracefully abort the ongoing generation
+		if (this.isLoading) {
+			this.stopGeneration();
+		}
 
 		try {
 			const messageIndex = this.activeMessages.findIndex((m: DatabaseMessage) => m.id === messageId);
@@ -339,6 +344,10 @@ class ChatStore {
 
 			this.activeMessages[messageIndex].content = newContent;
 
+			// Update the message in database immediately to ensure consistency
+			// This prevents issues with rapid consecutive edits during regeneration
+			await DatabaseService.updateMessage(messageId, { content: newContent });
+
 			const messagesToRemove = this.activeMessages.slice(messageIndex + 1);
 			for (const message of messagesToRemove) {
 				await DatabaseService.deleteMessage(message.id);
@@ -353,7 +362,8 @@ class ChatStore {
 			this.currentResponse = '';
 
 			try {
-				const allMessages = await DatabaseService.getConversationMessages(this.activeConversation.id);
+				// Use current in-memory messages which contain the updated content
+				// instead of fetching from database which still has the old content
 				const assistantMessage = await this.addMessage('assistant', '');
 
 				if (!assistantMessage) {
@@ -361,12 +371,9 @@ class ChatStore {
 				}
 
 				await this.streamChatCompletion(
-					allMessages,
+					this.activeMessages.slice(0, -1), // Exclude the just-added empty assistant message
 					assistantMessage,
-					async () => {
-						// Update the original user message in database
-						await DatabaseService.updateMessage(messageId, { content: newContent });
-					},
+					undefined,
 					(error: Error) => {
 						// Restore original content on error
 						const editedMessageIndex = this.activeMessages.findIndex(

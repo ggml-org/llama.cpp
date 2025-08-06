@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components';
+	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
 	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';

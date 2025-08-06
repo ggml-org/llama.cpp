@@ -1,6 +1,6 @@
 <script module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { ChatHeader } from '$lib/components';
+	import { ChatHeader } from '$lib/components/app';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatHeader',

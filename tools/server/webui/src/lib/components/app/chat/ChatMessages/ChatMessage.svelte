@@ -2,7 +2,7 @@
 	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatAttachmentsList, ChatThinkingBlock, MarkdownContent } from '$lib/components';
+	import { ChatAttachmentsList, ChatThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import type { ChatRole } from '$lib/types/chat';
 	import type { DatabaseMessage } from '$lib/types/database';
@@ -232,6 +232,11 @@
 			? 'right-0'
 			: 'left-0'} text-muted-foreground absolute text-xs transition-all duration-150 group-hover:pointer-events-none group-hover:opacity-0"
 	>
-		{message.timestamp ? new Date(message.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''}
+		{message.timestamp
+			? new Date(message.timestamp).toLocaleTimeString(undefined, {
+					hour: '2-digit',
+					minute: '2-digit'
+				})
+			: ''}
 	</div>
 {/snippet}

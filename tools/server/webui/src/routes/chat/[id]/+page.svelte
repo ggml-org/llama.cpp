@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { beforeNavigate } from '$app/navigation';
 	import { onDestroy } from 'svelte';
-	import { ChatScreen } from '$lib/components';
+	import { ChatScreen } from '$lib/components/app';
 	import {
 		chatStore,
 		activeConversation,

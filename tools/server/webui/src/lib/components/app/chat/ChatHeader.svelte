@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Settings } from '@lucide/svelte';
-	import { ChatSettingsDialog } from '$lib/components';
+	import { ChatSettingsDialog } from '$lib/components/app';
 
 	let settingsOpen = $state(false);
 

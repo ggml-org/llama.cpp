@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
-	import { ChatForm, ChatMessages, ServerInfo } from '$lib/components';
+	import { ChatForm, ChatMessages, ServerInfo } from '$lib/components/app';
 	import {
 		activeMessages,
 		activeConversation,
@@ -22,7 +22,7 @@
 		readFileAsText,
 		svgBase64UrlToPngDataURL
 	} from '$lib/utils';
-	import { ChatHeader } from '$lib/components';
+	import { ChatHeader } from '$lib/components/app';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -276,7 +276,7 @@
 
 {#if !isEmpty}
 	<div
-		class="flex h-full flex-col overflow-y-auto px-4"
+		class="flex h-full flex-col overflow-y-auto px-4 md:px-6"
 		bind:this={chatScrollContainer}
 		onscroll={handleScroll}
 		ondragenter={handleDragEnter}

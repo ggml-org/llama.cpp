@@ -1,6 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import ChatSettingsSection from '$lib/components/chat/ChatSettings/ChatSettingsSection.svelte';
+	import ChatSettingsSection from '$lib/components/app/chat/ChatSettings/ChatSettingsSection.svelte';
 	import { Settings, Filter, Beaker } from '@lucide/svelte';
 
 	const { Story } = defineMeta({

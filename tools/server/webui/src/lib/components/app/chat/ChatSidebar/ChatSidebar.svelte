@@ -2,8 +2,8 @@
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import { Plus, Search, SquarePen, X } from '@lucide/svelte';
-	import ChatSidebarConversationItem from '$lib/components/chat/ChatSidebar/ChatSidebarConversationItem.svelte';
+	import { Search, SquarePen, X } from '@lucide/svelte';
+	import { ChatSidebarConversationItem } from '$lib/components/app';
 	import { conversations, deleteConversation } from '$lib/stores/chat.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';

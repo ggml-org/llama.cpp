@@ -3,7 +3,7 @@
 	import autoResizeTextarea from '$lib/utils/autoresize-textarea';
 	import { Square, Paperclip, Mic, ArrowUp, Upload, X } from '@lucide/svelte';
 	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
-	import { ChatAttachmentsList } from '$lib/components';
+	import { ChatAttachmentsList } from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
 	import { onMount } from 'svelte';
 
@@ -164,7 +164,7 @@
 
 <form
 	onsubmit={handleSubmit}
-	class="{inputClasses} border-radius-bottom-none mx-auto max-w-4xl overflow-hidden rounded-3xl backdrop-blur-md {className}"
+	class="{inputClasses} border-radius-bottom-none mx-auto max-w-[48rem] overflow-hidden rounded-3xl backdrop-blur-md {className}"
 >
 	<ChatAttachmentsList bind:uploadedFiles {onFileRemove} class="mb-3 px-5 pt-5" />
 

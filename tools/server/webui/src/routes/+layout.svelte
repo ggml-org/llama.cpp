@@ -2,7 +2,7 @@
 	import '../app.css';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
-	import ChatSidebar from '$lib/components/chat/ChatSidebar/ChatSidebar.svelte';
+	import { ChatSidebar } from '$lib/components/app';
 	import { activeMessages, isLoading } from '$lib/stores/chat.svelte';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { page } from '$app/state';

@@ -2,7 +2,7 @@
 	import { ChevronDown, Brain } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Card } from '$lib/components/ui/card';
-	import { MarkdownContent } from '$lib/components';
+	import { MarkdownContent } from '$lib/components/app';
 	import { slide } from 'svelte/transition';
 
 	interface Props {
@@ -40,10 +40,7 @@
 	{#if isExpanded}
 		<div class="border-muted border-t px-3 pb-3" transition:slide={{ duration: 200 }}>
 			<div class="pt-3">
-				<MarkdownContent
-					content={thinking || ''}
-					class="text-xs leading-relaxed"
-				/>
+				<MarkdownContent content={thinking || ''} class="text-xs leading-relaxed" />
 			</div>
 		</div>
 	{/if}
