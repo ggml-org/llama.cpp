@@ -602,6 +602,7 @@ struct ggml_backend_opencl_context {
         if (ref_count == 0) {
 #ifdef GGML_OPENCL_PROFILING
             write_profiling_info();
+            profiling_info.clear();
 #endif
         }
     }
