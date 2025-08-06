@@ -9,6 +9,9 @@ var<storage, read_write> idx: array<u32>;
 @group(0) @binding(2)
 var<storage, read_write> dst: array<f16>;
 
+@group(0) @binding(3)
+var<storage, read_write> error: atomic<u32>;
+
 struct Params {
     offset_src: u32, // in elements
     offset_idx: u32, // in elements
@@ -38,7 +41,7 @@ struct Params {
     idx2: u32,
 };
 
-@group(0) @binding(3)
+@group(0) @binding(4)
 var<uniform> params: Params;
 
 override wg_size: u32;
@@ -63,6 +66,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     let idx_high_val = idx[idx_high];
     let idx_low_val = idx[idx_high + 1];
+
+    if (idx_low_val != 0) {
+        // Upper bits of index are not zero, output will be incorrect
+        atomicStore(&error, 1);
+        return;
+    }
 
     let i_dst_row = params.offset_dst + idx_high_val * params.stride_dst1 + i_src2 * params.stride_dst2 + i_src3 * params.stride_dst3;
     let i_src_row = params.offset_src + i_src1 * params.stride_src1 + i_src2 * params.stride_src2 + i_src3 * params.stride_src3;
