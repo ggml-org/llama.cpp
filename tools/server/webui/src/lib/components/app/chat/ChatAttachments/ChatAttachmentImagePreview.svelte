@@ -54,6 +54,7 @@
 			class="{height} {width} cursor-pointer object-cover {imageClass}"
 		/>
 	{/if}
+
 	{#if !readonly}
 		<div
 			class="absolute right-1 top-1 flex items-center justify-center opacity-0 transition-opacity hover:opacity-100"

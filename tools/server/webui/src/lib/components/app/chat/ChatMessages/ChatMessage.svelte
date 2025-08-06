@@ -2,7 +2,7 @@
 	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
-	import { ChatAttachmentsList, ChatThinkingBlock, MarkdownContent } from '$lib/components/app';
+	import { ChatAttachmentsList, ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import type { ChatRole } from '$lib/types/chat';
 	import type { DatabaseMessage } from '$lib/types/database';
@@ -161,7 +161,7 @@
 		aria-label="Assistant message with actions"
 	>
 		{#if thinkingContent}
-			<ChatThinkingBlock thinking={thinkingContent} isStreaming={!message.timestamp} />
+			<ChatMessageThinkingBlock thinking={thinkingContent} isStreaming={!message.timestamp} />
 		{/if}
 
 		{#if message.role === 'assistant'}
