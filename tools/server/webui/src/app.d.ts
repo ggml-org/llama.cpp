@@ -66,5 +66,6 @@ declare global {
 		SettingsConfigValue,
 		SettingsFieldConfig,
 		SettingsConfigType,
+		SettingsChatServiceOptions,
 	}
 }

@@ -13,6 +13,7 @@
 	import { Upload } from '@lucide/svelte';
 	import {
 		convertPDFToText,
+		convertPDFToImage,
 		isLikelyTextFile,
 		isPdfMimeType,
 		isSvgMimeType,
@@ -21,6 +22,7 @@
 		svgBase64UrlToPngDataURL
 	} from '$lib/utils';
 	import { serverStore } from '$lib/stores/server.svelte';
+	import { config } from '$lib/stores/settings.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -91,16 +93,41 @@
 				}
 			} else if (isPdfMimeType(file.type)) {
 				try {
-					// For now, always process PDF as text
-					// todo: Add settings to allow PDF as images for vision models
-					const content = await convertPDFToText(file.file);
-
-					extras.push({
-						type: 'pdfFile',
-						name: file.name,
-						content: content,
-						processedAsImages: false
-					});
+					const currentConfig = config();
+					const shouldProcessAsImages = Boolean(currentConfig.pdfAsImage);
+					
+					if (shouldProcessAsImages) {
+						// Process PDF as images
+						try {
+							const images = await convertPDFToImage(file.file);
+							extras.push({
+								type: 'pdfFile',
+								name: file.name,
+								content: `PDF file with ${images.length} pages`,
+								images: images,
+								processedAsImages: true
+							});
+						} catch (imageError) {
+							console.warn(`Failed to process PDF ${file.name} as images, falling back to text:`, imageError);
+							// Fallback to text processing
+							const content = await convertPDFToText(file.file);
+							extras.push({
+								type: 'pdfFile',
+								name: file.name,
+								content: content,
+								processedAsImages: false
+							});
+						}
+					} else {
+						// Process PDF as text (default)
+						const content = await convertPDFToText(file.file);
+						extras.push({
+							type: 'pdfFile',
+							name: file.name,
+							content: content,
+							processedAsImages: false
+						});
+					}
 				} catch (error) {
 					console.error(`Failed to process PDF file ${file.name}:`, error);
 				}

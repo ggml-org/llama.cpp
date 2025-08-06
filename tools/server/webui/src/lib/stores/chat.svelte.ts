@@ -121,12 +121,43 @@ class ChatStore {
 	): Promise<void> {
 		let streamedContent = '';
 
+		// Get current settings
+		const currentConfig = config();
+		
+		// Build complete options from settings
+		const apiOptions = {
+			stream: true,
+			// Generation parameters
+			temperature: Number(currentConfig.temperature) || 0.8,
+			max_tokens: Number(currentConfig.max_tokens) || 2048,
+			// Sampling parameters
+			dynatemp_range: Number(currentConfig.dynatemp_range) || 0.0,
+			dynatemp_exponent: Number(currentConfig.dynatemp_exponent) || 1.0,
+			top_k: Number(currentConfig.top_k) || 40,
+			top_p: Number(currentConfig.top_p) || 0.95,
+			min_p: Number(currentConfig.min_p) || 0.05,
+			xtc_probability: Number(currentConfig.xtc_probability) || 0.0,
+			xtc_threshold: Number(currentConfig.xtc_threshold) || 0.1,
+			typical_p: Number(currentConfig.typical_p) || 1.0,
+			// Penalty parameters
+			repeat_last_n: Number(currentConfig.repeat_last_n) || 64,
+			repeat_penalty: Number(currentConfig.repeat_penalty) || 1.0,
+			presence_penalty: Number(currentConfig.presence_penalty) || 0.0,
+			frequency_penalty: Number(currentConfig.frequency_penalty) || 0.0,
+			dry_multiplier: Number(currentConfig.dry_multiplier) || 0.0,
+			dry_base: Number(currentConfig.dry_base) || 1.75,
+			dry_allowed_length: Number(currentConfig.dry_allowed_length) || 2,
+			dry_penalty_last_n: Number(currentConfig.dry_penalty_last_n) || -1,
+			// Sampler configuration
+			samplers: currentConfig.samplers || 'top_k;tfs_z;typical_p;top_p;min_p;temperature',
+			// Custom parameters
+			custom: currentConfig.custom || '',
+		};
+	
 		await this.chatService.sendChatCompletion(
 			allMessages,
 			{
-				stream: true,
-				temperature: 0.7, // todo - use Settings-based value stored in localStorage
-				max_tokens: 2048, // todo - same here
+				...apiOptions,
 				onChunk: (chunk: string) => {
 					streamedContent += chunk;
 					this.currentResponse = streamedContent;

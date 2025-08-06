@@ -3,6 +3,7 @@
 	import { ChatFormActionButtons, ChatFormFileInput, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
 	import { onMount } from 'svelte';
+	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
 		class?: string;
@@ -12,7 +13,6 @@
 		onFileUpload?: (files: File[]) => void;
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
-		pasteLongTextToFileLength?: number;
 		showHelperText?: boolean;
 		uploadedFiles?: ChatUploadedFile[];
 	}
@@ -25,10 +25,13 @@
 		onFileUpload,
 		onSend,
 		onStop,
-		pasteLongTextToFileLength = 2500,
 		showHelperText = true,
 		uploadedFiles = $bindable([]),
 	}: Props = $props();
+
+	// Get settings
+	const currentConfig = $derived(config());
+	const pasteLongTextToFileLength = $derived(Number(currentConfig.pasteLongTextToFileLen) || 2500);
 
 	let message = $state('');
 	let fileInputRef: ChatFormFileInput | undefined;
