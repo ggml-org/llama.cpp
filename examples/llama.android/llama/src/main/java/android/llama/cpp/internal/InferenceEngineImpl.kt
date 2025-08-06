@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 /**
  * JNI wrapper for the llama.cpp library providing Android-friendly access to large language models.
@@ -128,26 +129,32 @@ internal class InferenceEngineImpl private constructor(
             check(_state.value is InferenceEngine.State.Initialized) {
                 "Cannot load model in ${_state.value.javaClass.simpleName}!"
             }
-            File(pathToModel).let {
-                require(it.exists()) { "Model file not found: $pathToModel" }
-                require(it.isFile) { "Model file is not a file: $pathToModel" }
-            }
 
             try {
+                Log.i(TAG, "Checking access to model file... \n$pathToModel")
+                File(pathToModel).let {
+                    require(it.exists()) { "File not found" }
+                    require(it.isFile) { "Not a valid file" }
+                    require(it.canRead()) { "Cannot read file" }
+                }
+
                 Log.i(TAG, "Loading model... \n$pathToModel")
                 _readyForSystemPrompt = false
                 _state.value = InferenceEngine.State.LoadingModel
                 load(pathToModel).let {
-                    if (it != 0) throw IllegalStateException("Failed to load the model!")
+                    // TODO-han.yin: find a better way to pass other error codes
+                    if (it != 0) throw IOException("Unsupported architecture")
                 }
                 prepare().let {
-                    if (it != 0) throw IllegalStateException("Failed to prepare resources!")
+                    if (it != 0) throw IOException("Failed to prepare resources")
                 }
                 Log.i(TAG, "Model loaded!")
                 _readyForSystemPrompt = true
                 _state.value = InferenceEngine.State.ModelReady
             } catch (e: Exception) {
-                _state.value = InferenceEngine.State.Error(e.message ?: "Unknown error")
+                val msg = e.message ?: "Unknown error"
+                Log.e(TAG, msg + "\n" + pathToModel, e)
+                _state.value = InferenceEngine.State.Error(msg)
                 throw e
             }
         }

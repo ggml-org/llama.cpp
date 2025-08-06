@@ -186,7 +186,7 @@ internal class InferenceServiceImpl @Inject internal constructor(
                     )
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error loading model", e)
+                Log.e(TAG, e.message, e)
                 null
             }
         }
