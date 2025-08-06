@@ -6447,9 +6447,11 @@ class T5GemmaModel(TextModel):
 
     def __init__(self, *args, **kwargs):
         # Load hyperparameters first to modify them for super().__init__()
-        dir_model: Path = args[0] if args else kwargs.get('dir_model')
+        dir_model = args[0] if args else kwargs.get('dir_model')
         if dir_model is None:
             raise ValueError("dir_model is required")
+        # Type assertion after None check
+        dir_model = Path(dir_model)
 
         hparams = kwargs.get("hparams") or ModelBase.load_hparams(dir_model)
         encoder_config = hparams.get("encoder", {})
