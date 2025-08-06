@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { DatabaseMessage } from '$lib/types/database';
 	import { updateMessage, regenerateMessage } from '$lib/stores/chat.svelte';
 	import { ChatMessage } from '$lib/components/app';
 

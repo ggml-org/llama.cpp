@@ -1,8 +1,8 @@
 import type { SETTING_CONFIG_DEFAULT } from "$lib/constants/settings-config";
 
-export type ConfigValue = string | number | boolean;
+export type SettingsConfigValue = string | number | boolean;
 
-export interface FieldConfig {
+export interface SettingsFieldConfig {
 	key: string;
 	label: string;
 	type: 'input' | 'textarea' | 'checkbox';
@@ -10,5 +10,5 @@ export interface FieldConfig {
 }
 
 export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {
-	[key: string]: string | number | boolean;
+	[key: string]: SettingsConfigValue;
 };

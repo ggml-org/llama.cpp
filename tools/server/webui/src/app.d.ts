@@ -2,12 +2,38 @@
 // for information about these interfaces
 
 // Import chat types from dedicated module
+
 import type {
-	ChatMessageData,
-	ChatCompletionRequest,
-	ChatCompletionResponse,
-	ChatCompletionStreamChunk
+	ApiChatCompletionRequest,
+	ApiChatCompletionResponse,
+	ApiChatCompletionStreamChunk,
+	ApiChatMessageData,
+	ApiChatMessageContentPart,
+	ApiLlamaCppServerProps,
+} from '$lib/types/api';
+
+import type {
+	ChatMessageType,
+	ChatRole,
+	ChatUploadedFile,
 } from '$lib/types/chat';
+
+import type {
+	DatabaseAppSettings,
+	DatabaseConversation,
+	DatabaseMessage,
+	DatabaseMessageExtra,
+	DatabaseMessageExtraAudioFile,
+	DatabaseMessageExtraImageFile,
+	DatabaseMessageExtraTextFile,
+	DatabaseMessageExtraPdfFile,
+} from '$lib/types/database';
+
+import type {
+	SettingsConfigValue,
+	SettingsFieldConfig,
+	SettingsConfigType,
+} from '$lib/types/settings';
 
 declare global {
 	// namespace App {
@@ -18,10 +44,27 @@ declare global {
 	// interface Platform {}
 	// }
 
-	export type {
+	export {
+		ApiChatCompletionRequest,
+		ApiChatCompletionResponse,
+		ApiChatCompletionStreamChunk,
+		ApiChatMessageData,
+		ApiChatMessageContentPart,
+		ApiLlamaCppServerProps,
 		ChatMessageData,
-		ChatCompletionRequest,
-		ChatCompletionResponse,
-		ChatCompletionStreamChunk
-	};
+		ChatMessageType,
+		ChatRole,
+		ChatUploadedFile,
+		DatabaseAppSettings,
+		DatabaseConversation,
+		DatabaseMessage,
+		DatabaseMessageExtra,
+		DatabaseMessageExtraAudioFile,
+		DatabaseMessageExtraImageFile,
+		DatabaseMessageExtraTextFile,
+		DatabaseMessageExtraPdfFile,
+		SettingsConfigValue,
+		SettingsFieldConfig,
+		SettingsConfigType,
+	}
 }

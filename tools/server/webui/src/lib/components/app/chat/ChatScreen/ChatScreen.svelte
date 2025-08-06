@@ -11,8 +11,6 @@
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { Upload } from '@lucide/svelte';
-	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
-	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';
 	import {
 		convertPDFToText,
 		isLikelyTextFile,

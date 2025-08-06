@@ -1,5 +1,4 @@
 <script lang="ts">
-	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 	import { ChatAttachmentsList } from '$lib/components/app';
 	import { ChatFormActionButtons, ChatFormFileInput, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';

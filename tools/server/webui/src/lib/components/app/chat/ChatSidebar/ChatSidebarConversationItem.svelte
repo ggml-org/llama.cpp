@@ -2,7 +2,6 @@
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
-	import type { DatabaseConversation } from '$lib/types/database';
 
 	interface Props {
 		conversation: DatabaseConversation;

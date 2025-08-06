@@ -2,9 +2,6 @@
  * Token estimation utilities for context length validation
  */
 
-import type { DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
-import type { ApiChatMessageData } from '$lib/types/api';
-
 /**
  * Rough token estimation based on character count
  * Uses a conservative estimate of ~4 characters per token for most languages

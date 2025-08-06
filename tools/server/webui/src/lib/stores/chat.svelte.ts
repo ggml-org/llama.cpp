@@ -1,12 +1,11 @@
 import { ChatService } from '$lib/services/chat';
 import { DatabaseService } from '$lib/services';
-import type { DatabaseConversation, DatabaseMessage, DatabaseMessageExtra } from '$lib/types/database';
 import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { extractPartialThinking } from '$lib/utils/thinking';
 import { wouldExceedContextLength } from '$lib/utils/token-estimation';
 import { serverStore } from '$lib/stores/server.svelte';
-import type { ChatMessageType, ChatRole } from '$lib/app';
+import { config } from '$lib/stores/settings.svelte';
 
 class ChatStore {
 	activeConversation = $state<DatabaseConversation | null>(null);

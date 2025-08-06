@@ -1,4 +1,3 @@
-import type { DatabaseConversation, DatabaseMessage, DatabaseAppSettings } from '$lib/types/database';
 import { db } from '$lib/stores/database';
 
 export class DatabaseService {

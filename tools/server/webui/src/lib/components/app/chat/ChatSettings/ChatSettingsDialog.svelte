@@ -12,7 +12,6 @@
 		updateMultipleConfig,
 		resetConfig
 	} from '$lib/stores/settings.svelte';
-	import { type SettingsConfigType, type FieldConfig } from '$lib/types/settings';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
@@ -52,7 +51,7 @@
 	const settingSections: Array<{
 		title: string;
 		icon: any;
-		fields: FieldConfig[];
+		fields: SettingsFieldConfig[];
 	}> = [
 		{
 			title: 'General',

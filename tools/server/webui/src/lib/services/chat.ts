@@ -1,20 +1,3 @@
-import type {
-	ApiChatMessageContentPart,
-	ApiChatMessageData,
-	ApiChatCompletionRequest,
-	ApiChatCompletionStreamChunk,
-	ApiChatCompletionResponse,
-	ApiLlamaCppServerProps
-} from '$lib/types/api';
-
-import type {
-	DatabaseMessage,
-	DatabaseMessageExtra,
-	DatabaseMessageExtraImageFile,
-	DatabaseMessageExtraTextFile,
-	DatabaseMessageExtraPdfFile
-} from '$lib/types/database'
-
 export class ChatService {
 	private baseUrl: string;
 	private abortController: AbortController | null = null;

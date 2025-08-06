@@ -1,8 +1,6 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { FileText, Image, Music, FileIcon } from '@lucide/svelte';
-	import type { DatabaseMessageExtra } from '$lib/types/database.d.ts';
-	import type { ChatUploadedFile } from '$lib/types/chat.d.ts';
 
 	interface Props {
 		open: boolean;

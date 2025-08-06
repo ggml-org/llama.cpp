@@ -1,5 +1,4 @@
 import { ChatService } from '$lib/services/chat';
-import type { ApiLlamaCppServerProps } from '$lib/types/api';
 
 /**
  * Server properties store

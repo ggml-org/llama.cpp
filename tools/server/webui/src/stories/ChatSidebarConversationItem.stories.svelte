@@ -1,7 +1,6 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { ChatSidebarConversationItem } from '$lib/components/app';
-	import type { DatabaseConversation } from '$lib/types/database';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatSidebar/ChatSidebarConversationItem',

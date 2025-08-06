@@ -4,8 +4,6 @@
 	import { Button } from '$lib/components/ui/button';
 	import { ChatAttachmentsList, ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
-	import type { ChatRole } from '$lib/types/chat';
-	import type { DatabaseMessage } from '$lib/types/database';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 
