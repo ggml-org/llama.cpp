@@ -499,7 +499,6 @@ static void ggml_webgpu_set_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
         return;
     }
 
-    // allocate error bufs
     webgpu_pool_bufs error_bufs = ctx->set_rows_error_buf_pool.alloc_bufs();
     if (error_bufs.host_buf.GetMapState() == wgpu::BufferMapState::Mapped) {
         error_bufs.host_buf.Unmap();
