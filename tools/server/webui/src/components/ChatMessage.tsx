@@ -61,20 +61,23 @@ export default function ChatMessage({
     if (msg.content === null || msg.role !== 'assistant') {
       return { content: msg.content };
     }
+    const REGEX_THINK_OPEN = /<think>|<\|channel\|>analysis<\|message\|>/;
+    const REGEX_THINK_CLOSE =
+      /<\/think>|<\|start\|>assistant<\|channel\|>final<\|message\|>/;
     let actualContent = '';
     let thought = '';
     let isThinking = false;
-    let thinkSplit = msg.content.split('<think>', 2);
+    let thinkSplit = msg.content.split(REGEX_THINK_OPEN, 2);
     actualContent += thinkSplit[0];
     while (thinkSplit[1] !== undefined) {
       // <think> tag found
-      thinkSplit = thinkSplit[1].split('</think>', 2);
+      thinkSplit = thinkSplit[1].split(REGEX_THINK_CLOSE, 2);
       thought += thinkSplit[0];
       isThinking = true;
       if (thinkSplit[1] !== undefined) {
         // </think> closing tag found
         isThinking = false;
-        thinkSplit = thinkSplit[1].split('<think>', 2);
+        thinkSplit = thinkSplit[1].split(REGEX_THINK_OPEN, 2);
         actualContent += thinkSplit[0];
       }
     }

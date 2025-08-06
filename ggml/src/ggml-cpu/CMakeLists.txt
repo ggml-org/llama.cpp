@@ -458,6 +458,7 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             list(APPEND ARCH_FLAGS -march=z16)
         elseif (${S390X_M} MATCHES "9175|9176")
             # NOTE: Only available from GCC 15.1.0 onwards. Any z17 machine with compile issues must first verify their GCC version.
+            #       binutils must also be updated to the latest for the -march=z17 flag to work. Otherwise, use -march=arch15.
             message(STATUS "z17 target")
             list(APPEND ARCH_FLAGS -march=z17)
         else()

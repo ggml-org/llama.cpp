@@ -747,6 +747,21 @@ void main() {
             buf_a[buf_idx + 1 ] = FLOAT_TYPE(kvalues_iq4nl[bitfieldExtract(vui, 8, 4)]) * d;
             buf_a[buf_idx + 16] = FLOAT_TYPE(kvalues_iq4nl[bitfieldExtract(vui, 4, 4)]) * d;
             buf_a[buf_idx + 17] = FLOAT_TYPE(kvalues_iq4nl[vui >> 12]) * d;
+#elif defined(DATA_A_MXFP4)
+            const uint idx = pos_a + (loadc_a + l) * p.stride_a / LOAD_VEC_A + loadr_a;
+            const uint buf_idx = (loadc_a + l) * SHMEM_STRIDE + 2 * loadr_a;
+
+            const uint ib = idx / 8;
+            const uint iqs = (idx & 0x07) * 2;
+
+            const float d = e8m0_to_fp32(data_a[ib].e);
+            const uint vui = uint(data_a[ib].qs[iqs]);
+            const uint vui2 = uint(data_a[ib].qs[iqs+1]);
+
+            buf_a[buf_idx     ] = FLOAT_TYPE(kvalues_mxfp4[vui & 0xF] * d);
+            buf_a[buf_idx + 16] = FLOAT_TYPE(kvalues_mxfp4[vui >>  4] * d);
+            buf_a[buf_idx +  1] = FLOAT_TYPE(kvalues_mxfp4[vui2 & 0xF] * d);
+            buf_a[buf_idx + 17] = FLOAT_TYPE(kvalues_mxfp4[vui2 >>  4] * d);
 #endif
         }
         [[unroll]] for (uint l = 0; l < BN; l += loadstride_b) {

@@ -647,6 +647,7 @@ struct ggml_backend_sched {
     // pipeline parallelism support
     int n_copies;
     int cur_copy;
+    int next_copy;
     ggml_backend_event_t events[GGML_SCHED_MAX_BACKENDS][GGML_SCHED_MAX_COPIES];
     struct ggml_tensor * graph_inputs[GGML_SCHED_MAX_SPLIT_INPUTS];
     int n_graph_inputs;
@@ -1070,6 +1071,11 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
                 }
             }
         }
+        // if the node is still unassigned, assign it to the first backend that supports it
+        for (int b = 0; b < sched->n_backends && *cur_backend_id == -1; b++) {
+            ggml_backend_sched_set_if_supported(sched, node, b, cur_backend_id);
+        }
+        GGML_ASSERT(*cur_backend_id != -1);
     }
 
     // pass 5: split graph, find tensors that need to be copied
@@ -1097,7 +1103,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
             const int node_backend_id = tensor_backend_id(node);
 
-            assert(node_backend_id != -1); // all nodes should be assigned by now, this can happen if there is no CPU fallback
+            GGML_ASSERT(node_backend_id != -1); // all nodes should be assigned by now, this can happen if there is no CPU fallback
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
@@ -1155,7 +1161,7 @@ static void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct gg
 
                 size_t src_id = hash_id(src);
                 const int src_backend_id = sched->hv_tensor_backend_ids[src_id];
-                assert(src_backend_id != -1); // all inputs should be assigned by now
+                GGML_ASSERT(src_backend_id != -1); // all inputs should be assigned by now
 
                 if (src->flags & GGML_TENSOR_FLAG_INPUT && sched->n_copies > 1) {
                     if (tensor_id_copy(src_id, src_backend_id, 0) == NULL) {
@@ -1433,8 +1439,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
     }
 
-    sched->cur_copy = (sched->cur_copy + 1) % sched->n_copies;
-
     return GGML_STATUS_SUCCESS;
 }
 
@@ -1535,9 +1539,9 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
 bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph) {
     GGML_ASSERT((int)sched->hash_set.size >= measure_graph->n_nodes + measure_graph->n_leafs);
 
-    ggml_backend_sched_split_graph(sched, measure_graph);
-
     ggml_backend_sched_synchronize(sched);
+
+    ggml_backend_sched_split_graph(sched, measure_graph);
 
     if (!ggml_gallocr_reserve_n(sched->galloc, &sched->graph, sched->node_backend_ids, sched->leaf_backend_ids)) {
         return false;
@@ -1550,6 +1554,10 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
 bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
+    GGML_ASSERT(!sched->is_alloc);
+
+    sched->cur_copy = sched->next_copy;
+    sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
 
     ggml_backend_sched_split_graph(sched, graph);
 
@@ -1590,7 +1598,7 @@ void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
         // if the graph is not already allocated, always use copy 0 after a synchronization
         // this ensures that during generation the same copy is used every time,
         // which avoids changes in the graph that could cause CUDA or other graphs to be disabled
-        sched->cur_copy = 0;
+        sched->next_copy = 0;
     }
 }
 
