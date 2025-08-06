@@ -970,7 +970,7 @@ class TensorNameMap:
             "decoder.final_layer_norm", # t5
             "model.decoder.norm", # t5gemma
         ),
-        
+
         # T5GEMMA specific post layer normalization tensors
         MODEL_TENSOR.DEC_POST_SELF_ATTN_NORM: (
             "model.decoder.layers.{bid}.post_self_attn_layernorm", # t5gemma

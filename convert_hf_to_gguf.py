@@ -6446,114 +6446,61 @@ class T5GemmaModel(TextModel):
     model_arch = gguf.MODEL_ARCH.T5GEMMA
 
     def __init__(self, *args, **kwargs):
-        # Don't call super().__init__() because it tries to find standard layer count parameters
-        # that don't exist in T5Gemma models (they have encoder.num_hidden_layers instead)
-        
-        # Initialize basic attributes manually
-        self.dir_model = args[0] if args else kwargs.get('dir_model')
-        if self.dir_model is None:
+        # Load hyperparameters first to modify them for super().__init__()
+        dir_model: Path = args[0] if args else kwargs.get('dir_model')
+        if dir_model is None:
             raise ValueError("dir_model is required")
-        self.ftype = args[1] if len(args) > 1 else kwargs.get('ftype')
-        if self.ftype is None:
-            raise ValueError("ftype is required")
-        self.fname_out = args[2] if len(args) > 2 else kwargs.get('fname_out')
-        if self.fname_out is None:
-            raise ValueError("fname_out is required")
-        self.is_big_endian = kwargs.get('is_big_endian', False)
-        self.endianess = gguf.GGUFEndian.BIG if self.is_big_endian else gguf.GGUFEndian.LITTLE
-        self.use_temp_file = kwargs.get('use_temp_file', False)
-        self.lazy = not kwargs.get('eager', False)
-        self.remote_hf_model_id = kwargs.get('remote_hf_model_id')
-        self.metadata_override = kwargs.get('metadata_override')
-        self.model_name = kwargs.get('model_name')
-        self.dir_model_card = self.dir_model
-        
-        # Load model parts
-        if self.remote_hf_model_id is not None:
-            self.is_safetensors = True
-            def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
-                if self.remote_hf_model_id is None:
-                    raise ValueError("remote_hf_model_id is required for remote models")
-                logger.info(f"Using remote model with HuggingFace id: {self.remote_hf_model_id}")
-                remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(self.remote_hf_model_id)
-                self.tensor_names = set(name for name in remote_tensors.keys())
-                for name, remote_tensor in gguf.utility.SafetensorRemote.get_list_tensors_hf_model(self.remote_hf_model_id).items():
-                    yield (name, LazyTorchTensor.from_remote_tensor(remote_tensor))
-            self.get_tensors = get_remote_tensors
-        else:
-            self.part_names = ModelBase.get_model_part_names(self.dir_model, "model", ".safetensors")
-            self.is_safetensors = len(self.part_names) > 0
-            if not self.is_safetensors:
-                self.part_names = ModelBase.get_model_part_names(self.dir_model, "pytorch_model", ".bin")
-        
-        # Load hyperparameters
-        self.hparams = kwargs.get('hparams') or ModelBase.load_hparams(self.dir_model)
-        self.tensor_names = None
-        
-        # Apply heuristics to figure out typical tensor encoding
-        if self.ftype == gguf.LlamaFileType.GUESSED:
-            _, first_tensor = next(self.get_tensors())
-            if first_tensor.dtype == torch.float16:
-                logger.info(f"choosing --outtype f16 from first tensor type ({first_tensor.dtype})")
-                self.ftype = gguf.LlamaFileType.MOSTLY_F16
-            else:
-                logger.info(f"choosing --outtype bf16 from first tensor type ({first_tensor.dtype})")
-                self.ftype = gguf.LlamaFileType.MOSTLY_BF16
-        
-        # Configure GGUF Writer
-        self.gguf_writer = gguf.GGUFWriter(
-            path=None, 
-            arch=gguf.MODEL_ARCH_NAMES[self.model_arch], 
-            endianess=self.endianess, 
-            use_temp_file=self.use_temp_file,
-            split_max_tensors=kwargs.get('split_max_tensors', 0),
-            split_max_size=kwargs.get('split_max_size', 0),
-            dry_run=kwargs.get('dry_run', False),
-            small_first_shard=kwargs.get('small_first_shard', False)
-        )
-        
+
+        hparams = kwargs.get("hparams") or ModelBase.load_hparams(dir_model)
+        encoder_config = hparams.get("encoder", {})
+        # Add num_hidden_layers to hparams so super().__init__() can find it
+        hparams["num_hidden_layers"] = encoder_config.get("num_hidden_layers", 0)
+        kwargs["hparams"] = hparams
+
+        # Now call super().__init__() with modified hparams
+        super().__init__(*args, **kwargs)
+
         # T5Gemma specific initialization
         self.is_encoder_decoder = True
-      
+
         # Dynamically get encoder and decoder configurations
-        encoder_config = self.hparams.get("encoder", {})
         decoder_config = self.hparams.get("decoder", {})
-    
+
         # Dynamically set encoder and decoder layer counts
         self.encoder_block_count = encoder_config.get("num_hidden_layers", 0)
         self.decoder_block_count = decoder_config.get("num_hidden_layers", 0)
-        
+
         # Set block_count to encoder_block_count for tensor mapping
         self.block_count = self.encoder_block_count
-       
+
         # Initialize tensor mapping using encoder layer count
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.encoder_block_count)
 
     def set_vocab(self):
         # T5Gemma uses BPE tokenizer - read directly from tokenizer.json
         import json
-        
+
         tokenizer_json_path = self.dir_model / "tokenizer.json"
         if not tokenizer_json_path.exists():
             logger.warning("tokenizer.json not found, falling back to GPT2 method")
             self._set_vocab_gpt2()
             return
-            
+
         try:
             with open(tokenizer_json_path, 'r', encoding='utf-8') as f:
                 tokenizer_data = json.load(f)
-            
+
             # Extract vocabulary from tokenizer.json
             vocab = tokenizer_data.get("model", {}).get("vocab", {})
             vocab_size = self.hparams.get("vocab_size", len(vocab))
-            
+
             # Create tokens and types lists
             tokens = []
             toktypes = []
-            
+
             # Create reverse mapping from id to token
             id_to_token = {v: k for k, v in vocab.items()}
-            
+
             for i in range(vocab_size):
                 if i in id_to_token:
                     token = id_to_token[i]
@@ -6566,7 +6513,7 @@ class T5GemmaModel(TextModel):
                 else:
                     tokens.append(f"[PAD{i}]")
                     toktypes.append(gguf.TokenType.UNUSED)
-            
+
             # Extract merges from tokenizer.json if available
             merges = []
             if "merges" in tokenizer_data and tokenizer_data["merges"]:
@@ -6577,7 +6524,7 @@ class T5GemmaModel(TextModel):
                 logger.info(f"Found {len(merges)} merges in tokenizer.json model section")
             else:
                 logger.warning("No merges found in tokenizer.json")
-            
+
             # Convert merges to the format expected by GGUF
             if merges:
                 # merges are in format [["token1", "token2"], ...]
@@ -6587,7 +6534,7 @@ class T5GemmaModel(TextModel):
                     if len(merge) == 2:
                         gguf_merges.append(f"{merge[0]} {merge[1]}")
                 merges = gguf_merges
-            
+
             # Add to GGUF
             self.gguf_writer.add_tokenizer_model("gpt2")
             self.gguf_writer.add_tokenizer_pre("default")
@@ -6595,19 +6542,19 @@ class T5GemmaModel(TextModel):
             self.gguf_writer.add_token_types(toktypes)
             if merges:
                 self.gguf_writer.add_token_merges(merges)
-            
+
             # Add special tokens
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
-            
+
             logger.info(f"Successfully loaded T5Gemma vocabulary with {len(tokens)} tokens")
-            
+
         except Exception as e:
             logger.warning(f"Failed to load T5Gemma tokenizer directly: {e}")
             self._set_vocab_gpt2()
-       
+
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
-      
+
         # Dynamically set special tokens from config instead of hardcoding
         if "eos_token_id" in self.hparams:
             eos_token_ids = self.hparams["eos_token_id"]
@@ -6617,7 +6564,7 @@ class T5GemmaModel(TextModel):
             elif isinstance(eos_token_ids, list) and len(eos_token_ids) == 1:
                 # If only one end token, use it as end_of_turn
                 special_vocab._set_special_token("end_of_turn", eos_token_ids[0])
-        
+
         # Dynamically set start_of_turn, usually end_of_turn - 1
         if "eos_token_id" in self.hparams:
             eos_token_ids = self.hparams["eos_token_id"]
@@ -6629,16 +6576,16 @@ class T5GemmaModel(TextModel):
                 # Use end_of_turn - 1 as start_of_turn
                 start_of_turn_id = eos_token_ids[0] - 1
                 special_vocab._set_special_token("start_of_turn", start_of_turn_id)
-        
+
         special_vocab.add_to_gguf(self.gguf_writer)
-          
+
         if "pad_token_id" in self.hparams:
             self.gguf_writer.add_pad_token_id(self.hparams["pad_token_id"])
 
         # Dynamically set special token IDs
         if "pad_token_id" in self.hparams:
             self.gguf_writer.add_pad_token_id(self.hparams["pad_token_id"])
-        
+
         # Dynamically set multiple end tokens
         if "eos_token_id" in self.hparams:
             eos_token_ids = self.hparams["eos_token_id"]
@@ -6650,7 +6597,7 @@ class T5GemmaModel(TextModel):
     def set_gguf_parameters(self):
         # Dynamically set encoder parameters
         encoder_config = self.hparams["encoder"]
-        
+
         if "max_position_embeddings" in encoder_config:
             self.gguf_writer.add_context_length(encoder_config["max_position_embeddings"])
         if "hidden_size" in encoder_config:
@@ -6680,32 +6627,34 @@ class T5GemmaModel(TextModel):
         decoder_config = self.hparams["decoder"]
         if "cross_attention_hidden_size" in decoder_config:
             self.gguf_writer.add_key_value("cross_attention_hidden_size", decoder_config["cross_attention_hidden_size"], gguf.GGUFValueType.UINT32)
-        
+
         # Dynamically set global parameters
         if "vocab_size" in encoder_config:
             self.gguf_writer.add_vocab_size(encoder_config["vocab_size"])
-        
+
         if "dropout_rate" in self.hparams:
             self.gguf_writer.add_key_value("dropout_rate", self.hparams["dropout_rate"], gguf.GGUFValueType.FLOAT32)
         if "classifier_dropout_rate" in self.hparams:
             self.gguf_writer.add_key_value("classifier_dropout_rate", self.hparams["classifier_dropout_rate"], gguf.GGUFValueType.FLOAT32)
-        
+
         if "initializer_range" in self.hparams:
             self.gguf_writer.add_key_value("initializer_range", self.hparams["initializer_range"], gguf.GGUFValueType.FLOAT32)
-        
+
         if "attention_bias" in encoder_config:
             self.gguf_writer.add_key_value("attention_bias", encoder_config["attention_bias"], gguf.GGUFValueType.BOOL)
         if "attention_dropout" in encoder_config:
             self.gguf_writer.add_key_value("attention_dropout", encoder_config["attention_dropout"], gguf.GGUFValueType.FLOAT32)
         if "query_pre_attn_scalar" in encoder_config:
             self.gguf_writer.add_key_value("query_pre_attn_scalar", encoder_config["query_pre_attn_scalar"], gguf.GGUFValueType.UINT32)
-        
+
         # Dynamically set encoder's other parameters
+        # Only include specific keys that are known to be useful for T5Gemma
+        encoder_keys_to_include = [
+            "classifier_dropout_rate", "dropout_rate", "initializer_range",
+            "model_type", "torch_dtype", "use_cache", "hidden_activation"
+        ]
         for key, value in encoder_config.items():
-            if key not in ["max_position_embeddings", "hidden_size", "num_hidden_layers", "intermediate_size", 
-                          "num_attention_heads", "num_key_value_heads", "head_dim", "rms_norm_eps", 
-                          "sliding_window", "attn_logit_softcapping", "final_logit_softcapping", 
-                          "rope_theta", "attention_bias", "attention_dropout", "query_pre_attn_scalar", "vocab_size"]:
+            if key in encoder_keys_to_include:
                 if isinstance(value, bool):
                     self.gguf_writer.add_key_value(f"encoder_{key}", value, gguf.GGUFValueType.BOOL)
                 elif isinstance(value, int):
@@ -6714,10 +6663,20 @@ class T5GemmaModel(TextModel):
                     self.gguf_writer.add_key_value(f"encoder_{key}", value, gguf.GGUFValueType.FLOAT32)
                 elif isinstance(value, str):
                     self.gguf_writer.add_key_value(f"encoder_{key}", value, gguf.GGUFValueType.STRING)
-        
+
         # Dynamically set decoder's other parameters
+        # Only include specific keys that are known to be useful for T5Gemma
+        decoder_keys_to_include = [
+            "classifier_dropout_rate", "dropout_rate", "initializer_range",
+            "model_type", "torch_dtype", "use_cache", "hidden_activation",
+            "is_decoder", "max_position_embeddings", "hidden_size",
+            "intermediate_size", "num_attention_heads", "num_key_value_heads",
+            "head_dim", "rms_norm_eps", "sliding_window", "attn_logit_softcapping",
+            "final_logit_softcapping", "rope_theta", "attention_bias",
+            "attention_dropout", "query_pre_attn_scalar", "vocab_size"
+        ]
         for key, value in decoder_config.items():
-            if key not in ["cross_attention_hidden_size"]:
+            if key in decoder_keys_to_include:
                 if isinstance(value, bool):
                     self.gguf_writer.add_key_value(f"decoder_{key}", value, gguf.GGUFValueType.BOOL)
                 elif isinstance(value, int):
@@ -6726,10 +6685,10 @@ class T5GemmaModel(TextModel):
                     self.gguf_writer.add_key_value(f"decoder_{key}", value, gguf.GGUFValueType.FLOAT32)
                 elif isinstance(value, str):
                     self.gguf_writer.add_key_value(f"decoder_{key}", value, gguf.GGUFValueType.STRING)
-        
+
         # T5 models typically use 32 relative attention buckets
         self.gguf_writer.add_relative_attn_buckets_count(32)
-        
+
         self.gguf_writer.add_file_type(self.ftype)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -6761,20 +6720,20 @@ class T5GemmaModel(TextModel):
         n_head_enc = self.hparams.get("encoder_num_attention_heads", 8)
         n_head_dec = self.hparams.get("decoder_num_attention_heads", 8)
         n_rel_attn_bkts = self.hparams.get("relative_buckets_count", 32)
-        
+
         # Generate relative attention bias for encoder layers
         for i in range(self.block_count):
             # Encoder relative attention bias - shape should be (n_rel_attn_bkts, n_head)
             rel_bias_enc = torch.zeros(n_rel_attn_bkts, n_head_enc, dtype=torch.float16)
-            yield f"enc.blk.{i}.attn_rel_b.weight", rel_bias_enc
-            
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.ENC_ATTN_REL_B, i), rel_bias_enc
+
             # Decoder relative attention bias - shape should be (n_rel_attn_bkts, n_head)
             rel_bias_dec = torch.zeros(n_rel_attn_bkts, n_head_dec, dtype=torch.float16)
-            yield f"dec.blk.{i}.attn_rel_b.weight", rel_bias_dec
-            
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.DEC_ATTN_REL_B, i), rel_bias_dec
+
             # Decoder cross attention relative bias - shape should be (n_rel_attn_bkts, n_head)
             rel_bias_cross = torch.zeros(n_rel_attn_bkts, n_head_dec, dtype=torch.float16)
-            yield f"dec.blk.{i}.cross_attn_rel_b.weight", rel_bias_cross
+            yield self.format_tensor_name(gguf.MODEL_TENSOR.DEC_CROSS_ATTN_REL_B, i), rel_bias_cross
 
 
 @ModelBase.register("T5EncoderModel")
