@@ -1913,11 +1913,9 @@ static void ggml_cann_mat_mul_fp(ggml_backend_cann_context& ctx,
                              bcast_weight_nb[4], bcast_weight_nb[5]};
     aclTensor* acl_weight_tensor;
 
-    bool weightToNZ = false;
-#ifdef ASCEND_310P
-    weightToNZ = (getenv("GGML_CANN_WEIGHT_NZ") != nullptr);
-#endif
-    if (weightToNZ && is_matmul_weight(weight)) {
+    // Only check env once.
+    static bool weight_to_nz = parse_bool(get_env("GGML_CANN_WEIGHT_NZ").value_or(""));
+    if (weight_to_nz && is_matmul_weight(weight)) {
         int64_t acl_stride[2] = {1, transpose_ne[1]};
 
         // Reverse ne.

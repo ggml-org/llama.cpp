@@ -312,7 +312,11 @@ class SpecialVocab:
         with open(config_file, encoding = 'utf-8') as f:
             config = json.load(f)
         for typ in self.special_token_types:
-            self._set_special_token(typ, config.get(f'{typ}_token_id'))
+            token_id = config.get(f'{typ}_token_id')
+            # If not found at root, check in text_config (for multimodal models like Kimi-VL)
+            if token_id is None and 'text_config' in config:
+                token_id = config['text_config'].get(f'{typ}_token_id')
+            self._set_special_token(typ, token_id)
         return True
 
 
