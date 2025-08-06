@@ -6451,8 +6451,14 @@ class T5GemmaModel(TextModel):
         
         # Initialize basic attributes manually
         self.dir_model = args[0] if args else kwargs.get('dir_model')
+        if self.dir_model is None:
+            raise ValueError("dir_model is required")
         self.ftype = args[1] if len(args) > 1 else kwargs.get('ftype')
+        if self.ftype is None:
+            raise ValueError("ftype is required")
         self.fname_out = args[2] if len(args) > 2 else kwargs.get('fname_out')
+        if self.fname_out is None:
+            raise ValueError("fname_out is required")
         self.is_big_endian = kwargs.get('is_big_endian', False)
         self.endianess = gguf.GGUFEndian.BIG if self.is_big_endian else gguf.GGUFEndian.LITTLE
         self.use_temp_file = kwargs.get('use_temp_file', False)
@@ -6466,6 +6472,8 @@ class T5GemmaModel(TextModel):
         if self.remote_hf_model_id is not None:
             self.is_safetensors = True
             def get_remote_tensors() -> Iterator[tuple[str, Tensor]]:
+                if self.remote_hf_model_id is None:
+                    raise ValueError("remote_hf_model_id is required for remote models")
                 logger.info(f"Using remote model with HuggingFace id: {self.remote_hf_model_id}")
                 remote_tensors = gguf.utility.SafetensorRemote.get_list_tensors_hf_model(self.remote_hf_model_id)
                 self.tensor_names = set(name for name in remote_tensors.keys())
