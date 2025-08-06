@@ -208,9 +208,10 @@ class ModelRepositoryImpl @Inject constructor(
 
             // Extract GGUF metadata if possible
             val metadata = try {
-                val filePath = modelFile.absolutePath
-                Log.i(TAG, "Extracting GGUF Metadata from $filePath")
-                GgufMetadata.fromDomain(ggufMetadataReader.readStructuredMetadata(filePath))
+                Log.i(TAG, "Extracting GGUF Metadata from ${modelFile.absolutePath}")
+                modelFile.inputStream().buffered().use {
+                    GgufMetadata.fromDomain(ggufMetadataReader.readStructuredMetadata(it))
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Cannot extract GGUF metadata: ${e.message}", e)
                 throw e

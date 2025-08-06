@@ -4,6 +4,7 @@ import android.content.Context
 import android.llama.cpp.internal.gguf.GgufMetadataReaderImpl
 import android.net.Uri
 import java.io.IOException
+import java.io.InputStream
 
 /**
  * Interface for reading GGUF metadata from model files.
@@ -23,12 +24,12 @@ interface GgufMetadataReader {
     /**
      * Reads and parses GGUF metadata from the specified file path.
      *
-     * @param path The absolute path to the GGUF file
+     * @param input the [InputStream] obtained from a readable file or content
      * @return Structured metadata extracted from the file
      * @throws IOException if file is damaged or cannot be read
      * @throws InvalidFileFormatException if file format is invalid
      */
-    suspend fun readStructuredMetadata(path: String): GgufMetadata
+    suspend fun readStructuredMetadata(input: InputStream): GgufMetadata
 
     companion object {
         private val DEFAULT_SKIP_KEYS = setOf(
