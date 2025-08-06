@@ -5998,6 +5998,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_sum());
     test_cases.emplace_back(new test_sum_rows());
     test_cases.emplace_back(new test_mean());
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 1, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
+    test_cases.emplace_back(new test_sum(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { 33, 256, 1, 1 }));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));
     test_cases.emplace_back(new test_acc());
@@ -6179,14 +6187,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_add_id(GGML_TYPE_F32, GGML_TYPE_F32, 2880, 32, 4, n_token));
     }
 
-    std::vector<std::array<int64_t, 4>> reduce_rows_cases;
-    for (int j=0; j<14; ++j){
-        for (int i=7; i<14;++i){
-        {
-                reduce_rows_cases.push_back({ int64_t(std::pow(2,i)), int64_t(std::pow(2,j)), 1, 1 });
-            }
-        }
-    }
+    std::vector<std::array<int64_t, 4>> reduce_rows_cases = {
+        { 8192, 1,    1, 1 },
+        { 8192, 8192, 1, 1 },
+        { 128,  8192, 1, 1 },
+    };
 
     for (auto it: reduce_rows_cases){
         test_cases.emplace_back(new test_mean(GGML_TYPE_F32, it));
