@@ -7,7 +7,7 @@ void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int 
         const dim3 block_dims(512, 1, 1);
         reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
     } else {
-        const dim3 block_dims(128, 1, 1);
+        const dim3 block_dims(ncols < 1024 ? 32 : 128, 1, 1);
         reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
     }
 }
@@ -33,7 +33,7 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
     } else {
         // Enough active SMs to hide latency, use smaller blocks to allow better scheduling
-        const dim3 block_dims(128, 1, 1);
+        const dim3 block_dims(ncols < 1024 ? 32 : 128, 1, 1);
         reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);
     }
 }
