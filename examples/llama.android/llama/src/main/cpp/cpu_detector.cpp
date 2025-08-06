@@ -32,7 +32,7 @@ Java_android_llama_cpp_internal_InferenceEngineLoader_getOptimalTier(
         LOGI("Detected dotprod support - selecting T1");
     }
     else if (features.asimd) {
-        tier = 0;  // T0: baseline ARMv8-a with SIMD
+        tier = 0;  // T0: baseline ARMv8-a with ASIMD
         LOGI("Detected basic ASIMD support - selecting T0");
     }
     else {
