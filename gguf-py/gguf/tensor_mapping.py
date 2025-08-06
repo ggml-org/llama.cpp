@@ -175,6 +175,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "transformer_encoder.{bid}.qkv",                                       # neobert
+            "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
         ),
 
         # Attention query
@@ -192,7 +193,6 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.q_proj",                       # llama4
             "model.transformer.blocks.{bid}.q_proj",                     # llada
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
-            "model.layers.{bid}.self_attn.language_expert_query",        # cogvlm
         ),
 
         # Attention key
@@ -211,7 +211,6 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.k_proj",                     # llama4
             "model.transformer.blocks.{bid}.k_proj",                   # llada
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
-            "model.layers.{bid}.self_attn.language_expert_key",        # cogvlm
         ),
 
         # Attention value
@@ -229,7 +228,6 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.v_proj",                       # llama4
             "model.transformer.blocks.{bid}.v_proj",                     # llada
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
-            "model.layers.{bid}.self_attn.language_expert_value",        # cogvlm
         ),
 
         # Attention output
@@ -1019,16 +1017,8 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.vision_expert_dense",  # cogvlm
         ),
 
-        MODEL_TENSOR.VISEXP_ATTN_Q: (
-            "model.layers.{bid}.self_attn.vision_expert_query",  # cogvlm
-        ),
-
-        MODEL_TENSOR.VISEXP_ATTN_K: (
-            "model.layers.{bid}.self_attn.vision_expert_key",  # cogvlm
-        ),
-
-        MODEL_TENSOR.VISEXP_ATTN_V: (
-            "model.layers.{bid}.self_attn.vision_expert_value",  # cogvlm
+        MODEL_TENSOR.VISEXP_ATTN_QKV: (
+            "model.layers.{bid}.self_attn.vision_expert_query_key_value",  # cogvlm
         ),
 
         ############################################################################
@@ -1172,6 +1162,10 @@ class TensorNameMap:
             "model.vision.patch_embedding.position_embedding", # cogvlm
         ),
 
+        MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
+        ),
+
         MODEL_TENSOR.V_ENC_ATTN_Q: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_tower.encoder.layer.{bid}.attention.q_proj", # Intern-S1
@@ -1180,7 +1174,6 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.q_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
-            "model.vision.transformer.layers.{bid}.attention.query", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1196,7 +1189,6 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.k_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
-            "model.vision.transformer.layers.{bid}.attention.key", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1212,7 +1204,6 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.v_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
-            "model.vision.transformer.layers.{bid}.attention.value", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (

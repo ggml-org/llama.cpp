@@ -562,9 +562,7 @@ class MODEL_TENSOR(IntEnum):
     SHORTCONV_CONV       = auto()
     SHORTCONV_INPROJ     = auto()
     SHORTCONV_OUTPROJ    = auto()
-    VISEXP_ATTN_Q        = auto()
-    VISEXP_ATTN_K        = auto()
-    VISEXP_ATTN_V        = auto()
+    VISEXP_ATTN_QKV      = auto()
     VISEXP_ATTN_OUT      = auto()
     VISEXP_GATE          = auto()
     VISEXP_DOWN          = auto()
@@ -578,6 +576,7 @@ class MODEL_TENSOR(IntEnum):
     V_ENC_EMBD_PATCH     = auto()
     V_ENC_EMBD_POS       = auto()
     V_ENC_INPUT_NORM     = auto()
+    V_ENC_ATTN_QKV       = auto()
     V_ENC_ATTN_Q         = auto()
     V_ENC_ATTN_Q_NORM    = auto()
     V_ENC_ATTN_K         = auto()
@@ -908,9 +907,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
     MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
     MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
-    MODEL_TENSOR.VISEXP_ATTN_Q:             "blk.{bid}.vis_attn_q",
-    MODEL_TENSOR.VISEXP_ATTN_K:             "blk.{bid}.vis_attn_k",
-    MODEL_TENSOR.VISEXP_ATTN_V:             "blk.{bid}.vis_attn_v",
+    MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
     MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
     MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
     MODEL_TENSOR.VISEXP_DOWN:               "blk.{bid}.vis_down",
@@ -923,6 +920,7 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.V_ENC_EMBD_CLS:            "v.class_embd",
     MODEL_TENSOR.V_ENC_EMBD_PATCH:          "v.patch_embd",
     MODEL_TENSOR.V_ENC_EMBD_POS:            "v.position_embd",
+    MODEL_TENSOR.V_ENC_ATTN_QKV:            "v.blk.{bid}.attn_qkv",
     MODEL_TENSOR.V_ENC_ATTN_Q:              "v.blk.{bid}.attn_q",
     MODEL_TENSOR.V_ENC_ATTN_Q_NORM:         "v.blk.{bid}.attn_q_norm",
     MODEL_TENSOR.V_ENC_ATTN_K:              "v.blk.{bid}.attn_k",
@@ -998,6 +996,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.V_ENC_EMBD_PATCH,
         MODEL_TENSOR.V_ENC_EMBD_POS,
         MODEL_TENSOR.V_ENC_INPUT_NORM,
+        MODEL_TENSOR.V_ENC_ATTN_QKV,
         MODEL_TENSOR.V_ENC_ATTN_Q,
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM,
         MODEL_TENSOR.V_ENC_ATTN_K,
@@ -2649,17 +2648,13 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.OUTPUT_NORM,
         MODEL_TENSOR.OUTPUT,
         MODEL_TENSOR.ATTN_NORM,
-        MODEL_TENSOR.ATTN_Q,
-        MODEL_TENSOR.ATTN_K,
-        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_QKV,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.FFN_NORM,
         MODEL_TENSOR.FFN_GATE,
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
-        MODEL_TENSOR.VISEXP_ATTN_Q,
-        MODEL_TENSOR.VISEXP_ATTN_K,
-        MODEL_TENSOR.VISEXP_ATTN_V,
+        MODEL_TENSOR.VISEXP_ATTN_QKV,
         MODEL_TENSOR.VISEXP_ATTN_OUT,
         MODEL_TENSOR.VISEXP_GATE,
         MODEL_TENSOR.VISEXP_UP,
