@@ -14,6 +14,7 @@ static __global__ void mul_mat_f(
         const int ncols, const int nchannels_y, const int stride_row, const int stride_col_y, const int stride_col_dst,
         const int channel_ratio, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     typedef tile<16, 8, T>     tile_A;
     typedef tile< 8, 8, T>     tile_B;
     typedef tile<16, 8, float> tile_C;
@@ -130,6 +131,13 @@ static __global__ void mul_mat_f(
         }
         dst[j*stride_col_dst + row0 + threadIdx.x] = sum;
     }
+#else
+    NO_DEVICE_CODE;
+    GGML_UNUSED(x); GGML_UNUSED(y); GGML_UNUSED(ids); GGML_UNUSED(dst);
+    GGML_UNUSED(ncols); GGML_UNUSED(nchannels_y); GGML_UNUSED(stride_row); GGML_UNUSED(stride_col_y); GGML_UNUSED(stride_col_dst);
+    GGML_UNUSED(channel_ratio); GGML_UNUSED(stride_channel_x); GGML_UNUSED(stride_channel_y); GGML_UNUSED(stride_channel_dst);
+    GGML_UNUSED(sample_ratio); GGML_UNUSED(stride_sample_x); GGML_UNUSED(stride_sample_y); GGML_UNUSED(stride_sample_dst);
+#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
 template <typename T, int cols_per_block>
