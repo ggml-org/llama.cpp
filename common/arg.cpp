@@ -24,6 +24,7 @@
 #include <cstdarg>
 #include <filesystem>
 #include <fstream>
+#include <list>
 #include <regex>
 #include <set>
 #include <string>
@@ -2375,20 +2376,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     }
                     throw std::invalid_argument("unknown buffer type");
                 }
-                // FIXME: this leaks memory
-                params.tensor_buft_overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+                // keep strings alive and avoid leaking memory by storing them in a static vector
+                static std::list<std::string> buft_overrides;
+                buft_overrides.push_back(tensor_name);
+                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
             }
         }
     ));
     add_opt(common_arg(
-        {"--cpu-moe"},
-        "use CPU for Mixture of Experts (MoE) weights",
+        {"--cpu-moe", "-cmoe"},
+        "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
-            params.tensor_buft_overrides.push_back({"\\.ffn_up_exps\\.weight$",   ggml_backend_cpu_buffer_type()});
-            params.tensor_buft_overrides.push_back({"\\.ffn_down_exps\\.weight$", ggml_backend_cpu_buffer_type()});
-            params.tensor_buft_overrides.push_back({"\\.ffn_gate_exps\\.weight$", ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
+    add_opt(common_arg(
+        {"--n-cpu-moe", "-ncmoe"}, "N",
+        "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            for (int i = 0; i < value; ++i) {
+                // keep strings alive and avoid leaking memory by storing them in a static vector
+                static std::list<std::string> buft_overrides;
+                buft_overrides.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
+            }
+        }
+    ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
         "number of layers to store in VRAM",
@@ -2649,10 +2665,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
         {"--output-format"}, "{gguf,dat}",
-        string_format("output format for imatrix file (default: %s)", params.imat_dat ? "dat" : "gguf"),
+        string_format("output format for imatrix file (default: %s)", params.imat_dat > 0 ? "dat" : "gguf"),
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "gguf") { params.imat_dat = false; }
-            else if (value == "dat")  { params.imat_dat = true;  }
+            /**/ if (value == "gguf") { params.imat_dat = -1; }
+            else if (value == "dat")  { params.imat_dat = 1;  }
             else { throw std::invalid_argument("invalid output format"); }
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
@@ -2931,11 +2947,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
-        "(default: deepseek)",
+        "(default: auto)",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
             else if (value == "deepseek-legacy") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY; }
             else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
+            else if (value == "auto") {     params.reasoning_format = COMMON_REASONING_FORMAT_AUTO; }
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));

@@ -285,6 +285,10 @@ class TensorNameMap:
             "transformer.h.{bid}.attn.rotary_emb.inv_freq",            # codeshell
         ),
 
+        MODEL_TENSOR.ATTN_SINKS: (
+            "model.layers.{bid}.self_attn.sinks", # openai-moe
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "gpt_neox.layers.{bid}.post_attention_layernorm",                # gptneox
@@ -332,6 +336,7 @@ class TensorNameMap:
             "model.layers.{bid}.block_sparse_moe.router.layer", # granitemoe
             "model.layers.{bid}.feed_forward.router",           # llama4 jamba
             "encoder.layers.{bid}.mlp.router.layer",            # nomic-bert-moe
+            "model.layers.{bid}.mlp.router",                    # openai-moe
             "model.layers.{bid}.mlp.gate.wg",                   # hunyuan
             "model.layers.{bid}.block_sparse_moe.primary_router", # smallthinker
         ),
@@ -1368,6 +1373,31 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MM_NORM_MID: (
             "audio.multi_modal_projector.ln_mid", # ultravox
+        ),
+
+        # NextN/MTP tensors for GLM4_MOE
+        MODEL_TENSOR.NEXTN_EH_PROJ: (
+            "model.layers.{bid}.eh_proj",
+        ),
+
+        MODEL_TENSOR.NEXTN_EMBED_TOKENS: (
+            "model.layers.{bid}.embed_tokens",
+        ),
+
+        MODEL_TENSOR.NEXTN_ENORM: (
+            "model.layers.{bid}.enorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_HNORM: (
+            "model.layers.{bid}.hnorm",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_HEAD: (
+            "model.layers.{bid}.shared_head.head",
+        ),
+
+        MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM: (
+            "model.layers.{bid}.shared_head.norm",
         ),
     }
 

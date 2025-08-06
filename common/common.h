@@ -236,6 +236,7 @@ struct common_params_diffusion {
 
 enum common_reasoning_format {
     COMMON_REASONING_FORMAT_NONE,
+    COMMON_REASONING_FORMAT_AUTO,
     COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY, // Extract thinking tag contents and return as `message.reasoning_content`, or leave inline in <think> tags in stream mode
     COMMON_REASONING_FORMAT_DEEPSEEK,        // Extract thinking tag contents and return as `message.reasoning_content`, including in streaming deltas.
 };
@@ -394,7 +395,7 @@ struct common_params {
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = false;                                                                                 // NOLINT
     bool enable_chat_template = true;
-    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+    common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_AUTO;
     int reasoning_budget = -1;
     bool prefill_assistant = true;                                                                          // if true, any trailing assistant message will be prefilled into the response
 
@@ -439,7 +440,7 @@ struct common_params {
     int32_t n_out_freq  = 10; // output the imatrix every n_out_freq iterations
     int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations
     int32_t i_chunk     =  0; // start processing from this chunk
-    bool    imat_dat    = false; // whether the legacy imatrix.dat format should be output
+    int8_t  imat_dat    =  0; // whether the legacy imatrix.dat format should be output (gguf <= 0 < dat)
 
     bool process_output  = false; // collect data for the output tensor
     bool compute_ppl     = true;  // whether to compute perplexity

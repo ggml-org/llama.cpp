@@ -111,6 +111,7 @@ def main() -> None:
     parser.add_argument("--general-description",                       type=str,  help="The models general.description", metavar='"Description ..."')
     parser.add_argument("--chat-template",                             type=str,  help="Chat template string (or JSON string containing templates)", metavar='"{% ... %} ..."')
     parser.add_argument("--chat-template-config",                      type=Path, help="Config file containing chat template(s)", metavar='tokenizer_config.json')
+    parser.add_argument("--chat-template-file",                        type=Path, help="Jinja file containing chat template", metavar='chat_template.jinja')
     parser.add_argument("--pre-tokenizer",                             type=str,  help="The models tokenizer.ggml.pre", metavar='"pre tokenizer"')
     parser.add_argument("--remove-metadata",      action="append",     type=str,  help="Remove metadata (by key name) from output model", metavar='general.url')
     parser.add_argument("--special-token",        action="append",     type=str,  help="Special token by value", nargs=2, metavar=(' | '.join(token_names.keys()), '"<token>"'))
@@ -134,11 +135,16 @@ def main() -> None:
         new_metadata[gguf.Keys.Tokenizer.CHAT_TEMPLATE] = MetadataDetails(gguf.GGUFValueType.STRING, json.loads(args.chat_template) if args.chat_template.startswith('[') else args.chat_template)
 
     if args.chat_template_config:
-        with open(args.chat_template_config, 'r') as fp:
+        with open(args.chat_template_config, 'r', encoding='utf-8') as fp:
             config = json.load(fp)
             template = config.get('chat_template')
             if template:
                 new_metadata[gguf.Keys.Tokenizer.CHAT_TEMPLATE] = MetadataDetails(gguf.GGUFValueType.STRING, template)
+
+    if args.chat_template_file:
+        with open(args.chat_template_file, 'r', encoding='utf-8') as fp:
+            template = fp.read()
+            new_metadata[gguf.Keys.Tokenizer.CHAT_TEMPLATE] = MetadataDetails(gguf.GGUFValueType.STRING, template)
 
     if args.pre_tokenizer:
         new_metadata[gguf.Keys.Tokenizer.PRE] = MetadataDetails(gguf.GGUFValueType.STRING, args.pre_tokenizer)
