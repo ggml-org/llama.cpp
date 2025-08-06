@@ -2075,7 +2075,7 @@ static void ggml_backend_cann_synchronize(ggml_backend_t backend) {
     ACL_CHECK(aclrtSynchronizeStream(cann_ctx->stream()));
 }
 
-#ifdef CANN_GRAPH
+#ifdef USE_ACL_GRAPH
 /**
  * @brief Populate the internal CANN graph node properties from the ggml computation graph.
  *
@@ -2171,7 +2171,7 @@ static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, 
     }
     return false;
 }
-#endif  // CANN_GRAPH
+#endif  // USE_ACL_GRAPH
 
 /**
  * @brief Evaluate the computation graph and optionally capture or execute it using CANN graph API.
@@ -2188,7 +2188,7 @@ static bool is_cann_graph_update_required(ggml_backend_cann_context * cann_ctx, 
  */
 static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx, ggml_cgraph * cgraph,
     bool & use_cann_graph, bool & cann_graph_update_required) {
-#ifdef CANN_GRAPH
+#ifdef USE_ACL_GRAPH
     if (use_cann_graph && cann_graph_update_required) {
         if (cann_ctx->cann_graph->graph != nullptr) {
             ACL_CHECK(aclmdlRIDestroy(cann_ctx->cann_graph->graph));
@@ -2196,7 +2196,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
         }
         ACL_CHECK(aclmdlRICaptureBegin(cann_ctx->stream(), ACL_MODEL_RI_CAPTURE_MODE_GLOBAL));
     }
-#endif // CANN_GRAPH
+#endif // USE_ACL_GRAPH
 
     // Only perform the graph execution if CANN graphs are not enabled, or we are capturing the graph.
     // With the use of CANN graphs, the execution will be performed by the graph launch.
@@ -2216,7 +2216,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
         }
     }
 
-#ifdef CANN_GRAPH
+#ifdef USE_ACL_GRAPH
     if (use_cann_graph && cann_graph_update_required) { // End CANN graph capture
         ACL_CHECK(aclmdlRICaptureEnd(cann_ctx->stream(), &cann_ctx->cann_graph->graph));
     }
@@ -2225,7 +2225,7 @@ static void evaluate_and_capture_cann_graph(ggml_backend_cann_context * cann_ctx
         // Execute graph
         ACL_CHECK(aclmdlRIExecuteAsync(cann_ctx->cann_graph->graph, cann_ctx->stream()));
     }
-#endif
+#endif // USE_ACL_GRAPH
 }
 
 
@@ -2247,7 +2247,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
         (ggml_backend_cann_context*)backend->context;
     ggml_cann_set_device(cann_ctx->device);
     release_nz_workspace();
-#ifdef CANN_GRAPH
+#ifdef USE_ACL_GRAPH
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
@@ -2268,7 +2268,7 @@ static enum ggml_status ggml_backend_cann_graph_compute(
 #else
     bool use_cann_graph = false;
     bool cann_graph_update_required = false;
-#endif  // CANN_GRAPH
+#endif  // USE_ACL_GRAPH
 
     evaluate_and_capture_cann_graph(
         cann_ctx,
