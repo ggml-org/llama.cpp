@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { afterNavigate } from '$app/navigation';
-	import { ChatForm, ChatMessages, ServerInfo } from '$lib/components/app';
+	import { ChatForm, ChatHeader, ChatMessages, ServerInfo } from '$lib/components/app';
 	import {
 		activeMessages,
 		activeConversation,
@@ -22,7 +22,7 @@
 		readFileAsText,
 		svgBase64UrlToPngDataURL
 	} from '$lib/utils';
-	import { ChatHeader } from '$lib/components/app';
+	import { serverStore } from '$lib/stores/server.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -302,7 +302,7 @@
 			</div>
 		</div>
 	</div>
-{:else}
+{:else if serverStore.modelName}
 	<div
 		class="flex h-full items-center justify-center"
 		ondragenter={handleDragEnter}

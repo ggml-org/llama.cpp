@@ -1,16 +1,16 @@
 import { ChatService } from '$lib/services/chat';
-import type { LlamaCppServerProps } from '$lib/services/chat';
+import type { ApiLlamaCppServerProps } from '$lib/types/api';
 
 /**
  * Server properties store
  * Manages server information including model, build info, and supported modalities
  */
 class ServerStore {
-	private _serverProps = $state<LlamaCppServerProps | null>(null);
+	private _serverProps = $state<ApiLlamaCppServerProps | null>(null);
 	private _loading = $state(false);
 	private _error = $state<string | null>(null);
 
-	get serverProps(): LlamaCppServerProps | null {
+	get serverProps(): ApiLlamaCppServerProps | null {
 		return this._serverProps;
 	}
 

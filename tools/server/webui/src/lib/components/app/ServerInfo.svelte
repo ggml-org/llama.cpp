@@ -10,7 +10,6 @@
 
 {#if props}
 	<div class="text-muted-foreground flex items-center justify-center gap-3 text-sm">
-		<!-- Model Name -->
 		{#if model}
 			<Badge variant="outline" class="text-xs">
 				<Server class="mr-1 h-3 w-3" />
@@ -18,9 +17,9 @@
 			</Badge>
 		{/if}
 
-		{#if props.n_ctx}
+		{#if props.default_generation_settings.n_ctx}
 			<Badge variant="secondary" class="text-xs">
-				ctx: {props.n_ctx.toLocaleString()}
+				ctx: {props.default_generation_settings.n_ctx.toLocaleString()}
 			</Badge>
 		{/if}
 
