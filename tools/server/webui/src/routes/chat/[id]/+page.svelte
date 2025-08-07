@@ -1,19 +1,18 @@
 <script lang="ts">
-	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { page } from '$app/state';
 	import { beforeNavigate } from '$app/navigation';
-	import { onDestroy } from 'svelte';
 	import { ChatScreen } from '$lib/components/app';
 	import {
 		chatStore,
 		activeConversation,
-		activeMessages,
 		isLoading,
 		stopGeneration,
 		gracefulStop
 	} from '$lib/stores/chat.svelte';
+	import { onDestroy } from 'svelte';
 
-	let chatId = $derived($page.params.id);
+	let chatId = $derived(page.params.id);
 	let currentChatId: string | undefined = undefined;
 
 	beforeNavigate(async ({ cancel, to }) => {
