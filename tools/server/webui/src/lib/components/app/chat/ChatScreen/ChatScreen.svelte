@@ -11,18 +11,8 @@
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { Upload } from '@lucide/svelte';
-	import {
-		convertPDFToText,
-		convertPDFToImage,
-		isLikelyTextFile,
-		isPdfMimeType,
-		isSvgMimeType,
-		isTextFileByName,
-		readFileAsText,
-		svgBase64UrlToPngDataURL
-	} from '$lib/utils';
+	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils';
 	import { serverStore } from '$lib/stores/server.svelte';
-	import { config } from '$lib/stores/settings.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -35,222 +25,6 @@
 	const isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
-
-	function validateChatUploadedFiles(files?: ChatUploadedFile[]): boolean {
-		if (!files) return true;
-
-		for (const file of files) {
-			if (file.type === 'image/webp' || file.name.toLowerCase().endsWith('.webp')) {
-				alert(
-					'WebP format is not supported at the moment. Please use JPEG or PNG images instead.'
-				);
-				return false;
-			}
-		}
-
-		return true;
-	}
-
-	async function handleSendMessage(
-		message: string,
-		files?: ChatUploadedFile[]
-	): Promise<boolean> {
-		if (!validateChatUploadedFiles(files)) {
-			return false;
-		}
-
-		const extras = files ? await convertFilesToExtras(files) : undefined;
-		await sendMessage(message, extras);
-		return true;
-	}
-
-	async function convertFilesToExtras(
-		files: ChatUploadedFile[]
-	): Promise<DatabaseMessageExtra[]> {
-		const extras: DatabaseMessageExtra[] = [];
-
-		for (const file of files) {
-			if (file.type.startsWith('image/')) {
-				if (file.preview) {
-					let base64Url = file.preview;
-
-					if (isSvgMimeType(file.type)) {
-						try {
-							base64Url = await svgBase64UrlToPngDataURL(base64Url);
-						} catch (error) {
-							console.error(
-								'Failed to convert SVG to PNG for database storage:',
-								error
-							);
-						}
-					}
-
-					extras.push({
-						type: 'imageFile',
-						name: file.name,
-						base64Url
-					});
-				}
-			} else if (isPdfMimeType(file.type)) {
-				try {
-					const currentConfig = config();
-					const shouldProcessAsImages = Boolean(currentConfig.pdfAsImage);
-					
-					if (shouldProcessAsImages) {
-						// Process PDF as images
-						try {
-							const images = await convertPDFToImage(file.file);
-							extras.push({
-								type: 'pdfFile',
-								name: file.name,
-								content: `PDF file with ${images.length} pages`,
-								images: images,
-								processedAsImages: true
-							});
-						} catch (imageError) {
-							console.warn(`Failed to process PDF ${file.name} as images, falling back to text:`, imageError);
-							// Fallback to text processing
-							const content = await convertPDFToText(file.file);
-							extras.push({
-								type: 'pdfFile',
-								name: file.name,
-								content: content,
-								processedAsImages: false
-							});
-						}
-					} else {
-						// Process PDF as text (default)
-						const content = await convertPDFToText(file.file);
-						extras.push({
-							type: 'pdfFile',
-							name: file.name,
-							content: content,
-							processedAsImages: false
-						});
-					}
-				} catch (error) {
-					console.error(`Failed to process PDF file ${file.name}:`, error);
-				}
-			} else {
-				try {
-					const content = await readFileAsText(file.file);
-
-					if (isLikelyTextFile(content)) {
-						extras.push({
-							type: 'textFile',
-							name: file.name,
-							content: content
-						});
-					} else {
-						console.warn(`File ${file.name} appears to be binary and will be skipped`);
-					}
-				} catch (error) {
-					console.error(`Failed to read file ${file.name}:`, error);
-				}
-			}
-		}
-
-		return extras;
-	}
-
-	function scrollChatToBottom() {
-		chatScrollContainer?.scrollTo({
-			top: chatScrollContainer?.scrollHeight,
-			behavior: 'instant'
-		});
-	}
-
-	afterNavigate(() => {
-		setTimeout(scrollChatToBottom, 10); //  This is a dirty workaround, need to find racing conditions
-	});
-
-	onMount(() => {
-		setTimeout(scrollChatToBottom, 10); //  This is a dirty workaround, need to find racing conditions
-	});
-
-	function handleScroll() {
-		if (!chatScrollContainer) return;
-
-		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
-		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
-
-		if (distanceFromBottom > 50) {
-			autoScrollEnabled = false;
-		} else if (distanceFromBottom <= 1) {
-			autoScrollEnabled = true;
-		}
-	}
-
-	$effect(() => {
-		if (isLoading() && autoScrollEnabled) {
-			scrollInterval = setInterval(scrollChatToBottom, 100);
-		} else if (scrollInterval) {
-			clearInterval(scrollInterval);
-			scrollInterval = undefined;
-		}
-	});
-
-	function processFiles(files: File[]) {
-		for (const file of files) {
-			const id = Date.now().toString() + Math.random().toString(36).substr(2, 9);
-			const uploadedFile: ChatUploadedFile = {
-				id,
-				name: file.name,
-				size: file.size,
-				type: file.type,
-				file
-			};
-
-			if (file.type.startsWith('image/')) {
-				const reader = new FileReader();
-				reader.onload = async (e) => {
-					let preview = e.target?.result as string;
-
-					// Convert SVG to PNG if necessary
-					if (isSvgMimeType(file.type)) {
-						try {
-							preview = await svgBase64UrlToPngDataURL(preview);
-						} catch (error) {
-							console.error('Failed to convert SVG to PNG:', error);
-							// Use original SVG preview if conversion fails
-						}
-					}
-
-					uploadedFile.preview = preview;
-					uploadedFiles = [...uploadedFiles, uploadedFile];
-				};
-				reader.readAsDataURL(file);
-			} else if (file.type.startsWith('text/') || isTextFileByName(file.name)) {
-				const reader = new FileReader();
-				reader.onload = (e) => {
-					const content = e.target?.result as string;
-					if (content) {
-						uploadedFile.textContent = content;
-					}
-					uploadedFiles = [...uploadedFiles, uploadedFile];
-				};
-				reader.onerror = () => {
-					// If reading fails, still add the file without text content
-					uploadedFiles = [...uploadedFiles, uploadedFile];
-				};
-				reader.readAsText(file);
-			} else if (isPdfMimeType(file.type)) {
-				// For PDF files, we'll process them during conversion to extras
-				// Just add them to the list for now
-				uploadedFiles = [...uploadedFiles, uploadedFile];
-			} else {
-				uploadedFiles = [...uploadedFiles, uploadedFile];
-			}
-		}
-	}
-
-	function handleFileUpload(files: File[]) {
-		processFiles(files);
-	}
-
-	function handleFileRemove(fileId: string) {
-		uploadedFiles = uploadedFiles.filter((f) => f.id !== fileId);
-	}
 
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
@@ -281,6 +55,66 @@
 			processFiles(Array.from(event.dataTransfer.files));
 		}
 	}
+
+	function handleFileRemove(fileId: string) {
+		uploadedFiles = uploadedFiles.filter((f) => f.id !== fileId);
+	}
+
+	function handleFileUpload(files: File[]) {
+		processFiles(files);
+	}
+
+	function handleScroll() {
+		if (!chatScrollContainer) return;
+
+		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
+		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
+
+		if (distanceFromBottom > 50) {
+			autoScrollEnabled = false;
+		} else if (distanceFromBottom <= 1) {
+			autoScrollEnabled = true;
+		}
+	}
+
+	async function handleSendMessage(
+		message: string,
+		files?: ChatUploadedFile[]
+	): Promise<boolean> {
+		const extras = files ? await parseFilesToMessageExtras(files) : undefined;
+		await sendMessage(message, extras);
+		
+		return true;
+	}
+
+	async function processFiles(files: File[]) {
+		const processed = await processFilesToChatUploaded(files);
+		uploadedFiles = [...uploadedFiles, ...processed];
+	}
+
+	function scrollChatToBottom() {
+		chatScrollContainer?.scrollTo({
+			top: chatScrollContainer?.scrollHeight,
+			behavior: 'smooth'
+		});
+	}
+
+	afterNavigate(() => {
+		setTimeout(scrollChatToBottom, 10); //  This is a dirty workaround, need to find racing conditions
+	});
+
+	onMount(() => {
+		setTimeout(scrollChatToBottom, 10); //  This is a dirty workaround, need to find racing conditions
+	});
+
+	$effect(() => {
+		if (isLoading() && autoScrollEnabled) {
+			scrollInterval = setInterval(scrollChatToBottom, 100);
+		} else if (scrollInterval) {
+			clearInterval(scrollInterval);
+			scrollInterval = undefined;
+		}
+	});
 </script>
 
 {#if isDragOver}
@@ -329,13 +163,13 @@
 	</div>
 {:else if serverStore.modelName}
 	<div
+		aria-label="Welcome screen with file drop zone"
 		class="flex h-full items-center justify-center"
 		ondragenter={handleDragEnter}
 		ondragleave={handleDragLeave}
 		ondragover={handleDragOver}
 		ondrop={handleDrop}
 		role="main"
-		aria-label="Welcome screen with file drop zone"
 	>
 		<div class="w-full max-w-2xl px-4">
 			<div class="mb-8 text-center" in:fade={{ duration: 300 }}>
@@ -351,12 +185,12 @@
 			<div in:fly={{ y: 10, duration: 250, delay: 300 }}>
 				<ChatForm
 					isLoading={isLoading()}
-					showHelperText={true}
+					onFileRemove={handleFileRemove}
+					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => stopGeneration()}
+					showHelperText={true}
 					{uploadedFiles}
-					onFileUpload={handleFileUpload}
-					onFileRemove={handleFileRemove}
 				/>
 			</div>
 		</div>
