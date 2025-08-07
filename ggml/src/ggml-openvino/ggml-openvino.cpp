@@ -420,8 +420,7 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
 }
 
 static bool ggml_backend_openvino_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    // TODO quantized weigts are cpu_repack_buffer_type which does not implement ggml_backend_buft_is_host
-    return ggml_backend_buft_is_host(buft) || strcmp(buft->device->iface.get_name(buft->device), "CPU") == 0;
+    return ggml_backend_buft_is_host(buft);
     GGML_UNUSED(dev);
 }
 
