@@ -1,0 +1,1 @@
+export const AUTO_SCROLL_THRESHOLD = 100;

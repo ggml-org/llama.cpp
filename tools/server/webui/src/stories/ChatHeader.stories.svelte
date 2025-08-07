@@ -1,10 +1,10 @@
 <script module>
 	import { defineMeta } from '@storybook/addon-svelte-csf';
-	import { ChatHeader } from '$lib/components/app';
+	import { ChatScreenHeader } from '$lib/components/app';
 
 	const { Story } = defineMeta({
-		title: 'Components/ChatHeader',
-		component: ChatHeader,
+		title: 'Components/ChatScreenHeader',
+		component: ChatScreenHeader,
 		parameters: {
 			layout: 'fullscreen'
 		}

@@ -13,7 +13,7 @@ export { default as ChatMessage } from './chat/ChatMessages/ChatMessage.svelte';
 export { default as ChatMessages } from './chat/ChatMessages/ChatMessages.svelte';
 export { default as ChatMessageThinkingBlock } from './chat/ChatMessages/ChatMessageThinkingBlock.svelte';
 
-export { default as ChatHeader } from './chat/ChatScreen/ChatScreenHeader.svelte';
+export { default as ChatScreenHeader } from './chat/ChatScreen/ChatScreenHeader.svelte';
 export { default as ChatScreen } from './chat/ChatScreen/ChatScreen.svelte';
 
 export { default as ChatSettingsDialog } from './chat/ChatSettings/ChatSettingsDialog.svelte';
