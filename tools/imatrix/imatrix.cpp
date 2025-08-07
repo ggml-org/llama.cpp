@@ -30,7 +30,7 @@ static void print_usage(int, char ** argv) {
             "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \\\n"
             "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
-            "       [--show-statistics] [...]\n" , argv[0]);
+            "       [--activation-statistics] [--show-statistics] [...]\n" , argv[0]);
     LOG("\n");
 }
 
@@ -428,6 +428,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             // broadcast, when loading an old imatrix
             e.counts.resize(n_as, e.counts[0]);
         }
+        // ToDo: find an efficient way to implement --activation-statistics to avoid doubling the imatrix size by default
         if (e.values.empty()) {
             e.activations.resize(src1->ne[0]*n_as, 0);
             e.values.resize(src1->ne[0]*n_as, 0);
