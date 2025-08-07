@@ -1,6 +1,8 @@
+mistral-common>=1.8.3
+
 -r ./requirements-convert_legacy_llama.txt
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch~=2.2.1; platform_machine != "s390x"
+torch~=2.4.0; platform_machine != "s390x"
 
 # torch s390x packages can only be found from nightly builds
 --extra-index-url https://download.pytorch.org/whl/nightly

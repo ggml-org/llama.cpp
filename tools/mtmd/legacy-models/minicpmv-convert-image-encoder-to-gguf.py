@@ -497,11 +497,11 @@ ap.add_argument("--projector-type", help="Type of projector. Possible values: ml
 ap.add_argument("-o", "--output-dir", help="Directory to save GGUF files. Default is the original model directory", default=None)
 # Example --image_mean 0.48145466 0.4578275 0.40821073 --image_std 0.26862954 0.26130258 0.27577711
 # Example --image_mean 0.5 0.5 0.5 --image_std 0.5 0.5 0.5
-default_image_mean = [0.48145466, 0.4578275, 0.40821073]
-default_image_std = [0.26862954, 0.26130258, 0.27577711]
+default_image_mean = [0.5, 0.5, 0.5]
+default_image_std = [0.5, 0.5, 0.5]
 ap.add_argument('--image-mean', type=float, nargs='+', help='Mean of the images for normalization (overrides processor) ', default=None)
 ap.add_argument('--image-std', type=float, nargs='+', help='Standard deviation of the images for normalization (overrides processor)', default=None)
-ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4', default=2)
+ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4; MiniCPM-V 4.0 use 5; MiniCPM-o-4.0 use 6', default=2)
 
 # with proper
 args = ap.parse_args()
@@ -526,6 +526,17 @@ if os.path.isfile(config_path):
     print(f"Loaded config from {config_path}")
 else:
     print(f"Warning: config.json not found at {config_path}")
+
+# If minicpmv_projector is not specified but the default path exists, use the default path
+if args.minicpmv_projector is None:
+    default_projector_path = os.path.join(dir_model, "minicpmv.projector")
+    if os.path.isfile(default_projector_path):
+        args.minicpmv_projector = default_projector_path
+        print(f"Found default projector file: {default_projector_path}")
+
+# If output_dir is not specified, use model_dir as the default value
+if args.output_dir is None:
+    args.output_dir = dir_model
 
 if args.clip_model_is_vision or not os.path.exists(dir_model + "/vocab.json") or args.clip_model_is_openclip:
     vocab = None
@@ -612,6 +623,10 @@ if minicpmv_version == 3 or (model_config and model_config.get("vision_config", 
 elif minicpmv_version == 4:
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
+elif minicpmv_version == 5:
+    default_vision_config["model_type"] = "siglip_vision_model"
+    vision_config = SiglipVisionConfig(**default_vision_config)
+    model = SiglipVisionTransformer(vision_config)
 
 processor = None
 # if model.attn_pool is not None:
@@ -638,7 +653,7 @@ elif args.vision_only:
 else:
     fname_middle = ""
 
-output_dir = args.output_dir if args.output_dir is not None else dir_model
+output_dir = args.output_dir
 os.makedirs(output_dir, exist_ok=True)
 output_prefix = os.path.basename(output_dir).replace("ggml_", "")
 fname_out = os.path.join(output_dir, f"{fname_middle}model-{ftype_str[ftype]}.gguf")

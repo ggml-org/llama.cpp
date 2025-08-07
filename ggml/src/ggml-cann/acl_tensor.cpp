@@ -77,6 +77,8 @@ aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne,
     for (int i = 0; i < final_dims; i++) {
         acl_storage_len += (acl_ne[i] - 1) * acl_stride[i];
     }
+    size_t elem_offset = offset / ggml_element_size(tensor);
+    acl_storage_len += elem_offset;
 
     // Reverse ne and stride.
     std::reverse(acl_ne, acl_ne + final_dims);
@@ -84,7 +86,7 @@ aclTensor* ggml_cann_create_tensor(const ggml_tensor* tensor, int64_t* ne,
 
     aclTensor* acl_tensor = aclCreateTensor(
         acl_ne, final_dims, ggml_cann_type_mapping(tensor->type), acl_stride,
-        offset / ggml_element_size(tensor), format, &acl_storage_len, 1,
+        elem_offset, format, &acl_storage_len, 1,
         tensor->data);
 
     return acl_tensor;
