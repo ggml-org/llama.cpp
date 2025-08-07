@@ -1,13 +1,12 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { AlertTriangle } from '@lucide/svelte';
-	import { contextError, clearContextError } from '$lib/stores/chat.svelte';
+	import { maxContextError, clearMaxContextError } from '$lib/stores/chat.svelte';
 </script>
 
-<!-- Context Length Error Alert Dialog -->
 <AlertDialog.Root
-	open={contextError() !== null}
-	onOpenChange={(open) => !open && clearContextError()}
+	open={maxContextError() !== null}
+	onOpenChange={(open) => !open && clearMaxContextError()}
 >
 	<AlertDialog.Content>
 		<AlertDialog.Header>
@@ -20,31 +19,37 @@
 			</AlertDialog.Description>
 		</AlertDialog.Header>
 
-		{#if contextError()}
+		{#if maxContextError()}
 			<div class="space-y-3 text-sm">
 				<div class="bg-muted rounded-lg p-3">
 					<div class="mb-2 font-medium">Token Usage:</div>
 					<div class="text-muted-foreground space-y-1">
 						<div>
-							Estimated tokens: <span class="font-mono"
-								>{contextError()?.estimatedTokens.toLocaleString()}</span
-							>
+							Estimated tokens:
+							<span class="font-mono">
+								{maxContextError()?.estimatedTokens.toLocaleString()}
+							</span>
 						</div>
+						
 						<div>
-							Maximum allowed: <span class="font-mono"
-								>{contextError()?.maxAllowed.toLocaleString()}</span
-							>
+							Maximum allowed:
+							<span class="font-mono">
+								{maxContextError()?.maxAllowed.toLocaleString()}
+							</span>
 						</div>
+
 						<div>
-							Context window: <span class="font-mono"
-								>{contextError()?.maxContext.toLocaleString()}</span
-							>
+							Context window:
+							<span class="font-mono">
+								{maxContextError()?.maxContext.toLocaleString()}
+							</span>
 						</div>
 					</div>
 				</div>
 
 				<div>
 					<div class="mb-2 font-medium">Suggestions:</div>
+
 					<ul class="text-muted-foreground list-inside list-disc space-y-1">
 						<li>Shorten your message</li>
 						<li>Remove some file attachments</li>
@@ -55,7 +60,7 @@
 		{/if}
 
 		<AlertDialog.Footer>
-			<AlertDialog.Action onclick={() => clearContextError()}>Got it</AlertDialog.Action>
+			<AlertDialog.Action onclick={() => clearMaxContextError()}>Got it</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>

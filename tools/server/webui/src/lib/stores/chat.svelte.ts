@@ -3,8 +3,6 @@ import { DatabaseService } from '$lib/services';
 import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { extractPartialThinking } from '$lib/utils/thinking';
-import { wouldExceedContextLength } from '$lib/utils/token-estimation';
-import { serverStore } from '$lib/stores/server.svelte';
 import { config } from '$lib/stores/settings.svelte';
 
 class ChatStore {
@@ -14,7 +12,7 @@ class ChatStore {
 	currentResponse = $state('');
 	isInitialized = $state(false);
 	isLoading = $state(false);
-	contextError = $state<{ message: string; estimatedTokens: number; maxAllowed: number; maxContext: number } | null>(null);
+	maxContextError = $state<{ message: string; estimatedTokens: number; maxAllowed: number; maxContext: number } | null>(null);
 	private chatService = new ChatService();
 
 	constructor() {
@@ -242,32 +240,6 @@ class ChatStore {
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
 		if (!content.trim() || this.isLoading) return;
 
-		// Check context length BEFORE creating conversation or processing anything
-		const maxContextLength = serverStore.serverProps?.default_generation_settings.n_ctx;
-		if (maxContextLength) {
-			const contextCheck = wouldExceedContextLength(
-				this.activeMessages,
-				content,
-				extras,
-				maxContextLength
-			);
-
-			if (contextCheck.wouldExceed) {
-				const errorMessage = `Message too long for context window. Estimated tokens: ${contextCheck.estimatedTokens.toLocaleString()}, Maximum allowed: ${contextCheck.maxAllowed.toLocaleString()} (Context: ${maxContextLength.toLocaleString()})`;
-				console.error('Context length exceeded:', errorMessage);
-				
-				// Set context error state for UI to display alert dialog
-				this.contextError = {
-					message: errorMessage,
-					estimatedTokens: contextCheck.estimatedTokens,
-					maxAllowed: contextCheck.maxAllowed,
-					maxContext: maxContextLength
-				};
-				// Early return - prevent any conversation creation or message processing
-				return;
-			}
-		}
-
 		let isNewConversation = false;
 
 		if (!this.activeConversation) {
@@ -340,8 +312,13 @@ class ChatStore {
 	/**
 	 * Clear context error state
 	 */
-	clearContextError(): void {
-		this.contextError = null;
+	clearMaxContextError(): void {
+		this.maxContextError = null;
+	}
+
+	// Allow external modules to set context error without importing heavy utils here
+	setMaxContextError(error: { message: string; estimatedTokens: number; maxAllowed: number; maxContext: number } | null): void {
+		this.maxContextError = error;
 	}
 
 	private async savePartialResponseIfNeeded() {		
@@ -573,7 +550,7 @@ export const activeMessages = () => chatStore.activeMessages;
 export const isLoading = () => chatStore.isLoading;
 export const currentResponse = () => chatStore.currentResponse;
 export const isInitialized = () => chatStore.isInitialized;
-export const contextError = () => chatStore.contextError;
+export const maxContextError = () => chatStore.maxContextError;
 
 export const createConversation = chatStore.createConversation.bind(chatStore);
 export const loadConversation = chatStore.loadConversation.bind(chatStore);
@@ -584,7 +561,8 @@ export const updateConversationName = chatStore.updateConversationName.bind(chat
 export const deleteConversation = chatStore.deleteConversation.bind(chatStore);
 export const clearActiveConversation = chatStore.clearActiveConversation.bind(chatStore);
 export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
-export const clearContextError = chatStore.clearContextError.bind(chatStore);
+export const clearMaxContextError = chatStore.clearMaxContextError.bind(chatStore);
+export const setMaxContextError = chatStore.setMaxContextError.bind(chatStore);
 
 export function stopGeneration() {
 	chatStore.stopGeneration();

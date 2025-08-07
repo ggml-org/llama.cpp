@@ -8,8 +8,10 @@
 		activeConversation,
 		isLoading,
 		sendMessage,
-		stopGeneration
+		stopGeneration,
+		setMaxContextError
 	} from '$lib/stores/chat.svelte';
+	import { wouldExceedContextLength } from '$lib/utils/token-estimation';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
 	import { navigating } from '$app/state';
@@ -83,6 +85,30 @@
 		files?: ChatUploadedFile[]
 	): Promise<boolean> {
 		const extras = files ? await parseFilesToMessageExtras(files) : undefined;
+		const maxContextLength = serverStore.serverProps?.default_generation_settings.n_ctx;
+
+		if (maxContextLength) {
+			const contextCheck = wouldExceedContextLength(
+				activeMessages(),
+				message,
+				extras,
+				maxContextLength
+			);
+
+			if (contextCheck.wouldExceed) {
+				const errorMessage = `Message too long for context window. Estimated tokens: ${contextCheck.estimatedTokens.toLocaleString()}, Maximum allowed: ${contextCheck.maxAllowed.toLocaleString()} (Context: ${maxContextLength.toLocaleString()})`;
+
+				setMaxContextError({
+					message: errorMessage,
+					estimatedTokens: contextCheck.estimatedTokens,
+					maxAllowed: contextCheck.maxAllowed,
+					maxContext: maxContextLength
+				});
+
+				return false;
+			}
+		}
+
 		await sendMessage(message, extras);
 		scrollChatToBottom();
 		
@@ -147,12 +173,12 @@
 			<div class="conversation-chat-form rounded-t-3xl pb-4">
 				<ChatForm
 					isLoading={isLoading()}
-					showHelperText={false}
+					onFileRemove={handleFileRemove}
+					onFileUpload={handleFileUpload}
 					onSend={handleSendMessage}
 					onStop={() => stopGeneration()}
+					showHelperText={false}
 					bind:uploadedFiles
-					onFileUpload={handleFileUpload}
-					onFileRemove={handleFileRemove}
 				/>
 			</div>
 		</div>
