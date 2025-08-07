@@ -3209,6 +3209,26 @@ void ggml_cpu_fp32_to_fp16(const float * x, ggml_fp16_t * y, int64_t n) {
         uint16x8_t v_y = vec_convert_to_fp16(v_yd, 0);
         vec_xst(v_y, 0, (ggml_fp16_t *)(y + i));
     }
+#elif defined(__riscv) && defined(__riscv_v) && defined(__riscv_zfh)
+    int64_t n_loop = n;
+    __asm__ volatile(
+            "LOOP%=:                                    \n\t"
+            "vsetvli        t0, %[n], e32, m4,tu,mu     \n\t"
+            "slli           t1, t0, 1                   \n\t"
+            "slli           t2, t0, 2                   \n\t"
+            "vle32.v        v0, (%[IN])                 \n\t"
+            "add            %[IN], %[IN], t2            \n\t"
+            "vsetvli        t0, %[n], e16, m2,tu,mu     \n\t"
+            "vfncvt.f.f.w   v4, v0                      \n\t"
+            "vse16.v        v4, (%[DST])                \n\t"
+            "add            %[DST], %[DST], t1          \n\t"
+            "sub            %[n],  %[n], t0             \n\t"
+            "bnez           %[n], LOOP%=                \n\t"
+
+            : [ IN ] "+r"(x), [ DST ] "+r"(y), [ n ] "+r"(n_loop)
+            :
+            : "cc", "t0", "t1", "t2");
+    i += n;
 #endif
     for (; i < n; ++i) {
         y[i] = GGML_CPU_FP32_TO_FP16(x[i]);
@@ -3250,6 +3270,26 @@ void ggml_cpu_fp16_to_fp32(const ggml_fp16_t * x, float * y, int64_t n) {
         float32x4_t v_yh = vec_extend_to_fp32_hi(v_yd, 0);
         vec_xst(v_yh, 0, (float *)(y + i));
     }
+#elif defined(__riscv) && defined(__riscv_v) && defined(__riscv_zfh)
+    int64_t n_loop = n;
+    __asm__ volatile(
+        "LOOP%=:                                    \n\t"
+        "vsetvli        t0, %[n], e16, m2,tu,mu     \n\t"
+        "slli           t1, t0, 2                   \n\t"
+        "slli           t2, t0, 1                   \n\t"
+        "vle16.v        v0, (%[IN])                 \n\t"
+        "add            %[IN], %[IN], t2            \n\t"
+        "vfwcvt.f.f.v   v4, v0                      \n\t"
+        "vsetvli        t0, %[n], e32, m4,tu,mu     \n\t"
+        "vse32.v        v4, (%[DST])                \n\t"
+        "add            %[DST], %[DST], t1          \n\t"
+        "sub            %[n],  %[n], t0             \n\t"
+        "bnez           %[n], LOOP%=                \n\t"
+
+        : [ IN ] "+r"(x), [ DST ] "+r"(y), [ n ] "+r"(n_loop)
+        :
+        : "cc", "t0", "t1", "t2");
+    i += n;
 #endif
 
     for (; i < n; ++i) {

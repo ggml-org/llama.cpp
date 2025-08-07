@@ -51,7 +51,108 @@ inline static void ggml_vec_set_i8(const int n, int8_t * x, const int8_t v) { fo
 inline static void ggml_vec_set_i16(const int n, int16_t * x, const int16_t v) { for (int i = 0; i < n; ++i) x[i] = v; }
 
 inline static void ggml_vec_set_i32(const int n, int32_t * x, const int32_t   v) { for (int i = 0; i < n; ++i) x[i] = v;    }
-inline static void ggml_vec_cpy_i32(const int n, int32_t * y, const int32_t * x) { for (int i = 0; i < n; ++i) y[i] = x[i]; }
+inline static void ggml_vec_cpy_i8(const int n, int8_t * y, const int8_t * x) {
+#if defined(__riscv) && defined(__riscv_v) && defined(__riscv_v_intrinsic)
+    size_t vlenb = __riscv_vlenb();
+    if (vlenb == 32) {
+    // 1024 bytes
+    __asm__ volatile( //
+        "srli                   t0, %[size], 10             \n\t"
+        "blez                   t0, memcpy_tail%=           \n\t"
+        "vsetvli                t1, x0, e8, m8,tu,mu        \n\t"
+        "memcpy_main_loop%=:                                \n\t"
+        "addi                   t0, t0, -1                  \n\t"
+        "vle8.v                 v0, (%[s])                  \n\t"
+        "addi                   %[s], %[s], 256             \n\t"
+        "vle8.v                 v8, (%[s])                  \n\t"
+        "addi                   %[s], %[s], 256             \n\t"
+        "vle8.v                 v16, (%[s])                 \n\t"
+        "addi                   %[s], %[s], 256             \n\t"
+        "vle8.v                 v24, (%[s])                 \n\t"
+        "addi                   %[s], %[s], 256             \n\t"
+        //
+        "vse8.v                 v0, (%[d])                  \n\t"
+        "addi                   %[d], %[d], 256             \n\t"
+        "vse8.v                 v8, (%[d])                  \n\t"
+        "addi                   %[d], %[d], 256             \n\t"
+        "vse8.v                 v16, (%[d])                 \n\t"
+        "addi                   %[d], %[d], 256             \n\t"
+        "vse8.v                 v24, (%[d])                 \n\t"
+        "addi                   %[d], %[d], 256             \n\t"
+        //
+        "bnez                   t0, memcpy_main_loop%=      \n\t"
+        "memcpy_tail%=:                                     \n\t"
+        "andi                   t1, %[size], 1023           \n\t"
+        "memcpy_tail_loop%=:                                \n\t"
+        "vsetvli                t0, t1, e8, m8,tu,mu        \n\t"
+        "sub                    t1, t1, t0                  \n\t"
+        "vle8.v                 v0, (%[s])                  \n\t"
+        "add                    %[s], %[s], t0              \n\t"
+        "vse8.v                 v0, (%[d])                  \n\t"
+        "add                    %[d], %[d], t0              \n\t"
+        "bnez                   t1, memcpy_tail_loop%=      \n\t"
+        : [ s ] "+r"(x), [ d ] "+r"(y)
+        : [ size ] "r"(n)
+        : "cc", "t0", "t1");
+    } else if (vlenb == 128) {
+    // 2048 bytes
+    __asm__ volatile( //
+        "srli                   t0, %[size], 11             \n\t"
+        "blez                   t0, memcpy_tail%=           \n\t"
+        "vsetvli                t1, x0, e8, m8,tu,mu        \n\t"
+        "memcpy_main_loop%=:                                \n\t"
+        "addi                   t0, t0, -1                  \n\t"
+        "vle8.v                 v0, (%[s])                  \n\t"
+        "addi                   %[s], %[s], 1024            \n\t"
+        "vle8.v                 v8, (%[s])                  \n\t"
+        "addi                   %[s], %[s], 1024            \n\t"
+        //
+        "vse8.v                 v0, (%[d])                  \n\t"
+        "addi                   %[d], %[d], 1024            \n\t"
+        "vse8.v                 v8, (%[d])                  \n\t"
+        "addi                   %[d], %[d], 1024            \n\t"
+        //
+        "bnez                   t0, memcpy_main_loop%=      \n\t"
+        "memcpy_tail%=:                                     \n\t"
+        "andi                   t1, %[size], 2047           \n\t"
+        "memcpy_tail_loop%=:                                \n\t"
+        "vsetvli                t0, t1, e8, m8,tu,mu        \n\t"
+        "sub                    t1, t1, t0                  \n\t"
+        "vle8.v                 v0, (%[s])                  \n\t"
+        "add                    %[s], %[s], t0              \n\t"
+        "vse8.v                 v0, (%[d])                  \n\t"
+        "add                    %[d], %[d], t0              \n\t"
+        "bnez                   t1, memcpy_tail_loop%=      \n\t"
+        : [ s ] "+r"(x), [ d ] "+r"(y)
+        : [ size ] "r"(n)
+        : "cc", "t0", "t1");
+    } else {
+    __asm__ volatile( //
+        "add                    t1, %[size], zero           \n\t"
+        "memcpy_tail_loop%=:                                \n\t"
+        "vsetvli                t0, t1, e8, m8,tu,mu        \n\t"
+        "sub                    t1, t1, t0                  \n\t"
+        "vle8.v                 v0, (%[s])                  \n\t"
+        "add                    %[s], %[s], t0              \n\t"
+        "vse8.v                 v0, (%[d])                  \n\t"
+        "add                    %[d], %[d], t0              \n\t"
+        "bnez                   t1, memcpy_tail_loop%=      \n\t"
+        : [ s ] "+r"(x), [ d ] "+r"(y)
+        : [ size ] "r"(n)
+        : "cc", "t0", "t1");
+    }
+#else
+    memcpy(y, x, n);
+#endif
+}
+
+inline static void ggml_vec_cpy_i32(const int n, int32_t * y, const int32_t * x) {
+#if defined(__riscv) && defined(__riscv_v) && defined(__riscv_v_intrinsic)
+    ggml_vec_cpy_i8(n * sizeof(int32_t), (int8_t *)y, (const int8_t *)x);
+#else
+    for (int i = 0; i < n; ++i) y[i] = x[i];
+#endif
+}
 
 inline static void ggml_vec_set_f16(const int n, ggml_fp16_t * x, const ggml_fp16_t v) { for (int i = 0; i < n; ++i) x[i] = v; }
 inline static void ggml_vec_set_bf16(const int n, ggml_bf16_t * x, const ggml_bf16_t v) { for (int i = 0; i < n; ++i) x[i] = v; }
@@ -65,6 +166,25 @@ inline static void ggml_vec_add_f32 (const int n, float * z, const float * x, co
         __m256 vz = _mm256_add_ps(vx, vy);
         _mm256_storeu_ps(z + i, vz);
     }
+#elif defined(__riscv) && defined(__riscv_v)
+    size_t N = n;
+    i += n;
+    __asm__ volatile(
+        "LOOP%=:                                            \n\t"
+        "vsetvli                t0, %[n], e32, m4,tu,mu     \n\t"
+        "sub                    %[n], %[n], t0              \n\t"
+        "slli                   t0, t0, 2                   \n\t"
+        "vle32.v                v0, (%[lhs])                \n\t"
+        "add                    %[lhs], %[lhs], t0          \n\t"
+        "vle32.v                v8, (%[rhs])                \n\t"
+        "add                    %[rhs], %[rhs], t0          \n\t"
+        "vfadd.vv               v0, v0, v8                  \n\t"
+        "vse32.v                v0, (%[z])                  \n\t"
+        "add                    %[z], %[z], t0              \n\t"
+        "bnez                   %[n], LOOP%=                \n\t"
+        : [ n ] "+r"(N), [ lhs ] "+r"(x), [ rhs ] "+r"(y), [ z ] "+r"(z)
+        :
+        : "cc", "t0");
 #endif
     for (; i < n; ++i) {
         z[i] = x[i] + y[i];
@@ -86,7 +206,13 @@ inline static void ggml_vec_sub_f16 (const int n, ggml_fp16_t * z, const ggml_fp
     }
 }
 inline static void ggml_vec_set_f32 (const int n, float * x, const float   v)                  { for (int i = 0; i < n; ++i) x[i]  = v;           }
-inline static void ggml_vec_cpy_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i]  = x[i];        }
+inline static void ggml_vec_cpy_f32 (const int n, float * y, const float * x) {
+#if defined(__riscv) && defined(__riscv_v)
+    ggml_vec_cpy_i8(n * sizeof(float), (int8_t *)y, (const int8_t *)x);
+#else
+    for (int i = 0; i < n; ++i) y[i]  = x[i];
+#endif
+}
 inline static void ggml_vec_neg_f32 (const int n, float * y, const float * x)                  { for (int i = 0; i < n; ++i) y[i]  = -x[i];       }
 inline static void ggml_vec_neg_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     for (int i = 0; i < n; ++i) {
@@ -94,7 +220,29 @@ inline static void ggml_vec_neg_f16 (const int n, ggml_fp16_t * y, const ggml_fp
     }
 }
 
-inline static void ggml_vec_mul_f32 (const int n, float * z, const float * x, const float * y) { for (int i = 0; i < n; ++i) z[i]  = x[i]*y[i];   }
+inline static void ggml_vec_mul_f32 (const int n, float * z, const float * x, const float * y) {
+#if defined(__riscv) && defined(__riscv_v)
+    int N = n;
+    __asm__ volatile(
+        "LOOP%=:                                  \t\n"
+        "vsetvli  t0,       %[n],     e32,      m4\t\n"
+        "sub      %[n],     %[n],     t0          \t\n"
+        "slli     t0,       t0,       2           \t\n"
+        "vle32.v  v0,       (%[lhs])              \t\n"
+        "add      %[lhs],   %[lhs],   t0          \t\n"
+        "vle32.v  v8,       (%[rhs])              \t\n"
+        "add      %[rhs],   %[rhs],   t0          \t\n"
+        "vfmul.vv v0,       v0,       v8          \t\n"
+        "vse32.v  v0,      (%[z])                 \t\n"
+        "add      %[z],     %[z],     t0          \t\n"
+        "bnez     %[n],     LOOP%=                \t\n"
+        : [ n ] "+r"(N), [ lhs ] "+r"(x), [ rhs ] "+r"(y), [ z ] "+r"(z)
+        :
+        : "cc", "t0");
+#else
+    for (int i = 0; i < n; ++i) z[i]  = x[i]*y[i];
+#endif
+}
 inline static void ggml_vec_mul_f16 (const int n, ggml_fp16_t * z, const ggml_fp16_t * x, const ggml_fp16_t * y) {
     for (int i = 0; i < n; ++i) {
         z[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(x[i]) * GGML_CPU_FP16_TO_FP32(y[i]));
@@ -297,6 +445,28 @@ inline static void ggml_vec_mad_f16(const int n, ggml_fp16_t * GGML_RESTRICT y, 
     for (int i = np; i < n; ++i) {
         y[i] = GGML_CPU_FP32_TO_FP16(GGML_CPU_FP16_TO_FP32(y[i]) + GGML_CPU_FP16_TO_FP32(x[i])*v);
     }
+#elif defined(__riscv) && defined(__riscv_v)
+    size_t N = n;
+    __asm__ volatile(
+        "LOOP%=:                                            \n\t"
+        "vsetvli                t0, %[n], e16, m2,tu,mu     \n\t"
+        "slli                   t1, t0, 1                   \n\t"
+        "vle16.v                v0, (%[lhs])                \n\t"
+        "add                    %[lhs], %[lhs], t1          \n\t"
+        "vle16.v                v2, (%[rhs])                \n\t"
+        "vfwcvt.f.f.v           v4, v0                      \n\t"
+        "vfwcvt.f.f.v           v8, v2                      \n\t"
+        "vsetvli                t0, %[n], e32, m4,tu,mu     \n\t"
+        "vfmacc.vf              v8, %[fs], v4               \n\t"
+        "vsetvli                t0, %[n], e16, m2,tu,mu     \n\t"
+        "vfncvt.f.f.w           v12, v8                     \n\t"
+        "vse16.v                v12, (%[rhs])               \n\t"
+        "add                    %[rhs], %[rhs], t1          \n\t"
+        "sub                    %[n], %[n], t0              \n\t"
+        "bnez                   %[n], LOOP%=                \n\t"
+        : [ n ] "+r"(N), [ lhs ] "+r"(x), [ rhs ] "+r"(y)
+        : [ fs ] "f"(v)
+        : "cc", "t0", "t1");
 #else
     // scalar
     for (int i = 0; i < n; ++i) {
@@ -457,6 +627,23 @@ inline static void ggml_vec_scale_f32(const int n, float * y, const float   v) {
             y[i] *= v;
         }
     #endif
+#elif defined(__riscv) && defined(__riscv_v)
+    size_t N = n;
+    float* out = y;
+    __asm__ volatile(
+        "LOOP%=:                                            \n\t"
+        "vsetvli  t0,       %[n],     e32,     m4,tu,mu     \n\t"
+        "sub      %[n],     %[n],     t0                    \n\t"
+        "slli     t0,       t0,       2                     \n\t"
+        "vle32.v  v0,       (%[lhs])                        \n\t"
+        "add      %[lhs],   %[lhs],   t0                    \n\t"
+        "vfmul.vf v0,       v0,       %[rhs]                \n\t"
+        "vse32.v  v0,      (%[out])                         \n\t"
+        "add      %[out],   %[out],   t0                    \n\t"
+        "bnez     %[n],     LOOP%=                          \n\t"
+        : [ n ] "+r"(N), [ lhs ] "+r"(y), [ out ] "+r"(out)
+        : [ rhs ] "f"(v)
+        : "cc", "t0");
 #else
     // scalar
     for (int i = 0; i < n; ++i) {
@@ -1090,6 +1277,27 @@ inline static void ggml_vec_sum_bf16_ggf(const int n, float * s, const ggml_bf16
 }
 
 inline static void ggml_vec_max_f32(const int n, float * s, const float * x) {
+#if defined(__riscv_v_intrinsic)
+#ifdef __cplusplus
+    float * src = const_cast<float *>(reinterpret_cast<const float *>(x));
+#else
+    float * src = (float *) x;
+#endif
+    float Maximum = -INFINITY;
+    int64_t N = n;
+    size_t vl;
+    vfloat32m8_t vmaxf = __riscv_vfmv_v_f_f32m8(Maximum, __riscv_vsetvlmax_e32m8());
+    for (; N > 0; N -= vl, src += vl) {
+        vl = __riscv_vsetvl_e32m8(N);
+        vfloat32m8_t vsrc = __riscv_vle32_v_f32m8(src, vl);
+        vmaxf = __riscv_vfmax_vv_f32m8(vmaxf, vsrc, vl);
+    }
+    vfloat32m1_t vmaxf_init = __riscv_vfmv_v_f_f32m1(Maximum, __riscv_vsetvlmax_e32m1());
+    vl = __riscv_vsetvlmax_e32m8();
+    vmaxf_init = __riscv_vfredmax_vs_f32m8_f32m1(vmaxf, vmaxf_init, vl);
+    float riscv_max =  __riscv_vfmv_f_s_f32m1_f32(vmaxf_init);
+    *s = MAX(riscv_max, *s);
+#else
 #ifndef GGML_USE_ACCELERATE
     float max = -INFINITY;
     for (int i = 0; i < n; ++i) {
@@ -1098,6 +1306,7 @@ inline static void ggml_vec_max_f32(const int n, float * s, const float * x) {
     *s = max;
 #else
     vDSP_maxv(x, 1, s, n);
+#endif
 #endif
 }
 
