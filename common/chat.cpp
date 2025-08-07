@@ -600,6 +600,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_MISTRAL_NEMO: return "Mistral Nemo";
         case COMMON_CHAT_FORMAT_LLAMA_3_X: return "Llama 3.x";
         case COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS: return "Llama 3.x with builtin tools";
+        case COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON: return "Llama 3.x Nemotron";
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1: return "DeepSeek R1";
         case COMMON_CHAT_FORMAT_FIREFUNCTION_V2: return "FireFunction v2";
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2: return "Functionary v3.2";
@@ -1854,6 +1855,63 @@ static void common_chat_parse_granite(common_chat_msg_parser & builder) {
     }
 }
 
+static common_chat_params common_chat_params_init_llama_3_x_nemotron(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+        auto schemas = json::array();
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            schemas.push_back({
+                {"type", "object"},
+                {"properties", {
+                    {"name", {
+                        {"type", "string"},
+                        {"const", function.at("name")},
+                    }},
+                    {"arguments", function.at("parameters")},
+                }},
+                {"required", json::array({"name", "arguments"})},
+            });
+        });
+        auto schema = json {
+            {"type", "array"},
+            {"items", schemas.size() == 1 ? schemas[0] : json {{"anyOf", schemas}}},
+            {"minItems", 1},
+        };
+        if (!inputs.parallel_tool_calls) {
+            schema["maxItems"] = 1;
+        }
+        builder.add_rule("root", "\"<TOOLCALL>\" " + builder.add_schema("tool_calls", schema) + " \"</TOOLCALL>\"");
+    });
+    data.grammar_triggers.push_back({COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<TOOLCALL>"});
+    data.preserved_tokens = {
+        "<TOOLCALL>",
+        "</TOOLCALL>"
+    };
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON;
+    return data;
+}
+static void common_chat_parse_llama_3_x_nemotron(common_chat_msg_parser & builder) {
+    builder.try_parse_reasoning("<think>", "</think>");
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+    static const common_regex toolcall_regex("<TOOLCALL>");
+    static const common_regex close_regex("</TOOLCALL>");
+    static const std::vector<std::vector<std::string>> args_paths = {{"arguments"}};
+    if (builder.try_find_regex(toolcall_regex)) {
+        auto tool_calls = builder.consume_json_with_dumped_args(args_paths);
+        if (!builder.add_tool_calls(tool_calls.value) || tool_calls.is_partial) {
+            throw common_chat_msg_partial_exception("incomplete tool call array");
+        }
+        builder.consume_regex(close_regex);
+    }
+    builder.add_content(builder.consume_rest());
+}
+
 static common_chat_params common_chat_params_init_without_tools(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
     data.prompt = apply(tmpl, inputs);
@@ -1968,6 +2026,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_llama_3_x(tmpl, params, allow_python_tag_builtin_tools);
     }
 
+    // Llama 3.x Nemotron (w/ tools)
+    if (src.find("<TOOLCALL>") != std::string::npos) {
+        return common_chat_params_init_llama_3_x_nemotron(tmpl, params);
+    }
+
     // Plain handler (no tools)
     if (params.tools.is_null() || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
         return common_chat_params_init_without_tools(tmpl, params);
@@ -2073,6 +2136,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_LLAMA_3_X_WITH_BUILTIN_TOOLS:
             common_chat_parse_llama_3_1(builder, /* with_builtin_tools= */ true);
+            break;
+        case COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON:
+            common_chat_parse_llama_3_x_nemotron(builder);
             break;
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1:
             common_chat_parse_deepseek_r1(builder);
