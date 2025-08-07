@@ -32,7 +32,7 @@
 
 #include "ggml-backend-impl.h"
 #include "ggml-backend.h"
-#include "ggml-quant.hpp"
+#include "ggml-quants.hpp"
 
 GgmlOvDecoder::GgmlOvDecoder(struct ggml_tensor* node, struct ggml_cgraph* cgraph, bool is_static, bool is_first_token,
                              int context_size, int num_heads, int num_heads_kv, int head_size) :
