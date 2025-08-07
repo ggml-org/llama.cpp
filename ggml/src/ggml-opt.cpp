@@ -824,7 +824,8 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
                     GGML_ASSERT(opt_pars.sgd.wd >= 0.0f);
                     GGML_ASSERT(opt_pars.sgd.wd <= 1.0f);
                     float * sgd = ggml_get_data_f32(opt_ctx->adamw_params);
-                    sgd[1]      = 1. - (sgd[0] = opt_pars.sgd.alpha) * opt_pars.sgd.wd;
+                    sgd[0] = opt_pars.sgd.alpha;
+                    sgd[1] = opt_pars.sgd.wd;
                 }
                 break;
 

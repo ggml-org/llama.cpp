@@ -10387,7 +10387,7 @@ void ggml_compute_forward_opt_step_adamw(
 static void ggml_compute_forward_opt_step_sgd_f32(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0         = dst->src[0];
     const ggml_tensor * src0_grad    = dst->src[1];
-    const ggml_tensor * sgd_params = dst->src[2];
+    const ggml_tensor * sgd_params   = dst->src[2];
 
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad));
     GGML_ASSERT(ggml_nelements(sgd_params) == 2);
@@ -10410,7 +10410,7 @@ static void ggml_compute_forward_opt_step_sgd_f32(const ggml_compute_params * pa
     // using adamw param subset we care about - alpha, wd - could have a separate struct
     const float * sgd_params_ptr   = ggml_get_data_f32(sgd_params);
     const float   alpha            = sgd_params_ptr[0];
-    const float   keep             = sgd_params_ptr[1];
+    const float   keep             = 1.f - alpha * sgd_params_ptr[1];
 
     for (int ir = ir0; ir < ir1; ++ir) {
         const int64_t i03 = ir / (ne02 * ne01);

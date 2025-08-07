@@ -11,7 +11,7 @@ static __global__ void opt_step_sgd_f32(
 
     if (i >= k)
         return;
-    x[i] = x[i] * pars[1] - pars[0] * g[i];
+    x[i] = x[i] * (1.f - pars[0] * pars[1]) - pars[0] * g[i];
 }
 
 static void opt_step_sgd_f32_cuda(
