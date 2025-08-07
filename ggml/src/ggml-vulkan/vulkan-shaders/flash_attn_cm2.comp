@@ -248,6 +248,34 @@ void main() {
     // resize L by using smear/reduce
     coopMatReduceNV(Ldiag, L, gl_CooperativeMatrixReduceRowNV, smearReduce);
 
+    if ((p.mask_n_head_log2 & SINK_ENABLE_BIT) != 0) {
+        coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, HSV, gl_MatrixUseAccumulator> S;
+        coopMatPerElementNV(S, S, perElemOpGetSink, iq2);
+
+        coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, HSV, gl_MatrixUseAccumulator> Mr;
+
+        // resize M by using smear/reduce
+        coopMatReduceNV(Mr, M, gl_CooperativeMatrixReduceRowNV, smearReduce);
+
+        // O, Ldiag, Mr all have the same type so all element locations match
+        [[unroll]] for (uint32_t i = 0; i < Ldiag.length(); ++i) {
+            ACC_TYPE sink = S[i];
+
+            ACC_TYPE ms = ACC_TYPE(1.0f);
+            ACC_TYPE vs = ACC_TYPE(1.0f);
+
+            if (sink > Mr[i]) {
+                ms = exp(Mr[i] - sink);
+
+                O[i] *= ms;
+            } else {
+                vs = exp(sink - Mr[i]);
+            }
+
+            Ldiag[i] = Ldiag[i]*ms + vs;
+        }
+    }
+
     [[unroll]]
     for (int k = 0; k < Ldiag.length(); ++k) {
         Ldiag[k] = ACC_TYPE(1.0) / Ldiag[k];
