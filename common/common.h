@@ -82,7 +82,7 @@ enum llama_example {
     LLAMA_EXAMPLE_PARALLEL,
     LLAMA_EXAMPLE_TTS,
     LLAMA_EXAMPLE_DIFFUSION,
-
+    LLAMA_EXAMPLE_PREDICTED,
     LLAMA_EXAMPLE_COUNT,
 };
 
@@ -202,6 +202,8 @@ struct common_params_speculative {
     float   p_split      =  0.1f; // speculative decoding split probability
     float   p_min        = 0.75f; // minimum speculative decoding probability (greedy)
     std::vector<std::pair<std::string, std::string>> replacements; // main to speculative model replacements
+
+    std::string text; // draft text to use for prediction
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
