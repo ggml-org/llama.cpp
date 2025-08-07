@@ -1,12 +1,12 @@
 <script lang="ts">
 	import '../app.css';
-	import { ModeWatcher } from 'mode-watcher';
-	import { Toaster } from 'svelte-sonner';
+	import { page } from '$app/state';
 	import { ChatSidebar, MaximumContextAlertDialog } from '$lib/components/app';
 	import { activeMessages, isLoading } from '$lib/stores/chat.svelte';
-	import { serverStore } from '$lib/stores/server.svelte';
-	import { page } from '$app/state';
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
+	import { serverStore } from '$lib/stores/server.svelte';
+	import { ModeWatcher } from 'mode-watcher';
+	import { Toaster } from 'svelte-sonner';
 
 	let { children } = $props();
 
