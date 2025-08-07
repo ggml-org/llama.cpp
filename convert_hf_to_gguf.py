@@ -8330,9 +8330,6 @@ class CogVLMVisionModel(MmprojModel):
 class CogVLMModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.COGVLM
 
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
 

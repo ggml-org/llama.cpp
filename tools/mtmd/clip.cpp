@@ -1553,7 +1553,7 @@ struct clip_graph {
         } else if (ctx->proj_type() == PROJECTOR_TYPE_VOXTRAL) {
             // projector
             cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
-            cur = ggml_gelu_erf(ctx0,ld cur);
+            cur = ggml_gelu_erf(ctx0, cur);
             cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
 
         } else {
@@ -1575,25 +1575,17 @@ struct clip_graph {
         const int n_pos = n_patches + 1; // +1 for [CLS]
 
         // build input and concatenate class embedding
-        ggml_tensor * inp = build_inp();
-        inp = ggml_concat(ctx0, inp, model.class_embedding, 1);
+        ggml_tensor * cur = build_inp();
+        cur = ggml_concat(ctx0, cur, model.class_embedding, 1);
 
         // Add position embeddings
-        inp = ggml_add(ctx0, inp, model.position_embeddings);
-        cb(inp, "pos_embed", -1);
-
-        ggml_tensor * inpL = inp;
-
-        // pre-layernorm
-        if (model.pre_ln_w) {
-            inpL = build_norm(inpL, model.pre_ln_w, model.pre_ln_b, NORM_TYPE_NORMAL, eps, -1);
-            cb(inpL, "pre_ln", -1);
-        }
+        cur = ggml_add(ctx0, cur, model.position_embeddings);
+        cb(cur, "pos_embed", -1);
 
         // loop over layers
         for (int il = 0; il < n_layer; il++) {
             auto & layer = model.layers[il];
-            ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
+            ggml_tensor * inpL = cur; // inpL = residual, cur = hidden_states
 
             // Note: cogvlm applies layernorm after attention, not before
             // So we skip the layernorm1 here
@@ -1608,12 +1600,15 @@ struct clip_graph {
 
                 // Split qkv into Q, K, V along the first dimension
                 // qkv shape: [3 * n_embd, n_pos] -> split into [n_embd, n_pos] each
-                ggml_tensor * Qcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos, 
-                    ggml_row_size(qkv->type, n_embd), 0);
-                ggml_tensor * Kcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos, 
-                    ggml_row_size(qkv->type, n_embd), n_embd * ggml_element_size(qkv));
-                ggml_tensor * Vcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos, 
-                    ggml_row_size(qkv->type, n_embd), 2 * n_embd * ggml_element_size(qkv));
+                ggml_tensor * Qcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos,
+                    qkv->nb[1], 0);
+                ggml_tensor * Kcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos,
+                    qkv->nb[1], n_embd * ggml_element_size(qkv));
+                ggml_tensor * Vcur = ggml_view_2d(ctx0, qkv, n_embd, n_pos,
+                    qkv->nb[1], 2 * n_embd * ggml_element_size(qkv));
+                Qcur = ggml_cont(ctx0, Qcur);
+                Kcur = ggml_cont(ctx0, Kcur);
+                Vcur = ggml_cont(ctx0, Vcur);
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
@@ -1626,11 +1621,6 @@ struct clip_graph {
                 cur = build_attn(layer.o_w, layer.o_b,
                     Qcur, Kcur, Vcur, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
-            }
-
-            if (layer.ls_1_w) {
-                cur = ggml_mul(ctx0, cur, layer.ls_1_w);
-                cb(cur, "attn_out_scaled", il);
             }
 
             // Apply layernorm after attention for cogvlm
@@ -1656,11 +1646,6 @@ struct clip_graph {
 
             cb(cur, "ffn_out", il);
 
-            if (layer.ls_2_w) {
-                cur = ggml_mul(ctx0, cur, layer.ls_2_w);
-                cb(cur, "ffn_out_scaled", il);
-            }
-
             // Apply layernorm after mlp for cogvlm
             cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
             cb(cur, "ffn_post_norm", il);
@@ -1668,19 +1653,12 @@ struct clip_graph {
             // residual 2
             cur = ggml_add(ctx0, inpL, cur);
             cb(cur, "layer_out", il);
-
-            inpL = cur;
-        }
-
-        // post-layernorm
-        if (model.post_ln_w) {
-            inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, NORM_TYPE_NORMAL, eps, -1);
         }
 
         // remove CLS token (like build_llama4 does)
-        cur = ggml_view_2d(ctx0, inpL,
+        cur = ggml_view_2d(ctx0, cur,
             n_embd, n_patches,
-            ggml_row_size(inpL->type, n_embd), 0);
+            ggml_row_size(cur->type, n_embd), 0);
 
         // Multiply with mm_model_proj
         cur = ggml_mul_mat(ctx0, model.mm_model_proj, cur);
@@ -1689,7 +1667,6 @@ struct clip_graph {
         cur = build_norm(cur, model.mm_post_fc_norm_w, model.mm_post_fc_norm_b, NORM_TYPE_NORMAL, 1e-5, -1);
 
         // Apply GELU
-        // TODO: Not 100% sure about gelu and silu configuration
         cur = ggml_gelu_inplace(ctx0, cur);
 
         // Branch 1: multiply with mm_h_to_4h_w
@@ -2548,9 +2525,9 @@ struct clip_model_loader {
         model.layers.resize(hparams.n_layer);
         for (int il = 0; il < hparams.n_layer; ++il) {
             auto & layer = model.layers[il];
-            layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"));
-            layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"));
-            layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"));
+            layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
+            layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
+            layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"), false);
             layer.o_w    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
             layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
             layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);

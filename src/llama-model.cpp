@@ -18124,22 +18124,19 @@ struct llm_build_cogvlm : public llm_graph_context {
                 cb(qkv, "qkv", il);
 
                 // split qkv into Q, K, V along the first dimension
-                ggml_tensor * Qcur = ggml_view_2d(ctx0, qkv,
-                    n_embd, n_tokens,
-                    ggml_row_size(qkv->type, n_embd), 0);
-                ggml_tensor * Kcur = ggml_view_2d(ctx0, qkv,
-                    n_embd, n_tokens,
-                    ggml_row_size(qkv->type, n_embd), n_embd * ggml_element_size(qkv));
-                ggml_tensor * Vcur = ggml_view_2d(ctx0, qkv,
-                    n_embd, n_tokens,
-                    ggml_row_size(qkv->type, n_embd), 2 * n_embd * ggml_element_size(qkv));
+                ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd, n_tokens,
+                    qkv->nb[1], 0));
+                ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd, n_tokens,
+                    qkv->nb[1], n_embd * ggml_element_size(qkv)));
+                ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd, n_tokens,
+                    qkv->nb[1], 2 * n_embd * ggml_element_size(qkv)));
 
                 Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
                 Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
-                Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
+                Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, rope_type);
+                Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, rope_type);
 
                 cur = build_attn(inp_attn, wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -18806,7 +18803,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
-        case LLM_ARCH_COGVLM:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
@@ -18852,6 +18848,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_LFM2:
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_GLM4_MOE:
+        case LLM_ARCH_COGVLM:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
