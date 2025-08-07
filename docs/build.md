@@ -754,7 +754,7 @@ git switch dev_backend_openvino
 
 # Build with OpenVINO support
 source /opt/intel/openvino/setupvars.sh
-cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON
+cmake -B build/ReleaseOV -G Ninja -DCMAKE_BUILD_TYPE=Release -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF
 cmake --build build/ReleaseOV --config Release -j $(nproc)
 ```
 
