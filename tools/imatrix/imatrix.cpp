@@ -47,16 +47,16 @@ struct Stats {
 struct tensor_statistics {
     std::string tensor;
     Stats stats;
-    float sum_values   = 0.0f;
-    float mean_values  = 0.0f;
-    float max_values   = 0.0f;
-    float min_values   = 0.0f;
-    int   elements     = 0;
-    float stddev       = 0.0f;
-    float entropy      = 0.0f;
-    float zd_score     = 0.0f;
-    float cossim       = 0.0f;
-    float l2_norm      = 0.0f;
+    float sum_values    = 0.0f;
+    float mean_values   = 0.0f;
+    float max_values    = 0.0f;
+    float min_values    = 0.0f;
+    int   elements      = 0;
+    float std_deviation = 0.0f;
+    float entropy       = 0.0f;
+    float zd_score      = 0.0f;
+    float cossim        = 0.0f;
+    float l2_norm       = 0.0f;
 };
 
 class IMatrixCollector {
@@ -227,10 +227,10 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
         }
     }
 
-    int z_score = 0;
+    int zd_score = 0;
     if (std_deviation > 0.0f) {
         for (const auto act : activations) {
-            if (const float z = (act - mean) / std_deviation; std::fabs(z) > 1.0f) z_score++;
+            if (const float z = (act - mean) / std_deviation; std::fabs(z) > 1.0f) zd_score++;
         }
     }
 
@@ -242,9 +242,9 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     ts.max_values   = max;
     ts.min_values   = min;
     ts.elements     = static_cast<int>(activations.size());
-    ts.stddev       = std_deviation;
+    ts.std_deviation       = std_deviation;
     ts.entropy      = entropy;
-    ts.zd_score     = static_cast<float>(z_score) / ts.elements;
+    ts.zd_score     = static_cast<float>(zd_score) / ts.elements;
 
     return e.activations.empty();
 }
@@ -1334,7 +1334,7 @@ static bool show_statistics(const common_params & params) {
                 tstat.min_values,
                 tstat.max_values,
                 tstat.mean_values,
-                tstat.stddev,
+                tstat.std_deviation,
                 tstat.elements,
                 tstat.entropy,
                 100.0f * (tstat.entropy / std::log2(tstat.elements)),
