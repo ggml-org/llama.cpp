@@ -1299,7 +1299,7 @@ static bool show_statistics(const common_params & params) {
     };
     std::map<int, layer_stats> ls;
 
-    LOG_INF("\nComputing statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
+    LOG_INF("\nComputing tensor statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
     LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%12s\t%s\t%5s\t%10s\n",
         "Layer",
         "Tensor",
@@ -1361,7 +1361,7 @@ static bool show_statistics(const common_params & params) {
     compute_layer_statistics(ts, lyr_cossim, lyr_l2_norm, g_collector.get_mstats());
 
     const auto layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
-    LOG_INF("\nComputing aggregated statistics per layer (%ld layers)\n", layers);
+    LOG_INF("\nComputing layer statistics (%ld layers)\n", layers);
     LOG_INF("\n%6s\t%13s\t%5s\t%10s\n",
     "Layer",
     legacy_mode ? "Σ(Act²)" : "L₂ Norm",
