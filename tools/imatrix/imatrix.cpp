@@ -137,13 +137,13 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
     std::vector<float> vec;
     vec.reserve(len);
 
-    if (!tstats.activations.empty()) {
+    if (tstats.activations.empty()) {
         for (size_t m = 0; m < n_mat; ++m) {
             const float c = (float)tstats.counts[m];
             if (c <= 0) return {};
             const size_t off = m * row;
             for (size_t j = 0; j < row; ++j) {
-                vec.push_back(tstats.activations[off + j] / c);
+                vec.push_back(tstats.values[off + j] / c);
             }
         }
     } else {
@@ -152,7 +152,7 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
             if (c <= 0) return {};
             const size_t off = m * row;
             for (size_t j = 0; j < row; ++j) {
-                vec.push_back(tstats.values[off + j] / c);
+                vec.push_back(tstats.activations[off + j] / c);
             }
         }
     }
