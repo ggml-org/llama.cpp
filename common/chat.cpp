@@ -1319,9 +1319,55 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     return data;
 }
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
-    // TODO @ngxson : this won't work with --special enabled, we should fix that
-    builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
+    static const common_regex next_block(
+        "<\\|start\\|>assistant<\\|channel\\|>(?:commentary\\s+to=functions\\.([^\\s<\\|]+)(?:\\s+json)?|final)<\\|message\\|>");
+
     if (!builder.syntax().parse_tool_calls) {
+        if (auto res = builder.try_find_regex(next_block)) {
+            while (true) {
+                std::string fname = builder.str(res->groups[1]);
+                const std::string header = builder.str(res->groups[0]);
+                if (fname.size() > 4 && header.find(" json<|message|>") == std::string::npos) {
+                    if (fname.rfind("json") == fname.size() - 4) {
+                        fname.resize(fname.size() - 4);
+                    }
+                }
+                if (!fname.empty()) {
+                    if (!builder.try_consume_json_with_dumped_args({{}})) {
+                        break;
+                    }
+                    res = builder.try_find_regex(next_block);
+                    if (!res) break;
+                    continue;
+                }
+                builder.add_content(builder.consume_rest());
+                return;
+            }
+        }
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    while (true) {
+        auto res = builder.try_find_regex(next_block);
+        if (!res) {
+            builder.add_content(builder.consume_rest());
+            return;
+        }
+        std::string fname = builder.str(res->groups[1]);
+        const std::string header = builder.str(res->groups[0]);
+        if (fname.size() > 4 && header.find(" json<|message|>") == std::string::npos) {
+            if (fname.rfind("json") == fname.size() - 4) {
+                fname.resize(fname.size() - 4);
+            }
+        }
+        if (!fname.empty()) {
+            auto arguments = builder.consume_json_with_dumped_args({{}});
+            if (!builder.add_tool_call(fname, "", arguments.value) || arguments.is_partial) {
+                throw common_chat_msg_partial_exception("incomplete tool call");
+            }
+            continue;
+        }
         builder.add_content(builder.consume_rest());
         return;
     }

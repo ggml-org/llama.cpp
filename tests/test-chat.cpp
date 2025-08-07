@@ -1441,6 +1441,64 @@ static void test_template_output_parsers() {
     }
 }
 
+static void test_gpt_oss_parser() {
+    printf("[%s]\n", __func__);
+
+    // Standard commentary header with explicit ' json'
+    {
+        const std::string input =
+            "<|start|>assistant<|channel|>commentary to=functions.shell json<|message|>" \
+            "{\\\"command\\\":[\\\"bash\\\",\\\"-lc\\\",\\\"echo hi\\\"]}" \
+            "<|start|>assistant<|channel|>final<|message|>Done";
+        common_chat_msg expected = simple_assist_msg("Done", "", "shell",
+            "{\"command\":[\"bash\",\"-lc\",\"echo hi\"]}");
+        assert_msg_equals(
+            expected,
+            common_chat_parse(
+                input,
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GPT_OSS}));
+    }
+
+    // Commentary header where 'json' is glued to function name (e.g., 'shelljson')
+    {
+        const std::string input =
+            "<|start|>assistant<|channel|>commentary to=functions.shelljson<|message|>" \
+            "{\\\"command\\\":[\\\"bash\\\",\\\"-lc\\\",\\\"echo hi\\\"]}" \
+            "<|start|>assistant<|channel|>final<|message|>Done";
+        common_chat_msg expected = simple_assist_msg("Done", "", "shell",
+            "{\"command\":[\"bash\",\"-lc\",\"echo hi\"]}");
+        assert_msg_equals(
+            expected,
+            common_chat_parse(
+                input,
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GPT_OSS}));
+    }
+
+    // Multiple commentary tool calls then final
+    {
+        const std::string input =
+            "<|start|>assistant<|channel|>commentary to=functions.shell json<|message|>" \
+            "{\\\"command\\\":[\\\"bash\\\",\\\"-lc\\\",\\\"echo hi\\\"]}" \
+            "<|start|>assistant<|channel|>commentary to=functions.update_plan json<|message|>" \
+            "{\\\"plan\\\":[{\\\"step\\\":\\\"x\\\",\\\"status\\\":\\\"in_progress\\\"}]}" \
+            "<|start|>assistant<|channel|>final<|message|>ok";
+        common_chat_msg expected;
+        expected.role = "assistant";
+        expected.content = "ok";
+        expected.tool_calls.push_back({"shell", "{\"command\":[\"bash\",\"-lc\",\"echo hi\"]}", ""});
+        expected.tool_calls.push_back({"update_plan", "{\"plan\":[{\"step\":\"x\",\"status\":\"in_progress\"}]}", ""});
+
+        assert_msg_equals(
+            expected,
+            common_chat_parse(
+                input,
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_GPT_OSS}));
+    }
+}
+
 static void test_msg_diffs_compute() {
     printf("[%s]\n", __func__);
     {
@@ -1564,6 +1622,7 @@ int main(int argc, char ** argv) {
             test_msgs_oaicompat_json_conversion();
             test_tools_oaicompat_json_conversion();
             test_template_output_parsers();
+            test_gpt_oss_parser();
             std::cout << "\n[chat] All tests passed!" << '\n';
         }
         return 0;
