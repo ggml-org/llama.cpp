@@ -432,6 +432,10 @@ std::shared_ptr<ov::Node> GgmlOvDecoder::create_weight_node(ggml_tensor* tensor)
     }
 
     // Quantized case
+    OPENVINO_ASSERT(
+        tensor->extra == nullptr,
+        "Unsupported weight tensor: " + std::string(tensor->name) + " Possibly this is a repacked quantized weights");
+
     node_shape.erase(node_shape.begin());
 
     uint64_t weights_per_byte;
