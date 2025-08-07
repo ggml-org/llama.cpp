@@ -604,6 +604,9 @@ else:
     elif minicpmv_version == 4:
         emb_dim = 3584
         block_count = 27
+    elif minicpmv_version == 5:
+        emb_dim = 2560
+        block_count = 27
 
     default_vision_config = {
             "hidden_size": 1152,
