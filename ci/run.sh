@@ -174,7 +174,7 @@ if [ ! -z ${GG_BUILD_OPENVINO} ]; then
         echo "source /opt/intel/openvino/setupvars.sh"
         exit 1
     fi
-    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON"
+    CMAKE_EXTRA="${CMAKE_EXTRA} -DGGML_OPENVINO=ON -DGGML_CPU_REPACK=OFF"
 fi
 
 ## helpers

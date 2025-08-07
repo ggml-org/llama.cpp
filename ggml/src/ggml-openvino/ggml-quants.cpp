@@ -1,4 +1,4 @@
-#include "ggml-quant.hpp"
+#include "ggml-quants.hpp"
 
 #include <cstdint>
 #include <openvino/core/parallel.hpp>
@@ -75,11 +75,11 @@ void extract_q8_0_data(const ggml_tensor* tensor,
     auto weights = static_cast<uint8_t*>(weights_arr.data());
     auto scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
     auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
-    for (int64_t i = 0; i < scales_arr.get_size(); i++) {
+    for (size_t i = 0; i < scales_arr.get_size(); i++) {
         uint8_t* block_data = data + i * bytes_per_block;
         scales[i] = ov::float16::from_bits(*(uint16_t*)block_data);
         biases[i] = ov::float16(-128.f * static_cast<float>(scales[i]));
-        for (int64_t j = 0; j < weights_per_block; ++j) {
+        for (size_t j = 0; j < weights_per_block; ++j) {
             uint8_t x = block_data[j + 2];  // j+2 to skip the scale bytes.
             // Original data is in int8_t, so we add a bias of -128 and invert the
             // first bit.
@@ -128,7 +128,7 @@ void extract_q4_k_data(const ggml_tensor* tensor,
 
         // Extract qs1 and qs2
         uint8_t* qs1 = block_data + 4;
-        uint8_t* qs2 = block_data + 16;
+        // uint8_t* qs2 = block_data + 16;
 
         scales[i * 8] = ov::float16(scale_scales * static_cast<float>((*(qs1) & 0b111111)));
         scales[i * 8 + 1] = ov::float16(scale_scales * static_cast<float>((*(qs1 + 1) & 0b111111)));
@@ -170,7 +170,7 @@ void extract_q6_k_data(const ggml_tensor* tensor,
     auto scales = scales_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
     auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
     // std::string name(tensor.name, tensor.namelen);
-    for (int64_t i = 0; i < n_super_block; i++) {
+    for (size_t i = 0; i < n_super_block; i++) {
         uint8_t* block_data = data + i * bytes_per_block;
 
         float scale_factor =
