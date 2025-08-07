@@ -150,6 +150,14 @@ static void test_regex() {
     common_chat_msg_parser builder("Hello,", is_partial, {});
     assert_equals(false, builder.try_consume_literal("Oh"));
   }
+  {
+    common_chat_msg_parser builder("<some>", false, {});
+    assert_equals(false, builder.try_consume_literal("<some><suffix>"));
+  }
+  {
+    common_chat_msg_parser builder("<some>", true, {});
+    assert_equals(true, builder.try_consume_literal("<some><suffix>"));
+  }
 }
 
 const std::vector<std::string> barely_healable_jsons = {
