@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils';
+	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
+	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo } from '$lib/components/app';
 	import {
