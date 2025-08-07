@@ -70,9 +70,9 @@
 		const { scrollTop, scrollHeight, clientHeight } = chatScrollContainer;
 		const distanceFromBottom = scrollHeight - scrollTop - clientHeight;
 
-		if (distanceFromBottom > 50) {
+		if (distanceFromBottom > AUTO_SCROLL_THRESHOLD) {
 			autoScrollEnabled = false;
-		} else if (distanceFromBottom <= 1) {
+		} else if (distanceFromBottom <= AUTO_SCROLL_THRESHOLD) {
 			autoScrollEnabled = true;
 		}
 	}
@@ -83,6 +83,7 @@
 	): Promise<boolean> {
 		const extras = files ? await parseFilesToMessageExtras(files) : undefined;
 		await sendMessage(message, extras);
+		scrollChatToBottom();
 		
 		return true;
 	}
@@ -92,24 +93,28 @@
 		uploadedFiles = [...uploadedFiles, ...processed];
 	}
 
-	function scrollChatToBottom() {
+	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
 		chatScrollContainer?.scrollTo({
 			top: chatScrollContainer?.scrollHeight,
-			behavior: 'smooth'
+			behavior
 		});
 	}
 
-	afterNavigate(() => {
-		setTimeout(scrollChatToBottom, 10); //  This is a dirty workaround, need to find racing conditions
-	});
+	$effect(() => {
+		// This solution is not ideal, but it works for now. But can be tricky for long conversations
+		// Eventually we might want to find a proper way to render the content scrolled down from the beginning
+		if (navigating.complete && chatScrollContainer) {
+			setTimeout(() => scrollChatToBottom('instant'), 100);
+		}
 
-	onMount(() => {
-		setTimeout(scrollChatToBottom, 10); //  This is a dirty workaround, need to find racing conditions
-	});
+		if (navigating) {
+			scrollChatToBottom('instant');
+		}
+	})
 
 	$effect(() => {
 		if (isLoading() && autoScrollEnabled) {
-			scrollInterval = setInterval(scrollChatToBottom, 100);
+			scrollInterval = setInterval(scrollChatToBottom, 200);
 		} else if (scrollInterval) {
 			clearInterval(scrollInterval);
 			scrollInterval = undefined;
