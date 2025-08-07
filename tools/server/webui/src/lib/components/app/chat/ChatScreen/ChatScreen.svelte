@@ -1,5 +1,8 @@
 <script lang="ts">
+	import { Upload } from '@lucide/svelte';
 	import { afterNavigate } from '$app/navigation';
+	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils';
+	import { serverStore } from '$lib/stores/server.svelte';
 	import { ChatForm, ChatHeader, ChatMessages, ServerInfo } from '$lib/components/app';
 	import {
 		activeMessages,
@@ -10,9 +13,6 @@
 	} from '$lib/stores/chat.svelte';
 	import { onMount } from 'svelte';
 	import { fade, fly, slide } from 'svelte/transition';
-	import { Upload } from '@lucide/svelte';
-	import { parseFilesToMessageExtras, processFilesToChatUploaded } from '$lib/utils';
-	import { serverStore } from '$lib/stores/server.svelte';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
