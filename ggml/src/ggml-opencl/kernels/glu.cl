@@ -203,6 +203,47 @@ kernel void kernel_swiglu_f16(
 }
 
 //------------------------------------------------------------------------------
+// swiglu_oai
+//------------------------------------------------------------------------------
+kernel void kernel_swiglu_oai(
+    global char * src0,
+    ulong         offset0,
+    global char * src1,
+    ulong         offset1,
+    global char * dst,
+    ulong         offsetd,
+    ulong         nb01,
+    ulong         nb11,
+    int           ne0,
+    ulong         nb1,
+    int           ne00_off,
+    int           ne10_off,
+    float         limit,
+    float         alpha
+) {
+    src0 = (global char*)((global char*)src0 + offset0);
+    src1 = (global char*)((global char*)src1 + offset1);
+    dst  = (global char*)((global char*)dst  + offsetd);
+
+    global float * src0_row = (global float *) ((global char *) src0 + get_group_id(0)*nb01) + ne00_off;
+    global float * src1_row = (global float *) ((global char *) src1 + get_group_id(0)*nb11) + ne10_off;
+    global float * dst_row  = (global float *) ((global char *) dst  + get_group_id(0)*nb1);
+
+    for (int i0 = get_local_id(0); i0 < ne0; i0 += get_local_size(0)) {
+        float x0 = src0_row[i0];
+        float x1 = src1_row[i0];
+
+        x0 = min(x0, limit);
+        x1 = max(min(x1, limit), -limit);
+
+        float out_glu = x0 / (1.0f + exp(-x0 * alpha));
+        out_glu = out_glu * (1.0f + x1);
+
+        dst_row[i0] = out_glu;
+    }
+}
+
+//------------------------------------------------------------------------------
 // geglu_erf
 //------------------------------------------------------------------------------
 kernel void kernel_geglu_erf(
