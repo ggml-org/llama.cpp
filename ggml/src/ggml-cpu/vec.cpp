@@ -214,46 +214,46 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
         for (int i = 0; i < np; i += ggml_f16_step) {
             ax1 = GGML_F16x_VEC_LOAD(x + i + 0 * ggml_f16_epr, 0);
             ay1 = GGML_F16x_VEC_LOAD(y + i + 0 * ggml_f16_epr, 0);
-            sum1 = GGML_F16x_VEC_FMA(ax1, ay1, sum1);
+            sum1 = GGML_F16x_VEC_FMA(sum1, ax1, ay1);
 
             ax2 = GGML_F16x_VEC_LOAD(x + i + 1 * ggml_f16_epr, 1);
             ay2 = GGML_F16x_VEC_LOAD(y + i + 1 * ggml_f16_epr, 1);
-            sum2 = GGML_F16x_VEC_FMA(ax2, ay2, sum2);
+            sum2 = GGML_F16x_VEC_FMA(sum2, ax2, ay2);
 
             ax3 = GGML_F16x_VEC_LOAD(x + i + 2 * ggml_f16_epr, 2);
             ay3 = GGML_F16x_VEC_LOAD(y + i + 2 * ggml_f16_epr, 2);
-            sum3 = GGML_F16x_VEC_FMA(ax3, ay3, sum3);
+            sum3 = GGML_F16x_VEC_FMA(sum3, ax3, ay3);
 
             ax4 = GGML_F16x_VEC_LOAD(x + i + 3 * ggml_f16_epr, 3);
             ay4 = GGML_F16x_VEC_LOAD(y + i + 3 * ggml_f16_epr, 3);
-            sum4 = GGML_F16x_VEC_FMA(ax4, ay4, sum4);
+            sum4 = GGML_F16x_VEC_FMA(sum4, ax4, ay4);
 
             ax5 = GGML_F16x_VEC_LOAD(x + i + 4 * ggml_f16_epr, 4);
             ay5 = GGML_F16x_VEC_LOAD(y + i + 4 * ggml_f16_epr, 4);
-            sum1 = GGML_F16x_VEC_FMA(ax5, ay5, sum1);
+            sum1 = GGML_F16x_VEC_FMA(sum1, ax5, ay5);
 
             ax6 = GGML_F16x_VEC_LOAD(x + i + 5 * ggml_f16_epr, 5);
             ay6 = GGML_F16x_VEC_LOAD(y + i + 5 * ggml_f16_epr, 5);
-            sum2 = GGML_F16x_VEC_FMA(ax6, ay6, sum2);
+            sum2 = GGML_F16x_VEC_FMA(sum2, ax6, ay6);
 
             ax7 = GGML_F16x_VEC_LOAD(x + i + 6 * ggml_f16_epr, 6);
             ay7 = GGML_F16x_VEC_LOAD(y + i + 6 * ggml_f16_epr, 6);
-            sum3 = GGML_F16x_VEC_FMA(ax7, ay7, sum3);
+            sum3 = GGML_F16x_VEC_FMA(sum3, ax7, ay7);
 
             ax8 = GGML_F16x_VEC_LOAD(x + i + 7 * ggml_f16_epr, 7);
             ay8 = GGML_F16x_VEC_LOAD(y + i + 7 * ggml_f16_epr, 7);
-            sum4 = GGML_F16x_VEC_FMA(ax8, ay8, sum4);
+            sum4 = GGML_F16x_VEC_FMA(sum4, ax8, ay8);
         }
 
         const int np2 = (n & ~(ggml_f16_epr - 1)); // round down to multiple of 8
         for (int k = np; k < np2; k += ggml_f16_epr) {
             svfloat16_t rx = GGML_F16x_VEC_LOAD(x + k, 0);
             svfloat16_t ry = GGML_F16x_VEC_LOAD(y + k, 0);
-            sum1 = GGML_F16x_VEC_FMA(rx, ry, sum1);
+            sum1 = GGML_F16x_VEC_FMA(sum1, rx, ry);
         }
 
         if (np2 < n) {
-            svbool_t pg = svwhilelt_b16(np2,n);
+            svbool_t pg = svwhilelt_b16(np2, n);
             svfloat16_t hx = svld1_f16(pg, (const __fp16 *)(x + np2));
             svfloat16_t hy = svld1_f16(pg, (const __fp16 *)(y + np2));
 
