@@ -534,6 +534,7 @@ struct vk_device_struct {
     ggml_backend_buffer_type buffer_type;
 
     bool disable_fusion;
+    bool disable_host_visible_vidmem;
 
 #ifdef GGML_VULKAN_MEMORY_DEBUG
     std::unique_ptr<vk_memory_logger> memory_logger;
@@ -1804,6 +1805,8 @@ static vk_buffer ggml_vk_create_buffer_device(vk_device& device, size_t size) {
         } else if (device->uma) {
             // Fall back to host memory type
             buf = ggml_vk_create_buffer(device, size, vk::MemoryPropertyFlagBits::eDeviceLocal, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
+        } else if (device->disable_host_visible_vidmem) {
+            buf = ggml_vk_create_buffer(device, size, vk::MemoryPropertyFlagBits::eDeviceLocal, vk::MemoryPropertyFlagBits::eDeviceLocal);
         } else {
             // use rebar if available, otherwise fallback to device only visible memory
             buf = ggml_vk_create_buffer(device, size, vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, vk::MemoryPropertyFlagBits::eDeviceLocal);
@@ -3264,6 +3267,9 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         const char* GGML_VK_PREFER_HOST_MEMORY = getenv("GGML_VK_PREFER_HOST_MEMORY");
         device->prefer_host_memory = GGML_VK_PREFER_HOST_MEMORY != nullptr;
+
+        const char* GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM = getenv("GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM");
+        device->disable_host_visible_vidmem = GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM != nullptr;
 
         bool fp16_storage = false;
         bool fp16_compute = false;
