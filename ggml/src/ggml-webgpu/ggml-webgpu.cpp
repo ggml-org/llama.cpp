@@ -50,6 +50,13 @@ static uint64_t webgpu_tensor_offset(const ggml_tensor * tensor) {
 
 /* Struct definitions */
 
+struct webgpu_pipeline_info {
+    std::string  name;
+    const char * shader_code;
+    ggml_type    src0_type;
+    ggml_type    src1_type;
+};
+
 // Forward reference
 static void ggml_webgpu_create_buffer(wgpu::Device &    device,
                                       wgpu::Buffer &    buffer,
@@ -124,7 +131,8 @@ struct webgpu_context_struct {
     webgpu_buf_pool set_rows_error_buf_pool;
 
     wgpu::ComputePipeline memset_pipeline;
-    wgpu::ComputePipeline mul_mat_pipeline;
+    // [src0 0=fp32,1=fp16][src1 0=fp32,1=fp16]
+    wgpu::ComputePipeline mul_mat_pipeline[2][2];
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline cpy_pipeline;
 
@@ -226,6 +234,15 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 }
 
 /** End WebGPU object initializations */
+
+/** Utility Functions */
+
+size_t ggml_webgpu_binding_size(ggml_tensor * t, size_t misalignment) {
+    return (ggml_nbytes(t) + misalignment + WEBGPU_STORAGE_BUF_BINDING_MULT - 1) &
+           ~(WEBGPU_STORAGE_BUF_BINDING_MULT - 1);
+}
+
+/** End Utility Functions */
 
 /** WebGPU Actions */
 
@@ -479,13 +496,11 @@ static void ggml_webgpu_cpy(webgpu_context & ctx, ggml_tensor * src, ggml_tensor
         { .binding = 0,
          .buffer  = ggml_backend_webgpu_tensor_buf(src),
          .offset  = src_offset,
-         .size    = (ggml_nbytes(src) + src_misalignment + WEBGPU_STORAGE_BUF_BINDING_MULT - 1) &
-                  ~(WEBGPU_STORAGE_BUF_BINDING_MULT - 1) },
+         .size    = ggml_webgpu_binding_size(src, src_misalignment) },
         { .binding = 1,
          .buffer  = ggml_backend_webgpu_tensor_buf(dst),
          .offset  = dst_offset,
-         .size    = (ggml_nbytes(dst) + dst_misalignment + WEBGPU_STORAGE_BUF_BINDING_MULT - 1) &
-                  ~(WEBGPU_STORAGE_BUF_BINDING_MULT - 1) }
+         .size   = ggml_webgpu_binding_size(dst, dst_misalignment) }
     };
 
     size_t   max_wg_size = ctx->limits.maxComputeWorkgroupSizeX;
@@ -542,15 +557,15 @@ static void ggml_webgpu_set_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
         { .binding = 0,
          .buffer  = ggml_backend_webgpu_tensor_buf(src),
          .offset  = ggml_backend_webgpu_tensor_offset(src),
-         .size    = ggml_nbytes(src)                                                                       },
+         .size    = ggml_webgpu_binding_size(src, src_misalignment) },
         { .binding = 1,
          .buffer  = ggml_backend_webgpu_tensor_buf(idx),
          .offset  = ggml_backend_webgpu_tensor_offset(idx),
-         .size    = ggml_nbytes(idx)                                                                       },
+         .size    = ggml_webgpu_binding_size(idx, idx_misalignment) },
         { .binding = 2,
          .buffer  = ggml_backend_webgpu_tensor_buf(dst),
          .offset  = ggml_backend_webgpu_tensor_offset(dst),
-         .size    = ggml_nbytes(dst)                                                                       },
+         .size    = ggml_webgpu_binding_size(dst, dst_misalignment) },
         { .binding = 3, .buffer = error_bufs.dev_buf,    .offset = 0, .size = error_bufs.dev_buf.GetSize() }
     };
 
@@ -564,7 +579,21 @@ static void ggml_webgpu_set_rows(webgpu_context & ctx, ggml_tensor * src, ggml_t
 }
 
 static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_tensor * src1, ggml_tensor * dst) {
+    size_t src0_offset       = ggml_backend_webgpu_tensor_offset(src0);
+    size_t src0_misalignment = src0_offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
+    // align to minimum offset alignment
+    src0_offset &= ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
+    size_t src1_offset       = ggml_backend_webgpu_tensor_offset(src1);
+    size_t src1_misalignment = src1_offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
+    src1_offset &= ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
+    size_t dst_offset       = ggml_backend_webgpu_tensor_offset(dst);
+    size_t dst_misalignment = dst_offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
+    dst_offset &= ~(ctx->limits.minStorageBufferOffsetAlignment - 1);
+
     std::vector<uint32_t> params = {
+        (uint32_t) (src0_misalignment / ggml_type_size(src0->type)),
+        (uint32_t) (src1_misalignment / ggml_type_size(src1->type)),
+        (uint32_t) (dst_misalignment / ggml_type_size(dst->type)),
         (uint32_t) dst->ne[1],                                  // number of rows in result (M)
         (uint32_t) dst->ne[0],                                  // number of columns in result (N)
         (uint32_t) src0->ne[0],                                 // number of columns in src0/src1 (K)
@@ -584,20 +613,20 @@ static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_t
         { .binding = 0,
          .buffer  = ggml_backend_webgpu_tensor_buf(src0),
          .offset  = ggml_backend_webgpu_tensor_offset(src0),
-         .size    = ggml_nbytes(src0) },
+         .size    = ggml_webgpu_binding_size(src0, src0_misalignment) },
         { .binding = 1,
          .buffer  = ggml_backend_webgpu_tensor_buf(src1),
          .offset  = ggml_backend_webgpu_tensor_offset(src1),
-         .size    = ggml_nbytes(src1) },
+         .size    = ggml_webgpu_binding_size(src1, src1_misalignment) },
         { .binding = 2,
          .buffer  = ggml_backend_webgpu_tensor_buf(dst),
          .offset  = ggml_backend_webgpu_tensor_offset(dst),
-         .size    = ggml_nbytes(dst)  }
+         .size    = ggml_webgpu_binding_size(dst, dst_misalignment) }
     };
 
     uint32_t wg_x =
         (dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3] + WEBGPU_MUL_MAT_WG_SIZE - 1) / WEBGPU_MUL_MAT_WG_SIZE;
-    ggml_backend_webgpu_build_and_enqueue(ctx, ctx->mul_mat_pipeline, params, entries, wg_x);
+    ggml_backend_webgpu_build_and_enqueue(ctx, ctx->mul_mat_pipeline[src0->type][src1->type], params, entries, wg_x);
 }
 
 // Returns true if node has enqueued work into the queue, false otherwise
@@ -907,7 +936,31 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    ggml_webgpu_create_pipeline(webgpu_ctx->device, webgpu_ctx->mul_mat_pipeline, wgsl_mul_mat, "mul_mat");
+    webgpu_pipeline_info pipeline_infos[4] = {
+        { .name        = "mul_mat_f32_f32",
+         .shader_code = wgsl_mul_mat_f32_f32,
+         .src0_type   = GGML_TYPE_F32,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_f16_f16",
+         .shader_code = wgsl_mul_mat_f16_f16,
+         .src0_type   = GGML_TYPE_F16,
+         .src1_type   = GGML_TYPE_F16 },
+        { .name        = "mul_mat_f32_f16",
+         .shader_code = wgsl_mul_mat_f32_f16,
+         .src0_type   = GGML_TYPE_F32,
+         .src1_type   = GGML_TYPE_F16 },
+        { .name        = "mul_mat_f16_f32",
+         .shader_code = wgsl_mul_mat_f16_f32,
+         .src0_type   = GGML_TYPE_F16,
+         .src1_type   = GGML_TYPE_F32 }
+    };
+
+    for (auto & pipeline_info : pipeline_infos) {
+        ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                    webgpu_ctx->mul_mat_pipeline[pipeline_info.src0_type][pipeline_info.src1_type],
+                                    pipeline_info.shader_code,
+                                    pipeline_info.name.data());
+    }
 }
 
 static void ggml_webgpu_init_set_rows_pipeline(webgpu_context & webgpu_ctx) {
@@ -1056,7 +1109,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_CPY | GGML_OP_SET_ROWS:
             return op->type == GGML_TYPE_F16 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
-            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16);
         default:
             return false;
     }
