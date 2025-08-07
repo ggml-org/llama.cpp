@@ -311,9 +311,9 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         GGML_ASSERT(kernel);
 
-        int ith = params->ith;
-        int nth_raw = params->nth;
-        int nth = nth_raw > 0 ? nth_raw : 1;
+        const int ith = params->ith;
+        const int nth_raw = params->nth;
+        const int nth = nth_raw > 0 ? nth_raw : 1;
 
         const size_t k = ne00;
         const size_t m = ne11;
