@@ -18,6 +18,7 @@
 #include <regex>
 #include <thread>
 #include <unordered_map>
+#include <valarray>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -1301,7 +1302,7 @@ static bool show_statistics(const common_params & params) {
     std::map<int, layer_stats> ls;
 
     LOG_INF("\nComputing tensor statistics for %s (%d tensors)\n", params.in_files[0].c_str(), static_cast<int>(ts.size()));
-    LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%12s\t%s\t%5s\t%10s\n",
+    LOG_INF("\n%6s\t%18s\t%13s\t%8s\t%8s\t%7s\t%15s\t%13s\t%11s\t%8s\t%5s\t%10s\n",
         "Layer",
         "Tensor",
         legacy_mode ? "Σ(Act²)" : "L₂ Norm",
@@ -1310,8 +1311,8 @@ static bool show_statistics(const common_params & params) {
         "μ",
         "σ",
         "N",
-        "Entropy",
-        "E (norm)",
+        "H Norm",
+        legacy_mode ? "H" : "ECS",
         "ZD",
         "CosSim");
     LOG_INF(
@@ -1328,17 +1329,17 @@ static bool show_statistics(const common_params & params) {
             blk = -1;  // not a block layer
         }
 
-        LOG_INF("%5s\t%-20s\t%11.2f\t%10.4f\t%10.4f\t%8.2f\t%8.2f\t%7d\t%12.4f\t%7.2f%%\t%6.2f%%\t%10.4f\n",
+        LOG_INF("%5s\t%-20s\t%11.2f\t%10.4f\t%10.4f\t%8.2f\t%8.2f\t%7d\t%10.2f%%\t%10.4f\t%6.2f%%\t%10.4f\n",
                 layer.c_str(),
                 name.c_str(),
-                legacy_mode == 1 ? tstat.sum_values : tstat.l2_norm,
+                legacy_mode ? tstat.sum_values : tstat.l2_norm,
                 tstat.min_values,
                 tstat.max_values,
                 tstat.mean_values,
                 tstat.std_deviation,
                 tstat.elements,
-                tstat.entropy,
                 100.0f * (tstat.entropy / std::log2(tstat.elements)),
+                legacy_mode ? tstat.entropy : 100.0f * std::exp(-0.01f * tstat.l2_norm) * std::pow(fabs(tstat.cossim), 10.0f),
                 100.0f * tstat.zd_score,
                 tstat.cossim);
 
@@ -1363,25 +1364,37 @@ static bool show_statistics(const common_params & params) {
 
     const auto layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing layer statistics (%ld layers)\n", layers);
-    LOG_INF("\n%6s\t%13s\t%5s\t%10s\n",
+    LOG_INF("\n%6s\t%13s\t%6s\t%11s\t%6s\n",
     "Layer",
     legacy_mode ? "Σ(Act²)" : "L₂ Norm",
     "ZD",
-    "CosSim");
-    LOG_INF("============================================\n");
+    "CosSim",
+    legacy_mode ? "" : "ECS");
+    if (legacy_mode) {
+        LOG_INF("============================================\n");
+    } else {
+        LOG_INF("=========================================================\n");
+    }
     for (const auto & [layer, stats] : ls) {
         if (layer < 0 || stats.n == 0) continue;
-        const float lyr_sum = stats.lyr_sum;
-        const float lyr_zd = stats.lyr_zd / stats.n;
         const auto lcs = lyr_cossim.find(layer);
-        const float lyr_cs = (lcs != lyr_cossim.end()) ? lcs->second : 0.0f;
+        const float lyr_cs = lcs != lyr_cossim.end() ? lcs->second : 0.0f;
         const auto ll2n = lyr_l2_norm.find(layer);
-        const float l2_norm = (ll2n != lyr_l2_norm.end()) ? ll2n->second : 0.0f;
-        LOG_INF("%5d\t%11.2f\t%6.2f%%\t%10.4f\n",
+        const float lyr_l2n = ll2n != lyr_l2_norm.end() ? ll2n->second : 0.0f;
+        if (legacy_mode) {
+            LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\n",
             layer,
-            legacy_mode ? lyr_sum : l2_norm,
-            100.0f * lyr_zd,
+            stats.lyr_sum,
+            100.0f * stats.lyr_zd / stats.n,
             lyr_cs);
+        } else {
+            LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\t%8.4f\n",
+            layer,
+            lyr_l2n,
+            100.0f * stats.lyr_zd / stats.n,
+            lyr_cs,
+            100.0f * std::exp(-0.01f * lyr_l2n) * std::pow(fabs(lyr_cs), 10.0f));
+        }
     }
     LOG_INF("\n");
 
