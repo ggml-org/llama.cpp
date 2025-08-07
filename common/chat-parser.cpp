@@ -95,6 +95,13 @@ bool common_chat_msg_parser::try_consume_literal(const std::string & literal) {
     auto pos = pos_;
     for (auto i = 0u; i < literal.size(); ++i) {
         if (pos >= input_.size()) {
+            if (is_partial() && i > 0) {
+                // For partial message, whose suffix matches the literal, report
+                // that it can be consumed. We need more content to be able to
+                // tell otherwise.
+                pos_ = pos;
+                return true;
+            }
             return false;
         }
         if (input_[pos] != literal[i]) {
