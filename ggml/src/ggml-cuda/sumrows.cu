@@ -1,14 +1,11 @@
 #include "reduce_rows.cuh"
 #include "sumrows.cuh"
 
-void sum_rows_f32_cuda(const float * x,
-                       float *       dst,
-                       const int     ncols,
-                       const int     nrows,
-                       cudaStream_t  stream,
-                       int &         n_sm) {
+void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
+    const int  id  = ggml_cuda_get_device();
+    const int  nsm = ggml_cuda_info().devices[id].nsm;
     const dim3 block_nums(nrows, 1, 1);
-    if ((nrows / n_sm) < 2) {
+    if ((nrows / nsm) < 2) {
         const dim3 block_dims(512, 1, 1);
         reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(x, dst, ncols);
     } else {
@@ -32,7 +29,9 @@ void ggml_cuda_op_sum_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const dim3 block_nums(nrows, 1, 1);
 
-    if ((nrows / ctx.sm_count) < 2) {
+    const int id  = ggml_cuda_get_device();
+    const int nsm = ggml_cuda_info().devices[id].nsm;
+    if ((nrows / nsm) < 2) {
         // Increase num threads to 512 for small nrows to better hide the latency
         const dim3 block_dims(512, 1, 1);
         reduce_rows_f32</*norm=*/false><<<block_nums, block_dims, 0, stream>>>(src0_d, dst_d, ncols);

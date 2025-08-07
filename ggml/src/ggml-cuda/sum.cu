@@ -12,7 +12,7 @@ using namespace cub;
 
 #include <cstdint>
 
-void sum_f32_cuda(ggml_cuda_pool & pool, const float * x, float * dst, const int64_t ne, cudaStream_t stream, int & n_sm) {
+void sum_f32_cuda(ggml_cuda_pool & pool, const float * x, float * dst, const int64_t ne, cudaStream_t stream) {
 #ifdef USE_CUB
     size_t tmp_size = 0;
     DeviceReduce::Sum(nullptr,       tmp_size, x, dst, ne, stream);
@@ -41,5 +41,5 @@ void ggml_cuda_op_sum(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_pool & pool = ctx.pool();
     cudaStream_t stream = ctx.stream();
 
-    sum_f32_cuda(pool, src0_d, dst_d, ne, stream, ctx.sm_count);
+    sum_f32_cuda(pool, src0_d, dst_d, ne, stream);
 }
