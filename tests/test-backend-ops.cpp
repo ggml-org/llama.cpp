@@ -4091,6 +4091,75 @@ struct test_conv_2d_dw : public test_case {
     }
 };
 
+// GGML_OP_CONV_3D
+struct test_conv_3d : public test_case {
+    // Logical 5D dimensions
+    const int64_t N, IC, ID, IH, IW;
+    const int64_t OC, KD, KH, KW;
+    // Conv params
+    const int s0, s1, s2;
+    const int p0, p1, p2;
+    const int d0, d1, d2;
+    // Types
+    const ggml_type type_kernel;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CONV_3D";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR11(N, IC, ID, IH, IW, OC, KD, KH, KW, s0, s1) + "," +
+               VARS_TO_STR8(s2, p0, p1, p2, d0, d1, d2, type_kernel);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        auto calc_conv_output_size = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+            return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+        };
+        const int64_t OD = calc_conv_output_size(ID, KD, s2, p2, d2);
+        const int64_t OH = calc_conv_output_size(IH, KH, s1, p1, d1);
+        const int64_t OW = calc_conv_output_size(IW, KW, s0, p0, d0);
+
+        return (uint64_t)N * OC * OD * OH * OW * (2 * IC * KD * KH * KW - 1);
+    }
+
+    test_conv_3d(
+        int64_t N, int64_t IC, int64_t ID, int64_t IH, int64_t IW,
+        int64_t OC, int64_t KD, int64_t KH, int64_t KW,
+        int s0, int s1, int s2,
+        int p0, int p1, int p2,
+        int d0, int d1, int d2,
+        ggml_type type_kernel
+    ) : N(N), IC(IC), ID(ID), IH(IH), IW(IW),
+        OC(OC), KD(KD), KH(KH), KW(KW),
+        s0(s0), s1(s1), s2(s2),
+        p0(p0), p1(p1), p2(p2),
+        d0(d0), d1(d1), d2(d2),
+        type_kernel(type_kernel) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // GGML input tensor is packed as [W, H, D, C*N]
+        const int64_t ne_input[] = {IW, IH, ID, IC * N};
+        ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input);
+        ggml_set_name(input, "input");
+
+        // GGML kernel tensor is packed as [KW, KH, KD, IC*OC]
+        const int64_t ne_kernel[] = {KW, KH, KD, IC * OC};
+        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel);
+        ggml_set_name(kernel, "kernel");
+
+        ggml_tensor * out = ggml_conv_3d(ctx, kernel, input, s0, s1, s2, p0, p1, p2, d0, d1, d2, (int)IC, (int)N, (int)OC);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_CONCAT
 struct test_concat : public test_case {
     const ggml_type type;
@@ -5527,6 +5596,61 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9}, 1, 0, 1, true));
     test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, 2, 1, 1, false));
     test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, 2, 1, 1, true));
+
+    // CONV_3D
+    auto calc_conv_output_size_3d = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
+        return (ins + 2 * p - d * (ks - 1) - 1) / s + 1;
+    };
+
+    for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+        for (int N : {1, 2}) {
+            for (int IC : {1, 3}) {
+                for (int OC : {1, 4}) {
+                    for (int s0 : {1, 2}) {
+                        for (int p1 : {0, 1}) {
+                            for (int d2 : {1, 2}) {
+                                int64_t IW = 20, IH = 22, ID = 18;
+                                int64_t KW = 3,  KH = 3,  KD = 3;
+                                int s1 = s0, s2 = s0;
+                                int p0 = p1, p2 = p1;
+                                int d0 = d2, d1 = d2;
+
+                                if (calc_conv_output_size_3d(IW, KW, s0, p0, d0) <= 0 ||
+                                    calc_conv_output_size_3d(IH, KH, s1, p1, d1) <= 0 ||
+                                    calc_conv_output_size_3d(ID, KD, s2, p2, d2) <= 0) {
+                                    continue;
+                                }
+                                test_cases.emplace_back(new test_conv_3d(
+                                    N, IC, ID, IH, IW,
+                                    OC, KD, KH, KW,
+                                    s0, s1, s2, p0, p1, p2, d0, d1, d2,
+                                    kernel_type));
+
+                                // Asymmetric kernel and params
+                                int64_t asym_KW = 5, asym_KH = 1, asym_KD = 3;
+                                int asym_s0 = 2, asym_s1 = 1, asym_s2 = 1;
+                                int asym_p0 = 2, asym_p1 = 0, asym_p2 = 1;
+                                int asym_d0 = 1, asym_d1 = 1, asym_d2 = 2;
+
+                                if (calc_conv_output_size_3d(IW, asym_KW, asym_s0, asym_p0, asym_d0) <= 0 ||
+                                    calc_conv_output_size_3d(IH, asym_KH, asym_s1, asym_p1, asym_d1) <= 0 ||
+                                    calc_conv_output_size_3d(ID, asym_KD, asym_s2, asym_p2, asym_d2) <= 0) {
+                                    continue;
+                                }
+                                test_cases.emplace_back(new test_conv_3d(
+                                    N, IC, ID, IH, IW,
+                                    OC, asym_KD, asym_KH, asym_KW,
+                                    asym_s0, asym_s1, asym_s2, asym_p0, asym_p1, asym_p2, asym_d0, asym_d1, asym_d2,
+                                    kernel_type));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Case with kernel size 1
+        test_cases.emplace_back(new test_conv_3d(1, 4, 8, 8, 8, 8, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 1, kernel_type));
+    }
 
     for(uint32_t Cout : {1, 9}){
         for(uint32_t Cin : {1, 7}){
