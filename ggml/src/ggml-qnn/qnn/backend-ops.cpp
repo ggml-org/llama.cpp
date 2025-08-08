@@ -1,14 +1,14 @@
 
 #include "backend-ops.hpp"
 
-#include <memory>
-
 #include "ggml-impl.h"
 #include "graph.hpp"
 #include "logger.hpp"
 #include "op-config.hpp"
 #include "tensor.hpp"
 #include "utils.hpp"
+
+#include <memory>
 
 namespace {
 
@@ -17,8 +17,10 @@ qnn::qnn_graph * get_qnn_graph_from_cache(qnn::ggml_backend_qnn_device_context *
     std::string graph_key;
     auto        op_data_type = qnn::qnn_graph::get_graph_key_from_cgraph(cgraph, graph_key);
     if (graph_key.empty()) {
-        QNN_LOG_DEBUG("[%s]empty graph key for cgraph: %p, size: %d\n", qnn::get_backend_name(ctx->device),
-                      (const void *) cgraph, (int) cgraph->n_nodes);
+        QNN_LOG_DEBUG("[%s]empty graph key for cgraph: %p, size: %d\n",
+                      qnn::get_backend_name(ctx->device),
+                      (const void *) cgraph,
+                      (int) cgraph->n_nodes);
         return nullptr;
     }
 
@@ -26,19 +28,21 @@ qnn::qnn_graph * get_qnn_graph_from_cache(qnn::ggml_backend_qnn_device_context *
     qnn::qnn_graph * graph_ptr = nullptr;
     if (it != graph_cache.end()) {
         auto it = graph_cache.find(graph_key);
-        QNN_LOG_DEBUG("[%s]found graph %s in cache, cache size: %d\n", qnn::get_backend_name(ctx->device),
-                      graph_key.c_str(), (int) graph_cache.size());
+        QNN_LOG_DEBUG("[%s]found graph %s in cache, cache size: %d\n",
+                      qnn::get_backend_name(ctx->device),
+                      graph_key.c_str(),
+                      (int) graph_cache.size());
         graph_ptr = it->second.get();
     } else {
         auto precision = qnn::qnn_graph::kHtpDefault;
         if (op_data_type == GGML_TYPE_F16) {
-            QNN_LOG_DEBUG("[%s][%s]set graph precision to FP16\n", qnn::get_backend_name(ctx->device),
-                          graph_key.c_str());
+            QNN_LOG_DEBUG(
+                "[%s][%s]set graph precision to FP16\n", qnn::get_backend_name(ctx->device), graph_key.c_str());
             precision = qnn::qnn_graph::kHtpFp16;
         }
 
-        auto graph = std::make_unique<qnn::qnn_graph>(graph_key, ctx->device, ctx->instance, precision,
-                                                      ctx->socinfo.vtcm_size_in_mb);
+        auto graph = std::make_unique<qnn::qnn_graph>(
+            graph_key, ctx->device, ctx->instance, precision, ctx->socinfo.vtcm_size_in_mb);
         if (!graph->is_valid()) {
             return nullptr;
         }
@@ -50,8 +54,10 @@ qnn::qnn_graph * get_qnn_graph_from_cache(qnn::ggml_backend_qnn_device_context *
 
         graph_ptr              = graph.get();
         graph_cache[graph_key] = std::move(graph);
-        QNN_LOG_DEBUG("[%s]add graph %s to cache, cache size: %d\n", qnn::get_backend_name(ctx->device),
-                      graph_key.c_str(), (int) graph_cache.size());
+        QNN_LOG_DEBUG("[%s]add graph %s to cache, cache size: %d\n",
+                      qnn::get_backend_name(ctx->device),
+                      graph_key.c_str(),
+                      (int) graph_cache.size());
     }
 
     return graph_ptr;
@@ -62,6 +68,7 @@ constexpr const bool kQnnSupportedOps[] = {
     true,   // GGML_OP_NONE
     false,  // GGML_OP_DUP
     true,   // GGML_OP_ADD
+    false,  // GGML_OP_ADD_ID
     false,  // GGML_OP_ADD1
     false,  // GGML_OP_ACC
     true,   // GGML_OP_SUB
@@ -197,8 +204,13 @@ inline bool is_tensor_size_valid(qnn::ggml_backend_qnn_device_context * ctx, con
     const auto tensor_size = get_tensor_size_in_bytes(tensor, type);
     if (ctx->max_tensor_size_in_bytes && tensor_size >= ctx->max_tensor_size_in_bytes) {
         QNN_LOG_DEBUG("[%s]tensor(%s_%dx%dx%dx%d) size(%lld) exceeds the limit(%lld)\n",
-                      qnn::get_backend_name(ctx->device), ggml_get_name(tensor), (int) tensor->ne[0],
-                      (int) tensor->ne[1], (int) tensor->ne[2], (int) tensor->ne[3], (long long int) tensor_size,
+                      qnn::get_backend_name(ctx->device),
+                      ggml_get_name(tensor),
+                      (int) tensor->ne[0],
+                      (int) tensor->ne[1],
+                      (int) tensor->ne[2],
+                      (int) tensor->ne[3],
+                      (long long int) tensor_size,
                       (long long int) ctx->max_tensor_size_in_bytes);
         return false;
     }
@@ -215,10 +227,18 @@ bool is_tensor_type_valid(qnn::ggml_backend_qnn_device_context * ctx, const ggml
 #ifndef NDEBUG
     if (tensor->view_src) {
         auto * src_tensor = tensor->view_src;
-        QNN_LOG_DEBUG("[%s]tensor(%s_%dx%dx%dx%d) is a view, src: %s_%dx%dx%dx%d\n", qnn::get_backend_name(ctx->device),
-                      ggml_get_name(tensor), (int) tensor->ne[0], (int) tensor->ne[1], (int) tensor->ne[2],
-                      (int) tensor->ne[3], ggml_get_name(src_tensor), (int) src_tensor->ne[0], (int) src_tensor->ne[1],
-                      (int) src_tensor->ne[2], (int) src_tensor->ne[3]);
+        QNN_LOG_DEBUG("[%s]tensor(%s_%dx%dx%dx%d) is a view, src: %s_%dx%dx%dx%d\n",
+                      qnn::get_backend_name(ctx->device),
+                      ggml_get_name(tensor),
+                      (int) tensor->ne[0],
+                      (int) tensor->ne[1],
+                      (int) tensor->ne[2],
+                      (int) tensor->ne[3],
+                      ggml_get_name(src_tensor),
+                      (int) src_tensor->ne[0],
+                      (int) src_tensor->ne[1],
+                      (int) src_tensor->ne[2],
+                      (int) src_tensor->ne[3]);
     }
 #endif
 
@@ -227,14 +247,15 @@ bool is_tensor_type_valid(qnn::ggml_backend_qnn_device_context * ctx, const ggml
         case GGML_TYPE_F16:
             if (!is_type_bit_enabled(ctx->supported_types, tensor->type)) {
                 QNN_LOG_DEBUG("[%s]unsupported data type %s, supported_types: 0x%x\n",
-                              qnn::get_backend_name(ctx->device), ggml_type_name(tensor->type),
+                              qnn::get_backend_name(ctx->device),
+                              ggml_type_name(tensor->type),
                               (unsigned int) ctx->supported_types);
                 return false;
             }
             break;
         default:
-            QNN_LOG_DEBUG("[%s]unsupported data type %s\n", qnn::get_backend_name(ctx->device),
-                          ggml_type_name(tensor->type));
+            QNN_LOG_DEBUG(
+                "[%s]unsupported data type %s\n", qnn::get_backend_name(ctx->device), ggml_type_name(tensor->type));
             return false;
     }
 
@@ -277,14 +298,20 @@ bool ggml_qnn_have_same_tensor_types(qnn::ggml_backend_qnn_device_context * ctx,
     if (src1) {
         if (src0->type != op->type || src1->type != op->type) {
             QNN_LOG_DEBUG("[%s][%s]type src0(%s), src1(%s) and op(%s) are not equal\n",
-                          qnn::get_backend_name(ctx->device), ggml_op_name(op->op), ggml_type_name(src0->type),
-                          ggml_type_name(src1->type), ggml_type_name(op->type));
+                          qnn::get_backend_name(ctx->device),
+                          ggml_op_name(op->op),
+                          ggml_type_name(src0->type),
+                          ggml_type_name(src1->type),
+                          ggml_type_name(op->type));
             return false;
         }
     } else {
         if (src0->type != op->type) {
-            QNN_LOG_DEBUG("[%s][%s]type src0(%s) and op(%s) are not equal\n", qnn::get_backend_name(ctx->device),
-                          ggml_op_name(op->op), ggml_type_name(src0->type), ggml_type_name(op->type));
+            QNN_LOG_DEBUG("[%s][%s]type src0(%s) and op(%s) are not equal\n",
+                          qnn::get_backend_name(ctx->device),
+                          ggml_op_name(op->op),
+                          ggml_type_name(src0->type),
+                          ggml_type_name(op->type));
             return false;
         }
     }
@@ -303,7 +330,9 @@ bool ggml_qnn_supports_matmul_op(qnn::ggml_backend_qnn_device_context * ctx, con
     if (is_data_reinterpretation_op(src0->op) || is_data_reinterpretation_op(src1->op)) {
         // TODO: remove the blocker here when we support permute op
         QNN_LOG_DEBUG("[%s][MUL_MAT]data reorganization op is not supported, (%s, %s)\n",
-                      qnn::get_backend_name(ctx->device), ggml_op_name(src0->op), ggml_op_name(src1->op));
+                      qnn::get_backend_name(ctx->device),
+                      ggml_op_name(src0->op),
+                      ggml_op_name(src1->op));
         return false;
     }
 
@@ -330,7 +359,8 @@ bool ggml_qnn_supports_matmul_op(qnn::ggml_backend_qnn_device_context * ctx, con
                 !is_type_bit_enabled(ctx->cpu_preprocess_types, src0->type)) {
                 // for such cases that src0 is quantized and op is float32, check if the quant type is enabled
                 QNN_LOG_DEBUG("[%s][MUL_MAT]quantized src0 type %s is not enabled\n",
-                              qnn::get_backend_name(ctx->device), ggml_type_name(src0->type));
+                              qnn::get_backend_name(ctx->device),
+                              ggml_type_name(src0->type));
                 return false;
             }
             break;
@@ -354,8 +384,12 @@ void print_tensor_info(qnn::ggml_backend_qnn_device_context * ctx, const ggml_te
     std::string  op_key;
     qnn::get_qnn_op_desc(op, true, GGML_TYPE_COUNT, op_key);
 
-    QNN_LOG_DEBUG("[%s][%s]op was %s, support/unsupported: %d/%d\n", qnn::get_backend_name(ctx->device), op_key.c_str(),
-                  supported, ctx->supported_op_count.load(), ctx->unsupported_op_count.load());
+    QNN_LOG_DEBUG("[%s][%s]op was %s, support/unsupported: %d/%d\n",
+                  qnn::get_backend_name(ctx->device),
+                  op_key.c_str(),
+                  supported,
+                  ctx->supported_op_count.load(),
+                  ctx->unsupported_op_count.load());
 }
 
 #endif
@@ -402,7 +436,9 @@ bool device_supports_op(qnn::ggml_backend_qnn_device_context * ctx, const ggml_t
                 // TODO: fix this when we have the support for mul with rms_norm
                 if (ctx->enable_cpu_dequantize && (src0->op == GGML_OP_RMS_NORM || src1->op == GGML_OP_RMS_NORM)) {
                     QNN_LOG_DEBUG("[%s][%s]skip unsupported mul with rms norm, (%s, %s)\n",
-                                  qnn::get_backend_name(ctx->device), ggml_op_desc(op), ggml_op_desc(src0),
+                                  qnn::get_backend_name(ctx->device),
+                                  ggml_op_desc(op),
+                                  ggml_op_desc(src0),
                                   ggml_op_desc(src1));
                     is_op_supported = false;
                     break;
@@ -414,7 +450,8 @@ bool device_supports_op(qnn::ggml_backend_qnn_device_context * ctx, const ggml_t
                 // TODO: move to op caps array?
                 if (!ggml_are_same_shape(src0, src1)) {
                     QNN_LOG_DEBUG("[%s][%s] src0 and src1 dimensions are not equal\n",
-                                  qnn::get_backend_name(ctx->device), ggml_op_desc(op));
+                                  qnn::get_backend_name(ctx->device),
+                                  ggml_op_desc(op));
                     is_op_supported = false;
                 }
                 break;
@@ -442,8 +479,8 @@ bool device_supports_op(qnn::ggml_backend_qnn_device_context * ctx, const ggml_t
 }
 
 bool device_compute_graph(qnn::ggml_backend_qnn_device_context * ctx, ggml_cgraph * cgraph) {
-    QNN_LOG_DEBUG("[%s]compute graph start, nodes count: %d\n", qnn::get_backend_name(ctx->device),
-                  (int) cgraph->n_nodes);
+    QNN_LOG_DEBUG(
+        "[%s]compute graph start, nodes count: %d\n", qnn::get_backend_name(ctx->device), (int) cgraph->n_nodes);
 
     auto qnn_graph = get_qnn_graph_from_cache(ctx, cgraph);
     bool success   = qnn_graph && qnn_graph->execute(cgraph, ctx->convert_context);

@@ -3,11 +3,14 @@
 
 namespace {
 
-using op_constructor_t = std::shared_ptr<qnn::ggml_qnn_op_config> (*)(const ggml_tensor *, const std::string &,
+using op_constructor_t = std::shared_ptr<qnn::ggml_qnn_op_config> (*)(const ggml_tensor *,
+                                                                      const std::string &,
                                                                       std::shared_ptr<qnn::qnn_instance>);
 
-using op_description_generator_t = void (*)(const ggml_tensor * op, bool append_dimensions,
-                                            ggml_type override_data_type, std::string & output);
+using op_description_generator_t = void (*)(const ggml_tensor * op,
+                                            bool                append_dimensions,
+                                            ggml_type           override_data_type,
+                                            std::string &       output);
 
 void append_tensor_shape_and_type_impl(const ggml_tensor * tensor, ggml_type override_data_type, std::string & output) {
     char         buffer[256] = {};
@@ -21,13 +24,24 @@ void append_tensor_shape_and_type_impl(const ggml_tensor * tensor, ggml_type ove
             len = snprintf(buffer, sizeof(buffer), "%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1], type_name);
             break;
         case 3:
-            len = snprintf(buffer, sizeof(buffer), "%ldx%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1],
-                           (long) tensor->ne[2], type_name);
+            len = snprintf(buffer,
+                           sizeof(buffer),
+                           "%ldx%ldx%ld%s",
+                           (long) tensor->ne[0],
+                           (long) tensor->ne[1],
+                           (long) tensor->ne[2],
+                           type_name);
             break;
         case 4:
         default:
-            len = snprintf(buffer, sizeof(buffer), "%ldx%ldx%ldx%ld%s", (long) tensor->ne[0], (long) tensor->ne[1],
-                           (long) tensor->ne[2], (long) tensor->ne[3], type_name);
+            len = snprintf(buffer,
+                           sizeof(buffer),
+                           "%ldx%ldx%ldx%ld%s",
+                           (long) tensor->ne[0],
+                           (long) tensor->ne[1],
+                           (long) tensor->ne[2],
+                           (long) tensor->ne[3],
+                           type_name);
             break;
     }
     GGML_ASSERT(len > 0 && len < (int) sizeof(buffer));
@@ -61,8 +75,10 @@ void get_op_key_with_src_op_desc(const ggml_tensor * op, std::string & output) {
     output += ')';
 }
 
-void generic_get_op_desc(const ggml_tensor * op, bool append_dimensions, ggml_type override_data_type,
-                         std::string & output) {
+void generic_get_op_desc(const ggml_tensor * op,
+                         bool                append_dimensions,
+                         ggml_type           override_data_type,
+                         std::string &       output) {
     if (append_dimensions) {
         get_graph_key_from_op(op, override_data_type, output);
     } else {
@@ -83,6 +99,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
      // GGML_OP_ADD
         QNN_OP_ELEMENT_WISE_ADD,  // qnn_op_name
     },
+    {}, // GGML_OP_ADD_ID
     {}, // GGML_OP_ADD1
     {}, // GGML_OP_ACC
     {
@@ -235,8 +252,8 @@ std::shared_ptr<qnn::ggml_qnn_op_config> mat_mul_op_constructor(const ggml_tenso
                                                                 qnn::qnn_instance_ptr qnn_instance) {
     if (qnn_instance->has_custom_op_package() && ggml_n_dims(op) == 2) {
         QNN_LOG_DEBUG("create GgmlMulMat, name %s, use GgmlOpPackage\n", instance_name.c_str());
-        return std::make_shared<qnn::ggml_qnn_single_op_config>(instance_name, "GgmlOpPackage", "GgmlMulMat",
-                                                                qnn_instance);
+        return std::make_shared<qnn::ggml_qnn_single_op_config>(
+            instance_name, "GgmlOpPackage", "GgmlMulMat", qnn_instance);
     }
 
     QNN_LOG_DEBUG("create QNN_OP_MAT_MUL, name %s\n", instance_name.c_str());
@@ -250,8 +267,8 @@ std::shared_ptr<qnn::ggml_qnn_op_config> generic_op_constructor(const ggml_tenso
     GGML_UNUSED(op);
     static_assert(_op < std::size(kOpCaps));
     static_assert(kOpCaps[_op].qnn_op_name != nullptr);
-    return std::make_shared<qnn::ggml_qnn_single_op_config>(instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW,
-                                                            kOpCaps[_op].qnn_op_name, qnn_instance);
+    return std::make_shared<qnn::ggml_qnn_single_op_config>(
+        instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW, kOpCaps[_op].qnn_op_name, qnn_instance);
 }
 
 void add_type_parameters(std::shared_ptr<qnn::ggml_qnn_op_config_base> op, const char * name, float value) {
@@ -273,8 +290,8 @@ std::shared_ptr<qnn::ggml_qnn_op_config> op_constructor_with_type_param(const gg
 
     _ggml_op_param_type op_param;
     memcpy(&op_param, op->op_params, sizeof(op_param));
-    auto qnn_op = std::make_shared<_qnn_op_type_name>(instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW, op_caps.qnn_op_name,
-                                                      qnn_instance);
+    auto qnn_op = std::make_shared<_qnn_op_type_name>(
+        instance_name, QNN_OP_PACKAGE_NAME_QTI_AISW, op_caps.qnn_op_name, qnn_instance);
     if (op_caps.qnn_param_name) {
         add_type_parameters(qnn_op, op_caps.qnn_param_name, op_param);
     }
@@ -285,6 +302,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,                                                                                   // GGML_OP_NONE
     nullptr,                                                                                   // GGML_OP_DUP
     generic_op_constructor<GGML_OP_ADD>,                                                       // GGML_OP_ADD
+    nullptr,                                                                                   // GGML_OP_ADD_ID
     nullptr,                                                                                   // GGML_OP_ADD1
     nullptr,                                                                                   // GGML_OP_ACC
     generic_op_constructor<GGML_OP_SUB>,                                                       // GGML_OP_SUB
@@ -425,8 +443,10 @@ const char * get_qnn_op_name(const ggml_tensor * op) {
     return kOpCaps[op_index].qnn_op_name;
 }
 
-void get_qnn_op_desc(const ggml_tensor * op, bool append_dimensions, ggml_type override_data_type,
-                     std::string & output) {
+void get_qnn_op_desc(const ggml_tensor * op,
+                     bool                append_dimensions,
+                     ggml_type           override_data_type,
+                     std::string &       output) {
     auto op_index = get_qnn_op_index(op);
     GGML_ASSERT(op_index < std::size(kOpCaps));
     auto get_desc = kOpCaps[op_index].get_desc;
@@ -437,8 +457,9 @@ void get_qnn_op_desc(const ggml_tensor * op, bool append_dimensions, ggml_type o
     }
 }
 
-std::shared_ptr<ggml_qnn_op_config> create_op(const ggml_tensor * op, const std::string & name,
-                                              qnn_instance_ptr qnn_instance) {
+std::shared_ptr<ggml_qnn_op_config> create_op(const ggml_tensor * op,
+                                              const std::string & name,
+                                              qnn_instance_ptr    qnn_instance) {
     auto op_index = get_qnn_op_index(op);
     GGML_ASSERT(op_index < std::size(kOpCaps));
     auto op_constructor = kOpConstructors[op_index];
