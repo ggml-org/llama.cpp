@@ -3093,104 +3093,24 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
             // Compute the slope if needed. Derived from ggml_cann_softmax().
             if(maxBias != 0.0f){
                 // alibi
-                const int64_t ne2_ne3 = src0->ne[2] * src0->ne[3];
-                const int64_t n_head = src0->ne[2];
-                const int n_head_log2 = 1u << (uint32_t)floor(log2(n_head));
-                float m0 = powf(2.0f, -(maxBias) / n_head_log2);
-                float m1 = powf(2.0f, -(maxBias / 2.0f) / n_head_log2);
-                // init arange
-                ggml_cann_pool_alloc arange_allocator(ctx.pool(),
-                                                    ne2_ne3 * faElemSize);
-                void* tmp_arange_buffer = arange_allocator.get();
+                const int64_t n_heads = src0->ne[2];
+                ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(float));
+                void* slope_buffer = slope_allocator.get();
+                aclnn_get_slope(ctx, n_heads, slope_buffer, maxBias);
 
-                // arange1: [1, ..., n_head_log2+1)
-                float start = 1;
-                float stop = n_head_log2 + 1;
-                float step = 1;
-                int64_t n_elements_arange = n_head_log2;
-
-                int64_t tmp_arange1_ne[] = {n_head_log2};
-                size_t tmp_arange1_nb[] = {faElemSize};
-                aclTensor* tmp_arange1_tensor = ggml_cann_create_tensor(
-                    tmp_arange_buffer, faDataType, faElemSize,
-                    tmp_arange1_ne, tmp_arange1_nb,
-                    GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
-
-                aclnn_arange(ctx, tmp_arange1_tensor, start, stop, step, n_elements_arange);
-
-                aclTensor* tmp_arange2_tensor = nullptr;
-                if (n_head_log2 < ne2_ne3) {
-                    // arange2: [1, ..., 2 * (k - n_head_log2) + 1)
-                    start = 1;
-                    stop = 2 * (ne2_ne3 - n_head_log2) + 1;
-                    step = 2;
-                    n_elements_arange = ne2_ne3 - n_head_log2;
-                    int64_t tmp_arange2_ne[] = {ne2_ne3 - n_head_log2};
-                    size_t tmp_arange2_nb[] = {faElemSize};
-
-                    aclTensor* tmp_arange2_tensor = ggml_cann_create_tensor(
-                        (char*)tmp_arange_buffer +
-                            n_head_log2 * faElemSize,
-                        faDataType, faElemSize,
-                        tmp_arange2_ne, tmp_arange2_nb, GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
-                    aclnn_arange(ctx, tmp_arange2_tensor, start, stop, step,
-                                n_elements_arange);
+                int64_t slope_ne[] = {1, 1, n_heads, 1};
+                size_t slope_nb[GGML_MAX_DIMS];
+                slope_nb[0] = sizeof(float);
+                for(int i = 1;i<GGML_MAX_DIMS;i++) {
+                    slope_nb[i] = slope_nb[i-1] * slope_ne[0];
                 }
 
-                // init mk_base
-                ggml_cann_pool_alloc mk_base_allocator(ctx.pool(),
-                                                    ne2_ne3 * faElemSize);
-                void* tmp_mk_base_buffer = mk_base_allocator.get();
-                int64_t tmp_mk_base1_ne[] = {n_head_log2};
-                size_t tmp_mk_base1_nb[] = {faElemSize};
-                aclTensor* tmp_mk_base1_tensor = ggml_cann_create_tensor(
-                    tmp_mk_base_buffer, faDataType, faElemSize,
-                    tmp_mk_base1_ne, tmp_mk_base1_nb,
-                    GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
+                aclTensor* slope_tensor = ggml_cann_create_tensor(
+                    slope_buffer, ACL_FLOAT, sizeof(float),
+                    slope_ne, slope_nb, GGML_MAX_DIMS);
+                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, bcast_pse_tensor, slope_tensor);
 
-                aclnn_fill_scalar(ctx, m0, tmp_mk_base1_tensor);
-
-                aclTensor* tmp_mk_base2_tensor = nullptr;
-                if (n_head_log2 < ne2_ne3) {
-                    int64_t tmp_mk_base2_ne[] = {ne2_ne3 - n_head_log2};
-                    size_t tmp_mk_base2_nb[] = {faElemSize};
-                    aclTensor* tmp_mk_base2_tensor = ggml_cann_create_tensor(
-                        (char*)tmp_mk_base_buffer +
-                            n_head_log2 * faElemSize,
-                        faDataType, faElemSize,
-                        tmp_mk_base2_ne, tmp_mk_base2_nb, GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
-                    aclnn_fill_scalar(ctx, m1, tmp_mk_base2_tensor);
-                }
-
-                // init mk
-                int64_t tmp_mk_base_ne[] = {ne2_ne3};
-                size_t tmp_mk_base_nb[] = {faElemSize};
-                aclTensor* tmp_mk_base_tensor = ggml_cann_create_tensor(
-                    tmp_mk_base_buffer, faDataType, faElemSize,
-                    tmp_mk_base_ne, tmp_mk_base_nb,
-                    GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
-                aclTensor* tmp_arange_tensor = ggml_cann_create_tensor(
-                    tmp_arange_buffer, faDataType, faElemSize,
-                    tmp_mk_base_ne, tmp_mk_base_nb,
-                    GGML_MAX_DIMS - 3, ACL_FORMAT_ND);
-                aclnn_pow_tensor_tensor(ctx, tmp_mk_base_tensor, tmp_arange_tensor);
-
-                // reshape mk
-                int64_t tmp_mk_ne[] = {1, 1, src0->ne[2], src0->ne[3]};
-                size_t tmp_mk_nb[GGML_MAX_DIMS];
-                tmp_mk_nb[0] = faElemSize;
-                for (int i = 1; i < GGML_MAX_DIMS; i++) {
-                    tmp_mk_nb[i] = tmp_mk_nb[i - 1] * tmp_mk_ne[i - 1];
-                }
-                aclTensor* tmp_mk_tensor = ggml_cann_create_tensor(
-                    tmp_mk_base_buffer, faDataType, faElemSize,
-                    tmp_mk_ne, tmp_mk_nb, GGML_MAX_DIMS,
-                    ACL_FORMAT_ND);
-                GGML_CANN_CALL_ACLNN_OP(ctx, InplaceMul, bcast_pse_tensor, tmp_mk_tensor);
-
-                ggml_cann_release_resources(ctx, tmp_arange1_tensor, tmp_arange2_tensor,
-                    tmp_mk_base1_tensor, tmp_mk_base2_tensor, tmp_mk_base_tensor,
-                    tmp_arange_tensor, tmp_mk_tensor);
+                ggml_cann_release_resources(ctx, slope_tensor);
             }
         }
 

@@ -2530,11 +2530,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 // DeepSeek MLA
                 return false;
             }
-            // TODO: support broadcast
-            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
-            if (op->src[0]->ne[3] != 1) {
-                return false;
-            }
             float logitSoftcap = 0.0f;
             memcpy(&logitSoftcap,  (float*)op->op_params + 2, sizeof(float));
             if(logitSoftcap != 0.0f) {
