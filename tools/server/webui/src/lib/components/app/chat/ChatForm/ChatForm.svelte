@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChatAttachmentsList } from '$lib/components/app';
-	import { ChatFormActionButtons, ChatFormFileInput, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
+	import { ChatFormActionButtons, ChatFormFileInputInvisible, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
 	import { onMount } from 'svelte';
 	import { config } from '$lib/stores/settings.svelte';
@@ -34,7 +34,7 @@
 	const pasteLongTextToFileLength = $derived(Number(currentConfig.pasteLongTextToFileLen) || 2500);
 
 	let message = $state('');
-	let fileInputRef: ChatFormFileInput | undefined;
+	let fileInputRef: ChatFormFileInputInvisible | undefined;
 	let previousIsLoading = $state(isLoading);
 	let textareaRef: ChatFormTextarea | undefined;
 
@@ -137,7 +137,7 @@
 	}
 </script>
 
-<ChatFormFileInput bind:this={fileInputRef} onFileSelect={handleFileSelect} />
+<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
 	onsubmit={handleSubmit}
@@ -153,7 +153,7 @@
 			bind:this={textareaRef}
 			bind:value={message}
 			onKeydown={handleKeydown}
-			{disabled}
+			disabled={isLoading}
 		/>
 
 		<ChatFormActionButtons
