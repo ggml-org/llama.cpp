@@ -110,6 +110,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_HERMES_2_PRO,
     COMMON_CHAT_FORMAT_COMMAND_R7B,
     COMMON_CHAT_FORMAT_GPT_OSS,
+    COMMON_CHAT_FORMAT_GLM_4_5,
 
     COMMON_CHAT_FORMAT_COUNT, // Not a format, just the # formats
 };

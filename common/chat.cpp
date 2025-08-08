@@ -203,7 +203,10 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                         msg_part.text = part.at("text");
                         msg.content_parts.push_back(msg_part);
                     }
-                } else if (!content.is_null()) {
+                } else if (content.is_null()) {
+                    // Handle null content by setting it to empty string
+                    msg.content = "";
+                } else {
                     throw std::runtime_error("Invalid 'content' type: expected string or array, got " + content.dump() + " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
                 }
             }
@@ -292,7 +295,7 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
                 }
             }
         } else {
-            jmsg["content"] = json(); // null
+            jmsg["content"] = ""; // empty string instead of null
         }
         if (!msg.reasoning_content.empty()) {
             jmsg["reasoning_content"] = msg.reasoning_content;
@@ -607,6 +610,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_HERMES_2_PRO: return "Hermes 2 Pro";
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
         case COMMON_CHAT_FORMAT_GPT_OSS: return "GPT-OSS";
+        case COMMON_CHAT_FORMAT_GLM_4_5: return "GLM 4.5";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -1325,6 +1329,63 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     }
 }
 
+static common_chat_params common_chat_params_init_glm_4_5(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+    data.prompt = apply(tmpl, inputs);
+    data.format = COMMON_CHAT_FORMAT_GLM_4_5;
+    return data;
+}
+
+static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
+    builder.try_parse_reasoning("<think>", "</think>");
+    if (!builder.syntax().parse_tool_calls) {
+        builder.add_content(builder.consume_rest());
+        return;
+    }
+
+    // GLM 4.5 uses format: <tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>
+    static const common_regex tool_call_start("<tool_call>([^\n<]+)");
+    static const common_regex arg_key_regex("<arg_key>([^<]+)</arg_key>");
+    static const common_regex arg_value_regex("<arg_value>([^<]*)</arg_value>");
+    static const common_regex tool_call_end("</tool_call>");
+
+    while (auto res = builder.try_find_regex(tool_call_start)) {
+        // Move to the start of the tool call and consume it
+        builder.move_to(res->groups[0].begin);
+        builder.consume_regex(tool_call_start);
+        
+        std::string function_name = builder.str(res->groups[1]);
+        json arguments = json::object();
+        
+        builder.consume_spaces();
+        
+        // Parse all arg_key/arg_value pairs
+        while (auto key_res = builder.try_consume_regex(arg_key_regex)) {
+            std::string key = builder.str(key_res->groups[1]);
+            builder.consume_spaces();
+            
+            if (auto value_res = builder.try_consume_regex(arg_value_regex)) {
+                std::string value = builder.str(value_res->groups[1]);
+                arguments[key] = value;
+                builder.consume_spaces();
+            } else {
+                throw common_chat_msg_partial_exception("Expected <arg_value> after <arg_key>");
+            }
+        }
+        
+        // Consume closing tag
+        builder.consume_regex(tool_call_end);
+        builder.consume_spaces();
+        
+        // Add the parsed tool call
+        if (!builder.add_tool_call(function_name, "", arguments.dump())) {
+            throw common_chat_msg_partial_exception("Failed to add GLM tool call");
+        }
+    }
+
+    builder.add_content(builder.consume_rest());
+}
+
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
     LOG_DBG("%s\n", __func__);
     common_chat_params data;
@@ -1805,6 +1866,11 @@ static common_chat_params common_chat_templates_apply_jinja(
         return common_chat_params_init_command_r7b(tmpl, params);
     }
 
+    // GLM 4.5: detect by <arg_key> and <arg_value> tags (check before Hermes since both use <tool_call>)
+    if (src.find("<arg_key>") != std::string::npos && src.find("<arg_value>") != std::string::npos && params.json_schema.is_null()) {
+        return common_chat_params_init_glm_4_5(tmpl, params);
+    }
+
     // Hermes 2/3 Pro, Qwen 2.5 Instruct (w/ tools)
     if (src.find("<tool_call>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_hermes_2_pro(tmpl, params);
@@ -1968,6 +2034,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_GPT_OSS:
             common_chat_parse_gpt_oss(builder);
+            break;
+        case COMMON_CHAT_FORMAT_GLM_4_5:
+            common_chat_parse_glm_4_5(builder);
             break;
         default:
             throw std::runtime_error(std::string("Unsupported format: ") + common_chat_format_name(builder.syntax().format));
