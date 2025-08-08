@@ -238,6 +238,20 @@ public:
     const llama_cross * cross;
 };
 
+class llm_graph_input_expert_mask : public llm_graph_input_i {
+  public:
+    llm_graph_input_expert_mask(const llama_cparams & cparams) : cparams(cparams) {}
+
+    virtual ~llm_graph_input_expert_mask() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * mask = nullptr;  // F32 [n_expert]
+
+    const llama_cparams & cparams;
+};
+
 class llm_graph_input_attn_no_cache : public llm_graph_input_i {
 public:
     llm_graph_input_attn_no_cache(const llama_hparams & hparams, const llama_cparams & cparams) :
@@ -635,6 +649,7 @@ struct llm_graph_context {
                     bool   scale_w,
                    float   w_scale,
             llama_expert_gating_func_type gating_op,
+             ggml_tensor * expert_mask,
                      int   il,
              ggml_tensor * probs_in = nullptr) const;
 
@@ -656,6 +671,7 @@ struct llm_graph_context {
                     bool   scale_w,
                    float   w_scale,
             llama_expert_gating_func_type gating_op,
+             ggml_tensor * expert_mask,
                      int   il,
              ggml_tensor * probs_in = nullptr) const;
 
@@ -814,6 +830,8 @@ struct llm_graph_context {
             ggml_tensor * cls_b,
             ggml_tensor * cls_out,
             ggml_tensor * cls_out_b) const;
+
+    llm_graph_input_expert_mask * build_inp_expert_mask() const;
 };
 
 // TODO: better name

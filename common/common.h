@@ -467,6 +467,11 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+
+    // MoE expert selection
+    int32_t num_experts = 0;             // number of experts to use, 0 = model defined
+    std::vector<int32_t> omit_experts;   // comma-separated list of expert indices to omit
+    std::vector<int32_t> force_experts;  // comma-separated list of expert indices to force
 };
 
 // call once at the start of a program if it uses libcommon

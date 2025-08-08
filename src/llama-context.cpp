@@ -102,6 +102,8 @@ llama_context::llama_context(
 
     cparams.op_offload = params.op_offload;
     cparams.kv_unified = params.kv_unified;
+    cparams.omit_experts = params.omit_experts;
+    cparams.force_experts = params.force_experts;
 
     {
         const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
@@ -2269,6 +2271,7 @@ llama_context_params llama_context_default_params() {
         /*.op_offload                  =*/ true,
         /*.swa_full                    =*/ true,
         /*.kv_unified                  =*/ false,
+        /*.omit_experts                =*/ {},
     };
 
     return result;

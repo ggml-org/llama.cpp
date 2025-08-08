@@ -1,15 +1,17 @@
 #ifndef LLAMA_H
 #define LLAMA_H
 
-#include "ggml.h"
-#include "ggml-cpu.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "ggml-opt.h"
+#include "ggml.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#include <stdbool.h>
+
+#include <vector>
 
 #ifdef LLAMA_SHARED
 #    if defined(_WIN32) && !defined(__MINGW32__)
@@ -283,6 +285,7 @@ extern "C" {
 
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
+        int32_t n_expert_used_override; // number of expert overrides, 0 = no overrides
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
@@ -340,6 +343,10 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        // MoE expert selection
+        int32_t num_experts;                 // number of experts to use, 0 = model defined
+        std::vector<int32_t> omit_experts;   // comma-separated list of expert indices to omit
+        std::vector<int32_t> force_experts;  // comma-separated list of expert indices to force
     };
 
     // model quantization parameters

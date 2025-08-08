@@ -2406,6 +2406,63 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
+        {"--num-experts"}, "N",
+        "Override the number of experts to use for MoE models (default: 0 = use model's default)",
+        [](common_params & params, int value) {
+            params.num_experts = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--omit-experts"}, "IDs",
+        "comma-separated list of expert indices to omit from MoE selection (e.g. 1,3,5 or 1-5,7)",
+        [](common_params & params, const std::string & value) {
+            params.omit_experts.clear();
+            auto parts = string_split<std::string>(value, ',');
+            for (const auto& part : parts) {
+                if (part.find('-') != std::string::npos) {
+                    // Parse range (e.g., "1-5")
+                    auto range = string_split<int32_t>(part, '-');
+                    if (range.size() == 2 && range[0] <= range[1]) {
+                        for (int32_t i = range[0]; i <= range[1]; ++i) {
+                            params.omit_experts.push_back(i);
+                        }
+                    }
+                } else {
+                    params.omit_experts.push_back(std::stoi(part));
+                }
+            }
+
+            // Sort and remove duplicates for efficient processing later
+            std::sort(params.omit_experts.begin(), params.omit_experts.end());
+            params.omit_experts.erase(std::unique(params.omit_experts.begin(), params.omit_experts.end()), params.omit_experts.end());
+        }
+    ));
+    add_opt(common_arg(
+        {"--force-experts"}, "IDs",
+        "comma-separated list of expert indices to always use in MoE selection (e.g. 1,3,5 or 1-5,7)",
+        [](common_params & params, const std::string & value) {
+            params.force_experts.clear();
+            auto parts = string_split<std::string>(value, ',');
+            for (const auto& part : parts) {
+                if (part.find('-') != std::string::npos) {
+                    // Parse range (e.g., "1-5")
+                    auto range = string_split<int32_t>(part, '-');
+                    if (range.size() == 2 && range[0] <= range[1]) {
+                        for (int32_t i = range[0]; i <= range[1]; ++i) {
+                            params.force_experts.push_back(i);
+                        }
+                    }
+                } else {
+                    params.force_experts.push_back(std::stoi(part));
+                }
+            }
+
+            // Sort and remove duplicates for efficient processing later
+            std::sort(params.force_experts.begin(), params.force_experts.end());
+            params.force_experts.erase(std::unique(params.force_experts.begin(), params.force_experts.end()), params.force_experts.end());
+        }
+    ));
+    add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
         "number of layers to store in VRAM",
         [](common_params & params, int value) {
