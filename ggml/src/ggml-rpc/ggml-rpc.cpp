@@ -32,6 +32,8 @@
 
 namespace fs = std::filesystem;
 
+static constexpr size_t RPC_IO_CHUNK = 1024ull * 1024ull * 1024ull; // 1 GiB
+
 #ifdef _WIN32
 typedef SOCKET sockfd_t;
 using ssize_t = __int64;
@@ -323,8 +325,15 @@ static std::shared_ptr<socket_t> create_server_socket(const char * host, int por
 static bool send_data(sockfd_t sockfd, const void * data, size_t size) {
     size_t bytes_sent = 0;
     while (bytes_sent < size) {
-        ssize_t n = send(sockfd, (const char *)data + bytes_sent, size - bytes_sent, 0);
+        size_t size_to_send = size - bytes_sent;
+        if (size_to_send > RPC_IO_CHUNK) size_to_send = RPC_IO_CHUNK;
+        ssize_t n = send(sockfd, (const char *)data + bytes_sent, size_to_send, 0);
         if (n < 0) {
+#ifndef _WIN32
+            perror("send");
+#else
+            fprintf(stderr, "send failed (bytes_sent=%zu, size_to_send=%zu)\n", bytes_sent, size_to_send);
+#endif
             return false;
         }
         bytes_sent += n;
@@ -332,17 +341,26 @@ static bool send_data(sockfd_t sockfd, const void * data, size_t size) {
     return true;
 }
 
+
 static bool recv_data(sockfd_t sockfd, void * data, size_t size) {
     size_t bytes_recv = 0;
     while (bytes_recv < size) {
-        ssize_t n = recv(sockfd, (char *)data + bytes_recv, size - bytes_recv, 0);
+        size_t size_to_recv = size - bytes_recv;
+        if (size_to_recv > RPC_IO_CHUNK) size_to_recv = RPC_IO_CHUNK;
+        ssize_t n = recv(sockfd, (char *)data + bytes_recv, size_to_recv, 0);
         if (n <= 0) {
+#ifndef _WIN32
+            perror("recv");
+#else
+            fprintf(stderr, "recv failed (bytes_recv=%zu, size_to_recv=%zu)\n", bytes_recv, size_to_recv);
+#endif
             return false;
         }
         bytes_recv += n;
     }
     return true;
 }
+
 
 static bool send_msg(sockfd_t sockfd, const void * msg, size_t msg_size) {
     if (!send_data(sockfd, &msg_size, sizeof(msg_size))) {
