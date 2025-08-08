@@ -50,10 +50,13 @@ layout (push_constant) uniform parameter {
     uint32_t k_num;
 } p;
 
+#define SINK_ENABLE_BIT (1<<24)
 #define MASK_ENABLE_BIT (1<<16)
 #define N_LOG2_MASK 0xFFFF
 
-layout (binding = 4) writeonly buffer O {D_TYPE data_o[];};
+layout (binding = 4) readonly buffer S {float data_s[];};
+
+layout (binding = 5) writeonly buffer O {D_TYPE data_o[];};
 
 #if defined(A_TYPE_PACKED16)
 #define BINDING_IDX_K 0
@@ -109,6 +112,14 @@ ACC_TYPE perElemOpComputeSlope(const in uint32_t r, const in uint32_t c, const i
     const int      exph = int(h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1);
 
     return ACC_TYPE(pow(base, ACC_TYPE(exph)));
+}
+
+// Load the sink value, indexed by Q's dimension 2.
+ACC_TYPE perElemOpGetSink(const in uint32_t r, const in uint32_t c, const in ACC_TYPE elem, const in uint32_t iq2)
+{
+    const uint32_t h = iq2 + (r % p.gqa_ratio);
+
+    return ACC_TYPE(data_s[h]);
 }
 
 uint32_t i, N, KV, split_k_index, Tr, start_j, end_j,

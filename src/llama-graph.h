@@ -39,6 +39,7 @@ enum llm_ffn_op_type {
     LLM_FFN_SWIGLU,
     LLM_FFN_GEGLU,
     LLM_FFN_REGLU,
+    LLM_FFN_SWIGLU_OAI_MOE,
 };
 
 enum llm_ffn_gate_type {
@@ -619,12 +620,34 @@ struct llm_graph_context {
        llm_ffn_gate_type   type_gate,
                      int   il) const;
 
+    // build MoE FFN without bias tensors
     ggml_tensor * build_moe_ffn(
              ggml_tensor * cur,
              ggml_tensor * gate_inp,
              ggml_tensor * up_exps,
              ggml_tensor * gate_exps,
              ggml_tensor * down_exps,
+             ggml_tensor * exp_probs_b,
+                 int64_t   n_expert,
+                 int64_t   n_expert_used,
+         llm_ffn_op_type   type_op,
+                    bool   norm_w,
+                    bool   scale_w,
+                   float   w_scale,
+            llama_expert_gating_func_type gating_op,
+                     int   il,
+             ggml_tensor * probs_in = nullptr) const;
+
+    ggml_tensor * build_moe_ffn(
+             ggml_tensor * cur,
+             ggml_tensor * gate_inp,
+             ggml_tensor * gate_inp_b,
+             ggml_tensor * up_exps,
+             ggml_tensor * up_exps_b,
+             ggml_tensor * gate_exps,
+             ggml_tensor * gate_exps_b,
+             ggml_tensor * down_exps,
+             ggml_tensor * down_exps_b,
              ggml_tensor * exp_probs_b,
                  int64_t   n_expert,
                  int64_t   n_expert_used,
@@ -662,6 +685,7 @@ struct llm_graph_context {
              ggml_tensor * v,       // [n_embd_head_v, n_head_v, n_tokens] (v_trans == false)
              ggml_tensor * kq_b,
              ggml_tensor * kq_mask,
+             ggml_tensor * sinks,
              ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                    float   kq_scale) const;
 
@@ -705,6 +729,20 @@ struct llm_graph_context {
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens] optional
             ggml_tensor * kq_b,
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+                  float   kq_scale,
+                    int   il) const;
+
+    // TODO: temporary to keep the diff small. after the code is public will refactor to simplify this
+    ggml_tensor * build_attn_with_sinks(
+            llm_graph_input_attn_kv_unified_iswa * inp,
+            ggml_tensor * wo,
+            ggml_tensor * wo_b,
+            ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
+            ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens] optional
+            ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens] optional
+            ggml_tensor * kq_b,
+            ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
+            ggml_tensor * sinks, // [n_head_q]
                   float   kq_scale,
                     int   il) const;
 

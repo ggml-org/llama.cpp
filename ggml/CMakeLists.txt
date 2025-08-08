@@ -39,8 +39,9 @@ if (WIN32)
     set(CMAKE_SHARED_MODULE_PREFIX  "")
 endif()
 
-option(BUILD_SHARED_LIBS "ggml: build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
-option(GGML_BACKEND_DL   "ggml: build backends as dynamic libraries (requires BUILD_SHARED_LIBS)" OFF)
+option(BUILD_SHARED_LIBS           "ggml: build shared libraries" ${BUILD_SHARED_LIBS_DEFAULT})
+option(GGML_BACKEND_DL             "ggml: build backends as dynamic libraries (requires BUILD_SHARED_LIBS)" OFF)
+set(GGML_BACKEND_DIR "" CACHE PATH "ggml: directory to load dynamic backends from (requires GGML_BACKEND_DL")
 
 #
 # option list
@@ -175,6 +176,7 @@ option(GGML_HIP_NO_VMM                      "ggml: do not try to use HIP VMM"   
 option(GGML_HIP_ROCWMMA_FATTN               "ggml: enable rocWMMA for FlashAttention"         OFF)
 option(GGML_HIP_FORCE_ROCWMMA_FATTN_GFX12   "ggml: enable rocWMMA FlashAttention on GFX12"    OFF)
 option(GGML_HIP_MMQ_MFMA                    "ggml: enable MFMA MMA for CDNA in MMQ"           ON)
+option(GGML_HIP_EXPORT_METRICS              "ggml: enable kernel perf metrics output"         OFF)
 option(GGML_MUSA_GRAPHS                     "ggml: use MUSA graph, experimental, unstable"    OFF)
 option(GGML_MUSA_MUDNN_COPY                 "ggml: enable muDNN for accelerated copy"         OFF)
 option(GGML_VULKAN                          "ggml: use Vulkan"                                OFF)

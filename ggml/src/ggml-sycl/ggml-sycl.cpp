@@ -2609,6 +2609,8 @@ static void ggml_sycl_mul_mat_vec_nc(ggml_backend_sycl_context & ctx, const ggml
     GGML_ASSERT(!ggml_backend_buffer_is_sycl_split(src0->buffer));
     GGML_ASSERT(src0->type == GGML_TYPE_F16);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->ne[1] == 1);
+    GGML_ASSERT(src1->ne[3] == 1);
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
@@ -2688,6 +2690,9 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     const size_t       type_size_src0 = ggml_type_size(src0->type);
     const size_t       type_size_src1 = ggml_type_size(src1->type);
 
+    bool is_src0_cont_2 = ggml_is_contiguous_2(src0);
+    bool is_src1_cont_2 = ggml_is_contiguous_2(src1);
+
     // SRC1 strides
     int64_t                          s11 = nb11 / type_size_src1;
     int64_t                          s12 = nb12 / type_size_src1;
@@ -2737,6 +2742,8 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
         s11      = ne10;
         s12      = ne11 * s11;
         s13      = ne12 * s12;
+
+        is_src1_cont_2 = true;
     }
 
     ggml_sycl_pool_alloc<sycl::half> dst_f16(ctx.pool());
@@ -2852,12 +2859,16 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
     else
 #endif
     {
-        if (r2 == 1 && r3 == 1 && ggml_is_contiguous_2(src0) && ggml_is_contiguous_2(src1)) {
+        if (r2 == 1 && r3 == 1 && is_src0_cont_2 && is_src1_cont_2) {
+            // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
+            const int64_t sma = ne02 == 1 ? nb03/nb00 : nb02/nb00;
+            const int64_t smb = ne12 == 1 ? s13       : s12;
+
             // there is no broadcast and src0, src1 are contiguous across dims 2, 3
             SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm_batch(*queue, oneapi::math::transpose::trans,
                                                         oneapi::math::transpose::nontrans, ne01, ne11, ne10, alpha,
-                                                        src0_f16, dpct::library_data_t::real_half, nb01 / nb00, nb02 / nb00,
-                                                        src1_f16, dpct::library_data_t::real_half, s11, s12, beta, dst_ddf,
+                                                        src0_f16, dpct::library_data_t::real_half, nb01 / nb00, sma,
+                                                        src1_f16, dpct::library_data_t::real_half, s11, smb, beta, dst_ddf,
                                                         mkl_data_type, ne0, ne1 * ne0, ne12 * ne13, mkl_compute_type)));
         } else {
             const int ne23 = ne12 * ne13;
@@ -3187,7 +3198,7 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
             // The kernel from the if path is faster for that specific case, but does not support all mul mats.
             ggml_sycl_mul_mat_batched_sycl(ctx, src0, src1, dst);
         }
-    } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && src1->ne[1] == 1) {
+    } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_contiguous(src0) && !ggml_is_transposed(src1) && src1->ne[1] == 1 && src1->ne[3] == 1) {
         // KQV single-batch
         ggml_sycl_mul_mat_vec_nc(ctx, src0, src1, dst);
     } else if (!split && src0->type == GGML_TYPE_F16 && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2] * src1->ne[3] > 1) {
@@ -4182,15 +4193,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
-                struct ggml_tensor * a;
-                struct ggml_tensor * b;
-                if (op->op == GGML_OP_MUL_MAT) {
-                    a = op->src[0];
-                    b = op->src[1];
-                } else {
-                    a = op->src[2];
-                    b = op->src[1];
-                }
+                struct ggml_tensor * a = op->src[0];
+                struct ggml_tensor * b = op->src[1];
+
                 if (a->ne[3] != b->ne[3]) {
                     return false;
                 }
@@ -4205,7 +4210,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                     }
                 }
                 ggml_type src0_type = op->src[0]->type;
-                if (src0_type == GGML_TYPE_BF16) {
+                if (src0_type == GGML_TYPE_BF16 || src0_type == GGML_TYPE_MXFP4) {
+                    // TODO: support MXFP4
+                    // FIXME: keep a list of supported types to avoid breaking the backend when a new type is added
                     return false;
                 }
                 return true;
@@ -4348,6 +4355,10 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_SOFT_MAX:
             // TODO: support batching
             if (op->src[0]->ne[3] != 1) {
+                return false;
+            }
+            // TODO: support attention sinks [TAG_ATTN_SINKS]
+            if (op->src[2]) {
                 return false;
             }
             // TODO: support broadcast
@@ -4575,10 +4586,10 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
     };
 
     ggml_backend_t sycl_backend = new ggml_backend {
-        /* .guid      = */ ggml_backend_sycl_guid(),
-        /* .interface = */ ggml_backend_sycl_interface,
-        /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), device),
-        /* .context   = */ ctx
+        /* .guid    = */ ggml_backend_sycl_guid(),
+        /* .iface   = */ ggml_backend_sycl_interface,
+        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), device),
+        /* .context = */ ctx
     };
 
     return sycl_backend;

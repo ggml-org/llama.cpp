@@ -823,10 +823,10 @@ ggml_backend_t ggml_backend_rpc_init(const char * endpoint) {
     };
 
     ggml_backend_t backend = new ggml_backend {
-        /* .guid      = */ ggml_backend_rpc_guid(),
-        /* .interface = */ ggml_backend_rpc_interface,
-        /* .device    = */ ggml_backend_rpc_add_device(endpoint),
-        /* .context   = */ ctx
+        /* .guid    = */ ggml_backend_rpc_guid(),
+        /* .iface   = */ ggml_backend_rpc_interface,
+        /* .device  = */ ggml_backend_rpc_add_device(endpoint),
+        /* .context = */ ctx
     };
     return backend;
 }

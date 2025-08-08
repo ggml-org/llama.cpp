@@ -374,7 +374,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
-    printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;...\n");
+    printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                            (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
     printf("\n");
@@ -1738,7 +1738,7 @@ struct sql_printer : public printer {
 
     void print_header(const cmd_params & params) override {
         std::vector<std::string> fields = test::get_fields();
-        fprintf(fout, "CREATE TABLE IF NOT EXISTS test (\n");
+        fprintf(fout, "CREATE TABLE IF NOT EXISTS llama_bench (\n");
         for (size_t i = 0; i < fields.size(); i++) {
             fprintf(fout, "  %s %s%s\n", fields.at(i).c_str(), get_sql_field_type(fields.at(i)).c_str(),
                     i < fields.size() - 1 ? "," : "");
@@ -1749,7 +1749,7 @@ struct sql_printer : public printer {
     }
 
     void print_test(const test & t) override {
-        fprintf(fout, "INSERT INTO test (%s) ", join(test::get_fields(), ", ").c_str());
+        fprintf(fout, "INSERT INTO llama_bench (%s) ", join(test::get_fields(), ", ").c_str());
         fprintf(fout, "VALUES (");
         std::vector<std::string> values = t.get_values();
         for (size_t i = 0; i < values.size(); i++) {

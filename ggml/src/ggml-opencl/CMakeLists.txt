@@ -55,6 +55,7 @@ endfunction()
 
 set(GGML_OPENCL_KERNELS
     add
+    add_id
     argsort
     clamp
     cpy
