@@ -365,6 +365,7 @@ struct ggml_backend_opencl_context {
     cl_program program_mul_mv_q4_0_f32_1d_8x_flat;
     cl_program program_mul_mv_q4_0_f32_1d_16x_flat;
     cl_program program_mul_mv_q6_K;
+    cl_program program_mul_mv_mxfp4_f32;
     cl_program program_mul_mv_f16_f16;
     cl_program program_mul_mv_f16_f32_1row;
     cl_program program_mul_mv_f16_f32_l4;
@@ -439,6 +440,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_convert_block_q4_0_noshuffle;
     cl_kernel kernel_mul_mat_q4_0_f32_1d_8x_flat, kernel_mul_mat_q4_0_f32_1d_16x_flat;
     cl_kernel kernel_mul_mv_q6_K_f32;
+    cl_kernel kernel_mul_mv_mxfp4_f32;
     cl_kernel kernel_im2col_f32, kernel_im2col_f16;
     cl_kernel kernel_argsort_f32_i32;
     cl_kernel kernel_sum_rows_f32;
@@ -968,6 +970,22 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
             build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
 
         CL_CHECK((backend_ctx->kernel_mul_mv_q6_K_f32 = clCreateKernel(backend_ctx->program_mul_mv_q6_K, "kernel_mul_mv_q6_K_f32", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
+    // mul_mv_mxfp4_f32
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_mxfp4_f32.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_mxfp4_f32.cl");
+#endif
+        backend_ctx->program_mul_mv_mxfp4_f32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mv_mxfp4_f32 = clCreateKernel(backend_ctx->program_mul_mv_mxfp4_f32, "kernel_mul_mv_mxfp4_f32", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2552,7 +2570,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 return true;
             } else if (op->src[0]->type == GGML_TYPE_F32) {
                 return op->src[1]->type == GGML_TYPE_F32;
-            } else if (op->src[0]->type == GGML_TYPE_Q4_0 ||
+            } else if (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_MXFP4 ||
                        op->src[0]->type == GGML_TYPE_Q6_K) {
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
             }
@@ -6254,11 +6272,47 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
             CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &r2));
             CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &r3));
             break;
+        case GGML_TYPE_MXFP4: {
+            kernel = backend_ctx->kernel_mul_mv_mxfp4_f32;
+
+            if (backend_ctx->gpu_family == INTEL) {
+                nth0 = 16;
+                nth1 = 2;
+                ndst = nth1*2;
+            } else if (backend_ctx->gpu_family == ADRENO) {
+                nth0 = 64;
+                nth1 = 2;
+                ndst = nth1*2;
+            } else {
+                GGML_ASSERT(false && "TODO: Unknown GPU");
+            }
+
+            CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+            CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+            CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+            CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+            CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
+            CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
+            CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
+            CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &nb01));
+            CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &nb02));
+            CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb03));
+            CL_CHECK(clSetKernelArg(kernel, 10, sizeof(int),      &ne12));
+            CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb11));
+            CL_CHECK(clSetKernelArg(kernel, 12, sizeof(cl_ulong), &nb12));
+            CL_CHECK(clSetKernelArg(kernel, 13, sizeof(cl_ulong), &nb13));
+            CL_CHECK(clSetKernelArg(kernel, 14, sizeof(int),      &ne0));
+            CL_CHECK(clSetKernelArg(kernel, 15, sizeof(int),      &ne1));
+            CL_CHECK(clSetKernelArg(kernel, 16, sizeof(int),      &r2));
+            CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &r3));
+            CL_CHECK(clSetKernelArg(kernel, 18, sizeof(float)*nth0,nullptr));
+            break;
+        }
         default:
             GGML_ASSERT(false && "not implemented");
     }
 
-    if (src0t == GGML_TYPE_Q4_0 ||
+    if (src0t == GGML_TYPE_Q4_0 || src0t == GGML_TYPE_MXFP4 ||
         src0t == GGML_TYPE_Q4_1 ||
         src0t == GGML_TYPE_Q8_0 ||
         src0t == GGML_TYPE_Q2_K) {
