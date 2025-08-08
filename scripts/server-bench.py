@@ -146,7 +146,7 @@ def send_prompt(data: dict) -> tuple[float, list[float]]:
         lines.append(line)
         token_arrival_times.append(time())
     token_arrival_times = token_arrival_times[:-1]
-    if "timings" in json.loads(lines[-2][6:]):
+    if len(lines) > 1 and "timings" in json.loads(lines[-2][6:]):
         token_arrival_times = token_arrival_times[:-1]
 
     if response.status_code != 200:
