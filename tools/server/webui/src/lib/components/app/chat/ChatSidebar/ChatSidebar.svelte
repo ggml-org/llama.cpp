@@ -108,11 +108,7 @@
 
 	<Sidebar.GroupContent>
 		<Sidebar.Menu>
-			<ScrollArea
-				class={!isSearchModeActive
-					? 'h-[calc(100vh-16.5rem)]'
-					: 'h-[calc(100vh-11.625rem)]'}
-			>
+			<ScrollArea>
 				{#each filteredConversations as conversation (conversation.id)}
 					<Sidebar.MenuItem class="mb-1" onclick={handleMobileSidebarItemClick}>
 						<ChatSidebarConversationItem
