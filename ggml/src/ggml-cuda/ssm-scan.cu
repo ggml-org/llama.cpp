@@ -9,6 +9,12 @@ using namespace cub;
 
 #include "ssm-scan.cuh"
 
+// We would like to keep pragma unroll for cases where L_template is not 0,
+// so we suppress the clang transformation warning.
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpass-failed"
+#endif // __clang__
 template <size_t splitD, size_t N, size_t L_template>
 __global__ void __launch_bounds__(splitD, 1)
     ssm_scan_f32(const float *__restrict__ src0, const float *__restrict__ src1, const float *__restrict__ src2,
@@ -103,6 +109,9 @@ __global__ void __launch_bounds__(splitD, 1)
     }
 #endif
 }
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif // __clang__
 
 // assumes as many threads as d_state
 template <int splitH, int d_state>
