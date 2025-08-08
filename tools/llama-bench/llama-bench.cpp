@@ -702,6 +702,25 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                             buft_list[ggml_backend_buft_name(buft)] = buft;
                         }
                     }
+
+                    // add CPU extra buffer types
+                    {
+                        auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+                        if (cpu_dev == nullptr) {
+                            throw std::runtime_error("no CPU backend found");
+                        }
+
+                        auto * cpu_reg = ggml_backend_dev_backend_reg(cpu_dev);
+                        auto ggml_backend_dev_get_extra_bufts_fn = (ggml_backend_dev_get_extra_bufts_t)
+                            ggml_backend_reg_get_proc_address(cpu_reg, "ggml_backend_dev_get_extra_bufts");
+                        if (ggml_backend_dev_get_extra_bufts_fn) {
+                            ggml_backend_buffer_type_t * extra_bufts = ggml_backend_dev_get_extra_bufts_fn(cpu_dev);
+                            while (extra_bufts && *extra_bufts) {
+                                buft_list[ggml_backend_buft_name(*extra_bufts)] = *extra_bufts;
+                                ++extra_bufts;
+                            }
+                        }
+                    }
                 }
                 auto override_group_span_len = std::strcspn(value, ",");
                 bool last_group = false;
