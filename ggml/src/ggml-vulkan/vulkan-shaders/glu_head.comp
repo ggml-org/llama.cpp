@@ -1,5 +1,7 @@
 #extension GL_EXT_shader_16bit_storage : require
 
+#include "rte.comp"
+
 layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
@@ -12,4 +14,6 @@ layout (push_constant) uniform parameter
     uint ne00;
     uint ne20;
     uint mode;
+    float alpha;
+    float limit;
 } p;

@@ -135,6 +135,53 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
+  macOS-latest-cmake-arm64-webgpu:
+    runs-on: macos-14
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-arm64-webgpu
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+          brew install curl
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-macos-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export CMAKE_PREFIX_PATH=dawn
+          cmake -B build -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
   ubuntu-cpu-cmake:
     strategy:
       matrix:
@@ -344,6 +391,56 @@ jobs:
           # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 4200
 
+  ubuntu-22-cmake-webgpu:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: hendrikmuhs/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-webgpu
+          evict-old-files: 1d
+
+      - name: Vulkan SDK Dependencies
+        id: vulkan-depends
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-ubuntu-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export Dawn_DIR=dawn/lib64/cmake/Dawn
+          cmake -B build -DGGML_WEBGPU=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          # This is using llvmpipe and runs slower than other backends
+          ctest -L main --verbose --timeout 3600
+
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
     container: rocm/dev-ubuntu-22.04:6.0.2
@@ -386,7 +483,7 @@ jobs:
 
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.0.1-mudnn-devel-ubuntu22.04
+    container: mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone

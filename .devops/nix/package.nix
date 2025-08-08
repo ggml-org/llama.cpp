@@ -47,6 +47,7 @@ let
   inherit (lib)
     cmakeBool
     cmakeFeature
+    optionalAttrs
     optionals
     strings
     ;
@@ -197,7 +198,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ];
 
   # Environment variables needed for ROCm
-  env = optionals useRocm {
+  env = optionalAttrs useRocm {
     ROCM_PATH = "${rocmPackages.clr}";
     HIP_DEVICE_LIB_PATH = "${rocmPackages.rocm-device-libs}/amdgcn/bitcode";
   };

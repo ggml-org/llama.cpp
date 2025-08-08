@@ -24,6 +24,7 @@
 #include <cstdarg>
 #include <filesystem>
 #include <fstream>
+#include <list>
 #include <regex>
 #include <set>
 #include <string>
@@ -977,6 +978,10 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         for (auto & seq_breaker : params.sampling.dry_sequence_breakers) {
             string_process_escapes(seq_breaker);
         }
+        for (auto & pair : params.speculative.replacements) {
+            string_process_escapes(pair.first);
+            string_process_escapes(pair.second);
+        }
     }
 
     if (!params.kv_overrides.empty()) {
@@ -1465,6 +1470,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_SWA_FULL"));
     add_opt(common_arg(
+        {"--kv-unified", "-kvu"},
+        string_format("use single unified KV buffer for the KV cache of all sequences (default: %s)\n"
+            "[(more info)](https://github.com/ggml-org/llama.cpp/pull/14363)", params.kv_unified ? "true" : "false"),
+        [](common_params & params) {
+            params.kv_unified = true;
+        }
+    ).set_env("LLAMA_ARG_KV_SPLIT"));
+    add_opt(common_arg(
         {"--no-context-shift"},
         string_format("disables context shift on infinite text generation (default: %s)", params.ctx_shift ? "disabled" : "enabled"),
         [](common_params & params) {
@@ -1604,7 +1617,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.antiprompt.emplace_back(value);
         }
-    ).set_examples({LLAMA_EXAMPLE_MAIN}));
+    ).set_examples({LLAMA_EXAMPLE_MAIN, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-sp", "--special"},
         string_format("special tokens output enabled (default: %s)", params.special ? "true" : "false"),
@@ -2084,6 +2097,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_NO_KV_OFFLOAD"));
     add_opt(common_arg(
+        {"-nr", "--no-repack"},
+        "disable weight repacking",
+        [](common_params & params) {
+            params.no_extra_bufts = true;
+        }
+    ).set_env("LLAMA_ARG_NO_REPACK"));
+    add_opt(common_arg(
         {"-ctk", "--cache-type-k"}, "TYPE",
         string_format(
             "KV cache data type for K\n"
@@ -2356,11 +2376,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     }
                     throw std::invalid_argument("unknown buffer type");
                 }
-                // FIXME: this leaks memory
-                params.tensor_buft_overrides.push_back({strdup(tensor_name.c_str()), buft_list.at(buffer_type)});
+                // keep strings alive and avoid leaking memory by storing them in a static vector
+                static std::list<std::string> buft_overrides;
+                buft_overrides.push_back(tensor_name);
+                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
             }
         }
     ));
+    add_opt(common_arg(
+        {"--cpu-moe", "-cmoe"},
+        "keep all Mixture of Experts (MoE) weights in the CPU",
+        [](common_params & params) {
+            params.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
+        }
+    ).set_env("LLAMA_ARG_CPU_MOE"));
+    add_opt(common_arg(
+        {"--n-cpu-moe", "-ncmoe"}, "N",
+        "keep the Mixture of Experts (MoE) weights of the first N layers in the CPU",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            for (int i = 0; i < value; ++i) {
+                // keep strings alive and avoid leaking memory by storing them in a static vector
+                static std::list<std::string> buft_overrides;
+                buft_overrides.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
+            }
+        }
+    ).set_env("LLAMA_ARG_N_CPU_MOE"));
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",
         "number of layers to store in VRAM",
@@ -2620,6 +2664,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--output-format"}, "{gguf,dat}",
+        string_format("output format for imatrix file (default: %s)", params.imat_dat > 0 ? "dat" : "gguf"),
+        [](common_params & params, const std::string & value) {
+            /**/ if (value == "gguf") { params.imat_dat = -1; }
+            else if (value == "dat")  { params.imat_dat = 1;  }
+            else { throw std::invalid_argument("invalid output format"); }
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--save-frequency"}, "N",
         string_format("save an imatrix copy every N iterations (default: %d)", params.n_save_freq),
         [](common_params & params, int value) {
@@ -2645,6 +2698,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format("start processing the input from chunk N (default: %d)", params.i_chunk),
         [](common_params & params, int value) {
             params.i_chunk = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--show-statistics"},
+        string_format("show imatrix statistics and then exit (default: %s)", params.show_statistics ? "true" : "false"),
+        [](common_params & params) {
+            params.show_statistics = true;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
@@ -2887,11 +2947,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:\n"
         "- none: leaves thoughts unparsed in `message.content`\n"
         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
-        "(default: deepseek)",
+        "(default: auto)",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
             else if (value == "deepseek-legacy") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY; }
             else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
+            else if (value == "auto") {     params.reasoning_format = COMMON_REASONING_FORMAT_AUTO; }
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
@@ -3235,6 +3296,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
     add_opt(common_arg(
+        {"--spec-replace"}, "TARGET", "DRAFT",
+        "translate the string in TARGET into DRAFT if the draft model and main model are not compatible",
+        [](common_params & params, const std::string & tgt, const std::string & dft) {
+            params.speculative.replacements.push_back({ tgt, dft });
+        }
+    ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-ctkd", "--cache-type-k-draft"}, "TYPE",
         string_format(
             "KV cache data type for K for the draft model\n"
@@ -3422,6 +3490,52 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_cache_reuse = 256;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
+    add_opt(common_arg(
+        { "--diffusion-steps" }, "N",
+        string_format("number of diffusion steps (default: %d)", params.diffusion.steps),
+        [](common_params & params, int value) { params.diffusion.steps = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-visual" },
+        string_format("enable visual diffusion mode (show progressive generation) (default: %s)",
+                      params.diffusion.visual_mode ? "true" : "false"),
+        [](common_params & params) { params.diffusion.visual_mode = true; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+
+    add_opt(common_arg(
+        { "--diffusion-eps" }, "F",
+        string_format("epsilon for timesteps (default: %.6f)", (double) params.diffusion.eps),
+        [](common_params & params, const std::string & value) { params.diffusion.eps = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-algorithm" }, "N",
+        string_format("diffusion algorithm: 0=ORIGIN, 1=ENTROPY_BASED, 2=MARGIN_BASED, 3=RANDOM, 4=LOW_CONFIDENCE (default: %d)",
+                      params.diffusion.algorithm),
+        [](common_params & params, int value) { params.diffusion.algorithm = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-alg-temp" }, "F",
+        string_format("dream algorithm temperature (default: %.3f)", (double) params.diffusion.alg_temp),
+        [](common_params & params, const std::string & value) { params.diffusion.alg_temp = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+
+    add_opt(common_arg(
+        { "--diffusion-block-length" }, "N",
+        string_format("llada block length for generation (default: %d)", params.diffusion.block_length),
+        [](common_params & params, int value) { params.diffusion.block_length = value; }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-cfg-scale" }, "F",
+        string_format("llada classifier-free guidance scale (default: %.3f)", (double) params.diffusion.cfg_scale),
+        [](common_params & params, const std::string & value) { params.diffusion.cfg_scale = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+    add_opt(common_arg(
+        { "--diffusion-add-gumbel-noise" }, "F",
+        string_format("add gumbel noise to the logits if temp > 0.0 (default: %s)", params.diffusion.add_gumbel_noise ? "true" : "false"),
+        [](common_params & params, const std::string & value) { params.diffusion.add_gumbel_noise = std::stof(value); }
+    ).set_examples({ LLAMA_EXAMPLE_DIFFUSION }));
+
 
     return ctx_arg;
 }

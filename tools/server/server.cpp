@@ -127,7 +127,6 @@ struct slot_params {
     std::vector<std::string> response_fields;
     bool timings_per_token = false;
     bool post_sampling_probs = false;
-    bool ignore_eos = false;
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
@@ -138,6 +137,9 @@ struct slot_params {
     std::string                  oaicompat_model;
     std::string                  oaicompat_cmpl_id;
     common_chat_syntax           oaicompat_chat_syntax;
+
+    // Embeddings
+    int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
 
     json to_json() const {
         std::vector<std::string> samplers;
@@ -254,6 +256,7 @@ struct server_task {
         defaults.sampling    = params_base.sampling;
         defaults.speculative = params_base.speculative;
         defaults.n_keep      = params_base.n_keep;
+        defaults.antiprompt  = params_base.antiprompt;
 
         // enabling this will output extra debug information in the HTTP responses from the server
         params.verbose           = params_base.verbosity > 9;
@@ -441,7 +444,6 @@ struct server_task {
 
         {
             params.sampling.logit_bias.clear();
-            params.ignore_eos = json_value(data, "ignore_eos", false);
 
             const auto & logit_bias = data.find("logit_bias");
             if (logit_bias != data.end() && logit_bias->is_array()) {
@@ -471,6 +473,40 @@ struct server_task {
                         }
                     }
                 }
+           } else if (logit_bias != data.end() && logit_bias->is_object()) {
+                const int n_vocab = llama_vocab_n_tokens(vocab);
+                for (const auto & el : logit_bias->items()) {
+                    float bias;
+                    const auto & key = el.key();
+                    const auto & value = el.value();
+                    if (value.is_number()) {
+                        bias = value.get<float>();
+                    } else if (value.is_boolean() && !value.get<bool>()) {
+                        bias = -INFINITY;
+                    } else {
+                        continue;
+                    }
+
+                    char *end;
+                    llama_token tok = strtol(key.c_str(), &end, 10);
+                    if (*end == 0) {
+                        if (tok >= 0 && tok < n_vocab) {
+                            params.sampling.logit_bias.push_back({tok, bias});
+                        }
+                    } else {
+                        auto toks = common_tokenize(vocab, key, false);
+                        for (auto tok : toks) {
+                            params.sampling.logit_bias.push_back({tok, bias});
+                        }
+                    }
+                }
+            }
+
+            params.sampling.ignore_eos = json_value(data, "ignore_eos", params_base.sampling.ignore_eos);
+            if (params.sampling.ignore_eos) {
+                params.sampling.logit_bias.insert(
+                        params.sampling.logit_bias.end(),
+                        defaults.sampling.logit_bias_eog.begin(), defaults.sampling.logit_bias_eog.end());
             }
         }
 
@@ -484,6 +520,10 @@ struct server_task {
                         params.antiprompt.push_back(word);
                     }
                 }
+            }
+            // set reverse prompt from cli args if not set in the request
+            if (params.antiprompt.empty()) {
+                params.antiprompt = defaults.antiprompt;
             }
         }
 
@@ -1889,6 +1929,7 @@ struct server_context {
     mtmd_context * mctx = nullptr;
 
     const llama_vocab * vocab = nullptr;
+    bool vocab_dft_compatible = true;
 
     llama_model * model_dft = nullptr;
 
@@ -1898,7 +1939,6 @@ struct server_context {
 
     bool clean_kv_cache = true;
     bool add_bos_token  = true;
-    bool has_eos_token  = false;
 
     int32_t n_ctx; // total context for all clients / slots
 
@@ -1957,7 +1997,6 @@ struct server_context {
         n_ctx = llama_n_ctx(ctx);
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
-        has_eos_token = llama_vocab_eos(vocab) != LLAMA_TOKEN_NULL;
 
         if (!params_base.speculative.model.path.empty() || !params_base.speculative.model.hf_repo.empty()) {
             SRV_INF("loading draft model '%s'\n", params_base.speculative.model.path.c_str());
@@ -1981,10 +2020,9 @@ struct server_context {
                 return false;
             }
 
-            if (!common_speculative_are_compatible(ctx, llama_init_dft.context.get())) {
-                SRV_ERR("the draft model '%s' is not compatible with the target model '%s'\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
-
-                return false;
+            vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft.context.get());
+            if (!vocab_dft_compatible) {
+                SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
             }
 
             const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
@@ -2074,10 +2112,13 @@ struct server_context {
                     return;
                 }
 
-                slot.spec = common_speculative_init(slot.ctx_dft);
+                slot.spec = common_speculative_init(slot.ctx, slot.ctx_dft);
                 if (slot.spec == nullptr) {
                     SRV_ERR("%s", "failed to create speculator\n");
                     return;
+                }
+                for (auto &pair : params_base.speculative.replacements) {
+                    common_speculative_add_replacement_tgt_dft(slot.spec, pair.first.c_str(), pair.second.c_str());
                 }
             }
 
@@ -2215,10 +2256,6 @@ struct server_context {
             // Might be better to reject the request with a 400 ?
             SLT_WRN(slot, "n_predict = %d exceeds server configuration, setting to %d\n", slot.params.n_predict, slot.n_predict);
             slot.params.n_predict = slot.n_predict;
-        }
-
-        if (slot.params.ignore_eos && has_eos_token) {
-            slot.params.sampling.logit_bias.push_back({llama_vocab_eos(vocab), -INFINITY});
         }
 
         {
@@ -2581,12 +2618,14 @@ struct server_context {
                 continue;
             }
 
-            const float * embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
-            if (embd == NULL) {
+            const float * embd = nullptr;
+            if (llama_pooling_type(slot.ctx) == LLAMA_POOLING_TYPE_NONE) {
                 embd = llama_get_embeddings_ith(ctx, i);
+            } else {
+                embd = llama_get_embeddings_seq(ctx, batch.seq_id[i][0]);
             }
 
-            if (embd == NULL) {
+            if (embd == nullptr) {
                 SLT_ERR(slot, "failed to get embeddings, token = %d, seq_id = %d\n", batch.token[i], batch.seq_id[i][0]);
 
                 res->embedding.push_back(std::vector<float>(n_embd, 0.0f));
@@ -2594,12 +2633,12 @@ struct server_context {
             }
 
             // normalize only when there is pooling
-            // TODO: configurable
             if (llama_pooling_type(slot.ctx) != LLAMA_POOLING_TYPE_NONE) {
-                common_embd_normalize(embd, embd_res.data(), n_embd, 2);
+                common_embd_normalize(embd, embd_res.data(), n_embd, slot.params.embd_normalize);
                 res->embedding.push_back(embd_res);
+                break;
             } else {
-                res->embedding.push_back({ embd, embd + n_embd });
+                res->embedding.emplace_back(embd, embd + n_embd);
             }
         }
 
@@ -4210,9 +4249,6 @@ int main(int argc, char ** argv) {
 
             // process prompt
             std::vector<server_tokens> inputs;
-            if (oaicompat && !prompt.is_string()) {
-                throw std::runtime_error("prompt must be a string");
-            }
 
             if (oaicompat && has_mtmd) {
                 // multimodal
@@ -4515,9 +4551,10 @@ int main(int argc, char ** argv) {
         json tokens_response = json::array();
         if (body.count("content") != 0) {
             const bool add_special = json_value(body, "add_special", false);
+            const bool parse_special = json_value(body, "parse_special", true);
             const bool with_pieces = json_value(body, "with_pieces", false);
 
-            llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, true);
+            llama_tokens tokens = tokenize_mixed(ctx_server.vocab, body.at("content"), add_special, parse_special);
 
             if (with_pieces) {
                 for (const auto& token : tokens) {
@@ -4607,6 +4644,14 @@ int main(int argc, char ** argv) {
             }
         }
 
+        int embd_normalize = 2; // default to Euclidean/L2 norm
+        if (body.count("embd_normalize") != 0) {
+            embd_normalize = body.at("embd_normalize");
+            if (llama_pooling_type(ctx_server.ctx) == LLAMA_POOLING_TYPE_NONE) {
+                SRV_DBG("embd_normalize is not supported by pooling type %d, ignoring it\n", llama_pooling_type(ctx_server.ctx));
+            }
+        }
+
         // create and queue the task
         json responses = json::array();
         bool error = false;
@@ -4622,6 +4667,7 @@ int main(int argc, char ** argv) {
 
                 // OAI-compat
                 task.params.oaicompat = oaicompat;
+                task.params.embd_normalize = embd_normalize;
 
                 tasks.push_back(std::move(task));
             }

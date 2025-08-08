@@ -310,5 +310,7 @@ Specifies the memory pool management strategy:
 
 Controls automatic cleanup of the memory pool. This option is only effective when using the prio or leg memory pool strategies.
 
-## TODO
-- Support more models and data types.
+### GGML_CANN_WEIGHT_NZ
+
+Converting the matmul weight format from ND to NZ can significantly improve performance on the 310I DUO NPU.
+

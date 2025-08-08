@@ -6,12 +6,13 @@
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 256  // DeepSeekV3
+#define LLAMA_MAX_EXPERTS 384  // Kimi-K2
 
 enum llama_expert_gating_func_type {
-    LLAMA_EXPERT_GATING_FUNC_TYPE_NONE    = 0,
-    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX = 1,
-    LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID = 2,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX        = 1,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID        = 2,
+    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT = 3, // applied to the router weights instead of the logits
 };
 
 enum llama_swa_type {
@@ -55,6 +56,8 @@ struct llama_hparams {
     struct llama_hparams_posnet   posnet;
     struct llama_hparams_convnext convnext;
 
+    uint32_t n_shortconv_l_cache  = 0;
+
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
@@ -71,6 +74,7 @@ struct llama_hparams {
     bool     expert_weights_norm  = false;
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
+    uint32_t nextn_predict_layers = 0;
 
     float f_norm_eps;
     float f_norm_rms_eps;
@@ -96,7 +100,7 @@ struct llama_hparams {
     float    rope_freq_scale_train;
     float    rope_freq_scale_train_swa;
     uint32_t n_ctx_orig_yarn;
-    float    rope_yarn_log_mul;
+    float    rope_yarn_log_mul = 0.0f;
 
     std::array<int, 4> rope_sections;
 
@@ -138,7 +142,7 @@ struct llama_hparams {
     // for Classifiers
     uint32_t n_cls_out = 1;
 
-    // llama4
+    // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;
     uint32_t n_attn_temp_floor_scale = 8192;
@@ -159,9 +163,10 @@ struct llama_hparams {
     enum llama_rope_scaling_type rope_scaling_type_train = LLAMA_ROPE_SCALING_TYPE_NONE;
 
     // this value n_pattern means that every nth layer is dense (i.e. non-SWA)
+    // dense_first means whether the pattern is start with a dense layer
     // note that if n_pattern == 0, all layers are SWA
     //           if n_pattern == 1, all layers are dense
-    // example: n_pattern = 3
+    // example 1: n_pattern = 3, dense_first = false
     //   il == 0: swa
     //   il == 1: swa
     //   il == 2: dense
@@ -170,7 +175,13 @@ struct llama_hparams {
     //   il == 5: dense
     //   il == 6: swa
     //   etc ...
-    void set_swa_pattern(uint32_t n_pattern);
+    // example 2: n_pattern = 2, dense_first = true
+    //   il == 0: dense
+    //   il == 1: swa
+    //   il == 2: dense
+    //   il == 3: swa
+    //   etc ...
+    void set_swa_pattern(uint32_t n_pattern, bool dense_first = false);
 
     // return true if one of the layers is SWA
     bool is_swa_any() const;
@@ -188,6 +199,14 @@ struct llama_hparams {
 
     // dimension of value embeddings across all k-v heads
     uint32_t n_embd_v_gqa(uint32_t il = 0) const;
+
+    // true if any layer has a different n_embd_k_gqa/n_embd_v_gqa
+    bool is_n_embd_k_gqa_variable() const;
+    bool is_n_embd_v_gqa_variable() const;
+
+    // return the maximum n_embd_k_gqa/n_embd_v_gqa across all layers
+    uint32_t n_embd_k_gqa_max() const;
+    uint32_t n_embd_v_gqa_max() const;
 
     // dimension of the rolling state embeddings
     // corresponds to Mamba's conv_states size or RWKV's token_shift states size
