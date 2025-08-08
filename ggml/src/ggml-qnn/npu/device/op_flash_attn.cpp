@@ -14,15 +14,20 @@ inline float f16_to_f32(const npu_device_fp16_t src) {
 
 // From: ggml/src/ggml-cpu/ops.cpp
 template <bool _IsKvF16>
-void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hexagon::tensor * k,
-                     const hexagon::tensor * v, const hexagon::tensor * mask, hexagon::compute_params * params) {
+void flash_attn_impl(hexagon::tensor *         out,
+                     const hexagon::tensor *   q,
+                     const hexagon::tensor *   k,
+                     const hexagon::tensor *   v,
+                     const hexagon::tensor *   mask,
+                     hexagon::compute_params * params) {
     static_assert(3 <= hexagon::kMaxParamsCount, "flash_attn op params count exceeds max params count");
 
     constexpr const npu_device_tensor_data_type kKvDataType = _IsKvF16 ? NPU_DATA_TYPE_F16 : NPU_DATA_TYPE_F32;
 
     if (k->get_type() != kKvDataType || v->get_type() != k->get_type()) {
         DEVICE_LOG_ERROR("flash_attn_impl: k and v must have same type, got k: %s, v: %s\n",
-                         hexagon::get_type_name(k->get_type()), hexagon::get_type_name(v->get_type()));
+                         hexagon::get_type_name(k->get_type()),
+                         hexagon::get_type_name(v->get_type()));
         return;
     }
 
@@ -80,7 +85,8 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
     const auto     out_rows_per_batch = out->get_ne(2) * out->get_ne(1);
     uint8_t *      dst_ptr            = out->get_write_buffer();
     if (!dst_ptr) {
-        DEVICE_LOG_ERROR("flash_attn_impl: dst_ptr is not writable, tensor: %p, type: %s\n", (void *) out,
+        DEVICE_LOG_ERROR("flash_attn_impl: dst_ptr is not writable, tensor: %p, type: %s\n",
+                         (void *) out,
                          hexagon::get_type_name(out->get_type()));
         return;
     }
@@ -118,7 +124,8 @@ void flash_attn_impl(hexagon::tensor * out, const hexagon::tensor * q, const hex
 
         const npu_device_fp16_t * mp =
             mask_ptr ? reinterpret_cast<const npu_device_fp16_t *>(mask_ptr + iq1 * mask->get_nb(1) +
-                                                                   (iq3 % mask->get_ne(2)) * mask->get_nb(2)) :
+                                                                   (iq2 % mask->get_ne(2)) * mask->get_nb(2) +
+                                                                   (iq3 % mask->get_ne(3)) * mask->get_nb(3)) :
                        nullptr;
 
         // k indices
@@ -251,8 +258,8 @@ bool flash_attn_f32(tensor * out, compute_params * params) {
     const auto * v    = out->get_src(2);
     const auto * mask = out->get_src(3);
     if (!q || !k || !v || !mask) {
-        DEVICE_LOG_DEBUG("invalid src tensors: q: %p, k: %p, v: %p, mask: %p\n", (void *) q, (void *) k, (void *) v,
-                         (void *) mask);
+        DEVICE_LOG_DEBUG(
+            "invalid src tensors: q: %p, k: %p, v: %p, mask: %p\n", (void *) q, (void *) k, (void *) v, (void *) mask);
         return false;
     }
 
@@ -264,8 +271,11 @@ bool flash_attn_f32(tensor * out, compute_params * params) {
     return true;
 }
 
-bool is_flash_attn_supported(npu_device_tensor_op op, const npu_device_tensor_spec * dst,
-                             const npu_device_tensor_spec * srcs, size_t src_len) {
+bool is_flash_attn_supported(const npu_device_tensor_op_spec * op_spec,
+                             const npu_device_tensor_spec *    dst,
+                             const npu_device_tensor_spec *    srcs,
+                             size_t                            src_len) {
+    const auto op = op_spec->op;
     if (op != NPU_OP_FLASH_ATTN) {
         DEVICE_LOG_DEBUG("op is not NPU_OP_FLASH_ATTN: %d\n", op);
         return false;
@@ -295,7 +305,9 @@ bool is_flash_attn_supported(npu_device_tensor_op op, const npu_device_tensor_sp
 
     const auto * v = &srcs[2];
     if (v->type != k->type) {  // TODO: support more v types
-        DEVICE_LOG_DEBUG("[%s]v type is not the same as k: %s vs %s\n", op_get_name(op), get_type_name(v->type),
+        DEVICE_LOG_DEBUG("[%s]v type is not the same as k: %s vs %s\n",
+                         op_get_name(op),
+                         get_type_name(v->type),
                          get_type_name(k->type));
         return false;
     }
@@ -310,28 +322,42 @@ bool is_flash_attn_supported(npu_device_tensor_op op, const npu_device_tensor_sp
         DEVICE_LOG_DEBUG(
             "[%s]dst shape does not match q and v: dst ne: %ld, %ld, %ld, %ld, q ne: %ld, %ld, %ld, %ld, "
             "v ne: %ld, %ld, %ld, %ld\n",
-            op_get_name(op), dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], q->ne[0], q->ne[1], q->ne[2], q->ne[3],
-            v->ne[0], v->ne[1], v->ne[2], v->ne[3]);
+            op_get_name(op),
+            dst->ne[0],
+            dst->ne[1],
+            dst->ne[2],
+            dst->ne[3],
+            q->ne[0],
+            q->ne[1],
+            q->ne[2],
+            q->ne[3],
+            v->ne[0],
+            v->ne[1],
+            v->ne[2],
+            v->ne[3]);
         return false;
     }
 
     if (is_transposed_or_permuted(dst->nb)) {
-        DEVICE_LOG_DEBUG("[%s]dst cannot be transposed or permuted, nb: %zu, %zu, %zu, %zu\n", op_get_name(op),
-                         dst->nb[0], dst->nb[1], dst->nb[2], dst->nb[3]);
+        DEVICE_LOG_DEBUG("[%s]dst cannot be transposed or permuted, nb: %zu, %zu, %zu, %zu\n",
+                         op_get_name(op),
+                         dst->nb[0],
+                         dst->nb[1],
+                         dst->nb[2],
+                         dst->nb[3]);
         return false;
     }
 
     if (q->ne[0] != k->ne[0]) {
         DEVICE_LOG_DEBUG("[%s]q and k shapes do not match: q ne: %ld, %ld, %ld, %ld, k ne: %ld, %ld, %ld, %ld\n",
-                         op_get_name(op), q->ne[0], q->ne[1], q->ne[2], q->ne[3], k->ne[0], k->ne[1], k->ne[2],
-                         k->ne[3]);
-        return false;
-    }
-
-    if (q->ne[2] != k->ne[2] || q->ne[3] != k->ne[3] || q->ne[3] != 1) {
-        // TODO: add broadcast support
-        DEVICE_LOG_DEBUG("[%s]q and k shapes do not match: q ne: %ld, %ld, %ld, %ld, k ne: %ld, %ld, %ld, %ld\n",
-                         op_get_name(op), q->ne[0], q->ne[1], q->ne[2], q->ne[3], k->ne[0], k->ne[1], k->ne[2],
+                         op_get_name(op),
+                         q->ne[0],
+                         q->ne[1],
+                         q->ne[2],
+                         q->ne[3],
+                         k->ne[0],
+                         k->ne[1],
+                         k->ne[2],
                          k->ne[3]);
         return false;
     }

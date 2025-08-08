@@ -17,6 +17,7 @@ interface npu_device : remote_handle64{
 
     typedef int64_t ne_type[DEVICE_TENSOR_MAX_DIMS];
     typedef uint64_t nb_type[DEVICE_TENSOR_MAX_DIMS];
+    typedef int32_t param_type[DEVICE_TENSOR_MAX_OP_PARAMS];
     typedef uint64_t tensor_handle_t;
     typedef uint64_t graph_handle_t;
 
@@ -50,7 +51,17 @@ interface npu_device : remote_handle64{
         NPU_OP_RMS_NORM,
         NPU_OP_FLASH_ATTN,
         NPU_OP_ROPE,
+        NPU_OP_GLU,
         NPU_OP_COUNT
+    };
+
+    enum glu_op {
+        NPU_GLU_OP_REGLU,
+        NPU_GLU_OP_GEGLU,
+        NPU_GLU_OP_SWIGLU,
+        NPU_GLU_OP_GEGLU_ERF,
+        NPU_GLU_OP_GEGLU_QUICK,
+        NPU_GLU_OP_COUNT
     };
 
     enum tensor_data_type {
@@ -69,9 +80,14 @@ interface npu_device : remote_handle64{
         tensor_data_type type;
     };
 
+    struct tensor_op_spec {
+        tensor_op op;
+        param_type params;
+    };
+
     struct tensor_update_config {
         tensor_op op;
-        int32_t params[DEVICE_TENSOR_MAX_OP_PARAMS];
+        param_type params;
         tensor_handle_t src_handles[DEVICE_TENSOR_MAX_SRC];
     };
 
@@ -90,7 +106,7 @@ interface npu_device : remote_handle64{
     );
 
     AEEResult device_support_op(
-        in tensor_op op,
+        in tensor_op_spec op_spec,
         in tensor_spec dst,
         in sequence<tensor_spec> srcs,
         rout boolean is_supported

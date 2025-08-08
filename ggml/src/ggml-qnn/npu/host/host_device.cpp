@@ -5,12 +5,12 @@
 #include <domain_default.h>
 #pragma GCC diagnostic pop
 
+#include "graph.hpp"
+#include "util.hpp"
+
 #include <remote.h>
 
 #include <type_traits>
-
-#include "graph.hpp"
-#include "util.hpp"
 
 #define SKEL_URI_DEFINE(arch) ("file:///libhexagon_npu_skel_" arch ".so?npu_device_skel_handle_invoke&_modver=1.0")
 
@@ -68,8 +68,10 @@ void backend_free(ggml_backend_t backend) {
     delete get_backend_object(backend);
 }
 
-bool backend_cpy_tensor_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const ggml_tensor * src,
-                              ggml_tensor * dst) {
+bool backend_cpy_tensor_async(ggml_backend_t      backend_src,
+                              ggml_backend_t      backend_dst,
+                              const ggml_tensor * src,
+                              ggml_tensor *       dst) {
     // TODO: implement this
     return false;
 }
@@ -194,13 +196,24 @@ bool npu_device::supports_op_impl(const ggml_tensor * op) {
 
     boolean supported = false;
     auto    dst_spec  = get_spec(op);
-    auto    ret       = npu_device_device_support_op(_device_handle, npu_op, &dst_spec, srcs, i, &supported);
+
+    npu_device_tensor_op_spec npu_op_spec = { npu_op, {} };
+    static_assert(sizeof(npu_op_spec.params) <= sizeof(op->op_params),
+                  "npu_op_spec.params size should less than op->op_params size");
+    memcpy(npu_op_spec.params, op->op_params, sizeof(npu_op_spec.params));
+    auto ret = npu_device_device_support_op(_device_handle, &npu_op_spec, &dst_spec, srcs, i, &supported);
     if (ret != AEE_SUCCESS || !supported) {
 #ifndef NDEBUG
         auto * src0_type = i ? ggml_type_name(op->src[0]->type) : "null";
         auto * src1_type = (i > 1) ? ggml_type_name(op->src[1]->type) : "null";
-        LOG_DEBUG("[%s][%s]unsupported %s(%s,%s), ret: 0x%x, supported: %d\n", get_name(), ggml_op_desc(op),
-                  ggml_type_name(op->type), src0_type, src1_type, ret, supported);
+        LOG_DEBUG("[%s][%s]unsupported %s(%s,%s), ret: 0x%x, supported: %d\n",
+                  get_name(),
+                  ggml_op_desc(op),
+                  ggml_type_name(op->type),
+                  src0_type,
+                  src1_type,
+                  ret,
+                  supported);
 #endif
         return false;
     }
@@ -244,8 +257,8 @@ bool npu_device::init_device_lib() {
             }
 
             if (err != AEE_SUCCESS) {
-                LOG_ERROR("[%s]Unable to open NPU device, err: 0x%x, uri %s\n", get_name(), err,
-                          device_lib_uri.c_str());
+                LOG_ERROR(
+                    "[%s]Unable to open NPU device, err: 0x%x, uri %s\n", get_name(), err, device_lib_uri.c_str());
                 _device_handle = 0;
                 return false;
             }
@@ -275,16 +288,26 @@ bool npu_device::supports_op(const ggml_tensor * op) {
         if (op->op != GGML_OP_NONE && op->op != GGML_OP_VIEW && op->op != GGML_OP_RESHAPE &&
             op->op != GGML_OP_PERMUTE) {
             _supported_op++;
-            LOG_DEBUG("[%s][%s][%s]supported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_desc(op),
-                      ggml_get_name(op), op_desc, _supported_op.load(), _unsupported_op.load());
+            LOG_DEBUG("[%s][%s][%s]supported, %s, supported/unsupported: %u/%u\n",
+                      get_name(),
+                      ggml_op_desc(op),
+                      ggml_get_name(op),
+                      op_desc,
+                      _supported_op.load(),
+                      _unsupported_op.load());
         }
 
         return true;
     }
 
     _unsupported_op++;
-    LOG_DEBUG("[%s][%s][%s]unsupported, %s, supported/unsupported: %u/%u\n", get_name(), ggml_op_desc(op),
-              ggml_get_name(op), op_desc, _supported_op.load(), _unsupported_op.load());
+    LOG_DEBUG("[%s][%s][%s]unsupported, %s, supported/unsupported: %u/%u\n",
+              get_name(),
+              ggml_op_desc(op),
+              ggml_get_name(op),
+              op_desc,
+              _supported_op.load(),
+              _unsupported_op.load());
     return false;
 }
 #else

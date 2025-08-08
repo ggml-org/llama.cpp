@@ -1,10 +1,10 @@
 #pragma once
 
-#include <memory>
-
 #include "hexagon_npu.h"
 #include "tensor.hpp"
 #include "thread_pool.hpp"
+
+#include <memory>
 
 namespace hexagon {
 
@@ -20,8 +20,9 @@ class graph {
     bool compute(default_thread_pool * thread_pool, const float * f16_to_f32_table);
 
   private:
-    static void thread_pool_task(default_thread_pool * pool, default_thread_pool::thread_params * thread_params,
-                                 void * graph);
+    static void thread_pool_task(default_thread_pool *                pool,
+                                 default_thread_pool::thread_params * thread_params,
+                                 void *                               graph);
     void        compute_impl(default_thread_pool * pool, default_thread_pool::thread_params * thread_params);
 
     std::unique_ptr<tensor *[]> _tensors;

@@ -1,11 +1,11 @@
 
 #include "graph.hpp"
 
-#include <new>
-
 #include "op_impl.hpp"
 #include "util.hpp"
 #include "vtcm_mem.hpp"
+
+#include <new>
 
 namespace hexagon {
 
@@ -30,8 +30,12 @@ void graph::set_tensor(const npu_device_tensor_handle_t * tensors, int tensor_co
     for (int i = 0; i < tensor_count; ++i) {
         auto * tensor_obj = reinterpret_cast<tensor *>(tensors[i]);
         _tensors[i]       = tensor_obj;
-        DEVICE_LOG_DEBUG("graph(%p) set_tensor[%d]: %p(%p,%p), op: %s\n", (void *) this, i, (void *) tensor_obj,
-                         (void *) tensor_obj->get_src(0), (void *) tensor_obj->get_src(1),
+        DEVICE_LOG_DEBUG("graph(%p) set_tensor[%d]: %p(%p,%p), op: %s\n",
+                         (void *) this,
+                         i,
+                         (void *) tensor_obj,
+                         (void *) tensor_obj->get_src(0),
+                         (void *) tensor_obj->get_src(1),
                          op_get_name(tensor_obj->get_op()));
     }
 
@@ -64,8 +68,9 @@ bool graph::compute(default_thread_pool * thread_pool, const float * f16_to_f32_
     return true;
 }
 
-void graph::thread_pool_task(default_thread_pool * pool, default_thread_pool::thread_params * thread_params,
-                             void * graph) {
+void graph::thread_pool_task(default_thread_pool *                pool,
+                             default_thread_pool::thread_params * thread_params,
+                             void *                               graph) {
     reinterpret_cast<hexagon::graph *>(graph)->compute_impl(pool, thread_params);
 }
 
@@ -86,8 +91,11 @@ void graph::compute_impl(default_thread_pool * pool, default_thread_pool::thread
 
         const bool should_sync = requires_thread_barrier(op);
         if (pool && should_sync && i < _tensor_count - 1) {
-            DEVICE_SCOPED_PERFORMANCE_TRACKER("[%p]sync_thread, tidx: %zu, tensor[%zu/%zu]", (void *) this,
-                                              params.get_thread_index(), i, _tensor_count);
+            DEVICE_SCOPED_PERFORMANCE_TRACKER("[%p]sync_thread, tidx: %zu, tensor[%zu/%zu]",
+                                              (void *) this,
+                                              params.get_thread_index(),
+                                              i,
+                                              _tensor_count);
             pool->sync_thread();
         }
     }

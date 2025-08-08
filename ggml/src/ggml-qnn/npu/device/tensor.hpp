@@ -1,12 +1,12 @@
 #pragma once
 
+#include "hexagon_npu.h"
+#include "util.hpp"
+
 #include <HAP_mem.h>
 #include <qurt.h>
 
 #include <atomic>
-
-#include "hexagon_npu.h"
-#include "util.hpp"
 
 namespace hexagon {
 
@@ -26,8 +26,15 @@ class tensor {
 
         _data = static_cast<uint8_t *>(mmap_address);
         DEVICE_LOG_INFO("tensor(%p[%ldx%ldx%ldx%ld]), fd: %d, offset: %zu, mmap_addr: %p, phy_addr: 0x%lx\n",
-                        (void *) this, (long) _info.ne[0], (long) _info.ne[1], (long) _info.ne[2], (long) _info.ne[3],
-                        _info.buffer_fd, _info.offset, (void *) mmap_address, phy_address);
+                        (void *) this,
+                        (long) _info.ne[0],
+                        (long) _info.ne[1],
+                        (long) _info.ne[2],
+                        (long) _info.ne[3],
+                        _info.buffer_fd,
+                        _info.offset,
+                        (void *) mmap_address,
+                        phy_address);
     }
 
     ~tensor() noexcept {
@@ -41,15 +48,17 @@ class tensor {
 
     void flush() const {
         if (_data) {
-            qurt_mem_cache_clean((qurt_addr_t) (_data + _info.offset), (qurt_size_t) _info.size, QURT_MEM_CACHE_FLUSH,
-                                 QURT_MEM_DCACHE);
+            qurt_mem_cache_clean(
+                (qurt_addr_t) (_data + _info.offset), (qurt_size_t) _info.size, QURT_MEM_CACHE_FLUSH, QURT_MEM_DCACHE);
         }
     }
 
     void invalidate() const {
         if (_data) {
-            qurt_mem_cache_clean((qurt_addr_t) (_data + _info.offset), (qurt_size_t) _info.size,
-                                 QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+            qurt_mem_cache_clean((qurt_addr_t) (_data + _info.offset),
+                                 (qurt_size_t) _info.size,
+                                 QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL,
+                                 QURT_MEM_DCACHE);
         }
     }
 

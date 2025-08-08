@@ -29,8 +29,14 @@ float rope_yarn_ramp(const float low, const float high, const int i0) {
 
 // YaRN algorithm based on LlamaYaRNScaledRotaryEmbedding.py from https://github.com/jquesnelle/yarn
 // MIT licensed. Copyright (c) 2023 Jeffrey Quesnelle and Bowen Peng.
-void rope_yarn(float theta_extrap, float freq_scale, float corr_dims[2], int64_t i0, float ext_factor, float mscale,
-               float * cos_theta, float * sin_theta) {
+void rope_yarn(float   theta_extrap,
+               float   freq_scale,
+               float   corr_dims[2],
+               int64_t i0,
+               float   ext_factor,
+               float   mscale,
+               float * cos_theta,
+               float * sin_theta) {
     // Get n-d rotational scaling corrected for extrapolation
     float theta_interp = freq_scale * theta_extrap;
     float theta        = theta_interp;
@@ -45,8 +51,16 @@ void rope_yarn(float theta_extrap, float freq_scale, float corr_dims[2], int64_t
     *sin_theta = sinf(theta) * mscale;
 }
 
-void rope_cache_init(float theta_base, float freq_scale, const float * freq_factors, float corr_dims[2], int64_t ne0,
-                     float ext_factor, float mscale, float * cache, float sin_sign, float theta_scale) {
+void rope_cache_init(float         theta_base,
+                     float         freq_scale,
+                     const float * freq_factors,
+                     float         corr_dims[2],
+                     int64_t       ne0,
+                     float         ext_factor,
+                     float         mscale,
+                     float *       cache,
+                     float         sin_sign,
+                     float         theta_scale) {
     // ref: https://github.com/jquesnelle/yarn/blob/master/scaled_rope/LlamaYaRNScaledRotaryEmbedding.py
     float theta = theta_base;
     for (int64_t i0 = 0; i0 < ne0; i0 += 2) {
@@ -58,10 +72,21 @@ void rope_cache_init(float theta_base, float freq_scale, const float * freq_fact
     }
 }
 
-void mrope_cache_init(float theta_base_t, float theta_base_h, float theta_base_w, float theta_base_e,
-                      const int sections[4], bool indep_sects, float freq_scale, const float * freq_factors,
-                      float corr_dims[2], int64_t ne0, float ext_factor, float mscale, float * cache, float sin_sign,
-                      float theta_scale) {
+void mrope_cache_init(float         theta_base_t,
+                      float         theta_base_h,
+                      float         theta_base_w,
+                      float         theta_base_e,
+                      const int     sections[4],
+                      bool          indep_sects,
+                      float         freq_scale,
+                      const float * freq_factors,
+                      float         corr_dims[2],
+                      int64_t       ne0,
+                      float         ext_factor,
+                      float         mscale,
+                      float *       cache,
+                      float         sin_sign,
+                      float         theta_scale) {
     // ref: https://github.com/jquesnelle/yarn/blob/master/scaled_rope/LlamaYaRNScaledRotaryEmbedding.py
     float theta_t   = theta_base_t;
     float theta_h   = theta_base_h;
@@ -181,16 +206,37 @@ bool rope_impl(hexagon::tensor * out, hexagon::compute_params * params) {
         if constexpr (!_IsMrope) {
             DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 0, cache);
             const int64_t p = pos[i2];
-            rope_cache_init(p, freq_scale, freq_factors, corr_dims, out->get_ne(0), ext_factor, attn_factor, cache,
-                            sin_sign, theta_scale);
+            rope_cache_init(p,
+                            freq_scale,
+                            freq_factors,
+                            corr_dims,
+                            out->get_ne(0),
+                            ext_factor,
+                            attn_factor,
+                            cache,
+                            sin_sign,
+                            theta_scale);
         } else {
             DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 0, cache);
             const int64_t p_t = pos[i2];
             const int64_t p_h = pos[i2 + out->get_ne(2)];
             const int64_t p_w = pos[i2 + out->get_ne(2) * 2];
             const int64_t p_e = pos[i2 + out->get_ne(2) * 3];
-            mrope_cache_init(p_t, p_h, p_w, p_e, sections, _IsVision, freq_scale, freq_factors, corr_dims,
-                             out->get_ne(0), ext_factor, attn_factor, cache, sin_sign, theta_scale);
+            mrope_cache_init(p_t,
+                             p_h,
+                             p_w,
+                             p_e,
+                             sections,
+                             _IsVision,
+                             freq_scale,
+                             freq_factors,
+                             corr_dims,
+                             out->get_ne(0),
+                             ext_factor,
+                             attn_factor,
+                             cache,
+                             sin_sign,
+                             theta_scale);
         }
 
         DEVICE_SCOPED_OP_PERFORMANCE_TRACKER_ADD_ONE_SUB_PROC(rope, 1, loop);
@@ -316,8 +362,11 @@ bool rope_f32(tensor * out, compute_params * params) {
     return kRopeImplFuncs[impl_index](out, params);
 }
 
-bool is_rope_supported(npu_device_tensor_op op, const npu_device_tensor_spec * dst, const npu_device_tensor_spec * srcs,
-                       size_t src_len) {
+bool is_rope_supported(const npu_device_tensor_op_spec * op_spec,
+                       const npu_device_tensor_spec *    dst,
+                       const npu_device_tensor_spec *    srcs,
+                       size_t                            src_len) {
+    const auto op = op_spec->op;
     if (op != NPU_OP_ROPE) {
         DEVICE_LOG_DEBUG("[%s]op is not ROPE\n", op_get_name(op));
         return false;
@@ -336,8 +385,10 @@ bool is_rope_supported(npu_device_tensor_op op, const npu_device_tensor_spec * d
 
     const auto & src0 = srcs[0];
     if (src0.type != dst->type) {
-        DEVICE_LOG_DEBUG("[%s]src0 type is not the same as dst type: %s vs %s\n", op_get_name(op),
-                         get_type_name(src0.type), get_type_name(dst->type));
+        DEVICE_LOG_DEBUG("[%s]src0 type is not the same as dst type: %s vs %s\n",
+                         op_get_name(op),
+                         get_type_name(src0.type),
+                         get_type_name(dst->type));
         return false;  // unsupported src0 type
     }
 

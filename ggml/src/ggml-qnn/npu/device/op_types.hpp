@@ -1,17 +1,17 @@
 #pragma once
 
+#include "hexagon_npu.h"
+#include "tensor.hpp"
+#include "thread_pool.hpp"
+#include "util.hpp"
+#include "vec_ops.hpp"
+
 #include <hexagon_types.h>
 
 #include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <utility>
-
-#include "hexagon_npu.h"
-#include "tensor.hpp"
-#include "thread_pool.hpp"
-#include "util.hpp"
-#include "vec_ops.hpp"
 
 namespace hexagon {
 
@@ -44,8 +44,6 @@ struct compute_params {
 
     uint8_t * get_vtcm_cache(size_t size) { return thread_params->get_vtcm_cache(size); }
 
-    uint8_t * get_mem_cache(size_t size) { return thread_params->get_mem_cache(size); }
-
     std::pair<int64_t, int64_t> get_work_slice(int64_t total) const {
         return get_thread_work_slice(total, thread_params->tidx, thread_params->tcnt);
     }
@@ -58,7 +56,9 @@ struct compute_params {
 };
 
 typedef bool (*compute_func_type)(tensor * dst, compute_params * params);
-typedef bool (*op_is_supported_func_type)(npu_device_tensor_op op, const npu_device_tensor_spec * dst,
-                                          const npu_device_tensor_spec * srcs, size_t src_len);
+typedef bool (*op_is_supported_func_type)(const npu_device_tensor_op_spec * op_spec,
+                                          const npu_device_tensor_spec *    dst,
+                                          const npu_device_tensor_spec *    srcs,
+                                          size_t                            src_len);
 
 }  // namespace hexagon

@@ -1,10 +1,4 @@
 
-#include <AEEStdErr.h>
-#include <HAP_compute_res.h>
-#include <hexagon_types.h>
-
-#include <memory>
-
 #include "graph.hpp"
 #include "hexagon_npu.h"
 #include "op_impl.hpp"
@@ -13,6 +7,12 @@
 #include "thread_pool.hpp"
 #include "type_traits.hpp"
 #include "util.hpp"
+
+#include <AEEStdErr.h>
+#include <HAP_compute_res.h>
+#include <hexagon_types.h>
+
+#include <memory>
 
 namespace {
 
@@ -130,8 +130,12 @@ AEEResult npu_device_device_get_alignment(remote_handle64 _h, uint32_t * alignme
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_device_support_op(remote_handle64 _h, npu_device_tensor_op op, const npu_device_tensor_spec * dst,
-                                       const npu_device_tensor_spec * srcs, int srcsLen, boolean * is_supported) {
+AEEResult npu_device_device_support_op(remote_handle64                   _h,
+                                       const npu_device_tensor_op_spec * op_spec,
+                                       const npu_device_tensor_spec *    dst,
+                                       const npu_device_tensor_spec *    srcs,
+                                       int                               srcsLen,
+                                       boolean *                         is_supported) {
     NPU_UNUSED(_h);
 
     if (!srcs || srcsLen <= 0 || !dst || !is_supported) {
@@ -139,19 +143,21 @@ AEEResult npu_device_device_support_op(remote_handle64 _h, npu_device_tensor_op 
         return AEE_EINVARGS;
     }
 
-    *is_supported = hexagon::support_op(op, dst, srcs, srcsLen);
+    *is_supported = hexagon::support_op(op_spec, dst, srcs, srcsLen);
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_tensor_init(remote_handle64 _h, const npu_device_tensor_config * info,
-                                 npu_device_tensor_handle_t * tensor_handle) {
+AEEResult npu_device_tensor_init(remote_handle64                  _h,
+                                 const npu_device_tensor_config * info,
+                                 npu_device_tensor_handle_t *     tensor_handle) {
     NPU_UNUSED(_h);
     auto * tensor  = new hexagon::tensor(*info);
     *tensor_handle = tensor_to_handle(tensor);
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_tensor_update_params(remote_handle64 _h, npu_device_tensor_handle_t tensor_handle,
+AEEResult npu_device_tensor_update_params(remote_handle64                         _h,
+                                          npu_device_tensor_handle_t              tensor_handle,
                                           const npu_device_tensor_update_config * config) {
     NPU_UNUSED(_h);
     auto * tensor = tensor_from_handle(tensor_handle);
@@ -174,8 +180,9 @@ AEEResult npu_device_tensor_free(remote_handle64 _h, npu_device_tensor_handle_t 
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_tensors_free(remote_handle64 _h, const npu_device_tensor_handle_t * tensor_handles,
-                                  int tensor_handlesLen) {
+AEEResult npu_device_tensors_free(remote_handle64                    _h,
+                                  const npu_device_tensor_handle_t * tensor_handles,
+                                  int                                tensor_handlesLen) {
     NPU_UNUSED(_h);
     if (!tensor_handles || tensor_handlesLen < 0) {
         DEVICE_LOG_ERROR("npu_device_tensors_free: Invalid arguments");
@@ -201,8 +208,10 @@ AEEResult npu_device_graph_init(remote_handle64 _h, npu_device_graph_handle_t * 
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_graph_set_tensor(remote_handle64 _h, npu_device_graph_handle_t graph_handle,
-                                      const npu_device_tensor_handle_t * tensor_handles, int tensor_handlesLen) {
+AEEResult npu_device_graph_set_tensor(remote_handle64                    _h,
+                                      npu_device_graph_handle_t          graph_handle,
+                                      const npu_device_tensor_handle_t * tensor_handles,
+                                      int                                tensor_handlesLen) {
     NPU_UNUSED(_h);
     auto * graph = graph_from_handle(graph_handle);
     if (!graph || !tensor_handles || tensor_handlesLen <= 0) {
@@ -213,7 +222,8 @@ AEEResult npu_device_graph_set_tensor(remote_handle64 _h, npu_device_graph_handl
     return AEE_SUCCESS;
 }
 
-AEEResult npu_device_graph_set_tensor_with_param(remote_handle64 _h, npu_device_graph_handle_t graph_handle,
+AEEResult npu_device_graph_set_tensor_with_param(remote_handle64                         _h,
+                                                 npu_device_graph_handle_t               graph_handle,
                                                  const npu_device_tensor_handle_t *      tensor_handles,
                                                  int                                     tensor_handlesLen,
                                                  const npu_device_tensor_update_config * tensor_params,

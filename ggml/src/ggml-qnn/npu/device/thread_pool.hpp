@@ -1,5 +1,8 @@
 #pragma once
 
+#include "util.hpp"
+#include "vtcm_mem.hpp"
+
 #include <qurt.h>
 
 #include <array>
@@ -8,27 +11,26 @@
 #include <memory>
 #include <string>
 
-#include "util.hpp"
-#include "vtcm_mem.hpp"
-
 namespace hexagon {
 
-constexpr const size_t             kMaxThreadCount       = 4;
-constexpr const size_t             kDefaultStackSize     = 1024 * 32;  // 32KB
-constexpr const unsigned long long kThreadTaskPendingBit = 1;
+constexpr const size_t kMaxThreadCount   = 4;
+constexpr const size_t kDefaultStackSize = 1024 * 64;  // 64KB
 
 template <size_t _stack_size> class qurt_thread {
   public:
     typedef void (*qurt_thread_func_type)(qurt_thread * thread, void * arg);
 
-    explicit qurt_thread(const std::string & thread_name, qurt_thread_func_type thread_func, void * arg,
-                         unsigned short priority) {
+    explicit qurt_thread(const std::string &   thread_name,
+                         qurt_thread_func_type thread_func,
+                         void *                arg,
+                         unsigned short        priority) {
         DEVICE_LOG_DEBUG("qurt_thread.create: %s", thread_name.c_str());
         qurt_thread_attr_init(&_attributes);
         qurt_thread_attr_set_name(&_attributes, (char *) thread_name.c_str());
         qurt_thread_attr_set_stack_addr(&_attributes, _stack);
         qurt_thread_attr_set_stack_size(&_attributes, _stack_size);
         qurt_thread_attr_set_priority(&_attributes, priority);
+        qurt_thread_attr_set_bus_priority(&_attributes, QURT_THREAD_BUS_PRIO_ENABLED);
 
         _func    = thread_func;
         _arg     = arg;
@@ -94,9 +96,9 @@ template <size_t _ThreadCount> class thread_pool {
         thread_pool<kMaxThreadCount> * pool = nullptr;
         size_t                         vtcm_quota_size;
 
-        std::unique_ptr<vtcm_mem>  vtcm_cache;
-        std::unique_ptr<uint8_t[]> mem_cache;
-        size_t                     mem_cache_size = 0;
+        std::unique_ptr<vtcm_mem> vtcm_cache;
+
+        void init_vtcm_cache() { vtcm_cache = std::make_unique<vtcm_mem>(vtcm_quota_size, false); }
 
         uint8_t * get_vtcm_cache(size_t size) {
             if (!vtcm_cache || vtcm_cache->get_size() < size) {
@@ -111,25 +113,18 @@ template <size_t _ThreadCount> class thread_pool {
 
             return vtcm_cache->get_mem();
         }
-
-        uint8_t * get_mem_cache(size_t size) {
-            if (!mem_cache || mem_cache_size < size) {
-                mem_cache.reset();  // reset the cache to create a new one
-                mem_cache      = std::make_unique<uint8_t[]>(size + 256);
-                mem_cache_size = mem_cache ? size : 0;
-            }
-
-            return mem_cache.get();
-        }
     };
 
     typedef void (*task_type)(thread_pool * pool, thread_params * param, void * arg);
 
     thread_pool() {
         for (size_t i = 0; i < kMaxThreadCount; ++i) {
-            _thread_params[i].tidx            = i;
-            _thread_params[i].vtcm_quota_size = hexagon::vtcm_mem::get_avail_block_size() / kMaxThreadCount;
-            _thread_params[i].pool            = this;
+            auto & thread_param          = _thread_params[i];
+            thread_param.tidx            = i;
+            thread_param.vtcm_quota_size = hexagon::vtcm_mem::get_avail_block_size() / kMaxThreadCount;
+            thread_param.pool            = this;
+
+            thread_param.init_vtcm_cache();
         }
 
         qurt_barrier_init(&_pending, kMaxSubThreadCount + 1);
@@ -215,7 +210,8 @@ template <size_t _ThreadCount> class thread_pool {
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
             auto task_begin_cycles = pool._task_begin_cycles.load();
-            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, prepare: %lluus", param->tidx,
+            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, prepare: %lluus",
+                            param->tidx,
                             static_cast<unsigned long long>(
                                 HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - task_begin_cycles)));
 #endif
@@ -229,7 +225,8 @@ template <size_t _ThreadCount> class thread_pool {
             qurt_barrier_wait(&pool._completed);
 
 #ifdef GGML_HEXAGON_ENABLE_PERFORMANCE_TRACKING
-            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, task_end: %lluus", param->tidx,
+            DEVICE_LOG_WARN("[profiler]worker_thread, tidx: %zu, task_end: %lluus",
+                            param->tidx,
                             static_cast<unsigned long long>(
                                 HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - task_begin_cycles)));
 #endif

@@ -1,9 +1,9 @@
 #pragma once
 
+#include "util.hpp"
+
 #include <HAP_compute_res.h>
 #include <HAP_vtcm_mgr.h>
-
-#include "util.hpp"
 
 namespace hexagon {
 
