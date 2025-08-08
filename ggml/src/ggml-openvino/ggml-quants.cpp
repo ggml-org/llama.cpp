@@ -15,8 +15,8 @@
 void unpack_32_4(const uint8_t* data, uint8_t* dst) {
     std::fill_n(dst, 16, 0);
     for (int j = 0; j < 16; ++j) {
-        uint8_t x = (data[j + 2] & 0x0F);  // j+2 to skip scale bytes.
-        uint8_t y = (data[j + 2] >> 4);
+        uint8_t x = (data[j] & 0x0F);
+        uint8_t y = (data[j] >> 4);
         if (j % 2 != 0) {
             x <<= 4;
             y <<= 4;
@@ -41,7 +41,7 @@ void extract_q4_0_data(const ggml_tensor* tensor,
     ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
         scales[i] = ov::float16::from_bits(*((uint16_t*)(data + i * bytes_per_block)));
         biases[i] = ov::float16(-8.f * static_cast<float>(scales[i]));
-        unpack_32_4(data + i * bytes_per_block, weights + i * 16);
+        unpack_32_4(data + i * bytes_per_block + 2, weights + i * 16);
     });
 }
 
@@ -58,8 +58,8 @@ void extract_q4_1_data(const ggml_tensor* tensor,
     auto biases = biases_arr.data<ov::element_type_traits<ov::element::f16>::value_type>();
     ov::parallel_for(scales_arr.get_size(), [&](size_t i) {
         scales[i] = ov::float16::from_bits(*((uint16_t*)(data + i * bytes_per_block)));
-        biases[i] = ov::float16::from_bits(*((uint16_t*)(data + i * bytes_per_block + 1)));
-        unpack_32_4(data + i * bytes_per_block, weights + i * 16);
+        biases[i] = ov::float16::from_bits(*((uint16_t*)(data + i * bytes_per_block + 2)));
+        unpack_32_4(data + i * bytes_per_block + 4, weights + i * 16);
     });
 }
 
