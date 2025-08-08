@@ -2624,10 +2624,10 @@ ggml_backend_t ggml_backend_opencl_init(void) {
     ggml_backend_opencl_context *backend_ctx = ggml_cl2_init(dev);
 
     ggml_backend_t backend = new ggml_backend {
-        /* .guid      = */ ggml_backend_opencl_guid(),
-        /* .interface = */ ggml_backend_opencl_i,
-        /* .device    = */ dev,
-        /* .context   = */ backend_ctx
+        /* .guid    = */ ggml_backend_opencl_guid(),
+        /* .iface   = */ ggml_backend_opencl_i,
+        /* .device  = */ dev,
+        /* .context = */ backend_ctx
     };
 
     return backend;

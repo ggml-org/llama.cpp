@@ -10767,10 +10767,10 @@ ggml_backend_t ggml_backend_vk_init(size_t dev_num) {
     ggml_vk_init(ctx, dev_num);
 
     ggml_backend_t vk_backend = new ggml_backend {
-        /* .guid      = */ ggml_backend_vk_guid(),
-        /* .interface = */ ggml_backend_vk_interface,
-        /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), dev_num),
-        /* .context   = */ ctx,
+        /* .guid    = */ ggml_backend_vk_guid(),
+        /* .iface   = */ ggml_backend_vk_interface,
+        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_vk_reg(), dev_num),
+        /* .context = */ ctx,
     };
 
     return vk_backend;
