@@ -279,7 +279,7 @@ def benchmark(
     plt.scatter(prompt_n, 1e3 * prompt_t, s=10.0, marker=".", alpha=0.25)
     plt.xlim(0, 1.05e0 * np.max(prompt_n))
     plt.ylim(0, 1.05e3 * np.max(prompt_t))
-    plt.title(name)
+    plt.title(name or "")
     plt.xlabel("Prompt length [tokens]")
     plt.ylabel("Time to first token [ms]")
     plt.savefig("prompt_time.png", dpi=240)
