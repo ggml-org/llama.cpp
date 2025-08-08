@@ -2,10 +2,13 @@
 	import { remark } from 'remark';
 	import remarkBreaks from 'remark-breaks';
 	import remarkGfm from 'remark-gfm';
+	import remarkMath from 'remark-math';
 	import rehypeHighlight from 'rehype-highlight';
 	import remarkRehype from 'remark-rehype';
+	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
 	import 'highlight.js/styles/github-dark.css';
+	import 'katex/dist/katex.min.css';
 
 	interface Props {
 		content: string;
@@ -20,8 +23,10 @@
 	let processor = $derived(() => {
 		return remark()
 			.use(remarkGfm) // GitHub Flavored Markdown
+			.use(remarkMath) // Parse $inline$ and $$block$$ math
 			.use(remarkBreaks) // Convert line breaks to <br>
 			.use(remarkRehype) // Convert to rehype (HTML AST)
+			.use(rehypeKatex) // Render math using KaTeX
 			.use(rehypeHighlight) // Add syntax highlighting
 			.use(rehypeStringify); // Convert to HTML string
 	});
