@@ -288,7 +288,7 @@ def benchmark(
     plt.figure()
     plt.hist(token_t, np.arange(0, bin_max))
     plt.xlim(0, bin_max + 1)
-    plt.title(name)
+    plt.title(name or "")
     plt.xlabel("Time [s]")
     plt.ylabel("Num. tokens generated per second")
     plt.savefig("gen_rate.png", dpi=240)
