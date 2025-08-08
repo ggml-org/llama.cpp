@@ -2503,9 +2503,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             if (op->src[2]) {
                 return false;
             }
-            // TODO: support broadcast
-            // ref: https://github.com/ggml-org/llama.cpp/pull/14435
-            return !op->src[1] || (op->src[1]->ne[2] == 1 && op->src[1]->ne[3] == 1);
+            return true;
         case GGML_OP_FLASH_ATTN_EXT:{
             // derived from [ggml-cuda.cu]
             if(op->src[1]->type != GGML_TYPE_F16 || op->src[2]->type != GGML_TYPE_F16){
