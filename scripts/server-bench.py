@@ -92,15 +92,13 @@ def get_prompt_length(data: dict) -> int:
         f"{server_address}/apply-template",
         json={"messages": [{"role": "user", "content": data["prompt"], "stream": True}]}
     )
-    if response.status_code != 200:
-        raise RuntimeError(f"Server returned status code {response.status_code}: {response.text}")
+    response.raise_for_status()
     prompt: str = json.loads(response.text)["prompt"]
     response = session.post(
         f"{server_address}/tokenize",
         json={"content": prompt, "add_special": True}
     )
-    if response.status_code != 200:
-        raise RuntimeError(f"Server returned status code {response.status_code}: {response.text}")
+    response.raise_for_status()
     tokens: list[str] = json.loads(response.text)["tokens"]
     return len(tokens)
 
@@ -125,18 +123,12 @@ def send_prompt(data: dict) -> tuple[float, list[float]]:
             f"{server_address}/apply-template",
             json={"messages": [{"role": "user", "content": data["prompt"], "stream": True}]}
         )
-        if response.status_code != 200:
-            response_text = ""
-            try:
-                response_text = response.text
-                response_text = ": {response_text}"
-            except RuntimeError:
-                pass
-            raise RuntimeError(f"Server returned status code {response.status_code}{response_text}")
+        response.raise_for_status()
         prompt: str = json.loads(response.text)["prompt"]
 
         json_data: dict = {"prompt": prompt, "seed": data["seed"], "n_predict": data["n_predict"], "stream": True}
         response = session.post(f"{server_address}/completion", json=json_data, stream=True)
+    response.raise_for_status()
 
     lines = []
     token_arrival_times: list[float] = []
@@ -148,15 +140,6 @@ def send_prompt(data: dict) -> tuple[float, list[float]]:
     token_arrival_times = token_arrival_times[:-1]
     if len(lines) > 1 and "timings" in json.loads(lines[-2][6:]):
         token_arrival_times = token_arrival_times[:-1]
-
-    if response.status_code != 200:
-        response_text = ""
-        try:
-            response_text = response.text
-            response_text = ": {response_text}"
-        except RuntimeError:
-            pass
-        raise RuntimeError(f"Server returned status code {response.status_code}{response_text}")
 
     return (t_submit, token_arrival_times)
 
