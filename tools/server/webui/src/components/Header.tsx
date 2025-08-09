@@ -4,11 +4,7 @@ import { useAppContext } from '../utils/app.context';
 import { classNames } from '../utils/misc';
 import daisyuiThemes from 'daisyui/theme/object';
 import { THEMES } from '../Config';
-import {
-  Cog8ToothIcon,
-  MoonIcon,
-  Bars3Icon,
-} from '@heroicons/react/24/outline';
+import { Cog8ToothIcon, Bars3Icon } from '@heroicons/react/24/outline';
 
 export default function Header() {
   const [selectedTheme, setSelectedTheme] = useState(StorageUtils.getTheme());
@@ -72,34 +68,50 @@ export default function Header() {
               role="button"
               className="btn btn-ghost m-1 w-8 h-8 p-0 rounded-full"
             >
-              <MoonIcon className="w-5 h-5" />
+              <div className="bg-base-100 grid shrink-0 grid-cols-2 gap-1 rounded-md p-1 shadow-sm">
+                <div className="bg-base-content size-1 rounded-full"></div>{' '}
+                <div className="bg-primary size-1 rounded-full"></div>{' '}
+                <div className="bg-secondary size-1 rounded-full"></div>{' '}
+                <div className="bg-accent size-1 rounded-full"></div>
+              </div>
             </div>
             <ul
               tabIndex={0}
-              className="dropdown-content bg-base-300 rounded-box z-[1] w-52 p-2 shadow-2xl h-80 overflow-y-auto"
+              className="dropdown-content rounded-box z-[1] w-50 p-2 shadow-2xl h-80 text-sm overflow-y-auto"
             >
               <li>
                 <button
                   className={classNames({
-                    'btn btn-sm btn-block btn-ghost justify-start': true,
+                    'flex gap-3 p-2 btn btn-sm btn-ghost': true,
                     'btn-active': selectedTheme === 'auto',
                   })}
                   onClick={() => setTheme('auto')}
                 >
-                  auto
+                  <div className="w-32 ml-6 pl-1 truncate text-left">auto</div>
                 </button>
               </li>
               {THEMES.map((theme) => (
                 <li key={theme}>
-                  <input
-                    type="radio"
-                    name="theme-dropdown"
-                    className="theme-controller btn btn-sm btn-block btn-ghost justify-start"
-                    aria-label={theme}
-                    value={theme}
-                    checked={selectedTheme === theme}
-                    onChange={(e) => e.target.checked && setTheme(theme)}
-                  />
+                  <button
+                    className={classNames({
+                      'flex gap-3 p-2 btn btn-sm btn-ghost': true,
+                      'btn-active': selectedTheme === theme,
+                    })}
+                    data-set-theme={theme}
+                    data-act-class="[&amp;_svg]:visible"
+                    onClick={() => setTheme(theme)}
+                  >
+                    <div
+                      data-theme={theme}
+                      className="bg-base-100 grid shrink-0 grid-cols-2 gap-0.5 rounded-md p-1 shadow-sm"
+                    >
+                      <div className="bg-base-content size-1 rounded-full"></div>{' '}
+                      <div className="bg-primary size-1 rounded-full"></div>{' '}
+                      <div className="bg-secondary size-1 rounded-full"></div>{' '}
+                      <div className="bg-accent size-1 rounded-full"></div>
+                    </div>
+                    <div className="w-32 truncate text-left">{theme}</div>
+                  </button>
                 </li>
               ))}
             </ul>
