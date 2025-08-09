@@ -1328,12 +1328,16 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     
     if (end_pos != std::string::npos) {
         // Content is everything from current position to <|end|>
-        auto content = builder.input().substr(builder.pos(), end_pos - builder.pos());
         if (!builder.syntax().parse_tool_calls) {
+            auto content = builder.input().substr(builder.pos(), end_pos - builder.pos());
             builder.add_content(content);
+            builder.move_to(end_pos);
+        } else {
+            // When parse_tool_calls=true, we still need to consume the content
+            // but don't add it to the result
+            builder.move_to(end_pos);
         }
-        // Move to the <|end|> token and consume it
-        builder.move_to(end_pos);
+        // Consume the <|end|> token
         builder.consume_literal("<|end|>");
     } else {
         // No <|end|> token, consume everything remaining
