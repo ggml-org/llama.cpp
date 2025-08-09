@@ -109,10 +109,8 @@
 		if (!containerRef) return;
 
 		const copyButtons = containerRef.querySelectorAll('.copy-code-btn');
-		console.log('Found copy buttons:', copyButtons.length);
 
 		for (const [index, button] of Array.from(copyButtons).entries()) {
-			console.log(`Setting up button ${index}:`, button);
 			button.addEventListener('click', async (e) => {
 				e.preventDefault();
 				e.stopPropagation();
@@ -147,7 +145,6 @@
 				try {
 					const { copyCodeToClipboard } = await import('$lib/utils/copy');
 					await copyCodeToClipboard(rawCode);
-					console.log('Code copied successfully');
 				} catch (error) {
 					console.error('Failed to copy code:', error);
 				}
