@@ -82,11 +82,11 @@ static __global__ void flash_attn_ext_f16(
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
-    const float * Q_f   = (const float *) (Q    + nb03* sequence         + nb02* head              + nb01*ic0);
-    const half  * K_h   = (const half  *) (K    + nb13* sequence         + nb12*(head / gqa_ratio));
-    const half  * V_h   = (const half  *) (V    + nb13* sequence         + nb12*(head / gqa_ratio)); // K and V have same shape
-    const half  * maskh = (const half  *) (mask + nb33*(sequence % ne33)                           + nb31*ic0);
-    const half2 * mask2 = (const half2 *)  maskh;
+    const float * Q_f    = (const float *) (Q    + nb03* sequence         + nb02* head              + nb01*ic0);
+    const half  * K_h    = (const half  *) (K    + nb13* sequence         + nb12*(head / gqa_ratio));
+    const half  * V_h    = (const half  *) (V    + nb13* sequence         + nb12*(head / gqa_ratio)); // K and V have same shape
+    const half  * maskh  = (const half  *) (mask + nb33*(sequence % ne33)                           + nb31*ic0);
+    const half2 * mask2  = (const half2 *)  maskh;
     const float * sinksf = (const float *) sinks;
 
     const int stride_Q  = nb01 / sizeof(float);
@@ -387,13 +387,12 @@ static __global__ void flash_attn_ext_f16(
         const float sinkf = sinksf[head];
         const half  sinkh = __float2half(sinkf);
 
-        #pragma unroll
+#pragma unroll
         for (int j0 = 0; j0 < ncols; j0 += nwarps) {
             const int j = j0 + threadIdx.y;
 
             if (std::is_same<KQ_acc_t, float>::value) {
                 float kqmax_new = fmaxf(KQ_max_f[j0/nwarps], sinkf);
-                kqmax_new = warp_reduce_max<warp_size>(kqmax_new);
 
                 const float KQ_max_scale = expf(KQ_max_f[j0/nwarps] - kqmax_new);
                 KQ_max_f[j0/nwarps] = kqmax_new;
@@ -401,7 +400,7 @@ static __global__ void flash_attn_ext_f16(
                 KQ_rowsum_f[j0/nwarps] = KQ_rowsum_f[j0/nwarps] * KQ_max_scale + expf(sinkf - KQ_max_f[j0/nwarps]);
 
                 const half2 scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
-                #pragma unroll
+#pragma unroll
                 for (int i0 = 0; i0 < D/2; i0 += warp_size) {
                     const int i = i0 + threadIdx.x;
                     if (i0 + warp_size > D/2 && i >= D/2) break;
@@ -410,7 +409,6 @@ static __global__ void flash_attn_ext_f16(
             } else {
                 half kqmax_old = __low2half(KQ_max_h2[j0/nwarps]);
                 half kqmax_new = fmaxf(kqmax_old, sinkh);
-                kqmax_new = warp_reduce_max<warp_size>(kqmax_new);
                 KQ_max_h2[j0/nwarps] = __half2half2(kqmax_new);
 
                 const half  KQ_max_scale_h = hexp(kqmax_old - kqmax_new);
@@ -420,7 +418,7 @@ static __global__ void flash_attn_ext_f16(
                 const half val = hexp(sinkh - kqmax_new);
                 KQ_rowsum_h2[j0/nwarps].x = __hadd(KQ_rowsum_h2[j0/nwarps].x, val);
 
-                #pragma unroll
+#pragma unroll
                 for (int i0 = 0; i0 < D/2; i0 += warp_size) {
                     const int i = i0 + threadIdx.x;
                     if (i0 + warp_size > D/2 && i >= D/2) break;
