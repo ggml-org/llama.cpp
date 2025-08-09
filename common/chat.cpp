@@ -1342,24 +1342,60 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
-            std::vector<std::string> tool_rules;
+            // tool calls can appear in commentary or analysis channels
+            auto channel = builder.add_rule("channel", "\"<|channel|>\" ( \"commentary\" | \"analysis\" )");
+
+            std::vector<std::string> tool_rules_recipient_in_role;
+            std::vector<std::string> tool_rules_recipient_in_channel;
             foreach_function(inputs.tools, [&](const json & tool) {
                 const auto & function = tool.at("function");
                 std::string name = function.at("name");
                 auto parameters = function.at("parameters");
                 builder.resolve_refs(parameters);
 
-                tool_rules.push_back(builder.add_rule(name + "-call",
-                    "\"" + name + "\"" + " space \"<|constrain|>\"? \"json\" space \"<|message|>\" " + builder.add_schema(name + "-args", parameters)
-                ));
+                tool_rules_recipient_in_role.push_back(
+                    builder.add_rule(name + "-call",
+                        "\"" + name + "\"" + channel + " \" <|constrain|>json\"? \"<|message|>\" " +
+                        builder.add_schema(name + "-args", parameters)
+                    )
+                );
+
+                tool_rules_recipient_in_channel.push_back(
+                    builder.add_rule(name + "-call",
+                        "\"" + name + "\"" + " \" <|constrain|>json\"? \"<|message|>\" " +
+                        builder.add_schema(name + "-args", parameters)
+                    )
+                );
             });
 
-            auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
-            builder.add_rule("root", "\"<|channel|>commentary to=functions.\" " + tool_call);
+            auto recipient_in_role = builder.add_rule("recipient_in_role",
+                "\"<|start|>assistant\"? \" to=functions.\" " +
+                string_join(tool_rules_recipient_in_role, " | ")
+            );
+
+            auto recipient_in_channel = builder.add_rule("recipient_in_channel",
+                channel + " \" to=functions.\" " +
+                string_join(tool_rules_recipient_in_channel, " | ")
+            );
+
+            builder.add_rule("root", recipient_in_role + " | " + recipient_in_channel);
+
+            // Trigger on tool calls that appear in the commentary channel
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
+                "<\\|channel\\|>(commentary|analysis) to"
+            });
+
+            // Trigger tool calls that appear in the role section, either at the
+            // start or in the middle.
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                "^ to"
+            });
 
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-                "<\\|channel\\|>commentary to"
+                "<\\|start\\|>assistant to"
             });
 
             data.preserved_tokens = {
@@ -1377,12 +1413,12 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     static const common_regex message_regex("<\\|message\\|>");
     static const common_regex channel_regex("<\\|channel\\|>(final|analysis|commentary)");
+    static const common_regex tool_call_channel_regex("<\\|channel\\|>(commentary|analysis)");
     static const common_regex start_regex("<\\|start\\|>assistant");
     static const common_regex end_regex("<\\|end\\|>");
     static const common_regex to_regex(" to=");
-    static const common_regex user_tool_call_regex(
-        "functions\\.([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?:(?:<\\|constrain\\|>)?([a-zA-Z]+))?\\s*<\\|message\\|>"
-    );
+    static const common_regex function_regex("functions\\.([a-zA-Z_][a-zA-Z0-9_]*)");
+    static const common_regex user_tool_call_regex("(?: <\\|constrain\\|>([a-zA-Z]+))?<\\|message\\|>");
     static const common_regex builtin_tool_call_regex("(?:browser|python)[\\s\\S]*<\\|message\\|>");
 
     // Save the start of the message so we can roll back when we encounter a tool call and parse_tool_calls == false.
@@ -1410,7 +1446,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
         return false;
     };
 
-    auto tool_call = [&]() {
+    auto tool_call = [&](bool recipient_in_role) {
         if (!builder.syntax().parse_tool_calls) {
             // Move back to the start and consume up to the next message
             builder.move_to(message_start_pos);
@@ -1418,24 +1454,35 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
             return;
         }
 
-        if (auto res = builder.try_consume_regex(user_tool_call_regex)) {
+        if (auto res = builder.try_consume_regex(function_regex)) {
             auto name = builder.str(res->groups[1]);
-            if (auto args = builder.try_consume_json_with_dumped_args({{}})) {
-                if (!builder.add_tool_call(name, "", args->value) || args->is_partial) {
-                    throw common_chat_msg_partial_exception("incomplete tool call");
+
+            if (recipient_in_role) {
+                if (!builder.try_consume_regex(tool_call_channel_regex)) {
+                    throw common_chat_msg_parse_exception("expected <|channel|>(commentary|analysis), got: " + consume_until_next());
                 }
+            }
+
+            if (builder.try_consume_regex(user_tool_call_regex)) {
+                if (auto args = builder.try_consume_json_with_dumped_args({{}})) {
+                    if (!builder.add_tool_call(name, "", args->value) || args->is_partial) {
+                        throw common_chat_msg_partial_exception("incomplete tool call");
+                    }
+                }
+            } else {
+                throw common_chat_msg_parse_exception("expected function args, got: " + consume_until_next());
             }
         } else if (builder.try_consume_regex(builtin_tool_call_regex)) {
             builder.consume_rest();
             LOG_ERR("builtin tool calls not implemented\n");
         } else {
-            throw common_chat_msg_parse_exception("expected function call, got: " + consume_until_next());
+            throw common_chat_msg_parse_exception("expected function name, got: " + consume_until_next());
         }
     };
 
     auto commentary = [&]() {
         if (builder.try_consume_regex(to_regex)) {
-            tool_call();
+            tool_call(false);
         } else if (!try_consume_message()) {
             throw common_chat_msg_parse_exception("expected: \" to=\" or <|message|>, got: " + consume_until_next());
         }
@@ -1443,7 +1490,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 
     auto analysis = [&]() {
         if (builder.try_consume_regex(to_regex)) {
-            tool_call(); // built-in tools can be called in the analysis channel
+            tool_call(false); // built-in tools can be called in the analysis channel
         } else if (builder.try_consume_regex(message_regex)) {
             // Defer reasoning parsing to builder
             builder.move_to(channel_start_pos);
@@ -1458,26 +1505,34 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
         }
     };
 
-    auto channel = [&]() {
-        if (auto res = builder.try_consume_regex(channel_regex)) {
-            channel_start_pos = res->groups[0].begin;
-            auto type = builder.str(res->groups[1]);
-            if (type == "analysis") {
-                analysis();
-            } else if (type == "commentary") {
-                commentary();
-            } else if (type == "final") {
-                if (!try_consume_message()) {
-                    throw common_chat_msg_parse_exception("expected: <|message|>, got: " + consume_until_next());
-                }
+    auto channel = [&](const common_chat_msg_parser::find_regex_result & match) {
+        auto type = builder.str(match.groups[1]);
+        if (type == "analysis") {
+            analysis();
+        } else if (type == "commentary") {
+            commentary();
+        } else if (type == "final") {
+            if (!try_consume_message()) {
+                throw common_chat_msg_parse_exception("expected: <|message|>, got: " + consume_until_next());
             }
         } else {
-            throw common_chat_msg_parse_exception("expected: <|channel|>, got: " + consume_until_next());
+            throw common_chat_msg_parse_exception("expected one of: [analysis, commentary, final], got: " + consume_until_next());
+        }
+    };
+
+    auto message = [&]() {
+        if (auto res = builder.try_consume_regex(channel_regex)) {
+            channel_start_pos = res->groups[0].begin;
+            channel(*res);
+        } else if (builder.try_consume_regex(to_regex)) {
+            tool_call(true);
+        } else {
+            throw common_chat_msg_parse_exception("expected: <|channel|> or \" to\", got: " + consume_until_next());
         }
     };
 
     try {
-        channel();
+        message();
     } catch (const common_chat_msg_parse_exception & e) {
         LOG_DBG("Parse error: %s\n", e.what());
     }
@@ -1486,7 +1541,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     while (auto res = builder.try_consume_regex(start_regex)) {
         message_start_pos = res->groups[0].begin;
         try {
-            channel();
+            message();
         } catch (const common_chat_msg_parse_exception & e) {
             LOG_DBG("Parse error: %s\n", e.what());
         }
