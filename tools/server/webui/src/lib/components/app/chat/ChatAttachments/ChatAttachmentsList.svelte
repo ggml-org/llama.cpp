@@ -91,7 +91,9 @@
 					name: attachment.name,
 					preview: attachment.base64Url,
 					type: 'image',
-					isImage: true
+					isImage: true,
+					attachment,
+					attachmentIndex: index
 				});
 			} else if (attachment.type === 'textFile') {
 				items.push({
@@ -108,7 +110,9 @@
 					id: `attachment-${index}`,
 					name: attachment.name,
 					type: attachment.mimeType || 'audio',
-					isImage: false
+					isImage: false,
+					attachment,
+					attachmentIndex: index
 				});
 			} else if (attachment.type === 'pdfFile') {
 				items.push({

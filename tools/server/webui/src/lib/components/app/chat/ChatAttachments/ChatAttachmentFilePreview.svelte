@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { X } from '@lucide/svelte';
+	import { stopPropagation } from 'svelte/legacy';
 
 	interface Props {
 		class?: string;
@@ -115,19 +116,20 @@
 		</div>
 	{/if}
 {:else}
-	<div class="bg-muted border-border flex items-center gap-2 rounded-lg border p-2 {className}">
+	<button class="bg-muted border-border flex gap-3 items-center gap-2 rounded-lg border p-3 {className}" 
+			onclick={onClick}>
 		<div
 			class="bg-primary/10 text-primary flex h-8 w-8 items-center justify-center rounded text-xs font-medium"
 		>
 			{getFileTypeLabel(type)}
 		</div>
 
-		<div class="flex flex-col">
+		<div class="flex flex-col gap-1">
 			<span class="text-foreground max-w-36 truncate text-sm font-medium md:max-w-72"
 				>{name}</span
 			>
 			{#if size}
-				<span class="text-muted-foreground text-xs">{formatFileSize(size)}</span>
+				<span class="text-left text-muted-foreground text-xs">{formatFileSize(size)}</span>
 			{/if}
 		</div>
 
@@ -137,10 +139,13 @@
 				variant="ghost"
 				size="sm"
 				class="h-6 w-6 p-0"
-				onclick={() => onRemove?.(id)}
+				onclick={(e) => {
+					e.stopPropagation();
+					onRemove?.(id);
+				}}
 			>
 				<X class="h-3 w-3" />
 			</Button>
 		{/if}
-	</div>
+		</button>
 {/if}

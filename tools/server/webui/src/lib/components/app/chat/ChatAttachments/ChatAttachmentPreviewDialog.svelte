@@ -1,6 +1,8 @@
 <script lang="ts">
 	import * as Dialog from '$lib/components/ui/dialog';
-	import { FileText, Image, Music, FileIcon } from '@lucide/svelte';
+	import { FileText, Image, Music, FileIcon, Eye } from '@lucide/svelte';
+	import { convertPDFToImage } from '$lib/utils/pdf-processing';
+	import { Button } from '$lib/components/ui/button';
 
 	interface Props {
 		open: boolean;
@@ -62,6 +64,12 @@
 	let isPdf = $derived(displayType === 'application/pdf');
 	let isAudio = $derived(displayType.startsWith('audio/') || displayType === 'audio');
 
+	// PDF preview state
+	let pdfViewMode = $state<'text' | 'pages'>('pages'); // Default to pages view
+	let pdfImages = $state<string[]>([]);
+	let pdfImagesLoading = $state(false);
+	let pdfImagesError = $state<string | null>(null);
+
 	let IconComponent = $derived(() => {
 		if (isImage) return Image;
 		if (isText || isPdf) return FileText;
@@ -78,12 +86,74 @@
 
 		return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 	}
+
+	async function loadPdfImages() {
+		if (!isPdf || pdfImages.length > 0 || pdfImagesLoading) return;
+		
+		if (import.meta.env.DEV) console.log('Loading PDF images...', { isPdf, attachment, uploadedFile });
+		
+		pdfImagesLoading = true;
+		pdfImagesError = null;
+		
+		try {
+			let file: File | null = null;
+			
+			if (uploadedFile?.file) {
+				if (import.meta.env.DEV) console.log('Using uploaded file:', uploadedFile.file);
+				file = uploadedFile.file;
+			} else if (attachment?.type === 'pdfFile') {
+				if (import.meta.env.DEV) console.log('Processing stored PDF attachment:', attachment);
+				
+				// Check if we have pre-processed images
+				if ((attachment as any).images && Array.isArray((attachment as any).images)) {
+					if (import.meta.env.DEV) console.log('Using pre-processed PDF images:', (attachment as any).images.length);
+					pdfImages = (attachment as any).images;
+					return;
+				}
+				
+				// Convert base64 back to File for processing
+				if ((attachment as any).base64Data) {
+					const base64Data = (attachment as any).base64Data;
+					const byteCharacters = atob(base64Data);
+					const byteNumbers = new Array(byteCharacters.length);
+					for (let i = 0; i < byteCharacters.length; i++) {
+						byteNumbers[i] = byteCharacters.charCodeAt(i);
+					}
+					const byteArray = new Uint8Array(byteNumbers);
+					file = new File([byteArray], displayName, { type: 'application/pdf' });
+					if (import.meta.env.DEV) console.log('Created file from base64 data, size:', file.size);
+				}
+			}
+			
+			if (file) {
+				if (import.meta.env.DEV) console.log('Converting PDF to images...');
+				const images = await convertPDFToImage(file);
+				if (import.meta.env.DEV) console.log('PDF conversion successful, got', images.length, 'images');
+				pdfImages = images;
+			} else {
+				throw new Error('No PDF file available for conversion');
+			}
+		} catch (error) {
+			if (import.meta.env.DEV) console.error('Failed to convert PDF to images:', error);
+			pdfImagesError = error instanceof Error ? error.message : 'Failed to load PDF images';
+			// Don't automatically fallback to text view, let user choose
+		} finally {
+			pdfImagesLoading = false;
+		}
+	}
+
+	// Load PDF images when dialog opens and it's a PDF
+	$effect(() => {
+		if (open && isPdf && pdfViewMode === 'pages') {
+			loadPdfImages();
+		}
+	});
 </script>
 
 <Dialog.Root bind:open>
-	<Dialog.Content class="grid max-h-[90vh] max-w-4xl overflow-hidden sm:w-auto sm:max-w-6xl">
+	<Dialog.Content class="grid max-h-[90vh] !p-10 max-w-5xl overflow-hidden sm:w-auto sm:max-w-6xl">
 		<Dialog.Header class="flex-shrink-0">
-			<div class="flex items-center space-x-4">
+			<div class="flex items-center justify-between">
 				<div class="flex items-center gap-3">
 					{#if IconComponent}
 						<IconComponent class="text-muted-foreground h-5 w-5" />
@@ -101,32 +171,117 @@
 						</div>
 					</div>
 				</div>
+
+				{#if isPdf}
+					<div class="flex items-center gap-2">
+						<Button
+							variant={pdfViewMode === 'text' ? 'default' : 'outline'}
+							size="sm"
+							onclick={() => pdfViewMode = 'text'}
+							disabled={pdfImagesLoading}
+						>
+							<FileText class="h-4 w-4 mr-1" />
+							Text
+						</Button>
+						<Button
+							variant={pdfViewMode === 'pages' ? 'default' : 'outline'}
+							size="sm"
+							onclick={() => { pdfViewMode = 'pages'; loadPdfImages(); }}
+							disabled={pdfImagesLoading}
+						>
+							{#if pdfImagesLoading}
+								<div class="h-4 w-4 mr-1 animate-spin rounded-full border-2 border-current border-t-transparent"></div>
+							{:else}
+								<Eye class="h-4 w-4 mr-1" />
+							{/if}
+							Pages
+						</Button>
+					</div>
+				{/if}
 			</div>
 		</Dialog.Header>
 
 		<div class="flex-1 overflow-auto">
 			{#if isImage && displayPreview}
-				<div class="flex items-center justify-center p-4">
+				<div class="flex items-center justify-center">
 					<img
 						src={displayPreview}
 						alt={displayName}
 						class="max-h-full rounded-lg object-contain shadow-lg"
 					/>
 				</div>
-			{:else if (isText || isPdf) && displayTextContent}
-				<div class="p-4">
-					<div
-						class="bg-muted max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-lg p-4 font-mono text-sm"
-					>
-						{displayTextContent}
+			{:else if isPdf && pdfViewMode === 'pages'}
+				{#if pdfImagesLoading}
+					<div class="flex items-center justify-center p-8">
+						<div class="text-center">
+							<div class="h-8 w-8 mx-auto mb-4 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+							<p class="text-muted-foreground">Converting PDF to images...</p>
+						</div>
 					</div>
+				{:else if pdfImagesError}
+					<div class="flex items-center justify-center p-8">
+						<div class="text-center">
+							<FileText class="text-muted-foreground mx-auto mb-4 h-16 w-16" />
+							<p class="text-muted-foreground mb-4">Failed to load PDF images</p>
+							<p class="text-muted-foreground text-sm">{pdfImagesError}</p>
+							<Button class="mt-4" onclick={() => { pdfViewMode = 'text'; }}>View as Text</Button>
+						</div>
+					</div>
+				{:else if pdfImages.length > 0}
+					<div class="max-h-[70vh] overflow-auto space-y-4">
+						{#each pdfImages as image, index}
+							<div class="text-center">
+								<p class="text-muted-foreground mb-2 text-sm">Page {index + 1}</p>
+								<img
+									src={image}
+									alt="PDF Page {index + 1}"
+									class="mx-auto max-w-full rounded-lg shadow-lg"
+								/>
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<div class="flex items-center justify-center p-8">
+						<div class="text-center">
+							<FileText class="text-muted-foreground mx-auto mb-4 h-16 w-16" />
+							<p class="text-muted-foreground mb-4">No PDF pages available</p>
+						</div>
+					</div>
+				{/if}
+			{:else if (isText || (isPdf && pdfViewMode === 'text')) && displayTextContent}
+				<div
+					class="bg-muted max-h-[60vh] overflow-auto whitespace-pre-wrap break-words rounded-lg p-4 font-mono text-sm"
+				>
+					{displayTextContent}
 				</div>
-			{:else if isAudio && attachment?.type === 'audioFile'}
+			{:else if isAudio}
 				<div class="flex items-center justify-center p-8">
-					<div class="text-center">
+					<div class="w-full max-w-md text-center">
 						<Music class="text-muted-foreground mx-auto mb-4 h-16 w-16" />
-
-						<p class="text-muted-foreground mb-4">Audio file preview not available</p>
+						
+						{#if attachment?.type === 'audioFile'}
+							<audio 
+								controls 
+								class="w-full mb-4"
+								src="data:{(attachment as any).mimeType};base64,{(attachment as any).base64Data}"
+							>
+								Your browser does not support the audio element.
+							</audio>
+						{:else if uploadedFile?.preview}
+							<audio 
+								controls 
+								class="w-full mb-4"
+								src={uploadedFile.preview}
+							>
+								Your browser does not support the audio element.
+							</audio>
+						{:else}
+							<p class="text-muted-foreground mb-4">Audio preview not available</p>
+						{/if}
+						
+						<p class="text-muted-foreground text-sm">
+							{displayName}
+						</p>
 					</div>
 				</div>
 			{:else}
