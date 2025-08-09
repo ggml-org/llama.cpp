@@ -1,8 +1,12 @@
 export interface ApiChatMessageContentPart {
-	type: 'text' | 'image_url';
+	type: 'text' | 'image_url' | 'input_audio';
 	text?: string;
 	image_url?: {
 		url: string;
+	};
+	input_audio?: {
+		data: string;
+		format: 'wav' | 'mp3';
 	};
 }
 

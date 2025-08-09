@@ -282,6 +282,7 @@ export class ChatService {
 
 		// Add image files
 		const imageFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraImageFile => extra.type === 'imageFile');
+
 		for (const image of imageFiles) {
 			contentParts.push({
 				type: 'image_url',
@@ -291,6 +292,7 @@ export class ChatService {
 
 		// Add text files as additional text content
 		const textFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraTextFile => extra.type === 'textFile');
+
 		for (const textFile of textFiles) {
 			contentParts.push({
 				type: 'text',
@@ -298,8 +300,22 @@ export class ChatService {
 			});
 		}
 
+		// Add audio files
+		const audioFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraAudioFile => extra.type === 'audioFile');
+
+		for (const audio of audioFiles) {
+			contentParts.push({
+				type: 'input_audio',
+				input_audio: {
+					data: audio.base64Data,
+					format: audio.mimeType.includes('wav') ? 'wav' : 'mp3'
+				}
+			});
+		}
+
 		// Add PDF files as text content
 		const pdfFiles = message.extra.filter((extra: DatabaseMessageExtra): extra is DatabaseMessageExtraPdfFile => extra.type === 'pdfFile');
+
 		for (const pdfFile of pdfFiles) {
 			if (pdfFile.processedAsImages && pdfFile.images) {
 				// If PDF was processed as images, add each page as an image

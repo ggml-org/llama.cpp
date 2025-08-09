@@ -65,8 +65,12 @@ export async function processFilesToChatUploaded(files: File[]): Promise<ChatUpl
 			} else if (isPdfMimeType(file.type)) {
 				// PDFs handled later when building extras; keep metadata only
 				results.push(base);
+			} else if (file.type.startsWith('audio/')) {
+				// Generate preview URL for audio files
+				const preview = await readFileAsDataURL(file);
+				results.push({ ...base, preview });
 			} else {
-				// Other files: add as-is (audio, etc.)
+				// Other files: add as-is
 				results.push(base);
 			}
 		} catch (error) {
