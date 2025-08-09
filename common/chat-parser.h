@@ -15,6 +15,11 @@ class common_chat_msg_partial_exception : public std::runtime_error {
     common_chat_msg_partial_exception(const std::string & message) : std::runtime_error(message) {}
 };
 
+class common_chat_msg_parse_exception : public std::runtime_error {
+  public:
+    common_chat_msg_parse_exception(const std::string & message) : std::runtime_error(message) {}
+};
+
 class common_chat_msg_parser {
     std::string input_;
     bool is_partial_;

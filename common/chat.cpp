@@ -296,6 +296,7 @@ json common_chat_msgs_to_json_oaicompat(const std::vector<common_chat_msg> & msg
         }
         if (!msg.reasoning_content.empty()) {
             jmsg["reasoning_content"] = msg.reasoning_content;
+            jmsg["thinking"] = msg.reasoning_content; // gpt-oss
         }
         if (!msg.tool_name.empty()) {
             jmsg["name"] = msg.tool_name;
@@ -1338,17 +1339,160 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_GPT_OSS;
 
-    // TODO: support tool calls in GPT-OSS?
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+
+                tool_rules.push_back(builder.add_rule(name + "-call",
+                    "\"" + name + "\"" + " space \"<|constrain|>\"? \"json\" space \"<|message|>\" " + builder.add_schema(name + "-args", parameters)
+                ));
+            });
+
+            auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
+            builder.add_rule("root", "\"<|channel|>commentary\" space \"to=functions.\" " + tool_call);
+
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
+                "<\\|channel\\|>commentary\\s+to=functions\\."
+            });
+
+            data.preserved_tokens = {
+                "<|channel|>",
+                "<|constrain|>",
+                "<|message|>",
+                "<|start|>",
+                "<|end|>",
+            };
+        });
+    }
 
     return data;
 }
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
-    // TODO @ngxson : this won't work with --special enabled, we should fix that
-    builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
-    if (!builder.syntax().parse_tool_calls) {
-        builder.add_content(builder.consume_rest());
-        return;
+    static const common_regex message_regex("<\\|message\\|>");
+    static const common_regex channel_regex("<\\|channel\\|>(final|analysis|commentary)");
+    static const common_regex start_regex("<\\|start\\|>assistant");
+    static const common_regex end_regex("<\\|end\\|>");
+    static const common_regex to_regex(" to=");
+    static const common_regex user_tool_call_regex(
+        "functions\\.([a-zA-Z_][a-zA-Z0-9_]*)\\s*(?:(?:<\\|constrain\\|>)?([a-zA-Z]+))?\\s*<\\|message\\|>"
+    );
+    static const common_regex builtin_tool_call_regex("(?:browser|python)[\\s\\S]*<\\|message\\|>");
+
+    // Save the start of the message so we can roll back when we encounter a tool call and parse_tool_calls == false.
+    size_t message_start_pos = 0;
+
+    // Similarly, save the channel start so we can roll back to defer reasoning parsing to builder.
+    size_t channel_start_pos = 0;
+
+    auto consume_until_next = [&](size_t from = std::string::npos) {
+        if (auto res = builder.try_find_regex(start_regex, from, false)) {
+            auto begin = res->groups[0].begin;
+            builder.move_to(begin);
+            return res->prelude;
+        }
+        return builder.consume_rest();
+    };
+
+    auto try_consume_message = [&]() {
+        if (builder.try_consume_regex(message_regex)) {
+            if (!builder.try_find_regex(end_regex)) {
+                builder.add_content(builder.consume_rest());
+            }
+            return true;
+        }
+        return false;
+    };
+
+    auto tool_call = [&]() {
+        if (!builder.syntax().parse_tool_calls) {
+            // Move back to the start and consume up to the next message
+            builder.move_to(message_start_pos);
+            builder.add_content(consume_until_next(message_start_pos + 1));
+            return;
+        }
+
+        if (auto res = builder.try_consume_regex(user_tool_call_regex)) {
+            auto name = builder.str(res->groups[1]);
+            if (auto args = builder.try_consume_json_with_dumped_args({{}})) {
+                if (!builder.add_tool_call(name, "", args->value) || args->is_partial) {
+                    throw common_chat_msg_partial_exception("incomplete tool call");
+                }
+            }
+        } else if (builder.try_consume_regex(builtin_tool_call_regex)) {
+            builder.consume_rest();
+            LOG_ERR("builtin tool calls not implemented\n");
+        } else {
+            throw common_chat_msg_parse_exception("expected function call, got: " + consume_until_next());
+        }
+    };
+
+    auto commentary = [&]() {
+        if (builder.try_consume_regex(to_regex)) {
+            tool_call();
+        } else if (!try_consume_message()) {
+            throw common_chat_msg_parse_exception("expected: \" to=\" or <|message|>, got: " + consume_until_next());
+        }
+    };
+
+    auto analysis = [&]() {
+        if (builder.try_consume_regex(to_regex)) {
+            tool_call(); // built-in tools can be called in the analysis channel
+        } else if (builder.try_consume_regex(message_regex)) {
+            // Defer reasoning parsing to builder
+            builder.move_to(channel_start_pos);
+
+            if (builder.syntax().reasoning_format != COMMON_REASONING_FORMAT_NONE) {
+                builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|end|>");
+            } else {
+                builder.add_content(consume_until_next());
+            }
+        } else {
+            throw common_chat_msg_parse_exception("expected: <|message|>, got: " + consume_until_next());
+        }
+    };
+
+    auto channel = [&]() {
+        if (auto res = builder.try_consume_regex(channel_regex)) {
+            channel_start_pos = res->groups[0].begin;
+            auto type = builder.str(res->groups[1]);
+            if (type == "analysis") {
+                analysis();
+            } else if (type == "commentary") {
+                commentary();
+            } else if (type == "final") {
+                if (!try_consume_message()) {
+                    throw common_chat_msg_parse_exception("expected: <|message|>, got: " + consume_until_next());
+                }
+            }
+        } else {
+            throw common_chat_msg_parse_exception("expected: <|channel|>, got: " + consume_until_next());
+        }
+    };
+
+    try {
+        channel();
+    } catch (const common_chat_msg_parse_exception & e) {
+        LOG_DBG("Parse error: %s\n", e.what());
     }
+
+    // Read in complete messages until done or partial exception raised
+    while (auto res = builder.try_consume_regex(start_regex)) {
+        message_start_pos = res->groups[0].begin;
+        try {
+            channel();
+        } catch (const common_chat_msg_parse_exception & e) {
+            LOG_DBG("Parse error: %s\n", e.what());
+        }
+    }
+
+    builder.consume_rest();
 }
 
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
