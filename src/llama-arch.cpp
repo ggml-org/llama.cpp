@@ -93,6 +93,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_DREAM,            "dream"            },
     { LLM_ARCH_SMALLTHINKER,     "smallthinker"     },
     { LLM_ARCH_LLADA,            "llada"            },
+    { LLM_ARCH_COGVLM,           "cogvlm"           },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -2068,6 +2069,26 @@ static const std::map<llm_arch, std::map<llm_tensor, const char *>> LLM_TENSOR_N
         },
     },
     {
+        LLM_ARCH_COGVLM,
+        {
+            { LLM_TENSOR_TOKEN_EMBD,       "token_embd" },
+            { LLM_TENSOR_OUTPUT_NORM,      "output_norm" },
+            { LLM_TENSOR_OUTPUT,           "output" },
+            { LLM_TENSOR_ATTN_NORM,        "blk.%d.attn_norm" },
+            { LLM_TENSOR_ATTN_QKV,         "blk.%d.attn_qkv" },
+            { LLM_TENSOR_ATTN_OUT,         "blk.%d.attn_output" },
+            { LLM_TENSOR_FFN_NORM,         "blk.%d.ffn_norm" },
+            { LLM_TENSOR_FFN_GATE,         "blk.%d.ffn_gate" },
+            { LLM_TENSOR_FFN_DOWN,         "blk.%d.ffn_down" },
+            { LLM_TENSOR_FFN_UP,           "blk.%d.ffn_up" },
+            { LLM_TENSOR_VISEXP_ATTN_QKV,  "blk.%d.vis_attn_qkv" },
+            { LLM_TENSOR_VISEXP_ATTN_OUT,  "blk.%d.vis_attn_output" },
+            { LLM_TENSOR_VISEXP_FFN_GATE,  "blk.%d.vis_gate" },
+            { LLM_TENSOR_VISEXP_FFN_DOWN,  "blk.%d.vis_down" },
+            { LLM_TENSOR_VISEXP_FFN_UP,    "blk.%d.vis_up" },
+        },
+    },
+    {
         LLM_ARCH_UNKNOWN,
         {
             { LLM_TENSOR_TOKEN_EMBD,      "token_embd" },
@@ -2246,6 +2267,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_NEXTN_HNORM,                {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_NEXTN_SHARED_HEAD_NORM,     {LLM_TENSOR_LAYER_OUTPUT, GGML_OP_MUL}},
+    {LLM_TENSOR_VISEXP_ATTN_QKV,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_VISEXP_ATTN_OUT,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_VISEXP_FFN_GATE,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_VISEXP_FFN_DOWN,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_VISEXP_FFN_UP,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
