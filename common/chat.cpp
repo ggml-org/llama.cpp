@@ -1359,7 +1359,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-                "<\\|channel\\|>commentary\\s+to=functions\\."
+                "<\\|channel\\|>commentary\\s+to=functions"
             });
 
             data.preserved_tokens = {
