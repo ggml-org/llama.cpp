@@ -12,7 +12,7 @@ import {
 
 export default function Header() {
   const [selectedTheme, setSelectedTheme] = useState(StorageUtils.getTheme());
-  const { setShowSettings } = useAppContext();
+  const { serverProps, setShowSettings } = useAppContext();
 
   const setTheme = (theme: string) => {
     StorageUtils.setTheme(theme);
@@ -28,13 +28,25 @@ export default function Header() {
   }, [selectedTheme]);
 
   return (
-    <div className="flex flex-row items-center pt-6 pb-6 sticky top-0 z-10 bg-base-100">
+    <div className="flex flex-row items-center pt-2 pb-2 sticky top-0 z-10 bg-base-100 border-b border-base-content/10">
       {/* open sidebar button */}
-      <label htmlFor="toggle-drawer" className="btn btn-ghost lg:hidden">
+      <label
+        htmlFor="toggle-drawer"
+        className="btn btn-ghost w-8 h-8 p-0 lg:hidden"
+      >
         <Bars3Icon className="h-5 w-5" />
       </label>
 
-      <div className="grow text-2xl font-bold ml-2">llama.cpp</div>
+      {/* model information*/}
+      <div className="grow ml-2 px-1 sm:px-4 py-0 sm:py-2">
+        <b>
+          {serverProps?.model_alias ||
+            serverProps?.model_path
+              ?.split(/(\\|\/)/)
+              .pop()
+              ?.replace(/\.\w+$/, '')}
+        </b>
+      </div>
 
       {/* action buttons (top right) */}
       <div className="flex items-center">
@@ -43,7 +55,7 @@ export default function Header() {
           data-tip="Settings"
           onClick={() => setShowSettings(true)}
         >
-          <button className="btn" aria-hidden={true}>
+          <button className="btn w-8 h-8 p-0 rounded-full" aria-hidden={true}>
             {/* settings button */}
             <Cog8ToothIcon className="w-5 h-5" />
           </button>
@@ -52,7 +64,11 @@ export default function Header() {
         {/* theme controller is copied from https://daisyui.com/components/theme-controller/ */}
         <div className="tooltip tooltip-bottom" data-tip="Themes">
           <div className="dropdown dropdown-end dropdown-bottom">
-            <div tabIndex={0} role="button" className="btn m-1">
+            <div
+              tabIndex={0}
+              role="button"
+              className="btn m-1 w-8 h-8 p-0 rounded-full"
+            >
               <MoonIcon className="w-5 h-5" />
             </div>
             <ul
