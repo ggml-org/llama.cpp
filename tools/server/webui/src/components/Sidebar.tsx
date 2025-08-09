@@ -228,12 +228,13 @@ function ConversationItem({
       >
         {conv.name}
       </button>
+
       <div tabIndex={0} className="dropdown dropdown-end h-5">
         <BtnWithTooltips
           // on mobile, we always show the ellipsis icon
           // on desktop, we only show it when the user hovers over the conversation item
           // we use opacity instead of hidden to avoid layout shift
-          className="cursor-pointer opacity-100 md:opacity-0 group-hover:opacity-100"
+          className="cursor-pointer opacity-100 xl:opacity-20 group-hover:opacity-100"
           onClick={() => {}}
           tooltipsContent="More"
         >
