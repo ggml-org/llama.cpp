@@ -44,7 +44,7 @@ export default function Header() {
             serverProps?.model_path
               ?.split(/(\\|\/)/)
               .pop()
-              ?.replace(/\.\w+$/, '')}
+              ?.replace(/[-](?:[IQ]+[0-9]+[_\d\w]+)(?:\.[a-z]+)?$/, '')}
         </b>
       </div>
 
