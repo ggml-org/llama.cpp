@@ -429,7 +429,7 @@ int main(int argc, char ** argv) {
 
         // KV cache management
         // if no verification token matched, we simply remove all cells from this batch -> no fragmentation
-        llama_memory_seq_rm(mem, -1, n_past, -1);
+        llama_memory_seq_rm(mem, 0, n_past, -1);
 
         if (seq_id_best != 0) {
             // if a verification token matched, we keep the best sequence and remove the rest
