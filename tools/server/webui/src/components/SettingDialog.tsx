@@ -341,7 +341,7 @@ export default function SettingDialog({
       className={classNames({ modal: true, 'modal-open': show })}
       aria-label="Settings dialog"
     >
-      <div className="modal-box w-11/12 max-w-3xl">
+      <div className="modal-box w-11/12 max-w-4xl">
         <h3 className="text-lg font-bold mb-6">Settings</h3>
         <div className="flex flex-col md:flex-row h-[calc(90vh-12rem)]">
           {/* Left panel, showing sections - Desktop version */}
