@@ -348,7 +348,7 @@ function ChatInput({
       >
         {({ getRootProps, getInputProps }) => (
           <div
-            className="flex flex-col rounded-xl border-1 border-base-content/30 p-3 w-full"
+            className="flex flex-col rounded-xl w-full"
             // when a file is pasted to the input, we handle it here
             // if a text is pasted, and if it is long text, we will convert it to a file
             onPasteCapture={(e: ClipboardEvent<HTMLInputElement>) => {
@@ -390,11 +390,11 @@ function ChatInput({
               />
             )}
 
-            <div className="flex flex-row w-full">
+            <div className="bg-base-200 border-1 border-base-content/30 rounded-lg p-2 flex flex-col">
               <textarea
                 // Default (mobile): Enable vertical resize, overflow auto for scrolling if needed
                 // Large screens (lg:): Disable manual resize, apply max-height for autosize limit
-                className="text-md outline-none border-none w-full resize-vertical lg:resize-none lg:max-h-48 lg:overflow-y-auto" // Adjust lg:max-h-48 as needed (e.g., lg:max-h-60)
+                className="w-full focus:outline-none px-2 border-none focus:ring-0 resize-none"
                 placeholder="Type a message (Shift+Enter to add a new line)"
                 ref={textarea.ref}
                 onInput={textarea.onInput} // Hook's input handler (will only resize height on lg+ screens)
@@ -413,42 +413,47 @@ function ChatInput({
               ></textarea>
 
               {/* buttons area */}
-              <div className="flex flex-row gap-2 ml-2">
-                <label
-                  htmlFor="file-upload"
-                  className={classNames({
-                    'btn w-8 h-8 p-0 rounded-full': true,
-                    'btn-disabled': isGenerating,
-                  })}
-                  aria-label="Upload file"
-                  tabIndex={0}
-                  role="button"
-                >
-                  <PaperClipIcon className="h-5 w-5" />
-                </label>
-                <input
-                  id="file-upload"
-                  type="file"
-                  disabled={isGenerating}
-                  {...getInputProps()}
-                  hidden
-                />
-                {isGenerating ? (
-                  <button
-                    className="btn btn-neutral w-8 h-8 p-0 rounded-full"
-                    onClick={onStop}
+              <div className="flex items-center justify-between mt-2">
+                <div className="flex items-center">
+                  <label
+                    htmlFor="file-upload"
+                    className={classNames({
+                      'btn w-8 h-8 p-0 rounded-full': true,
+                      'btn-disabled': isGenerating,
+                    })}
+                    aria-label="Upload file"
+                    tabIndex={0}
+                    role="button"
                   >
-                    <StopIcon className="h-5 w-5" />
-                  </button>
-                ) : (
-                  <button
-                    className="btn btn-primary w-8 h-8 p-0 rounded-full"
-                    onClick={onSend}
-                    aria-label="Send message"
-                  >
-                    <ArrowUpIcon className="h-5 w-5" />
-                  </button>
-                )}
+                    <PaperClipIcon className="h-5 w-5" />
+                  </label>
+                  <input
+                    id="file-upload"
+                    type="file"
+                    disabled={isGenerating}
+                    {...getInputProps()}
+                    hidden
+                  />
+                </div>
+
+                <div className="flex items-center">
+                  {isGenerating ? (
+                    <button
+                      className="btn btn-neutral w-8 h-8 p-0 rounded-full"
+                      onClick={onStop}
+                    >
+                      <StopIcon className="h-5 w-5" />
+                    </button>
+                  ) : (
+                    <button
+                      className="btn btn-primary w-8 h-8 p-0 rounded-full"
+                      onClick={onSend}
+                      aria-label="Send message"
+                    >
+                      <ArrowUpIcon className="h-5 w-5" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
