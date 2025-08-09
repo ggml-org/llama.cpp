@@ -1322,7 +1322,15 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     // TODO @ngxson : this won't work with --special enabled, we should fix that
     builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
     if (!builder.syntax().parse_tool_calls) {
-        builder.add_content(builder.consume_rest());
+        // First consume everything except potential <|end|> token
+        auto rest = builder.consume_rest();
+        // Check if the rest ends with <|end|> and remove it if present
+        const std::string end_token = "<|end|>";
+        if (rest.size() >= end_token.size() && 
+            rest.substr(rest.size() - end_token.size()) == end_token) {
+            rest = rest.substr(0, rest.size() - end_token.size());
+        }
+        builder.add_content(rest);
         return;
     }
 }

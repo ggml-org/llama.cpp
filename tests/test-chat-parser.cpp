@@ -10,6 +10,7 @@
 #include <string>
 
 #include "chat-parser.h"
+#include "chat.h"
 #include "common.h"
 #include "log.h"
 #include "regex-partial.h"
@@ -341,12 +342,69 @@ static void test_positions() {
   }
 }
 
+static void test_gpt_oss_harmony_format() {
+    // Test GPT-OSS Harmony format with <|end|> token
+    {
+        auto msg = common_chat_parse(
+            "<|channel|>analysis<|message|>Let me think about this...<|start|>assistant<|channel|>final<|message|>The answer is 42<|end|>",
+            /* is_partial= */ false,
+            {
+                /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO, // Use AUTO to enable reasoning parsing
+                /* .reasoning_in_content = */ false,
+                /* .thinking_forced_open = */ false,
+                /* .parse_tool_calls = */ false,
+            }
+        );
+        // Should not throw with <|end|> token
+        assert_equals("The answer is 42", msg.content);
+        assert_equals("Let me think about this...", msg.reasoning_content);
+    }
+    
+    // Test without <|end|> token (backward compatibility)
+    {
+        auto msg = common_chat_parse(
+            "<|channel|>analysis<|message|>Thinking...<|start|>assistant<|channel|>final<|message|>Hello world",
+            /* is_partial= */ false,
+            {
+                /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
+                /* .reasoning_in_content = */ false,
+                /* .thinking_forced_open = */ false,
+                /* .parse_tool_calls = */ false,
+            }
+        );
+        // Should not throw without <|end|> token
+        assert_equals("Hello world", msg.content);
+        assert_equals("Thinking...", msg.reasoning_content);
+    }
+    
+    // Test partial message with <|end|> token
+    {
+        auto msg = common_chat_parse(
+            "<|channel|>analysis<|message|>Processing...<|start|>assistant<|channel|>final<|message|>Partial result<|e",
+            /* is_partial= */ true,
+            {
+                /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
+                /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
+                /* .reasoning_in_content = */ false,
+                /* .thinking_forced_open = */ false,
+                /* .parse_tool_calls = */ false,
+            }
+        );
+        // Should not throw for partial message
+        assert_equals("Partial result<|e", msg.content);
+        assert_equals("Processing...", msg.reasoning_content);
+    }
+}
+
 int main() {
     test_positions();
     test_json_with_dumped_args_no_args();
     test_json_with_dumped_args();
     test_reasoning();
     test_regex();
+    test_gpt_oss_harmony_format();
     std::cout << "All tests passed!\n";
     return 0;
 }
