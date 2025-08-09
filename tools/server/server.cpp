@@ -383,8 +383,17 @@ struct server_task {
             } else {
                 params.oaicompat_chat_syntax.format = defaults.oaicompat_chat_syntax.format;
             }
-            params.oaicompat_chat_syntax.reasoning_format = params_base.reasoning_format;
-            params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (params_base.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+            
+            // Use template's reasoning format if provided, otherwise use CLI default
+            auto reasoning_it = data.find("reasoning_format");
+            if (reasoning_it != data.end()) {
+                params.oaicompat_chat_syntax.reasoning_format = static_cast<common_reasoning_format>(reasoning_it->get<int>());
+                SRV_INF("Reasoning format (from template): %s\n", common_reasoning_format_name(params.oaicompat_chat_syntax.reasoning_format));
+            } else {
+                params.oaicompat_chat_syntax.reasoning_format = params_base.reasoning_format;
+            }
+            
+            params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (params.oaicompat_chat_syntax.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
             params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
             params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         }
