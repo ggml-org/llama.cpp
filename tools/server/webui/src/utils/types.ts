@@ -128,6 +128,7 @@ export type CanvasData = CanvasPyInterpreter;
 // a non-complete list of props, only contains the ones we need
 export interface LlamaCppServerProps {
   build_info: string;
+  model_alias: string;
   model_path: string;
   n_ctx: number;
   modalities?: {
