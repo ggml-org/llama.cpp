@@ -1355,11 +1355,11 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
             });
 
             auto tool_call = builder.add_rule("tool_call", string_join(tool_rules, " | "));
-            builder.add_rule("root", "\"<|channel|>commentary\" space \"to=functions.\" " + tool_call);
+            builder.add_rule("root", "\"<|channel|>commentary to=functions.\" " + tool_call);
 
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
-                "<\\|channel\\|>commentary\\s+to=functions"
+                "<\\|channel\\|>commentary to"
             });
 
             data.preserved_tokens = {
