@@ -243,6 +243,13 @@ struct llama_layer {
     struct ggml_tensor * ffn_norm_exps    = nullptr;
     struct ggml_tensor * ffn_norm_enc     = nullptr;
 
+    // T5GEMMA specific post layer normalization tensors
+    struct ggml_tensor * post_self_attn_norm     = nullptr;
+    struct ggml_tensor * post_cross_attn_norm    = nullptr;
+    struct ggml_tensor * post_ffn_norm           = nullptr;
+    struct ggml_tensor * post_self_attn_norm_enc = nullptr;
+    struct ggml_tensor * post_ffn_norm_enc       = nullptr;
+
     // ff
     struct ggml_tensor * ffn_gate     = nullptr; // w1
     struct ggml_tensor * ffn_down     = nullptr; // w2
