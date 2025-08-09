@@ -2400,6 +2400,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     }
                 }
             }
+
             for (const auto & override : string_split<std::string>(value, ',')) {
                 std::string::size_type pos = override.find('=');
                 if (pos == std::string::npos) {
@@ -2407,6 +2408,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 }
                 std::string tensor_name = override.substr(0, pos);
                 std::string buffer_type = override.substr(pos + 1);
+
                 if (buft_list.find(buffer_type) == buft_list.end()) {
                     printf("Available buffer types:\n");
                     for (const auto & it : buft_list) {
@@ -2414,6 +2416,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     }
                     throw std::invalid_argument("unknown buffer type");
                 }
+                // keep strings alive and avoid leaking memory by storing them in a static vector
                 static std::list<std::string> buft_overrides;
                 buft_overrides.push_back(tensor_name);
                 params.speculative.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
