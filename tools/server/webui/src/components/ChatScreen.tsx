@@ -231,29 +231,31 @@ export default function ChatScreen() {
           flex: !hasCanvas,
         })}
       >
-        {/* chat messages */}
-        <div id="messages-list" className="grow" ref={msgListRef}>
-          <div className="mt-auto flex flex-col items-center">
-            {/* placeholder to shift the message to the bottom */}
-            {viewingChat ? (
-              ''
-            ) : (
-              <div className="mb-4">Send a message to start</div>
-            )}
+        {/* placeholder to shift the message to the bottom */}
+        {!viewingChat && (
+          <div className="grow flex flex-col items-center justify-center ">
+            <b className="text-4xl">Nice to see you.</b>
+            <small>how can I help you today?</small>
           </div>
-          {[...messages, ...pendingMsgDisplay].map((msg) => (
-            <ChatMessage
-              key={msg.msg.id}
-              msg={msg.msg}
-              siblingLeafNodeIds={msg.siblingLeafNodeIds}
-              siblingCurrIdx={msg.siblingCurrIdx}
-              onRegenerateMessage={handleRegenerateMessage}
-              onEditMessage={handleEditMessage}
-              onChangeSibling={setCurrNodeId}
-              isPending={msg.isPending}
-            />
-          ))}
-        </div>
+        )}
+
+        {/* chat messages */}
+        {viewingChat && (
+          <div id="messages-list" className="grow" ref={msgListRef}>
+            {[...messages, ...pendingMsgDisplay].map((msg) => (
+              <ChatMessage
+                key={msg.msg.id}
+                msg={msg.msg}
+                siblingLeafNodeIds={msg.siblingLeafNodeIds}
+                siblingCurrIdx={msg.siblingCurrIdx}
+                onRegenerateMessage={handleRegenerateMessage}
+                onEditMessage={handleEditMessage}
+                onChangeSibling={setCurrNodeId}
+                isPending={msg.isPending}
+              />
+            ))}
+          </div>
+        )}
 
         {/* chat input */}
         <ChatInput
