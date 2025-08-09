@@ -141,7 +141,7 @@
 
 	$effect(() => {
 		if (isLoading() && autoScrollEnabled) {
-			scrollInterval = setInterval(scrollChatToBottom, 200);
+			scrollInterval = setInterval(scrollChatToBottom, 50);
 		} else if (scrollInterval) {
 			clearInterval(scrollInterval);
 			scrollInterval = undefined;
