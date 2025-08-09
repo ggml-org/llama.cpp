@@ -110,7 +110,7 @@ export default function Sidebar() {
               {group.title ? (
                 // we use btn class here to make sure that the padding/margin are aligned with the other items
                 <b
-                  className="btn btn-ghost btn-xs bg-none btn-disabled block text-xs text-base-content text-start px-2 mb-0 mt-6 font-bold"
+                  className="btn btn-ghost btn-xs bg-none btn-disabled block text-xs text-base-content text-start px-2 mb-0 mt-6 font-bold opacity-50"
                   role="note"
                   aria-description={group.title}
                   tabIndex={0}
@@ -287,6 +287,9 @@ export function groupConversationsByDate(
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // Start of today
 
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
   const sevenDaysAgo = new Date(today);
   sevenDaysAgo.setDate(today.getDate() - 7);
 
@@ -295,6 +298,7 @@ export function groupConversationsByDate(
 
   const groups: { [key: string]: Conversation[] } = {
     Today: [],
+    Yesterday: [],
     'Previous 7 Days': [],
     'Previous 30 Days': [],
   };
@@ -311,6 +315,8 @@ export function groupConversationsByDate(
 
     if (convDate >= today) {
       groups['Today'].push(conv);
+    } else if (convDate >= yesterday) {
+      groups['Yesterday'].push(conv);
     } else if (convDate >= sevenDaysAgo) {
       groups['Previous 7 Days'].push(conv);
     } else if (convDate >= thirtyDaysAgo) {
@@ -332,6 +338,13 @@ export function groupConversationsByDate(
     result.push({
       title: undefined, // no title for Today
       conversations: groups['Today'],
+    });
+  }
+
+  if (groups['Yesterday'].length > 0) {
+    result.push({
+      title: 'Yesterday',
+      conversations: groups['Yesterday'],
     });
   }
 
