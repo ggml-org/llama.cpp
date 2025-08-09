@@ -1321,6 +1321,8 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 }
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     // TODO @ngxson : this won't work with --special enabled, we should fix that
+    // TODO: Full Harmony format support with multiple channels (analysis, commentary, final) 
+    //       is being implemented in PR #15181. This is a minimal fix to prevent crashes.
     builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
     
     // Check if we have an <|end|> token at the current position or later
@@ -1328,26 +1330,16 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     
     if (end_pos != std::string::npos) {
         // Content is everything from current position to <|end|>
-        if (!builder.syntax().parse_tool_calls) {
-            auto content = builder.input().substr(builder.pos(), end_pos - builder.pos());
-            builder.add_content(content);
-            builder.move_to(end_pos);
-        } else {
-            // When parse_tool_calls=true, we still need to consume the content
-            // but don't add it to the result
-            builder.move_to(end_pos);
-        }
-        // Consume the <|end|> token
+        auto content = builder.input().substr(builder.pos(), end_pos - builder.pos());
+        builder.add_content(content);
+        builder.move_to(end_pos);
+        // Consume the <|end|> token to prevent "Unexpected content at end of input" errors
+        // Note: <|end|> marks end of message, not end of generation. Full multi-message
+        // support requires proper Harmony channel parsing.
         builder.consume_literal("<|end|>");
     } else {
         // No <|end|> token, consume everything remaining
-        if (!builder.syntax().parse_tool_calls) {
-            builder.add_content(builder.consume_rest());
-        } else {
-            // Even when parse_tool_calls=true, we need to consume the remaining content
-            // to avoid the "Unexpected content at end of input" error
-            builder.consume_rest();
-        }
+        builder.add_content(builder.consume_rest());
     }
 }
 
