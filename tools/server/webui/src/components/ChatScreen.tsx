@@ -238,10 +238,7 @@ export default function ChatScreen() {
             {viewingChat ? (
               ''
             ) : (
-              <>
-                <div className="mb-4">Send a message to start</div>
-                <ServerInfo />
-              </>
+              <div className="mb-4">Send a message to start</div>
             )}
           </div>
           {[...messages, ...pendingMsgDisplay].map((msg) => (
@@ -276,41 +273,6 @@ export default function ChatScreen() {
   );
 }
 
-function ServerInfo() {
-  const { serverProps } = useAppContext();
-  const modalities = [];
-  if (serverProps?.modalities?.audio) {
-    modalities.push('audio');
-  }
-  if (serverProps?.modalities?.vision) {
-    modalities.push('vision');
-  }
-  return (
-    <div
-      className="card card-sm shadow-sm border-1 border-base-content/20 text-base-content/70 mb-6"
-      tabIndex={0}
-      aria-description="Server information"
-    >
-      <div className="card-body">
-        <b>Server Info</b>
-        <p>
-          <b>Model</b>: {serverProps?.model_path?.split(/(\\|\/)/).pop()}
-          <br />
-          <b>Build</b>: {serverProps?.build_info}
-          <br />
-          {modalities.length > 0 ? (
-            <>
-              <b>Supported modalities:</b> {modalities.join(', ')}
-            </>
-          ) : (
-            ''
-          )}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 function ChatInput({
   textarea,
   extraContext,
@@ -332,7 +294,7 @@ function ChatInput({
       role="group"
       aria-label="Chat input"
       className={classNames({
-        'flex items-end pt-8 pb-6 sticky bottom-0 bg-base-100': true,
+        'flex items-end pt-8 pb-1 sticky bottom-0 bg-base-100': true,
         'opacity-50': isDrag, // simply visual feedback to inform user that the file will be accepted
       })}
     >
