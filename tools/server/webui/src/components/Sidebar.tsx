@@ -75,36 +75,33 @@ export default function Sidebar() {
           Skip to main content
         </a>
 
-        <div className="flex flex-col bg-base-200 min-h-full max-w-64 py-4 px-4">
-          <div className="flex flex-row items-center justify-between mb-4 mt-4">
-            <h2 className="font-bold ml-4" role="heading">
-              Conversations
-            </h2>
-
+        <div className="flex flex-col bg-base-200 min-h-full max-w-64 pb-4 px-4">
+          <div className="flex flex-row items-center justify-between leading-10 py-2 border-b border-base-content/10">
             {/* close sidebar button */}
+            <label className="w-8 h-8 p-0 max-lg:hidden"></label>
             <label
               htmlFor="toggle-drawer"
-              className="btn btn-ghost lg:hidden"
+              className="btn btn-ghost w-8 h-8 p-0 rounded-full lg:hidden"
               aria-label="Close sidebar"
               role="button"
               tabIndex={0}
             >
               <XMarkIcon className="w-5 h-5" />
             </label>
-          </div>
 
-          {/* new conversation button */}
-          <button
-            className={classNames({
-              'btn btn-ghost justify-start px-2': true,
-              'btn-soft': !currConv,
-            })}
-            onClick={() => navigate('/')}
-            aria-label="New conversation"
-          >
-            <PencilSquareIcon className="w-5 h-5" />
-            New conversation
-          </button>
+            <h2 className="font-bold" role="heading">
+              Conversations
+            </h2>
+
+            {/* new conversation button */}
+            <button
+              className="btn btn-ghost w-8 h-8 p-0 rounded-full"
+              onClick={() => navigate('/')}
+              aria-label="New conversation"
+            >
+              <PencilSquareIcon className="w-5 h-5" />
+            </button>
+          </div>
 
           {/* list of conversations */}
           {groupedConv.map((group, i) => (
