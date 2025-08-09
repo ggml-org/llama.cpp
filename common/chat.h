@@ -135,6 +135,7 @@ struct common_chat_templates_inputs {
 
 struct common_chat_params {
     common_chat_format                  format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
+    common_reasoning_format              reasoning_format = COMMON_REASONING_FORMAT_NONE; // Template-specific reasoning format
     std::string                         prompt;
     std::string                         grammar;
     bool                                grammar_lazy = false;

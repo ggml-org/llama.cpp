@@ -804,6 +804,7 @@ static json oaicompat_chat_params_parse(
     }
 
     llama_params["chat_format"]      = static_cast<int>(chat_params.format);
+    llama_params["reasoning_format"] = static_cast<int>(chat_params.reasoning_format); // Pass template's reasoning format
     llama_params["prompt"]           = chat_params.prompt;
     if (!chat_params.grammar.empty()) {
         llama_params["grammar"] = chat_params.grammar;

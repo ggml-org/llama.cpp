@@ -1313,6 +1313,7 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_GPT_OSS;
+    data.reasoning_format = COMMON_REASONING_FORMAT_AUTO; // GPT-OSS Harmony format always has reasoning channels
 
     // TODO: support tool calls in GPT-OSS?
 
@@ -1321,17 +1322,28 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     // TODO @ngxson : this won't work with --special enabled, we should fix that
     builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
-    if (!builder.syntax().parse_tool_calls) {
-        // First consume everything except potential <|end|> token
-        auto rest = builder.consume_rest();
-        // Check if the rest ends with <|end|> and remove it if present
-        const std::string end_token = "<|end|>";
-        if (rest.size() >= end_token.size() && 
-            rest.substr(rest.size() - end_token.size()) == end_token) {
-            rest = rest.substr(0, rest.size() - end_token.size());
+    
+    // Check if we have an <|end|> token at the current position or later
+    auto end_pos = builder.input().find("<|end|>", builder.pos());
+    
+    if (end_pos != std::string::npos) {
+        // Content is everything from current position to <|end|>
+        auto content = builder.input().substr(builder.pos(), end_pos - builder.pos());
+        if (!builder.syntax().parse_tool_calls) {
+            builder.add_content(content);
         }
-        builder.add_content(rest);
-        return;
+        // Move to the <|end|> token and consume it
+        builder.move_to(end_pos);
+        builder.consume_literal("<|end|>");
+    } else {
+        // No <|end|> token, consume everything remaining
+        if (!builder.syntax().parse_tool_calls) {
+            builder.add_content(builder.consume_rest());
+        } else {
+            // Even when parse_tool_calls=true, we need to consume the remaining content
+            // to avoid the "Unexpected content at end of input" error
+            builder.consume_rest();
+        }
     }
 }
 
