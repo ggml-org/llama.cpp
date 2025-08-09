@@ -38,7 +38,7 @@ export default function Header() {
       </label>
 
       {/* model information*/}
-      <div className="grow ml-2 px-1 sm:px-4 py-0">
+      <div className="grow text-nowrap overflow-hidden truncate ml-2 px-1 sm:px-4 py-0">
         <b>
           {serverProps?.model_alias ||
             serverProps?.model_path
