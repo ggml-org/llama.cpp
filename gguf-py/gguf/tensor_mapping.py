@@ -1119,7 +1119,8 @@ class TensorNameMap:
             "model.vision_tower.embeddings.patch_embeddings.projection", # Intern-S1
             "vpm.embeddings.patch_embedding",
             "model.vision_model.embeddings.patch_embedding", # SmolVLM
-            "vision_tower.patch_conv", # pixtral
+            "vision_tower.patch_conv", # pixtral-hf
+            "vision_encoder.patch_conv", # pixtral
             "vision_model.patch_embedding.linear", # llama 4
             "visual.patch_embed.proj", # qwen2vl
         ),
@@ -1138,7 +1139,8 @@ class TensorNameMap:
             "vpm.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.q_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.q_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wq", # pixtral
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
         ),
 
@@ -1153,7 +1155,8 @@ class TensorNameMap:
             "vpm.encoder.layers.{bid}.self_attn.k_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.k_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.k_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wk", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
         ),
 
@@ -1168,7 +1171,8 @@ class TensorNameMap:
             "vpm.encoder.layers.{bid}.self_attn.v_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.v_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.v_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wv", # pixtral
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
         ),
 
@@ -1178,7 +1182,8 @@ class TensorNameMap:
             "model.vision_tower.encoder.layer.{bid}.layernorm_before", # Intern-S1
             "vpm.encoder.layers.{bid}.layer_norm1",
             "model.vision_model.encoder.layers.{bid}.layer_norm1", # SmolVLM
-            "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention_norm", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention_norm", # pixtral
             "vision_model.model.layers.{bid}.input_layernorm", # llama4
             "visual.blocks.{bid}.norm1", # qwen2vl
         ),
@@ -1190,7 +1195,8 @@ class TensorNameMap:
             "vpm.encoder.layers.{bid}.self_attn.out_proj",
             "model.vision_model.encoder.layers.{bid}.self_attn.out_proj", # SmolVLM
             "vision_model.model.layers.{bid}.self_attn.o_proj", # llama4
-            "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.attention.o_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.attention.wo", # pixtral
             "visual.blocks.{bid}.attn.proj", # qwen2vl
         ),
 
@@ -1201,7 +1207,8 @@ class TensorNameMap:
             "vpm.encoder.layers.{bid}.layer_norm2",
             "model.vision_model.encoder.layers.{bid}.layer_norm2", # SmolVLM
             "vision_model.model.layers.{bid}.post_attention_layernorm", # llama4
-            "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral
+            "vision_tower.transformer.layers.{bid}.ffn_norm", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.ffn_norm", # pixtral
             "visual.blocks.{bid}.norm2", # qwen2vl
         ),
 
@@ -1210,14 +1217,16 @@ class TensorNameMap:
             "model.vision_tower.encoder.layer.{bid}.mlp.fc1", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc1",
             "model.vision_model.encoder.layers.{bid}.mlp.fc1", # SmolVLM, gemma3
-            "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.feed_forward.up_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.feed_forward.w3", # pixtral
             "vision_model.model.layers.{bid}.mlp.fc1", # llama4
             "visual.blocks.{bid}.mlp.fc1", # qwen2vl
             "visual.blocks.{bid}.mlp.up_proj", # qwen2.5vl
         ),
 
         MODEL_TENSOR.V_ENC_FFN_GATE: (
-            "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.feed_forward.gate_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.feed_forward.w1", # pixtral
             "visual.blocks.{bid}.mlp.gate_proj", # qwen2.5vl
         ),
 
@@ -1226,7 +1235,8 @@ class TensorNameMap:
             "model.vision_tower.encoder.layer.{bid}.mlp.fc2", # Intern-S1
             "vpm.encoder.layers.{bid}.mlp.fc2",
             "model.vision_model.encoder.layers.{bid}.mlp.fc2", # SmolVLM, gemma3
-            "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral
+            "vision_tower.transformer.layers.{bid}.feed_forward.down_proj", # pixtral-hf
+            "vision_encoder.transformer.layers.{bid}.feed_forward.w2", # pixtral
             "vision_model.model.layers.{bid}.mlp.fc2", # llama4
             "visual.blocks.{bid}.mlp.fc2", # qwen2vl
             "visual.blocks.{bid}.mlp.down_proj", # qwen2.5vl
@@ -1244,7 +1254,8 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_PRE_NORM: (
             "vision_tower.vision_model.pre_layrnorm",
-            "vision_tower.ln_pre", # pixtral
+            "vision_tower.ln_pre", # pixtral-hf
+            "vision_encoder.ln_pre", # pixtral
             "vision_model.layernorm_pre", # llama4
         ),
 
@@ -1261,6 +1272,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_INP_NORM: (
             "multi_modal_projector.norm",
+            "pre_mm_projector_norm",
         ),
 
         MODEL_TENSOR.V_MM_SOFT_EMB_NORM: (
@@ -1316,7 +1328,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.V_MM_PATCH_MERGER: (
-            "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1
+            "multi_modal_projector.patch_merger.merging_layer", # mistral small 3.1 - hf
+            "patch_merger.merging_layer", # mistral
         ),
 
         # audio (mtmd)
