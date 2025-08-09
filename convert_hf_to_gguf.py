@@ -3328,7 +3328,13 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
 @ModelBase.register("InternVisionModel")
 class InternVisionModel(MmprojModel):
     def set_gguf_parameters(self):
+        assert self.hparams_vision is not None
+        if isinstance(self.hparams_vision['image_size'], list):
+            self.hparams_vision['image_size'] = self.hparams_vision['image_size'][0]
+        if isinstance(self.hparams_vision['patch_size'], list):
+            self.hparams_vision['patch_size'] = self.hparams_vision['patch_size'][0]
         super().set_gguf_parameters()
+
         hparams = self.hparams
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.INTERNVL)
         self.gguf_writer.add_vision_attention_layernorm_eps(hparams["layer_norm_eps"])
@@ -3352,14 +3358,30 @@ class InternVisionModel(MmprojModel):
             return gguf.GGMLQuantizationType.F32
         return False
 
+    def _mapping_interns1_name(self, name):
+        names_map = {
+            "model.multi_modal_projector.layer_norm.bias": "mlp1.0.bias",
+            "model.multi_modal_projector.layer_norm.weight": "mlp1.0.weight",
+            "model.multi_modal_projector.linear_1.bias": "mlp1.1.bias",
+            "model.multi_modal_projector.linear_1.weight": "mlp1.1.weight",
+            "model.multi_modal_projector.linear_2.bias": "mlp1.3.bias",
+            "model.multi_modal_projector.linear_2.weight": "mlp1.3.weight",
+        }
+        if name in names_map:
+            name = names_map[name]
+        return name
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
-        if name.startswith("vision_model") or name.startswith("mlp"):
+        vision_prefix = ['vision_model', 'mlp', 'model.vision_tower', 'model.multi_modal_projector']
+        # deal with intern-s1 special case
+        name = self._mapping_interns1_name(name)
+        if any([name.startswith(prefix) for prefix in vision_prefix]):
             # process visual tensors
             # correct name
             if name.startswith("vision_model"):
                 name = "vision_tower." + name
-            if (".ls" in name or "position_embedding" in name) and not name.endswith(".weight"):
+            if (".ls" in name or ".lambda_" in name or "position_embedding" in name) and not name.endswith(".weight"):
                 name += ".weight"
             # split QKV tensors if needed
             if ".qkv." in name:
@@ -3445,6 +3467,10 @@ class Qwen2MoeModel(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
+        name = name.replace("language_model.", "") # InternVL
+        if name.startswith("mlp") or name.startswith("vision_model") or name.startswith("model.vision_tower") or name.startswith("model.multi_modal_projector"):
+            # skip visual tensors
+            return []
         if name.find("experts") != -1:
             n_experts = self.hparams["num_experts"]
             assert bid is not None
@@ -3497,6 +3523,85 @@ class Qwen3Model(Qwen2Model):
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3MOE
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        hparams = ModelBase.load_hparams(self.dir_model)
+        self.origin_hf_arch = hparams.get('architectures', [None])[0]
+
+    def set_vocab(self):
+        # deal with intern-s1
+        if self.origin_hf_arch == 'InternS1ForConditionalGeneration':
+            self._set_vocab_interns1()
+            return
+
+        try:
+            self._set_vocab_sentencepiece()
+        except FileNotFoundError:
+            self._set_vocab_gpt2()
+
+    def _set_vocab_interns1(self):
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
+        vocab_size = self.hparams.get("vocab_size", len(vocab))
+        assert max(vocab.values()) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    # The tokenizer in llama.cpp assumes the CONTROL and USER_DEFINED tokens are pre-normalized.
+                    # To avoid unexpected issues - we make sure to normalize non-normalized tokens
+                    if not added_tokens_decoder[i].normalized:
+                        previous_token = token
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        if previous_token != token:
+                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
+
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_tokens_map_file = self.dir_model / 'special_tokens_map.json'
+        additional_special_tokens = []
+        if special_tokens_map_file.is_file():
+            with open(special_tokens_map_file, encoding = 'utf-8') as f:
+                additional_special_tokens = json.load(f).get('additional_special_tokens', [])
+        tokenizer_cfg_file = self.dir_model / 'special_tokens_map.json'
+        if tokenizer_cfg_file.is_file():
+            with open(tokenizer_cfg_file, encoding = 'utf-8') as f:
+                added_tokens_decoder = json.load(f).get('added_tokens_decoder', {})
+                token2ids_map = {data['content'] : int(token) for token, data in added_tokens_decoder.items() if data['special']}
+                for token in additional_special_tokens:
+                    if token in token2ids_map:
+                        special_vocab._set_special_token(token, token2ids_map[token])
+        special_vocab._set_special_token('eos', 151645)
+        special_vocab._set_special_token("bos", 151643)
+        special_vocab.add_to_gguf(self.gguf_writer)
 
 
 @ModelBase.register("GPT2LMHeadModel")
@@ -7997,7 +8102,6 @@ class GptOssModel(TextModel):
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         blocks0: Tensor = torch.zeros(1)
         blocks1: Tensor = torch.zeros(1)
-        found_mxfp4_tensors = False
         # we assume that tensors are loaded in the correct order
         for name, data_torch in self.get_tensors():
             if "mlp.experts.down_proj_blocks" in name:
@@ -8005,7 +8109,6 @@ class GptOssModel(TextModel):
             elif "mlp.experts.down_proj_scales" in name:
                 new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
                 self.repack_mxfp4(new_name, blocks0, data_torch)
-                found_mxfp4_tensors = True
             elif "mlp.experts.gate_up_proj_blocks" in name:
                 blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
             elif "mlp.experts.gate_up_proj_scales" in name:
@@ -8014,9 +8117,6 @@ class GptOssModel(TextModel):
                 new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
                 self.repack_mxfp4(new_name_gate, blocks0, scales0)
                 self.repack_mxfp4(new_name_up, blocks1, scales1)
-                found_mxfp4_tensors = True
-        if not found_mxfp4_tensors:
-            raise ValueError("No MXFP4 tensors found in the model. Please make sure you are using MXFP4 model.")
         return []
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
@@ -8029,7 +8129,12 @@ class GptOssModel(TextModel):
         if "down_proj" in name:
             if name.endswith("_bias"):
                 name = name.replace("down_proj_bias", "down_proj.bias")
+            elif "_blocks" not in name and "_scales" not in name:
+                logger.warning(f"{name} is not in MXFP4, performance may be degraded")
+                name = name.replace("down_proj", "down_proj.weight")
+                data_torch = data_torch.transpose(-1, -2)
             else:
+                # otherwise, it should already be repacked to ggml MXFP4 format
                 return []
 
         # split the gate_up into gate and up
@@ -8042,7 +8147,18 @@ class GptOssModel(TextModel):
                     (self.map_tensor_name(name_gate), gate_proj_bias),
                     (self.map_tensor_name(name_up), up_proj_bias)
                 ]
+            elif "_blocks" not in name and "_scales" not in name:
+                logger.warning(f"{name} is not in MXFP4, performance may be degraded")
+                name_up = name.replace("gate_up_proj", "up_proj.weight")
+                name_gate = name.replace("gate_up_proj", "gate_proj.weight")
+                data_torch = data_torch.transpose(-1, -2)
+                gate_proj_weight, up_proj_weight = data_torch[:, ::2, :], data_torch[:, 1::2, :]
+                return [
+                    (self.map_tensor_name(name_gate), gate_proj_weight),
+                    (self.map_tensor_name(name_up), up_proj_weight)
+                ]
             else:
+                # otherwise, it should already be repacked to ggml MXFP4 format
                 return []
 
         return [(self.map_tensor_name(name), data_torch)]

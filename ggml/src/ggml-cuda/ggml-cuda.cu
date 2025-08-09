@@ -3532,7 +3532,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 return op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512 && op->src[3] && gqa_ratio % 16 == 0;
             }
             // TODO: more general-purpose attention sink support [TAG_ATTN_SINKS]
-            if (op->src[4] && op->src[0]->ne[0] != 64 && op->src[0]->ne[0] != 128) { // currently only sinks for head_size 64 and 128 are supported
+            if (op->src[4] && !fp16_mma_available(ggml_cuda_info().devices[dev_ctx->device].cc)
+                    && op->src[0]->ne[0] != 64 && op->src[0]->ne[0] != 128) {
                 return false;
             }
             if (op->src[0]->ne[0] == 192) {
@@ -3798,10 +3799,10 @@ ggml_backend_t ggml_backend_cuda_init(int device) {
     }
 
     ggml_backend_t cuda_backend = new ggml_backend {
-        /* .guid      = */ ggml_backend_cuda_guid(),
-        /* .interface = */ ggml_backend_cuda_interface,
-        /* .device    = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
-        /* .context   = */ ctx,
+        /* .guid    = */ ggml_backend_cuda_guid(),
+        /* .iface   = */ ggml_backend_cuda_interface,
+        /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_cuda_reg(), device),
+        /* .context = */ ctx,
     };
 
     return cuda_backend;

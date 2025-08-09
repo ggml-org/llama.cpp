@@ -282,7 +282,7 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     const enum ggml_prec prec = ggml_flash_attn_ext_get_prec(KQV);
 
     // TODO: currently only vec implementation for sinks is supported [TAG_ATTN_SINKS]
-    if (sinks) {
+    if (sinks && !fp16_mma_available(cc)) {
         if (prec == GGML_PREC_DEFAULT && fast_fp16_available(cc)) {
             ggml_cuda_flash_attn_ext_vec_f16(ctx, dst);
         } else {
