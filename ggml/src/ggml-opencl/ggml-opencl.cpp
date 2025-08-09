@@ -399,6 +399,7 @@ struct ggml_backend_opencl_context {
     cl_program program_conv_2d_f16_f32;
     cl_program program_tsembd;
     cl_program program_mul_mv_id_q4_0_f32_8x_flat;
+    cl_program program_mul_mv_id_mxfp4_f32;
     cl_program program_mul_mm_f32_f32_l4_lm;
     cl_program program_mul_mm_f16_f32_l4_lm;
 
@@ -457,6 +458,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_conv_2d_f16_f32;
     cl_kernel kernel_timestep_embedding;
     cl_kernel kernel_mul_mv_id_q4_0_f32_8x_flat;
+    cl_kernel kernel_mul_mv_id_mxfp4_f32;
     cl_kernel kernel_mul_mm_f32_f32_l4_lm;
     cl_kernel kernel_mul_mm_f16_f32_l4_lm;
 
@@ -1629,6 +1631,22 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         GGML_LOG_CONT(".");
     }
 
+    // mul_mv_id_mxfp4_f32
+    {
+#ifdef GGML_OPENCL_EMBED_KERNELS
+        const std::string kernel_src {
+            #include "mul_mv_id_mxfp4_f32.cl.h"
+        };
+#else
+        const std::string kernel_src = read_file("mul_mv_id_mxfp4_f32.cl");
+#endif
+        backend_ctx->program_mul_mv_id_mxfp4_f32 =
+            build_program_from_source(backend_ctx->context, backend_ctx->device, kernel_src.c_str(), compile_opts);
+
+        CL_CHECK((backend_ctx->kernel_mul_mv_id_mxfp4_f32 = clCreateKernel(backend_ctx->program_mul_mv_id_mxfp4_f32, "kernel_mul_mv_id_mxfp4_f32", &err), err));
+        GGML_LOG_CONT(".");
+    }
+
     // Adreno kernels
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     // transpose
@@ -2576,7 +2594,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             }
             return false;
         case GGML_OP_MUL_MAT_ID:
-            if (op->src[0]->type == GGML_TYPE_Q4_0) {
+            if (op->src[0]->type == GGML_TYPE_Q4_0 ||
+                op->src[0]->type == GGML_TYPE_MXFP4) {
                 if (op->src[1]->type == GGML_TYPE_F32) {
                     return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
                 }
@@ -6361,10 +6380,12 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
+    ggml_tensor_extra_cl * extra0 = (ggml_tensor_extra_cl *)src0->extra;
     ggml_tensor_extra_cl * extra1 = (ggml_tensor_extra_cl *)src1->extra;
     ggml_tensor_extra_cl * extra2 = (ggml_tensor_extra_cl *)src2->extra;
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
 
+    cl_ulong offset0 = extra0->offset + src0->view_offs;
     cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offset2 = extra2->offset + src2->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
@@ -6379,7 +6400,9 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     const int ne03 = src0->ne[3];
 
     const cl_ulong nb00 = src0->nb[0];
+    const cl_ulong nb01 = src0->nb[1];
     const cl_ulong nb02 = src0->nb[2];
+    const cl_ulong nb03 = src0->nb[3];
 
     const int ne10 = src1->ne[0];
     const int ne11 = src1->ne[1];
@@ -6388,6 +6411,7 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
     const cl_ulong nb11 = src1->nb[1];
     const cl_ulong nb12 = src1->nb[2];
+    const cl_ulong nb13 = src1->nb[3];
 
     const int ne20 = src2->ne[0];
     const int ne21 = src2->ne[1];
@@ -6452,6 +6476,49 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
             CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &ne1));
             CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &r2));
             CL_CHECK(clSetKernelArg(kernel, 24, sizeof(int),      &r3));
+
+            break;
+        }
+        case GGML_TYPE_MXFP4: {
+            kernel = backend_ctx->kernel_mul_mv_id_mxfp4_f32;
+
+            if (backend_ctx->gpu_family == INTEL) {
+                sgs  = 16;
+                nsg  = 2;
+                ndst = 2;
+            } else if (backend_ctx->gpu_family == ADRENO) {
+                sgs  = 64;
+                nsg  = 2;
+                ndst = 2;
+            } else {
+                GGML_ASSERT(false && "TODO: Unknown GPU");
+            }
+
+            CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &extra0->data_device));
+            CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offset0));
+            CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &extra1->data_device));
+            CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
+            CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extra2->data_device));
+            CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offset2));
+            CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &extrad->data_device));
+            CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offsetd));
+            CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne00));
+            CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &nb01));
+            CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_ulong), &nb02));
+            CL_CHECK(clSetKernelArg(kernel, 11, sizeof(cl_ulong), &nb03));
+            CL_CHECK(clSetKernelArg(kernel, 12, sizeof(int),      &ne11));
+            CL_CHECK(clSetKernelArg(kernel, 13, sizeof(int),      &ne12));
+            CL_CHECK(clSetKernelArg(kernel, 14, sizeof(cl_ulong), &nb11));
+            CL_CHECK(clSetKernelArg(kernel, 15, sizeof(cl_ulong), &nb12));
+            CL_CHECK(clSetKernelArg(kernel, 16, sizeof(cl_ulong), &nb13));
+            CL_CHECK(clSetKernelArg(kernel, 17, sizeof(int),      &ne20));
+            CL_CHECK(clSetKernelArg(kernel, 18, sizeof(int),      &ne21));
+            CL_CHECK(clSetKernelArg(kernel, 19, sizeof(cl_ulong), &nb21));
+            CL_CHECK(clSetKernelArg(kernel, 20, sizeof(int),      &ne0));
+            CL_CHECK(clSetKernelArg(kernel, 21, sizeof(int),      &ne1));
+            CL_CHECK(clSetKernelArg(kernel, 22, sizeof(int),      &r2));
+            CL_CHECK(clSetKernelArg(kernel, 23, sizeof(int),      &r3));
+            CL_CHECK(clSetKernelArg(kernel, 24, sizeof(float)*sgs,nullptr));
 
             break;
         }
