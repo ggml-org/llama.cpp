@@ -226,6 +226,7 @@ services:
 ### Multimodal support
 
 Multimodal support was added in [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) and is currently an experimental feature.
+It is currently available in the non-OAI-compatible completion endpoint, and the OAI-compatible chat endpoint.
 
 For more details, please refer to [multimodal documentation](../../docs/multimodal.md)
 
@@ -400,12 +401,15 @@ These input shapes and data type are allowed for `prompt`:
   - Single string: `"string"`
   - Single sequence of tokens: `[12, 34, 56]`
   - Mixed tokens and strings: `[12, 34, "string", 56, 78]`
+  - A JSON object which optionally contains multimodal data: `{ "prompt": "string", "multimodal_data": ["base64"] }`
 
 Multiple prompts are also supported. In this case, the completion result will be an array.
 
   - Only strings: `["string1", "string2"]`
-  - Strings and sequences of tokens: `["string1", [12, 34, 56]]`
-  - Mixed types: `[[12, 34, "string", 56, 78], [12, 34, 56], "string"]`
+  - Strings, JSON objects, and sequences of tokens: `["string1", [12, 34, 56], { "prompt": "string", "multimodal_data": ["base64"]}]`
+  - Mixed types: `[[12, 34, "string", 56, 78], [12, 34, 56], "string", { "prompt": "string" }]`
+
+Note for `multimodal_data` in JSON object prompts. This should be an array of strings, containing base64 encoded multimodal data such as images and audio. There must be an identical number of MTMD media markers in the string prompt element which act as placeholders for the data provided to this parameter. The multimodal data files will be substituted in order. The marker string (e.g. `<__media__>`) can be found by calling `mtmd_default_marker()` defined in [the MTMD C API](https://github.com/ggml-org/llama.cpp/blob/5fd160bbd9d70b94b5b11b0001fd7f477005e4a0/tools/mtmd/mtmd.h#L87).
 
 `temperature`: Adjust the randomness of the generated text. Default: `0.8`
 

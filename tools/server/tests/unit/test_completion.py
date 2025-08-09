@@ -231,6 +231,27 @@ def test_nocache_long_input_prompt():
     })
     assert res.status_code == 200
 
+def test_nocache_json_prompt():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": { "prompt": "I believe the meaning of life is" },
+        "seed": 42,
+        "temperature": 1.0,
+        "cache_prompt": False,
+    })
+    assert res.status_code == 200
+
+def test_nocache_multimodal_prompt():
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": { "prompt": "I believe the meaning of life is <__media__>", "multimodal_data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" },
+        "seed": 42,
+        "temperature": 1.0,
+        "cache_prompt": False,
+    })
+    assert res.status_code == 200
 
 def test_completion_with_tokens_input():
     global server
@@ -268,6 +289,20 @@ def test_completion_with_tokens_input():
     assert type(res.body) == list
     assert len(res.body) == 2
     assert res.body[0]["content"] == res.body[1]["content"]
+
+    # mixed multimodal and tokens works. Does not assert equality.
+    res = server.make_request("POST", "/completion", data={
+        "prompt": [
+            tokens,
+            {
+                "prompt": "Here is my photo: <__media__>",
+                "multimodal_data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            },
+        ],
+    })
+    assert res.status_code == 200
+    assert type(res.body) == list
+    assert len(res.body) == 2
 
     # mixed string and tokens in one sequence
     res = server.make_request("POST", "/completion", data={
