@@ -258,6 +258,39 @@ void llm_graph_input_cross_embd::set_input(const llama_ubatch * ubatch) {
     }
 }
 
+void llm_graph_input_expert_mask::set_input(const llama_ubatch * ubatch) {
+    if (mask == nullptr || (cparams.omit_experts.empty() && cparams.force_experts.empty())) {
+        return;
+    }
+    GGML_UNUSED(ubatch);
+
+    const int64_t n_expert = mask->ne[0];
+
+    GGML_ASSERT(ggml_backend_buffer_is_host(mask->buffer));
+    float * data = (float *) mask->data;
+
+    std::fill(data, data + n_expert, 0.0f);
+
+    for (int32_t expert_idx : cparams.omit_experts) {
+        if (expert_idx >= 0 && expert_idx < n_expert) {
+            data[expert_idx] = -INFINITY;
+        }
+    }
+    for (int32_t expert_idx : cparams.force_experts) {
+        if (expert_idx >= 0 && expert_idx < n_expert) {
+            data[expert_idx] = INFINITY;
+        }
+    }
+}
+
+bool llm_graph_input_expert_mask::can_reuse(const llm_graph_params & params) {
+    bool res = true;
+    res &= mask->ne[0] == params.hparams.n_expert;
+    res &= cparams.omit_experts == params.cparams.omit_experts;
+    res &= cparams.force_experts == params.cparams.force_experts;
+    return res;
+}
+
 void llm_graph_input_attn_no_cache::set_input(const llama_ubatch * ubatch) {
     const int64_t n_kv     = ubatch->n_tokens;
     const int64_t n_tokens = ubatch->n_tokens;
@@ -787,6 +820,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 bool   scale_w,
                float   w_scale,
          llama_expert_gating_func_type gating_op,
+         ggml_tensor * expert_mask,
                  int   il,
          ggml_tensor * probs_in) const {
     return build_moe_ffn(
@@ -803,6 +837,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         scale_w,
         w_scale,
         gating_op,
+        expert_mask,
         il,
         probs_in
     );
@@ -826,6 +861,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 bool   scale_w,
                float   w_scale,
         llama_expert_gating_func_type gating_op,
+         ggml_tensor * expert_mask,
                  int   il,
          ggml_tensor * probs_in) const {
     const int64_t n_embd   = cur->ne[0];
@@ -877,6 +913,12 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     // see: https://github.com/meta-llama/llama-models/blob/699a02993512fb36936b1b0741e13c06790bcf98/models/llama4/moe.py#L183-L198
     if (arch == LLM_ARCH_LLAMA4) {
         selection_probs = logits;
+    }
+
+    // Omit or force specified experts by adding a mask of -INF/INF respectively
+    if (expert_mask != nullptr) {
+        selection_probs = ggml_add(ctx0, selection_probs, expert_mask);
+        cb(selection_probs, "ffn_moe_probs_masked", il);
     }
 
     // select experts
@@ -1350,6 +1392,14 @@ llm_graph_input_attn_no_cache * llm_graph_context::build_attn_inp_no_cache() con
     inp->kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->kq_mask, GGML_TYPE_F16) : inp->kq_mask;
 
     return (llm_graph_input_attn_no_cache *) res->add_input(std::move(inp));
+}
+
+llm_graph_input_expert_mask * llm_graph_context::build_inp_expert_mask() const {
+    auto   inp = std::make_unique<llm_graph_input_expert_mask>(cparams);
+    auto & cur = inp->mask;
+    cur        = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, hparams.n_expert);
+    ggml_set_input(cur);
+    return (llm_graph_input_expert_mask *) res->add_input(std::move(inp));
 }
 
 ggml_tensor * llm_graph_context::build_attn(

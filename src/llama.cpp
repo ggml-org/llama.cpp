@@ -109,6 +109,20 @@ static int llama_model_load(const std::string & fname, std::vector<std::string> 
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
+        if (params.n_expert_used_override > 0) {
+            if (model.hparams.n_expert == 0) {
+                LLAMA_LOG_WARN("%s: --num-experts is set to %d, but the model is not a Mixture-of-Experts model. Ignoring.\n",
+                    __func__, params.n_expert_used_override);
+            } else if (params.n_expert_used_override > (int32_t)model.hparams.n_expert) {
+                LLAMA_LOG_WARN("%s: --num-experts is set to %d, which is greater than the total number of experts available in the model (%u). Clamping to %u.\n",
+                    __func__, params.n_expert_used_override, model.hparams.n_expert, model.hparams.n_expert);
+                model.hparams.n_expert_used = model.hparams.n_expert;
+            } else {
+                LLAMA_LOG_INFO("%s: Overriding n_expert_used from %u to %d.\n",
+                    __func__, model.hparams.n_expert_used, params.n_expert_used_override);
+                model.hparams.n_expert_used = params.n_expert_used_override;
+            }
+        }
         try {
             model.load_vocab(ml);
         } catch(const std::exception & e) {

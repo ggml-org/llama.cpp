@@ -1130,6 +1130,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
         GGML_ASSERT(params.kv_overrides.back().key[0] == 0 && "KV overrides not terminated with empty key");
         mparams.kv_overrides = params.kv_overrides.data();
     }
+    mparams.n_expert_used_override = params.num_experts;
 
     if (params.tensor_buft_overrides.empty()) {
         mparams.tensor_buft_overrides = NULL;
@@ -1177,6 +1178,10 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
+
+    cparams.num_experts       = params.num_experts;
+    cparams.omit_experts      = params.omit_experts;
+    cparams.force_experts     = params.force_experts;
 
     return cparams;
 }
