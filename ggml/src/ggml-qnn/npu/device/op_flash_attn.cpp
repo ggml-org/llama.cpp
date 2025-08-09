@@ -275,8 +275,7 @@ bool flash_attn_f32(tensor * out, compute_params * params) {
     const auto * k = out->get_src(1);
     const auto * v = out->get_src(2);
     if (!q || !k || !v) {
-        DEVICE_LOG_DEBUG(
-            "invalid src tensors: q: %p, k: %p, v: %p, mask: %p\n", (void *) q, (void *) k, (void *) v, (void *) mask);
+        DEVICE_LOG_DEBUG("invalid src tensors: q: %p, k: %p, v: %p\n", (void *) q, (void *) k, (void *) v);
         return false;
     }
 
