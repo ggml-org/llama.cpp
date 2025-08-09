@@ -75,7 +75,7 @@ export default function Sidebar() {
           Skip to main content
         </a>
 
-        <div className="flex flex-col bg-base-200 min-h-full max-w-64 pb-4 px-4">
+        <div className="flex flex-col bg-base-200 min-h-full max-w-full pb-4 px-4">
           <div className="flex flex-row items-center justify-between leading-10 py-2 border-b border-base-content/10">
             {/* close sidebar button */}
             <label className="w-8 h-8 p-0 max-lg:hidden"></label>
