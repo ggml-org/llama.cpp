@@ -1,0 +1,20 @@
+{% set bos = "<|begin_of_text|>" %}{%- set enable_thinking = true -%}{% set system_start_header = "<|start_header_id|>" %}{% set system_end_header = "<|end_header_id|>
+
+" %}{% set start_header = "<|start_header_id|>" %}{% set end_header = "<|end_header_id|>
+
+" %}{% set eot = "<|eot_id|>" %}{% set system_token = "system" %}{% set user_token = "user" %}{% set assistant_token = "assistant" %}{% set tool_token = "tool" %}{{- bos ~ system_start_header ~ system_token ~ system_end_header -}}{%- if messages[0].role == 'system' and messages[0].content != '' -%}{%- set system_content = messages[0].content -%}{%- if '/no_think' in system_content -%}{%- set system_content = system_content.replace('/no_think', '')|trim -%}{%- set enable_thinking = false -%}{%- elif '/think' in system_content -%}{%- set system_content = system_content.replace('/think', '')|trim -%}{%- set enable_thinking = true -%}{%- endif -%}{{- system_content + '
+
+' -}}{%- endif -%}{%- if tools -%}{{- 'You can use the following tools to assist the user if required:
+<AVAILABLE_TOOLS>[' -}}{%- for tool in tools -%}{{- (tool.function if tool.function is defined else tool) | tojson -}}{{- ', ' if not loop.last else '' -}}{%- endfor -%}{{- ']</AVAILABLE_TOOLS>
+
+If you decide to call any tool(s), use the following format:
+<TOOLCALL>[{{"name": "tool_name1", "arguments": "tool_args1"}}, {{"name": "tool_name2", "arguments": "tool_args2"}}]</TOOLCALL>
+
+Response from tool(s) will be returned in this format:
+<TOOL_RESPONSE>[{{"response": "tool_response1"}}, {{"response": "tool_response2"}}]</TOOL_RESPONSE>
+
+Based on the results returned by the tool(s), you can call additional tools if needed, correct tool calls if any errors are found, or just respond with the answer to the user.' -}}{%- endif -%}{{- eot -}}{%- for message in messages -%}{%- if message.role == user_token -%}{{- start_header ~ user_token ~ end_header -}}{{ message.content -}}{{ eot -}}{%- elif message.role == assistant_token -%}{%- if '</think>' in message.content -%}{%- set content = message.content.split('</think>')[-1].lstrip() -%}{%- else -%}{%- set content = message.content -%}{%- endif -%}{{- start_header ~ assistant_token ~ end_header -}}{{ content -}}{%- if message.tool_calls -%}{{- '<TOOLCALL>[' -}}{%- for call in message.tool_calls -%}{%- set fn = call.function if call.function is defined else call -%}{{- '{"name": "' + fn.name + '", "arguments": ' -}}{%- if fn.arguments is string -%}{{- fn.arguments -}}{%- else -%}{{- fn.arguments | tojson -}}{%- endif -%}{{- '}' + (', ' if not loop.last else '') -}}{%- endfor -%}{{- ']</TOOLCALL>' -}}{%- endif -%}{{- eot -}}{%- elif message.role == tool_token -%}{%- if loop.first or (messages[loop.index0 - 1].role != tool_token) -%}{{- start_header ~ tool_token ~ end_header -}}{{ '<TOOL_RESPONSE>[' -}}{%- endif -%}{{- message.content -}}{{- ', ' if not loop.last and (messages[loop.index0 + 1].role == tool_token) else '' -}}{%- if loop.last or (messages[loop.index0 + 1].role != tool_token) -%}{{- ']</TOOL_RESPONSE>' -}}{{ eot -}}{%- endif -%}{%- endif -%}{%- endfor -%}{%- if add_generation_prompt -%}{{- start_header ~ assistant_token ~ end_header -}}{%- if not enable_thinking -%}{{- '<think>
+
+</think>
+
+' -}}{%- endif -%}{%- endif -%}

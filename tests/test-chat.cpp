@@ -1439,6 +1439,77 @@ static void test_template_output_parsers() {
                       /* expect_grammar_triggered= */ false
         );
     }
+    {
+        auto tmpls = read_templates("models/templates/nvidia-Llama-3_3-Nemotron-Super-49B-v1_5.jinja");
+        std::vector<std::string>   end_tokens{ "<|eot_id|>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
+        test_templates(tmpls.get(), end_tokens, message_assist_thoughts, tools, "Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
+
+        assert_msg_equals(message_assist_thoughts_unparsed_deepseek,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON}));
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+        assert_msg_equals(message_assist_thoughts,
+            common_chat_parse(
+                "I'm\nthinking</think>Hello, world!\nWhat's up?",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_in_content = */ false,
+                    /* .thinking_forced_open = */ true,
+                }));
+
+        assert_msg_equals(message_assist_call_thoughts_unparsed,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>\n\n"
+                "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON}));
+        assert_msg_equals(message_assist_call,
+            common_chat_parse(
+                "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON}));
+        assert_msg_equals(message_assist_call_thoughts,
+            common_chat_parse(
+                "<think>I'm\nthinking</think>\n\n"
+                "<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        assert_msg_equals(message_assist_empty,
+            common_chat_parse(
+                "<th",
+                /* is_partial= */ true,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+        assert_msg_equals(message_assist_thoughts_no_content,
+            common_chat_parse(
+                "<think>I'm\nthinking",
+                /* is_partial= */ true,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_LLAMA_3_X_NEMOTRON,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+    }
 }
 
 static void test_msg_diffs_compute() {

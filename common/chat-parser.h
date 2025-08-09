@@ -82,6 +82,7 @@ class common_chat_msg_parser {
     std::optional<find_regex_result> try_find_regex(const common_regex & regex, size_t from = std::string::npos, bool add_prelude_to_content = true);
 
     bool try_consume_literal(const std::string & literal);
+    bool try_consume_partial_literal(const std::string & literal);
 
     std::optional<find_regex_result> try_find_literal(const std::string & literal);
 

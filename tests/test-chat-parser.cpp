@@ -99,6 +99,47 @@ static void test_reasoning() {
     assert_equals("<think>Cogito</think>", builder.result().content);
     assert_equals("Ergo sum", builder.consume_rest());
   }
+  {
+    common_chat_msg_parser builder("<tnk>Cogito", /* is_partial= */ true, {
+        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+    });
+
+    assert_equals(true, builder.try_parse_reasoning("<tnk>", "</tnk>"));
+    assert_equals("Cogito", builder.result().reasoning_content);
+    assert_equals("", builder.consume_rest());
+  }
+  {
+    common_chat_msg_parser builder("<t", /* is_partial= */ true, {
+        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+    });
+
+    try {
+        builder.try_parse_reasoning("<tnk>", "</tnk>");
+        throw std::runtime_error("Expected exception");
+    } catch (const std::exception & e) {
+        if (std::string(e.what()).find("<tnk>") == std::string::npos) {
+            throw std::runtime_error("Expected exception about partial <tnk>");
+        }
+    }
+  }
+  {
+    common_chat_msg_parser builder("<think>Cogito", /* is_partial= */ true, {
+        /* .format = */ COMMON_CHAT_FORMAT_CONTENT_ONLY,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+    });
+
+    assert_equals(false, builder.try_parse_reasoning("<tnk>", "</tnk>"));
+    assert_equals("", builder.result().reasoning_content);
+    assert_equals("<think>Cogito", builder.consume_rest());
+  }
 }
 
 static void test_regex() {
