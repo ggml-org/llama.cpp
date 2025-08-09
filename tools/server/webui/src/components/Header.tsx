@@ -28,7 +28,7 @@ export default function Header() {
   }, [selectedTheme]);
 
   return (
-    <div className="flex flex-row items-center pt-2 pb-2 sticky top-0 z-10 bg-base-100 border-b border-base-content/10">
+    <div className="flex flex-row items-center py-2 sticky top-0 z-10 bg-base-100 border-b border-base-content/10">
       {/* open sidebar button */}
       <label
         htmlFor="toggle-drawer"
@@ -38,7 +38,7 @@ export default function Header() {
       </label>
 
       {/* model information*/}
-      <div className="grow ml-2 px-1 sm:px-4 py-0 sm:py-2">
+      <div className="grow ml-2 px-1 sm:px-4 py-0">
         <b>
           {serverProps?.model_alias ||
             serverProps?.model_path
@@ -55,7 +55,10 @@ export default function Header() {
           data-tip="Settings"
           onClick={() => setShowSettings(true)}
         >
-          <button className="btn w-8 h-8 p-0 rounded-full" aria-hidden={true}>
+          <button
+            className="btn btn-ghost w-8 h-8 p-0 rounded-full"
+            aria-hidden={true}
+          >
             {/* settings button */}
             <Cog8ToothIcon className="w-5 h-5" />
           </button>
@@ -67,7 +70,7 @@ export default function Header() {
             <div
               tabIndex={0}
               role="button"
-              className="btn m-1 w-8 h-8 p-0 rounded-full"
+              className="btn btn-ghost m-1 w-8 h-8 p-0 rounded-full"
             >
               <MoonIcon className="w-5 h-5" />
             </div>
