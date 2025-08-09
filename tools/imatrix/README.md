@@ -84,7 +84,7 @@ From version <bwxyz>, `--show-statistics` operates in two modes: for GGUF (prefe
 * **Min / Max / μ / σ**: Tensor elements Min, Max, Mean, and Standard Deviation.
 * **N**: Number of tensor elements considered.
 * **H Norm**: Shannon Entropy normalized over log₂(N). Defined as $H Norm=\frac{-\sum_{i=1}^N p_i \log_2 p_i}{log_2 N}$. Used to determine how well a prompt "exercises" the model's capabilities.
-* **H** *(legacy mode)* / **ECS** *(preferred)*: If legacy, Shannon Entropy defined as $H = -\sum_{i=1}^N p_i \log_2 p_i$. If preferred, *Euclidean-Cosine Score* defined as $ECS = K \cdot e^{-\alpha a} \cdot |b|^{\gamma}$ where `a = L₂ Norm`, `b = Cosine Similarity`, `α = -0.01`, `γ = 10` between this tensor’s elements and those of the previous layer. Higher score means more similarity and lower change.
+* **H** *(legacy mode)* / **ECS** *(preferred)*: If legacy, Shannon Entropy defined as $H = -\sum_{i=1}^N p_i \log_2 p_i$. If preferred, *Euclidean-Cosine Score* defined as $ECS = K \cdot e^{-\alpha a} \cdot |b|^{\gamma}$ where `a = L₂ Norm`, `b = Cosine Similarity`, `α = 0.01`, `γ = 10` between this tensor’s elements and those of the previous layer. Higher score means more similarity and lower change.
 * **ZD**: % of elements whose Z-score is > 1.0 in magnitude (an indicator of outliers), as described in _3.1 Layer Importance Scores_ of [Layer-Wise Quantization](https://arxiv.org/abs/2406.17415)
 * **CosSim**: Cosine Similarity between this tensor’s elements and those of the previous layer.
 
