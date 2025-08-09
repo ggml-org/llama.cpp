@@ -64,6 +64,7 @@ class IMatrixCollector {
 public:
     IMatrixCollector() = default;
     void set_params(common_params params) { m_params = std::move(params); }
+    bool activation_statistics() const { return m_params.activation_statistics; }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void save_imatrix_legacy(int32_t ncall = -1) const;
     void save_imatrix(int32_t n_chunk = -1) const;
@@ -429,9 +430,8 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             // broadcast, when loading an old imatrix
             e.counts.resize(n_as, e.counts[0]);
         }
-        // ToDo: find an efficient way to implement --activation-statistics to avoid doubling the imatrix size by default
         if (e.values.empty()) {
-            e.activations.resize(src1->ne[0]*n_as, 0);
+            if (activation_statistics()) e.activations.resize(src1->ne[0]*n_as, 0);
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(n_as, 0);
         }
@@ -463,7 +463,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     e.counts[ex]++;
 
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
-                        e.activations[e_start + j] += x[j];
+                        if (activation_statistics()) e.activations[e_start + j] += x[j];
                         e.values[e_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[e_start + j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[e_start + j], wname.c_str());
@@ -503,7 +503,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             }
         }
         if (e.values.empty()) {
-            e.activations.resize(src1->ne[0] * n_mat, 0);
+            if (activation_statistics()) e.activations.resize(src1->ne[0] * n_mat, 0);
             e.values.resize(src1->ne[0] * n_mat, 0);
             e.counts.resize(1, 0);
         }
@@ -522,7 +522,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                 for (int64_t row = 0; row < src1->ne[1]; ++row) {
                     const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->nb[3]);
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
-                        e.activations[mat_start + j] += x[j];
+                        if (activation_statistics()) e.activations[mat_start + j] += x[j];
                         e.values[mat_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[j], wname.c_str());
@@ -704,7 +704,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         }
 
         to_store.push_back(kv.first);
-        data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
+        if (activation_statistics()) data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.activations.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
     }
@@ -758,7 +758,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
             gguf_add_tensor(ctx_gguf, in_sum2);
             gguf_add_tensor(ctx_gguf, counts);
 
-            if (!stat.activations.empty()) {
+            if (!stat.activations.empty() && activation_statistics()) {
                 const int32_t nact = (int32_t) stat.activations.size();
                 struct ggml_tensor * in_sum  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nact / nmat, nmat);
                 ggml_format_name(in_sum, "%s.in_sum", name.c_str());
