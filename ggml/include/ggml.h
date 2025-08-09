@@ -470,7 +470,7 @@ extern "C" {
         GGML_OP_REPEAT_BACK,
         GGML_OP_CONCAT,
         GGML_OP_SILU_BACK,
-        GGML_OP_NORM, // normalize
+        GGML_OP_NORM,  // normalize
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
         GGML_OP_GROUP_NORM,
@@ -540,6 +540,7 @@ extern "C" {
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
         GGML_OP_OPT_STEP_ADAMW,
+        GGML_OP_OPT_STEP_SGD,
 
         GGML_OP_GLU,
 
@@ -2294,6 +2295,14 @@ extern "C" {
             struct ggml_tensor  * m,
             struct ggml_tensor  * v,
             struct ggml_tensor  * adamw_params); // parameters such a the learning rate
+
+    // SGD (with weight decay) step
+    GGML_API struct ggml_tensor * ggml_opt_step_sgd(
+        // params: alpha (learning rate), 1 - alpha * (weight decay)
+        struct ggml_context * ctx,
+        struct ggml_tensor *  a,
+        struct ggml_tensor *  grad,
+        struct ggml_tensor *  sgd_params);
 
     //
     // automatic differentiation

@@ -17,7 +17,6 @@ static __global__ void opt_step_adamw_f32(
     const float beta1  = pars[1];
     const float beta2  = pars[2];
     const float eps    = pars[3];
-    const float wd     = pars[4];
     const float beta1h = pars[5];
     const float beta2h = pars[6];
 
@@ -31,7 +30,7 @@ static __global__ void opt_step_adamw_f32(
     const float mh =       gmi*beta1h;
     const float vh = sqrtf(gvi*beta2h) + eps;
 
-    x[i] = x[i]*(1.0f - alpha*wd) - alpha*mh/vh;
+    x[i] = x[i] * (1.f - alpha * pars[4]) - alpha * mh / vh;
 }
 
 static void opt_step_adamw_f32_cuda(
@@ -69,7 +68,6 @@ void ggml_cuda_opt_step_adamw(ggml_backend_cuda_context & ctx, ggml_tensor * dst
     float       * src0_grad_m_d  = (float       *) src0_grad_m->data;
     float       * src0_grad_v_d  = (float       *) src0_grad_v->data;
     const float * adamw_params_d = (const float *) adamw_params->data;
-
     cudaStream_t stream = ctx.stream();
 
     const int64_t ne = ggml_nelements(src0);
