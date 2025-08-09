@@ -305,8 +305,10 @@ export const AppContextProvider = ({
     if (isGenerating(convId ?? '') || content.trim().length === 0) return false;
 
     if (convId === null || convId.length === 0 || leafNodeId === null) {
+      const modelName = serverProps?.model_path?.split(/(\\|\/)/).pop();
       const conv = await StorageUtils.createConversation(
-        content.substring(0, 256)
+        content.substring(0, 256),
+        modelName
       );
       convId = conv.id;
       leafNodeId = conv.currNode;
