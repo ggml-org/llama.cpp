@@ -1163,6 +1163,10 @@ class TensorNameMap:
             "model.vision.patch_embedding.position_embedding", # cogvlm
         ),
 
+        MODEL_TENSOR.V_ENC_ATTN_QKV: (
+            "model.vision.transformer.layers.{bid}.attention.query_key_value", # cogvlm
+        ),
+
         MODEL_TENSOR.V_ENC_ATTN_Q: (
             "vision_tower.vision_model.encoder.layers.{bid}.self_attn.q_proj",
             "model.vision_tower.encoder.layer.{bid}.attention.q_proj", # Intern-S1
@@ -1171,7 +1175,6 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.q_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.q_proj", # pixtral
             "visual.blocks.{bid}.attn.q", # qwen2vl, generated
-            "model.vision.transformer.layers.{bid}.attention.query", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_Q_NORM: (
@@ -1187,7 +1190,6 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.k_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.k_proj", # pixtral
             "visual.blocks.{bid}.attn.k", # qwen2vl, generated
-            "model.vision.transformer.layers.{bid}.attention.key", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_ATTN_K_NORM: (
@@ -1203,7 +1205,6 @@ class TensorNameMap:
             "vision_model.model.layers.{bid}.self_attn.v_proj", # llama4
             "vision_tower.transformer.layers.{bid}.attention.v_proj", # pixtral
             "visual.blocks.{bid}.attn.v", # qwen2vl, generated
-            "model.vision.transformer.layers.{bid}.attention.value", # cogvlm
         ),
 
         MODEL_TENSOR.V_ENC_INPUT_NORM: (
