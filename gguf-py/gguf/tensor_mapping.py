@@ -1042,7 +1042,7 @@ class TensorNameMap:
         MODEL_TENSOR.VISEXP_ATTN_Q: (
             "model.layers.{bid}.self_attn.vision_expert_query",  # cogvlm
         ),
-        
+
         MODEL_TENSOR.VISEXP_ATTN_K: (
             "model.layers.{bid}.self_attn.vision_expert_key",  # cogvlm
         ),
@@ -1433,7 +1433,7 @@ class TensorNameMap:
         MODEL_TENSOR.V_TOK_BOI: (
             "model.vision.boi", # cogvlm
         ),
-        
+
         MODEL_TENSOR.V_TOK_EOI: (
             "model.vision.eoi", # cogvlm
         ),

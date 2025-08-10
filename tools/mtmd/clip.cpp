@@ -1661,7 +1661,7 @@ struct clip_graph {
 
         // Apply silu
         gate = ggml_silu_inplace(ctx0, gate);
-        
+
         // Multiply together
         cur = ggml_mul(ctx0, gate, h_to_4h);
 
