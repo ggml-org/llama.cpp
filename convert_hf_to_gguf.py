@@ -1346,7 +1346,7 @@ class MmprojModel(ModelBase):
             self.gguf_writer.add_vision_embedding_length(self.find_vparam(["hidden_size"]))
             self.gguf_writer.add_vision_feed_forward_length(self.find_vparam(["intermediate_size"]))
             self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys))
-            self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads"]))
+            self.gguf_writer.add_vision_head_count(self.find_vparam(["num_attention_heads", "num_heads"]))
 
             # preprocessor config
             image_mean = DATASET_MEAN if self.is_mistral_format else self.preprocessor_config["image_mean"]
@@ -8696,9 +8696,6 @@ class KimiVLModel(MmprojModel):
 
 @ModelBase.register("CogVLMForCausalLM")
 class CogVLMVisionModel(MmprojModel):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.hparams_vision['num_attention_heads'] = self.hparams['num_heads']
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -8726,9 +8723,6 @@ class CogVLMVisionModel(MmprojModel):
 @ModelBase.register("CogVLMForCausalLM")
 class CogVLMModel(LlamaModel):
     model_arch = gguf.MODEL_ARCH.COGVLM
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
