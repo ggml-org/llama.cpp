@@ -212,6 +212,8 @@ struct clip_layer {
     ggml_tensor * q_b = nullptr;
     ggml_tensor * v_w = nullptr;
     ggml_tensor * v_b = nullptr;
+    ggml_tensor * qkv_w = nullptr;
+    ggml_tensor * qkv_b = nullptr;
 
     ggml_tensor * o_w = nullptr;
     ggml_tensor * o_b = nullptr;
@@ -1630,18 +1632,65 @@ struct clip_graph {
         ggml_tensor * inp = build_inp();
         inp = ggml_concat(ctx0, inp, model.class_embedding, 1);
 
-        // build ViT transformer
-        ggml_tensor * cur = build_vit(
-                                inp, n_pos,
-                                NORM_TYPE_NORMAL,
-                                hparams.ffn_op,
-                                model.position_embeddings,
-                                nullptr);
+        inp = ggml_add(ctx0, inp, model.position_embeddings);
+        cb(inp, "inp_pos", -1);
+
+        ggml_tensor * inpL = inp;
+
+        for (int il = 0; il < n_layer; il++) {
+            auto & layer = model.layers[il];
+            ggml_tensor * cur = inpL;
+
+            cur = ggml_mul_mat(ctx0, layer.qkv_w, cur);
+
+            cur = ggml_add(ctx0, cur, layer.qkv_b);
+
+            ggml_tensor * Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_pos,
+                cur->nb[1], 0));
+            ggml_tensor * Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_pos,
+                cur->nb[1], n_embd * sizeof(float)));
+            ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, cur, n_embd, n_pos,
+                cur->nb[1], 2 * n_embd * sizeof(float)));
+
+            Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
+            Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
+            Vcur = ggml_reshape_3d(ctx0, Vcur, d_head, n_head, n_pos);
+
+            cb(Qcur, "Qcur", il);
+            cb(Kcur, "Kcur", il);
+            cb(Vcur, "Vcur", il);
+
+            cur = build_attn(layer.o_w, layer.o_b,
+                Qcur, Kcur, Vcur, nullptr, kq_scale, il);
+            cb(cur, "attn_out", il);
+
+            cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
+            cb(cur, "attn_post_norm", il);
+
+            cur = ggml_add(ctx0, cur, inpL);
+            inpL = cur;
+
+            cur = build_ffn(cur,
+                layer.ff_up_w, layer.ff_up_b,
+                layer.ff_gate_w, layer.ff_gate_b,
+                layer.ff_down_w, layer.ff_down_b,
+                hparams.ffn_op, il);
+
+            cb(cur, "ffn_out", il);
+
+            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
+            cb(cur, "ffn_post_norm", il);
+
+            cur = ggml_add(ctx0, cur, inpL);
+            cb(cur, "layer_out", il);
+            inpL = cur;
+
+        }
 
         // remove CLS token (like build_llama4 does)
-        cur = ggml_view_2d(ctx0, cur,
+        ggml_tensor * cur = ggml_view_2d(ctx0, inpL,
             n_embd, n_patches,
-            ggml_row_size(cur->type, n_embd), 0);
+            ggml_row_size(inpL->type, n_embd), 0);
 
         // Multiply with mm_model_proj
         cur = ggml_mul_mat(ctx0, model.mm_model_proj, cur);
@@ -1742,14 +1791,9 @@ private:
             auto & layer = model.layers[il];
             ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 
-            // Check if this is COGVLM projector type for post-norm layernorm order
-            const bool is_cogvlm = ctx->proj_type() == PROJECTOR_TYPE_COGVLM;
-
-            // layernorm1 (only for non-COGVLM)
-            if (!is_cogvlm) {
-                cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
-                cb(cur, "layer_inp_normed", il);
-            }
+            // layernorm1
+            cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
+            cb(cur, "layer_inp_normed", il);
 
             // self-attention
             {
@@ -1803,12 +1847,6 @@ private:
                 cb(cur, "attn_out_scaled", il);
             }
 
-            // Apply layernorm AFTER attention for COGVLM (post-norm)
-            if (is_cogvlm) {
-                cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
-                cb(cur, "attn_post_norm", il);
-            }
-
             // re-add the layer input, e.g., residual
             cur = ggml_add(ctx0, cur, inpL);
 
@@ -1816,11 +1854,9 @@ private:
 
             cb(cur, "ffn_inp", il);
 
-            // layernorm2 (only for non-COGVLM)
-            if (!is_cogvlm) {
-                cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
-                cb(cur, "ffn_inp_normed", il);
-            }
+            // layernorm2
+            cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
+            cb(cur, "ffn_inp_normed", il);
 
             // ffn
             cur = build_ffn(cur,
@@ -1834,12 +1870,6 @@ private:
             if (layer.ls_2_w) {
                 cur = ggml_mul(ctx0, cur, layer.ls_2_w);
                 cb(cur, "ffn_out_scaled", il);
-            }
-
-            // Apply layernorm AFTER MLP for COGVLM (post-norm)
-            if (is_cogvlm) {
-                cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, norm_t, eps, il);
-                cb(cur, "ffn_post_norm", il);
             }
 
             // residual 2
@@ -2601,10 +2631,11 @@ struct clip_model_loader {
         model.layers.resize(hparams.n_layer);
         for (int il = 0; il < hparams.n_layer; ++il) {
             auto & layer = model.layers[il];
-            layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"));
-            layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"));
-            layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"));
+            layer.k_w    = get_tensor(string_format(TN_ATTN_K,      prefix, il, "weight"), false);
+            layer.q_w    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "weight"), false);
+            layer.v_w    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "weight"), false);
             layer.o_w    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "weight"));
+            layer.qkv_w  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "weight"), false);
             layer.k_norm = get_tensor(string_format(TN_ATTN_K_NORM, prefix, il, "weight"), false);
             layer.q_norm = get_tensor(string_format(TN_ATTN_Q_NORM, prefix, il, "weight"), false);
             layer.ln_1_w = get_tensor(string_format(TN_LN_1,        prefix, il, "weight"), false);
@@ -2616,6 +2647,7 @@ struct clip_model_loader {
             layer.q_b    = get_tensor(string_format(TN_ATTN_Q,      prefix, il, "bias"), false);
             layer.v_b    = get_tensor(string_format(TN_ATTN_V,      prefix, il, "bias"), false);
             layer.o_b    = get_tensor(string_format(TN_ATTN_OUTPUT, prefix, il, "bias"), false);
+            layer.qkv_b  = get_tensor(string_format(TN_ATTN_QKV,    prefix, il, "bias"), false);
             layer.ln_1_b = get_tensor(string_format(TN_LN_1,        prefix, il, "bias"), false);
             layer.ln_2_b = get_tensor(string_format(TN_LN_2,        prefix, il, "bias"), false);
 
