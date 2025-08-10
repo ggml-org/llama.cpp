@@ -1650,7 +1650,6 @@ struct clip_graph {
         cur = build_norm(cur, model.mm_post_fc_norm_w, model.mm_post_fc_norm_b, NORM_TYPE_NORMAL, 1e-5, -1);
 
         // Apply GELU
-        // TODO: Not 100% sure about gelu and silu configuration
         cur = ggml_gelu_inplace(ctx0, cur);
 
         // Branch 1: multiply with mm_h_to_4h_w
@@ -1660,16 +1659,12 @@ struct clip_graph {
         ggml_tensor * gate = ggml_mul_mat(ctx0, model.mm_gate_w, cur);
 
         // Apply silu
-        gate = ggml_silu_inplace(ctx0, gate);
-
-        // Multiply together
-        cur = ggml_mul(ctx0, gate, h_to_4h);
+        gate = ggml_swiglu_split(ctx0, gate, h_to_4h);
 
         // Apply mm_4h_to_h_w
-        cur = ggml_mul_mat(ctx0, model.mm_4h_to_h_w, cur);
+        cur = ggml_mul_mat(ctx0, model.mm_4h_to_h_w, gate);
 
         // Concatenate with boi and eoi
-        // TODO: The shape may be incorrect
         cur = ggml_concat(ctx0, model.mm_boi, cur, 1);
         cur = ggml_concat(ctx0, cur, model.mm_eoi, 1);
 
