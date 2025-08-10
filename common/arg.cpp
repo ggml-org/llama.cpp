@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <climits>
 #include <cstdarg>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <list>
@@ -37,6 +38,11 @@
 #include <curl/curl.h>
 #include <curl/easy.h>
 #include <future>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #endif
 
 using json = nlohmann::ordered_json;
@@ -220,19 +226,123 @@ struct curl_slist_ptr {
 #define CURL_MAX_RETRY 3
 #define CURL_RETRY_DELAY_SECONDS 2
 
+// Header callback state for detecting resume support
+struct curl_resume_state {
+    bool attempting_resume;
+    curl_off_t resume_offset;
+    FILE * file_ptr;
+    CURL * curl_handle;
+    bool server_supports_resume;
+    bool decided;  // Only process once per response
+};
+
+static size_t curl_resume_header_callback(char * buffer, size_t size, size_t n_items, void * userdata) {
+    size_t n_bytes = size * n_items;
+    curl_resume_state * state = static_cast<curl_resume_state*>(userdata);
+
+    if (!state || !state->attempting_resume || state->decided) {
+        return n_bytes;  // Not resuming or already processed
+    }
+
+    // Parse status line (e.g., "HTTP/1.1 200 OK\r\n" or "HTTP/2 200\r\n")
+    if (n_bytes > 9 && strncmp(buffer, "HTTP/", 5) == 0) {
+        // Find first space and parse status code from there
+        const char * space = strchr(buffer, ' ');
+        if (space) {
+            int status_code = atoi(space + 1);
+            if (status_code == 200) {
+                // Server ignored our range request - need to start fresh
+                LOG_WRN("curl: server returned 200 instead of 206 - doesn't support resume\n");
+                state->server_supports_resume = false;
+                state->decided = true;
+
+                // Truncate file to 0 and rewind immediately
+                if (state->file_ptr) {
+                    fflush(state->file_ptr);
+#ifdef _WIN32
+                    _chsize_s(_fileno(state->file_ptr), 0);
+#else
+                    if (ftruncate(fileno(state->file_ptr), 0) != 0) {
+                        LOG_WRN("curl: failed to truncate file\n");
+                    }
+#endif
+                    rewind(state->file_ptr);
+                }
+            } else if (status_code == 206) {
+                // Partial content - resume is working
+                state->server_supports_resume = true;
+                state->decided = true;
+            }
+        }
+    }
+
+    // Also check for Content-Range header as confirmation of resume support
+    if (n_bytes > 14 && strncasecmp(buffer, "Content-Range:", 14) == 0) {
+        state->server_supports_resume = true;
+        state->decided = true;
+    }
+
+    return n_bytes;
+}
+
 static bool curl_perform_with_retry(const std::string & url, CURL * curl, int max_attempts, int retry_delay_seconds, const char * method_name) {
     int remaining_attempts = max_attempts;
 
+    // Check if this is a download operation (GET with WRITEDATA set)
+    void * pv = nullptr;
+    curl_easy_getinfo(curl, CURLINFO_PRIVATE, &pv);
+    FILE * write_file = static_cast<FILE*>(pv);
+
     while (remaining_attempts > 0) {
+        // Initialize state for this attempt
+        curl_resume_state state = {false, 0, write_file, curl, false, false};
+
+        // For resume support on GET requests with file output after failure
+        if (write_file && strcmp(method_name, "GET") == 0 && max_attempts - remaining_attempts > 0) {
+            // Flush any pending data and get current file position
+            fflush(write_file);
+            curl_off_t file_size = ftell(write_file);
+            if (file_size > 0) {
+                // Use CURLOPT_RESUME_FROM_LARGE for proper resume
+                curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, file_size);
+                LOG_INF("%s: resuming download from byte %lld\n", __func__, (long long)file_size);
+
+                // Set up header callback to detect if server supports resume
+                state.attempting_resume = true;
+                state.resume_offset = file_size;
+                curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, curl_resume_header_callback);
+                curl_easy_setopt(curl, CURLOPT_HEADERDATA, &state);
+            }
+        }
+
         LOG_INF("%s: %s %s (attempt %d of %d)...\n", __func__ , method_name, url.c_str(), max_attempts - remaining_attempts + 1, max_attempts);
 
         CURLcode res = curl_easy_perform(curl);
+
+        // Restore original header callback if we changed it
+        if (state.attempting_resume) {
+            curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, nullptr);
+            curl_easy_setopt(curl, CURLOPT_HEADERDATA, nullptr);
+        }
+
         if (res == CURLE_OK) {
             return true;
         }
 
-        int exponential_backoff_delay = std::pow(retry_delay_seconds, max_attempts - remaining_attempts) * 1000;
-        LOG_WRN("%s: curl_easy_perform() failed: %s, retrying after %d milliseconds...\n", __func__, curl_easy_strerror(res), exponential_backoff_delay);
+        // Check for specific error conditions
+        long http_code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+
+        // HTTP 416 Range Not Satisfiable means file is already complete
+        if (http_code == 416) {
+            LOG_INF("%s: file already complete (HTTP 416)\n", __func__);
+            return true;
+        }
+
+        // Fixed exponential backoff: multiply delay by 2 for each retry
+        int exponential_backoff_delay = retry_delay_seconds * std::pow(2, max_attempts - remaining_attempts) * 1000;
+        LOG_WRN("%s: curl_easy_perform() failed: %s (HTTP %ld), retrying after %d milliseconds...\n",
+                __func__, curl_easy_strerror(res), http_code, exponential_backoff_delay);
 
         remaining_attempts--;
         if (remaining_attempts == 0) break;
@@ -248,6 +358,16 @@ static bool curl_perform_with_retry(const std::string & url, CURL * curl, int ma
 static bool common_download_file_single(const std::string & url, const std::string & path, const std::string & bearer_token, bool offline) {
     // Check if the file already exists locally
     auto file_exists = std::filesystem::exists(path);
+
+    // Send a HEAD request to retrieve the etag and last-modified headers
+    struct common_load_model_from_url_headers {
+        std::string etag;
+        std::string last_modified;
+        std::string x_linked_etag;  // SHA256 hash from HuggingFace
+        curl_off_t content_length = 0;  // Total file size from Content-Length or x-linked-size
+    };
+
+    common_load_model_from_url_headers headers;
 
     // If the file exists, check its JSON metadata companion file.
     std::string metadata_path = path + ".json";
@@ -272,6 +392,14 @@ static bool common_download_file_single(const std::string & url, const std::stri
                 if (metadata.contains("lastModified") && metadata.at("lastModified").is_string()) {
                     last_modified = metadata.at("lastModified");
                 }
+                // Load the expected file size if available
+                if (metadata.contains("contentLength") && metadata.at("contentLength").is_number()) {
+                    headers.content_length = metadata.at("contentLength");
+                }
+                // Load the SHA256 hash if available
+                if (metadata.contains("sha256") && metadata.at("sha256").is_string()) {
+                    headers.x_linked_etag = metadata.at("sha256");
+                }
             } catch (const nlohmann::json::exception & e) {
                 LOG_ERR("%s: error reading metadata file %s: %s\n", __func__, metadata_path.c_str(), e.what());
             }
@@ -285,13 +413,6 @@ static bool common_download_file_single(const std::string & url, const std::stri
         LOG_INF("%s: no previous model file found %s\n", __func__, path.c_str());
     }
 
-    // Send a HEAD request to retrieve the etag and last-modified headers
-    struct common_load_model_from_url_headers {
-        std::string etag;
-        std::string last_modified;
-    };
-
-    common_load_model_from_url_headers headers;
     bool head_request_ok = false;
     bool should_download = !file_exists; // by default, we should download if the file does not exist
 
@@ -328,6 +449,9 @@ static bool common_download_file_single(const std::string & url, const std::stri
         static std::regex header_regex("([^:]+): (.*)\r\n");
         static std::regex etag_regex("ETag", std::regex_constants::icase);
         static std::regex last_modified_regex("Last-Modified", std::regex_constants::icase);
+        static std::regex content_length_regex("Content-Length", std::regex_constants::icase);
+        static std::regex x_linked_size_regex("x-linked-size", std::regex_constants::icase);
+        static std::regex x_linked_etag_regex("x-linked-etag", std::regex_constants::icase);
 
         std::string header(buffer, n_items);
         std::smatch match;
@@ -338,6 +462,19 @@ static bool common_download_file_single(const std::string & url, const std::stri
                 headers->etag = value;
             } else if (std::regex_match(key, match, last_modified_regex)) {
                 headers->last_modified = value;
+            } else if (std::regex_match(key, match, content_length_regex)) {
+                headers->content_length = std::stoll(value);
+            } else if (std::regex_match(key, match, x_linked_size_regex)) {
+                // HuggingFace provides file size in x-linked-size header
+                headers->content_length = std::stoll(value);
+            } else if (std::regex_match(key, match, x_linked_etag_regex)) {
+                // HuggingFace provides SHA256 hash in x-linked-etag header
+                // Remove quotes if present
+                std::string hash = value;
+                if (hash.size() >= 2 && hash.front() == '"' && hash.back() == '"') {
+                    hash = hash.substr(1, hash.size() - 2);
+                }
+                headers->x_linked_etag = hash;
             }
         }
         return n_items;
@@ -396,7 +533,15 @@ static bool common_download_file_single(const std::string & url, const std::stri
             }
         };
 
-        std::unique_ptr<FILE, FILE_deleter> outfile(fopen(path_temporary.c_str(), "wb"));
+        // Check if partial file exists from previous attempt
+        bool resume_download = false;
+        curl_off_t resume_from = 0;
+        if (std::filesystem::exists(path_temporary)) {
+            resume_from = std::filesystem::file_size(path_temporary);
+            resume_download = resume_from > 0;
+        }
+
+        std::unique_ptr<FILE, FILE_deleter> outfile(fopen(path_temporary.c_str(), resume_download ? "ab" : "wb"));
         if (!outfile) {
             LOG_ERR("%s: error opening local file for writing: %s\n", __func__, path.c_str());
             return false;
@@ -409,6 +554,15 @@ static bool common_download_file_single(const std::string & url, const std::stri
         curl_easy_setopt(curl.get(), CURLOPT_NOBODY, 0L);
         curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, static_cast<CURLOPT_WRITEFUNCTION_PTR>(write_callback));
         curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, outfile.get());
+
+        // Set resume position if we have a partial file
+        if (resume_download) {
+            curl_easy_setopt(curl.get(), CURLOPT_RESUME_FROM_LARGE, resume_from);
+            LOG_INF("%s: resuming download from byte %lld\n", __func__, (long long)resume_from);
+        }
+
+        // Store file pointer for retry mechanism
+        curl_easy_setopt(curl.get(), CURLOPT_PRIVATE, outfile.get());
 
         //  display download progress
         curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
@@ -438,7 +592,11 @@ static bool common_download_file_single(const std::string & url, const std::stri
 
         long http_code = 0;
         curl_easy_getinfo (curl.get(), CURLINFO_RESPONSE_CODE, &http_code);
-        if (http_code < 200 || http_code >= 400) {
+        // HTTP 416 means the file is already complete (e.g., when resuming a completed download)
+        if (http_code == 416) {
+            LOG_INF("%s: file already complete (HTTP 416), treating as success\n", __func__);
+            // File is already complete, we can proceed
+        } else if (http_code < 200 || http_code >= 400) {
             LOG_ERR("%s: invalid http status code received: %ld\n", __func__, http_code);
             return false;
         }
@@ -446,11 +604,65 @@ static bool common_download_file_single(const std::string & url, const std::stri
         // Causes file to be closed explicitly here before we rename it.
         outfile.reset();
 
+        // Verify file size if we know the expected size
+        if (headers.content_length > 0) {
+            curl_off_t actual_size = std::filesystem::file_size(path_temporary);
+            if (actual_size != headers.content_length) {
+                LOG_ERR("%s: file size mismatch: expected %lld, got %lld\n", __func__,
+                        (long long)headers.content_length, (long long)actual_size);
+                return false;
+            }
+            LOG_INF("%s: file size verified: %lld bytes\n", __func__, (long long)actual_size);
+        }
+
+        // Verify SHA256 if we have it (from HuggingFace x-linked-etag)
+        if (!headers.x_linked_etag.empty()) {
+            LOG_INF("%s: verifying SHA256 hash...\n", __func__);
+
+            // Use sha256sum command to compute hash
+            std::string cmd = "sha256sum \"" + path_temporary + "\" 2>/dev/null";
+            FILE * pipe = popen(cmd.c_str(), "r");
+            if (pipe) {
+                char buffer[130]; // SHA256 is 64 chars + filename + space
+                std::string result;
+                if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+                    result = buffer;
+                }
+                pclose(pipe);
+
+                // Extract just the hash (first 64 characters)
+                if (result.size() >= 64) {
+                    std::string computed_hash = result.substr(0, 64);
+
+                    // Compare with expected hash (case-insensitive)
+                    std::string expected = headers.x_linked_etag;
+                    std::transform(expected.begin(), expected.end(), expected.begin(), ::tolower);
+                    std::transform(computed_hash.begin(), computed_hash.end(), computed_hash.begin(), ::tolower);
+
+                    if (computed_hash != expected) {
+                        LOG_ERR("%s: SHA256 hash mismatch!\n", __func__);
+                        LOG_ERR("%s:   expected: %s\n", __func__, expected.c_str());
+                        LOG_ERR("%s:   computed: %s\n", __func__, computed_hash.c_str());
+                        LOG_ERR("%s: file may be corrupted, deleting: %s\n", __func__, path_temporary.c_str());
+                        std::filesystem::remove(path_temporary);
+                        return false;
+                    }
+                    LOG_INF("%s: SHA256 hash verified: %s\n", __func__, computed_hash.c_str());
+                } else {
+                    LOG_WRN("%s: sha256sum output format unexpected, skipping verification\n", __func__);
+                }
+            } else {
+                LOG_WRN("%s: sha256sum command not available, skipping hash verification\n", __func__);
+            }
+        }
+
         // Write the updated JSON metadata file.
         metadata.update({
             {"url", url},
             {"etag", headers.etag},
-            {"lastModified", headers.last_modified}
+            {"lastModified", headers.last_modified},
+            {"contentLength", headers.content_length},
+            {"sha256", headers.x_linked_etag}  // SHA256 hash if available (from HuggingFace)
         });
         write_file(metadata_path, metadata.dump(4));
         LOG_DBG("%s: file metadata saved: %s\n", __func__, metadata_path.c_str());
