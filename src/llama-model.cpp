@@ -18612,7 +18612,7 @@ struct llm_build_smallthinker : public llm_graph_context{
 };
 
 struct llm_build_cogvlm : public llm_graph_context {
-    llm_build_cogvlm(const llama_model & model, const llm_graph_params & params, ggml_cgraph * gf) : llm_graph_context(params) {
+    llm_build_cogvlm(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
         const int64_t n_embd_head = hparams.n_embd_head_v;
         float kq_scale = 1.0f / sqrtf(float(n_embd_head));
 
@@ -18680,7 +18680,7 @@ struct llm_build_cogvlm : public llm_graph_context {
                 Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
                 Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
 
-                cur = build_attn(inp_attn, gf, wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
+                cur = build_attn(inp_attn, wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
             }
 
@@ -19237,7 +19237,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_COGVLM:
             {
-                llm = std::make_unique<llm_build_cogvlm>(*this, params, gf);
+                llm = std::make_unique<llm_build_cogvlm>(*this, params);
             } break;
         default:
             GGML_ABORT("fatal error");
