@@ -2011,12 +2011,7 @@ struct server_context {
             params_dft.cache_type_k = params_base.speculative.cache_type_k;
             params_dft.cache_type_v = params_base.speculative.cache_type_v;
 
-            // Apply tensor overrides for draft model
-            if (!params_base.speculative.tensor_buft_overrides.empty()) {
-                params_dft.tensor_buft_overrides = params_base.speculative.tensor_buft_overrides;
-            } else {
-                params_dft.tensor_buft_overrides.clear(); // ensure no main overrides leak in
-            }
+            params_dft.tensor_buft_overrides = params_base.speculative.tensor_buft_overrides;
 
             llama_init_dft = common_init_from_params(params_dft);
 

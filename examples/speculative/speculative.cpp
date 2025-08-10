@@ -85,13 +85,7 @@ int main(int argc, char ** argv) {
     }
 
     params.cpuparams_batch.n_threads = params.speculative.cpuparams_batch.n_threads;
-
-    // Apply tensor overrides for draft model
-    if (!params.speculative.tensor_buft_overrides.empty()) {
-        params.tensor_buft_overrides = params.speculative.tensor_buft_overrides;
-    } else {
-        params.tensor_buft_overrides.clear();
-    }
+    params.tensor_buft_overrides     = params.speculative.tensor_buft_overrides;
 
     common_init_result llama_init_dft = common_init_from_params(params);
 
