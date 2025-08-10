@@ -1014,9 +1014,10 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "OPT_STEP_ADAMW",
 
     "GLU",
+    "FFN",
 };
 
-static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
+static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1115,9 +1116,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "adamw(x)",
 
     "glu(x)",
+    "ffn(x)",
 };
 
-static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
+static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -4954,6 +4956,40 @@ struct ggml_tensor * ggml_flash_attn_back(
     result->src[1] = k;
     result->src[2] = v;
     result->src[3] = d;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_ffn_ext(
+        struct ggml_context * ctx,
+        struct ggml_tensor * cur,
+        struct ggml_tensor * up,
+        struct ggml_tensor * up_b,
+        struct ggml_tensor * up_s,
+        struct ggml_tensor * gate,
+        struct ggml_tensor * gate_b,
+        struct ggml_tensor * gate_s,
+        struct ggml_tensor * down,
+        struct ggml_tensor * down_b,
+        struct ggml_tensor * down_s,
+        struct ggml_tensor * act_scales,
+        int      type_op) {
+    int64_t ne[] = {10, 10, 10, 10};
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, GGML_MAX_DIMS, ne);
+
+    ggml_set_op_params_i32(result, 0, type_op);
+
+    result->op     = GGML_OP_FFN;
+    result->src[0] = up;
+    result->src[1] = up_b;
+    result->src[2] = up_s;
+    result->src[3] = gate;
+    result->src[4] = gate_b;
+    result->src[5] = gate_s;
+    result->src[6] = down;
+    result->src[7] = down_b;
+    result->src[8] = down_s;
+    result->src[9] = act_scales;
 
     return result;
 }

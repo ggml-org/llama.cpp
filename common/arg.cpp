@@ -1499,6 +1499,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_FLASH_ATTN"));
     add_opt(common_arg(
+        {"-ffn", "--feed-forward-network"},
+        string_format("enable fused feed froward network (default: %s)", params.ffn ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.ffn = true;
+        }
+    ).set_env("LLAMA_ARG_FFN"));
+    add_opt(common_arg(
         {"-p", "--prompt"}, "PROMPT",
         "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {

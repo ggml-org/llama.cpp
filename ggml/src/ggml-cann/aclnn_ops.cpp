@@ -3397,3 +3397,7 @@ void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst){
         GGML_ABORT("Function is not implemented.");
     }
 }
+
+void ggml_cann_ffn(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+    
+}

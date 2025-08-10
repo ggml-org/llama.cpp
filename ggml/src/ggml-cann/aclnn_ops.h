@@ -740,6 +740,8 @@ void ggml_cann_step(ggml_backend_cann_context& ctx, ggml_tensor* dst);
  */
 void ggml_cann_flash_attn_ext(ggml_backend_cann_context& ctx, ggml_tensor* dst);
 
+void ggml_cann_ffn(ggml_backend_cann_context& ctx, ggml_tensor* dst);
+
 /*
  * @brief A generic wrapper for ACL resources with custom deleter support.
  */

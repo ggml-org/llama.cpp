@@ -644,6 +644,12 @@ ggml_tensor * llm_graph_context::build_ffn(
      llm_ffn_op_type   type_op,
    llm_ffn_gate_type   type_gate,
                  int   il) const {
+
+    if (cparams.ffn) {
+        cur = ggml_ffn_ext(ctx0, cur, up, up_b, up_s, gate, gate_b, 
+            gate_s, down, down_b, down_s, act_scales, type_gate);
+        return cur;
+    }
     ggml_tensor * tmp = up ? build_lora_mm(up, cur) : cur;
     cb(tmp, "ffn_up", il);
 

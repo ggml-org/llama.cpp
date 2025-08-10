@@ -543,6 +543,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_FFN,
+
         GGML_OP_COUNT,
     };
 
@@ -2096,6 +2098,21 @@ extern "C" {
            struct ggml_tensor  * v,
            struct ggml_tensor  * d,
            bool                  masked);
+
+    GGML_API struct ggml_tensor * ggml_ffn_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor * cur,
+            struct ggml_tensor * up,
+            struct ggml_tensor * up_b,
+            struct ggml_tensor * up_s,
+            struct ggml_tensor * gate,
+            struct ggml_tensor * gate_b,
+            struct ggml_tensor * gate_s,
+            struct ggml_tensor * down,
+            struct ggml_tensor * down_b,
+            struct ggml_tensor * down_s,
+            struct ggml_tensor * act_scales,
+            int   type_gate);
 
     GGML_API struct ggml_tensor * ggml_ssm_conv(
             struct ggml_context * ctx,

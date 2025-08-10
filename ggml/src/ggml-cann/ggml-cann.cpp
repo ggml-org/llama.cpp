@@ -1881,6 +1881,8 @@ static bool ggml_cann_compute_forward(ggml_backend_cann_context& ctx,
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cann_flash_attn_ext(ctx, dst);
             break;
+        case GGML_OP_FFN:
+            ggml_cann_ffn(ctx, dst);
         default:
             return false;
     }
@@ -2544,6 +2546,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             }
             return true;
         }
+        case GGML_OP_FFN:
+            return true;
         default:
             return false;
     }
