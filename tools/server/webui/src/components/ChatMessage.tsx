@@ -7,6 +7,7 @@ import {
   ArrowPathIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ExclamationCircleIcon,
   PencilSquareIcon,
 } from '@heroicons/react/24/outline';
 import ChatInputExtraContextItem from './ChatInputExtraContextItem';
@@ -109,7 +110,7 @@ export default function ChatMessage({
         <div
           className={classNames({
             'chat-bubble markdown': true,
-            'chat-bubble bg-transparent': !isUser,
+            'bg-transparent': !isUser,
           })}
         >
           {/* textarea for editing message */}
@@ -168,30 +169,6 @@ export default function ChatMessage({
                   </div>
                 </>
               )}
-              {/* render timings if enabled */}
-              {timings && config.showTokensPerSecond && (
-                <div className="dropdown dropdown-hover dropdown-top mt-2">
-                  <div
-                    tabIndex={0}
-                    role="button"
-                    className="cursor-pointer font-semibold text-sm opacity-60"
-                  >
-                    Speed: {timings.predicted_per_second.toFixed(1)} t/s
-                  </div>
-                  <div className="dropdown-content bg-base-100 z-10 w-64 p-2 shadow mt-4">
-                    <b>Prompt</b>
-                    <br />- Tokens: {timings.prompt_n}
-                    <br />- Time: {timings.prompt_ms} ms
-                    <br />- Speed: {timings.prompt_per_second.toFixed(1)} t/s
-                    <br />
-                    <b>Generation</b>
-                    <br />- Tokens: {timings.predicted_n}
-                    <br />- Time: {timings.predicted_ms} ms
-                    <br />- Speed: {timings.predicted_per_second.toFixed(1)} t/s
-                    <br />
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>
@@ -201,7 +178,7 @@ export default function ChatMessage({
       {msg.content !== null && (
         <div
           className={classNames({
-            'flex items-center gap-2 mx-4 mt-2 mb-2': true,
+            'flex items-center gap-2 mx-4 mb-2': true,
             'flex-row-reverse': msg.role === 'user',
           })}
         >
@@ -262,6 +239,41 @@ export default function ChatMessage({
                   tooltipsContent="Regenerate response"
                 >
                   <ArrowPathIcon className="h-4 w-4" />
+                </BtnWithTooltips>
+              )}
+
+              {/* render timings if enabled */}
+              {timings && config.showTokensPerSecond && (
+                <BtnWithTooltips
+                  className="btn-mini w-8 h-8"
+                  tooltipsContent="Performance"
+                >
+                  <div className="dropdown dropdown-hover dropdown-top">
+                    <ExclamationCircleIcon className="h-4 w-4" />
+
+                    <div
+                      tabIndex={0}
+                      className="dropdown-content rounded-box bg-base-100 z-10 w-48 px-4 py-2 shadow mt-4 text-sm text-left"
+                    >
+                      <b>Prompt Processing</b>
+                      <ul className="list-inside list-disc">
+                        <li>Tokens: {timings.prompt_n}</li>
+                        <li>Time: {timings.prompt_ms} ms</li>
+                        <li>
+                          Speed: {timings.prompt_per_second.toFixed(1)} t/s
+                        </li>
+                      </ul>
+                      <br />
+                      <b>Generation</b>
+                      <ul className="list-inside list-disc">
+                        <li>Tokens: {timings.predicted_n}</li>
+                        <li>Time: {timings.predicted_ms} ms</li>
+                        <li>
+                          Speed: {timings.predicted_per_second.toFixed(1)} t/s
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
                 </BtnWithTooltips>
               )}
             </>

@@ -46,7 +46,7 @@ export function BtnWithTooltips({
   disabled,
 }: {
   className?: string;
-  onClick: () => void;
+  onClick?: () => void;
   onMouseLeave?: () => void;
   children: React.ReactNode;
   tooltipsContent: string;
