@@ -56,6 +56,11 @@ if (MSVC)
     add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:/bigobj>")
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+    set(CMAKE_INSTALL_RPATH $ORIGIN)
+endif()
+
 #
 # option list
 #
