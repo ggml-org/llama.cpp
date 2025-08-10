@@ -1417,7 +1417,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     static const common_regex start_regex("<\\|start\\|>assistant");
     static const common_regex end_regex("<\\|end\\|>");
     static const common_regex to_regex(" to=");
-    static const common_regex function_regex("functions\\.([a-zA-Z_][a-zA-Z0-9_]*)");
+    static const common_regex function_regex("functions\\.([^<\\s]+)");
     static const common_regex user_tool_call_regex("(?: <\\|constrain\\|>([a-zA-Z]+))?<\\|message\\|>");
     static const common_regex builtin_tool_call_regex("(?:browser|python)[\\s\\S]*<\\|message\\|>");
 
