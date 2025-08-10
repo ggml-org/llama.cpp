@@ -18667,9 +18667,8 @@ struct llm_build_cogvlm : public llm_graph_context {
 
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-                // TODO: Check Rope because this might not be the same as cogvlm
-                Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
-                Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, GGML_ROPE_TYPE_NEOX);
+                Qcur = ggml_rope(ctx0, Qcur, inp_pos, n_embd_head, rope_type);
+                Kcur = ggml_rope(ctx0, Kcur, inp_pos, n_embd_head, rope_type);
 
                 cur = build_attn(inp_attn, wo, nullptr, Qcur, Kcur, Vcur, nullptr, nullptr, kq_scale, il);
                 cb(cur, "attn_out", il);
@@ -18681,12 +18680,6 @@ struct llm_build_cogvlm : public llm_graph_context {
             cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            // Make a standard ffn without the build_ffn function
-            //ggml_tensor * tmp = build_lora_mm(ffn_up, cur);
-            //ggml_tensor * gate = build_lora_mm(ffn_gate, cur);
-            //gate = ggml_silu(ctx0, gate);
-            //cur = ggml_mul(ctx0, gate, tmp);
-            //cur = build_lora_mm(ffn_down, cur);
             cur = build_ffn(cur,
                     ffn_up,   NULL, NULL,
                     ffn_gate, NULL, NULL,
@@ -19386,7 +19379,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
-        case LLM_ARCH_COGVLM:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
@@ -19435,6 +19427,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_SMALLTHINKER:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_SEED_OSS:
+        case LLM_ARCH_COGVLM:
             return LLAMA_ROPE_TYPE_NEOX;
 
         case LLM_ARCH_QWEN2VL:
