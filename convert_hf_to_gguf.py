@@ -8731,15 +8731,6 @@ class CogVLMModel(LlamaModel):
         if name.startswith("model.vision."):
             return []
 
-        if "query_key_value.weight" in name:
-            # Slice tensor into three along first axis
-            q, k, v = data_torch.split(data_torch.shape[0] // 3, dim=0)
-            return [
-                (self.map_tensor_name(name.replace("query_key_value", "query")), q),
-                (self.map_tensor_name(name.replace("query_key_value", "key")), k),
-                (self.map_tensor_name(name.replace("query_key_value", "value")), v),
-            ]
-
         return [(self.map_tensor_name(name), data_torch)]
 
 ###### CONVERSION LOGIC ######

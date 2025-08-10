@@ -5744,14 +5744,10 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         auto & layer = layers[i];
 
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
-                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
-                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
-                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i), {n_embd, n_embd_head_k * n_head * 3}, 0);
                         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
 
-                        layer.visexp_attn_wq = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_WQ, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
-                        layer.visexp_attn_wk = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_WK, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
-                        layer.visexp_attn_wv = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_WV, "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.visexp_attn_wqkv = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_QKV, "weight", i), {n_embd, n_embd_head_k * n_head * 3}, 0);
                         layer.visexp_attn_wo = create_tensor(tn(LLM_TENSOR_VISEXP_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
 
                         layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), {n_rot/2}, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
@@ -18637,21 +18633,17 @@ struct llm_build_cogvlm : public llm_graph_context {
 
         for (int il = 0; il < n_layer; ++il) {
             // get either the text or image weight tensors
-            ggml_tensor * wq, * wk, * wv, * wo;
+            ggml_tensor * wqkv, * wo;
             ggml_tensor * ffn_gate, * ffn_down, * ffn_up;
 
             if (is_text) {
-                wq = model.layers[il].wq;
-                wk = model.layers[il].wk;
-                wv = model.layers[il].wv;
+                wqkv = model.layers[il].wqkv;
                 wo = model.layers[il].wo;
                 ffn_gate = model.layers[il].ffn_gate;
                 ffn_down = model.layers[il].ffn_down;
                 ffn_up = model.layers[il].ffn_up;
             } else {
-                wq = model.layers[il].visexp_attn_wq;
-                wk = model.layers[il].visexp_attn_wk;
-                wv = model.layers[il].visexp_attn_wv;
+                wqkv = model.layers[il].visexp_attn_wqkv;
                 wo = model.layers[il].visexp_attn_wo;
                 ffn_gate = model.layers[il].visexp_ffn_gate;
                 ffn_down = model.layers[il].visexp_ffn_down;
@@ -18663,17 +18655,16 @@ struct llm_build_cogvlm : public llm_graph_context {
 
             // build self attention
             {
-                ggml_tensor * Qcur = build_lora_mm(wq, cur);
-                cb(Qcur, "Qcur", il);
+                ggml_tensor * qkv = build_lora_mm(wqkv, cur);
 
-                ggml_tensor * Kcur = build_lora_mm(wk, cur);
-                cb(Kcur, "Kcur", il);
+                // split qkv into Q, K, V along the first dimension
+                ggml_tensor * Qcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head, n_tokens, n_embd_head * sizeof(float),
+                    qkv->nb[1], 0);
+                ggml_tensor * Kcur = ggml_view_3d(ctx0, qkv, n_embd_head, n_head_kv, n_tokens, n_embd_head * sizeof(float),
+                    qkv->nb[1], n_embd * ggml_element_size(qkv));
+                ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv, n_embd, n_tokens,
+                    qkv->nb[1], 2 * n_embd * ggml_element_size(qkv)));
 
-                ggml_tensor * Vcur = build_lora_mm(wv, cur);
-                cb(Vcur, "Vcur", il);
-
-                Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
-                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
                 // TODO: Check Rope because this might not be the same as cogvlm

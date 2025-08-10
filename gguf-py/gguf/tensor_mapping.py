@@ -178,6 +178,7 @@ class TensorNameMap:
             "encoder.layers.{bid}.self_attention.query_key_value",                 # chatglm
             "transformer.layers.{bid}.attn.qkv_proj",                              # openelm
             "transformer_encoder.{bid}.qkv",                                       # neobert
+            "model.layers.{bid}.self_attn.language_expert_query_key_value",        # cogvlm
         ),
 
         # Attention query
@@ -197,7 +198,6 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.q_proj",                     # llada
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
-            "model.layers.{bid}.self_attn.language_expert_query",        # cogvlm
         ),
 
         # Attention key
@@ -218,7 +218,6 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.k_proj",                   # llada
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
-            "model.layers.{bid}.self_attn.language_expert_key",        # cogvlm
         ),
 
         # Attention value
@@ -238,7 +237,6 @@ class TensorNameMap:
             "model.transformer.blocks.{bid}.v_proj",                     # llada
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
-            "model.layers.{bid}.self_attn.language_expert_value",        # cogvlm
         ),
 
         # Attention output
@@ -1039,16 +1037,8 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.vision_expert_dense",  # cogvlm
         ),
 
-        MODEL_TENSOR.VISEXP_ATTN_Q: (
-            "model.layers.{bid}.self_attn.vision_expert_query",  # cogvlm
-        ),
-
-        MODEL_TENSOR.VISEXP_ATTN_K: (
-            "model.layers.{bid}.self_attn.vision_expert_key",  # cogvlm
-        ),
-
-        MODEL_TENSOR.VISEXP_ATTN_V: (
-            "model.layers.{bid}.self_attn.vision_expert_value",  # cogvlm
+        MODEL_TENSOR.VISEXP_ATTN_QKV: (
+            "model.layers.{bid}.self_attn.vision_expert_query_key_value",  # cogvlm
         ),
 
         ############################################################################
