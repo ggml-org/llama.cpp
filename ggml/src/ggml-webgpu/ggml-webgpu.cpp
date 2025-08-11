@@ -131,8 +131,7 @@ struct webgpu_context_struct {
     webgpu_buf_pool set_rows_error_buf_pool;
 
     wgpu::ComputePipeline memset_pipeline;
-    // [src0 0=fp32,1=fp16][src1 0=fp32,1=fp16]
-    wgpu::ComputePipeline mul_mat_pipeline[2][2];
+    wgpu::ComputePipeline mul_mat_pipeline[3][2];
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline cpy_pipeline;
 
@@ -339,13 +338,14 @@ static void ggml_backend_webgpu_map_buffer(webgpu_context & ctx,
 // To use, add a bind group entry to the setup for the shader you are debugging, add the buffer and
 // debug statements in the shader, and then call this function after encoding the commands and submitting them.
 static void ggml_backend_webgpu_debug(webgpu_context & ctx) {
+    ggml_backend_webgpu_submit_queue(ctx);
     wgpu::CommandEncoder encoder = ctx->device.CreateCommandEncoder();
     encoder.CopyBufferToBuffer(ctx->debug_dev_buf, 0, ctx->debug_host_buf, 0, ctx->debug_host_buf.GetSize());
     wgpu::CommandBuffer commands = encoder.Finish();
     ctx->queue.Submit(1, &commands);
 
     ggml_backend_webgpu_map_buffer(ctx, ctx->debug_host_buf, wgpu::MapMode::Read, 0, ctx->debug_host_buf.GetSize());
-    const uint32_t * debug_data = (const uint32_t *) ctx->debug_host_buf.GetConstMappedRange();
+    const float * debug_data = (const float *) ctx->debug_host_buf.GetConstMappedRange();
     std::cout << "debug data:";
     for (size_t i = 0; i < WEBGPU_DEBUG_BUF_ELEMS; i++) {
         std::cout << "  " << i << ": " << debug_data[i];
@@ -911,7 +911,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_pipeline_info pipeline_infos[4] = {
+    webgpu_pipeline_info pipeline_infos[5] = {
         { .name        = "mul_mat_f32_f32",
          .shader_code = wgsl_mul_mat_f32_f32,
          .src0_type   = GGML_TYPE_F32,
@@ -927,7 +927,11 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
         { .name        = "mul_mat_f16_f32",
          .shader_code = wgsl_mul_mat_f16_f32,
          .src0_type   = GGML_TYPE_F16,
-         .src1_type   = GGML_TYPE_F32 }
+         .src1_type   = GGML_TYPE_F32 },
+         { .name = "mul_mat_q4_0_f32",
+           .shader_code = wgsl_mul_mat_q4_0_f32,
+           .src0_type = GGML_TYPE_Q4_0,
+           .src1_type = GGML_TYPE_F32 }
     };
 
     for (auto & pipeline_info : pipeline_infos) {
@@ -1084,8 +1088,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_CPY | GGML_OP_SET_ROWS:
             return op->type == GGML_TYPE_F16 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
-            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16);
+            return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
+                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16)) ||
+                   (op->src[0]->type == GGML_TYPE_Q4_0 && op->src[1]->type == GGML_TYPE_F32);
         default:
             return false;
     }
