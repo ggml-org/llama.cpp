@@ -572,7 +572,7 @@ class TextModel(ModelBase):
         if (rope_theta := self.hparams.get("rope_theta")) is not None:
             self.gguf_writer.add_rope_freq_base(rope_theta)
             logger.info(f"gguf: rope theta = {rope_theta}")
-        if (f_rms_eps := self.find_hparam(["rms_norm_eps", "norm_eps"])) is not None:
+        if (f_rms_eps := self.find_hparam(["rms_norm_eps", "norm_eps"], optional=True)) is not None:
             self.gguf_writer.add_layer_norm_rms_eps(f_rms_eps)
             logger.info(f"gguf: rms norm epsilon = {f_rms_eps}")
         if (f_norm_eps := self.find_hparam(["layer_norm_eps", "layer_norm_epsilon", "norm_epsilon"], optional=True)) is not None:
@@ -3598,7 +3598,7 @@ class Qwen3MoeModel(Qwen2MoeModel):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        hparams = ModelBase.load_hparams(self.dir_model)
+        hparams = ModelBase.load_hparams(self.dir_model, False)
         self.origin_hf_arch = hparams.get('architectures', [None])[0]
 
     def set_vocab(self):
