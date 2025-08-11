@@ -812,7 +812,7 @@ void ggml_cann_dup(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
             ggml_cann_release_resources(ctx, src_trans_tensor);
             return;
         } else {
-            GGML_ABORT("Unsupport dst is not tontiguous.");
+            GGML_ABORT("Unsupport dst is not contiguous.");
         }
     }
     ggml_cann_release_resources(ctx, acl_src, acl_dst);
@@ -1342,10 +1342,6 @@ static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_bu
         sizeof(float), ne, nb, 1);
     aclnn_arange(ctx, arange_tensor, start, stop, step, size);
 
-    ACL_CHECK(aclrtSynchronizeStream(ctx.stream()));
-    float* arange_host = new float[size];
-    aclrtMemcpy(arange_host, size * 4, arange_buffer, size* 4, ACL_MEMCPY_DEVICE_TO_HOST);
-
     aclTensor* slope_tensor = ggml_cann_create_tensor(
         slope_buffer, ACL_FLOAT,
         sizeof(float), ne, nb, 1);
@@ -1383,12 +1379,14 @@ static void aclnn_get_slope(ggml_backend_cann_context& ctx, int64_t n_head, void
 static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, ggml_tensor* dst, void* dst_ptr, float max_bias) {
     void* slope_buffer = nullptr;
     void* bias_buffer = nullptr;
+
+    int64_t n_heads = dst->ne[2];
+    ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(float));
+    slope_buffer = slope_allocator.get();
+    ggml_cann_pool_alloc bias_allocator(ctx.pool(), ggml_nelements(dst) * ggml_element_size(dst));
+    bias_buffer = bias_allocator.get();
+
     if (max_bias > 0.0f) {
-        int64_t n_heads = dst->ne[2];
-        ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(float));
-        slope_buffer = slope_allocator.get();
-        ggml_cann_pool_alloc bias_allocator(ctx.pool(), ggml_nelements(dst) * ggml_element_size(dst));
-        bias_buffer = bias_allocator.get();
         aclnn_get_slope(ctx, n_heads, slope_buffer, max_bias);
     }
 
@@ -1400,10 +1398,12 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, g
     // broadcast the mask across rows
     int64_t mask_ne[] = {mask->ne[0], dst->ne[1], mask->ne[2], 1, mask->ne[3], 1};
     size_t mask_nb[GGML_MAX_DIMS + 2];
-    mask_nb[0] = ggml_element_size(mask);
-    for(int i = 1;i<GGML_MAX_DIMS + 2;i++) {
-        mask_nb[i] = mask_nb[i-1]* mask_ne[i-1];
-    }
+    mask_nb[0] = mask->nb[0];
+    mask_nb[1] = mask->nb[1];
+    mask_nb[2] = mask->nb[2];
+    mask_nb[3] = mask->nb[2];
+    mask_nb[4] = mask->nb[3];
+    mask_nb[5] = mask->nb[3];
 
     // ne2 and ne3 may be integer multiples of the mask.
     int64_t dst_ne[] = {dst->ne[0], dst->ne[1], mask->ne[2], nr2, mask->ne[3], nr3};
