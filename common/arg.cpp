@@ -749,6 +749,41 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 // utils
 //
 
+// Helper function to parse tensor buffer override strings
+static void parse_tensor_buffer_overrides(const std::string & value, std::vector<llama_model_tensor_buft_override> & overrides) {
+    static std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+    if (buft_list.empty()) {
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            auto * buft = ggml_backend_dev_buffer_type(dev);
+            if (buft) {
+                buft_list[ggml_backend_buft_name(buft)] = buft;
+            }
+        }
+    }
+
+    for (const auto & override : string_split<std::string>(value, ',')) {
+        std::string::size_type pos = override.find('=');
+        if (pos == std::string::npos) {
+            throw std::invalid_argument("invalid value");
+        }
+        std::string tensor_name = override.substr(0, pos);
+        std::string buffer_type = override.substr(pos + 1);
+
+        if (buft_list.find(buffer_type) == buft_list.end()) {
+            printf("Available buffer types:\n");
+            for (const auto & it : buft_list) {
+                printf("  %s\n", ggml_backend_buft_name(it.second));
+            }
+            throw std::invalid_argument("unknown buffer type");
+        }
+        // keep strings alive and avoid leaking memory by storing them in a static vector
+        static std::list<std::string> buft_overrides;
+        buft_overrides.push_back(tensor_name);
+        overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
+    }
+}
+
 struct handle_model_result {
     bool found_mmproj = false;
     common_params_model mmproj;
@@ -2353,74 +2388,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--override-tensor", "-ot"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type", [](common_params & params, const std::string & value) {
-            /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
-            if (buft_list.empty()) {
-                // enumerate all the devices and add their buffer types to the list
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    auto * buft = ggml_backend_dev_buffer_type(dev);
-                    if (buft) {
-                        buft_list[ggml_backend_buft_name(buft)] = buft;
-                    }
-                }
-            }
-
-            for (const auto & override : string_split<std::string>(value, ',')) {
-                std::string::size_type pos = override.find('=');
-                if (pos == std::string::npos) {
-                    throw std::invalid_argument("invalid value");
-                }
-                std::string tensor_name = override.substr(0, pos);
-                std::string buffer_type = override.substr(pos + 1);
-
-                if (buft_list.find(buffer_type) == buft_list.end()) {
-                    printf("Available buffer types:\n");
-                    for (const auto & it : buft_list) {
-                        printf("  %s\n", ggml_backend_buft_name(it.second));
-                    }
-                    throw std::invalid_argument("unknown buffer type");
-                }
-                // keep strings alive and avoid leaking memory by storing them in a static vector
-                static std::list<std::string> buft_overrides;
-                buft_overrides.push_back(tensor_name);
-                params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
-            }
+            parse_tensor_buffer_overrides(value, params.tensor_buft_overrides);
         }
     ));
     add_opt(common_arg(
         {"--override-tensor-draft"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type for draft model", [](common_params & params, const std::string & value) {
-            /* static */ std::map<std::string, ggml_backend_buffer_type_t> buft_list;
-            if (buft_list.empty()) {
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    auto * buft = ggml_backend_dev_buffer_type(dev);
-                    if (buft) {
-                        buft_list[ggml_backend_buft_name(buft)] = buft;
-                    }
-                }
-            }
-
-            for (const auto & override : string_split<std::string>(value, ',')) {
-                std::string::size_type pos = override.find('=');
-                if (pos == std::string::npos) {
-                    throw std::invalid_argument("invalid value");
-                }
-                std::string tensor_name = override.substr(0, pos);
-                std::string buffer_type = override.substr(pos + 1);
-
-                if (buft_list.find(buffer_type) == buft_list.end()) {
-                    printf("Available buffer types:\n");
-                    for (const auto & it : buft_list) {
-                        printf("  %s\n", ggml_backend_buft_name(it.second));
-                    }
-                    throw std::invalid_argument("unknown buffer type");
-                }
-                // keep strings alive and avoid leaking memory by storing them in a static vector
-                static std::list<std::string> buft_overrides;
-                buft_overrides.push_back(tensor_name);
-                params.speculative.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
-            }
+            parse_tensor_buffer_overrides(value, params.speculative.tensor_buft_overrides);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
