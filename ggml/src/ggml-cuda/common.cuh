@@ -35,9 +35,9 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
 
-#ifndef GGML_WARP_SYNC_MASK
-#define GGML_WARP_SYNC_MASK 0xffffffff
-#endif
+#ifndef GGML_CUDA_WARP_MASK
+#define GGML_CUDA_WARP_MASK 0xffffffff
+#endif // GGML_CUDA_WARP_MASK
 
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
@@ -380,11 +380,11 @@ struct ggml_cuda_unroll<1> {
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if (!defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE) || (defined(GGML_USE_HIP) && HIP_VERSION >= 70000000)
-    return __reduce_add_sync(GGML_WARP_SYNC_MASK, x);
+    return __reduce_add_sync(GGML_CUDA_WARP_MASK, x);
 #else
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(GGML_WARP_SYNC_MASK, x, offset, width);
+        x += __shfl_xor_sync(GGML_CUDA_WARP_MASK, x, offset, width);
     }
     return x;
 #endif // (!defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE) || (defined(GGML_USE_HIP) && HIP_VERSION >= 70000000)
@@ -394,7 +394,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += __shfl_xor_sync(GGML_WARP_SYNC_MASK, x, offset, width);
+        x += __shfl_xor_sync(GGML_CUDA_WARP_MASK, x, offset, width);
     }
     return x;
 }
@@ -403,8 +403,8 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        a.x += __shfl_xor_sync(GGML_WARP_SYNC_MASK, a.x, offset, width);
-        a.y += __shfl_xor_sync(GGML_WARP_SYNC_MASK, a.y, offset, width);
+        a.x += __shfl_xor_sync(GGML_CUDA_WARP_MASK, a.x, offset, width);
+        a.y += __shfl_xor_sync(GGML_CUDA_WARP_MASK, a.y, offset, width);
     }
     return a;
 }
@@ -414,7 +414,7 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 #ifdef FP16_AVAILABLE
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        a = __hadd2(a, __shfl_xor_sync(GGML_WARP_SYNC_MASK, a, offset, width));
+        a = __hadd2(a, __shfl_xor_sync(GGML_CUDA_WARP_MASK, a, offset, width));
     }
     return a;
 
@@ -449,12 +449,12 @@ static __device__ __forceinline__ int warp_reduce_all(int x) {
 #ifdef GGML_USE_HIP
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = x && __shfl_xor_sync(GGML_WARP_SYNC_MASK, x, offset, width);
+        x = x && __shfl_xor_sync(GGML_CUDA_WARP_MASK, x, offset, width);
     }
     return x;
 #else
     static_assert(width == WARP_SIZE, "width != WARP_SIZE not implemented");
-    return __all_sync(GGML_WARP_SYNC_MASK, x);
+    return __all_sync(GGML_CUDA_WARP_MASK, x);
 #endif // GGML_USE_HIP
 }
 
@@ -462,7 +462,7 @@ template<int width = WARP_SIZE>
 static __device__ __forceinline__ float warp_reduce_max(float x) {
 #pragma unroll
     for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = fmaxf(x, __shfl_xor_sync(GGML_WARP_SYNC_MASK, x, offset, width));
+        x = fmaxf(x, __shfl_xor_sync(GGML_CUDA_WARP_MASK, x, offset, width));
     }
     return x;
 }
@@ -505,7 +505,7 @@ static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
 #if !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || (defined(GGML_USE_HIP) && HIP_VERSION >= 50700000)
 #pragma unroll
    for (int offset = width/2; offset > 0; offset >>= 1) {
-       x = ggml_cuda_hmax2(x, __shfl_xor_sync(GGML_WARP_SYNC_MASK, x, offset, width));
+       x = ggml_cuda_hmax2(x, __shfl_xor_sync(GGML_CUDA_WARP_MASK, x, offset, width));
    }
    return x;
 #else

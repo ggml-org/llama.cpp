@@ -152,9 +152,9 @@
 
 // Warp sync functions and masks
 #if HIP_VERSION >= 70000000 && defined(GGML_HIP_ROCWMMA_FATTN)
-#define GGML_WARP_SYNC_MASK 0xffffffffffffffffULL // ROCm 7.0+ requires 64-bit masks for __*_*_sync functions
+#define GGML_CUDA_WARP_MASK 0xffffffffffffffffULL // ROCm 7.0+ requires 64-bit masks for __*_*_sync functions
 #else
-#define GGML_WARP_SYNC_MASK 0xffffffff
+#define GGML_CUDA_WARP_MASK 0xffffffff
 #define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
 #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
 #endif // HIP_VERSION >= 70000000 && defined(GGML_HIP_ROCWMMA_FATTN)
