@@ -1821,19 +1821,13 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
             tool_call_alts.push_back(
                 "( \"```\\n\" | \"```json\\n\" | \"```xml\\n\" ) space " + wrappable_tool_call + " space \"```\" space ");
             auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
-            if (supports_thinking)
-            {
+            if (supports_thinking) {
                 builder.add_rule("thinking", "\"<think>\" [^\\x00]* \"</think>\" space");
-                builder.add_rule("root", 
-                "(thinking)? space " + 
-                (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
             }
-            else
-            {
-                builder.add_rule("root",
-                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
+            builder.add_rule("root",
+                std::string(supports_thinking ? "(thinking)? space " : 
+                            data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
                 (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
-            }
             // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
