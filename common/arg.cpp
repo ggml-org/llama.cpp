@@ -2654,7 +2654,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-o", "--output", "--output-file"}, "FNAME",
         string_format("output file (default: '%s')", params.out_file.c_str()),
         [](common_params & params, const std::string & value) {
-          params.out_file = value;
+            params.out_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_CVECTOR_GENERATOR, LLAMA_EXAMPLE_EXPORT_LORA, LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_FINETUNE}));
     add_opt(common_arg(
@@ -3539,7 +3539,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
 
 
     add_opt(
-        common_arg({ "-lr", "--learning-rate-initial" }, "ALPHA",
+        common_arg({ "-lr", "--learning-rate" }, "ALPHA",
                    string_format(
                        "adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)",
                        (double) params.lr.lr0),
@@ -3548,16 +3548,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(
         common_arg({ "-lr-min", "--learning-rate-min" }, "ALPHA",
                    string_format(
-                       "(if >0) final learning rate (default=%.2g)",
+                       "(if >0) final learning rate after decay (if -decay-epochs is set, default=%.2g)",
                        (double) params.lr.lr_min),
                    [](common_params & params, const std::string & value) { params.lr.lr_min = std::stof(value); })
             .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
     add_opt(
-        common_arg({ "-min-epochs", "--learning-rate-min-epochs" }, "ALPHA",
+        common_arg({ "-decay-epochs", "--learning-rate-decay-epochs" }, "ALPHA",
                    string_format(
-                       "(if >0) reach -lr-min after this many epochs (instead of only at the last) (default=%.2g)",
-                       (double) params.lr.min_epochs),
-                   [](common_params & params, const std::string & value) { params.lr.min_epochs = std::stof(value); })
+                       "(if >0) decay learning rate to -lr-min after this many epochs (exponential decay, default=%.2g)",
+                       (double) params.lr.decay_epochs),
+                   [](common_params & params, const std::string & value) { params.lr.decay_epochs = std::stof(value); })
             .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
     add_opt(common_arg(
                 { "-wd", "--weight-decay" }, "WD",
@@ -3566,7 +3566,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     (double) params.lr.wd),
                 [](common_params & params, const std::string & value) { params.lr.wd = std::stof(value); })
                 .set_examples({ LLAMA_EXAMPLE_FINETUNE }));
-    add_opt(common_arg({ "-val", "--val-split" }, "FRACTION",
+    add_opt(common_arg({ "-val-split", "--val-split" }, "FRACTION",
                        string_format("fraction of data to use as validation set for training (default: %.2g).",
                                      (double) params.val_split),
                        [](common_params & params, const std::string & value) { params.val_split = std::stof(value); })

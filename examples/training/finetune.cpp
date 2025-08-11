@@ -39,10 +39,9 @@ int main(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
     // load the model and apply lora adapter, if any
-    common_init_result  llama_init = common_init_from_params(params);
-    llama_model_ptr &   model      = llama_init.model;
-    llama_context_ptr & ctx        = llama_init.context;
-    auto pctx = ctx.get();
+    common_init_result   llama_init = common_init_from_params(params);
+    llama_model_ptr    & model      = llama_init.model;
+    llama_context_ptr  & ctx        = llama_init.context;
 
     if (model == NULL) {
         LOG_ERR("%s: unable to load model\n", __func__);
@@ -55,12 +54,12 @@ int main(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    std::vector<llama_token> tokens  = common_tokenize(pctx, params.prompt, true);
-    ggml_opt_dataset_t       dataset = common_opt_dataset_init(pctx, tokens, llama_n_ctx(pctx) / 2);
+    std::vector<llama_token> tokens  = common_tokenize(ctx.get(), params.prompt, true);
+    ggml_opt_dataset_t       dataset = common_opt_dataset_init(ctx.get(), tokens, llama_n_ctx(ctx.get()) / 2);
 
     struct lr_opt & lr = params.lr;
     LOG_INF("-optimizer %s -lr0 %.2g -wd %.2g -lr-min %.2g -min-epochs %.2g -epochs %d -period %.2g -val %.2g\n",
-            ggml_opt_optimizer_name(params.optimizer), (double) lr.lr0, (double) lr.wd, (double) lr.lr_min, (double) lr.min_epochs,
+            ggml_opt_optimizer_name(params.optimizer), (double) lr.lr0, (double) lr.wd, (double) lr.lr_min, (double) lr.decay_epochs,
             (unsigned) lr.epochs, (double) params.n_batch / params.n_ubatch, (double) params.val_split);
 
     struct llama_opt_params lopt_params{
@@ -71,7 +70,7 @@ int main(int argc, char ** argv) {
         /*get_opt_pars_ud =*/&params.lr,
         /*optimizer_type  =*/params.optimizer,
     };
-    llama_opt_init(pctx, model.get(), lopt_params);
+    llama_opt_init(ctx.get(), model.get(), lopt_params);
 
     const int64_t idata_split = ggml_opt_dataset_ndata(dataset) * (1.0f - params.val_split);
 
@@ -79,7 +78,7 @@ int main(int argc, char ** argv) {
     ggml_opt_result_t result_eval  = ggml_opt_result_init();
 
     for (lr.epoch = 0; lr.epoch < lr.epochs; ++lr.epoch) {
-        llama_opt_epoch(pctx, dataset, result_train, result_eval, idata_split,
+        llama_opt_epoch(ctx.get(), dataset, result_train, result_eval, idata_split,
                         ggml_opt_epoch_callback_progress_bar, ggml_opt_epoch_callback_progress_bar);
         fprintf(stderr, "\n");
 

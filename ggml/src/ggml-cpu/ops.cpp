@@ -10385,9 +10385,9 @@ void ggml_compute_forward_opt_step_adamw(
 }
 
 static void ggml_compute_forward_opt_step_sgd_f32(const ggml_compute_params * params, ggml_tensor * dst) {
-    const ggml_tensor * src0         = dst->src[0];
-    const ggml_tensor * src0_grad    = dst->src[1];
-    const ggml_tensor * sgd_params   = dst->src[2];
+    const ggml_tensor * src0       = dst->src[0];
+    const ggml_tensor * src0_grad  = dst->src[1];
+    const ggml_tensor * sgd_params = dst->src[2];
 
     GGML_ASSERT(ggml_are_same_shape(src0, src0_grad));
     GGML_ASSERT(ggml_nelements(sgd_params) == 2);

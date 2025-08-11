@@ -248,12 +248,12 @@ enum common_reasoning_format {
 
 
 struct lr_opt {
-    float    lr0             = 1e-5; // learning rate at first epoch
-    float    lr_min          = -1;
-    float    min_epochs      = -1;  // if >0, constant (lr_min) after this many epochs
-    float    scale_epoch    = 0;
-    float    wd              = 0;
-    unsigned epochs          = 2;
+    float    lr0          = 1e-5; // learning rate at first epoch
+    float    lr_min       = -1;
+    float    decay_epochs = -1;   // if >0, the learning rate starts at lr0 and decays to lr_min after this many epochs
+    float    scale_epoch  = 0;
+    float    wd           = 0;
+    unsigned epochs       = 2;
 
     unsigned epoch; // set by optimizer outer (epochs) loop
     // learning rate decay - constant LR per epoch only for now

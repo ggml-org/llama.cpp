@@ -152,7 +152,7 @@ struct llama_context {
 
     void opt_init(struct llama_model * model, struct llama_opt_params lopt_params);
 
-    //TODO: currently limits logical batch size to physical batch -ub, and -ctx-size
+    // TODO: more flexible combinations of logical/physical batch size and context size
     void opt_epoch(
             ggml_opt_dataset_t      dataset,
             ggml_opt_result_t       result_train,

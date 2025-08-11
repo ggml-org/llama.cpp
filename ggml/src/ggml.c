@@ -1017,6 +1017,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
+static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
+
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
 
@@ -5603,8 +5605,11 @@ struct ggml_tensor * ggml_opt_step_adamw(
 
 // opt_step_sgd
 
-struct ggml_tensor * ggml_opt_step_sgd(struct ggml_context * ctx, struct ggml_tensor * a, struct ggml_tensor * grad,
-                                       struct ggml_tensor * params) {
+struct ggml_tensor * ggml_opt_step_sgd(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * grad,
+        struct ggml_tensor  * params) {
     GGML_ASSERT(a->flags & GGML_TENSOR_FLAG_PARAM);
     GGML_ASSERT(ggml_are_same_shape(a, grad));
     GGML_ASSERT(params->type == GGML_TYPE_F32);

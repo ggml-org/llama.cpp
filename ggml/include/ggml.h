@@ -470,7 +470,7 @@ extern "C" {
         GGML_OP_REPEAT_BACK,
         GGML_OP_CONCAT,
         GGML_OP_SILU_BACK,
-        GGML_OP_NORM,  // normalize
+        GGML_OP_NORM, // normalize
         GGML_OP_RMS_NORM,
         GGML_OP_RMS_NORM_BACK,
         GGML_OP_GROUP_NORM,
@@ -2294,15 +2294,14 @@ extern "C" {
             struct ggml_tensor  * grad,
             struct ggml_tensor  * m,
             struct ggml_tensor  * v,
-            struct ggml_tensor  * adamw_params); // parameters such a the learning rate
+            struct ggml_tensor  * adamw_params); // parameters such as the learning rate
 
-    // SGD (with weight decay) step
+    // stochastic gradient descent step (with weight decay)
     GGML_API struct ggml_tensor * ggml_opt_step_sgd(
-        // params: alpha (learning rate), 1 - alpha * (weight decay)
         struct ggml_context * ctx,
         struct ggml_tensor *  a,
         struct ggml_tensor *  grad,
-        struct ggml_tensor *  sgd_params);
+        struct ggml_tensor *  sgd_params); // alpha, weight decay
 
     //
     // automatic differentiation
