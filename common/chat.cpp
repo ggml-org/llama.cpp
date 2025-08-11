@@ -1314,17 +1314,56 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_GPT_OSS;
 
+    // These special tokens are required to parse properly, so we include them
+    // even if parse_tool_calls is false.
+    data.preserved_tokens = {
+        "<|channel|>",
+        "<|constrain|>",
+        "<|message|>",
+        "<|start|>",
+        "<|end|>",
+    };
+
     // TODO: support tool calls in GPT-OSS?
 
     return data;
 }
 static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
-    // TODO @ngxson : this won't work with --special enabled, we should fix that
-    builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|start|>assistant<|channel|>final<|message|>");
-    if (!builder.syntax().parse_tool_calls) {
-        builder.add_content(builder.consume_rest());
-        return;
+    static const common_regex end_regex("<\\|end\\|>");
+    static const common_regex analysis_regex("<\\|channel\\|>analysis<\\|message\\|>");
+    static const common_regex final_regex("<\\|channel\\|>final<\\|message\\|>");
+
+    if (builder.try_consume_regex(analysis_regex)) {
+        std::string reasoning;
+        bool has_end = false;
+        if (auto res = builder.try_find_regex(end_regex, std::string::npos, false)) {
+            reasoning = res->prelude;
+            has_end = true;
+        } else {
+            reasoning = builder.consume_rest();
+        }
+
+        if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
+            // the templates raise an exception if <|channel|> is present
+            // an assistant's content, so wrap it in think tags
+            builder.add_content("<think>");
+            builder.add_content(reasoning);
+            if (has_end) {
+                builder.add_content("</think>");
+            }
+        } else {
+            builder.add_reasoning_content(reasoning);
+        }
     }
+
+    if (builder.try_find_regex(final_regex, std::string::npos, false)) {
+        if (!builder.try_find_regex(end_regex)) {
+            builder.add_content(builder.consume_rest());
+        }
+    }
+
+    // no tool call support yet, so we have to consume everything else
+    builder.consume_rest();
 }
 
 static common_chat_params common_chat_params_init_firefunction_v2(const common_chat_template & tmpl, const struct templates_params & inputs) {
