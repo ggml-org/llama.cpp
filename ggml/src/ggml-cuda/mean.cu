@@ -1,6 +1,15 @@
 #include "mean.cuh"
 #include "reduce_rows.cuh"
 
+#ifdef USE_CUB
+#    include <cub/cub.cuh>
+using namespace cub;
+#endif  // USE_CUB
+
+template <typename T> __global__ void divide_by_count(T * result, size_t count) {
+    *result /= static_cast<T>(count);
+}
+
 void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0   = dst->src[0];
     const float *       src0_d = (const float *) src0->data;
@@ -13,6 +22,24 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     const int64_t ncols = src0->ne[0];
     const int64_t nrows = ggml_nrows(src0);
+
+// Special case for reducing vectors
+#ifdef USE_CUB
+    if (nrows == 1) {
+        // Single row - use device-wide reduction
+        size_t           tmp_size = 0;
+        ggml_cuda_pool & pool     = ctx.pool();
+
+        DeviceReduce::Sum(nullptr, tmp_size, src0_d, dst_d, ncols, stream);
+
+        ggml_cuda_pool_alloc<uint8_t> tmp_alloc(pool, tmp_size);
+        DeviceReduce::Sum(tmp_alloc.ptr, tmp_size, src0_d, dst_d, ncols, stream);
+
+        // Divide by ncols
+        divide_by_count<float><<<1, 1, 0, stream>>>(dst_d, ncols);
+        return;
+    }
+#endif
 
     const dim3 block_nums(nrows, 1, 1);
 

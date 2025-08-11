@@ -1,14 +1,10 @@
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
-#define USE_CUB
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#include "sum.cuh"
+#include "sumrows.cuh"
 
 #ifdef USE_CUB
-#include <cub/cub.cuh>
+#    include <cub/cub.cuh>
 using namespace cub;
-#endif // USE_CUB
-
-#include "sumrows.cuh"
-#include "sum.cuh"
+#endif  // USE_CUB
 
 #include <cstdint>
 
