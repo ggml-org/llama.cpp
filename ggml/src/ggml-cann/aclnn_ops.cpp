@@ -1329,30 +1329,74 @@ static void aclnn_pow_tensor_tensor(ggml_backend_cann_context& ctx,
     GGML_CANN_CALL_ACLNN_OP(ctx, InplacePowTensorTensor, acl_dst, acl_exp);
 }
 
-
+/**
+ * @brief Generate a range of values and apply a scalar base exponentiation.
+ *
+ * This function creates an evenly spaced sequence from `start` to `stop` (exclusive),
+ * with step size `step`, stores it in a temporary buffer, and then computes:
+ *
+ * @f[
+ * slope[i] = m^{\left( start + i \cdot step \right)}, \quad 0 \le i < size
+ * @f]
+ *
+ * The results are written to the provided @p slope_buffer.
+ *
+ * @param ctx           CANN backend context for memory allocation and operator execution.
+ * @param slope_buffer  Pointer to the output buffer (float array) for the computed slope values.
+ * @param m             Scalar base for the exponentiation.
+ * @param size          Number of elements in the generated sequence.
+ * @param start         Starting exponent offset.
+ * @param stop          Stopping exponent offset (exclusive).
+ * @param step          Step size for the exponent increment.
+ */
 static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_buffer, 
     float m, int64_t size, float start, float stop, float step){
     int64_t ne[] = {size};
     size_t nb[] = {sizeof(float)};
 
     ggml_cann_pool_alloc arange_allocator(ctx.pool(), size * sizeof(float));
-    void *               arange_buffer = arange_allocator.get();
+    void* arange_buffer = arange_allocator.get();
 
-    aclTensor * arange_tensor = ggml_cann_create_tensor(
+    aclTensor* arange_tensor = ggml_cann_create_tensor(
         arange_buffer, ACL_FLOAT, sizeof(float), ne, nb, 1);
     aclnn_arange(ctx, arange_tensor, start, stop, step, size);
 
-    aclTensor * slope_tensor = ggml_cann_create_tensor(
+    aclTensor* slope_tensor = ggml_cann_create_tensor(
         slope_buffer, ACL_FLOAT, sizeof(float), ne, nb, 1);
 
-    aclScalar * sc = aclCreateScalar(&m, aclDataType::ACL_FLOAT);
+    aclScalar* sc = aclCreateScalar(&m, aclDataType::ACL_FLOAT);
 
     GGML_CANN_CALL_ACLNN_OP(ctx, PowScalarTensor, sc, arange_tensor, slope_tensor);
     ggml_cann_release_resources(ctx, sc, arange_tensor, slope_tensor);
 }
 
+/**
+ * @brief Compute slope values for multiple attention heads based on ALiBi bias parameters.
+ *
+ * This function generates slope values for each attention head according to the ALiBi
+ * (Attention with Linear Biases) method. It splits the computation into two ranges depending
+ * on whether the head index is less than @p n_head_log2 or not, and uses different base values
+ * (`m0` and `m1`) for the exponentiation.
+ *
+ * @f[
+ * slope[h] =
+ * \begin{cases}
+ * m_0^{(h + 1)}, & h < n\_head\_log2 \\
+ * m_1^{\left( 2 \cdot (h - n\_head\_log2) + 1 \right)}, & h \geq n\_head\_log2
+ * \end{cases}
+ * \quad , \quad \text{if } max\_bias > 0
+ * @f]
+ *
+ * If @p max_bias <= 0, all slope values are set to 1.0.
+ *
+ * @param ctx           CANN backend context for memory allocation and operator execution.
+ * @param n_head        Total number of attention heads.
+ * @param slope_buffer  Pointer to the output buffer (float array) for storing slopes.
+ * @param max_bias      Maximum bias value for slope computation.
+ *
+*/
 static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head, 
-    void * slope_buffer, float max_bias) {
+    void* slope_buffer, float max_bias) {
     const int n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
     float m0 = powf(2.0f, -(max_bias) / n_head_log2);
@@ -1382,24 +1426,43 @@ static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head,
     }
 }
 
+/**
+ * @brief Add ALiBi (Attention with Linear Biases) positional biases to the attention mask.
+ *
+ * This function computes the ALiBi slopes for each attention head (if max_bias > 0),
+ * multiplies them with the attention mask to produce bias tensors, and adds these biases
+ * to the destination tensor (@p dst).
+ *
+ * The function performs necessary broadcasting of the mask and slope tensors to match
+ * the shape of the destination tensor, then applies element-wise multiplication and addition
+ * using CANN operators.
+ *
+ * @param ctx         CANN backend context for memory management and operator execution.
+ * @param mask        Input attention mask tensor, assumed to be contiguous.
+ * @param dst         Destination tensor to which ALiBi biases will be added.
+ * @param dst_ptr     Pointer to the memory of the destination tensor.
+ * @param max_bias    Maximum bias value controlling the slope scaling.
+ *
+ * @note
+ * - Write data into dst_ptr using only the shape information of the dst tensor.
+ * - `GGML_MAX_DIMS + 2` is used to extend tensor dimensions for broadcasting.
+ */
 static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, 
     ggml_tensor* dst, void* dst_ptr, float max_bias) {
     void* slope_buffer = nullptr;
     void* bias_buffer = nullptr;
 
-    int64_t n_heads = dst->ne[2];
-    ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(float));
-    slope_buffer = slope_allocator.get();
-    ggml_cann_pool_alloc bias_allocator(
-                ctx.pool(), ggml_nelements(dst) * ggml_element_size(dst));
-    bias_buffer = bias_allocator.get();
-
     if (max_bias > 0.0f) {
+        int64_t n_heads = dst->ne[2];
+        ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(float));
+        slope_buffer = slope_allocator.get();
+        ggml_cann_pool_alloc bias_allocator(
+                    ctx.pool(), ggml_nelements(dst) * ggml_element_size(dst));
+        bias_buffer = bias_allocator.get();
         aclnn_get_slope(ctx, n_heads, slope_buffer, max_bias);
     }
 
     // broadcast for mask, slop and dst;
-    GGML_ASSERT(ggml_is_contiguous(mask));
     int64_t nr2 = dst->ne[2] / mask->ne[2];
     int64_t nr3 = dst->ne[3] / mask->ne[3];
 
@@ -1424,12 +1487,14 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask,
         slope_nb[i] = slope_nb[i - 1] * slope_ne[i - 1];
     }
 
-    aclTensor * acl_slope = ggml_cann_create_tensor(
+    aclTensor* acl_slope = ggml_cann_create_tensor(
                             slope_buffer, ACL_FLOAT, sizeof(float), 
                             slope_ne, slope_nb, GGML_MAX_DIMS + 2);
-    aclTensor * acl_mask = ggml_cann_create_tensor(
+    aclTensor* acl_mask = ggml_cann_create_tensor(
                             mask, mask_ne, mask_nb, GGML_MAX_DIMS + 2);
-    aclTensor * acl_dst  = ggml_cann_create_tensor(
+    
+    // write data into dst_ptr using only the shape information of the dst tensor.
+    aclTensor* acl_dst  = ggml_cann_create_tensor(
                             dst_ptr, ggml_cann_type_mapping(dst->type), 
                             ggml_type_size(dst->type), dst_ne, dst_nb, 
                             GGML_MAX_DIMS + 2);
@@ -1441,7 +1506,7 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask,
         for (int i = 1; i < GGML_MAX_DIMS + 2; i++) {
             bias_nb[i] = bias_nb[i - 1] * bias_ne[i - 1];
         }
-        aclTensor * bias_tensor = ggml_cann_create_tensor(
+        aclTensor* bias_tensor = ggml_cann_create_tensor(
                                     bias_buffer, ACL_FLOAT, sizeof(float), 
                                     bias_ne, bias_nb, GGML_MAX_DIMS + 2);
 
@@ -1473,16 +1538,16 @@ void ggml_cann_cpy(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
  * stored.
  */
 static void aclnn_softmax(ggml_backend_cann_context & ctx, 
-    aclTensor * acl_src, int64_t dim, aclTensor * acl_dst) {
+    aclTensor* acl_src, int64_t dim, aclTensor * acl_dst) {
     GGML_CANN_CALL_ACLNN_OP(ctx, Softmax, acl_src, dim, acl_dst);
 }
 
 void ggml_cann_softmax(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
-    ggml_tensor * src0 = dst->src[0];
-    ggml_tensor * src1 = dst->src[1];  // mask
+    ggml_tensor* src0 = dst->src[0];
+    ggml_tensor* src1 = dst->src[1];  // mask
 
-    aclTensor * acl_src0 = ggml_cann_create_tensor(src0);
-    aclTensor * acl_dst  = ggml_cann_create_tensor(dst);
+    aclTensor* acl_src0 = ggml_cann_create_tensor(src0);
+    aclTensor* acl_dst  = ggml_cann_create_tensor(dst);
 
     float scale    = 1.0f;
     float max_bias = 0.0f;
@@ -1491,7 +1556,7 @@ void ggml_cann_softmax(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
 
     // input mul scale
-    aclScalar * acl_scale = aclCreateScalar(&scale, aclDataType::ACL_FLOAT);
+    aclScalar* acl_scale = aclCreateScalar(&scale, aclDataType::ACL_FLOAT);
     ggml_cann_pool_alloc src_tensor_allocator(ctx.pool(), ggml_nbytes(src0));
     void* src_tensor_buffer = src_tensor_allocator.get();
     aclTensor* softmax_tensor = ggml_cann_create_tensor(
