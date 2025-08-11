@@ -552,6 +552,17 @@ common_chat_templates_ptr common_chat_templates_init(
             default_template_src = CHATML_TEMPLATE_SRC;
         }
     }
+
+    // TODO @ngxson : this is a temporary hack to prevent chat template from throwing an error
+    // Ref: https://github.com/ggml-org/llama.cpp/pull/15230#issuecomment-3173959633
+    if (default_template_src.find("<|channel|>") != std::string::npos
+            // search for the error message and patch it
+            && default_template_src.find("in message.content or") != std::string::npos) {
+        string_replace_all(default_template_src,
+            "{%- if \"<|channel|>analysis<|message|>\" in message.content or \"<|channel|>final<|message|>\" in message.content %}",
+            "{%- if false %}");
+    }
+
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
     bool add_bos = false;
