@@ -256,13 +256,13 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
             head = new_head;
         }
     } else {
-        for (seq_id = 0; seq_id < (int) seq_to_stream.size(); ++seq_id) {
-            auto & cells = v_cells[seq_to_stream[seq_id]];
-            auto & head  = v_heads[seq_to_stream[seq_id]];
+        // match any sequence
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            auto & cells = v_cells[s];
+            auto & head  = v_heads[s];
 
             uint32_t new_head = cells.size();
 
-            // match any sequence
             for (uint32_t i = 0; i < cells.size(); ++i) {
                 if (!cells.pos_in(i, p0, p1)) {
                     continue;
