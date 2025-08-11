@@ -1349,7 +1349,7 @@ static void aclnn_pow_tensor_tensor(ggml_backend_cann_context& ctx,
  * @param stop          Stopping exponent offset (exclusive).
  * @param step          Step size for the exponent increment.
  */
-static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_buffer, 
+static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_buffer,
     float m, int64_t size, float start, float stop, float step){
     int64_t ne[] = {size};
     size_t nb[] = {sizeof(float)};
@@ -1395,17 +1395,17 @@ static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_bu
  * @param max_bias      Maximum bias value for slope computation.
  *
 */
-static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head, 
+static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head,
     void* slope_buffer, float max_bias) {
     const int n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
     float m0 = powf(2.0f, -(max_bias) / n_head_log2);
     float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    // const float slope = (max_bias > 0.0f) ? 
-    //                          h < n_head_log2 ? 
-    //                              powf(m0, h + 1) : 
-    //                              powf(m1, 2*(h - n_head_log2) + 1) : 
+    // const float slope = (max_bias > 0.0f) ?
+    //                          h < n_head_log2 ?
+    //                              powf(m0, h + 1) :
+    //                              powf(m1, 2*(h - n_head_log2) + 1) :
     //                          1.0f;
     // arange1
     float start = 0 + 1;
@@ -1421,7 +1421,7 @@ static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head,
         step  = 2;
         count = n_head - n_head_log2;
         aclnn_get_slope_inner(
-            ctx, (char *) slope_buffer + n_head_log2 * sizeof(float), 
+            ctx, (char *) slope_buffer + n_head_log2 * sizeof(float),
             m1, count, start, end + 1, step);
     }
 }
@@ -1447,7 +1447,7 @@ static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head,
  * - Write data into dst_ptr using only the shape information of the dst tensor.
  * - `GGML_MAX_DIMS + 2` is used to extend tensor dimensions for broadcasting.
  */
-static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, 
+static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask,
     ggml_tensor* dst, void* dst_ptr, float max_bias) {
     void* slope_buffer = nullptr;
     void* bias_buffer = nullptr;
@@ -1468,15 +1468,15 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask,
 
     // broadcast the mask across rows
     int64_t mask_ne[] = { mask->ne[0], dst->ne[1], mask->ne[2], 1, mask->ne[3], 1 };
-    size_t  mask_nb[] = { 
+    size_t  mask_nb[] = {
         mask_nb[0] = mask->nb[0], mask_nb[1] = mask->nb[1], mask_nb[2] = mask->nb[2],
-        mask_nb[3] = mask->nb[2], mask_nb[4] = mask->nb[3], mask_nb[5] = mask->nb[3] 
+        mask_nb[3] = mask->nb[2], mask_nb[4] = mask->nb[3], mask_nb[5] = mask->nb[3]
     };
 
     int64_t dst_ne[] = { dst->ne[0], dst->ne[1], mask->ne[2], nr2, mask->ne[3], nr3 };
-    size_t  dst_nb[] = { 
+    size_t  dst_nb[] = {
         dst_nb[0] = dst->nb[0], dst_nb[1] = dst->nb[1], dst_nb[2] = dst->nb[2],
-        dst_nb[3] = dst->nb[2], dst_nb[4] = dst->nb[3], dst_nb[5] = dst->nb[3] 
+        dst_nb[3] = dst->nb[2], dst_nb[4] = dst->nb[3], dst_nb[5] = dst->nb[3]
     };
 
     // slope is a 1 dim tensor, slope.ne2 == dst.ne2
@@ -1488,15 +1488,15 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask,
     }
 
     aclTensor* acl_slope = ggml_cann_create_tensor(
-                            slope_buffer, ACL_FLOAT, sizeof(float), 
+                            slope_buffer, ACL_FLOAT, sizeof(float),
                             slope_ne, slope_nb, GGML_MAX_DIMS + 2);
     aclTensor* acl_mask = ggml_cann_create_tensor(
                             mask, mask_ne, mask_nb, GGML_MAX_DIMS + 2);
-    
+
     // write data into dst_ptr using only the shape information of the dst tensor.
     aclTensor* acl_dst  = ggml_cann_create_tensor(
-                            dst_ptr, ggml_cann_type_mapping(dst->type), 
-                            ggml_type_size(dst->type), dst_ne, dst_nb, 
+                            dst_ptr, ggml_cann_type_mapping(dst->type),
+                            ggml_type_size(dst->type), dst_ne, dst_nb,
                             GGML_MAX_DIMS + 2);
 
     if (max_bias > 0.0f) {
@@ -1507,7 +1507,7 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask,
             bias_nb[i] = bias_nb[i - 1] * bias_ne[i - 1];
         }
         aclTensor* bias_tensor = ggml_cann_create_tensor(
-                                    bias_buffer, ACL_FLOAT, sizeof(float), 
+                                    bias_buffer, ACL_FLOAT, sizeof(float),
                                     bias_ne, bias_nb, GGML_MAX_DIMS + 2);
 
         aclnn_mul(ctx, acl_slope, acl_mask, bias_tensor);
@@ -1537,7 +1537,7 @@ void ggml_cann_cpy(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
  * @param acl_dst The destination tensor where the softmax results will be
  * stored.
  */
-static void aclnn_softmax(ggml_backend_cann_context & ctx, 
+static void aclnn_softmax(ggml_backend_cann_context & ctx,
     aclTensor* acl_src, int64_t dim, aclTensor * acl_dst) {
     GGML_CANN_CALL_ACLNN_OP(ctx, Softmax, acl_src, dim, acl_dst);
 }
