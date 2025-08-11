@@ -751,14 +751,12 @@ std::pair<long, std::vector<char>> common_remote_get_content(const std::string &
 
 // Helper function to parse tensor buffer override strings
 static void parse_tensor_buffer_overrides(const std::string & value, std::vector<llama_model_tensor_buft_override> & overrides) {
-    static std::map<std::string, ggml_backend_buffer_type_t> buft_list;
-    if (buft_list.empty()) {
-        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-            auto * dev = ggml_backend_dev_get(i);
-            auto * buft = ggml_backend_dev_buffer_type(dev);
-            if (buft) {
-                buft_list[ggml_backend_buft_name(buft)] = buft;
-            }
+    std::map<std::string, ggml_backend_buffer_type_t> buft_list;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto * dev = ggml_backend_dev_get(i);
+        auto * buft = ggml_backend_dev_buffer_type(dev);
+        if (buft) {
+            buft_list[ggml_backend_buft_name(buft)] = buft;
         }
     }
 
