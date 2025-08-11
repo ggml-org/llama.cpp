@@ -1,13 +1,14 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
+	import Input from '$lib/components/ui/input/input.svelte';
 	import { Trash2, Pencil, MoreHorizontal } from '@lucide/svelte';
 
 	interface Props {
 		conversation: DatabaseConversation;
 		isActive?: boolean;
 		onSelect?: (id: string) => void;
-		onEdit?: (id: string) => void;
+		onEdit?: (id: string, name: string) => void;
 		onDelete?: (id: string) => void;
 		showLastModified?: boolean;
 	}
@@ -22,7 +23,9 @@
 	}: Props = $props();
 
 	let showDeleteDialog = $state(false);
+	let showEditDialog = $state(false);
 	let showDropdown = $state(false);
+	let editedName = $state('');
 
 	function formatLastModified(timestamp: number) {
 		const now = Date.now();
@@ -43,7 +46,13 @@
 
 	function handleEdit(event: Event) {
 		event.stopPropagation();
-		onEdit?.(conversation.id);
+		editedName = conversation.name;
+		showEditDialog = true;
+	}
+
+	function handleConfirmEdit() {
+		if (!editedName.trim()) return;
+		onEdit?.(conversation.id, editedName);
 	}
 
 	function handleConfirmDelete() {
@@ -120,6 +129,33 @@
 						class="bg-destructive text-destructive-foreground"
 						onclick={handleConfirmDelete}>Delete</AlertDialog.Action
 					>
+				</AlertDialog.Footer>
+			</AlertDialog.Content>
+		</AlertDialog.Root>
+
+		<AlertDialog.Root bind:open={showEditDialog}>
+			<AlertDialog.Content>
+				<AlertDialog.Header>
+					<AlertDialog.Title>Edit Conversation Name</AlertDialog.Title>
+					<AlertDialog.Description>
+						<Input
+							class="mt-4 text-foreground"
+							onkeydown={(e) => {
+								if (e.key === 'Enter') {
+									e.preventDefault();
+									handleConfirmEdit();
+									showEditDialog = false;
+								}
+							}}
+							placeholder="Enter a new name"
+							type="text"
+							bind:value={editedName}
+						/>
+					</AlertDialog.Description>
+				</AlertDialog.Header>
+				<AlertDialog.Footer>
+					<AlertDialog.Cancel>Cancel</AlertDialog.Cancel>
+					<AlertDialog.Action onclick={handleConfirmEdit}>Save</AlertDialog.Action>
 				</AlertDialog.Footer>
 			</AlertDialog.Content>
 		</AlertDialog.Root>

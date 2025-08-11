@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
 	import { ChatSidebarConversationItem } from '$lib/components/app';
-	import { conversations, deleteConversation } from '$lib/stores/chat.svelte';
+	import { conversations, deleteConversation, updateConversationName } from '$lib/stores/chat.svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { useSidebar } from '$lib/components/ui/sidebar';
@@ -28,8 +28,8 @@
 		return conversations();
 	});
 
-	async function editConversation(id: string) {
-		console.log('Editing conversation:', id);
+	async function editConversation(id: string, name: string) {
+		await updateConversationName(id, name);
 	}
 
 	async function handleDeleteConversation(id: string) {
