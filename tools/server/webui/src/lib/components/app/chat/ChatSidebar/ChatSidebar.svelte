@@ -48,10 +48,10 @@
 	}
 </script>
 
-<ScrollArea class="h-[100vh] px-4">
-	<Sidebar.Header class="pb-2 pt-4 md:sticky top-0 bg-sidebar z-10 gap-6">
+<ScrollArea class="h-[100vh]">
+	<Sidebar.Header class=" px-4 pb-2 pt-4 md:sticky top-0 bg-sidebar/50 backdrop-blur-lg z-10 gap-6">
 		<a href="/" onclick={handleMobileSidebarItemClick}>
-			<h1 class="inline-flex items-center gap-1 text-xl font-semibold">llama.cpp</h1>
+			<h1 class="inline-flex items-center gap-1 text-xl font-semibold px-2">llama.cpp</h1>
 		</a>
 
 		<ChatSidebarActions
@@ -61,7 +61,7 @@
 		/>
 	</Sidebar.Header>
 
-	<Sidebar.Group class="space-y-2 mt-4 p-0">
+	<Sidebar.Group class="space-y-2 mt-4 p-0 px-4">
 		{#if (filteredConversations.length > 0 && isSearchModeActive) || !isSearchModeActive}
 			<Sidebar.GroupLabel>
 				{isSearchModeActive ? 'Search results' : 'Conversations'}
@@ -103,7 +103,7 @@
 		</Sidebar.GroupContent>
 	</Sidebar.Group>
 	
-	<div class="md:sticky bottom-0 bg-sidebar z-10 px-2 py-4">
+	<div class="md:sticky bottom-0 bg-sidebar z-10 px-4 py-4  bg-sidebar/50 backdrop-blur-lg">
 		<p class="text-muted-foreground text-xs">
 			Conversations are stored locally in your browser.
 		</p>
