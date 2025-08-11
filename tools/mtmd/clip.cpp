@@ -201,6 +201,7 @@ struct clip_hparams {
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;
+    int32_t minicpmv_query_num = 0;         // MiniCPM-V query number
 };
 
 struct clip_layer {
@@ -866,21 +867,8 @@ struct clip_graph {
             int n_embd = clip_n_mmproj_embd(ctx);
             const int d_head = 128;
             int n_head = n_embd/d_head;
-            int num_query = 96;
-            if (ctx->model.hparams.minicpmv_version == 2) {
-                // MiniCPM-V 2.5
-                num_query = 96;
-            } else if (ctx->model.hparams.minicpmv_version == 3) {
-                // MiniCPM-V 2.6
-                num_query = 64;
-            } else if (ctx->model.hparams.minicpmv_version == 4) {
-                // MiniCPM-o 2.6
-                num_query = 64;
-            } else if (ctx->model.hparams.minicpmv_version == 5) {
-                // MiniCPM-V 4.0
-                num_query = 64;
-            }
-
+            // Use actual config value if available, otherwise fall back to hardcoded values
+            int num_query = ctx->model.hparams.minicpmv_query_num;
             ggml_tensor * Q = ggml_add(ctx0,
                 ggml_mul_mat(ctx0, model.mm_model_attn_q_w, q),
                 model.mm_model_attn_q_b);
@@ -2138,7 +2126,19 @@ struct clip_model_loader {
                 get_u32(KEY_PATCH_SIZE, hparams.patch_size);
                 get_u32(KEY_IMAGE_CROP_RESOLUTION, hparams.image_crop_resolution, false);
                 get_i32(KEY_MINICPMV_VERSION, hparams.minicpmv_version, false); // legacy
-
+                get_u32(KEY_MINICPMV_QUERY_NUM, hparams.minicpmv_query_num, false);
+                if (hparams.minicpmv_query_num == 0) {
+                    // Fallback to hardcoded values for legacy models
+                    if (hparams.minicpmv_version == 3) {
+                        hparams.minicpmv_query_num = 64;
+                    } else if (hparams.minicpmv_version == 4) {
+                        hparams.minicpmv_query_num = 64;
+                    } else if (hparams.minicpmv_version == 5) {
+                        hparams.minicpmv_query_num = 64;
+                    } else {
+                        hparams.minicpmv_query_num = 96;
+                    }
+                }
             } else if (is_audio) {
                 get_u32(KEY_A_NUM_MEL_BINS, hparams.n_mel_bins);
 
@@ -3556,20 +3556,23 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
             } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
-                if (params.minicpmv_version == 2) {
-                    // MiniCPM-V 2.5
-                    n_patches_sq = 96;
-                } else if (params.minicpmv_version == 3) {
-                    // MiniCPM-V 2.6
-                    n_patches_sq = 64;
-                } else if (params.minicpmv_version == 4) {
-                    // MiniCPM-o 2.6
-                    n_patches_sq = 64;
-                } else if (params.minicpmv_version == 5) {
-                    // MiniCPM-V 4.0
-                    n_patches_sq = 64;
+                // Use actual config value if available, otherwise fall back to hardcoded values
+                if (params.minicpmv_query_num > 0) {
+                    n_patches_sq = params.minicpmv_query_num;
                 } else {
-                    GGML_ABORT("Unknown minicpmv version");
+                    // Fallback to hardcoded values for legacy models
+                    if (params.minicpmv_version == 2) {
+                        n_patches_sq = 96;
+                    } else if (params.minicpmv_version == 3) {
+                        n_patches_sq = 64;
+                    } else if (params.minicpmv_version == 4) {
+                        n_patches_sq = 64;
+                    } else if (params.minicpmv_version == 5) {
+                        // MiniCPM-V 4.0
+                        n_patches_sq = 64;
+                    } else {
+                        GGML_ABORT("Unknown minicpmv version");
+                    }
                 }
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
@@ -4102,7 +4105,6 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
 }
 
 int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
-    const auto & hparams = ctx->model.hparams;
     switch (ctx->model.proj_type) {
         case PROJECTOR_TYPE_LDP:
             return ctx->model.mm_model_block_1_block_2_1_b->ne[0];
@@ -4114,20 +4116,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_MLP_NORM:
             return ctx->model.mm_3_b->ne[0];
         case PROJECTOR_TYPE_MINICPMV:
-            if (hparams.minicpmv_version == 2) {
-                // MiniCPM-V 2.5
-                return 4096;
-            } else if (hparams.minicpmv_version == 3) {
-                // MiniCPM-V 2.6
-                return 3584;
-            } else if (hparams.minicpmv_version == 4) {
-                // MiniCPM-o 2.6
-                return 3584;
-            } else if (hparams.minicpmv_version == 5) {
-                // MiniCPM-V 4.0
-                return 2560;
-            }
-            GGML_ABORT("Unknown minicpmv version");
+            return ctx->model.mm_model_proj->ne[0];
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_QWEN2VL:

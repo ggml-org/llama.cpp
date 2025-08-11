@@ -552,6 +552,17 @@ common_chat_templates_ptr common_chat_templates_init(
             default_template_src = CHATML_TEMPLATE_SRC;
         }
     }
+
+    // TODO @ngxson : this is a temporary hack to prevent chat template from throwing an error
+    // Ref: https://github.com/ggml-org/llama.cpp/pull/15230#issuecomment-3173959633
+    if (default_template_src.find("<|channel|>") != std::string::npos
+            // search for the error message and patch it
+            && default_template_src.find("in message.content or") != std::string::npos) {
+        string_replace_all(default_template_src,
+            "{%- if \"<|channel|>analysis<|message|>\" in message.content or \"<|channel|>final<|message|>\" in message.content %}",
+            "{%- if false %}");
+    }
+
     std::string token_bos = bos_token_override;
     std::string token_eos = eos_token_override;
     bool add_bos = false;
@@ -623,6 +634,19 @@ const char * common_reasoning_format_name(common_reasoning_format format) {
         default:
             throw std::runtime_error("Unknown reasoning format");
     }
+}
+
+common_reasoning_format common_reasoning_format_from_name(const std::string & format) {
+    if (format == "none") {
+        return COMMON_REASONING_FORMAT_NONE;
+    } else if (format == "auto") {
+        return COMMON_REASONING_FORMAT_AUTO;
+    } else if (format == "deepseek") {
+        return COMMON_REASONING_FORMAT_DEEPSEEK;
+    } else if (format == "deepseek-legacy") {
+        return COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY;
+    }
+    throw std::runtime_error("Unknown reasoning format: " + format);
 }
 
 static std::string wrap_code_as_arguments(common_chat_msg_parser & builder, const std::string & code) {
