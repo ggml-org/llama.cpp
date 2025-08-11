@@ -1441,7 +1441,10 @@ static void test_template_output_parsers() {
     }
     {
         auto tmpls = read_templates("models/templates/openai-gpt-oss-120b.jinja");
-        std::vector<std::string> end_tokens{ "<|return|>" };
+        std::vector<std::string> end_tokens{ "<|return|>", "<|call|>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_GPT_OSS, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_GPT_OSS, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
 
         assert_msg_equals(message_assist_empty,
             common_chat_parse(
