@@ -24,6 +24,14 @@
 
 #define UNUSED GGML_UNUSED
 
+void print_m512f(const __m512 vec) {
+    const float *values = (const float*)&vec;
+    for (int i = 0; i < 16; i++) {
+        printf("%f ", values[i]);
+    }
+    printf("\n");
+}
+
 #if defined(__AVX__)
 #if defined(__F16C__)
 #if defined(__AVX512F__)
@@ -6720,7 +6728,7 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     scalesmask1 = _mm256_permute2f128_si256(scalesmask1, scalesmask1, 0);
     __m256i scalesmask2 = _mm256_castsi128_si256(scalesmask2_sse);
     scalesmask2 = _mm256_permute2f128_si256(scalesmask2, scalesmask2, 0);
-/*
+
 #ifdef __AVX512F__
     int anc = nc - nc % 16; // Used to align nc with boundary of 16
     const __m512i m4_expanded = _mm512_set1_epi8(0xF);
@@ -6736,7 +6744,7 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             a_ptrs[i + 1] = a_ptrs[i] + nb;
         }
         // Take group of eight block_q6_kx8 structures at each pass of the loop and perform dot product operation
-        for (int64_t x = xstart; x < anc / 8; x += 2) {
+        for (int64_t x = 0; x < anc / 8; x += 2) {
 
             const block_q6_Kx8 * b_ptr_0 = b_ptr_start + ((x) * b_nb);
             const block_q6_Kx8 * b_ptr_1 = b_ptr_start + ((x + 1) * b_nb);
@@ -7677,16 +7685,966 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             // Store the accumulated values
             for (int i = 0; i < 16; i++) {
                 _mm512_storeu_ps((float * )(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
-                printf("Index = %d",((y * 4 + i) * bs + x * 8));
-                printf("\n");
-                printf("sub_ps values = ");
-                print_m512f(acc_rows[i]);
+
             }
         }    
     }
-    exit(0);
+
+    for (; y < nr / 4; y ++){
+
+        const block_q8_Kx4 * a_ptr = a_ptr_start + (y * nb);
+
+        // Take group of eight block_q6_kx8 structures at each pass of the loop and perform dot product operation
+        for (int64_t x = 0; x < anc / 8; x += 2) {
+
+            const block_q6_Kx8 * b_ptr_0 = b_ptr_start + ((x) * b_nb);
+            const block_q6_Kx8 * b_ptr_1 = b_ptr_start + ((x + 1) * b_nb);
+
+            // Master FP accumulators
+            __m512 acc_rows[4];
+            for (int i = 0; i < 4; i++) {
+                acc_rows[i] = _mm512_setzero_ps();
+            }
+
+            // For super block
+            for (int64_t b = 0; b < nb; b++) {
+                // Delta values - Load the sixteen scale values from two block_q2_kx8 structures
+                const __m512 col_scale_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].d, b_ptr_1[b].d);
+
+                 for (int sb = 0; sb < QK_K / 128; sb++) {
+                    const __m256i rhs_raw_mat_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + sb * 512));
+                    const __m256i rhs_raw_mat_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 32 + sb * 512));
+                    const __m256i rhs_raw_mat_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 64 + sb * 512));
+                    const __m256i rhs_raw_mat_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 96 + sb * 512));
+                    const __m256i rhs_raw_mat_0123_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 128 + sb * 512));
+                    const __m256i rhs_raw_mat_4567_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 160 + sb * 512));
+                    const __m256i rhs_raw_mat_0123_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 192 + sb * 512));
+                    const __m256i rhs_raw_mat_4567_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 224 + sb * 512));
+
+                    const __m256i rhs_raw_mat_0123_4 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 256 + sb * 512));
+                    const __m256i rhs_raw_mat_4567_4 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 288 + sb * 512));
+                    const __m256i rhs_raw_mat_0123_5 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 320 + sb * 512));
+                    const __m256i rhs_raw_mat_4567_5 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 352 + sb * 512));
+                    const __m256i rhs_raw_mat_0123_6 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 384 + sb * 512));
+                    const __m256i rhs_raw_mat_4567_6 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 416 + sb * 512));
+                    const __m256i rhs_raw_mat_0123_7 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 448 + sb * 512));
+                    const __m256i rhs_raw_mat_4567_7 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].ql + 480 + sb * 512));
+
+                    const __m256i rhs_raw_mat_89AB_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 32 + sb * 512));
+                    const __m256i rhs_raw_mat_89AB_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 64 + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 96 + sb * 512));
+                    const __m256i rhs_raw_mat_89AB_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 128 + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 160 + sb * 512));
+                    const __m256i rhs_raw_mat_89AB_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 192 + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 224 + sb * 512));
+
+                    const __m256i rhs_raw_mat_89AB_4 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 256 + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_4 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 288 + sb * 512));
+                    const __m256i rhs_raw_mat_89AB_5 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 320 + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_5 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 352 + sb * 512));
+                    const __m256i rhs_raw_mat_89AB_6 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 384 + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_6 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 416 + sb * 512));
+                    const __m256i rhs_raw_mat_89AB_7 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 448 + sb * 512));
+                    const __m256i rhs_raw_mat_CDEF_7 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].ql + 480 + sb * 512));
+
+                    const __m256i rhs_raw_hbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + sb * 256));
+                    const __m256i rhs_raw_hbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + 32 + sb * 256));
+                    const __m256i rhs_raw_hbit_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + 64 + sb * 256));
+                    const __m256i rhs_raw_hbit_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + 96 + sb * 256));
+                    const __m256i rhs_raw_hbit_0123_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + 128 + sb * 256));
+                    const __m256i rhs_raw_hbit_4567_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + 160 + sb * 256));
+                    const __m256i rhs_raw_hbit_0123_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + 192 + sb * 256));
+                    const __m256i rhs_raw_hbit_4567_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_0[b].qh + 224 + sb * 256));
+
+                    const __m256i rhs_raw_hbit_89AB_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + sb * 256));
+                    const __m256i rhs_raw_hbit_CDEF_0 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + 32 + sb * 256));
+                    const __m256i rhs_raw_hbit_89AB_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + 64 + sb * 256));
+                    const __m256i rhs_raw_hbit_CDEF_1 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + 96 + sb * 256));
+                    const __m256i rhs_raw_hbit_89AB_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + 128 + sb * 256));
+                    const __m256i rhs_raw_hbit_CDEF_2 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + 160 + sb * 256));
+                    const __m256i rhs_raw_hbit_89AB_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + 192 + sb * 256));
+                    const __m256i rhs_raw_hbit_CDEF_3 = _mm256_loadu_si256((const __m256i *)(b_ptr_1[b].qh + 224 + sb * 256));
+
+                    // Indices 0 through 7 (first block):
+                    const __m256i rhs_raw_mat_0145_0 = _mm256_blend_epi32(rhs_raw_mat_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_0, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_0, requiredOrder), rhs_raw_mat_4567_0, 240);
+                    const __m256i rhs_raw_mat_0145_1 = _mm256_blend_epi32(rhs_raw_mat_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_1, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_1, requiredOrder), rhs_raw_mat_4567_1, 240);
+                    const __m256i rhs_raw_mat_0145_2 = _mm256_blend_epi32(rhs_raw_mat_0123_2, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_2, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_2, requiredOrder), rhs_raw_mat_4567_2, 240);
+                    const __m256i rhs_raw_mat_0145_3 = _mm256_blend_epi32(rhs_raw_mat_0123_3, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_3, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_3, requiredOrder), rhs_raw_mat_4567_3, 240);
+
+                    // Indices 4 through 7 (second block):
+                    const __m256i rhs_raw_mat_0145_4 = _mm256_blend_epi32(rhs_raw_mat_0123_4, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_4, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_4 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_4, requiredOrder), rhs_raw_mat_4567_4, 240);
+                    const __m256i rhs_raw_mat_0145_5 = _mm256_blend_epi32(rhs_raw_mat_0123_5, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_5, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_5 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_5, requiredOrder), rhs_raw_mat_4567_5, 240);
+                    const __m256i rhs_raw_mat_0145_6 = _mm256_blend_epi32(rhs_raw_mat_0123_6, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_6, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_6 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_6, requiredOrder), rhs_raw_mat_4567_6, 240);
+                    const __m256i rhs_raw_mat_0145_7 = _mm256_blend_epi32(rhs_raw_mat_0123_7, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_7, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_2367_7 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_7, requiredOrder), rhs_raw_mat_4567_7, 240);
+
+                    // Indices 8 through F (first block):
+                    const __m256i rhs_raw_mat_89CD_0 = _mm256_blend_epi32(rhs_raw_mat_89AB_0, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_0, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_0, requiredOrder), rhs_raw_mat_CDEF_0, 240);
+                    const __m256i rhs_raw_mat_89CD_1 = _mm256_blend_epi32(rhs_raw_mat_89AB_1, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_1, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_1, requiredOrder), rhs_raw_mat_CDEF_1, 240);
+                    const __m256i rhs_raw_mat_89CD_2 = _mm256_blend_epi32(rhs_raw_mat_89AB_2, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_2, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_2, requiredOrder), rhs_raw_mat_CDEF_2, 240);
+                    const __m256i rhs_raw_mat_89CD_3 = _mm256_blend_epi32(rhs_raw_mat_89AB_3, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_3, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_3, requiredOrder), rhs_raw_mat_CDEF_3, 240);
+
+                    // Indices 8 through F (second block):
+                    const __m256i rhs_raw_mat_89CD_4 = _mm256_blend_epi32(rhs_raw_mat_89AB_4, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_4, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_4 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_4, requiredOrder), rhs_raw_mat_CDEF_4, 240);
+                    const __m256i rhs_raw_mat_89CD_5 = _mm256_blend_epi32(rhs_raw_mat_89AB_5, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_5, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_5 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_5, requiredOrder), rhs_raw_mat_CDEF_5, 240);
+                    const __m256i rhs_raw_mat_89CD_6 = _mm256_blend_epi32(rhs_raw_mat_89AB_6, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_6, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_6 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_6, requiredOrder), rhs_raw_mat_CDEF_6, 240);
+                    const __m256i rhs_raw_mat_89CD_7 = _mm256_blend_epi32(rhs_raw_mat_89AB_7, _mm256_permutevar8x32_epi32(rhs_raw_mat_CDEF_7, requiredOrder), 240);
+                    const __m256i rhs_raw_mat_ABEF_7 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_89AB_7, requiredOrder), rhs_raw_mat_CDEF_7, 240);
+
+                    const __m256i rhs_raw_hbit_0145_0 = _mm256_blend_epi32(rhs_raw_hbit_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_hbit_4567_0, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_0123_0, requiredOrder), rhs_raw_hbit_4567_0, 240);
+                    const __m256i rhs_raw_hbit_0145_1 = _mm256_blend_epi32(rhs_raw_hbit_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_hbit_4567_1, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_0123_1, requiredOrder), rhs_raw_hbit_4567_1, 240);
+                    const __m256i rhs_raw_hbit_0145_2 = _mm256_blend_epi32(rhs_raw_hbit_0123_2, _mm256_permutevar8x32_epi32(rhs_raw_hbit_4567_2, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_2367_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_0123_2, requiredOrder), rhs_raw_hbit_4567_2, 240);
+                    const __m256i rhs_raw_hbit_0145_3 = _mm256_blend_epi32(rhs_raw_hbit_0123_3, _mm256_permutevar8x32_epi32(rhs_raw_hbit_4567_3, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_2367_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_0123_3, requiredOrder), rhs_raw_hbit_4567_3, 240);
+
+                    const __m256i rhs_raw_hbit_89CD_0 = _mm256_blend_epi32(rhs_raw_hbit_89AB_0, _mm256_permutevar8x32_epi32(rhs_raw_hbit_CDEF_0, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_ABEF_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_89AB_0, requiredOrder), rhs_raw_hbit_CDEF_0, 240);
+                    const __m256i rhs_raw_hbit_89CD_1 = _mm256_blend_epi32(rhs_raw_hbit_89AB_1, _mm256_permutevar8x32_epi32(rhs_raw_hbit_CDEF_1, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_ABEF_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_89AB_1, requiredOrder), rhs_raw_hbit_CDEF_1, 240);
+                    const __m256i rhs_raw_hbit_89CD_2 = _mm256_blend_epi32(rhs_raw_hbit_89AB_2, _mm256_permutevar8x32_epi32(rhs_raw_hbit_CDEF_2, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_ABEF_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_89AB_2, requiredOrder), rhs_raw_hbit_CDEF_2, 240);
+                    const __m256i rhs_raw_hbit_89CD_3 = _mm256_blend_epi32(rhs_raw_hbit_89AB_3, _mm256_permutevar8x32_epi32(rhs_raw_hbit_CDEF_3, requiredOrder), 240);
+                    const __m256i rhs_raw_hbit_ABEF_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_89AB_3, requiredOrder), rhs_raw_hbit_CDEF_3, 240);
+
+                    const __m512i rhs_raw_mat_014589CD_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_0), rhs_raw_mat_89CD_0, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_0), rhs_raw_mat_ABEF_0, 1);
+                    const __m512i rhs_raw_mat_014589CD_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_1), rhs_raw_mat_89CD_1, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_1), rhs_raw_mat_ABEF_1, 1);
+
+                    const __m512i rhs_raw_mat_014589CD_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_2), rhs_raw_mat_89CD_2, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_2), rhs_raw_mat_ABEF_2, 1);
+                    const __m512i rhs_raw_mat_014589CD_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_3), rhs_raw_mat_89CD_3, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_3), rhs_raw_mat_ABEF_3, 1);
+
+                    const __m512i rhs_raw_mat_014589CD_4 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_4), rhs_raw_mat_89CD_4, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_4 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_4), rhs_raw_mat_ABEF_4, 1);
+                    const __m512i rhs_raw_mat_014589CD_5 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_5), rhs_raw_mat_89CD_5, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_5 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_5), rhs_raw_mat_ABEF_5, 1);
+
+                    const __m512i rhs_raw_mat_014589CD_6 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_6), rhs_raw_mat_89CD_6, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_6 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_6), rhs_raw_mat_ABEF_6, 1);
+                    const __m512i rhs_raw_mat_014589CD_7 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_0145_7), rhs_raw_mat_89CD_7, 1);
+                    const __m512i rhs_raw_mat_2367ABEF_7 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_mat_2367_7), rhs_raw_mat_ABEF_7, 1);
+
+                    const __m512i rhs_raw_hbit_014589CD_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_0145_0), rhs_raw_hbit_89CD_0, 1);
+                    const __m512i rhs_raw_hbit_2367ABEF_0 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_2367_0), rhs_raw_hbit_ABEF_0, 1);
+                    const __m512i rhs_raw_hbit_014589CD_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_0145_1), rhs_raw_hbit_89CD_1, 1);
+                    const __m512i rhs_raw_hbit_2367ABEF_1 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_2367_1), rhs_raw_hbit_ABEF_1, 1);
+
+                    const __m512i rhs_raw_hbit_014589CD_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_0145_2), rhs_raw_hbit_89CD_2, 1);
+                    const __m512i rhs_raw_hbit_2367ABEF_2 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_2367_2), rhs_raw_hbit_ABEF_2, 1);
+                    const __m512i rhs_raw_hbit_014589CD_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_0145_3), rhs_raw_hbit_89CD_3, 1);
+                    const __m512i rhs_raw_hbit_2367ABEF_3 = _mm512_inserti32x8(_mm512_castsi256_si512(rhs_raw_hbit_2367_3), rhs_raw_hbit_ABEF_3, 1);
+
+                    // 2-bit -> 8-bit
+                    // Values of the 0th,2nd,4th,6th sub blocks of eight block_q6_K structures for the sb loop
+                    const __m512i rhs_hbit_014589CD_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_0, m2_expanded), 4); //B00(0-7) B01(0-7) B04(0-7) B05(0-7)
+                    const __m512i rhs_hbit_014589CD_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 2), m2_expanded), 4); //B20(0-7) B21(0-7) B24(0-7) B25(0-7)
+                    const __m512i rhs_hbit_014589CD_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 4), m2_expanded), 4); //B40(0-7) B41(0-7) B44(0-7) B45(0-7)
+                    const __m512i rhs_hbit_014589CD_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 6), m2_expanded), 4); //B60(0-7) B61(0-7) B64(0-7) B65(0-7)
+
+                    const __m512i rhs_hbit_2367ABEF_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_0, m2_expanded), 4); //B02(0-7) B03(0-7) B06(0-7) B07(0-7)
+                    const __m512i rhs_hbit_2367ABEF_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 2), m2_expanded), 4); //B22(0-7) B23(0-7) B26(0-7) B27(0-7)
+                    const __m512i rhs_hbit_2367ABEF_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 4), m2_expanded), 4); //B42(0-7) B43(0-7) B46(0-7) B47(0-7)
+                    const __m512i rhs_hbit_2367ABEF_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 6), m2_expanded), 4); //B62(0-7) B63(0-7) B66(0-7) B67(0-7)
+
+                    const __m512i rhs_hbit_014589CD_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_1, m2_expanded), 4); //B00(8-15) B01(8-15) B04(8-15) B05(8-15)
+                    const __m512i rhs_hbit_014589CD_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 2), m2_expanded), 4); //B20(8-15) B21(8-15) B24(8-15) B25(8-15)
+                    const __m512i rhs_hbit_014589CD_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 4), m2_expanded), 4); //B40(8-15) B41(8-15) B44(8-15) B45(8-15)
+                    const __m512i rhs_hbit_014589CD_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 6), m2_expanded), 4); //B60(8-15) B61(8-15) B64(8-15) B65(8-15)
+
+                    const __m512i rhs_hbit_2367ABEF_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_1, m2_expanded), 4); //B02(8-15) B03(8-15) B06(8-15) B07(8-15)
+                    const __m512i rhs_hbit_2367ABEF_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 2), m2_expanded), 4); //B22(8-15) B23(8-15) B26(8-15) B27(8-15)
+                    const __m512i rhs_hbit_2367ABEF_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 4), m2_expanded), 4); //B42(8-15) B43(8-15) B46(8-15) B47(8-15)
+                    const __m512i rhs_hbit_2367ABEF_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 6), m2_expanded), 4); //B62(8-15) B63(8-15) B66(8-15) B67(8-15)
+
+                    // Values of the 1st,3rd,5th,7th sub blocks of eight block_q6_K structures for the sb loop
+                    const __m512i rhs_hbit_014589CD_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_2, m2_expanded), 4); //B10(0-7) B11(0-7) B14(0-7) B15(0-7)
+                    const __m512i rhs_hbit_014589CD_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 2), m2_expanded), 4); //B30(0-7) B31(0-7) B34(0-7) B35(0-7)
+                    const __m512i rhs_hbit_014589CD_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 4), m2_expanded), 4); //B50(0-7) B51(0-7) B54(0-7) B55(0-7)
+                    const __m512i rhs_hbit_014589CD_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 6), m2_expanded), 4); //B70(0-7) B71(0-7) B74(0-7) B75(0-7)
+
+                    const __m512i rhs_hbit_2367ABEF_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_2, m2_expanded), 4); //B12(0-7) B13(0-7) B16(0-7) B17(0-7)
+                    const __m512i rhs_hbit_2367ABEF_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 2), m2_expanded), 4); //B32(0-7) B33(0-7) B36(0-7) B37(0-7)
+                    const __m512i rhs_hbit_2367ABEF_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 4), m2_expanded), 4); //B52(0-7) B53(0-7) B56(0-7) B57(0-7)
+                    const __m512i rhs_hbit_2367ABEF_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 6), m2_expanded), 4); //B72(0-7) B73(0-7) B76(0-7) B77(0-7)
+
+                    const __m512i rhs_hbit_014589CD_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_3, m2_expanded), 4); //B10(8-15) B11(8-15) B14(8-15) B15(8-15)
+                    const __m512i rhs_hbit_014589CD_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 2), m2_expanded), 4); //B30(8-15) B31(8-15) B34(8-15) B35(8-15)
+                    const __m512i rhs_hbit_014589CD_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 4), m2_expanded), 4); //B50(8-15) B51(8-15) B54(8-15) B55(8-15)
+                    const __m512i rhs_hbit_014589CD_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 6), m2_expanded), 4); //B70(8-15) B71(8-15) B74(8-15) B75(8-15)
+
+                    const __m512i rhs_hbit_2367ABEF_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_3, m2_expanded), 4); //B12(8-15) B13(8-15) B16(8-15) B17(8-15)
+                    const __m512i rhs_hbit_2367ABEF_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 2), m2_expanded), 4); //B32(8-15) B33(8-15) B36(8-15) B37(8-15)
+                    const __m512i rhs_hbit_2367ABEF_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 4), m2_expanded), 4); //B52(8-15) B53(8-15) B56(8-15) B57(8-15)
+                    const __m512i rhs_hbit_2367ABEF_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 6), m2_expanded), 4); //B72(8-15) B73(8-15) B76(8-15) B77(8-15)
+
+                    // 0 -7, 64 - 71
+                    const __m512i rhs_mat_014589CD_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_0, m4_expanded), rhs_hbit_014589CD_00);
+                    const __m512i rhs_mat_014589CD_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_0, 4), m4_expanded), rhs_hbit_014589CD_40);
+
+                    const __m512i rhs_mat_2367ABEF_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_0, m4_expanded), rhs_hbit_2367ABEF_00);
+                    const __m512i rhs_mat_2367ABEF_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_0, 4), m4_expanded), rhs_hbit_2367ABEF_40);
+
+                    // 8 - 15, 72 - 79
+                    const __m512i rhs_mat_014589CD_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_1, m4_expanded), rhs_hbit_014589CD_01);
+                    const __m512i rhs_mat_014589CD_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_1, 4), m4_expanded), rhs_hbit_014589CD_41);
+
+                    const __m512i rhs_mat_2367ABEF_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_1, m4_expanded), rhs_hbit_2367ABEF_01);
+                    const __m512i rhs_mat_2367ABEF_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_1, 4), m4_expanded), rhs_hbit_2367ABEF_41);
+
+                    // 16 - 23, 80 - 87
+                    const __m512i rhs_mat_014589CD_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_2, m4_expanded), rhs_hbit_014589CD_10);
+                    const __m512i rhs_mat_014589CD_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_2, 4), m4_expanded), rhs_hbit_014589CD_50);
+
+                    const __m512i rhs_mat_2367ABEF_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_2, m4_expanded), rhs_hbit_2367ABEF_10);
+                    const __m512i rhs_mat_2367ABEF_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_2, 4), m4_expanded), rhs_hbit_2367ABEF_50);
+
+                    // 24 - 31, 88 - 95
+                    const __m512i rhs_mat_014589CD_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_3, m4_expanded), rhs_hbit_014589CD_11);
+                    const __m512i rhs_mat_014589CD_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_3, 4), m4_expanded), rhs_hbit_014589CD_51);
+
+                    const __m512i rhs_mat_2367ABEF_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_3, m4_expanded), rhs_hbit_2367ABEF_11);
+                    const __m512i rhs_mat_2367ABEF_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_3, 4), m4_expanded), rhs_hbit_2367ABEF_51);
+
+                    // 32 - 39, 96 - 103
+                    const __m512i rhs_mat_014589CD_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_4, m4_expanded), rhs_hbit_014589CD_20);
+                    const __m512i rhs_mat_014589CD_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_4, 4), m4_expanded), rhs_hbit_014589CD_60);
+
+                    const __m512i rhs_mat_2367ABEF_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_4, m4_expanded), rhs_hbit_2367ABEF_20);
+                    const __m512i rhs_mat_2367ABEF_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_4, 4), m4_expanded), rhs_hbit_2367ABEF_60);
+
+                    // 40 - 47, 104 - 111
+                    const __m512i rhs_mat_014589CD_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_5, m4_expanded), rhs_hbit_014589CD_21);
+                    const __m512i rhs_mat_014589CD_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_5, 4), m4_expanded), rhs_hbit_014589CD_61);
+
+                    const __m512i rhs_mat_2367ABEF_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_5, m4_expanded), rhs_hbit_2367ABEF_21);
+                    const __m512i rhs_mat_2367ABEF_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_5, 4), m4_expanded), rhs_hbit_2367ABEF_61);
+
+                    // 48 - 55, 112 - 119
+                    const __m512i rhs_mat_014589CD_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_6, m4_expanded), rhs_hbit_014589CD_30);
+                    const __m512i rhs_mat_014589CD_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_6, 4), m4_expanded), rhs_hbit_014589CD_70);
+
+                    const __m512i rhs_mat_2367ABEF_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_6, m4_expanded), rhs_hbit_2367ABEF_30);
+                    const __m512i rhs_mat_2367ABEF_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_6, 4), m4_expanded), rhs_hbit_2367ABEF_70);
+
+                    // 56 - 63, 120 - 127
+                    const __m512i rhs_mat_014589CD_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_014589CD_7, m4_expanded), rhs_hbit_014589CD_31);
+                    const __m512i rhs_mat_014589CD_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_014589CD_7, 4), m4_expanded), rhs_hbit_014589CD_71);
+
+                    const __m512i rhs_mat_2367ABEF_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_mat_2367ABEF_7, m4_expanded), rhs_hbit_2367ABEF_31);
+                    const __m512i rhs_mat_2367ABEF_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_mat_2367ABEF_7, 4), m4_expanded), rhs_hbit_2367ABEF_71);
+
+                    // Shuffle pattern one - right side input
+                    const __m512i rhs_mat_014589CD_00_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_00, (_MM_PERM_ENUM)136); //B00(0-3) B01(0-3) B00(0-3) B01(0-3) B04(0-3) B05(0-3) B04(0-3) B05(0-3)
+                    const __m512i rhs_mat_2367ABEF_00_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_00, (_MM_PERM_ENUM)136); //B02(0-3) B03(0-3) B02(0-3) B03(0-3) B06(0-3) B07(0-3) B06(0-3) B07(0-3)
+
+                    const __m512i rhs_mat_014589CD_01_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_01, (_MM_PERM_ENUM)136); //B00(8-11) B01(8-11) B00(8-11) B01(8-11) B04(8-11) B05(8-11) B04(8-11) B05(8-11)
+                    const __m512i rhs_mat_2367ABEF_01_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_01, (_MM_PERM_ENUM)136); //B02(8-11) B03(8-11) B02(8-11) B03(8-11) B06(8-11) B07(8-11) B06(8-11) B07(8-11)
+
+                    const __m512i rhs_mat_014589CD_10_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_10, (_MM_PERM_ENUM)136); //B10(0-3) B11(0-3) B10(0-3) B11(0-3) B14(0-3) B15(0-3) B14(0-3) B15(0-3)
+                    const __m512i rhs_mat_2367ABEF_10_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_10, (_MM_PERM_ENUM)136); //B12(0-3) B13(0-3) B12(0-3) B13(0-3) B16(0-3) B17(0-3) B16(0-3) B17(0-3)
+
+                    const __m512i rhs_mat_014589CD_11_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_11, (_MM_PERM_ENUM)136); //B10(8-11) B11(8-11) B10(8-11) B11(8-11) B14(8-11) B15(8-11) B14(8-11) B15(8-11)
+                    const __m512i rhs_mat_2367ABEF_11_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_11, (_MM_PERM_ENUM)136); //B12(8-11) B13(8-11) B12(8-11) B13(8-11) B16(8-11) B17(8-11) B16(8-11) B17(8-11)
+
+                    const __m512i rhs_mat_014589CD_20_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_20, (_MM_PERM_ENUM)136); //B20(0-3) B21(0-3) B20(0-3) B21(0-3) B24(0-3) B25(0-3) B24(0-3) B25(0-3)
+                    const __m512i rhs_mat_2367ABEF_20_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_20, (_MM_PERM_ENUM)136); //B22(0-3) B23(0-3) B22(0-3) B23(0-3) B26(0-3) B27(0-3) B26(0-3) B27(0-3)
+
+                    const __m512i rhs_mat_014589CD_21_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_21, (_MM_PERM_ENUM)136); //B20(8-11) B21(8-11) B20(8-11) B21(8-11) B24(8-11) B25(8-11) B24(8-11) B25(8-11)
+                    const __m512i rhs_mat_2367ABEF_21_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_21, (_MM_PERM_ENUM)136); //B22(8-11) B23(8-11) B22(8-11) B23(8-11) B26(8-11) B27(8-11) B26(8-11) B27(8-11)
+
+                    const __m512i rhs_mat_014589CD_30_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_30, (_MM_PERM_ENUM)136); //B30(0-3) B31(0-3) B30(0-3) B31(0-3) B34(0-3) B35(0-3) B34(0-3) B35(0-3)
+                    const __m512i rhs_mat_2367ABEF_30_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_30, (_MM_PERM_ENUM)136); //B32(0-3) B33(0-3) B32(0-3) B33(0-3) B36(0-3) B37(0-3) B36(0-3) B37(0-3)
+
+                    const __m512i rhs_mat_014589CD_31_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_31, (_MM_PERM_ENUM)136); //B30(8-11) B31(8-11) B30(8-11) B31(8-11) B34(8-11) B35(8-11) B34(8-11) B35(8-11
+                    const __m512i rhs_mat_2367ABEF_31_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_31, (_MM_PERM_ENUM)136); //B32(8-11) B33(8-11) B32(8-11) B33(8-11) B36(8-11) B37(8-11) B36(8-11) B37(8-11)
+
+                    const __m512i rhs_mat_014589CD_40_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_40, (_MM_PERM_ENUM)136); //B40(0-3) B41(0-3) B40(0-3) B41(0-3) B44(0-3) B45(0-3) B44(0-3) B45(0-3)
+                    const __m512i rhs_mat_2367ABEF_40_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_40, (_MM_PERM_ENUM)136); //B42(0-3) B43(0-3) B42(0-3) B43(0-3) B46(0-3) B47(0-3) B46(0-3) B47(0-3)
+
+                    const __m512i rhs_mat_014589CD_41_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_41, (_MM_PERM_ENUM)136); //B40(8-11) B41(8-11) B40(8-11) B41(8-11) B44(8-11) B45(8-11) B44(8-11) B45(8-11)
+                    const __m512i rhs_mat_2367ABEF_41_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_41, (_MM_PERM_ENUM)136); //B42(8-11) B43(8-11) B42(8-11) B43(8-11) B46(8-11) B47(8-11) B46(8-11) B47(8-11)
+
+                    const __m512i rhs_mat_014589CD_50_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_50, (_MM_PERM_ENUM)136); //B50(0-3) B51(0-3) B50(0-3) B51(0-3) B54(0-3) B55(0-3) B54(0-3) B55(0-3)
+                    const __m512i rhs_mat_2367ABEF_50_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_50, (_MM_PERM_ENUM)136); //B52(0-3) B53(0-3) B52(0-3) B53(0-3) B56(0-3) B57(0-3) B56(0-3) B57(0-3)
+
+                    const __m512i rhs_mat_014589CD_51_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_51, (_MM_PERM_ENUM)136); //B50(8-11) B51(8-11) B50(8-11) B51(8-11) B54(8-11) B55(8-11) B54(8-11) B55(8-11)
+                    const __m512i rhs_mat_2367ABEF_51_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_51, (_MM_PERM_ENUM)136); //B52(8-11) B53(8-11) B52(8-11) B53(8-11) B56(8-11) B57(8-11) B56(8-11) B57(8-11)
+
+                    const __m512i rhs_mat_014589CD_60_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_60, (_MM_PERM_ENUM)136); //B60(0-3) B61(0-3) B60(0-3) B61(0-3) B64(0-3) B65(0-3) B64(0-3) B65(0-3)
+                    const __m512i rhs_mat_2367ABEF_60_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_60, (_MM_PERM_ENUM)136); //B62(0-3) B63(0-3) B62(0-3) B63(0-3) B66(0-3) B67(0-3) B66(0-3) B67(0-3)
+
+                    const __m512i rhs_mat_014589CD_61_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_61, (_MM_PERM_ENUM)136); //B60(8-11) B61(8-11) B60(8-11) B61(8-11) B64(8-11) B65(8-11) B64(8-11) B65(8-11)
+                    const __m512i rhs_mat_2367ABEF_61_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_61, (_MM_PERM_ENUM)136); //B62(8-11) B63(8-11) B62(8-11) B63(8-11) B66(8-11) B67(8-11) B66(8-11) B67(8-11)
+
+                    const __m512i rhs_mat_014589CD_70_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_70, (_MM_PERM_ENUM)136); //B70(0-3) B71(0-3) B70(0-3) B71(0-3) B74(0-3) B75(0-3) B74(0-3) B75(0-3)
+                    const __m512i rhs_mat_2367ABEF_70_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_70, (_MM_PERM_ENUM)136); //B72(0-3) B73(0-3) B72(0-3) B73(0-3) B76(0-3) B77(0-3) B76(0-3) B77(0-3)
+
+                    const __m512i rhs_mat_014589CD_71_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_71, (_MM_PERM_ENUM)136); //B70(8-11) B71(8-11) B70(8-11) B71(8-11) B74(8-11) B75(8-11) B74(8-11) B75(8-11)
+                    const __m512i rhs_mat_2367ABEF_71_sp1 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_71, (_MM_PERM_ENUM)136); //B72(8-11) B73(8-11) B72(8-11) B73(8-11) B76(8-11) B77(8-11) B76(8-11) B77(8-11)
+
+
+                    // Shuffle pattern two - right side input
+                    const __m512i rhs_mat_014589CD_00_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_00, (_MM_PERM_ENUM)221); //B00(4-7) B01(4-7) B00(4-7) B01(4-7) B04(4-7) B05(4-7) B04(4-7) B05(4-7)
+                    const __m512i rhs_mat_2367ABEF_00_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_00, (_MM_PERM_ENUM)221); //B02(4-7) B03(4-7) B02(4-7) B03(4-7) B06(4-7) B07(4-7) B06(4-7) B07(4-7)
+
+                    const __m512i rhs_mat_014589CD_01_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_01, (_MM_PERM_ENUM)221); //B00(12-15) B01(12-15) B00(12-15) B01(12-15) B04(12-15) B05(12-15) B04(12-15) B05(12-15)
+                    const __m512i rhs_mat_2367ABEF_01_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_01, (_MM_PERM_ENUM)221); //B02(12-15) B03(12-15) B02(12-15) B03(12-15) B06(12-15) B07(12-15) B06(12-15) B07(12-15)
+
+                    const __m512i rhs_mat_014589CD_10_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_10, (_MM_PERM_ENUM)221); //B10(4-7) B11(4-7) B10(4-7) B11(4-7) B14(4-7) B15(4-7) B14(4-7) B15(4-7)
+                    const __m512i rhs_mat_2367ABEF_10_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_10, (_MM_PERM_ENUM)221); //B12(4-7) B13(4-7) B12(4-7) B13(4-7) B16(4-7) B17(4-7) B16(4-7) B17(4-7)
+
+                    const __m512i rhs_mat_014589CD_11_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_11, (_MM_PERM_ENUM)221); //B10(12-15) B11(12-15) B10(12-15) B11(12-15) B14(12-15) B15(12-15) B14(12-15) B15(12-15)
+                    const __m512i rhs_mat_2367ABEF_11_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_11, (_MM_PERM_ENUM)221); //B12(12-15) B13(12-15) B12(12-15) B13(12-15) B16(12-15) B17(12-15) B16(12-15) B17(12-15)
+
+                    const __m512i rhs_mat_014589CD_20_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_20, (_MM_PERM_ENUM)221); //B20(4-7) B21(4-7) B20(4-7) B21(4-7) B24(4-7) B25(4-7) B24(4-7) B25(4-7)
+                    const __m512i rhs_mat_2367ABEF_20_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_20, (_MM_PERM_ENUM)221); //B22(4-7) B23(4-7) B22(4-7) B23(4-7) B26(4-7) B27(4-7) B26(4-7) B27(4-7)
+
+                    const __m512i rhs_mat_014589CD_21_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_21, (_MM_PERM_ENUM)221); //B20(12-15) B21(12-15) B20(12-15) B21(12-15) B24(12-15) B25(12-15) B24(12-15) B25(12-15)
+                    const __m512i rhs_mat_2367ABEF_21_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_21, (_MM_PERM_ENUM)221); //B22(12-15) B23(12-15) B22(12-15) B23(12-15) B26(12-15) B27(12-15) B26(12-15) B27(12-15)
+
+                    const __m512i rhs_mat_014589CD_30_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_30, (_MM_PERM_ENUM)221); //B30(4-7) B31(4-7) B30(4-7) B31(4-7) B34(4-7) B35(4-7) B34(4-7) B35(4-7)
+                    const __m512i rhs_mat_2367ABEF_30_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_30, (_MM_PERM_ENUM)221); //B32(4-7) B33(4-7) B32(4-7) B33(4-7) B36(4-7) B37(4-7) B36(4-7) B37(4-7)
+
+                    const __m512i rhs_mat_014589CD_31_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_31, (_MM_PERM_ENUM)221); //B30(12-15) B31(12-15) B30(12-15) B31(12-15) B34(12-15) B35(12-15) B34(12-15) B35(12-15)
+                    const __m512i rhs_mat_2367ABEF_31_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_31, (_MM_PERM_ENUM)221); //B32(12-15) B33(12-15) B32(12-15) B33(12-15) B36(12-15) B37(12-15) B36(12-15) B37(12-15)
+
+                    const __m512i rhs_mat_014589CD_40_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_40, (_MM_PERM_ENUM)221); //B40(4-7) B41(4-7) B40(4-7) B41(4-7) B44(4-7) B45(4-7) B44(4-7) B45(4-7)
+                    const __m512i rhs_mat_2367ABEF_40_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_40, (_MM_PERM_ENUM)221); //B42(4-7) B43(4-7) B42(4-7) B43(4-7) B46(4-7) B47(4-7) B46(4-7) B47(4-7)
+
+                    const __m512i rhs_mat_014589CD_41_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_41, (_MM_PERM_ENUM)221); //B40(12-15) B41(12-15) B40(12-15) B41(12-15) B44(12-15) B45(12-15) B44(12-15) B45(12-15)
+                    const __m512i rhs_mat_2367ABEF_41_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_41, (_MM_PERM_ENUM)221); //B42(12-15) B43(12-15) B42(12-15) B43(12-15) B46(12-15) B47(12-15) B46(12-15) B47(12-15)
+
+                    const __m512i rhs_mat_014589CD_50_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_50, (_MM_PERM_ENUM)221); //B50(4-7) B51(4-7) B50(4-7) B51(4-7) B54(4-7) B55(4-7) B54(4-7) B55(4-7)
+                    const __m512i rhs_mat_2367ABEF_50_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_50, (_MM_PERM_ENUM)221); //B52(4-7) B53(4-7) B52(4-7) B53(4-7) B56(4-7) B57(4-7) B56(4-7) B57(4-7)
+
+                    const __m512i rhs_mat_014589CD_51_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_51, (_MM_PERM_ENUM)221); //B50(12-15) B51(12-15) B50(12-15) B51(12-15) B54(12-15) B55(12-15) B54(12-15) B55(12-15)
+                    const __m512i rhs_mat_2367ABEF_51_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_51, (_MM_PERM_ENUM)221); //B52(12-15) B53(12-15) B52(12-15) B53(12-15) B56(12-15) B57(12-15) B56(12-15) B57(12-15)
+
+                    const __m512i rhs_mat_014589CD_60_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_60, (_MM_PERM_ENUM)221); //B60(4-7) B61(4-7) B60(4-7) B61(4-7) B64(4-7) B65(4-7) B64(4-7) B65(4-7)
+                    const __m512i rhs_mat_2367ABEF_60_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_60, (_MM_PERM_ENUM)221); //B62(4-7) B63(4-7) B62(4-7) B63(4-7) B66(4-7) B67(4-7) B66(4-7) B67(4-7)
+
+                    const __m512i rhs_mat_014589CD_61_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_61, (_MM_PERM_ENUM)221); //B60(12-15) B61(12-15) B60(12-15) B61(12-15) B64(12-15) B65(12-15) B64(12-15) B65(12-15)
+                    const __m512i rhs_mat_2367ABEF_61_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_61, (_MM_PERM_ENUM)221); //B62(12-15) B63(12-15) B62(12-15) B63(12-15) B66(12-15) B67(12-15) B66(12-15) B67(12-15)
+
+                    const __m512i rhs_mat_014589CD_70_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_70, (_MM_PERM_ENUM)221); //B70(4-7) B71(4-7) B70(4-7) B71(4-7) B74(4-7) B75(4-7) B74(4-7) B75(4-7)
+                    const __m512i rhs_mat_2367ABEF_70_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_70, (_MM_PERM_ENUM)221); //B72(4-7) B73(4-7) B72(4-7) B73(4-7) B76(4-7) B77(4-7) B76(4-7) B77(4-7)
+
+                    const __m512i rhs_mat_014589CD_71_sp2 = _mm512_shuffle_epi32(rhs_mat_014589CD_71, (_MM_PERM_ENUM)221); //B70(12-15) B71(12-15) B70(12-15) B71(12-15) B74(12-15) B75(12-15) B74(12-15) B75(12-15)
+                    const __m512i rhs_mat_2367ABEF_71_sp2 = _mm512_shuffle_epi32(rhs_mat_2367ABEF_71, (_MM_PERM_ENUM)221); //B72(12-15) B73(12-15) B72(12-15) B73(12-15) B76(12-15) B77(12-15) B76(12-15) B77(12-15)
+
+                    //Scales of corresponding sub blocks from different Q6_K structures are stored together
+                    //s00 s01 s10 s11 s20 s21 ...... s70 s71
+                    // Combine mins and scales for sub-blocks: 0-1, 2-3, 4-5, 6-7 in the sb loop
+                    const __m128i scales_01_0 = _mm_loadu_si128((const __m128i *)(b_ptr_0[b].scales + sb * 64));
+                    const __m128i scales_23_0 = _mm_loadu_si128((const __m128i *)(b_ptr_0[b].scales + 16 + sb * 64));
+                    const __m128i scales_45_0 = _mm_loadu_si128((const __m128i *)(b_ptr_0[b].scales + 32 + sb * 64));
+                    const __m128i scales_67_0 = _mm_loadu_si128((const __m128i *)(b_ptr_0[b].scales + 48 + sb * 64));
+
+                    const __m128i scales_01_1 = _mm_loadu_si128((const __m128i *)(b_ptr_1[b].scales + sb * 64));
+                    const __m128i scales_23_1 = _mm_loadu_si128((const __m128i *)(b_ptr_1[b].scales + 16 + sb * 64));
+                    const __m128i scales_45_1 = _mm_loadu_si128((const __m128i *)(b_ptr_1[b].scales + 32 + sb * 64));
+                    const __m128i scales_67_1 = _mm_loadu_si128((const __m128i *)(b_ptr_1[b].scales + 48 + sb * 64));
+
+                    // Combine mins and scales for sub-blocks: 0-1, 2-3, 4-5, 6-7 in the sb loop
+                    const __m256i scales_01 = _mm256_insertf128_si256(_mm256_castsi128_si256(scales_01_0), scales_01_1, 1);
+                    const __m256i scales_23 = _mm256_insertf128_si256(_mm256_castsi128_si256(scales_23_0), scales_23_1, 1);
+                    const __m256i scales_45 = _mm256_insertf128_si256(_mm256_castsi128_si256(scales_45_0), scales_45_1, 1);
+                    const __m256i scales_67 = _mm256_insertf128_si256(_mm256_castsi128_si256(scales_67_0), scales_67_1, 1);
+
+                    const __m512i scales_0 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_01,scalesmask1));
+                    const __m512i scales_1 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_01,scalesmask2));
+                    const __m512i scales_2 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_23,scalesmask1));
+                    const __m512i scales_3 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_23,scalesmask2));
+                    const __m512i scales_4 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_45,scalesmask1));
+                    const __m512i scales_5 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_45,scalesmask2));
+                    const __m512i scales_6 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_67,scalesmask1));
+                    const __m512i scales_7 = _mm512_cvtepi8_epi16(_mm256_shuffle_epi8(scales_67,scalesmask2));
+
+                    const __m512i scale_014589CD_0 = _mm512_shuffle_epi32(scales_0, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_0 = _mm512_shuffle_epi32(scales_0, (_MM_PERM_ENUM)238);
+
+                    const __m512i scale_014589CD_1 = _mm512_shuffle_epi32(scales_1, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_1 = _mm512_shuffle_epi32(scales_1, (_MM_PERM_ENUM)238);
+
+                    const __m512i scale_014589CD_2 = _mm512_shuffle_epi32(scales_2, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_2 = _mm512_shuffle_epi32(scales_2, (_MM_PERM_ENUM)238);
+
+                    const __m512i scale_014589CD_3 = _mm512_shuffle_epi32(scales_3, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_3 = _mm512_shuffle_epi32(scales_3, (_MM_PERM_ENUM)238);
+
+                    const __m512i scale_014589CD_4 = _mm512_shuffle_epi32(scales_4, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_4 = _mm512_shuffle_epi32(scales_4, (_MM_PERM_ENUM)238);
+
+                    const __m512i scale_014589CD_5 = _mm512_shuffle_epi32(scales_5, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_5 = _mm512_shuffle_epi32(scales_5, (_MM_PERM_ENUM)238);
+
+                    const __m512i scale_014589CD_6 = _mm512_shuffle_epi32(scales_6, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_6 = _mm512_shuffle_epi32(scales_6, (_MM_PERM_ENUM)238);
+
+                    const __m512i scale_014589CD_7 = _mm512_shuffle_epi32(scales_7, (_MM_PERM_ENUM)68);
+                    const __m512i scale_2367ABEF_7 = _mm512_shuffle_epi32(scales_7, (_MM_PERM_ENUM)238);
+
+
+                    // Load the four block_q8_k quantized values interleaved with each other in chunks of eight bytes - A0,A1,A2,A3
+                    // Loaded as set of 128 bit vectors and repeated and stored into a 256 bit vector before again repeating into 512 bit vector
+                    __m256i lhs_mat_ymm_0123_00 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_00 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_00, lhs_mat_ymm_0123_00, 0);
+                    __m256i lhs_mat_ymm_23_00 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_00, lhs_mat_ymm_0123_00, 17);
+                    __m256i lhs_mat_ymm_0123_01 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 32 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_01 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_01, lhs_mat_ymm_0123_01, 0);
+                    __m256i lhs_mat_ymm_23_01 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_01, lhs_mat_ymm_0123_01, 17);
+                    __m256i lhs_mat_ymm_0123_10 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 64 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_10 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_10, lhs_mat_ymm_0123_10, 0);
+                    __m256i lhs_mat_ymm_23_10 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_10, lhs_mat_ymm_0123_10, 17);
+                    __m256i lhs_mat_ymm_0123_11 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 96 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_11 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_11, lhs_mat_ymm_0123_11, 0);
+                    __m256i lhs_mat_ymm_23_11 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_11, lhs_mat_ymm_0123_11, 17);
+                    __m256i lhs_mat_ymm_0123_20 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 128 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_20 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_20, lhs_mat_ymm_0123_20, 0);
+                    __m256i lhs_mat_ymm_23_20 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_20, lhs_mat_ymm_0123_20, 17);
+                    __m256i lhs_mat_ymm_0123_21 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 160 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_21 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_21, lhs_mat_ymm_0123_21, 0);
+                    __m256i lhs_mat_ymm_23_21 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_21, lhs_mat_ymm_0123_21, 17);
+                    __m256i lhs_mat_ymm_0123_30 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 192 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_30 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_30, lhs_mat_ymm_0123_30, 0);
+                    __m256i lhs_mat_ymm_23_30 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_30, lhs_mat_ymm_0123_30, 17);
+                    __m256i lhs_mat_ymm_0123_31 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 224 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_31 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_31, lhs_mat_ymm_0123_31, 0);
+                    __m256i lhs_mat_ymm_23_31 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_31, lhs_mat_ymm_0123_31, 17);
+
+                    __m256i lhs_mat_ymm_0123_40 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 256 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_40 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_40, lhs_mat_ymm_0123_40, 0);
+                    __m256i lhs_mat_ymm_23_40 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_40, lhs_mat_ymm_0123_40, 17);
+                    __m256i lhs_mat_ymm_0123_41 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 288 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_41 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_41, lhs_mat_ymm_0123_41, 0);
+                    __m256i lhs_mat_ymm_23_41 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_41, lhs_mat_ymm_0123_41, 17);
+                    __m256i lhs_mat_ymm_0123_50 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 320 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_50 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_50, lhs_mat_ymm_0123_50, 0);
+                    __m256i lhs_mat_ymm_23_50 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_50, lhs_mat_ymm_0123_50, 17);
+                    __m256i lhs_mat_ymm_0123_51 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 352 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_51 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_51, lhs_mat_ymm_0123_51, 0);
+                    __m256i lhs_mat_ymm_23_51 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_51, lhs_mat_ymm_0123_51, 17);
+                    __m256i lhs_mat_ymm_0123_60 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 384 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_60 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_60, lhs_mat_ymm_0123_60, 0);
+                    __m256i lhs_mat_ymm_23_60 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_60, lhs_mat_ymm_0123_60, 17);
+                    __m256i lhs_mat_ymm_0123_61 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 416 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_61 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_61, lhs_mat_ymm_0123_61, 0);
+                    __m256i lhs_mat_ymm_23_61 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_61, lhs_mat_ymm_0123_61, 17);
+                    __m256i lhs_mat_ymm_0123_70 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 448 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_70 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_70, lhs_mat_ymm_0123_70, 0);
+                    __m256i lhs_mat_ymm_23_70 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_70, lhs_mat_ymm_0123_70, 17);
+                    __m256i lhs_mat_ymm_0123_71 = _mm256_loadu_si256((const __m256i * )((a_ptr[b].qs + 480 + 512 * sb)));
+                    __m256i lhs_mat_ymm_01_71 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_71, lhs_mat_ymm_0123_71, 0);
+                    __m256i lhs_mat_ymm_23_71 = _mm256_permute2f128_si256(lhs_mat_ymm_0123_71, lhs_mat_ymm_0123_71, 17);
+
+
+                    __m512i lhs_mat_01_00 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_00), lhs_mat_ymm_01_00, 1);
+                    __m512i lhs_mat_23_00 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_00), lhs_mat_ymm_23_00, 1);
+                    __m512i lhs_mat_01_01 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_01), lhs_mat_ymm_01_01, 1);
+                    __m512i lhs_mat_23_01 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_01), lhs_mat_ymm_23_01, 1);
+
+                    __m512i lhs_mat_01_10 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_10), lhs_mat_ymm_01_10, 1);
+                    __m512i lhs_mat_23_10 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_10), lhs_mat_ymm_23_10, 1);
+                    __m512i lhs_mat_01_11 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_11), lhs_mat_ymm_01_11, 1);
+                    __m512i lhs_mat_23_11 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_11), lhs_mat_ymm_23_11, 1);
+
+                    __m512i lhs_mat_01_20 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_20), lhs_mat_ymm_01_20, 1);
+                    __m512i lhs_mat_23_20 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_20), lhs_mat_ymm_23_20, 1);
+                    __m512i lhs_mat_01_21 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_21), lhs_mat_ymm_01_21, 1);
+                    __m512i lhs_mat_23_21 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_21), lhs_mat_ymm_23_21, 1);
+
+                    __m512i lhs_mat_01_30 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_30), lhs_mat_ymm_01_30, 1);
+                    __m512i lhs_mat_23_30 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_30), lhs_mat_ymm_23_30, 1);
+                    __m512i lhs_mat_01_31 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_31), lhs_mat_ymm_01_31, 1);
+                    __m512i lhs_mat_23_31 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_31), lhs_mat_ymm_23_31, 1);
+
+                    __m512i lhs_mat_01_40 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_40), lhs_mat_ymm_01_40, 1);
+                    __m512i lhs_mat_23_40 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_40), lhs_mat_ymm_23_40, 1);
+                    __m512i lhs_mat_01_41 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_41), lhs_mat_ymm_01_41, 1);
+                    __m512i lhs_mat_23_41 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_41), lhs_mat_ymm_23_41, 1);
+
+                    __m512i lhs_mat_01_50 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_50), lhs_mat_ymm_01_50, 1);
+                    __m512i lhs_mat_23_50 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_50), lhs_mat_ymm_23_50, 1);
+                    __m512i lhs_mat_01_51 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_51), lhs_mat_ymm_01_51, 1);
+                    __m512i lhs_mat_23_51 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_51), lhs_mat_ymm_23_51, 1);
+
+                    __m512i lhs_mat_01_60 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_60), lhs_mat_ymm_01_60, 1);
+                    __m512i lhs_mat_23_60 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_60), lhs_mat_ymm_23_60, 1);
+                    __m512i lhs_mat_01_61 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_61), lhs_mat_ymm_01_61, 1);
+                    __m512i lhs_mat_23_61 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_61), lhs_mat_ymm_23_61, 1);
+
+                    __m512i lhs_mat_01_70 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_70), lhs_mat_ymm_01_70, 1);
+                    __m512i lhs_mat_23_70 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_70), lhs_mat_ymm_23_70, 1);
+                    __m512i lhs_mat_01_71 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_01_71), lhs_mat_ymm_01_71, 1);
+                    __m512i lhs_mat_23_71 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_71), lhs_mat_ymm_23_71, 1);
+
+                    __m512i lhs_mat_s_01_00 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_00);
+                    __m512i lhs_mat_s_23_00 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_00);
+                    __m512i lhs_mat_s_01_01 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_01);
+                    __m512i lhs_mat_s_23_01 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_01);
+                    __m512i lhs_mat_s_01_10 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_10);
+                    __m512i lhs_mat_s_23_10 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_10);
+                    __m512i lhs_mat_s_01_11 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_11);
+                    __m512i lhs_mat_s_23_11 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_11);
+                    __m512i lhs_mat_s_01_20 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_20);
+                    __m512i lhs_mat_s_23_20 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_20);
+                    __m512i lhs_mat_s_01_21 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_21);
+                    __m512i lhs_mat_s_23_21 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_21);
+                    __m512i lhs_mat_s_01_30 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_30);
+                    __m512i lhs_mat_s_23_30 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_30);
+                    __m512i lhs_mat_s_01_31 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_31);
+                    __m512i lhs_mat_s_23_31 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_31);
+                    __m512i lhs_mat_s_01_40 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_40);
+                    __m512i lhs_mat_s_23_40 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_40);
+                    __m512i lhs_mat_s_01_41 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_41);
+                    __m512i lhs_mat_s_23_41 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_41);
+                    __m512i lhs_mat_s_01_50 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_50);
+                    __m512i lhs_mat_s_23_50 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_50);
+                    __m512i lhs_mat_s_01_51 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_51);
+                    __m512i lhs_mat_s_23_51 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_51);
+                    __m512i lhs_mat_s_01_60 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_60);
+                    __m512i lhs_mat_s_23_60 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_60);
+                    __m512i lhs_mat_s_01_61 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_61);
+                    __m512i lhs_mat_s_23_61 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_61);
+                    __m512i lhs_mat_s_01_70 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_70);
+                    __m512i lhs_mat_s_23_70 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_70);
+                    __m512i lhs_mat_s_01_71 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_71);
+                    __m512i lhs_mat_s_23_71 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_71);
+
+                    // Shuffle pattern one - left side input
+                    const __m512i lhs_mat_01_00_sp1 = _mm512_shuffle_epi32(lhs_mat_01_00, (_MM_PERM_ENUM)160); //A00(0-3) A00(0-3) A01(0-3) A01(0-3) A00(0-3) A00(0-3) A01(0-3) A01(0-3)
+                    const __m512i lhs_mat_23_00_sp1 = _mm512_shuffle_epi32(lhs_mat_23_00, (_MM_PERM_ENUM)160); //A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3)
+
+                    const __m512i lhs_mat_01_01_sp1 = _mm512_shuffle_epi32(lhs_mat_01_01, (_MM_PERM_ENUM)160); //A00(8-11) A00(8-11) A01(8-11) A01(8-11) A00(8-11) A00(8-11) A01(8-11) A01(8-11)
+                    const __m512i lhs_mat_23_01_sp1 = _mm512_shuffle_epi32(lhs_mat_23_01, (_MM_PERM_ENUM)160); //A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11)
+
+                    const __m512i lhs_mat_01_10_sp1 = _mm512_shuffle_epi32(lhs_mat_01_10, (_MM_PERM_ENUM)160); //A10(0-3) A10(0-3) A11(0-3) A11(0-3) A10(0-3) A10(0-3) A11(0-3) A11(0-3)
+                    const __m512i lhs_mat_23_10_sp1 = _mm512_shuffle_epi32(lhs_mat_23_10, (_MM_PERM_ENUM)160); //A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3)
+
+                    const __m512i lhs_mat_01_11_sp1 = _mm512_shuffle_epi32(lhs_mat_01_11, (_MM_PERM_ENUM)160); //A10(8-11) A10(8-11) A11(8-11) A11(8-11) A10(8-11) A10(8-11) A11(8-11) A11(8-11)
+                    const __m512i lhs_mat_23_11_sp1 = _mm512_shuffle_epi32(lhs_mat_23_11, (_MM_PERM_ENUM)160); //A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11)
+
+                    const __m512i lhs_mat_01_20_sp1 = _mm512_shuffle_epi32(lhs_mat_01_20, (_MM_PERM_ENUM)160); //A20(0-3) A20(0-3) A21(0-3) A21(0-3) A20(0-3) A20(0-3) A21(0-3) A21(0-3)
+                    const __m512i lhs_mat_23_20_sp1 = _mm512_shuffle_epi32(lhs_mat_23_20, (_MM_PERM_ENUM)160); //A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3)
+
+                    const __m512i lhs_mat_01_21_sp1 = _mm512_shuffle_epi32(lhs_mat_01_21, (_MM_PERM_ENUM)160); //A20(8-11) A20(8-11) A21(8-11) A21(8-11) A20(8-11) A20(8-11) A21(8-11) A21(8-11)
+                    const __m512i lhs_mat_23_21_sp1 = _mm512_shuffle_epi32(lhs_mat_23_21, (_MM_PERM_ENUM)160); //A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11)
+
+                    const __m512i lhs_mat_01_30_sp1 = _mm512_shuffle_epi32(lhs_mat_01_30, (_MM_PERM_ENUM)160); //A30(0-3) A30(0-3) A31(0-3) A31(0-3) A30(0-3) A30(0-3) A31(0-3) A31(0-3)
+                    const __m512i lhs_mat_23_30_sp1 = _mm512_shuffle_epi32(lhs_mat_23_30, (_MM_PERM_ENUM)160); //A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3)
+
+                    const __m512i lhs_mat_01_31_sp1 = _mm512_shuffle_epi32(lhs_mat_01_31, (_MM_PERM_ENUM)160); //A30(8-11) A30(8-11) A31(8-11) A31(8-11) A30(8-11) A30(8-11) A31(8-11) A31(8-11)
+                    const __m512i lhs_mat_23_31_sp1 = _mm512_shuffle_epi32(lhs_mat_23_31, (_MM_PERM_ENUM)160); //A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11)
+
+                    const __m512i lhs_mat_01_40_sp1 = _mm512_shuffle_epi32(lhs_mat_01_40, (_MM_PERM_ENUM)160); //A40(0-3) A40(0-3) A41(0-3) A41(0-3) A40(0-3) A40(0-3) A41(0-3) A41(0-3)
+                    const __m512i lhs_mat_23_40_sp1 = _mm512_shuffle_epi32(lhs_mat_23_40, (_MM_PERM_ENUM)160); //A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3)
+
+                    const __m512i lhs_mat_01_41_sp1 = _mm512_shuffle_epi32(lhs_mat_01_41, (_MM_PERM_ENUM)160); //A40(8-11) A40(8-11) A41(8-11) A41(8-11) A40(8-11) A40(8-11) A41(8-11) A41(8-11)
+                    const __m512i lhs_mat_23_41_sp1 = _mm512_shuffle_epi32(lhs_mat_23_41, (_MM_PERM_ENUM)160); //A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11)
+
+                    const __m512i lhs_mat_01_50_sp1 = _mm512_shuffle_epi32(lhs_mat_01_50, (_MM_PERM_ENUM)160); //A50(0-3) A50(0-3) A51(0-3) A51(0-3) A50(0-3) A50(0-3) A51(0-3) A51(0-3)
+                    const __m512i lhs_mat_23_50_sp1 = _mm512_shuffle_epi32(lhs_mat_23_50, (_MM_PERM_ENUM)160); //A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3)
+
+                    const __m512i lhs_mat_01_51_sp1 = _mm512_shuffle_epi32(lhs_mat_01_51, (_MM_PERM_ENUM)160); //A50(8-11) A50(8-11) A51(8-11) A51(8-11) A50(8-11) A50(8-11) A51(8-11) A51(8-11)
+                    const __m512i lhs_mat_23_51_sp1 = _mm512_shuffle_epi32(lhs_mat_23_51, (_MM_PERM_ENUM)160); //A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11)
+
+                    const __m512i lhs_mat_01_60_sp1 = _mm512_shuffle_epi32(lhs_mat_01_60, (_MM_PERM_ENUM)160); //A60(0-3) A60(0-3) A61(0-3) A61(0-3) A60(0-3) A60(0-3) A61(0-3) A61(0-3)
+                    const __m512i lhs_mat_23_60_sp1 = _mm512_shuffle_epi32(lhs_mat_23_60, (_MM_PERM_ENUM)160); //A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3)
+
+                    const __m512i lhs_mat_01_61_sp1 = _mm512_shuffle_epi32(lhs_mat_01_61, (_MM_PERM_ENUM)160); //A60(8-11) A60(8-11) A61(8-11) A61(8-11) A60(8-11) A60(8-11) A61(8-11) A61(8-11)
+                    const __m512i lhs_mat_23_61_sp1 = _mm512_shuffle_epi32(lhs_mat_23_61, (_MM_PERM_ENUM)160); //A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11)
+
+                    const __m512i lhs_mat_01_70_sp1 = _mm512_shuffle_epi32(lhs_mat_01_70, (_MM_PERM_ENUM)160); //A70(0-3) A70(0-3) A71(0-3) A71(0-3) A70(0-3) A70(0-3) A71(0-3) A71(0-3)
+                    const __m512i lhs_mat_23_70_sp1 = _mm512_shuffle_epi32(lhs_mat_23_70, (_MM_PERM_ENUM)160); //A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3)
+
+                    const __m512i lhs_mat_01_71_sp1 = _mm512_shuffle_epi32(lhs_mat_01_71, (_MM_PERM_ENUM)160); //A70(8-11) A70(8-11) A71(8-11) A71(8-11) A70(8-11) A70(8-11) A71(8-11) A71(8-11)
+                    const __m512i lhs_mat_23_71_sp1 = _mm512_shuffle_epi32(lhs_mat_23_71, (_MM_PERM_ENUM)160); //A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11)
+
+                    // Shuffle pattern two- left side input
+                    const __m512i lhs_mat_01_00_sp2 = _mm512_shuffle_epi32(lhs_mat_01_00, (_MM_PERM_ENUM)245); //A00(4-7) A00(4-7) A01(4-7) A01(4-7) A00(4-7) A00(4-7) A01(4-7) A01(4-7)
+                    const __m512i lhs_mat_23_00_sp2 = _mm512_shuffle_epi32(lhs_mat_23_00, (_MM_PERM_ENUM)245); //A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7)
+
+                    const __m512i lhs_mat_01_01_sp2 = _mm512_shuffle_epi32(lhs_mat_01_01, (_MM_PERM_ENUM)245); //A00(12-15) A00(12-15) A01(12-15) A01(12-15) A00(12-15) A00(12-15) A01(12-15) A01(12-15)
+                    const __m512i lhs_mat_23_01_sp2 = _mm512_shuffle_epi32(lhs_mat_23_01, (_MM_PERM_ENUM)245); //A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15)
+
+                    const __m512i lhs_mat_01_10_sp2 = _mm512_shuffle_epi32(lhs_mat_01_10, (_MM_PERM_ENUM)245); //A10(4-7) A10(4-7) A11(4-7) A11(4-7) A10(4-7) A10(4-7) A11(4-7) A11(4-7)
+                    const __m512i lhs_mat_23_10_sp2 = _mm512_shuffle_epi32(lhs_mat_23_10, (_MM_PERM_ENUM)245); //A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7)
+
+                    const __m512i lhs_mat_01_11_sp2 = _mm512_shuffle_epi32(lhs_mat_01_11, (_MM_PERM_ENUM)245); //A10(12-15) A10(12-15) A11(12-15) A11(12-15) A10(12-15) A10(12-15) A11(12-15) A11(12-15)
+                    const __m512i lhs_mat_23_11_sp2 = _mm512_shuffle_epi32(lhs_mat_23_11, (_MM_PERM_ENUM)245); //A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15)
+
+                    const __m512i lhs_mat_01_20_sp2 = _mm512_shuffle_epi32(lhs_mat_01_20, (_MM_PERM_ENUM)245); //A20(4-7) A20(4-7) A21(4-7) A21(4-7) A20(4-7) A20(4-7) A21(4-7) A21(4-7)
+                    const __m512i lhs_mat_23_20_sp2 = _mm512_shuffle_epi32(lhs_mat_23_20, (_MM_PERM_ENUM)245); //A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7)
+
+                    const __m512i lhs_mat_01_21_sp2 = _mm512_shuffle_epi32(lhs_mat_01_21, (_MM_PERM_ENUM)245); //A20(12-15) A20(12-15) A21(12-15) A21(12-15) A20(12-15) A20(12-15) A21(12-15) A21(12-15)
+                    const __m512i lhs_mat_23_21_sp2 = _mm512_shuffle_epi32(lhs_mat_23_21, (_MM_PERM_ENUM)245); //A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15)
+
+                    const __m512i lhs_mat_01_30_sp2 = _mm512_shuffle_epi32(lhs_mat_01_30, (_MM_PERM_ENUM)245); //A30(4-7) A30(4-7) A31(4-7) A31(4-7) A30(4-7) A30(4-7) A31(4-7) A31(4-7)
+                    const __m512i lhs_mat_23_30_sp2 = _mm512_shuffle_epi32(lhs_mat_23_30, (_MM_PERM_ENUM)245); //A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7)
+
+                    const __m512i lhs_mat_01_31_sp2 = _mm512_shuffle_epi32(lhs_mat_01_31, (_MM_PERM_ENUM)245); //A30(12-15) A30(12-15) A31(12-15) A31(12-15) A30(12-15) A30(12-15) A31(12-15) A31(12-15)
+                    const __m512i lhs_mat_23_31_sp2 = _mm512_shuffle_epi32(lhs_mat_23_31, (_MM_PERM_ENUM)245); //A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15)
+
+                    const __m512i lhs_mat_01_40_sp2 = _mm512_shuffle_epi32(lhs_mat_01_40, (_MM_PERM_ENUM)245); //A40(4-7) A40(4-7) A41(4-7) A41(4-7) A40(4-7) A40(4-7) A41(4-7) A41(4-7)
+                    const __m512i lhs_mat_23_40_sp2 = _mm512_shuffle_epi32(lhs_mat_23_40, (_MM_PERM_ENUM)245); //A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7)
+
+                    const __m512i lhs_mat_01_41_sp2 = _mm512_shuffle_epi32(lhs_mat_01_41, (_MM_PERM_ENUM)245); //A40(12-15) A40(12-15) A41(12-15) A41(12-15) A40(12-15) A40(12-15) A41(12-15) A41(12-15)
+                    const __m512i lhs_mat_23_41_sp2 = _mm512_shuffle_epi32(lhs_mat_23_41, (_MM_PERM_ENUM)245); //A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15)
+
+                    const __m512i lhs_mat_01_50_sp2 = _mm512_shuffle_epi32(lhs_mat_01_50, (_MM_PERM_ENUM)245); //A50(4-7) A50(4-7) A51(4-7) A51(4-7) A50(4-7) A50(4-7) A51(4-7) A51(4-7)
+                    const __m512i lhs_mat_23_50_sp2 = _mm512_shuffle_epi32(lhs_mat_23_50, (_MM_PERM_ENUM)245); //A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7)
+
+                    const __m512i lhs_mat_01_51_sp2 = _mm512_shuffle_epi32(lhs_mat_01_51, (_MM_PERM_ENUM)245); //A50(12-15) A50(12-15) A51(12-15) A51(12-15) A50(12-15) A50(12-15) A51(12-15) A51(12-15)
+                    const __m512i lhs_mat_23_51_sp2 = _mm512_shuffle_epi32(lhs_mat_23_51, (_MM_PERM_ENUM)245); //A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15)
+
+                    const __m512i lhs_mat_01_60_sp2 = _mm512_shuffle_epi32(lhs_mat_01_60, (_MM_PERM_ENUM)245); //A60(4-7) A60(4-7) A61(4-7) A61(4-7) A60(4-7) A60(4-7) A61(4-7) A61(4-7)
+                    const __m512i lhs_mat_23_60_sp2 = _mm512_shuffle_epi32(lhs_mat_23_60, (_MM_PERM_ENUM)245); //A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7)
+
+                    const __m512i lhs_mat_01_61_sp2 = _mm512_shuffle_epi32(lhs_mat_01_61, (_MM_PERM_ENUM)245); //A60(12-15) A60(12-15) A61(12-15) A61(12-15) A60(12-15) A60(12-15) A61(12-15) A61(12-15)
+                    const __m512i lhs_mat_23_61_sp2 = _mm512_shuffle_epi32(lhs_mat_23_61, (_MM_PERM_ENUM)245); //A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15)
+
+                    const __m512i lhs_mat_01_70_sp2 = _mm512_shuffle_epi32(lhs_mat_01_70, (_MM_PERM_ENUM)245); //A70(4-7) A70(4-7) A71(4-7) A71(4-7) A70(4-7) A70(4-7) A71(4-7) A71(4-7)
+                    const __m512i lhs_mat_23_70_sp2 = _mm512_shuffle_epi32(lhs_mat_23_70, (_MM_PERM_ENUM)245); //A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7)
+
+                    const __m512i lhs_mat_01_71_sp2 = _mm512_shuffle_epi32(lhs_mat_01_71, (_MM_PERM_ENUM)245); //A70(12-15) A70(12-15) A71(12-15) A71(12-15) A70(12-15) A70(12-15) A71(12-15) A71(12-15)
+                    const __m512i lhs_mat_23_71_sp2 = _mm512_shuffle_epi32(lhs_mat_23_71, (_MM_PERM_ENUM)245); //A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15)
+
+                    // Shuffle pattern one - left side input
+                    const __m512i lhs_mat_s_01_00_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_00, (_MM_PERM_ENUM)160); //A00(0-3) A00(0-3) A01(0-3) A01(0-3) A00(0-3) A00(0-3) A01(0-3) A01(0-3)
+                    const __m512i lhs_mat_s_23_00_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_00, (_MM_PERM_ENUM)160); //A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3)
+
+                    const __m512i lhs_mat_s_01_01_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_01, (_MM_PERM_ENUM)160); //A00(8-11) A00(8-11) A01(8-11) A01(8-11) A00(8-11) A00(8-11) A01(8-11) A01(8-11)
+                    const __m512i lhs_mat_s_23_01_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_01, (_MM_PERM_ENUM)160); //A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11)
+
+                    const __m512i lhs_mat_s_01_10_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_10, (_MM_PERM_ENUM)160); //A10(0-3) A10(0-3) A11(0-3) A11(0-3) A10(0-3) A10(0-3) A11(0-3) A11(0-3)
+                    const __m512i lhs_mat_s_23_10_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_10, (_MM_PERM_ENUM)160); //A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3)
+
+                    const __m512i lhs_mat_s_01_11_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_11, (_MM_PERM_ENUM)160); //A10(8-11) A10(8-11) A11(8-11) A11(8-11) A10(8-11) A10(8-11) A11(8-11) A11(8-11)
+                    const __m512i lhs_mat_s_23_11_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_11, (_MM_PERM_ENUM)160); //A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11)
+
+                    const __m512i lhs_mat_s_01_20_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_20, (_MM_PERM_ENUM)160); //A20(0-3) A20(0-3) A21(0-3) A21(0-3) A20(0-3) A20(0-3) A21(0-3) A21(0-3)
+                    const __m512i lhs_mat_s_23_20_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_20, (_MM_PERM_ENUM)160); //A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3)
+
+                    const __m512i lhs_mat_s_01_21_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_21, (_MM_PERM_ENUM)160); //A20(8-11) A20(8-11) A21(8-11) A21(8-11) A20(8-11) A20(8-11) A21(8-11) A21(8-11)
+                    const __m512i lhs_mat_s_23_21_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_21, (_MM_PERM_ENUM)160); //A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11)
+
+                    const __m512i lhs_mat_s_01_30_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_30, (_MM_PERM_ENUM)160); //A30(0-3) A30(0-3) A31(0-3) A31(0-3) A30(0-3) A30(0-3) A31(0-3) A31(0-3)
+                    const __m512i lhs_mat_s_23_30_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_30, (_MM_PERM_ENUM)160); //A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3)
+
+                    const __m512i lhs_mat_s_01_31_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_31, (_MM_PERM_ENUM)160); //A30(8-11) A30(8-11) A31(8-11) A31(8-11) A30(8-11) A30(8-11) A31(8-11) A31(8-11)
+                    const __m512i lhs_mat_s_23_31_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_31, (_MM_PERM_ENUM)160); //A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11)
+
+                    const __m512i lhs_mat_s_01_40_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_40, (_MM_PERM_ENUM)160); //A40(0-3) A40(0-3) A41(0-3) A41(0-3) A40(0-3) A40(0-3) A41(0-3) A41(0-3)
+                    const __m512i lhs_mat_s_23_40_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_40, (_MM_PERM_ENUM)160); //A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3)
+
+                    const __m512i lhs_mat_s_01_41_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_41, (_MM_PERM_ENUM)160); //A40(8-11) A40(8-11) A41(8-11) A41(8-11) A40(8-11) A40(8-11) A41(8-11) A41(8-11)
+                    const __m512i lhs_mat_s_23_41_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_41, (_MM_PERM_ENUM)160); //A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11)
+
+                    const __m512i lhs_mat_s_01_50_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_50, (_MM_PERM_ENUM)160); //A50(0-3) A50(0-3) A51(0-3) A51(0-3) A50(0-3) A50(0-3) A51(0-3) A51(0-3)
+                    const __m512i lhs_mat_s_23_50_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_50, (_MM_PERM_ENUM)160); //A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3)
+
+                    const __m512i lhs_mat_s_01_51_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_51, (_MM_PERM_ENUM)160); //A50(8-11) A50(8-11) A51(8-11) A51(8-11) A50(8-11) A50(8-11) A51(8-11) A51(8-11)
+                    const __m512i lhs_mat_s_23_51_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_51, (_MM_PERM_ENUM)160); //A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11)
+
+                    const __m512i lhs_mat_s_01_60_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_60, (_MM_PERM_ENUM)160); //A60(0-3) A60(0-3) A61(0-3) A61(0-3) A60(0-3) A60(0-3) A61(0-3) A61(0-3)
+                    const __m512i lhs_mat_s_23_60_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_60, (_MM_PERM_ENUM)160); //A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3)
+
+                    const __m512i lhs_mat_s_01_61_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_61, (_MM_PERM_ENUM)160); //A60(8-11) A60(8-11) A61(8-11) A61(8-11) A60(8-11) A60(8-11) A61(8-11) A61(8-11)
+                    const __m512i lhs_mat_s_23_61_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_61, (_MM_PERM_ENUM)160); //A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11)
+
+                    const __m512i lhs_mat_s_01_70_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_70, (_MM_PERM_ENUM)160); //A70(0-3) A70(0-3) A71(0-3) A71(0-3) A70(0-3) A70(0-3) A71(0-3) A71(0-3)
+                    const __m512i lhs_mat_s_23_70_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_70, (_MM_PERM_ENUM)160); //A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3)
+
+                    const __m512i lhs_mat_s_01_71_sp1 = _mm512_shuffle_epi32(lhs_mat_s_01_71, (_MM_PERM_ENUM)160); //A70(8-11) A70(8-11) A71(8-11) A71(8-11) A70(8-11) A70(8-11) A71(8-11) A71(8-11)
+                    const __m512i lhs_mat_s_23_71_sp1 = _mm512_shuffle_epi32(lhs_mat_s_23_71, (_MM_PERM_ENUM)160); //A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11)
+
+                    // Shuffle pattern two- left side input
+                    const __m512i lhs_mat_s_01_00_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_00, (_MM_PERM_ENUM)245); //A00(4-7) A00(4-7) A01(4-7) A01(4-7) A00(4-7) A00(4-7) A01(4-7) A01(4-7)
+                    const __m512i lhs_mat_s_23_00_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_00, (_MM_PERM_ENUM)245); //A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7)
+
+                    const __m512i lhs_mat_s_01_01_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_01, (_MM_PERM_ENUM)245); //A00(12-15) A00(12-15) A01(12-15) A01(12-15) A00(12-15) A00(12-15) A01(12-15) A01(12-15)
+                    const __m512i lhs_mat_s_23_01_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_01, (_MM_PERM_ENUM)245); //A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15)
+
+                    const __m512i lhs_mat_s_01_10_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_10, (_MM_PERM_ENUM)245); //A10(4-7) A10(4-7) A11(4-7) A11(4-7) A10(4-7) A10(4-7) A11(4-7) A11(4-7)
+                    const __m512i lhs_mat_s_23_10_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_10, (_MM_PERM_ENUM)245); //A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7)
+
+                    const __m512i lhs_mat_s_01_11_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_11, (_MM_PERM_ENUM)245); //A10(12-15) A10(12-15) A11(12-15) A11(12-15) A10(12-15) A10(12-15) A11(12-15) A11(12-15)
+                    const __m512i lhs_mat_s_23_11_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_11, (_MM_PERM_ENUM)245); //A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15)
+
+                    const __m512i lhs_mat_s_01_20_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_20, (_MM_PERM_ENUM)245); //A20(4-7) A20(4-7) A21(4-7) A21(4-7) A20(4-7) A20(4-7) A21(4-7) A21(4-7)
+                    const __m512i lhs_mat_s_23_20_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_20, (_MM_PERM_ENUM)245); //A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7)
+
+                    const __m512i lhs_mat_s_01_21_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_21, (_MM_PERM_ENUM)245); //A20(12-15) A20(12-15) A21(12-15) A21(12-15) A20(12-15) A20(12-15) A21(12-15) A21(12-15)
+                    const __m512i lhs_mat_s_23_21_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_21, (_MM_PERM_ENUM)245); //A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15)
+
+                    const __m512i lhs_mat_s_01_30_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_30, (_MM_PERM_ENUM)245); //A30(4-7) A30(4-7) A31(4-7) A31(4-7) A30(4-7) A30(4-7) A31(4-7) A31(4-7)
+                    const __m512i lhs_mat_s_23_30_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_30, (_MM_PERM_ENUM)245); //A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7)
+
+                    const __m512i lhs_mat_s_01_31_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_31, (_MM_PERM_ENUM)245); //A30(12-15) A30(12-15) A31(12-15) A31(12-15) A30(12-15) A30(12-15) A31(12-15) A31(12-15)
+                    const __m512i lhs_mat_s_23_31_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_31, (_MM_PERM_ENUM)245); //A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15)
+
+                    const __m512i lhs_mat_s_01_40_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_40, (_MM_PERM_ENUM)245); //A40(4-7) A40(4-7) A41(4-7) A41(4-7) A40(4-7) A40(4-7) A41(4-7) A41(4-7)
+                    const __m512i lhs_mat_s_23_40_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_40, (_MM_PERM_ENUM)245); //A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7)
+
+                    const __m512i lhs_mat_s_01_41_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_41, (_MM_PERM_ENUM)245); //A40(12-15) A40(12-15) A41(12-15) A41(12-15) A40(12-15) A40(12-15) A41(12-15) A41(12-15)
+                    const __m512i lhs_mat_s_23_41_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_41, (_MM_PERM_ENUM)245); //A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15)
+
+                    const __m512i lhs_mat_s_01_50_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_50, (_MM_PERM_ENUM)245); //A50(4-7) A50(4-7) A51(4-7) A51(4-7) A50(4-7) A50(4-7) A51(4-7) A51(4-7)
+                    const __m512i lhs_mat_s_23_50_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_50, (_MM_PERM_ENUM)245); //A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7)
+
+                    const __m512i lhs_mat_s_01_51_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_51, (_MM_PERM_ENUM)245); //A50(12-15) A50(12-15) A51(12-15) A51(12-15) A50(12-15) A50(12-15) A51(12-15) A51(12-15)
+                    const __m512i lhs_mat_s_23_51_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_51, (_MM_PERM_ENUM)245); //A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15)
+
+                    const __m512i lhs_mat_s_01_60_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_60, (_MM_PERM_ENUM)245); //A60(4-7) A60(4-7) A61(4-7) A61(4-7) A60(4-7) A60(4-7) A61(4-7) A61(4-7)
+                    const __m512i lhs_mat_s_23_60_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_60, (_MM_PERM_ENUM)245); //A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7)
+
+                    const __m512i lhs_mat_s_01_61_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_61, (_MM_PERM_ENUM)245); //A60(12-15) A60(12-15) A61(12-15) A61(12-15) A60(12-15) A60(12-15) A61(12-15) A61(12-15)
+                    const __m512i lhs_mat_s_23_61_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_61, (_MM_PERM_ENUM)245); //A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15)
+
+                    const __m512i lhs_mat_s_01_70_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_70, (_MM_PERM_ENUM)245); //A70(4-7) A70(4-7) A71(4-7) A71(4-7) A70(4-7) A70(4-7) A71(4-7) A71(4-7)
+                    const __m512i lhs_mat_s_23_70_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_70, (_MM_PERM_ENUM)245); //A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7)
+
+                    const __m512i lhs_mat_s_01_71_sp2 = _mm512_shuffle_epi32(lhs_mat_s_01_71, (_MM_PERM_ENUM)245); //A70(12-15) A70(12-15) A71(12-15) A71(12-15) A70(12-15) A70(12-15) A71(12-15) A71(12-15)
+                    const __m512i lhs_mat_s_23_71_sp2 = _mm512_shuffle_epi32(lhs_mat_s_23_71, (_MM_PERM_ENUM)245); //A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15)
+
+                    // The values arranged in shuffle patterns are operated with dot product operation within 32 bit lane i.e corresponding bytes and multiplied and added into 32 bit integers within 32 bit lane
+                    __m512i iacc_mat_00_0_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_00_sp1, lhs_mat_01_00_sp1), lhs_mat_s_01_00_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_01_sp1, lhs_mat_01_01_sp1), lhs_mat_s_01_01_sp1));
+                    __m512i iacc_mat_01_0_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_00_sp1, lhs_mat_01_00_sp1), lhs_mat_s_01_00_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_01_sp1, lhs_mat_01_01_sp1), lhs_mat_s_01_01_sp1));
+
+                    __m512i iacc_mat_10_0_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_00_sp1, lhs_mat_23_00_sp1), lhs_mat_s_23_00_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_01_sp1, lhs_mat_23_01_sp1), lhs_mat_s_23_01_sp1));
+                    __m512i iacc_mat_11_0_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_00_sp1, lhs_mat_23_00_sp1), lhs_mat_s_23_00_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_01_sp1, lhs_mat_23_01_sp1), lhs_mat_s_23_01_sp1));
+
+                    __m512i iacc_mat_00_1_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_10_sp1, lhs_mat_01_10_sp1), lhs_mat_s_01_10_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_11_sp1, lhs_mat_01_11_sp1), lhs_mat_s_01_11_sp1));
+                    __m512i iacc_mat_01_1_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_10_sp1, lhs_mat_01_10_sp1), lhs_mat_s_01_10_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_11_sp1, lhs_mat_01_11_sp1), lhs_mat_s_01_11_sp1));
+
+                    __m512i iacc_mat_10_1_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_10_sp1, lhs_mat_23_10_sp1), lhs_mat_s_23_10_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_11_sp1, lhs_mat_23_11_sp1), lhs_mat_s_23_11_sp1));
+                    __m512i iacc_mat_11_1_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_10_sp1, lhs_mat_23_10_sp1), lhs_mat_s_23_10_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_11_sp1, lhs_mat_23_11_sp1), lhs_mat_s_23_11_sp1));
+
+                    __m512i iacc_mat_00_2_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_20_sp1, lhs_mat_01_20_sp1), lhs_mat_s_01_20_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_21_sp1, lhs_mat_01_21_sp1), lhs_mat_s_01_21_sp1));
+                    __m512i iacc_mat_01_2_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_20_sp1, lhs_mat_01_20_sp1), lhs_mat_s_01_20_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_21_sp1, lhs_mat_01_21_sp1), lhs_mat_s_01_21_sp1));
+
+                    __m512i iacc_mat_10_2_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_20_sp1, lhs_mat_23_20_sp1), lhs_mat_s_23_20_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_21_sp1, lhs_mat_23_21_sp1), lhs_mat_s_23_21_sp1));
+                    __m512i iacc_mat_11_2_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_20_sp1, lhs_mat_23_20_sp1), lhs_mat_s_23_20_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_21_sp1, lhs_mat_23_21_sp1), lhs_mat_s_23_21_sp1));
+
+                    __m512i iacc_mat_00_3_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_30_sp1, lhs_mat_01_30_sp1), lhs_mat_s_01_30_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_31_sp1, lhs_mat_01_31_sp1), lhs_mat_s_01_31_sp1));
+                    __m512i iacc_mat_01_3_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_30_sp1, lhs_mat_01_30_sp1), lhs_mat_s_01_30_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_31_sp1, lhs_mat_01_31_sp1), lhs_mat_s_01_31_sp1));
+
+                    __m512i iacc_mat_10_3_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_30_sp1, lhs_mat_23_30_sp1), lhs_mat_s_23_30_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_31_sp1, lhs_mat_23_31_sp1), lhs_mat_s_23_31_sp1));
+                    __m512i iacc_mat_11_3_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_30_sp1, lhs_mat_23_30_sp1), lhs_mat_s_23_30_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_31_sp1, lhs_mat_23_31_sp1), lhs_mat_s_23_31_sp1));
+
+                    __m512i iacc_mat_00_4_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_40_sp1, lhs_mat_01_40_sp1), lhs_mat_s_01_40_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_41_sp1, lhs_mat_01_41_sp1), lhs_mat_s_01_41_sp1));
+                    __m512i iacc_mat_01_4_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_40_sp1, lhs_mat_01_40_sp1), lhs_mat_s_01_40_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_41_sp1, lhs_mat_01_41_sp1), lhs_mat_s_01_41_sp1));
+
+                    __m512i iacc_mat_10_4_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_40_sp1, lhs_mat_23_40_sp1), lhs_mat_s_23_40_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_41_sp1, lhs_mat_23_41_sp1), lhs_mat_s_23_41_sp1));
+                    __m512i iacc_mat_11_4_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_40_sp1, lhs_mat_23_40_sp1), lhs_mat_s_23_40_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_41_sp1, lhs_mat_23_41_sp1), lhs_mat_s_23_41_sp1));
+
+                    __m512i iacc_mat_00_5_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_50_sp1, lhs_mat_01_50_sp1), lhs_mat_s_01_50_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_51_sp1, lhs_mat_01_51_sp1), lhs_mat_s_01_51_sp1));
+                    __m512i iacc_mat_01_5_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_50_sp1, lhs_mat_01_50_sp1), lhs_mat_s_01_50_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_51_sp1, lhs_mat_01_51_sp1), lhs_mat_s_01_51_sp1));
+
+                    __m512i iacc_mat_10_5_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_50_sp1, lhs_mat_23_50_sp1), lhs_mat_s_23_50_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_51_sp1, lhs_mat_23_51_sp1), lhs_mat_s_23_51_sp1));
+                    __m512i iacc_mat_11_5_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_50_sp1, lhs_mat_23_50_sp1), lhs_mat_s_23_50_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_51_sp1, lhs_mat_23_51_sp1), lhs_mat_s_23_51_sp1));
+
+                    __m512i iacc_mat_00_6_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_60_sp1, lhs_mat_01_60_sp1), lhs_mat_s_01_60_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_61_sp1, lhs_mat_01_61_sp1), lhs_mat_s_01_61_sp1));
+                    __m512i iacc_mat_01_6_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_60_sp1, lhs_mat_01_60_sp1), lhs_mat_s_01_60_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_61_sp1, lhs_mat_01_61_sp1), lhs_mat_s_01_61_sp1));
+
+                    __m512i iacc_mat_10_6_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_60_sp1, lhs_mat_23_60_sp1), lhs_mat_s_23_60_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_61_sp1, lhs_mat_23_61_sp1), lhs_mat_s_23_61_sp1));
+                    __m512i iacc_mat_11_6_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_60_sp1, lhs_mat_23_60_sp1), lhs_mat_s_23_60_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_61_sp1, lhs_mat_23_61_sp1), lhs_mat_s_23_61_sp1));
+
+                    __m512i iacc_mat_00_7_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_70_sp1, lhs_mat_01_70_sp1), lhs_mat_s_01_70_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_71_sp1, lhs_mat_01_71_sp1), lhs_mat_s_01_71_sp1));
+                    __m512i iacc_mat_01_7_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_70_sp1, lhs_mat_01_70_sp1), lhs_mat_s_01_70_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_71_sp1, lhs_mat_01_71_sp1), lhs_mat_s_01_71_sp1));
+
+                    __m512i iacc_mat_10_7_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_70_sp1, lhs_mat_23_70_sp1), lhs_mat_s_23_70_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_71_sp1, lhs_mat_23_71_sp1), lhs_mat_s_23_71_sp1));
+                    __m512i iacc_mat_11_7_sp1 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_70_sp1, lhs_mat_23_70_sp1), lhs_mat_s_23_70_sp1), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_71_sp1, lhs_mat_23_71_sp1), lhs_mat_s_23_71_sp1));
+
+                    __m512i iacc_mat_00_0_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_00_sp2, lhs_mat_01_00_sp2), lhs_mat_s_01_00_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_01_sp2, lhs_mat_01_01_sp2), lhs_mat_s_01_01_sp2));
+                    __m512i iacc_mat_01_0_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_00_sp2, lhs_mat_01_00_sp2), lhs_mat_s_01_00_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_01_sp2, lhs_mat_01_01_sp2), lhs_mat_s_01_01_sp2));
+
+                    __m512i iacc_mat_10_0_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_00_sp2, lhs_mat_23_00_sp2), lhs_mat_s_23_00_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_01_sp2, lhs_mat_23_01_sp2), lhs_mat_s_23_01_sp2));
+                    __m512i iacc_mat_11_0_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_00_sp2, lhs_mat_23_00_sp2), lhs_mat_s_23_00_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_01_sp2, lhs_mat_23_01_sp2), lhs_mat_s_23_01_sp2));
+
+                    __m512i iacc_mat_00_1_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_10_sp2, lhs_mat_01_10_sp2), lhs_mat_s_01_10_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_11_sp2, lhs_mat_01_11_sp2), lhs_mat_s_01_11_sp2));
+                    __m512i iacc_mat_01_1_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_10_sp2, lhs_mat_01_10_sp2), lhs_mat_s_01_10_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_11_sp2, lhs_mat_01_11_sp2), lhs_mat_s_01_11_sp2));
+
+                    __m512i iacc_mat_10_1_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_10_sp2, lhs_mat_23_10_sp2), lhs_mat_s_23_10_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_11_sp2, lhs_mat_23_11_sp2), lhs_mat_s_23_11_sp2));
+                    __m512i iacc_mat_11_1_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_10_sp2, lhs_mat_23_10_sp2), lhs_mat_s_23_10_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_11_sp2, lhs_mat_23_11_sp2), lhs_mat_s_23_11_sp2));
+
+                    __m512i iacc_mat_00_2_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_20_sp2, lhs_mat_01_20_sp2), lhs_mat_s_01_20_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_21_sp2, lhs_mat_01_21_sp2), lhs_mat_s_01_21_sp2));
+                    __m512i iacc_mat_01_2_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_20_sp2, lhs_mat_01_20_sp2), lhs_mat_s_01_20_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_21_sp2, lhs_mat_01_21_sp2), lhs_mat_s_01_21_sp2));
+
+                    __m512i iacc_mat_10_2_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_20_sp2, lhs_mat_23_20_sp2), lhs_mat_s_23_20_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_21_sp2, lhs_mat_23_21_sp2), lhs_mat_s_23_21_sp2));
+                    __m512i iacc_mat_11_2_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_20_sp2, lhs_mat_23_20_sp2), lhs_mat_s_23_20_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_21_sp2, lhs_mat_23_21_sp2), lhs_mat_s_23_21_sp2));
+
+                    __m512i iacc_mat_00_3_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_30_sp2, lhs_mat_01_30_sp2), lhs_mat_s_01_30_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_31_sp2, lhs_mat_01_31_sp2), lhs_mat_s_01_31_sp2));
+                    __m512i iacc_mat_01_3_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_30_sp2, lhs_mat_01_30_sp2), lhs_mat_s_01_30_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_31_sp2, lhs_mat_01_31_sp2), lhs_mat_s_01_31_sp2));
+
+                    __m512i iacc_mat_10_3_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_30_sp2, lhs_mat_23_30_sp2), lhs_mat_s_23_30_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_31_sp2, lhs_mat_23_31_sp2), lhs_mat_s_23_31_sp2));
+                    __m512i iacc_mat_11_3_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_30_sp2, lhs_mat_23_30_sp2), lhs_mat_s_23_30_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_31_sp2, lhs_mat_23_31_sp2), lhs_mat_s_23_31_sp2));
+
+                    __m512i iacc_mat_00_4_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_40_sp2, lhs_mat_01_40_sp2), lhs_mat_s_01_40_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_41_sp2, lhs_mat_01_41_sp2), lhs_mat_s_01_41_sp2));
+                    __m512i iacc_mat_01_4_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_40_sp2, lhs_mat_01_40_sp2), lhs_mat_s_01_40_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_41_sp2, lhs_mat_01_41_sp2), lhs_mat_s_01_41_sp2));
+
+                    __m512i iacc_mat_10_4_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_40_sp2, lhs_mat_23_40_sp2), lhs_mat_s_23_40_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_41_sp2, lhs_mat_23_41_sp2), lhs_mat_s_23_41_sp2));
+                    __m512i iacc_mat_11_4_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_40_sp2, lhs_mat_23_40_sp2), lhs_mat_s_23_40_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_41_sp2, lhs_mat_23_41_sp2), lhs_mat_s_23_41_sp2));
+
+                    __m512i iacc_mat_00_5_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_50_sp2, lhs_mat_01_50_sp2), lhs_mat_s_01_50_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_51_sp2, lhs_mat_01_51_sp2), lhs_mat_s_01_51_sp2));
+                    __m512i iacc_mat_01_5_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_50_sp2, lhs_mat_01_50_sp2), lhs_mat_s_01_50_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_51_sp2, lhs_mat_01_51_sp2), lhs_mat_s_01_51_sp2));
+
+                    __m512i iacc_mat_10_5_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_50_sp2, lhs_mat_23_50_sp2), lhs_mat_s_23_50_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_51_sp2, lhs_mat_23_51_sp2), lhs_mat_s_23_51_sp2));
+                    __m512i iacc_mat_11_5_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_50_sp2, lhs_mat_23_50_sp2), lhs_mat_s_23_50_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_51_sp2, lhs_mat_23_51_sp2), lhs_mat_s_23_51_sp2));
+
+                    __m512i iacc_mat_00_6_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_60_sp2, lhs_mat_01_60_sp2), lhs_mat_s_01_60_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_61_sp2, lhs_mat_01_61_sp2), lhs_mat_s_01_61_sp2));
+                    __m512i iacc_mat_01_6_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_60_sp2, lhs_mat_01_60_sp2), lhs_mat_s_01_60_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_61_sp2, lhs_mat_01_61_sp2), lhs_mat_s_01_61_sp2));
+
+                    __m512i iacc_mat_10_6_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_60_sp2, lhs_mat_23_60_sp2), lhs_mat_s_23_60_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_61_sp2, lhs_mat_23_61_sp2), lhs_mat_s_23_61_sp2));
+                    __m512i iacc_mat_11_6_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_60_sp2, lhs_mat_23_60_sp2), lhs_mat_s_23_60_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_61_sp2, lhs_mat_23_61_sp2), lhs_mat_s_23_61_sp2));
+
+                    __m512i iacc_mat_00_7_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_70_sp2, lhs_mat_01_70_sp2), lhs_mat_s_01_70_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_71_sp2, lhs_mat_01_71_sp2), lhs_mat_s_01_71_sp2));
+                    __m512i iacc_mat_01_7_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_70_sp2, lhs_mat_01_70_sp2), lhs_mat_s_01_70_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_71_sp2, lhs_mat_01_71_sp2), lhs_mat_s_01_71_sp2));
+
+                    __m512i iacc_mat_10_7_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_70_sp2, lhs_mat_23_70_sp2), lhs_mat_s_23_70_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_014589CD_71_sp2, lhs_mat_23_71_sp2), lhs_mat_s_23_71_sp2));
+                    __m512i iacc_mat_11_7_sp2 = _mm512_add_epi16(_mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_70_sp2, lhs_mat_23_70_sp2), lhs_mat_s_23_70_sp2), _mm512_sub_epi16(_mm512_maddubs_epi16(rhs_mat_2367ABEF_71_sp2, lhs_mat_23_71_sp2), lhs_mat_s_23_71_sp2));
+
+                    // Combine results from both shuffle patterns for each output block
+                    __m512i iacc_mat_00_0 = _mm512_add_epi16(iacc_mat_00_0_sp1, iacc_mat_00_0_sp2);
+                    __m512i iacc_mat_01_0 = _mm512_add_epi16(iacc_mat_01_0_sp1, iacc_mat_01_0_sp2);
+                    __m512i iacc_mat_10_0 = _mm512_add_epi16(iacc_mat_10_0_sp1, iacc_mat_10_0_sp2);
+                    __m512i iacc_mat_11_0 = _mm512_add_epi16(iacc_mat_11_0_sp1, iacc_mat_11_0_sp2);
+
+                    __m512i iacc_mat_00_1 = _mm512_add_epi16(iacc_mat_00_1_sp1, iacc_mat_00_1_sp2);
+                    __m512i iacc_mat_01_1 = _mm512_add_epi16(iacc_mat_01_1_sp1, iacc_mat_01_1_sp2);
+                    __m512i iacc_mat_10_1 = _mm512_add_epi16(iacc_mat_10_1_sp1, iacc_mat_10_1_sp2);
+                    __m512i iacc_mat_11_1 = _mm512_add_epi16(iacc_mat_11_1_sp1, iacc_mat_11_1_sp2);
+
+                    __m512i iacc_mat_00_2 = _mm512_add_epi16(iacc_mat_00_2_sp1, iacc_mat_00_2_sp2);
+                    __m512i iacc_mat_01_2 = _mm512_add_epi16(iacc_mat_01_2_sp1, iacc_mat_01_2_sp2);
+                    __m512i iacc_mat_10_2 = _mm512_add_epi16(iacc_mat_10_2_sp1, iacc_mat_10_2_sp2);
+                    __m512i iacc_mat_11_2 = _mm512_add_epi16(iacc_mat_11_2_sp1, iacc_mat_11_2_sp2);
+
+                    __m512i iacc_mat_00_3 = _mm512_add_epi16(iacc_mat_00_3_sp1, iacc_mat_00_3_sp2);
+                    __m512i iacc_mat_01_3 = _mm512_add_epi16(iacc_mat_01_3_sp1, iacc_mat_01_3_sp2);
+                    __m512i iacc_mat_10_3 = _mm512_add_epi16(iacc_mat_10_3_sp1, iacc_mat_10_3_sp2);
+                    __m512i iacc_mat_11_3 = _mm512_add_epi16(iacc_mat_11_3_sp1, iacc_mat_11_3_sp2);
+
+                    __m512i iacc_mat_00_4 = _mm512_add_epi16(iacc_mat_00_4_sp1, iacc_mat_00_4_sp2);
+                    __m512i iacc_mat_01_4 = _mm512_add_epi16(iacc_mat_01_4_sp1, iacc_mat_01_4_sp2);
+                    __m512i iacc_mat_10_4 = _mm512_add_epi16(iacc_mat_10_4_sp1, iacc_mat_10_4_sp2);
+                    __m512i iacc_mat_11_4 = _mm512_add_epi16(iacc_mat_11_4_sp1, iacc_mat_11_4_sp2);
+
+                    __m512i iacc_mat_00_5 = _mm512_add_epi16(iacc_mat_00_5_sp1, iacc_mat_00_5_sp2);
+                    __m512i iacc_mat_01_5 = _mm512_add_epi16(iacc_mat_01_5_sp1, iacc_mat_01_5_sp2);
+                    __m512i iacc_mat_10_5 = _mm512_add_epi16(iacc_mat_10_5_sp1, iacc_mat_10_5_sp2);
+                    __m512i iacc_mat_11_5 = _mm512_add_epi16(iacc_mat_11_5_sp1, iacc_mat_11_5_sp2);
+
+                    __m512i iacc_mat_00_6 = _mm512_add_epi16(iacc_mat_00_6_sp1, iacc_mat_00_6_sp2);
+                    __m512i iacc_mat_01_6 = _mm512_add_epi16(iacc_mat_01_6_sp1, iacc_mat_01_6_sp2);
+                    __m512i iacc_mat_10_6 = _mm512_add_epi16(iacc_mat_10_6_sp1, iacc_mat_10_6_sp2);
+                    __m512i iacc_mat_11_6 = _mm512_add_epi16(iacc_mat_11_6_sp1, iacc_mat_11_6_sp2);
+
+                    __m512i iacc_mat_00_7 = _mm512_add_epi16(iacc_mat_00_7_sp1, iacc_mat_00_7_sp2);
+                    __m512i iacc_mat_01_7 = _mm512_add_epi16(iacc_mat_01_7_sp1, iacc_mat_01_7_sp2);
+                    __m512i iacc_mat_10_7 = _mm512_add_epi16(iacc_mat_10_7_sp1, iacc_mat_10_7_sp2);
+                    __m512i iacc_mat_11_7 = _mm512_add_epi16(iacc_mat_11_7_sp1, iacc_mat_11_7_sp2);
+
+                    // Output of both shuffle patterns are added in order to sum dot product outputs of all 32 values in block
+                    iacc_mat_00_0 = _mm512_madd_epi16(iacc_mat_00_0, scale_014589CD_0);
+                    iacc_mat_01_0 = _mm512_madd_epi16(iacc_mat_01_0, scale_2367ABEF_0);
+                    iacc_mat_10_0 = _mm512_madd_epi16(iacc_mat_10_0, scale_014589CD_0);
+                    iacc_mat_11_0 = _mm512_madd_epi16(iacc_mat_11_0, scale_2367ABEF_0);
+
+                    iacc_mat_00_1 = _mm512_madd_epi16(iacc_mat_00_1, scale_014589CD_1);
+                    iacc_mat_01_1 = _mm512_madd_epi16(iacc_mat_01_1, scale_2367ABEF_1);
+                    iacc_mat_10_1 = _mm512_madd_epi16(iacc_mat_10_1, scale_014589CD_1);
+                    iacc_mat_11_1 = _mm512_madd_epi16(iacc_mat_11_1, scale_2367ABEF_1);
+
+                    iacc_mat_00_2 = _mm512_madd_epi16(iacc_mat_00_2, scale_014589CD_2);
+                    iacc_mat_01_2 = _mm512_madd_epi16(iacc_mat_01_2, scale_2367ABEF_2);
+                    iacc_mat_10_2 = _mm512_madd_epi16(iacc_mat_10_2, scale_014589CD_2);
+                    iacc_mat_11_2 = _mm512_madd_epi16(iacc_mat_11_2, scale_2367ABEF_2);
+
+                    iacc_mat_00_3 = _mm512_madd_epi16(iacc_mat_00_3, scale_014589CD_3);
+                    iacc_mat_01_3 = _mm512_madd_epi16(iacc_mat_01_3, scale_2367ABEF_3);
+                    iacc_mat_10_3 = _mm512_madd_epi16(iacc_mat_10_3, scale_014589CD_3);
+                    iacc_mat_11_3 = _mm512_madd_epi16(iacc_mat_11_3, scale_2367ABEF_3);
+
+                    iacc_mat_00_4 = _mm512_madd_epi16(iacc_mat_00_4, scale_014589CD_4);
+                    iacc_mat_01_4 = _mm512_madd_epi16(iacc_mat_01_4, scale_2367ABEF_4);
+                    iacc_mat_10_4 = _mm512_madd_epi16(iacc_mat_10_4, scale_014589CD_4);
+                    iacc_mat_11_4 = _mm512_madd_epi16(iacc_mat_11_4, scale_2367ABEF_4);
+
+                    iacc_mat_00_5 = _mm512_madd_epi16(iacc_mat_00_5, scale_014589CD_5);
+                    iacc_mat_01_5 = _mm512_madd_epi16(iacc_mat_01_5, scale_2367ABEF_5);
+                    iacc_mat_10_5 = _mm512_madd_epi16(iacc_mat_10_5, scale_014589CD_5);
+                    iacc_mat_11_5 = _mm512_madd_epi16(iacc_mat_11_5, scale_2367ABEF_5);
+
+                    iacc_mat_00_6 = _mm512_madd_epi16(iacc_mat_00_6, scale_014589CD_6);
+                    iacc_mat_01_6 = _mm512_madd_epi16(iacc_mat_01_6, scale_2367ABEF_6);
+                    iacc_mat_10_6 = _mm512_madd_epi16(iacc_mat_10_6, scale_014589CD_6);
+                    iacc_mat_11_6 = _mm512_madd_epi16(iacc_mat_11_6, scale_2367ABEF_6);
+
+                    iacc_mat_00_7 = _mm512_madd_epi16(iacc_mat_00_7, scale_014589CD_7);
+                    iacc_mat_01_7 = _mm512_madd_epi16(iacc_mat_01_7, scale_2367ABEF_7);
+                    iacc_mat_10_7 = _mm512_madd_epi16(iacc_mat_10_7, scale_014589CD_7);
+                    iacc_mat_11_7 = _mm512_madd_epi16(iacc_mat_11_7, scale_2367ABEF_7);
+
+
+                    __m512i iacc_mat_00 = _mm512_add_epi32(_mm512_add_epi32(_mm512_add_epi32(iacc_mat_00_0, iacc_mat_00_1), _mm512_add_epi32(iacc_mat_00_2, iacc_mat_00_3)), _mm512_add_epi32(_mm512_add_epi32(iacc_mat_00_4, iacc_mat_00_5), _mm512_add_epi32(iacc_mat_00_6, iacc_mat_00_7)));
+                    __m512i iacc_mat_01 = _mm512_add_epi32(_mm512_add_epi32(_mm512_add_epi32(iacc_mat_01_0, iacc_mat_01_1), _mm512_add_epi32(iacc_mat_01_2, iacc_mat_01_3)), _mm512_add_epi32(_mm512_add_epi32(iacc_mat_01_4, iacc_mat_01_5), _mm512_add_epi32(iacc_mat_01_6, iacc_mat_01_7)));
+                    __m512i iacc_mat_10 = _mm512_add_epi32(_mm512_add_epi32(_mm512_add_epi32(iacc_mat_10_0, iacc_mat_10_1), _mm512_add_epi32(iacc_mat_10_2, iacc_mat_10_3)), _mm512_add_epi32(_mm512_add_epi32(iacc_mat_10_4, iacc_mat_10_5), _mm512_add_epi32(iacc_mat_10_6, iacc_mat_10_7)));
+                    __m512i iacc_mat_11 = _mm512_add_epi32(_mm512_add_epi32(_mm512_add_epi32(iacc_mat_11_0, iacc_mat_11_1), _mm512_add_epi32(iacc_mat_11_2, iacc_mat_11_3)), _mm512_add_epi32(_mm512_add_epi32(iacc_mat_11_4, iacc_mat_11_5), _mm512_add_epi32(iacc_mat_11_6, iacc_mat_11_7)));
+
+                    // Straighten out to make 4 row vectors
+                    __m512i iacc_row_0 = _mm512_mask_blend_epi32(0xCCCC, iacc_mat_00, _mm512_shuffle_epi32(iacc_mat_01, (_MM_PERM_ENUM)78));
+                    __m512i iacc_row_1 = _mm512_mask_blend_epi32(0xCCCC, _mm512_shuffle_epi32(iacc_mat_00, (_MM_PERM_ENUM)78), iacc_mat_01);
+                    __m512i iacc_row_2 = _mm512_mask_blend_epi32(0xCCCC, iacc_mat_10, _mm512_shuffle_epi32(iacc_mat_11, (_MM_PERM_ENUM)78));
+                    __m512i iacc_row_3 = _mm512_mask_blend_epi32(0xCCCC, _mm512_shuffle_epi32(iacc_mat_10, (_MM_PERM_ENUM)78), iacc_mat_11);
+
+                    // Load the scale(d) values for all the 4 Q8_k blocks and repeat it across lanes
+                    const __m128 row_scale_f32_sse = _mm_load_ps(a_ptr[b].d);
+                    const __m256 row_scale_f32_ymm = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);
+                    const __m512 row_scale_f32 = _mm512_insertf32x8(_mm512_castps256_ps512(row_scale_f32_ymm), row_scale_f32_ymm, 1);
+
+                    // Multiply with appropiate scales and accumulate (for both d and dmin) below
+                    acc_rows[0] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_0), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[0]);
+                    acc_rows[1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_1), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[1]);
+                    acc_rows[2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_2), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[2]);
+                    acc_rows[3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_3), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[3]);
+                }
+            }
+
+            // Store the accumulated values
+            for (int i = 0; i < 4; i++) {
+                _mm512_storeu_ps((float * )(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
+            }
+        }    
+    }
+
+    if (anc != nc) {
+        xstart = anc/8;
+        y = 0;
+    }
+
 #endif    
-*/
+
     for (; y < anr / 4; y += 4){
 
         const block_q8_Kx4 * a_ptrs[4];
