@@ -15,14 +15,10 @@
 	let searchQuery = $state('');
 
 	let filteredConversations = $derived.by(() => {
-		if (isSearchModeActive && searchQuery.trim().length > 0) {
+		if (searchQuery.trim().length > 0) {
 			return conversations().filter((conversation: { name: string }) =>
 				conversation.name.toLowerCase().includes(searchQuery.toLowerCase())
 			);
-		}
-
-		if (isSearchModeActive && searchQuery.trim().length === 0) {
-			return [];
 		}
 
 		return conversations();
@@ -60,8 +56,8 @@
 
 		<ChatSidebarActions
 			{handleMobileSidebarItemClick}
-			{isSearchModeActive}
-			{searchQuery}
+			bind:isSearchModeActive
+			bind:searchQuery
 		/>
 	</Sidebar.Header>
 

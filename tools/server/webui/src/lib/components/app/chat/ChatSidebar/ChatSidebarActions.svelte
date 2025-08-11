@@ -9,7 +9,20 @@
         searchQuery: string;
     }
 
-    let { handleMobileSidebarItemClick, isSearchModeActive, searchQuery }: Props = $props();
+    let { handleMobileSidebarItemClick, isSearchModeActive = $bindable(), searchQuery = $bindable() }: Props = $props();
+
+    let searchInput: HTMLInputElement | null = $state(null);
+
+    $effect(() => {
+        if (isSearchModeActive) {
+            searchInput?.focus();
+        }
+    })
+
+    function handleSearchModeDeactivate() {
+        isSearchModeActive = false;
+        searchQuery = '';
+    }
 </script>
 
 <div class="space-y-0.5">
@@ -17,11 +30,17 @@
         <div class="relative">
             <Search class="text-muted-foreground absolute left-2 top-2.5 h-4 w-4" />
 
-            <Input bind:value={searchQuery} placeholder="Search conversations..." class="pl-8" />
+            <Input
+                bind:ref={searchInput}
+                onkeydown={(e) => e.key === 'Escape' && handleSearchModeDeactivate()}
+                placeholder="Search conversations..."
+                class="pl-8"
+                bind:value={searchQuery}
+            />
 
             <X
                 class="cursor-pointertext-muted-foreground absolute right-2 top-2.5 h-4 w-4"
-                onclick={() => (isSearchModeActive = false)}
+                onclick={handleSearchModeDeactivate}
             />
         </div>
     {:else}
