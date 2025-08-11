@@ -250,7 +250,7 @@ static void ggml_backend_et_device_get_memory(ggml_backend_dev_t dev, size_t * f
 
 static enum ggml_backend_dev_type ggml_backend_et_device_get_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
-    return GGML_BACKEND_DEVICE_TYPE_ACCEL;
+    return GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
 static void ggml_backend_et_device_get_props(ggml_backend_dev_t dev, struct ggml_backend_dev_props * props) {
