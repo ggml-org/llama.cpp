@@ -7,7 +7,7 @@
 #include "fattn-wmma-f16.cuh"
 
 #ifdef FP16_MMA_AVAILABLE
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
+#if !defined(GGML_USE_HIP)
 #include <mma.h>
 #ifdef GGML_USE_MUSA
 namespace wmma = mtmusa::wmma;
@@ -18,7 +18,7 @@ namespace wmma = nvcuda::wmma;
 #undef HIP_ENABLE_WARP_SYNC_BUILTINS // conflicts with rocWMMA headers
 #include <rocwmma/rocwmma.hpp>
 namespace wmma = rocwmma;
-#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
+#endif // !defined(GGML_USE_HIP)
 #endif // FP16_MMA_AVAILABLE
 
 // D == head size, VKQ_stride == num VKQ rows calculated in parallel:
@@ -29,6 +29,8 @@ static __global__ void flash_attn_ext_f16(
         const char * __restrict__ K,
         const char * __restrict__ V,
         const char * __restrict__ mask,
+        const char * __restrict__ sinks,
+        const int  * __restrict__ KV_max,
         float      * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
@@ -80,11 +82,12 @@ static __global__ void flash_attn_ext_f16(
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
-    const float * Q_f   = (const float *) (Q    + nb03* sequence         + nb02* head              + nb01*ic0);
-    const half  * K_h   = (const half  *) (K    + nb13* sequence         + nb12*(head / gqa_ratio));
-    const half  * V_h   = (const half  *) (V    + nb13* sequence         + nb12*(head / gqa_ratio)); // K and V have same shape
-    const half  * maskh = (const half  *) (mask + nb33*(sequence % ne33)                           + nb31*ic0);
-    const half2 * mask2 = (const half2 *)  maskh;
+    const float * Q_f    = (const float *) (Q    + nb03* sequence         + nb02* head              + nb01*ic0);
+    const half  * K_h    = (const half  *) (K    + nb13* sequence         + nb12*(head / gqa_ratio));
+    const half  * V_h    = (const half  *) (V    + nb13* sequence         + nb12*(head / gqa_ratio)); // K and V have same shape
+    const half  * maskh  = (const half  *) (mask + nb33*(sequence % ne33)                           + nb31*ic0);
+    const half2 * mask2  = (const half2 *)  maskh;
+    const float * sinksf = (const float *) sinks;
 
     const int stride_Q  = nb01 / sizeof(float);
     const int stride_KV = nb11 / sizeof(half);
@@ -165,7 +168,8 @@ static __global__ void flash_attn_ext_f16(
     __syncthreads();
 
     // Iterate over ne11 == previous tokens:
-    for (int k_VKQ_0 = blockIdx.y*FATTN_KQ_STRIDE; k_VKQ_0 < ne11; k_VKQ_0 += gridDim.y*FATTN_KQ_STRIDE) {
+    const int k_VKQ_max = KV_max ? KV_max[sequence*gridDim.x + blockIdx.x] : ne11;
+    for (int k_VKQ_0 = blockIdx.y*FATTN_KQ_STRIDE; k_VKQ_0 < k_VKQ_max; k_VKQ_0 += gridDim.y*FATTN_KQ_STRIDE) {
         // Calculate tile of KQ:
 #pragma unroll
         for (int i_KQ_0 = 0; i_KQ_0 < FATTN_KQ_STRIDE; i_KQ_0 += KQ_stride_tc) {
@@ -378,6 +382,53 @@ static __global__ void flash_attn_ext_f16(
         __syncthreads();
     }
 
+    // Apply attention sinks
+    if (sinksf && blockIdx.y == 0) {
+        const float sinkf = sinksf[head];
+        const half  sinkh = __float2half(sinkf);
+
+#pragma unroll
+        for (int j0 = 0; j0 < ncols; j0 += nwarps) {
+            const int j = j0 + threadIdx.y;
+
+            if (std::is_same<KQ_acc_t, float>::value) {
+                float kqmax_new = fmaxf(KQ_max_f[j0/nwarps], sinkf);
+
+                const float KQ_max_scale = expf(KQ_max_f[j0/nwarps] - kqmax_new);
+                KQ_max_f[j0/nwarps] = kqmax_new;
+
+                KQ_rowsum_f[j0/nwarps] = KQ_rowsum_f[j0/nwarps] * KQ_max_scale + expf(sinkf - KQ_max_f[j0/nwarps]);
+
+                const half2 scale_h2 = make_half2(KQ_max_scale, KQ_max_scale);
+#pragma unroll
+                for (int i0 = 0; i0 < D/2; i0 += warp_size) {
+                    const int i = i0 + threadIdx.x;
+                    if (i0 + warp_size > D/2 && i >= D/2) break;
+                    VKQ2[j*(D_padded/2) + i] *= scale_h2;
+                }
+            } else {
+                half kqmax_old = __low2half(KQ_max_h2[j0/nwarps]);
+                half kqmax_new = fmaxf(kqmax_old, sinkh);
+                KQ_max_h2[j0/nwarps] = __half2half2(kqmax_new);
+
+                const half  KQ_max_scale_h = hexp(kqmax_old - kqmax_new);
+                const half2 KQ_max_scale   = __half2half2(KQ_max_scale_h);
+
+                KQ_rowsum_h2[j0/nwarps] = KQ_rowsum_h2[j0/nwarps] * KQ_max_scale;
+                const half val = hexp(sinkh - kqmax_new);
+                KQ_rowsum_h2[j0/nwarps].x = __hadd(KQ_rowsum_h2[j0/nwarps].x, val);
+
+#pragma unroll
+                for (int i0 = 0; i0 < D/2; i0 += warp_size) {
+                    const int i = i0 + threadIdx.x;
+                    if (i0 + warp_size > D/2 && i >= D/2) break;
+                    VKQ2[j*(D_padded/2) + i] *= KQ_max_scale;
+                }
+            }
+        }
+
+        __syncthreads();
+    }
 #pragma unroll
     for (int j0 = 0; j0 < ncols; j0 += nwarps) {
         const int j_VKQ = j0 + threadIdx.y;
@@ -421,7 +472,7 @@ static __global__ void flash_attn_ext_f16(
         dst_meta[j_dst_unrolled] = dst_meta_val;
     }
 #else
-    GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask);
+    GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask); GGML_UNUSED(sinks);
     GGML_UNUSED(dst); GGML_UNUSED(dst_meta); GGML_UNUSED(scale);
     GGML_UNUSED(max_bias); GGML_UNUSED(m0); GGML_UNUSED(m1);
     GGML_UNUSED(n_head_log2); GGML_UNUSED(logit_softcap);
@@ -546,7 +597,7 @@ void ggml_cuda_flash_attn_ext_wmma_f16(ggml_backend_cuda_context & ctx, ggml_ten
         return;
     }
 
-#if !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
+#if !defined(GGML_USE_HIP)
     if (Q->ne[1] <= 8 && Q->ne[0] % warp_size == 0) {
         constexpr int cols_per_block = 8;
         switch (Q->ne[0]) {
@@ -568,7 +619,7 @@ void ggml_cuda_flash_attn_ext_wmma_f16(ggml_backend_cuda_context & ctx, ggml_ten
         }
         return;
     }
-#endif // !(defined(GGML_USE_HIP) && defined(__HIP_PLATFORM_AMD__))
+#endif // !defined(GGML_USE_HIP)
 
     if (Q->ne[1] <= 32) {
         constexpr int cols_per_block = 16;

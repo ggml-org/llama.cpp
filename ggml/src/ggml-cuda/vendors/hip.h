@@ -5,10 +5,8 @@
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_bfloat16.h>
-#ifdef __HIP_PLATFORM_AMD__
 // for rocblas_initialize()
 #include "rocblas/rocblas.h"
-#endif // __HIP_PLATFORM_AMD__
 
 #define CUBLAS_GEMM_DEFAULT HIPBLAS_GEMM_DEFAULT
 #define CUBLAS_GEMM_DEFAULT_TENSOR_OP HIPBLAS_GEMM_DEFAULT
@@ -25,8 +23,6 @@
 #define CU_MEM_LOCATION_TYPE_DEVICE hipMemLocationTypeDevice
 #define CU_MEM_ACCESS_FLAGS_PROT_READWRITE hipMemAccessFlagsProtReadWrite
 #define CU_CHECK(fn) {hipError_t err = fn; if(err != hipSuccess) { GGML_ABORT("HipVMM Failure: %s\n", hipGetErrorString(err)); }}
-#define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
-#define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
 #define cublasGemmEx hipblasGemmEx
@@ -139,7 +135,8 @@
 #define CUBLAS_STATUS_INTERNAL_ERROR HIPBLAS_STATUS_INTERNAL_ERROR
 #define CUBLAS_STATUS_NOT_SUPPORTED HIPBLAS_STATUS_NOT_SUPPORTED
 
-#if defined(__HIP_PLATFORM_AMD__) && HIP_VERSION >= 70000000
+// HIP version-specific type mappings
+#if HIP_VERSION >= 70000000
 #define CUBLAS_COMPUTE_16F HIPBLAS_COMPUTE_16F
 #define CUBLAS_COMPUTE_32F HIPBLAS_COMPUTE_32F
 #define CUBLAS_COMPUTE_32F_FAST_16F HIPBLAS_COMPUTE_32F_FAST_16F
@@ -151,7 +148,20 @@
 #define CUBLAS_COMPUTE_32F_FAST_16F HIPBLAS_R_32F
 #define cublasComputeType_t hipblasDatatype_t
 #define cudaDataType_t hipblasDatatype_t
-#endif
+#endif // HIP_VERSION >= 70000000
+
+// Warp sync functions and masks
+#if HIP_VERSION >= 70000000 && defined(GGML_HIP_ROCWMMA_FATTN)
+#define GGML_WARP_SYNC_MASK 0xffffffffffffffffULL // ROCm 7.0+ requires 64-bit masks for __*_*_sync functions
+#else
+#define GGML_WARP_SYNC_MASK 0xffffffff
+#define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
+#define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
+#endif // HIP_VERSION >= 70000000 && defined(GGML_HIP_ROCWMMA_FATTN)
+
+#if !defined(__HIP_PLATFORM_AMD__)
+#error "The HIP backend supports only AMD targets"
+#endif // !defined(__HIP_PLATFORM_AMD__)
 
 #define __CUDA_ARCH__ 1300
 
@@ -198,6 +208,7 @@
 #endif
 
 typedef hip_bfloat16 nv_bfloat16;
+typedef short2 nv_bfloat162; // FIXME there is no 2x BF16 type being defined in bfloat16.h, ad-hoc compilation fix
 
 typedef int8_t int8x4_t __attribute__((ext_vector_type(4)));
 typedef uint8_t uint8x4_t __attribute__((ext_vector_type(4)));
@@ -249,7 +260,7 @@ static __device__ __forceinline__ unsigned int __vcmpne4(unsigned int a, unsigne
     return c;
 }
 
-#if defined(__HIP_PLATFORM_AMD__) && HIP_VERSION < 50600000
+#if HIP_VERSION < 50600000
 // __shfl_xor() for half2 was added in ROCm 5.6
 static __device__ __forceinline__ half2 __shfl_xor(half2 var, int laneMask, int width) {
     typedef union half2_b32 {
@@ -261,4 +272,4 @@ static __device__ __forceinline__ half2 __shfl_xor(half2 var, int laneMask, int 
     tmp.b32 = __shfl_xor(tmp.b32, laneMask, width);
     return tmp.val;
 }
-#endif // defined(__HIP_PLATFORM_AMD__) && HIP_VERSION < 50600000
+#endif // HIP_VERSION < 50600000

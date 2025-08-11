@@ -81,6 +81,14 @@ int main(int argc, char ** argv) {
 
     params.embedding = true;
 
+    // if the number of prompts that would be encoded is known in advance, it's more efficient to specify the
+    //   --parallel argument accordingly. for convenience, if not specified, we fallback to unified KV cache
+    //   in order to support any number of prompts
+    if (params.n_parallel == 1) {
+        LOG_INF("%s: n_parallel == 1 -> unified KV cache is enabled\n", __func__);
+        params.kv_unified = true;
+    }
+
     // utilize the full context
     if (params.n_batch < params.n_ctx) {
         LOG_WRN("%s: setting batch size to %d\n", __func__, params.n_ctx);
