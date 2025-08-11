@@ -6,6 +6,8 @@
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
+	import { isLoading } from '$lib/stores/chat.svelte';
+	import { fade } from 'svelte/transition';
 
 	interface Props {
 		class?: string;
@@ -179,6 +181,14 @@
 {/if}
 
 {#snippet messageActions(config?: { role: ChatRole })}
+	{#if config?.role === 'assistant' && !message.content && isLoading()}
+		<div class="mx-auto w-full max-w-[48rem] mb-16" in:fade>
+			<span class="processing-text">
+				Processing
+			</span>
+		</div>
+	{/if}
+
 	<div
 		class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
 	>
@@ -238,3 +248,21 @@
 			: ''}
 	</div>
 {/snippet}
+
+<style>
+	.processing-text {
+		background: linear-gradient(90deg, var(--muted-foreground), var(--foreground), var(--muted-foreground));
+		background-size: 200% 100%;
+		background-clip: text;
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		animation: shine 1s linear infinite;
+		font-weight: 500;
+	}
+
+	@keyframes shine {
+		to {
+			background-position: -200% 0;
+		}
+	}
+</style>

@@ -1,5 +1,8 @@
 <script lang="ts">
-	import { updateMessage, regenerateMessage } from '$lib/stores/chat.svelte';
+	import {
+		updateMessage,
+		regenerateMessage
+	} from '$lib/stores/chat.svelte';
 	import { ChatMessage } from '$lib/components/app';
 
 	interface Props {
@@ -19,7 +22,7 @@
 				await updateMessage(msg.id, newContent);
 			}}
 			onRegenerate={async (msg) => {
-				await regenerateMessage(msg.id);
+				await regenerateMessage(msg.id);	
 			}}
 		/>
 	{/each}
