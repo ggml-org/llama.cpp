@@ -240,7 +240,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 <details>
 <summary>Infrastructure</summary>
 
-- [Paddler](https://github.com/distantmagic/paddler) - Stateful load balancer custom-tailored for llama.cpp
+- [Paddler](https://github.com/intentee/paddler) - Open-source LLMOps platform for hosting and scaling AI in your own infrastructure
 - [GPUStack](https://github.com/gpustack/gpustack) - Manage GPU clusters for running LLMs
 - [llama_cpp_canister](https://github.com/onicai/llama_cpp_canister) - llama.cpp as a smart contract on the Internet Computer, using WebAssembly
 - [llama-swap](https://github.com/mostlygeek/llama-swap) - transparent proxy that adds automatic model switching with llama-server

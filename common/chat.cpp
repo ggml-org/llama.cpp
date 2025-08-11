@@ -625,6 +625,19 @@ const char * common_reasoning_format_name(common_reasoning_format format) {
     }
 }
 
+common_reasoning_format common_reasoning_format_from_name(const std::string & format) {
+    if (format == "none") {
+        return COMMON_REASONING_FORMAT_NONE;
+    } else if (format == "auto") {
+        return COMMON_REASONING_FORMAT_AUTO;
+    } else if (format == "deepseek") {
+        return COMMON_REASONING_FORMAT_DEEPSEEK;
+    } else if (format == "deepseek-legacy") {
+        return COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY;
+    }
+    throw std::runtime_error("Unknown reasoning format: " + format);
+}
+
 static std::string wrap_code_as_arguments(common_chat_msg_parser & builder, const std::string & code) {
     std::string arguments;
     if (builder.is_partial()) {

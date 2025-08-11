@@ -383,8 +383,12 @@ struct server_task {
             } else {
                 params.oaicompat_chat_syntax.format = defaults.oaicompat_chat_syntax.format;
             }
-            params.oaicompat_chat_syntax.reasoning_format = params_base.reasoning_format;
-            params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (params_base.reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
+            common_reasoning_format reasoning_format = params_base.reasoning_format;
+            if (data.contains("reasoning_format")) {
+                reasoning_format = common_reasoning_format_from_name(data.at("reasoning_format").get<std::string>());
+            }
+            params.oaicompat_chat_syntax.reasoning_format = reasoning_format;
+            params.oaicompat_chat_syntax.reasoning_in_content = params.stream && (reasoning_format == COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY);
             params.oaicompat_chat_syntax.thinking_forced_open = json_value(data, "thinking_forced_open", false);
             params.oaicompat_chat_syntax.parse_tool_calls = json_value(data, "parse_tool_calls", false);
         }
