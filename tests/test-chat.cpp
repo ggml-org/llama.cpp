@@ -1678,7 +1678,7 @@ static void test_template_output_parsers() {
                 }));
         assert_msg_equals(
             simple_assist_msg(
-                "<|start|>assistant<|channel|>commentary to=functions.special_function<|message|>{\"arg1",
+                "<tool_call>{\"name\": \"special_function\", \"arguments\": {\"arg1",
                 "I'm\nthinking"),
             common_chat_parse(
                 "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
@@ -1693,7 +1693,7 @@ static void test_template_output_parsers() {
                 }));
         assert_msg_equals(
             simple_assist_msg(
-                "<|start|>assistant<|channel|>commentary to=functions.special_function <|constrain|>json<|message|>{\"arg1\": 1}",
+                "<tool_call>{\"name\": \"special_function\", \"arguments\": {\"arg1\":1}}</tool_call>",
                 "I'm\nthinking"),
             common_chat_parse(
                 "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
@@ -1710,7 +1710,7 @@ static void test_template_output_parsers() {
         // Test reasoning formats
         assert_msg_equals(
             simple_assist_msg(
-                "<|channel|>analysis<|message|>I'm\nthinking<|end|>Hello, world!\nWhat's up?"),
+                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?"),
             common_chat_parse(
                 "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
                 "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
@@ -1722,18 +1722,6 @@ static void test_template_output_parsers() {
 
         assert_msg_equals(
             simple_assist_msg(
-                "Hello, world!\nWhat's up?", "I'm\nthinking"),
-            common_chat_parse(
-                "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
-                "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
-                /* is_partial= */ false,
-                {
-                    /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
-                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-                }));
-
-        assert_msg_equals(
-            simple_assist_msg(
                 "<think>I'm\nthinking</think>Hello, world!\nWhat's up?"),
             common_chat_parse(
                 "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
@@ -1741,7 +1729,7 @@ static void test_template_output_parsers() {
                 /* is_partial= */ false,
                 {
                     /* .format = */ COMMON_CHAT_FORMAT_GPT_OSS,
-                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                     /* .reasoning_in_content = */ true,
                 }));
 
