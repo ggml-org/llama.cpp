@@ -1132,6 +1132,12 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 
 `chat_template_kwargs`: Allows sending additional parameters to the json templating system. For example: `{"enable_thinking": false}`
 
+`reasoning_format`: The reasoning format to be parsed. If set to `none`, it will output the raw generated text.
+
+`thinking_forced_open`: Force a reasoning model to always output the reasoning. Only works on certain models.
+
+`parse_tool_calls`: Whether to parse the generated tool call.
+
 *Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:

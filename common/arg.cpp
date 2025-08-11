@@ -2949,11 +2949,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- deepseek: puts thoughts in `message.reasoning_content` (except in streaming mode, which behaves as `none`)\n"
         "(default: auto)",
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "deepseek") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK; }
-            else if (value == "deepseek-legacy") { params.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK_LEGACY; }
-            else if (value == "none") {     params.reasoning_format = COMMON_REASONING_FORMAT_NONE; }
-            else if (value == "auto") {     params.reasoning_format = COMMON_REASONING_FORMAT_AUTO; }
-            else { throw std::invalid_argument("invalid value"); }
+            params.reasoning_format = common_reasoning_format_from_name(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_MAIN}).set_env("LLAMA_ARG_THINK"));
     add_opt(common_arg(
