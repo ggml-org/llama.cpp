@@ -1339,6 +1339,16 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_GPT_OSS;
 
+    // These special tokens are required to parse properly, so we include them
+    // even if parse_tool_calls is false.
+    data.preserved_tokens = {
+        "<|channel|>",
+        "<|constrain|>",
+        "<|message|>",
+        "<|start|>",
+        "<|end|>",
+    };
+
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
@@ -1397,14 +1407,6 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN,
                 "<\\|start\\|>assistant to"
             });
-
-            data.preserved_tokens = {
-                "<|channel|>",
-                "<|constrain|>",
-                "<|message|>",
-                "<|start|>",
-                "<|end|>",
-            };
         });
     }
 
