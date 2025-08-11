@@ -1330,60 +1330,68 @@ static void aclnn_pow_tensor_tensor(ggml_backend_cann_context& ctx,
 }
 
 
-static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_buffer, float m, int64_t size, float start, float stop, float step){
+static void aclnn_get_slope_inner(ggml_backend_cann_context& ctx, void* slope_buffer, 
+    float m, int64_t size, float start, float stop, float step){
     int64_t ne[] = {size};
     size_t nb[] = {sizeof(float)};
 
-    ggml_cann_pool_alloc arange_allocator(ctx.pool(),size * sizeof(float));
-    void* arange_buffer = arange_allocator.get();
-    
-    aclTensor* arange_tensor = ggml_cann_create_tensor(
-        arange_buffer, ACL_FLOAT,
-        sizeof(float), ne, nb, 1);
+    ggml_cann_pool_alloc arange_allocator(ctx.pool(), size * sizeof(float));
+    void *               arange_buffer = arange_allocator.get();
+
+    aclTensor * arange_tensor = ggml_cann_create_tensor(
+        arange_buffer, ACL_FLOAT, sizeof(float), ne, nb, 1);
     aclnn_arange(ctx, arange_tensor, start, stop, step, size);
 
-    aclTensor* slope_tensor = ggml_cann_create_tensor(
-        slope_buffer, ACL_FLOAT,
-        sizeof(float), ne, nb, 1);
+    aclTensor * slope_tensor = ggml_cann_create_tensor(
+        slope_buffer, ACL_FLOAT, sizeof(float), ne, nb, 1);
 
-    aclScalar* sc = aclCreateScalar(&m, aclDataType::ACL_FLOAT);
+    aclScalar * sc = aclCreateScalar(&m, aclDataType::ACL_FLOAT);
 
     GGML_CANN_CALL_ACLNN_OP(ctx, PowScalarTensor, sc, arange_tensor, slope_tensor);
     ggml_cann_release_resources(ctx, sc, arange_tensor, slope_tensor);
 }
 
-static void aclnn_get_slope(ggml_backend_cann_context& ctx, int64_t n_head, void* slope_buffer, float max_bias) {
-    const int n_head_log2 = 1u << (uint32_t)floor(log2(n_head));
+static void aclnn_get_slope(ggml_backend_cann_context & ctx, int64_t n_head, 
+    void * slope_buffer, float max_bias) {
+    const int n_head_log2 = 1u << (uint32_t) floor(log2(n_head));
 
     float m0 = powf(2.0f, -(max_bias) / n_head_log2);
     float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    // const float slope = (max_bias > 0.0f) ? h < n_head_log2 ? powf(m0, h + 1) : powf(m1, 2*(h - n_head_log2) + 1) : 1.0f;
+    // const float slope = (max_bias > 0.0f) ? 
+    //                          h < n_head_log2 ? 
+    //                              powf(m0, h + 1) : 
+    //                              powf(m1, 2*(h - n_head_log2) + 1) : 
+    //                          1.0f;
     // arange1
     float start = 0 + 1;
-    float end = (n_head_log2 - 1) + 1;
-    float step = 1;
+    float end   = (n_head_log2 - 1) + 1;
+    float step  = 1;
     float count = n_head_log2;
     // end needs to be +1 because aclnn uses a left-closed, right-open interval.
     aclnn_get_slope_inner(ctx, slope_buffer, m0, count, start, end + 1, step);
     if (n_head_log2 < n_head) {
         // arange2
-        start = 2*(n_head_log2 - n_head_log2) + 1;
-        end = 2*((n_head - 1) - n_head_log2) + 1;
-        step = 2; 
+        start = 2 * (n_head_log2 - n_head_log2) + 1;
+        end   = 2 * ((n_head - 1) - n_head_log2) + 1;
+        step  = 2;
         count = n_head - n_head_log2;
-        aclnn_get_slope_inner(ctx, (char*)slope_buffer + n_head_log2* sizeof(float), m1, count, start, end + 1, step);
+        aclnn_get_slope_inner(
+            ctx, (char *) slope_buffer + n_head_log2 * sizeof(float), 
+            m1, count, start, end + 1, step);
     }
 }
 
-static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, ggml_tensor* dst, void* dst_ptr, float max_bias) {
+static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, 
+    ggml_tensor* dst, void* dst_ptr, float max_bias) {
     void* slope_buffer = nullptr;
     void* bias_buffer = nullptr;
 
     int64_t n_heads = dst->ne[2];
     ggml_cann_pool_alloc slope_allocator(ctx.pool(), n_heads * sizeof(float));
     slope_buffer = slope_allocator.get();
-    ggml_cann_pool_alloc bias_allocator(ctx.pool(), ggml_nelements(dst) * ggml_element_size(dst));
+    ggml_cann_pool_alloc bias_allocator(
+                ctx.pool(), ggml_nelements(dst) * ggml_element_size(dst));
     bias_buffer = bias_allocator.get();
 
     if (max_bias > 0.0f) {
@@ -1396,44 +1404,46 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, g
     int64_t nr3 = dst->ne[3] / mask->ne[3];
 
     // broadcast the mask across rows
-    int64_t mask_ne[] = {mask->ne[0], dst->ne[1], mask->ne[2], 1, mask->ne[3], 1};
-    size_t mask_nb[GGML_MAX_DIMS + 2];
-    mask_nb[0] = mask->nb[0];
-    mask_nb[1] = mask->nb[1];
-    mask_nb[2] = mask->nb[2];
-    mask_nb[3] = mask->nb[2];
-    mask_nb[4] = mask->nb[3];
-    mask_nb[5] = mask->nb[3];
+    int64_t mask_ne[] = { mask->ne[0], dst->ne[1], mask->ne[2], 1, mask->ne[3], 1 };
+    size_t  mask_nb[] = { 
+        mask_nb[0] = mask->nb[0], mask_nb[1] = mask->nb[1], mask_nb[2] = mask->nb[2],
+        mask_nb[3] = mask->nb[2], mask_nb[4] = mask->nb[3], mask_nb[5] = mask->nb[3] 
+    };
 
-    // ne2 and ne3 may be integer multiples of the mask.
-    int64_t dst_ne[] = {dst->ne[0], dst->ne[1], mask->ne[2], nr2, mask->ne[3], nr3};
-    size_t dst_nb[GGML_MAX_DIMS + 2];
-    dst_nb[0] = ggml_element_size(dst);
-    for(int i = 1;i<GGML_MAX_DIMS + 2;i++) {
-        dst_nb[i] = dst_nb[i-1]* dst_ne[i-1];
-    }
+    int64_t dst_ne[] = { dst->ne[0], dst->ne[1], mask->ne[2], nr2, mask->ne[3], nr3 };
+    size_t  dst_nb[] = { 
+        dst_nb[0] = dst->nb[0], dst_nb[1] = dst->nb[1], dst_nb[2] = dst->nb[2],
+        dst_nb[3] = dst->nb[2], dst_nb[4] = dst->nb[3], dst_nb[5] = dst->nb[3] 
+    };
 
     // slope is a 1 dim tensor, slope.ne2 == dst.ne2
-    int64_t slope_ne[] = {1, 1, mask->ne[2], nr2, 1, 1};
-    size_t slope_nb[GGML_MAX_DIMS + 2];
+    int64_t slope_ne[] = { 1, 1, mask->ne[2], nr2, 1, 1 };
+    size_t  slope_nb[GGML_MAX_DIMS + 2];
     slope_nb[0] = sizeof(float);
-    for(int i = 1;i<GGML_MAX_DIMS + 2;i++) {
-        slope_nb[i] = slope_nb[i-1]* slope_ne[i-1];
+    for (int i = 1; i < GGML_MAX_DIMS + 2; i++) {
+        slope_nb[i] = slope_nb[i - 1] * slope_ne[i - 1];
     }
 
-    aclTensor* acl_slope = ggml_cann_create_tensor(slope_buffer, ACL_FLOAT, sizeof(float), slope_ne, slope_nb, GGML_MAX_DIMS + 2);
-    aclTensor* acl_mask = ggml_cann_create_tensor(mask, mask_ne, mask_nb, GGML_MAX_DIMS + 2);
-    aclTensor* acl_dst = ggml_cann_create_tensor(dst_ptr, ggml_cann_type_mapping(dst->type),
-        ggml_type_size(dst->type), dst_ne, dst_nb, GGML_MAX_DIMS + 2);
-    
+    aclTensor * acl_slope = ggml_cann_create_tensor(
+                            slope_buffer, ACL_FLOAT, sizeof(float), 
+                            slope_ne, slope_nb, GGML_MAX_DIMS + 2);
+    aclTensor * acl_mask = ggml_cann_create_tensor(
+                            mask, mask_ne, mask_nb, GGML_MAX_DIMS + 2);
+    aclTensor * acl_dst  = ggml_cann_create_tensor(
+                            dst_ptr, ggml_cann_type_mapping(dst->type), 
+                            ggml_type_size(dst->type), dst_ne, dst_nb, 
+                            GGML_MAX_DIMS + 2);
+
     if (max_bias > 0.0f) {
-        int64_t bias_ne[] = {mask->ne[0], dst->ne[1], mask->ne[2], nr2, mask->ne[3], 1};
-        size_t bias_nb[GGML_MAX_DIMS + 2];
+        int64_t bias_ne[] = { mask->ne[0], dst->ne[1], mask->ne[2], nr2, mask->ne[3], 1 };
+        size_t  bias_nb[GGML_MAX_DIMS + 2];
         bias_nb[0] = sizeof(float);
-        for(int i = 1;i<GGML_MAX_DIMS + 2;i++) {
-           bias_nb[i] = bias_nb[i-1]* bias_ne[i-1];
+        for (int i = 1; i < GGML_MAX_DIMS + 2; i++) {
+            bias_nb[i] = bias_nb[i - 1] * bias_ne[i - 1];
         }
-        aclTensor* bias_tensor = ggml_cann_create_tensor(bias_buffer, ACL_FLOAT, sizeof(float), bias_ne, bias_nb, GGML_MAX_DIMS + 2);
+        aclTensor * bias_tensor = ggml_cann_create_tensor(
+                                    bias_buffer, ACL_FLOAT, sizeof(float), 
+                                    bias_ne, bias_nb, GGML_MAX_DIMS + 2);
 
         aclnn_mul(ctx, acl_slope, acl_mask, bias_tensor);
         aclnn_add(ctx, acl_dst, bias_tensor);
@@ -1444,7 +1454,7 @@ static void aclnn_add_alibi(ggml_backend_cann_context& ctx, ggml_tensor* mask, g
     ggml_cann_release_resources(ctx, acl_slope, acl_mask, acl_dst);
 }
 
-void ggml_cann_cpy(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
+void ggml_cann_cpy(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
     ggml_cann_dup(ctx, dst);
 }
 
@@ -1462,31 +1472,31 @@ void ggml_cann_cpy(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
  * @param acl_dst The destination tensor where the softmax results will be
  * stored.
  */
-static void aclnn_softmax(ggml_backend_cann_context& ctx, aclTensor* acl_src,
-                          int64_t dim, aclTensor* acl_dst) {
+static void aclnn_softmax(ggml_backend_cann_context & ctx, 
+    aclTensor * acl_src, int64_t dim, aclTensor * acl_dst) {
     GGML_CANN_CALL_ACLNN_OP(ctx, Softmax, acl_src, dim, acl_dst);
 }
 
-void ggml_cann_softmax(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
-    ggml_tensor* src0 = dst->src[0];
-    ggml_tensor* src1 = dst->src[1];  // mask
+void ggml_cann_softmax(ggml_backend_cann_context & ctx, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];
+    ggml_tensor * src1 = dst->src[1];  // mask
 
-    aclTensor* acl_src0 = ggml_cann_create_tensor(src0);
-    aclTensor* acl_dst = ggml_cann_create_tensor(dst);
+    aclTensor * acl_src0 = ggml_cann_create_tensor(src0);
+    aclTensor * acl_dst  = ggml_cann_create_tensor(dst);
 
-    float scale = 1.0f;
+    float scale    = 1.0f;
     float max_bias = 0.0f;
 
-    memcpy(&scale, (float*)dst->op_params + 0, sizeof(float));
-    memcpy(&max_bias, (float*)dst->op_params + 1, sizeof(float));
+    memcpy(&scale, (float *) dst->op_params + 0, sizeof(float));
+    memcpy(&max_bias, (float *) dst->op_params + 1, sizeof(float));
 
     // input mul scale
-    aclScalar* acl_scale = aclCreateScalar(&scale, aclDataType::ACL_FLOAT);
+    aclScalar * acl_scale = aclCreateScalar(&scale, aclDataType::ACL_FLOAT);
     ggml_cann_pool_alloc src_tensor_allocator(ctx.pool(), ggml_nbytes(src0));
     void* src_tensor_buffer = src_tensor_allocator.get();
     aclTensor* softmax_tensor = ggml_cann_create_tensor(
-        src_tensor_buffer, ggml_cann_type_mapping(src0->type), ggml_element_size(src0), src0->ne,
-        src0->nb, GGML_MAX_DIMS);
+        src_tensor_buffer, ggml_cann_type_mapping(src0->type),
+        ggml_element_size(src0), src0->ne, src0->nb,GGML_MAX_DIMS);
 
     aclnn_muls(ctx, acl_src0, scale, softmax_tensor, false);
 
@@ -1496,8 +1506,7 @@ void ggml_cann_softmax(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     }
     // softmax
     aclnn_softmax(ctx, softmax_tensor, 3, acl_dst);
-    ggml_cann_release_resources(ctx, acl_src0, acl_dst,
-        acl_scale, softmax_tensor);
+    ggml_cann_release_resources(ctx, acl_src0, acl_dst, acl_scale, softmax_tensor);
 }
 
 /**
