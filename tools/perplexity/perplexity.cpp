@@ -525,7 +525,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     }
 
     // We get the logits for all the tokens in the context window (params.n_ctx)
-    // from llama_eval above.  Now, based on https://huggingface.co/docs/transformers/perplexity,
+    // from llama_decode below.  Now, based on https://huggingface.co/docs/transformers/perplexity,
     // calculate the perplexity over the last half of the window (so the model always has
     // some context to predict the token).
     //
@@ -559,7 +559,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
             for (int seq = 0; seq < n_seq_batch; seq++) {
                 int seq_start = batch_start + seq*n_ctx;
 
-                // save original token and restore it after eval
+                // save original token and restore it after decode
                 const auto token_org = tokens[seq_start];
 
                 // add BOS token for the first batch of each chunk
@@ -584,7 +584,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
             }
 
             if (llama_decode(ctx, batch)) {
-                LOG_INF("%s : failed to eval\n", __func__);
+                LOG_INF("%s : failed to decode\n", __func__);
                 return {tokens, -1, logit_history, prob_history};
             }
 
