@@ -23,8 +23,19 @@
 #define CU_MEM_LOCATION_TYPE_DEVICE hipMemLocationTypeDevice
 #define CU_MEM_ACCESS_FLAGS_PROT_READWRITE hipMemAccessFlagsProtReadWrite
 #define CU_CHECK(fn) {hipError_t err = fn; if(err != hipSuccess) { GGML_ABORT("HipVMM Failure: %s\n", hipGetErrorString(err)); }}
+#ifdef GGML_HIP_ROCWMMA_FATTN
+// ROCm requires 64-bit masks for __shfl_*_sync functions
+#define GGML_CUDA_WARP_MASK 0xFFFFFFFFFFFFFFFFULL
+#else
+#define GGML_CUDA_WARP_MASK 0xFFFFFFFF
+// Only define __shfl_*_sync macros if they're not already available
+#ifndef __shfl_sync
 #define __shfl_sync(mask, var, laneMask, width) __shfl(var, laneMask, width)
+#endif
+#ifndef __shfl_xor_sync
 #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
+#endif
+#endif
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
 #define cublasGemmEx hipblasGemmEx
