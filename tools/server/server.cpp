@@ -4546,16 +4546,16 @@ int main(int argc, char ** argv) {
         res_ok(res, models);
     };
 
-    const auto handle_ollama_version = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) { 
+    const auto handle_version = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) { 
         json version;
-        char* fake_ollama_version = std::getenv("FAKE_OLLAMA_VERSION");
-        if (fake_ollama_version) {
+        char* version_override = std::getenv("LLAMA_API_VERSION_OVERRIDE");
+        if (version_override) {
             version = {
-                {"version", std::string(fake_ollama_version)}
+                {"version", std::string(version_override)}
             };
         } else {
             version = {
-                {"version", "0.6.4"} 
+                {"version", std::to_string(LLAMA_BUILD_NUMBER)} 
             };
         }
 
@@ -4900,7 +4900,7 @@ int main(int argc, char ** argv) {
     svr->Get (params.api_prefix + "/models",              handle_models); // public endpoint (no API key check)
     svr->Get (params.api_prefix + "/v1/models",           handle_models); // public endpoint (no API key check)
     svr->Get (params.api_prefix + "/api/tags",            handle_models); // ollama specific endpoint. public endpoint (no API key check)
-    svr->Get (params.api_prefix + "/api/version",         handle_ollama_version); // ollama specific endpoint. public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/api/version",         handle_version); // public endpoint (no API key check)
     svr->Post(params.api_prefix + "/completion",          handle_completions); // legacy
     svr->Post(params.api_prefix + "/completions",         handle_completions);
     svr->Post(params.api_prefix + "/v1/completions",      handle_completions_oai);
