@@ -1,0 +1,57 @@
+#version 450
+
+#include "types.comp"
+#include "generic_binary_head.comp"
+#include "dequant_funcs.comp"
+
+const uint num_threads = 256;
+layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
+
+void get_dst_indices(uint idx, out uint i20, out uint i21, out uint i22, out uint i23) {
+    i23 = fastdiv(idx, (p.ne22*p.ne21*p.ne20));
+    const uint i23_offset = i23 * p.ne22*p.ne21*p.ne20;
+    i22 = fastdiv((idx - i23_offset), (p.ne21*p.ne20));
+    const uint i22_offset = i22*p.ne21*p.ne20;
+    i21 = (idx - i23_offset - i22_offset) / p.ne20;
+    i20 = idx - i23_offset - i22_offset - i21*p.ne20;
+}
+
+void main() {
+    // num_threads * num_iter must equal 512 to match the wg_denoms and get_idx
+    const uint num_iter = 2;
+
+    const uint broadcast2 = uint(p.param2);
+    const uint broadcast3 = p.param3;
+
+    uint idx = get_idx();
+
+    [[unroll]] for (uint it = 0; it < num_iter; ++it) {
+        if (idx < p.ne) {
+            uint i0, i1, i2, i3;
+            get_dst_indices(idx, i0, i1, i2, i3);
+
+            float acc = 0.0f;
+
+            for (uint k = 0; k < p.ne01; k += 1) {
+                const uint a_block_base = get_aoffset() + (i3 / broadcast3) * p.nb03 + (i2 / broadcast2) * p.nb02 + k * p.nb01;
+                const uint ib = a_block_base + (i0 / QUANT_K);
+                const uint iqs = i0 % (QUANT_K / QUANT_R);
+                const uint upper = (i0 % QUANT_K) / (QUANT_K / QUANT_R);
+                const uint lower = 1 - upper;
+
+                const vec2 v = dequantize(ib, iqs, 0);
+                const vec2 dm = get_dm(ib, 0);
+
+                const float a_val = (v.x * lower + v.y * upper) * dm.x + dm.y;
+
+                const uint b_idx = src1_idx(i1, k, i2, i3);
+                const float b = data_b[get_boffset() + b_idx];
+                acc += a_val * b;
+            }
+
+            uint d_idx = dst_idx(i0, i1, i2, i3);
+            data_d[get_doffset() + d_idx] = acc;
+        }
+        idx += num_threads;
+    }
+}
