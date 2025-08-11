@@ -616,6 +616,10 @@ void ggml_gemv_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
 }
 
+void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+
+}
+
 void ggml_gemv_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
     const int nb = n / qk;
@@ -1118,6 +1122,9 @@ void ggml_gemm_q2_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     }
 }
 
+void ggml_gemm_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
+
+}
 
 void ggml_gemm_iq4_nl_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc) {
     const int qk = QK8_0;
@@ -1410,6 +1417,51 @@ static block_q2_Kx8 make_block_q2_Kx8(block_q2_K * in, unsigned int blck_size_in
 
 }
 
+
+static block_q6_Kx8 make_block_q6_Kx8(block_q6_K* in, unsigned int blck_size_interleave) {
+    block_q6_Kx8 out;
+
+    // Delta(scale) of the eight Q6_K structures are copied onto the output interleaved structure
+    for (int i = 0; i < 8; i++) {
+        out.d[i] = in[i].d;
+    }
+
+    const int end = QK_K * 4 / blck_size_interleave;
+
+    // Interleave Q6_K quants by taking 8 bytes at a time
+    for (int i = 0; i < end; ++i) {
+        int src_id = i % 8;
+        int src_offset = (i / 8) * blck_size_interleave;
+        int dst_offset = i * blck_size_interleave;
+
+        uint64_t ql_elems;
+        memcpy(&ql_elems, &in[src_id].ql[src_offset], sizeof(uint64_t));
+        memcpy(&out.ql[dst_offset], &ql_elems, sizeof(uint64_t));
+    }
+
+    for (int i = 0; i < 64; ++i) {
+        int qh_src_id = i % 8;
+        int qh_src_offset = (i / 8) * blck_size_interleave;
+        int qh_dst_offset =  i * blck_size_interleave;
+    
+        uint64_t qh_elems;
+        memcpy(&qh_elems, &in[qh_src_id].qh[qh_src_offset], sizeof(uint64_t));
+        memcpy(&out.qh[qh_dst_offset], &qh_elems, sizeof(uint64_t));
+    }
+
+    for (int i = 0; i < 128; i++) {
+
+        // Index for selecting which q6k super block
+        int src1 = (i % 16) / 2;
+        // Index for selecting scale
+        int src2 = ((i / 16) * 2) + (i % 2);
+
+        out.scales[i] = in[src1].scales[src2];
+    }
+    return out;
+
+}
+
 static int repack_q4_0_to_q4_0_4_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
     GGML_ASSERT(t->type == GGML_TYPE_Q4_0);
     GGML_ASSERT(interleave_block == 4 || interleave_block == 8);
@@ -1502,6 +1554,38 @@ static int repack_q2_K_to_q2_K_8_bl(struct ggml_tensor * t, int interleave_block
 
     GGML_UNUSED(data_size);
 }
+
+static int repack_q6_K_to_q6_K_8_bl(struct ggml_tensor* t, int interleave_block, const void* GGML_RESTRICT data, size_t data_size) {
+    GGML_ASSERT(t->type == GGML_TYPE_Q6_K);
+    GGML_ASSERT(interleave_block == 8);
+    constexpr int nrows_interleaved = 8;
+
+    block_q6_Kx8* dst = (block_q6_Kx8*)t->data;
+    const block_q6_K* src = (const block_q6_K*)data;
+    block_q6_K dst_tmp[8];
+    int nrow = ggml_nrows(t);
+    int nblocks = t->ne[0] / QK_K;
+
+    GGML_ASSERT(data_size == nrow * nblocks * sizeof(block_q6_K));
+
+    if (t->ne[1] % nrows_interleaved != 0 || t->ne[0] % 8 != 0) {
+        return -1;
+    }
+
+    for (int b = 0; b < nrow; b += nrows_interleaved) {
+        for (int64_t x = 0; x < nblocks; x++) {
+            for (int i = 0; i < nrows_interleaved; i++) {
+                dst_tmp[i] = src[x + i * nblocks];
+            }
+            *dst++ = make_block_q6_Kx8(dst_tmp, interleave_block);
+        }
+        src += nrows_interleaved * nblocks;
+    }
+    return 0;
+
+    GGML_UNUSED(data_size);
+}
+
 
 static int repack_q4_0_to_q4_0_8_bl(struct ggml_tensor * t, int interleave_block, const void * GGML_RESTRICT data, size_t data_size) {
     GGML_ASSERT(t->type == GGML_TYPE_Q4_0);
@@ -1689,6 +1773,10 @@ template <> int repack<block_q2_K, 8, 8>(struct ggml_tensor * t, const void * da
     return repack_q2_K_to_q2_K_8_bl(t, 8, data, data_size);
 }
 
+template <> int repack<block_q6_K, 8, 8>(struct ggml_tensor * t, const void * data, size_t data_size) {
+    return repack_q6_K_to_q6_K_8_bl(t, 8, data, data_size);
+}
+
 template <> int repack<block_iq4_nl, 4, 4>(struct ggml_tensor * t, const void * data, size_t data_size) {
     return repack_iq4_nl_to_iq4_nl_4_bl(t, 4, data, data_size);
 }
@@ -1730,6 +1818,10 @@ template <> void gemv<block_q2_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t
     ggml_gemv_q2_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
+template <> void gemv<block_q6_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemv_q6_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
+}
+
 template <> void gemv<block_iq4_nl, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemv_iq4_nl_4x4_q8_0(n, s, bs, vx, vy, nr, nc);
 }
@@ -1764,6 +1856,10 @@ template <> void gemm<block_q4_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t
 
 template <> void gemm<block_q2_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
     ggml_gemm_q2_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
+}
+
+template <> void gemm<block_q6_K, 8, 8, GGML_TYPE_Q8_K>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
+    ggml_gemm_q6_K_8x8_q8_K(n, s, bs, vx, vy, nr, nc);
 }
 
 template <> void gemm<block_iq4_nl, 4, 4, GGML_TYPE_Q8_0>(int n, float * s, size_t bs, const void * vx, const void * vy, int nr, int nc) {
@@ -2164,6 +2260,9 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
     // instance for Q2
     static const ggml::cpu::repack::tensor_traits<block_q2_K, 8, 8, GGML_TYPE_Q8_K> q2_K_8x8_q8_K;
 
+    // instance for Q6
+    static const ggml::cpu::repack::tensor_traits<block_q6_K, 8, 8, GGML_TYPE_Q8_K> q6_K_8x8_q8_K;
+
     // instance for IQ4
     static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 4, 4, GGML_TYPE_Q8_0> iq4_nl_4x4_q8_0;
     static const ggml::cpu::repack::tensor_traits<block_iq4_nl, 8, 8, GGML_TYPE_Q8_0> iq4_nl_8x8_q8_0;
@@ -2205,6 +2304,12 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
         if (ggml_cpu_has_avx512()) {
             if (cur->ne[1] % 8 == 0) {
                 return &q2_K_8x8_q8_K;
+            }
+        }
+    } else if (cur->type == GGML_TYPE_Q6_K) {
+        if (ggml_cpu_has_avx2()) {
+            if (cur->ne[1] % 8 == 0) {
+                return &q6_K_8x8_q8_K;
             }
         }
     } else if (cur->type == GGML_TYPE_IQ4_NL) {
