@@ -22,7 +22,12 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 function isAudioMimeType(mimeType: string): boolean {
-    return mimeType === 'audio/mpeg' || mimeType === 'audio/wav' || mimeType === 'audio/mp3';
+    return mimeType === 'audio/mpeg' || 
+           mimeType === 'audio/wav' || 
+           mimeType === 'audio/mp3' || 
+           mimeType === 'audio/webm' ||
+           mimeType === 'audio/ogg' ||
+           mimeType === 'audio/m4a';
 }
 
 export async function parseFilesToMessageExtras(
