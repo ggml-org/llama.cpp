@@ -25,7 +25,19 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 // Special case for reducing vectors
 #ifdef USE_CUB
-    if (nrows == 1) {
+    cudaStreamCaptureStatus iscapturing;
+    CUDA_CHECK(cudaStreamIsCapturing(stream, &iscapturing));
+    if ((nrows == 1) &&
+            // CUDA_GRAPHS_DISABLED
+            ((ncols > 65536) &&
+             ((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
+              ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
+              ctx.cuda_graph->disable_due_to_failed_graph_capture)) ||
+        // CUDA_GRAPHS ENABLED
+        ((ncols > 32768) &&
+         !((ctx.cuda_graph->instance == nullptr) && (iscapturing == cudaStreamCaptureStatusNone) ||
+           ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
+           ctx.cuda_graph->disable_due_to_failed_graph_capture))) {
         // Single row - use device-wide reduction
         size_t           tmp_size = 0;
         ggml_cuda_pool & pool     = ctx.pool();
