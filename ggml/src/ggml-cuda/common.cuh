@@ -35,6 +35,10 @@
 #include "vendors/cuda.h"
 #endif // defined(GGML_USE_HIP)
 
+#ifndef GGML_WARP_SYNC_MASK
+#define GGML_WARP_SYNC_MASK 0xffffffff
+#endif
+
 #define STRINGIZE_IMPL(...) #__VA_ARGS__
 #define STRINGIZE(...) STRINGIZE_IMPL(__VA_ARGS__)
 
