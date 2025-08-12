@@ -6719,9 +6719,9 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     int anr = nr - nr % 16;; // Used to align nr with boundary of 16
 
     // Mask to extract nibbles from packed bytes
-    const __m256i m4 = _mm256_set1_epi8(0xF);
+    const __m256i m4b = _mm256_set1_epi8(0xF);
     // Mask to extract 2 bit values from packed bytes
-    const __m256i m2 = _mm256_set1_epi8(3);
+    const __m256i m3b = _mm256_set1_epi8(3);
     // Vector with each byte value 32 - Used as an subtract offset for 6 bit quantized values
     const __m256i m32s = _mm256_set1_epi8(32);
 
@@ -6739,11 +6739,11 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     scalesmask2 = _mm256_permute2f128_si256(scalesmask2, scalesmask2, 0);
 
     // Mask to extract nibbles from packed bytes
-    const __m512i m4_expanded = _mm512_set1_epi8(0xF);
+    const __m512i m4bexpanded = _mm512_set1_epi8(0xF);
     // Mask to extract 2 bit values from packed bytes
-    const __m512i m2_expanded = _mm512_set1_epi8(3);
+    const __m512i m3bexpanded = _mm512_set1_epi8(3);
     // Vector with each byte set to 32 - Used as an subtraction adjustment factor for 6 bit quantization
-    const __m512i m32s_expanded = _mm512_set1_epi8(32);
+    const __m512i m32expanded = _mm512_set1_epi8(32);
 
     //Take group of four block_q8_Kx4 structures at each pass of the loop and perform dot product operation
     for (; y < anr / 4; y += 4){
@@ -6916,106 +6916,106 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // 2-bit -> 8-bit
                     // hbit Values of the 0th,2nd,4th,6th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m512i rhs_hbit_014589CD_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_0, m2_expanded), 4); //Index : 0 - 7
-                    const __m512i rhs_hbit_014589CD_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 2), m2_expanded), 4); //Index : 32 - 39
-                    const __m512i rhs_hbit_014589CD_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 4), m2_expanded), 4); //Index : 64 - 71
-                    const __m512i rhs_hbit_014589CD_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 6), m2_expanded), 4); //Index : 96 - 103
+                    const __m512i rhs_hbit_014589CD_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_0, m3bexpanded), 4); //Index : 0 - 7
+                    const __m512i rhs_hbit_014589CD_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 2), m3bexpanded), 4); //Index : 32 - 39
+                    const __m512i rhs_hbit_014589CD_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 4), m3bexpanded), 4); //Index : 64 - 71
+                    const __m512i rhs_hbit_014589CD_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 6), m3bexpanded), 4); //Index : 96 - 103
 
-                    const __m512i rhs_hbit_2367ABEF_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_0, m2_expanded), 4); //Index : 0 - 7
-                    const __m512i rhs_hbit_2367ABEF_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 2), m2_expanded), 4); //Index : 32 - 39
-                    const __m512i rhs_hbit_2367ABEF_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 4), m2_expanded), 4); //Index : 64 - 71
-                    const __m512i rhs_hbit_2367ABEF_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 6), m2_expanded), 4); //Index : 96 - 103
+                    const __m512i rhs_hbit_2367ABEF_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_0, m3bexpanded), 4); //Index : 0 - 7
+                    const __m512i rhs_hbit_2367ABEF_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 2), m3bexpanded), 4); //Index : 32 - 39
+                    const __m512i rhs_hbit_2367ABEF_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 4), m3bexpanded), 4); //Index : 64 - 71
+                    const __m512i rhs_hbit_2367ABEF_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 6), m3bexpanded), 4); //Index : 96 - 103
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
-                    const __m512i rhs_hbit_014589CD_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_1, m2_expanded), 4); //Index : 8 - 15
-                    const __m512i rhs_hbit_014589CD_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 2), m2_expanded), 4); //Index : 40 - 47
-                    const __m512i rhs_hbit_014589CD_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 4), m2_expanded), 4); //Index : 72 - 79
-                    const __m512i rhs_hbit_014589CD_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 6), m2_expanded), 4); //Index : 104 - 111
+                    const __m512i rhs_hbit_014589CD_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_1, m3bexpanded), 4); //Index : 8 - 15
+                    const __m512i rhs_hbit_014589CD_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 2), m3bexpanded), 4); //Index : 40 - 47
+                    const __m512i rhs_hbit_014589CD_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 4), m3bexpanded), 4); //Index : 72 - 79
+                    const __m512i rhs_hbit_014589CD_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 6), m3bexpanded), 4); //Index : 104 - 111
 
-                    const __m512i rhs_hbit_2367ABEF_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_1, m2_expanded), 4); //Index : 8 - 15
-                    const __m512i rhs_hbit_2367ABEF_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 2), m2_expanded), 4); //Index : 40 - 47
-                    const __m512i rhs_hbit_2367ABEF_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 4), m2_expanded), 4); //Index : 72 - 79
-                    const __m512i rhs_hbit_2367ABEF_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 6), m2_expanded), 4); //Index : 104 - 111
+                    const __m512i rhs_hbit_2367ABEF_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_1, m3bexpanded), 4); //Index : 8 - 15
+                    const __m512i rhs_hbit_2367ABEF_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 2), m3bexpanded), 4); //Index : 40 - 47
+                    const __m512i rhs_hbit_2367ABEF_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 4), m3bexpanded), 4); //Index : 72 - 79
+                    const __m512i rhs_hbit_2367ABEF_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 6), m3bexpanded), 4); //Index : 104 - 111
 
                     // hbit values of the 1st,3rd,5th,7th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m512i rhs_hbit_014589CD_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_2, m2_expanded), 4); //Index : 16 - 23
-                    const __m512i rhs_hbit_014589CD_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 2), m2_expanded), 4); //Index : 48 - 55
-                    const __m512i rhs_hbit_014589CD_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 4), m2_expanded), 4); //Index : 80 - 87
-                    const __m512i rhs_hbit_014589CD_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 6), m2_expanded), 4); //Index : 112 - 119
+                    const __m512i rhs_hbit_014589CD_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_2, m3bexpanded), 4); //Index : 16 - 23
+                    const __m512i rhs_hbit_014589CD_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 2), m3bexpanded), 4); //Index : 48 - 55
+                    const __m512i rhs_hbit_014589CD_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 4), m3bexpanded), 4); //Index : 80 - 87
+                    const __m512i rhs_hbit_014589CD_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 6), m3bexpanded), 4); //Index : 112 - 119
 
-                    const __m512i rhs_hbit_2367ABEF_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_2, m2_expanded), 4); //Index : 16 - 23
-                    const __m512i rhs_hbit_2367ABEF_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 2), m2_expanded), 4); //Index : 48 - 55
-                    const __m512i rhs_hbit_2367ABEF_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 4), m2_expanded), 4); //Index : 80 - 87
-                    const __m512i rhs_hbit_2367ABEF_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 6), m2_expanded), 4); //Index : 112 - 119
+                    const __m512i rhs_hbit_2367ABEF_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_2, m3bexpanded), 4); //Index : 16 - 23
+                    const __m512i rhs_hbit_2367ABEF_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 2), m3bexpanded), 4); //Index : 48 - 55
+                    const __m512i rhs_hbit_2367ABEF_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 4), m3bexpanded), 4); //Index : 80 - 87
+                    const __m512i rhs_hbit_2367ABEF_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 6), m3bexpanded), 4); //Index : 112 - 119
 
-                    const __m512i rhs_hbit_014589CD_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_3, m2_expanded), 4); //Index : 24 - 31
-                    const __m512i rhs_hbit_014589CD_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 2), m2_expanded), 4); //Index : 56 - 63
-                    const __m512i rhs_hbit_014589CD_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 4), m2_expanded), 4); //Index : 88 - 95
-                    const __m512i rhs_hbit_014589CD_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 6), m2_expanded), 4); //Index : 120 - 127
+                    const __m512i rhs_hbit_014589CD_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_3, m3bexpanded), 4); //Index : 24 - 31
+                    const __m512i rhs_hbit_014589CD_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 2), m3bexpanded), 4); //Index : 56 - 63
+                    const __m512i rhs_hbit_014589CD_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 4), m3bexpanded), 4); //Index : 88 - 95
+                    const __m512i rhs_hbit_014589CD_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 6), m3bexpanded), 4); //Index : 120 - 127
 
-                    const __m512i rhs_hbit_2367ABEF_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_3, m2_expanded), 4); //Index : 24 - 31
-                    const __m512i rhs_hbit_2367ABEF_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 2), m2_expanded), 4); //Index : 56 - 63
-                    const __m512i rhs_hbit_2367ABEF_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 4), m2_expanded), 4); //Index : 88 - 95
-                    const __m512i rhs_hbit_2367ABEF_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 6), m2_expanded), 4); //Index : 120 - 127
+                    const __m512i rhs_hbit_2367ABEF_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_3, m3bexpanded), 4); //Index : 24 - 31
+                    const __m512i rhs_hbit_2367ABEF_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 2), m3bexpanded), 4); //Index : 56 - 63
+                    const __m512i rhs_hbit_2367ABEF_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 4), m3bexpanded), 4); //Index : 88 - 95
+                    const __m512i rhs_hbit_2367ABEF_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 6), m3bexpanded), 4); //Index : 120 - 127
 
                     // 4 bit values are unpacked/denibbled and bitwise or-ed with the hbit values to form the 6 bit quantized values
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
                     // Index : 0 -7, 64 - 71
-                    const __m512i rhs_mat_014589CD_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_0, m4_expanded), rhs_hbit_014589CD_00);
-                    const __m512i rhs_mat_014589CD_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_0, 4), m4_expanded), rhs_hbit_014589CD_40);
+                    const __m512i rhs_mat_014589CD_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_0, m4bexpanded), rhs_hbit_014589CD_00);
+                    const __m512i rhs_mat_014589CD_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_0, 4), m4bexpanded), rhs_hbit_014589CD_40);
 
-                    const __m512i rhs_mat_2367ABEF_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_0, m4_expanded), rhs_hbit_2367ABEF_00);
-                    const __m512i rhs_mat_2367ABEF_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_0, 4), m4_expanded), rhs_hbit_2367ABEF_40);
+                    const __m512i rhs_mat_2367ABEF_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_0, m4bexpanded), rhs_hbit_2367ABEF_00);
+                    const __m512i rhs_mat_2367ABEF_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_0, 4), m4bexpanded), rhs_hbit_2367ABEF_40);
 
                     // Index : 8 - 15, 72 - 79
-                    const __m512i rhs_mat_014589CD_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_1, m4_expanded), rhs_hbit_014589CD_01);
-                    const __m512i rhs_mat_014589CD_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_1, 4), m4_expanded), rhs_hbit_014589CD_41);
+                    const __m512i rhs_mat_014589CD_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_1, m4bexpanded), rhs_hbit_014589CD_01);
+                    const __m512i rhs_mat_014589CD_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_1, 4), m4bexpanded), rhs_hbit_014589CD_41);
 
-                    const __m512i rhs_mat_2367ABEF_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_1, m4_expanded), rhs_hbit_2367ABEF_01);
-                    const __m512i rhs_mat_2367ABEF_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_1, 4), m4_expanded), rhs_hbit_2367ABEF_41);
+                    const __m512i rhs_mat_2367ABEF_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_1, m4bexpanded), rhs_hbit_2367ABEF_01);
+                    const __m512i rhs_mat_2367ABEF_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_1, 4), m4bexpanded), rhs_hbit_2367ABEF_41);
 
                     // Index : 16 - 23, 80 - 87
-                    const __m512i rhs_mat_014589CD_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_2, m4_expanded), rhs_hbit_014589CD_10);
-                    const __m512i rhs_mat_014589CD_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_2, 4), m4_expanded), rhs_hbit_014589CD_50);
+                    const __m512i rhs_mat_014589CD_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_2, m4bexpanded), rhs_hbit_014589CD_10);
+                    const __m512i rhs_mat_014589CD_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_2, 4), m4bexpanded), rhs_hbit_014589CD_50);
 
-                    const __m512i rhs_mat_2367ABEF_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_2, m4_expanded), rhs_hbit_2367ABEF_10);
-                    const __m512i rhs_mat_2367ABEF_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_2, 4), m4_expanded), rhs_hbit_2367ABEF_50);
+                    const __m512i rhs_mat_2367ABEF_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_2, m4bexpanded), rhs_hbit_2367ABEF_10);
+                    const __m512i rhs_mat_2367ABEF_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_2, 4), m4bexpanded), rhs_hbit_2367ABEF_50);
 
                     // Index : 24 - 31, 88 - 95
-                    const __m512i rhs_mat_014589CD_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_3, m4_expanded), rhs_hbit_014589CD_11);
-                    const __m512i rhs_mat_014589CD_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_3, 4), m4_expanded), rhs_hbit_014589CD_51);
+                    const __m512i rhs_mat_014589CD_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_3, m4bexpanded), rhs_hbit_014589CD_11);
+                    const __m512i rhs_mat_014589CD_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_3, 4), m4bexpanded), rhs_hbit_014589CD_51);
 
-                    const __m512i rhs_mat_2367ABEF_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_3, m4_expanded), rhs_hbit_2367ABEF_11);
-                    const __m512i rhs_mat_2367ABEF_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_3, 4), m4_expanded), rhs_hbit_2367ABEF_51);
+                    const __m512i rhs_mat_2367ABEF_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_3, m4bexpanded), rhs_hbit_2367ABEF_11);
+                    const __m512i rhs_mat_2367ABEF_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_3, 4), m4bexpanded), rhs_hbit_2367ABEF_51);
 
                     // Index : 32 - 39, 96 - 103
-                    const __m512i rhs_mat_014589CD_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_4, m4_expanded), rhs_hbit_014589CD_20);
-                    const __m512i rhs_mat_014589CD_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_4, 4), m4_expanded), rhs_hbit_014589CD_60);
+                    const __m512i rhs_mat_014589CD_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_4, m4bexpanded), rhs_hbit_014589CD_20);
+                    const __m512i rhs_mat_014589CD_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_4, 4), m4bexpanded), rhs_hbit_014589CD_60);
 
-                    const __m512i rhs_mat_2367ABEF_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_4, m4_expanded), rhs_hbit_2367ABEF_20);
-                    const __m512i rhs_mat_2367ABEF_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_4, 4), m4_expanded), rhs_hbit_2367ABEF_60);
+                    const __m512i rhs_mat_2367ABEF_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_4, m4bexpanded), rhs_hbit_2367ABEF_20);
+                    const __m512i rhs_mat_2367ABEF_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_4, 4), m4bexpanded), rhs_hbit_2367ABEF_60);
 
                     // Index : 40 - 47, 104 - 111
-                    const __m512i rhs_mat_014589CD_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_5, m4_expanded), rhs_hbit_014589CD_21);
-                    const __m512i rhs_mat_014589CD_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_5, 4), m4_expanded), rhs_hbit_014589CD_61);
+                    const __m512i rhs_mat_014589CD_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_5, m4bexpanded), rhs_hbit_014589CD_21);
+                    const __m512i rhs_mat_014589CD_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_5, 4), m4bexpanded), rhs_hbit_014589CD_61);
 
-                    const __m512i rhs_mat_2367ABEF_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_5, m4_expanded), rhs_hbit_2367ABEF_21);
-                    const __m512i rhs_mat_2367ABEF_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_5, 4), m4_expanded), rhs_hbit_2367ABEF_61);
+                    const __m512i rhs_mat_2367ABEF_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_5, m4bexpanded), rhs_hbit_2367ABEF_21);
+                    const __m512i rhs_mat_2367ABEF_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_5, 4), m4bexpanded), rhs_hbit_2367ABEF_61);
 
                     // Index : 48 - 55, 112 - 119
-                    const __m512i rhs_mat_014589CD_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_6, m4_expanded), rhs_hbit_014589CD_30);
-                    const __m512i rhs_mat_014589CD_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_6, 4), m4_expanded), rhs_hbit_014589CD_70);
+                    const __m512i rhs_mat_014589CD_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_6, m4bexpanded), rhs_hbit_014589CD_30);
+                    const __m512i rhs_mat_014589CD_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_6, 4), m4bexpanded), rhs_hbit_014589CD_70);
 
-                    const __m512i rhs_mat_2367ABEF_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_6, m4_expanded), rhs_hbit_2367ABEF_30);
-                    const __m512i rhs_mat_2367ABEF_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_6, 4), m4_expanded), rhs_hbit_2367ABEF_70);
+                    const __m512i rhs_mat_2367ABEF_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_6, m4bexpanded), rhs_hbit_2367ABEF_30);
+                    const __m512i rhs_mat_2367ABEF_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_6, 4), m4bexpanded), rhs_hbit_2367ABEF_70);
 
                     // Index : 56 - 63, 120 - 127
-                    const __m512i rhs_mat_014589CD_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_7, m4_expanded), rhs_hbit_014589CD_31);
-                    const __m512i rhs_mat_014589CD_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_7, 4), m4_expanded), rhs_hbit_014589CD_71);
+                    const __m512i rhs_mat_014589CD_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_7, m4bexpanded), rhs_hbit_014589CD_31);
+                    const __m512i rhs_mat_014589CD_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_7, 4), m4bexpanded), rhs_hbit_014589CD_71);
 
-                    const __m512i rhs_mat_2367ABEF_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_7, m4_expanded), rhs_hbit_2367ABEF_31);
-                    const __m512i rhs_mat_2367ABEF_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_7, 4), m4_expanded), rhs_hbit_2367ABEF_71);
+                    const __m512i rhs_mat_2367ABEF_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_7, m4bexpanded), rhs_hbit_2367ABEF_31);
+                    const __m512i rhs_mat_2367ABEF_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_7, 4), m4bexpanded), rhs_hbit_2367ABEF_71);
 
                     // Shuffle pattern one - right side input
                     const __m512i rhs_mat_014589CD_00_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_00, (_MM_PERM_ENUM)136); //B00(0-3) B01(0-3) B00(0-3) B01(0-3) B04(0-3) B05(0-3) B04(0-3) B05(0-3) B08(0-3) B09(0-3) B08(0-3) B09(0-3) B0C(0-3) B0D(0-3) B0C(0-3) B0D(0-3)
@@ -7261,38 +7261,38 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         __m512i lhs_mat_23_71 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_71), lhs_mat_ymm_23_71, 1);
 
                         // Multiply Q8 quants with bytes valued 32 - Subtracted later as an adjustment for 6 bit quantization
-                        __m512i lhs_mat_s_01_00 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_00);
-                        __m512i lhs_mat_s_23_00 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_00);
-                        __m512i lhs_mat_s_01_01 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_01);
-                        __m512i lhs_mat_s_23_01 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_01);
-                        __m512i lhs_mat_s_01_10 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_10);
-                        __m512i lhs_mat_s_23_10 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_10);
-                        __m512i lhs_mat_s_01_11 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_11);
-                        __m512i lhs_mat_s_23_11 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_11);
-                        __m512i lhs_mat_s_01_20 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_20);
-                        __m512i lhs_mat_s_23_20 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_20);
-                        __m512i lhs_mat_s_01_21 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_21);
-                        __m512i lhs_mat_s_23_21 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_21);
-                        __m512i lhs_mat_s_01_30 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_30);
-                        __m512i lhs_mat_s_23_30 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_30);
-                        __m512i lhs_mat_s_01_31 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_31);
-                        __m512i lhs_mat_s_23_31 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_31);
-                        __m512i lhs_mat_s_01_40 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_40);
-                        __m512i lhs_mat_s_23_40 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_40);
-                        __m512i lhs_mat_s_01_41 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_41);
-                        __m512i lhs_mat_s_23_41 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_41);
-                        __m512i lhs_mat_s_01_50 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_50);
-                        __m512i lhs_mat_s_23_50 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_50);
-                        __m512i lhs_mat_s_01_51 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_51);
-                        __m512i lhs_mat_s_23_51 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_51);
-                        __m512i lhs_mat_s_01_60 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_60);
-                        __m512i lhs_mat_s_23_60 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_60);
-                        __m512i lhs_mat_s_01_61 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_61);
-                        __m512i lhs_mat_s_23_61 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_61);
-                        __m512i lhs_mat_s_01_70 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_70);
-                        __m512i lhs_mat_s_23_70 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_70);
-                        __m512i lhs_mat_s_01_71 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_71);
-                        __m512i lhs_mat_s_23_71 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_71);
+                        __m512i lhs_mat_s_01_00 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_00);
+                        __m512i lhs_mat_s_23_00 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_00);
+                        __m512i lhs_mat_s_01_01 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_01);
+                        __m512i lhs_mat_s_23_01 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_01);
+                        __m512i lhs_mat_s_01_10 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_10);
+                        __m512i lhs_mat_s_23_10 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_10);
+                        __m512i lhs_mat_s_01_11 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_11);
+                        __m512i lhs_mat_s_23_11 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_11);
+                        __m512i lhs_mat_s_01_20 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_20);
+                        __m512i lhs_mat_s_23_20 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_20);
+                        __m512i lhs_mat_s_01_21 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_21);
+                        __m512i lhs_mat_s_23_21 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_21);
+                        __m512i lhs_mat_s_01_30 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_30);
+                        __m512i lhs_mat_s_23_30 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_30);
+                        __m512i lhs_mat_s_01_31 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_31);
+                        __m512i lhs_mat_s_23_31 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_31);
+                        __m512i lhs_mat_s_01_40 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_40);
+                        __m512i lhs_mat_s_23_40 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_40);
+                        __m512i lhs_mat_s_01_41 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_41);
+                        __m512i lhs_mat_s_23_41 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_41);
+                        __m512i lhs_mat_s_01_50 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_50);
+                        __m512i lhs_mat_s_23_50 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_50);
+                        __m512i lhs_mat_s_01_51 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_51);
+                        __m512i lhs_mat_s_23_51 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_51);
+                        __m512i lhs_mat_s_01_60 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_60);
+                        __m512i lhs_mat_s_23_60 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_60);
+                        __m512i lhs_mat_s_01_61 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_61);
+                        __m512i lhs_mat_s_23_61 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_61);
+                        __m512i lhs_mat_s_01_70 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_70);
+                        __m512i lhs_mat_s_23_70 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_70);
+                        __m512i lhs_mat_s_01_71 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_71);
+                        __m512i lhs_mat_s_23_71 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_71);
 
                         //  Shuffle pattern one – left-side input
 
@@ -7872,107 +7872,107 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // 2-bit -> 8-bit
                     // hbit Values of the 0th,2nd,4th,6th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m512i rhs_hbit_014589CD_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_0, m2_expanded), 4); //Index : 0 - 7
-                    const __m512i rhs_hbit_014589CD_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 2), m2_expanded), 4); //Index : 32 - 39
-                    const __m512i rhs_hbit_014589CD_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 4), m2_expanded), 4); //Index : 64 - 71
-                    const __m512i rhs_hbit_014589CD_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 6), m2_expanded), 4); //Index : 96 - 103
+                    const __m512i rhs_hbit_014589CD_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_0, m3bexpanded), 4); //Index : 0 - 7
+                    const __m512i rhs_hbit_014589CD_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 2), m3bexpanded), 4); //Index : 32 - 39
+                    const __m512i rhs_hbit_014589CD_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 4), m3bexpanded), 4); //Index : 64 - 71
+                    const __m512i rhs_hbit_014589CD_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_0, 6), m3bexpanded), 4); //Index : 96 - 103
 
-                    const __m512i rhs_hbit_2367ABEF_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_0, m2_expanded), 4); //Index : 0 - 7
-                    const __m512i rhs_hbit_2367ABEF_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 2), m2_expanded), 4); //Index : 32 - 39
-                    const __m512i rhs_hbit_2367ABEF_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 4), m2_expanded), 4); //Index : 64 - 71
-                    const __m512i rhs_hbit_2367ABEF_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 6), m2_expanded), 4); //Index : 96 - 103
+                    const __m512i rhs_hbit_2367ABEF_00 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_0, m3bexpanded), 4); //Index : 0 - 7
+                    const __m512i rhs_hbit_2367ABEF_20 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 2), m3bexpanded), 4); //Index : 32 - 39
+                    const __m512i rhs_hbit_2367ABEF_40 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 4), m3bexpanded), 4); //Index : 64 - 71
+                    const __m512i rhs_hbit_2367ABEF_60 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_0, 6), m3bexpanded), 4); //Index : 96 - 103
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
                     // Index : 8 - 15, 72 - 79
-                    const __m512i rhs_hbit_014589CD_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_1, m2_expanded), 4); //Index : 8 - 15
-                    const __m512i rhs_hbit_014589CD_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 2), m2_expanded), 4); //Index : 40 - 47
-                    const __m512i rhs_hbit_014589CD_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 4), m2_expanded), 4); //Index : 72 - 79
-                    const __m512i rhs_hbit_014589CD_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 6), m2_expanded), 4); //Index : 104 - 111
+                    const __m512i rhs_hbit_014589CD_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_1, m3bexpanded), 4); //Index : 8 - 15
+                    const __m512i rhs_hbit_014589CD_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 2), m3bexpanded), 4); //Index : 40 - 47
+                    const __m512i rhs_hbit_014589CD_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 4), m3bexpanded), 4); //Index : 72 - 79
+                    const __m512i rhs_hbit_014589CD_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_1, 6), m3bexpanded), 4); //Index : 104 - 111
 
-                    const __m512i rhs_hbit_2367ABEF_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_1, m2_expanded), 4); //Index : 8 - 15
-                    const __m512i rhs_hbit_2367ABEF_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 2), m2_expanded), 4); //Index : 40 - 47
-                    const __m512i rhs_hbit_2367ABEF_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 4), m2_expanded), 4); //Index : 72 - 79
-                    const __m512i rhs_hbit_2367ABEF_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 6), m2_expanded), 4); //Index : 104 - 111
+                    const __m512i rhs_hbit_2367ABEF_01 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_1, m3bexpanded), 4); //Index : 8 - 15
+                    const __m512i rhs_hbit_2367ABEF_21 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 2), m3bexpanded), 4); //Index : 40 - 47
+                    const __m512i rhs_hbit_2367ABEF_41 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 4), m3bexpanded), 4); //Index : 72 - 79
+                    const __m512i rhs_hbit_2367ABEF_61 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_1, 6), m3bexpanded), 4); //Index : 104 - 111
 
                     // hbit values of the 1st,3rd,5th,7th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m512i rhs_hbit_014589CD_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_2, m2_expanded), 4); //Index : 16 - 23
-                    const __m512i rhs_hbit_014589CD_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 2), m2_expanded), 4); //Index : 48 - 55
-                    const __m512i rhs_hbit_014589CD_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 4), m2_expanded), 4); //Index : 80 - 87
-                    const __m512i rhs_hbit_014589CD_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 6), m2_expanded), 4); //Index : 112 - 119
+                    const __m512i rhs_hbit_014589CD_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_2, m3bexpanded), 4); //Index : 16 - 23
+                    const __m512i rhs_hbit_014589CD_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 2), m3bexpanded), 4); //Index : 48 - 55
+                    const __m512i rhs_hbit_014589CD_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 4), m3bexpanded), 4); //Index : 80 - 87
+                    const __m512i rhs_hbit_014589CD_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_2, 6), m3bexpanded), 4); //Index : 112 - 119
 
-                    const __m512i rhs_hbit_2367ABEF_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_2, m2_expanded), 4); //Index : 16 - 23
-                    const __m512i rhs_hbit_2367ABEF_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 2), m2_expanded), 4); //Index : 48 - 55
-                    const __m512i rhs_hbit_2367ABEF_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 4), m2_expanded), 4); //Index : 80 - 87
-                    const __m512i rhs_hbit_2367ABEF_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 6), m2_expanded), 4); //Index : 112 - 119
+                    const __m512i rhs_hbit_2367ABEF_10 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_2, m3bexpanded), 4); //Index : 16 - 23
+                    const __m512i rhs_hbit_2367ABEF_30 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 2), m3bexpanded), 4); //Index : 48 - 55
+                    const __m512i rhs_hbit_2367ABEF_50 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 4), m3bexpanded), 4); //Index : 80 - 87
+                    const __m512i rhs_hbit_2367ABEF_70 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_2, 6), m3bexpanded), 4); //Index : 112 - 119
 
-                    const __m512i rhs_hbit_014589CD_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_3, m2_expanded), 4); //Index : 24 - 31
-                    const __m512i rhs_hbit_014589CD_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 2), m2_expanded), 4); //Index : 56 - 63
-                    const __m512i rhs_hbit_014589CD_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 4), m2_expanded), 4); //Index : 88 - 95
-                    const __m512i rhs_hbit_014589CD_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 6), m2_expanded), 4); //Index : 120 - 127
+                    const __m512i rhs_hbit_014589CD_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_014589CD_3, m3bexpanded), 4); //Index : 24 - 31
+                    const __m512i rhs_hbit_014589CD_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 2), m3bexpanded), 4); //Index : 56 - 63
+                    const __m512i rhs_hbit_014589CD_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 4), m3bexpanded), 4); //Index : 88 - 95
+                    const __m512i rhs_hbit_014589CD_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_014589CD_3, 6), m3bexpanded), 4); //Index : 120 - 127
 
-                    const __m512i rhs_hbit_2367ABEF_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_3, m2_expanded), 4); //Index : 24 - 31
-                    const __m512i rhs_hbit_2367ABEF_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 2), m2_expanded), 4); //Index : 56 - 63
-                    const __m512i rhs_hbit_2367ABEF_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 4), m2_expanded), 4); //Index : 88 - 95
-                    const __m512i rhs_hbit_2367ABEF_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 6), m2_expanded), 4); //Index : 120 - 127
+                    const __m512i rhs_hbit_2367ABEF_11 = _mm512_slli_epi16(_mm512_and_si512(rhs_raw_hbit_2367ABEF_3, m3bexpanded), 4); //Index : 24 - 31
+                    const __m512i rhs_hbit_2367ABEF_31 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 2), m3bexpanded), 4); //Index : 56 - 63
+                    const __m512i rhs_hbit_2367ABEF_51 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 4), m3bexpanded), 4); //Index : 88 - 95
+                    const __m512i rhs_hbit_2367ABEF_71 = _mm512_slli_epi16(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_hbit_2367ABEF_3, 6), m3bexpanded), 4); //Index : 120 - 127
 
                     // 4 bit values are unpacked/denibbled and bitwise or-ed with the hbit values to form the 6 bit quantized values
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
                     // Index : 0 -7, 64 - 71
-                    const __m512i rhs_mat_014589CD_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_0, m4_expanded), rhs_hbit_014589CD_00);
-                    const __m512i rhs_mat_014589CD_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_0, 4), m4_expanded), rhs_hbit_014589CD_40);
+                    const __m512i rhs_mat_014589CD_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_0, m4bexpanded), rhs_hbit_014589CD_00);
+                    const __m512i rhs_mat_014589CD_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_0, 4), m4bexpanded), rhs_hbit_014589CD_40);
 
-                    const __m512i rhs_mat_2367ABEF_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_0, m4_expanded), rhs_hbit_2367ABEF_00);
-                    const __m512i rhs_mat_2367ABEF_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_0, 4), m4_expanded), rhs_hbit_2367ABEF_40);
+                    const __m512i rhs_mat_2367ABEF_00 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_0, m4bexpanded), rhs_hbit_2367ABEF_00);
+                    const __m512i rhs_mat_2367ABEF_40 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_0, 4), m4bexpanded), rhs_hbit_2367ABEF_40);
 
                     // Index : 8 - 15, 72 - 79
-                    const __m512i rhs_mat_014589CD_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_1, m4_expanded), rhs_hbit_014589CD_01);
-                    const __m512i rhs_mat_014589CD_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_1, 4), m4_expanded), rhs_hbit_014589CD_41);
+                    const __m512i rhs_mat_014589CD_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_1, m4bexpanded), rhs_hbit_014589CD_01);
+                    const __m512i rhs_mat_014589CD_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_1, 4), m4bexpanded), rhs_hbit_014589CD_41);
 
-                    const __m512i rhs_mat_2367ABEF_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_1, m4_expanded), rhs_hbit_2367ABEF_01);
-                    const __m512i rhs_mat_2367ABEF_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_1, 4), m4_expanded), rhs_hbit_2367ABEF_41);
+                    const __m512i rhs_mat_2367ABEF_01 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_1, m4bexpanded), rhs_hbit_2367ABEF_01);
+                    const __m512i rhs_mat_2367ABEF_41 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_1, 4), m4bexpanded), rhs_hbit_2367ABEF_41);
 
                     // Index : 16 - 23, 80 - 87
-                    const __m512i rhs_mat_014589CD_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_2, m4_expanded), rhs_hbit_014589CD_10);
-                    const __m512i rhs_mat_014589CD_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_2, 4), m4_expanded), rhs_hbit_014589CD_50);
+                    const __m512i rhs_mat_014589CD_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_2, m4bexpanded), rhs_hbit_014589CD_10);
+                    const __m512i rhs_mat_014589CD_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_2, 4), m4bexpanded), rhs_hbit_014589CD_50);
 
-                    const __m512i rhs_mat_2367ABEF_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_2, m4_expanded), rhs_hbit_2367ABEF_10);
-                    const __m512i rhs_mat_2367ABEF_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_2, 4), m4_expanded), rhs_hbit_2367ABEF_50);
+                    const __m512i rhs_mat_2367ABEF_10 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_2, m4bexpanded), rhs_hbit_2367ABEF_10);
+                    const __m512i rhs_mat_2367ABEF_50 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_2, 4), m4bexpanded), rhs_hbit_2367ABEF_50);
 
                     // Index : 24 - 31, 88 - 95
-                    const __m512i rhs_mat_014589CD_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_3, m4_expanded), rhs_hbit_014589CD_11);
-                    const __m512i rhs_mat_014589CD_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_3, 4), m4_expanded), rhs_hbit_014589CD_51);
+                    const __m512i rhs_mat_014589CD_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_3, m4bexpanded), rhs_hbit_014589CD_11);
+                    const __m512i rhs_mat_014589CD_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_3, 4), m4bexpanded), rhs_hbit_014589CD_51);
 
-                    const __m512i rhs_mat_2367ABEF_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_3, m4_expanded), rhs_hbit_2367ABEF_11);
-                    const __m512i rhs_mat_2367ABEF_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_3, 4), m4_expanded), rhs_hbit_2367ABEF_51);
+                    const __m512i rhs_mat_2367ABEF_11 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_3, m4bexpanded), rhs_hbit_2367ABEF_11);
+                    const __m512i rhs_mat_2367ABEF_51 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_3, 4), m4bexpanded), rhs_hbit_2367ABEF_51);
 
                     // Index : 32 - 39, 96 - 103
-                    const __m512i rhs_mat_014589CD_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_4, m4_expanded), rhs_hbit_014589CD_20);
-                    const __m512i rhs_mat_014589CD_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_4, 4), m4_expanded), rhs_hbit_014589CD_60);
+                    const __m512i rhs_mat_014589CD_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_4, m4bexpanded), rhs_hbit_014589CD_20);
+                    const __m512i rhs_mat_014589CD_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_4, 4), m4bexpanded), rhs_hbit_014589CD_60);
 
-                    const __m512i rhs_mat_2367ABEF_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_4, m4_expanded), rhs_hbit_2367ABEF_20);
-                    const __m512i rhs_mat_2367ABEF_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_4, 4), m4_expanded), rhs_hbit_2367ABEF_60);
+                    const __m512i rhs_mat_2367ABEF_20 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_4, m4bexpanded), rhs_hbit_2367ABEF_20);
+                    const __m512i rhs_mat_2367ABEF_60 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_4, 4), m4bexpanded), rhs_hbit_2367ABEF_60);
 
                     // Index : 40 - 47, 104 - 111
-                    const __m512i rhs_mat_014589CD_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_5, m4_expanded), rhs_hbit_014589CD_21);
-                    const __m512i rhs_mat_014589CD_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_5, 4), m4_expanded), rhs_hbit_014589CD_61);
+                    const __m512i rhs_mat_014589CD_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_5, m4bexpanded), rhs_hbit_014589CD_21);
+                    const __m512i rhs_mat_014589CD_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_5, 4), m4bexpanded), rhs_hbit_014589CD_61);
 
-                    const __m512i rhs_mat_2367ABEF_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_5, m4_expanded), rhs_hbit_2367ABEF_21);
-                    const __m512i rhs_mat_2367ABEF_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_5, 4), m4_expanded), rhs_hbit_2367ABEF_61);
+                    const __m512i rhs_mat_2367ABEF_21 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_5, m4bexpanded), rhs_hbit_2367ABEF_21);
+                    const __m512i rhs_mat_2367ABEF_61 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_5, 4), m4bexpanded), rhs_hbit_2367ABEF_61);
 
                     // Index : 48 - 55, 112 - 119
-                    const __m512i rhs_mat_014589CD_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_6, m4_expanded), rhs_hbit_014589CD_30);
-                    const __m512i rhs_mat_014589CD_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_6, 4), m4_expanded), rhs_hbit_014589CD_70);
+                    const __m512i rhs_mat_014589CD_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_6, m4bexpanded), rhs_hbit_014589CD_30);
+                    const __m512i rhs_mat_014589CD_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_6, 4), m4bexpanded), rhs_hbit_014589CD_70);
 
-                    const __m512i rhs_mat_2367ABEF_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_6, m4_expanded), rhs_hbit_2367ABEF_30);
-                    const __m512i rhs_mat_2367ABEF_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_6, 4), m4_expanded), rhs_hbit_2367ABEF_70);
+                    const __m512i rhs_mat_2367ABEF_30 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_6, m4bexpanded), rhs_hbit_2367ABEF_30);
+                    const __m512i rhs_mat_2367ABEF_70 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_6, 4), m4bexpanded), rhs_hbit_2367ABEF_70);
 
                     // Index : 56 - 63, 120 - 127
-                    const __m512i rhs_mat_014589CD_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_7, m4_expanded), rhs_hbit_014589CD_31);
-                    const __m512i rhs_mat_014589CD_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_7, 4), m4_expanded), rhs_hbit_014589CD_71);
+                    const __m512i rhs_mat_014589CD_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_014589CD_7, m4bexpanded), rhs_hbit_014589CD_31);
+                    const __m512i rhs_mat_014589CD_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_014589CD_7, 4), m4bexpanded), rhs_hbit_014589CD_71);
 
-                    const __m512i rhs_mat_2367ABEF_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_7, m4_expanded), rhs_hbit_2367ABEF_31);
-                    const __m512i rhs_mat_2367ABEF_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_7, 4), m4_expanded), rhs_hbit_2367ABEF_71);
+                    const __m512i rhs_mat_2367ABEF_31 = _mm512_or_si512(_mm512_and_si512(rhs_raw_lbit_2367ABEF_7, m4bexpanded), rhs_hbit_2367ABEF_31);
+                    const __m512i rhs_mat_2367ABEF_71 = _mm512_or_si512(_mm512_and_si512(_mm512_srli_epi16(rhs_raw_lbit_2367ABEF_7, 4), m4bexpanded), rhs_hbit_2367ABEF_71);
 
                     // Shuffle pattern one - right side input
                     const __m512i rhs_mat_014589CD_00_sp1 = _mm512_shuffle_epi32(rhs_mat_014589CD_00, (_MM_PERM_ENUM)136); //B00(0-3) B01(0-3) B00(0-3) B01(0-3) B04(0-3) B05(0-3) B04(0-3) B05(0-3) B08(0-3) B09(0-3) B08(0-3) B09(0-3) B0C(0-3) B0D(0-3) B0C(0-3) B0D(0-3)
@@ -8216,38 +8216,38 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     __m512i lhs_mat_23_71 = _mm512_inserti32x8(_mm512_castsi256_si512(lhs_mat_ymm_23_71), lhs_mat_ymm_23_71, 1);
 
                     // Multiply Q8 quants with bytes valued 32 - Subtracted later as an adjustment for 6 bit quantization
-                    __m512i lhs_mat_s_01_00 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_00);
-                    __m512i lhs_mat_s_23_00 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_00);
-                    __m512i lhs_mat_s_01_01 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_01);
-                    __m512i lhs_mat_s_23_01 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_01);
-                    __m512i lhs_mat_s_01_10 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_10);
-                    __m512i lhs_mat_s_23_10 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_10);
-                    __m512i lhs_mat_s_01_11 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_11);
-                    __m512i lhs_mat_s_23_11 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_11);
-                    __m512i lhs_mat_s_01_20 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_20);
-                    __m512i lhs_mat_s_23_20 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_20);
-                    __m512i lhs_mat_s_01_21 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_21);
-                    __m512i lhs_mat_s_23_21 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_21);
-                    __m512i lhs_mat_s_01_30 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_30);
-                    __m512i lhs_mat_s_23_30 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_30);
-                    __m512i lhs_mat_s_01_31 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_31);
-                    __m512i lhs_mat_s_23_31 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_31);
-                    __m512i lhs_mat_s_01_40 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_40);
-                    __m512i lhs_mat_s_23_40 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_40);
-                    __m512i lhs_mat_s_01_41 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_41);
-                    __m512i lhs_mat_s_23_41 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_41);
-                    __m512i lhs_mat_s_01_50 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_50);
-                    __m512i lhs_mat_s_23_50 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_50);
-                    __m512i lhs_mat_s_01_51 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_51);
-                    __m512i lhs_mat_s_23_51 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_51);
-                    __m512i lhs_mat_s_01_60 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_60);
-                    __m512i lhs_mat_s_23_60 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_60);
-                    __m512i lhs_mat_s_01_61 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_61);
-                    __m512i lhs_mat_s_23_61 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_61);
-                    __m512i lhs_mat_s_01_70 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_70);
-                    __m512i lhs_mat_s_23_70 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_70);
-                    __m512i lhs_mat_s_01_71 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_01_71);
-                    __m512i lhs_mat_s_23_71 = _mm512_maddubs_epi16(m32s_expanded, lhs_mat_23_71);
+                    __m512i lhs_mat_s_01_00 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_00);
+                    __m512i lhs_mat_s_23_00 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_00);
+                    __m512i lhs_mat_s_01_01 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_01);
+                    __m512i lhs_mat_s_23_01 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_01);
+                    __m512i lhs_mat_s_01_10 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_10);
+                    __m512i lhs_mat_s_23_10 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_10);
+                    __m512i lhs_mat_s_01_11 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_11);
+                    __m512i lhs_mat_s_23_11 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_11);
+                    __m512i lhs_mat_s_01_20 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_20);
+                    __m512i lhs_mat_s_23_20 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_20);
+                    __m512i lhs_mat_s_01_21 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_21);
+                    __m512i lhs_mat_s_23_21 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_21);
+                    __m512i lhs_mat_s_01_30 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_30);
+                    __m512i lhs_mat_s_23_30 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_30);
+                    __m512i lhs_mat_s_01_31 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_31);
+                    __m512i lhs_mat_s_23_31 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_31);
+                    __m512i lhs_mat_s_01_40 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_40);
+                    __m512i lhs_mat_s_23_40 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_40);
+                    __m512i lhs_mat_s_01_41 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_41);
+                    __m512i lhs_mat_s_23_41 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_41);
+                    __m512i lhs_mat_s_01_50 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_50);
+                    __m512i lhs_mat_s_23_50 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_50);
+                    __m512i lhs_mat_s_01_51 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_51);
+                    __m512i lhs_mat_s_23_51 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_51);
+                    __m512i lhs_mat_s_01_60 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_60);
+                    __m512i lhs_mat_s_23_60 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_60);
+                    __m512i lhs_mat_s_01_61 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_61);
+                    __m512i lhs_mat_s_23_61 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_61);
+                    __m512i lhs_mat_s_01_70 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_70);
+                    __m512i lhs_mat_s_23_70 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_70);
+                    __m512i lhs_mat_s_01_71 = _mm512_maddubs_epi16(m32expanded, lhs_mat_01_71);
+                    __m512i lhs_mat_s_23_71 = _mm512_maddubs_epi16(m32expanded, lhs_mat_23_71);
 
                     //  Shuffle pattern one – left-side input
 
@@ -8752,105 +8752,105 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // 2-bit -> 8-bit
                     // Values of the 0th,2nd,4th,6th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m256i rhs_hbit_0145_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_0, m2), 4); //Index : 0 - 7
-                    const __m256i rhs_hbit_0145_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 2), m2), 4); //Index : 32 - 39
-                    const __m256i rhs_hbit_0145_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 4), m2), 4); //Index : 64 - 71
-                    const __m256i rhs_hbit_0145_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 6), m2), 4); //Index : 96 - 103
+                    const __m256i rhs_hbit_0145_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_0, m3b), 4); //Index : 0 - 7
+                    const __m256i rhs_hbit_0145_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 2), m3b), 4); //Index : 32 - 39
+                    const __m256i rhs_hbit_0145_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 4), m3b), 4); //Index : 64 - 71
+                    const __m256i rhs_hbit_0145_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 6), m3b), 4); //Index : 96 - 103
 
-                    const __m256i rhs_hbit_2367_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_0, m2), 4); //Index : 0 - 7
-                    const __m256i rhs_hbit_2367_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 2), m2), 4); //Index : 32 - 39
-                    const __m256i rhs_hbit_2367_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 4), m2), 4); //Index : 64 - 71
-                    const __m256i rhs_hbit_2367_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 6), m2), 4); //Index : 96 - 103
+                    const __m256i rhs_hbit_2367_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_0, m3b), 4); //Index : 0 - 7
+                    const __m256i rhs_hbit_2367_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 2), m3b), 4); //Index : 32 - 39
+                    const __m256i rhs_hbit_2367_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 4), m3b), 4); //Index : 64 - 71
+                    const __m256i rhs_hbit_2367_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 6), m3b), 4); //Index : 96 - 103
 
-                    const __m256i rhs_hbit_0145_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_1, m2), 4); //Index : 8 - 15
-                    const __m256i rhs_hbit_0145_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 2), m2), 4); //Index : 40 - 47
-                    const __m256i rhs_hbit_0145_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 4), m2), 4); //Index : 72 - 79
-                    const __m256i rhs_hbit_0145_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 6), m2), 4); //Index : 104 - 111
+                    const __m256i rhs_hbit_0145_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_1, m3b), 4); //Index : 8 - 15
+                    const __m256i rhs_hbit_0145_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 2), m3b), 4); //Index : 40 - 47
+                    const __m256i rhs_hbit_0145_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 4), m3b), 4); //Index : 72 - 79
+                    const __m256i rhs_hbit_0145_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 6), m3b), 4); //Index : 104 - 111
 
-                    const __m256i rhs_hbit_2367_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_1, m2), 4); //Index : 8 - 15
-                    const __m256i rhs_hbit_2367_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 2), m2), 4); //Index : 40 - 47
-                    const __m256i rhs_hbit_2367_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 4), m2), 4); //Index : 72 - 79
-                    const __m256i rhs_hbit_2367_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 6), m2), 4); //Index : 104 - 111
+                    const __m256i rhs_hbit_2367_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_1, m3b), 4); //Index : 8 - 15
+                    const __m256i rhs_hbit_2367_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 2), m3b), 4); //Index : 40 - 47
+                    const __m256i rhs_hbit_2367_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 4), m3b), 4); //Index : 72 - 79
+                    const __m256i rhs_hbit_2367_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 6), m3b), 4); //Index : 104 - 111
 
                     // Values of the 1st,3rd,5th,7th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m256i rhs_hbit_0145_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_2, m2), 4); //Index : 16 - 23
-                    const __m256i rhs_hbit_0145_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 2), m2), 4); //Index : 48 - 55
-                    const __m256i rhs_hbit_0145_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 4), m2), 4); //Index : 80 - 87
-                    const __m256i rhs_hbit_0145_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 6), m2), 4); //Index : 112 - 119
+                    const __m256i rhs_hbit_0145_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_2, m3b), 4); //Index : 16 - 23
+                    const __m256i rhs_hbit_0145_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 2), m3b), 4); //Index : 48 - 55
+                    const __m256i rhs_hbit_0145_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 4), m3b), 4); //Index : 80 - 87
+                    const __m256i rhs_hbit_0145_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 6), m3b), 4); //Index : 112 - 119
 
-                    const __m256i rhs_hbit_2367_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_2, m2), 4); //Index : 16 - 23
-                    const __m256i rhs_hbit_2367_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 2), m2), 4); //Index : 48 - 55
-                    const __m256i rhs_hbit_2367_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 4), m2), 4); //Index : 80 - 87
-                    const __m256i rhs_hbit_2367_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 6), m2), 4); //Index : 112 - 119
+                    const __m256i rhs_hbit_2367_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_2, m3b), 4); //Index : 16 - 23
+                    const __m256i rhs_hbit_2367_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 2), m3b), 4); //Index : 48 - 55
+                    const __m256i rhs_hbit_2367_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 4), m3b), 4); //Index : 80 - 87
+                    const __m256i rhs_hbit_2367_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 6), m3b), 4); //Index : 112 - 119
 
-                    const __m256i rhs_hbit_0145_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_3, m2), 4); //Index : 24 - 31
-                    const __m256i rhs_hbit_0145_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 2), m2), 4); //Index : 56 - 63
-                    const __m256i rhs_hbit_0145_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 4), m2), 4); //Index : 88 - 95
-                    const __m256i rhs_hbit_0145_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 6), m2), 4); //Index : 120 - 127
+                    const __m256i rhs_hbit_0145_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_3, m3b), 4); //Index : 24 - 31
+                    const __m256i rhs_hbit_0145_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 2), m3b), 4); //Index : 56 - 63
+                    const __m256i rhs_hbit_0145_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 4), m3b), 4); //Index : 88 - 95
+                    const __m256i rhs_hbit_0145_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 6), m3b), 4); //Index : 120 - 127
 
-                    const __m256i rhs_hbit_2367_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_3, m2), 4); //Index : 24 - 31
-                    const __m256i rhs_hbit_2367_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 2), m2), 4); //Index : 56 - 63
-                    const __m256i rhs_hbit_2367_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 4), m2), 4); //Index : 88 - 95
-                    const __m256i rhs_hbit_2367_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 6), m2), 4); //Index : 120 - 127
+                    const __m256i rhs_hbit_2367_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_3, m3b), 4); //Index : 24 - 31
+                    const __m256i rhs_hbit_2367_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 2), m3b), 4); //Index : 56 - 63
+                    const __m256i rhs_hbit_2367_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 4), m3b), 4); //Index : 88 - 95
+                    const __m256i rhs_hbit_2367_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 6), m3b), 4); //Index : 120 - 127
 
                     // 4 bit values are unpacked/denibbled and bitwise or-ed with the hbit values to form the 6 bit quantized values
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
                     // Index : 0 -7, 64 - 71
-                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_0, m4), rhs_hbit_0145_00);
-                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_0, 4), m4), rhs_hbit_0145_40);
+                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_0, m4b), rhs_hbit_0145_00);
+                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_0, 4), m4b), rhs_hbit_0145_40);
 
-                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_0, m4), rhs_hbit_2367_00);
-                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_0, 4), m4), rhs_hbit_2367_40);
+                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_0, m4b), rhs_hbit_2367_00);
+                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_0, 4), m4b), rhs_hbit_2367_40);
 
                     // Index : 8 - 15, 72 - 79
-                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_1, m4), rhs_hbit_0145_01);
-                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_1, 4), m4), rhs_hbit_0145_41);
+                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_1, m4b), rhs_hbit_0145_01);
+                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_1, 4), m4b), rhs_hbit_0145_41);
 
-                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_1, m4), rhs_hbit_2367_01);
-                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_1, 4), m4), rhs_hbit_2367_41);
+                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_1, m4b), rhs_hbit_2367_01);
+                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_1, 4), m4b), rhs_hbit_2367_41);
 
                     // Index : 16 - 23, 80 - 87
-                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_2, m4), rhs_hbit_0145_10);
-                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_2, 4), m4), rhs_hbit_0145_50);
+                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_2, m4b), rhs_hbit_0145_10);
+                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_2, 4), m4b), rhs_hbit_0145_50);
 
-                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_2, m4), rhs_hbit_2367_10);
-                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_2, 4), m4), rhs_hbit_2367_50);
+                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_2, m4b), rhs_hbit_2367_10);
+                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_2, 4), m4b), rhs_hbit_2367_50);
 
                     // Index : 24 - 31, 88 - 95
-                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_3, m4), rhs_hbit_0145_11);
-                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_3, 4), m4), rhs_hbit_0145_51);
+                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_3, m4b), rhs_hbit_0145_11);
+                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_3, 4), m4b), rhs_hbit_0145_51);
 
-                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_3, m4), rhs_hbit_2367_11);
-                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_3, 4), m4), rhs_hbit_2367_51);
+                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_3, m4b), rhs_hbit_2367_11);
+                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_3, 4), m4b), rhs_hbit_2367_51);
 
                     // Index : 32 - 39, 96 - 103
-                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_4, m4), rhs_hbit_0145_20);
-                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_4, 4), m4), rhs_hbit_0145_60);
+                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_4, m4b), rhs_hbit_0145_20);
+                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_4, 4), m4b), rhs_hbit_0145_60);
 
-                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_4, m4), rhs_hbit_2367_20);
-                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_4, 4), m4), rhs_hbit_2367_60);
+                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_4, m4b), rhs_hbit_2367_20);
+                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_4, 4), m4b), rhs_hbit_2367_60);
 
                     // Index : 40 - 47, 104 - 111
-                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_5, m4), rhs_hbit_0145_21);
-                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_5, 4), m4), rhs_hbit_0145_61);
+                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_5, m4b), rhs_hbit_0145_21);
+                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_5, 4), m4b), rhs_hbit_0145_61);
 
-                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_5, m4), rhs_hbit_2367_21);
-                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_5, 4), m4), rhs_hbit_2367_61);
+                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_5, m4b), rhs_hbit_2367_21);
+                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_5, 4), m4b), rhs_hbit_2367_61);
 
                     // Index : 48 - 55, 112 - 119
-                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_6, m4), rhs_hbit_0145_30);
-                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_6, 4), m4), rhs_hbit_0145_70);
+                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_6, m4b), rhs_hbit_0145_30);
+                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_6, 4), m4b), rhs_hbit_0145_70);
 
-                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_6, m4), rhs_hbit_2367_30);
-                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_6, 4), m4), rhs_hbit_2367_70);
+                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_6, m4b), rhs_hbit_2367_30);
+                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_6, 4), m4b), rhs_hbit_2367_70);
 
                     // Index : 56 - 63, 120 - 127
-                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_7, m4), rhs_hbit_0145_31);
-                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_7, 4), m4), rhs_hbit_0145_71);
+                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_7, m4b), rhs_hbit_0145_31);
+                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_7, 4), m4b), rhs_hbit_0145_71);
 
-                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_7, m4), rhs_hbit_2367_31);
-                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_7, 4), m4), rhs_hbit_2367_71);
+                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_7, m4b), rhs_hbit_2367_31);
+                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_7, 4), m4b), rhs_hbit_2367_71);
 
                     // Shuffle pattern one - right side input
                     const __m256i rhs_mat_0145_00_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_00, 136); //B00(0-3) B01(0-3) B00(0-3) B01(0-3) B04(0-3) B05(0-3) B04(0-3) B05(0-3)
@@ -9562,103 +9562,103 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // 2-bit -> 8-bit
                     // Values of the 0th,2nd,4th,6th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m256i rhs_hbit_0145_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_0, m2), 4); //Index : 0 - 7
-                    const __m256i rhs_hbit_0145_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 2), m2), 4); //Index : 32 - 39
-                    const __m256i rhs_hbit_0145_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 4), m2), 4); //Index : 64 - 71
-                    const __m256i rhs_hbit_0145_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 6), m2), 4); //Index : 96 - 103
+                    const __m256i rhs_hbit_0145_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_0, m3b), 4); //Index : 0 - 7
+                    const __m256i rhs_hbit_0145_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 2), m3b), 4); //Index : 32 - 39
+                    const __m256i rhs_hbit_0145_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 4), m3b), 4); //Index : 64 - 71
+                    const __m256i rhs_hbit_0145_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_0, 6), m3b), 4); //Index : 96 - 103
 
-                    const __m256i rhs_hbit_2367_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_0, m2), 4); //Index : 0 - 7
-                    const __m256i rhs_hbit_2367_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 2), m2), 4); //Index : 32 - 39
-                    const __m256i rhs_hbit_2367_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 4), m2), 4); //Index : 64 - 71
-                    const __m256i rhs_hbit_2367_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 6), m2), 4); //Index : 96 - 103
+                    const __m256i rhs_hbit_2367_00 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_0, m3b), 4); //Index : 0 - 7
+                    const __m256i rhs_hbit_2367_20 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 2), m3b), 4); //Index : 32 - 39
+                    const __m256i rhs_hbit_2367_40 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 4), m3b), 4); //Index : 64 - 71
+                    const __m256i rhs_hbit_2367_60 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_0, 6), m3b), 4); //Index : 96 - 103
 
-                    const __m256i rhs_hbit_0145_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_1, m2), 4); //Index : 8 - 15
-                    const __m256i rhs_hbit_0145_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 2), m2), 4); //Index : 40 - 47
-                    const __m256i rhs_hbit_0145_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 4), m2), 4); //Index : 72 - 79
-                    const __m256i rhs_hbit_0145_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 6), m2), 4); //Index : 104 - 111
+                    const __m256i rhs_hbit_0145_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_1, m3b), 4); //Index : 8 - 15
+                    const __m256i rhs_hbit_0145_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 2), m3b), 4); //Index : 40 - 47
+                    const __m256i rhs_hbit_0145_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 4), m3b), 4); //Index : 72 - 79
+                    const __m256i rhs_hbit_0145_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_1, 6), m3b), 4); //Index : 104 - 111
 
-                    const __m256i rhs_hbit_2367_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_1, m2), 4); //Index : 8 - 15
-                    const __m256i rhs_hbit_2367_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 2), m2), 4); //Index : 40 - 47
-                    const __m256i rhs_hbit_2367_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 4), m2), 4); //Index : 72 - 79
-                    const __m256i rhs_hbit_2367_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 6), m2), 4); //Index : 104 - 111
+                    const __m256i rhs_hbit_2367_01 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_1, m3b), 4); //Index : 8 - 15
+                    const __m256i rhs_hbit_2367_21 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 2), m3b), 4); //Index : 40 - 47
+                    const __m256i rhs_hbit_2367_41 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 4), m3b), 4); //Index : 72 - 79
+                    const __m256i rhs_hbit_2367_61 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_1, 6), m3b), 4); //Index : 104 - 111
 
                     // Values of the 1st,3rd,5th,7th sub blocks of eight block_q6_K structures for the sb loop
-                    const __m256i rhs_hbit_0145_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_2, m2), 4); //Index : 16 - 23
-                    const __m256i rhs_hbit_0145_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 2), m2), 4); //Index : 48 - 55
-                    const __m256i rhs_hbit_0145_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 4), m2), 4); //Index : 80 - 87
-                    const __m256i rhs_hbit_0145_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 6), m2), 4); //Index : 112 - 119
+                    const __m256i rhs_hbit_0145_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_2, m3b), 4); //Index : 16 - 23
+                    const __m256i rhs_hbit_0145_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 2), m3b), 4); //Index : 48 - 55
+                    const __m256i rhs_hbit_0145_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 4), m3b), 4); //Index : 80 - 87
+                    const __m256i rhs_hbit_0145_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_2, 6), m3b), 4); //Index : 112 - 119
 
-                    const __m256i rhs_hbit_2367_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_2, m2), 4); //Index : 16 - 23
-                    const __m256i rhs_hbit_2367_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 2), m2), 4); //Index : 48 - 55
-                    const __m256i rhs_hbit_2367_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 4), m2), 4); //Index : 80 - 87
-                    const __m256i rhs_hbit_2367_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 6), m2), 4); //Index : 112 - 119
+                    const __m256i rhs_hbit_2367_10 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_2, m3b), 4); //Index : 16 - 23
+                    const __m256i rhs_hbit_2367_30 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 2), m3b), 4); //Index : 48 - 55
+                    const __m256i rhs_hbit_2367_50 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 4), m3b), 4); //Index : 80 - 87
+                    const __m256i rhs_hbit_2367_70 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_2, 6), m3b), 4); //Index : 112 - 119
 
-                    const __m256i rhs_hbit_0145_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_3, m2), 4); //Index : 24 - 31
-                    const __m256i rhs_hbit_0145_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 2), m2), 4); //Index : 56 - 63
-                    const __m256i rhs_hbit_0145_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 4), m2), 4); //Index : 88 - 95
-                    const __m256i rhs_hbit_0145_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 6), m2), 4); //Index : 120 - 127
+                    const __m256i rhs_hbit_0145_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_0145_3, m3b), 4); //Index : 24 - 31
+                    const __m256i rhs_hbit_0145_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 2), m3b), 4); //Index : 56 - 63
+                    const __m256i rhs_hbit_0145_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 4), m3b), 4); //Index : 88 - 95
+                    const __m256i rhs_hbit_0145_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_0145_3, 6), m3b), 4); //Index : 120 - 127
 
-                    const __m256i rhs_hbit_2367_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_3, m2), 4); //Index : 24 - 31
-                    const __m256i rhs_hbit_2367_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 2), m2), 4); //Index : 56 - 63
-                    const __m256i rhs_hbit_2367_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 4), m2), 4); //Index : 88 - 95
-                    const __m256i rhs_hbit_2367_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 6), m2), 4); //Index : 120 - 127
+                    const __m256i rhs_hbit_2367_11 = _mm256_slli_epi16(_mm256_and_si256(rhs_raw_hbit_2367_3, m3b), 4); //Index : 24 - 31
+                    const __m256i rhs_hbit_2367_31 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 2), m3b), 4); //Index : 56 - 63
+                    const __m256i rhs_hbit_2367_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 4), m3b), 4); //Index : 88 - 95
+                    const __m256i rhs_hbit_2367_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 6), m3b), 4); //Index : 120 - 127
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
                     // Index : 0 -7, 64 - 71
-                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_0, m4), rhs_hbit_0145_00);
-                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_0, 4), m4), rhs_hbit_0145_40);
+                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_0, m4b), rhs_hbit_0145_00);
+                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_0, 4), m4b), rhs_hbit_0145_40);
 
-                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_0, m4), rhs_hbit_2367_00);
-                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_0, 4), m4), rhs_hbit_2367_40);
+                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_0, m4b), rhs_hbit_2367_00);
+                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_0, 4), m4b), rhs_hbit_2367_40);
 
                     // Index : 8 - 15, 72 - 79
-                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_1, m4), rhs_hbit_0145_01);
-                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_1, 4), m4), rhs_hbit_0145_41);
+                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_1, m4b), rhs_hbit_0145_01);
+                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_1, 4), m4b), rhs_hbit_0145_41);
 
-                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_1, m4), rhs_hbit_2367_01);
-                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_1, 4), m4), rhs_hbit_2367_41);
+                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_1, m4b), rhs_hbit_2367_01);
+                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_1, 4), m4b), rhs_hbit_2367_41);
 
                     // Index : 16 - 23, 80 - 87
-                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_2, m4), rhs_hbit_0145_10);
-                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_2, 4), m4), rhs_hbit_0145_50);
+                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_2, m4b), rhs_hbit_0145_10);
+                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_2, 4), m4b), rhs_hbit_0145_50);
 
-                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_2, m4), rhs_hbit_2367_10);
-                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_2, 4), m4), rhs_hbit_2367_50);
+                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_2, m4b), rhs_hbit_2367_10);
+                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_2, 4), m4b), rhs_hbit_2367_50);
 
                     // Index : 24 - 31, 88 - 95
-                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_3, m4), rhs_hbit_0145_11);
-                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_3, 4), m4), rhs_hbit_0145_51);
+                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_3, m4b), rhs_hbit_0145_11);
+                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_3, 4), m4b), rhs_hbit_0145_51);
 
-                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_3, m4), rhs_hbit_2367_11);
-                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_3, 4), m4), rhs_hbit_2367_51);
+                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_3, m4b), rhs_hbit_2367_11);
+                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_3, 4), m4b), rhs_hbit_2367_51);
 
                     // Index : 32 - 39, 96 - 103
-                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_4, m4), rhs_hbit_0145_20);
-                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_4, 4), m4), rhs_hbit_0145_60);
+                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_4, m4b), rhs_hbit_0145_20);
+                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_4, 4), m4b), rhs_hbit_0145_60);
 
-                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_4, m4), rhs_hbit_2367_20);
-                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_4, 4), m4), rhs_hbit_2367_60);
+                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_4, m4b), rhs_hbit_2367_20);
+                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_4, 4), m4b), rhs_hbit_2367_60);
 
                     // Index : 40 - 47, 104 - 111
-                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_5, m4), rhs_hbit_0145_21);
-                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_5, 4), m4), rhs_hbit_0145_61);
+                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_5, m4b), rhs_hbit_0145_21);
+                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_5, 4), m4b), rhs_hbit_0145_61);
 
-                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_5, m4), rhs_hbit_2367_21);
-                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_5, 4), m4), rhs_hbit_2367_61);
+                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_5, m4b), rhs_hbit_2367_21);
+                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_5, 4), m4b), rhs_hbit_2367_61);
 
                     // Index : 48 - 55, 112 - 119
-                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_6, m4), rhs_hbit_0145_30);
-                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_6, 4), m4), rhs_hbit_0145_70);
+                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_6, m4b), rhs_hbit_0145_30);
+                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_6, 4), m4b), rhs_hbit_0145_70);
 
-                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_6, m4), rhs_hbit_2367_30);
-                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_6, 4), m4), rhs_hbit_2367_70);
+                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_6, m4b), rhs_hbit_2367_30);
+                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_6, 4), m4b), rhs_hbit_2367_70);
 
                     // Index : 56 - 63, 120 - 127
-                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_7, m4), rhs_hbit_0145_31);
-                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_7, 4), m4), rhs_hbit_0145_71);
+                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0145_7, m4b), rhs_hbit_0145_31);
+                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0145_7, 4), m4b), rhs_hbit_0145_71);
 
-                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_7, m4), rhs_hbit_2367_31);
-                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_7, 4), m4), rhs_hbit_2367_71);
+                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_2367_7, m4b), rhs_hbit_2367_31);
+                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_2367_7, 4), m4b), rhs_hbit_2367_71);
 
                     // Shuffle pattern one - right side input
                     const __m256i rhs_mat_0145_00_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_00, 136); //B00(0-3) B01(0-3) B00(0-3) B01(0-3) B04(0-3) B05(0-3) B04(0-3) B05(0-3)
