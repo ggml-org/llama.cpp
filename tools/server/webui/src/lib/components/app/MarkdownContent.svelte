@@ -7,6 +7,7 @@
 	import remarkRehype from 'remark-rehype';
 	import rehypeKatex from 'rehype-katex';
 	import rehypeStringify from 'rehype-stringify';
+	import { copyCodeToClipboard } from '$lib/utils/copy';
 	import 'highlight.js/styles/github-dark.css';
 	import 'katex/dist/katex.min.css';
 
@@ -143,7 +144,6 @@
 				}
 
 				try {
-					const { copyCodeToClipboard } = await import('$lib/utils/copy');
 					await copyCodeToClipboard(rawCode);
 				} catch (error) {
 					console.error('Failed to copy code:', error);
