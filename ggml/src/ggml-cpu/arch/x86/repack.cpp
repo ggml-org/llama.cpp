@@ -24,14 +24,6 @@
 
 #define UNUSED GGML_UNUSED
 
-void print_m512f(const __m512 vec) {
-    const float *values = (const float*)&vec;
-    for (int i = 0; i < 16; i++) {
-        printf("%f ", values[i]);
-    }
-    printf("\n");
-}
-
 #if defined(__AVX__)
 #if defined(__F16C__)
 #if defined(__AVX512F__)
