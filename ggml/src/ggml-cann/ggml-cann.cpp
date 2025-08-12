@@ -2391,7 +2391,7 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
                 // only support F32 and F16.
                 return false;
             }
-            return ggml_is_contiguous(op);
+            return true;
         } break;
         case GGML_OP_CONT: {
             // TODO: support GGML_TYPE_BF16
@@ -2457,7 +2457,6 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev,
             return (p0 <= (k0 / 2)) && (p1 <= (k1 / 2));
         }
         case GGML_OP_DUP:
-            return ggml_is_contiguous(op);
         case GGML_OP_SUM:
         case GGML_OP_IM2COL:
         case GGML_OP_CONCAT:
