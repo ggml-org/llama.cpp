@@ -22,7 +22,8 @@ export enum ImageFileType {
 
 export enum AudioFileType {
 	MP3 = 'mp3',
-	WAV = 'wav'
+	WAV = 'wav',
+	WEBM = 'webm'
 }
 
 export enum PdfFileType {
@@ -129,7 +130,10 @@ export enum ImageMimeType {
 export enum AudioMimeType {
 	MP3_MPEG = 'audio/mpeg',
 	MP3 = 'audio/mp3',
-	WAV = 'audio/wav'
+	MP4 = 'audio/mp4',
+	WAV = 'audio/wav',
+	WEBM = 'audio/webm',
+	WEBM_OPUS = 'audio/webm;codecs=opus'
 }
 
 export enum PdfMimeType {

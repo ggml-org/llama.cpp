@@ -4,6 +4,13 @@
 	import { inputClasses } from '$lib/constants/input-classes';
 	import { onMount } from 'svelte';
 	import { config } from '$lib/stores/settings.svelte';
+	import { 
+		AudioRecorder, 
+		convertToWav, 
+		createAudioFile, 
+		isAudioRecordingSupported 
+	} from '$lib/utils/audio-recording';
+	import { TextMimeType } from '$lib/constants/supported-file-types';
 
 	interface Props {
 		class?: string;
@@ -29,26 +36,16 @@
 		uploadedFiles = $bindable([]),
 	}: Props = $props();
 
-	// Get settings
 	const currentConfig = $derived(config());
 	const pasteLongTextToFileLength = $derived(Number(currentConfig.pasteLongTextToFileLen) || 2500);
 
-	let message = $state('');
+	let audioRecorder: AudioRecorder | undefined;
+	let isRecording = $state(false);
 	let fileInputRef: ChatFormFileInputInvisible | undefined;
+	let message = $state('');
 	let previousIsLoading = $state(isLoading);
+	let recordingSupported = $state(false);
 	let textareaRef: ChatFormTextarea | undefined;
-
-	onMount(() => {
-		textareaRef?.focus();
-	});
-
-	$effect(() => {
-		if (previousIsLoading && !isLoading) {
-			textareaRef?.focus();
-		}
-
-		previousIsLoading = isLoading;
-	});
 
 	async function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter' && !event.shiftKey) {
@@ -95,7 +92,7 @@
 			return;
 		}
 
-		const text = event.clipboardData.getData('text/plain');
+		const text = event.clipboardData.getData(TextMimeType.PLAIN);
 
 		if (
 			text.length > 0 &&
@@ -105,7 +102,7 @@
 			event.preventDefault();
 
 			const textFile = new File([text], 'Pasted', {
-				type: 'text/plain'
+				type: TextMimeType.PLAIN
 			});
 
 			onFileUpload?.([textFile]);
@@ -135,6 +132,48 @@
 	function handleStop() {
 		onStop?.();
 	}
+
+	async function handleMicClick() {
+		if (!audioRecorder || !recordingSupported) {
+			console.warn('Audio recording not supported');
+			return;
+		}
+
+		if (isRecording) {
+			try {
+				const audioBlob = await audioRecorder.stopRecording();
+				const wavBlob = await convertToWav(audioBlob);
+				const audioFile = createAudioFile(wavBlob);
+				
+				onFileUpload?.([audioFile]);
+				isRecording = false;
+			} catch (error) {
+				console.error('Failed to stop recording:', error);
+				isRecording = false;
+			}
+		} else {
+			try {
+				await audioRecorder.startRecording();
+				isRecording = true;
+			} catch (error) {
+				console.error('Failed to start recording:', error);
+			}
+		}
+	}
+
+	onMount(() => {
+		textareaRef?.focus();
+		recordingSupported = isAudioRecordingSupported();
+		audioRecorder = new AudioRecorder();
+	});
+
+	$effect(() => {
+		if (previousIsLoading && !isLoading) {
+			textareaRef?.focus();
+		}
+
+		previousIsLoading = isLoading;
+	});
 </script>
 
 <ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
@@ -157,10 +196,12 @@
 		/>
 
 		<ChatFormActionButtons
+			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
 			{disabled}
 			{isLoading}
-			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
+			{isRecording}
 			onFileUpload={handleFileUpload}
+			onMicClick={handleMicClick}
 			onStop={handleStop}
 		/>
 	</div>

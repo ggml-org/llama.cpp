@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import { FileTypeCategory, TextMimeType } from '$lib/constants/supported-file-types';
 	import { X } from '@lucide/svelte';
 	import { stopPropagation } from 'svelte/legacy';
 
@@ -44,7 +45,7 @@
 	}
 </script>
 
-{#if type === 'text/plain' || type === 'text'}
+{#if type === TextMimeType.PLAIN || type === FileTypeCategory.TEXT}
 	{#if readonly}
 		<!-- Readonly mode (ChatMessage) -->
 		<button
