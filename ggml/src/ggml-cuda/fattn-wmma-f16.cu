@@ -15,7 +15,11 @@ namespace wmma = mtmusa::wmma;
 namespace wmma = nvcuda::wmma;
 #endif // GGML_USE_MUSA
 #elif defined(GGML_HIP_ROCWMMA_FATTN) && defined(FP16_MMA_AVAILABLE)
-#undef HIP_ENABLE_WARP_SYNC_BUILTINS // conflicts with rocWMMA headers
+#if HIP_VERSION >= 60500000
+#define HIP_DISABLE_WARP_SYNC_BUILTINS // conflicts with rocWMMA headers for ROCm 6.5+
+#else
+#undef HIP_ENABLE_WARP_SYNC_BUILTINS // conflicts with rocWMMA headers before ROCm 6.5
+#endif // HIP_VERSION >= 60500000
 #include <rocwmma/rocwmma.hpp>
 namespace wmma = rocwmma;
 #endif // !defined(GGML_USE_HIP)
