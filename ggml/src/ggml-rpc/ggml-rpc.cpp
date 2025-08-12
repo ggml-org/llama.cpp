@@ -333,7 +333,7 @@ static bool send_data(sockfd_t sockfd, const void * data, size_t size) {
                            bytes_sent, size_to_send);
             return false;
         }
-        bytes_sent += (size_t)n;  
+        bytes_sent += (size_t)n;
     }
     return true;
 }
