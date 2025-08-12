@@ -3,7 +3,7 @@
  * Handles text file detection, reading, and validation
  */
 
-import { TEXT_FILE_EXTENSIONS } from "$lib/constants/text-file-extensions";
+import { TextExtension } from "$lib/constants/supported-file-types";
 
 /**
  * Check if a filename indicates a text file based on its extension
@@ -11,7 +11,8 @@ import { TEXT_FILE_EXTENSIONS } from "$lib/constants/text-file-extensions";
  * @returns True if the filename has a recognized text file extension
  */
 export function isTextFileByName(filename: string): boolean {
-    return TEXT_FILE_EXTENSIONS.some((ext) => filename.toLowerCase().endsWith(ext));
+    const textExtensions = Object.values(TextExtension);
+    return textExtensions.some((ext) => filename.toLowerCase().endsWith(ext));
 }
 
 /**
