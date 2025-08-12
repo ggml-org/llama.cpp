@@ -431,6 +431,11 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
     return _reg;
 }
 
+ggml_guid_t ggml_backend_et_guid(void) {
+    static ggml_guid guid = { 0x4b, 0xe0, 0x72, 0x88, 0xc0, 0xf6, 0x29, 0xb4, 0x79, 0x9f, 0x70, 0x68, 0x71, 0x0f, 0x6d, 0xc8 };
+    return &guid;
+}
+
 ggml_backend_t ggml_backend_et_init(size_t dev_num) {
     if (!ggml_et_driver_init())
 	return nullptr;
@@ -443,7 +448,7 @@ ggml_backend_t ggml_backend_et_init(size_t dev_num) {
     ctx->device = (int)dev_num;
 
     ggml_backend_t backend = new ggml_backend {
-        /* .guid    = */ {},
+        /* .guid    = */ ggml_backend_et_guid(),
         /* .iface   = */ ggml_backend_et_i,
         /* .device  = */ ggml_backend_et_reg_get_device(ggml_backend_et_reg(), dev_num),
         /* .context = */ ctx,
