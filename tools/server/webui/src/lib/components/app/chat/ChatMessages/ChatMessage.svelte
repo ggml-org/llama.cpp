@@ -7,6 +7,7 @@
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 	import { isLoading } from '$lib/stores/chat.svelte';
+	import { useProcessingState } from '$lib/hooks/use-processing-state';
 	import { fade } from 'svelte/transition';
 
 	interface Props {
@@ -30,6 +31,8 @@
 	let isEditing = $state(false);
 	let editedContent = $state(message.content);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
+
+	const processingState = useProcessingState();
 
 	let thinkingContent = $derived.by(() => {
 		if (message.role === 'assistant') {
@@ -92,11 +95,19 @@
 	}
 
 	function handleSaveEdit() {
-		if (editedContent.trim() && editedContent !== message.content) {
+		if (editedContent.trim() !== message.content) {
 			onUpdateMessage?.(message, editedContent.trim());
 		}
 		isEditing = false;
 	}
+
+	$effect(() => {
+		if (message.role === 'assistant' && !message.content && isLoading()) {
+			processingState.startMonitoring();
+		} else {
+			processingState.stopMonitoring();
+		}
+	});
 </script>
 
 {#if message.role === 'user'}
@@ -186,8 +197,16 @@
 	{#if config?.role === 'assistant' && !message.content && isLoading()}
 		<div class="mx-auto w-full max-w-[48rem] mb-16" in:fade>
 			<span class="processing-text">
-				Processing
+				{processingState.getProcessingMessage()}
 			</span>
+			
+			{#if processingState.shouldShowDetails()}
+				<div class="processing-details">
+					{#each processingState.getProcessingDetails() as detail}
+						<span class="processing-detail">{detail}</span>
+					{/each}
+				</div>
+			{/if}
 		</div>
 	{/if}
 
@@ -260,6 +279,24 @@
 		-webkit-text-fill-color: transparent;
 		animation: shine 1s linear infinite;
 		font-weight: 500;
+		font-size: 0.875rem;
+	}
+
+	.processing-details {
+		display: flex;
+		flex-wrap: wrap;
+		justify-content: center;
+		gap: 0.75rem;
+		margin-top: 0.25rem;
+	}
+
+	.processing-detail {
+		color: var(--muted-foreground);
+		font-size: 0.75rem;
+		padding: 0.125rem 0.5rem;
+		background: var(--muted);
+		border-radius: 0.375rem;
+		font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
 	}
 
 	@keyframes shine {

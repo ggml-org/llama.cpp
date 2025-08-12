@@ -148,3 +148,81 @@ export interface ApiChatCompletionResponse {
 		};
 	}>;
 }
+
+export interface ApiSlotData {
+	id: number;
+	id_task: number;
+	n_ctx: number;
+	speculative: boolean;
+	is_processing: boolean;
+	params: {
+		n_predict: number;
+		seed: number;
+		temperature: number;
+		dynatemp_range: number;
+		dynatemp_exponent: number;
+		top_k: number;
+		top_p: number;
+		min_p: number;
+		top_n_sigma: number;
+		xtc_probability: number;
+		xtc_threshold: number;
+		typical_p: number;
+		repeat_last_n: number;
+		repeat_penalty: number;
+		presence_penalty: number;
+		frequency_penalty: number;
+		dry_multiplier: number;
+		dry_base: number;
+		dry_allowed_length: number;
+		dry_penalty_last_n: number;
+		dry_sequence_breakers: string[];
+		mirostat: number;
+		mirostat_tau: number;
+		mirostat_eta: number;
+		stop: string[];
+		max_tokens: number;
+		n_keep: number;
+		n_discard: number;
+		ignore_eos: boolean;
+		stream: boolean;
+		logit_bias: any[];
+		n_probs: number;
+		min_keep: number;
+		grammar: string;
+		grammar_lazy: boolean;
+		grammar_triggers: any[];
+		preserved_tokens: any[];
+		chat_format: string;
+		reasoning_format: string;
+		reasoning_in_content: boolean;
+		thinking_forced_open: boolean;
+		samplers: string[];
+		'speculative.n_max': number;
+		'speculative.n_min': number;
+		'speculative.p_min': number;
+		timings_per_token: boolean;
+		post_sampling_probs: boolean;
+		lora: any[];
+	};
+	prompt: string;
+	next_token: {
+		has_next_token: boolean;
+		has_new_line: boolean;
+		n_remain: number;
+		n_decoded: number;
+		stopping_word: string;
+	};
+}
+
+export interface ApiProcessingState {
+	status: 'initializing' | 'generating' | 'preparing' | 'idle';
+	tokensDecoded: number;
+	tokensRemaining: number;
+	contextUsed: number;
+	contextTotal: number;
+	temperature: number;
+	topP: number;
+	speculative: boolean;
+	hasNextToken: boolean;
+}
