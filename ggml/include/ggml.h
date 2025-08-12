@@ -2417,6 +2417,11 @@ extern "C" {
         GGML_SCHED_PRIO_REALTIME
     };
 
+    enum ggml_cpu_pnp_strategy {
+        GGML_CPU_PNP_STRATEGY_DISABLED,
+        GGML_CPU_PNP_STRATEGY_EFFICIENCY
+    };
+
     // threadpool params
     // Use ggml_threadpool_params_default() or ggml_threadpool_params_init() to populate the defaults
     struct ggml_threadpool_params {

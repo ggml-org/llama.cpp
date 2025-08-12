@@ -470,10 +470,11 @@ struct ggml_threadpool {
 struct ggml_compute_state {
 #ifndef GGML_USE_OPENMP
     ggml_thread_t thrd;
-    bool cpumask[GGML_MAX_N_THREADS];
     int  last_graph;
     bool pending;
 #endif
+    bool cpumask[GGML_MAX_N_THREADS];
+    bool mask_valid;
     struct ggml_threadpool * threadpool;
     int ith;
 };
@@ -3050,10 +3051,20 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
     const size_t workers_size = sizeof(struct ggml_compute_state) * tpp->n_threads;
     struct ggml_compute_state * workers = ggml_aligned_malloc(workers_size);
 
+    // Check if cpu mask is valid
+    bool cpumask_valid = false;
+    for (int i = 0;  i < GGML_MAX_N_THREADS; i++) {
+        if (tpp->cpumask[i]) {
+            cpumask_valid = true;
+            break;
+        }
+    }
+
     memset(workers, 0, workers_size);
     for (int j = 0; j < tpp->n_threads; j++) {
         workers[j].threadpool = threadpool;
         workers[j].ith        = j;
+        workers[j].mask_valid = cpumask_valid; // set mask_valid for worker threads use affinity
     }
 
     threadpool->workers = workers;
@@ -3084,6 +3095,12 @@ static struct ggml_threadpool * ggml_threadpool_new_impl(
         }
     }
 #endif // GGML_USE_OPENMP
+
+    int32_t cpumask_iter = 0;
+    for (int j = 1; j < tpp->n_threads; j++) {
+        ggml_thread_cpumask_next(tpp->cpumask, workers[j].cpumask, tpp->strict_cpu, &cpumask_iter);
+    }
+    ggml_thread_cpumask_next(tpp->cpumask, workers[0].cpumask, tpp->strict_cpu, &cpumask_iter);
 
     return threadpool;
 }
@@ -3131,10 +3148,19 @@ enum ggml_status ggml_graph_compute(struct ggml_cgraph * cgraph, struct ggml_cpl
                 atomic_store_explicit(&threadpool->n_threads_cur, n_threads, memory_order_relaxed);
             }
 
+            // If mask is valid for worker thread apply affinity
+            if(&threadpool->workers[omp_get_thread_num()].mask_valid)
+               ggml_thread_apply_affinity(&threadpool->workers[omp_get_thread_num()].cpumask);
+
             ggml_graph_compute_thread(&threadpool->workers[omp_get_thread_num()]);
         }
     } else {
         atomic_store_explicit(&threadpool->n_threads_cur, 1, memory_order_relaxed);
+        
+        // If mask is valid for main thread apply affinity
+        if(&threadpool->workers[omp_get_thread_num()].mask_valid)
+               ggml_thread_apply_affinity(&threadpool->workers[omp_get_thread_num()].cpumask);
+        
         ggml_graph_compute_thread(&threadpool->workers[0]);
     }
 #else
