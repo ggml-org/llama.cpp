@@ -212,7 +212,7 @@
 					onSend={handleSendMessage}
 					onStop={() => stopGeneration()}
 					showHelperText={true}
-					{uploadedFiles}
+					bind:uploadedFiles
 				/>
 			</div>
 		</div>
