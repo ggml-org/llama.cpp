@@ -2,6 +2,7 @@
 	import { parseFilesToMessageExtras } from '$lib/utils/convert-files-to-extra';
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { serverStore } from '$lib/stores/server.svelte';
+	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
 	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo } from '$lib/components/app';
 	import {
 		activeMessages,
@@ -116,8 +117,30 @@
 	}
 
 	async function processFiles(files: File[]) {
-		const processed = await processFilesToChatUploaded(files);
-		uploadedFiles = [...uploadedFiles, ...processed];
+		const supportedFiles: File[] = [];
+		const unsupportedFiles: File[] = [];
+
+		for (const file of files) {
+			if (isFileTypeSupported(file.name, file.type)) {
+				supportedFiles.push(file);
+			} else {
+				unsupportedFiles.push(file);
+			}
+		}
+
+		if (unsupportedFiles.length > 0) {
+			const fileNames = unsupportedFiles.map(f => f.name).join(', ');
+			const message = unsupportedFiles.length === 1 
+				? `The file "${fileNames}" is not supported. Please upload images (JPG, PNG, GIF, WebP, SVG), audio files (MP3, WAV), PDFs, or text files.`
+				: `The following files are not supported: ${fileNames}. Please upload images (JPG, PNG, GIF, WebP, SVG), audio files (MP3, WAV), PDFs, or text files.`;
+			
+			alert(message);
+		}
+
+		if (supportedFiles.length > 0) {
+			const processed = await processFilesToChatUploaded(supportedFiles);
+			uploadedFiles = [...uploadedFiles, ...processed];
+		}
 	}
 
 	function scrollChatToBottom(behavior: ScrollBehavior = 'smooth') {
