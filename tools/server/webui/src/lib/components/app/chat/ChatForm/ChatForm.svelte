@@ -54,7 +54,7 @@
 		if (event.key === 'Enter' && !event.shiftKey) {
 			event.preventDefault();
 
-			if (!message.trim() || disabled || isLoading) return;
+			if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
 
 			const messageToSend = message.trim();
 			const filesToSend = [...uploadedFiles];
@@ -114,7 +114,7 @@
 
 	async function handleSubmit(event: SubmitEvent) {
 		event.preventDefault();
-		if (!message.trim() || disabled || isLoading) return;
+		if ((!message.trim() && uploadedFiles.length === 0) || disabled || isLoading) return;
 
 		const messageToSend = message.trim();
 		const filesToSend = [...uploadedFiles];

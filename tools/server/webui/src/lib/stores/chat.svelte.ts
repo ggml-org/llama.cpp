@@ -238,7 +238,7 @@ class ChatStore {
 	}
 
 	async sendMessage(content: string, extras?: DatabaseMessageExtra[]): Promise<void> {
-		if (!content.trim() || this.isLoading) return;
+		if ((!content.trim() && (!extras || extras.length === 0)) || this.isLoading) return;
 
 		let isNewConversation = false;
 
