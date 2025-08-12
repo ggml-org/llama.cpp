@@ -333,16 +333,10 @@ static bool send_data(sockfd_t sockfd, const void * data, size_t size) {
                            bytes_sent, size_to_send);
             return false;
         }
-        if (n == 0) {
-            GGML_LOG_ERROR("send returned 0 (peer closed?)\n");
-            return false;
-        }
-        bytes_sent += (size_t)n;
+        bytes_sent += (size_t)n;  
     }
     return true;
 }
-
-
 
 static bool recv_data(sockfd_t sockfd, void * data, size_t size) {
     size_t bytes_recv = 0;
@@ -362,8 +356,6 @@ static bool recv_data(sockfd_t sockfd, void * data, size_t size) {
     }
     return true;
 }
-
-
 
 static bool send_msg(sockfd_t sockfd, const void * msg, size_t msg_size) {
     if (!send_data(sockfd, &msg_size, sizeof(msg_size))) {
