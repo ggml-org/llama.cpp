@@ -403,12 +403,20 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
         return false;
     }
     for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (supported_types.find(op->type) == supported_types.end()) {
-            GGML_LOG_WARN("OpenVINO backend does not support tensor type %s\n", ggml_type_name(op->type));
+        auto* src = op->src[i];
+        if (src == nullptr) {
+            break;
+        }
+        if (supported_types.find(src->type) == supported_types.end()) {
+            GGML_LOG_WARN("OpenVINO backend does not support tensor type %s\n", ggml_type_name(src->type));
             return false;
         }
-        if (op->src[i] != nullptr && op->src[i]->ne[3] != 1) {
+        if (src->ne[3] != 1) {
             GGML_LOG_WARN("OpenVINO backend does not support tensors with ne[3] != 1\n");
+            return false;
+        }
+        if (ggml_is_quantized(src->type) && src->ne[2] != 1) {
+            GGML_LOG_WARN("OpenVINO backend does not support 3D quantized tensors\n");
             return false;
         }
     }
