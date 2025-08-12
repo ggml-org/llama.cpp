@@ -9501,23 +9501,26 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // Loop to iterate over the sixteen sub blocks of a super block - eight sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 128; sb++) {
 
-                    const __m256i rhs_raw_mat_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + sb * 512));
-                    const __m256i rhs_raw_mat_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 32 + sb * 512));
-                    const __m256i rhs_raw_mat_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 64 + sb * 512));
-                    const __m256i rhs_raw_mat_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 96 + sb * 512));
-                    const __m256i rhs_raw_mat_0123_2 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 128 + sb * 512));
-                    const __m256i rhs_raw_mat_4567_2 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 160 + sb * 512));
-                    const __m256i rhs_raw_mat_0123_3 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 192 + sb * 512));
-                    const __m256i rhs_raw_mat_4567_3 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 224 + sb * 512));
+                    // Load the eight block_q6_k for eight sub blocks quantized values interleaved with each other in chunks of eight bytes - B0,B1 ....B6,B7
+                    // The lower and higher packed bits are loaded, unpacked and individual bytes representing 6 bits each are formed from the same
+                    // They are blended/permuted for further mul mat operations within the pipeline
+                    const __m256i rhs_raw_lbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 32 + sb * 512));
+                    const __m256i rhs_raw_lbit_0123_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 64 + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_1 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 96 + sb * 512));
+                    const __m256i rhs_raw_lbit_0123_2 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 128 + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_2 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 160 + sb * 512));
+                    const __m256i rhs_raw_lbit_0123_3 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 192 + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_3 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 224 + sb * 512));
 
-                    const __m256i rhs_raw_mat_0123_4 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 256 + sb * 512));
-                    const __m256i rhs_raw_mat_4567_4 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 288 + sb * 512));
-                    const __m256i rhs_raw_mat_0123_5 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 320 + sb * 512));
-                    const __m256i rhs_raw_mat_4567_5 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 352 + sb * 512));
-                    const __m256i rhs_raw_mat_0123_6 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 384 + sb * 512));
-                    const __m256i rhs_raw_mat_4567_6 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 416 + sb * 512));
-                    const __m256i rhs_raw_mat_0123_7 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 448 + sb * 512));
-                    const __m256i rhs_raw_mat_4567_7 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 480 + sb * 512));
+                    const __m256i rhs_raw_lbit_0123_4 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 256 + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_4 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 288 + sb * 512));
+                    const __m256i rhs_raw_lbit_0123_5 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 320 + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_5 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 352 + sb * 512));
+                    const __m256i rhs_raw_lbit_0123_6 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 384 + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_6 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 416 + sb * 512));
+                    const __m256i rhs_raw_lbit_0123_7 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 448 + sb * 512));
+                    const __m256i rhs_raw_lbit_4567_7 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].ql + 480 + sb * 512));
 
                     const __m256i rhs_raw_hbit_0123_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qh + sb * 256));
                     const __m256i rhs_raw_hbit_4567_0 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qh + 32 + sb * 256));
@@ -9529,24 +9532,24 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i rhs_raw_hbit_4567_3 = _mm256_loadu_si256((const __m256i *)(b_ptr[b].qh + 224 + sb * 256));
 
                     // Indices 0 through 7 (first block):
-                    const __m256i rhs_raw_mat_0145_0 = _mm256_blend_epi32(rhs_raw_mat_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_0, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_0, requiredOrder), rhs_raw_mat_4567_0, 240);
-                    const __m256i rhs_raw_mat_0145_1 = _mm256_blend_epi32(rhs_raw_mat_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_1, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_1, requiredOrder), rhs_raw_mat_4567_1, 240);
-                    const __m256i rhs_raw_mat_0145_2 = _mm256_blend_epi32(rhs_raw_mat_0123_2, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_2, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_2, requiredOrder), rhs_raw_mat_4567_2, 240);
-                    const __m256i rhs_raw_mat_0145_3 = _mm256_blend_epi32(rhs_raw_mat_0123_3, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_3, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_3, requiredOrder), rhs_raw_mat_4567_3, 240);
+                    const __m256i rhs_raw_lbit_0145_0 = _mm256_blend_epi32(rhs_raw_lbit_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_0, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_0, requiredOrder), rhs_raw_lbit_4567_0, 240);
+                    const __m256i rhs_raw_lbit_0145_1 = _mm256_blend_epi32(rhs_raw_lbit_0123_1, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_1, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_1 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_1, requiredOrder), rhs_raw_lbit_4567_1, 240);
+                    const __m256i rhs_raw_lbit_0145_2 = _mm256_blend_epi32(rhs_raw_lbit_0123_2, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_2, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_2 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_2, requiredOrder), rhs_raw_lbit_4567_2, 240);
+                    const __m256i rhs_raw_lbit_0145_3 = _mm256_blend_epi32(rhs_raw_lbit_0123_3, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_3, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_3 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_3, requiredOrder), rhs_raw_lbit_4567_3, 240);
 
                     // Indices 4 through 7 (second block):
-                    const __m256i rhs_raw_mat_0145_4 = _mm256_blend_epi32(rhs_raw_mat_0123_4, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_4, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_4 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_4, requiredOrder), rhs_raw_mat_4567_4, 240);
-                    const __m256i rhs_raw_mat_0145_5 = _mm256_blend_epi32(rhs_raw_mat_0123_5, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_5, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_5 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_5, requiredOrder), rhs_raw_mat_4567_5, 240);
-                    const __m256i rhs_raw_mat_0145_6 = _mm256_blend_epi32(rhs_raw_mat_0123_6, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_6, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_6 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_6, requiredOrder), rhs_raw_mat_4567_6, 240);
-                    const __m256i rhs_raw_mat_0145_7 = _mm256_blend_epi32(rhs_raw_mat_0123_7, _mm256_permutevar8x32_epi32(rhs_raw_mat_4567_7, requiredOrder), 240);
-                    const __m256i rhs_raw_mat_2367_7 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_mat_0123_7, requiredOrder), rhs_raw_mat_4567_7, 240);
+                    const __m256i rhs_raw_lbit_0145_4 = _mm256_blend_epi32(rhs_raw_lbit_0123_4, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_4, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_4 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_4, requiredOrder), rhs_raw_lbit_4567_4, 240);
+                    const __m256i rhs_raw_lbit_0145_5 = _mm256_blend_epi32(rhs_raw_lbit_0123_5, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_5, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_5 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_5, requiredOrder), rhs_raw_lbit_4567_5, 240);
+                    const __m256i rhs_raw_lbit_0145_6 = _mm256_blend_epi32(rhs_raw_lbit_0123_6, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_6, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_6 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_6, requiredOrder), rhs_raw_lbit_4567_6, 240);
+                    const __m256i rhs_raw_lbit_0145_7 = _mm256_blend_epi32(rhs_raw_lbit_0123_7, _mm256_permutevar8x32_epi32(rhs_raw_lbit_4567_7, requiredOrder), 240);
+                    const __m256i rhs_raw_lbit_2367_7 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_lbit_0123_7, requiredOrder), rhs_raw_lbit_4567_7, 240);
 
                     const __m256i rhs_raw_hbit_0145_0 = _mm256_blend_epi32(rhs_raw_hbit_0123_0, _mm256_permutevar8x32_epi32(rhs_raw_hbit_4567_0, requiredOrder), 240);
                     const __m256i rhs_raw_hbit_2367_0 = _mm256_blend_epi32(_mm256_permutevar8x32_epi32(rhs_raw_hbit_0123_0, requiredOrder), rhs_raw_hbit_4567_0, 240);
@@ -9600,56 +9603,57 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const __m256i rhs_hbit_2367_51 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 4), m2), 4); //Index : 88 - 95
                     const __m256i rhs_hbit_2367_71 = _mm256_slli_epi16(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_hbit_2367_3, 6), m2), 4); //Index : 120 - 127
 
-                    // 0 -7, 64 - 71
+                    // Comments indicate the indices of elements from individual super block in non interleaved fashion
+                    // Index : 0 -7, 64 - 71
                     const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_0, m4), rhs_hbit_0145_00);
                     const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_0, 4), m4), rhs_hbit_0145_40);
 
                     const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_0, m4), rhs_hbit_2367_00);
                     const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_0, 4), m4), rhs_hbit_2367_40);
 
-                    // 8 - 15, 72 - 79
+                    // Index : 8 - 15, 72 - 79
                     const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_1, m4), rhs_hbit_0145_01);
                     const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_1, 4), m4), rhs_hbit_0145_41);
 
                     const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_1, m4), rhs_hbit_2367_01);
                     const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_1, 4), m4), rhs_hbit_2367_41);
 
-                    // 16 - 23, 80 - 87
+                    // Index : 16 - 23, 80 - 87
                     const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_2, m4), rhs_hbit_0145_10);
                     const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_2, 4), m4), rhs_hbit_0145_50);
 
                     const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_2, m4), rhs_hbit_2367_10);
                     const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_2, 4), m4), rhs_hbit_2367_50);
 
-                    // 24 - 31, 88 - 95
+                    // Index : 24 - 31, 88 - 95
                     const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_3, m4), rhs_hbit_0145_11);
                     const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_3, 4), m4), rhs_hbit_0145_51);
 
                     const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_3, m4), rhs_hbit_2367_11);
                     const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_3, 4), m4), rhs_hbit_2367_51);
 
-                    // 32 - 39, 96 - 103
+                    // Index : 32 - 39, 96 - 103
                     const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_4, m4), rhs_hbit_0145_20);
                     const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_4, 4), m4), rhs_hbit_0145_60);
 
                     const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_4, m4), rhs_hbit_2367_20);
                     const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_4, 4), m4), rhs_hbit_2367_60);
 
-                    // 40 - 47, 104 - 111
+                    // Index : 40 - 47, 104 - 111
                     const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_5, m4), rhs_hbit_0145_21);
                     const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_5, 4), m4), rhs_hbit_0145_61);
 
                     const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_5, m4), rhs_hbit_2367_21);
                     const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_5, 4), m4), rhs_hbit_2367_61);
 
-                    // 48 - 55, 112 - 119
+                    // Index : 48 - 55, 112 - 119
                     const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_6, m4), rhs_hbit_0145_30);
                     const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_6, 4), m4), rhs_hbit_0145_70);
 
                     const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_6, m4), rhs_hbit_2367_30);
                     const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_6, 4), m4), rhs_hbit_2367_70);
 
-                    // 56 - 63, 120 - 127
+                    // Index : 56 - 63, 120 - 127
                     const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_7, m4), rhs_hbit_0145_31);
                     const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_7, 4), m4), rhs_hbit_0145_71);
 
@@ -9884,200 +9888,200 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     __m256i lhs_mat_s_23_71 = _mm256_maddubs_epi16(m32s, lhs_mat_23_71);
 
                     // Shuffle pattern one - left side input
-                    const __m256i lhs_mat_01_00_sp1 = _mm256_shuffle_epi32(lhs_mat_01_00, 160); //A00(0-3) A00(0-3) A01(0-3) A01(0-3) A00(0-3) A00(0-3) A01(0-3) A01(0-3)
-                    const __m256i lhs_mat_23_00_sp1 = _mm256_shuffle_epi32(lhs_mat_23_00, 160); //A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3)
+                    const __m256i lhs_mat_01_00_sp1 = _mm256_shuffle_epi32(lhs_mat_01_00, 160); //A00(0-3) A00(0-3) A01(0-3) A01(0-3)
+                    const __m256i lhs_mat_23_00_sp1 = _mm256_shuffle_epi32(lhs_mat_23_00, 160); //A02(0-3) A03(0-3) A02(0-3) A03(0-3)
 
-                    const __m256i lhs_mat_01_01_sp1 = _mm256_shuffle_epi32(lhs_mat_01_01, 160); //A00(8-11) A00(8-11) A01(8-11) A01(8-11) A00(8-11) A00(8-11) A01(8-11) A01(8-11)
-                    const __m256i lhs_mat_23_01_sp1 = _mm256_shuffle_epi32(lhs_mat_23_01, 160); //A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11)
+                    const __m256i lhs_mat_01_01_sp1 = _mm256_shuffle_epi32(lhs_mat_01_01, 160); //A00(8-11) A00(8-11) A01(8-11) A01(8-11)
+                    const __m256i lhs_mat_23_01_sp1 = _mm256_shuffle_epi32(lhs_mat_23_01, 160); //A02(8-11) A03(8-11) A02(8-11) A03(8-11)
 
-                    const __m256i lhs_mat_01_10_sp1 = _mm256_shuffle_epi32(lhs_mat_01_10, 160); //A10(0-3) A10(0-3) A11(0-3) A11(0-3) A10(0-3) A10(0-3) A11(0-3) A11(0-3)
-                    const __m256i lhs_mat_23_10_sp1 = _mm256_shuffle_epi32(lhs_mat_23_10, 160); //A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3)
+                    const __m256i lhs_mat_01_10_sp1 = _mm256_shuffle_epi32(lhs_mat_01_10, 160); //A10(0-3) A10(0-3) A11(0-3) A11(0-3)
+                    const __m256i lhs_mat_23_10_sp1 = _mm256_shuffle_epi32(lhs_mat_23_10, 160); //A12(0-3) A13(0-3) A12(0-3) A13(0-3)
 
-                    const __m256i lhs_mat_01_11_sp1 = _mm256_shuffle_epi32(lhs_mat_01_11, 160); //A10(8-11) A10(8-11) A11(8-11) A11(8-11) A10(8-11) A10(8-11) A11(8-11) A11(8-11)
-                    const __m256i lhs_mat_23_11_sp1 = _mm256_shuffle_epi32(lhs_mat_23_11, 160); //A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11)
+                    const __m256i lhs_mat_01_11_sp1 = _mm256_shuffle_epi32(lhs_mat_01_11, 160); //A10(8-11) A10(8-11) A11(8-11) A11(8-11)
+                    const __m256i lhs_mat_23_11_sp1 = _mm256_shuffle_epi32(lhs_mat_23_11, 160); //A12(8-11) A13(8-11) A12(8-11) A13(8-11)
 
-                    const __m256i lhs_mat_01_20_sp1 = _mm256_shuffle_epi32(lhs_mat_01_20, 160); //A20(0-3) A20(0-3) A21(0-3) A21(0-3) A20(0-3) A20(0-3) A21(0-3) A21(0-3)
-                    const __m256i lhs_mat_23_20_sp1 = _mm256_shuffle_epi32(lhs_mat_23_20, 160); //A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3)
+                    const __m256i lhs_mat_01_20_sp1 = _mm256_shuffle_epi32(lhs_mat_01_20, 160); //A20(0-3) A20(0-3) A21(0-3) A21(0-3)
+                    const __m256i lhs_mat_23_20_sp1 = _mm256_shuffle_epi32(lhs_mat_23_20, 160); //A22(0-3) A23(0-3) A22(0-3) A23(0-3)
 
-                    const __m256i lhs_mat_01_21_sp1 = _mm256_shuffle_epi32(lhs_mat_01_21, 160); //A20(8-11) A20(8-11) A21(8-11) A21(8-11) A20(8-11) A20(8-11) A21(8-11) A21(8-11)
-                    const __m256i lhs_mat_23_21_sp1 = _mm256_shuffle_epi32(lhs_mat_23_21, 160); //A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11)
+                    const __m256i lhs_mat_01_21_sp1 = _mm256_shuffle_epi32(lhs_mat_01_21, 160); //A20(8-11) A20(8-11) A21(8-11) A21(8-11)
+                    const __m256i lhs_mat_23_21_sp1 = _mm256_shuffle_epi32(lhs_mat_23_21, 160); //A22(8-11) A23(8-11) A22(8-11) A23(8-11)
 
-                    const __m256i lhs_mat_01_30_sp1 = _mm256_shuffle_epi32(lhs_mat_01_30, 160); //A30(0-3) A30(0-3) A31(0-3) A31(0-3) A30(0-3) A30(0-3) A31(0-3) A31(0-3)
-                    const __m256i lhs_mat_23_30_sp1 = _mm256_shuffle_epi32(lhs_mat_23_30, 160); //A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3)
+                    const __m256i lhs_mat_01_30_sp1 = _mm256_shuffle_epi32(lhs_mat_01_30, 160); //A30(0-3) A30(0-3) A31(0-3) A31(0-3)
+                    const __m256i lhs_mat_23_30_sp1 = _mm256_shuffle_epi32(lhs_mat_23_30, 160); //A32(0-3) A33(0-3) A32(0-3) A33(0-3)
 
-                    const __m256i lhs_mat_01_31_sp1 = _mm256_shuffle_epi32(lhs_mat_01_31, 160); //A30(8-11) A30(8-11) A31(8-11) A31(8-11) A30(8-11) A30(8-11) A31(8-11) A31(8-11)
-                    const __m256i lhs_mat_23_31_sp1 = _mm256_shuffle_epi32(lhs_mat_23_31, 160); //A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11)
+                    const __m256i lhs_mat_01_31_sp1 = _mm256_shuffle_epi32(lhs_mat_01_31, 160); //A30(8-11) A30(8-11) A31(8-11) A31(8-11)
+                    const __m256i lhs_mat_23_31_sp1 = _mm256_shuffle_epi32(lhs_mat_23_31, 160); //A32(8-11) A33(8-11) A32(8-11) A33(8-11)
 
-                    const __m256i lhs_mat_01_40_sp1 = _mm256_shuffle_epi32(lhs_mat_01_40, 160); //A40(0-3) A40(0-3) A41(0-3) A41(0-3) A40(0-3) A40(0-3) A41(0-3) A41(0-3)
-                    const __m256i lhs_mat_23_40_sp1 = _mm256_shuffle_epi32(lhs_mat_23_40, 160); //A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3)
+                    const __m256i lhs_mat_01_40_sp1 = _mm256_shuffle_epi32(lhs_mat_01_40, 160); //A40(0-3) A40(0-3) A41(0-3) A41(0-3)
+                    const __m256i lhs_mat_23_40_sp1 = _mm256_shuffle_epi32(lhs_mat_23_40, 160); //A42(0-3) A43(0-3) A42(0-3) A43(0-3)
 
-                    const __m256i lhs_mat_01_41_sp1 = _mm256_shuffle_epi32(lhs_mat_01_41, 160); //A40(8-11) A40(8-11) A41(8-11) A41(8-11) A40(8-11) A40(8-11) A41(8-11) A41(8-11)
-                    const __m256i lhs_mat_23_41_sp1 = _mm256_shuffle_epi32(lhs_mat_23_41, 160); //A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11)
+                    const __m256i lhs_mat_01_41_sp1 = _mm256_shuffle_epi32(lhs_mat_01_41, 160); //A40(8-11) A40(8-11) A41(8-11) A41(8-11)
+                    const __m256i lhs_mat_23_41_sp1 = _mm256_shuffle_epi32(lhs_mat_23_41, 160); //A42(8-11) A43(8-11) A42(8-11) A43(8-11)
 
-                    const __m256i lhs_mat_01_50_sp1 = _mm256_shuffle_epi32(lhs_mat_01_50, 160); //A50(0-3) A50(0-3) A51(0-3) A51(0-3) A50(0-3) A50(0-3) A51(0-3) A51(0-3)
-                    const __m256i lhs_mat_23_50_sp1 = _mm256_shuffle_epi32(lhs_mat_23_50, 160); //A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3)
+                    const __m256i lhs_mat_01_50_sp1 = _mm256_shuffle_epi32(lhs_mat_01_50, 160); //A50(0-3) A50(0-3) A51(0-3) A51(0-3)
+                    const __m256i lhs_mat_23_50_sp1 = _mm256_shuffle_epi32(lhs_mat_23_50, 160); //A52(0-3) A53(0-3) A52(0-3) A53(0-3)
 
-                    const __m256i lhs_mat_01_51_sp1 = _mm256_shuffle_epi32(lhs_mat_01_51, 160); //A50(8-11) A50(8-11) A51(8-11) A51(8-11) A50(8-11) A50(8-11) A51(8-11) A51(8-11)
-                    const __m256i lhs_mat_23_51_sp1 = _mm256_shuffle_epi32(lhs_mat_23_51, 160); //A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11)
+                    const __m256i lhs_mat_01_51_sp1 = _mm256_shuffle_epi32(lhs_mat_01_51, 160); //A50(8-11) A50(8-11) A51(8-11) A51(8-11)
+                    const __m256i lhs_mat_23_51_sp1 = _mm256_shuffle_epi32(lhs_mat_23_51, 160); //A52(8-11) A53(8-11) A52(8-11) A53(8-11)
 
-                    const __m256i lhs_mat_01_60_sp1 = _mm256_shuffle_epi32(lhs_mat_01_60, 160); //A60(0-3) A60(0-3) A61(0-3) A61(0-3) A60(0-3) A60(0-3) A61(0-3) A61(0-3)
-                    const __m256i lhs_mat_23_60_sp1 = _mm256_shuffle_epi32(lhs_mat_23_60, 160); //A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3)
+                    const __m256i lhs_mat_01_60_sp1 = _mm256_shuffle_epi32(lhs_mat_01_60, 160); //A60(0-3) A60(0-3) A61(0-3) A61(0-3)
+                    const __m256i lhs_mat_23_60_sp1 = _mm256_shuffle_epi32(lhs_mat_23_60, 160); //A62(0-3) A63(0-3) A62(0-3) A63(0-3)
 
-                    const __m256i lhs_mat_01_61_sp1 = _mm256_shuffle_epi32(lhs_mat_01_61, 160); //A60(8-11) A60(8-11) A61(8-11) A61(8-11) A60(8-11) A60(8-11) A61(8-11) A61(8-11)
-                    const __m256i lhs_mat_23_61_sp1 = _mm256_shuffle_epi32(lhs_mat_23_61, 160); //A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11)
+                    const __m256i lhs_mat_01_61_sp1 = _mm256_shuffle_epi32(lhs_mat_01_61, 160); //A60(8-11) A60(8-11) A61(8-11) A61(8-11)
+                    const __m256i lhs_mat_23_61_sp1 = _mm256_shuffle_epi32(lhs_mat_23_61, 160); //A62(8-11) A63(8-11) A62(8-11) A63(8-11)
 
-                    const __m256i lhs_mat_01_70_sp1 = _mm256_shuffle_epi32(lhs_mat_01_70, 160); //A70(0-3) A70(0-3) A71(0-3) A71(0-3) A70(0-3) A70(0-3) A71(0-3) A71(0-3)
-                    const __m256i lhs_mat_23_70_sp1 = _mm256_shuffle_epi32(lhs_mat_23_70, 160); //A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3)
+                    const __m256i lhs_mat_01_70_sp1 = _mm256_shuffle_epi32(lhs_mat_01_70, 160); //A70(0-3) A70(0-3) A71(0-3) A71(0-3)
+                    const __m256i lhs_mat_23_70_sp1 = _mm256_shuffle_epi32(lhs_mat_23_70, 160); //A72(0-3) A73(0-3) A72(0-3) A73(0-3)
 
-                    const __m256i lhs_mat_01_71_sp1 = _mm256_shuffle_epi32(lhs_mat_01_71, 160); //A70(8-11) A70(8-11) A71(8-11) A71(8-11) A70(8-11) A70(8-11) A71(8-11) A71(8-11)
-                    const __m256i lhs_mat_23_71_sp1 = _mm256_shuffle_epi32(lhs_mat_23_71, 160); //A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11)
+                    const __m256i lhs_mat_01_71_sp1 = _mm256_shuffle_epi32(lhs_mat_01_71, 160); //A70(8-11) A70(8-11) A71(8-11) A71(8-11)
+                    const __m256i lhs_mat_23_71_sp1 = _mm256_shuffle_epi32(lhs_mat_23_71, 160); //A72(8-11) A73(8-11) A72(8-11) A73(8-11)
 
                     // Shuffle pattern two- left side input
-                    const __m256i lhs_mat_01_00_sp2 = _mm256_shuffle_epi32(lhs_mat_01_00, 245); //A00(4-7) A00(4-7) A01(4-7) A01(4-7) A00(4-7) A00(4-7) A01(4-7) A01(4-7)
-                    const __m256i lhs_mat_23_00_sp2 = _mm256_shuffle_epi32(lhs_mat_23_00, 245); //A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7)
+                    const __m256i lhs_mat_01_00_sp2 = _mm256_shuffle_epi32(lhs_mat_01_00, 245); //A00(4-7) A00(4-7) A01(4-7) A01(4-7)
+                    const __m256i lhs_mat_23_00_sp2 = _mm256_shuffle_epi32(lhs_mat_23_00, 245); //A02(4-7) A03(4-7) A02(4-7) A03(4-7)
 
-                    const __m256i lhs_mat_01_01_sp2 = _mm256_shuffle_epi32(lhs_mat_01_01, 245); //A00(12-15) A00(12-15) A01(12-15) A01(12-15) A00(12-15) A00(12-15) A01(12-15) A01(12-15)
-                    const __m256i lhs_mat_23_01_sp2 = _mm256_shuffle_epi32(lhs_mat_23_01, 245); //A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15)
+                    const __m256i lhs_mat_01_01_sp2 = _mm256_shuffle_epi32(lhs_mat_01_01, 245); //A00(12-15) A00(12-15) A01(12-15) A01(12-15)
+                    const __m256i lhs_mat_23_01_sp2 = _mm256_shuffle_epi32(lhs_mat_23_01, 245); //A02(12-15) A03(12-15) A02(12-15) A03(12-15)
 
-                    const __m256i lhs_mat_01_10_sp2 = _mm256_shuffle_epi32(lhs_mat_01_10, 245); //A10(4-7) A10(4-7) A11(4-7) A11(4-7) A10(4-7) A10(4-7) A11(4-7) A11(4-7)
-                    const __m256i lhs_mat_23_10_sp2 = _mm256_shuffle_epi32(lhs_mat_23_10, 245); //A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7)
+                    const __m256i lhs_mat_01_10_sp2 = _mm256_shuffle_epi32(lhs_mat_01_10, 245); //A10(4-7) A10(4-7) A11(4-7) A11(4-7)
+                    const __m256i lhs_mat_23_10_sp2 = _mm256_shuffle_epi32(lhs_mat_23_10, 245); //A12(4-7) A13(4-7) A12(4-7) A13(4-7)
 
-                    const __m256i lhs_mat_01_11_sp2 = _mm256_shuffle_epi32(lhs_mat_01_11, 245); //A10(12-15) A10(12-15) A11(12-15) A11(12-15) A10(12-15) A10(12-15) A11(12-15) A11(12-15)
-                    const __m256i lhs_mat_23_11_sp2 = _mm256_shuffle_epi32(lhs_mat_23_11, 245); //A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15)
+                    const __m256i lhs_mat_01_11_sp2 = _mm256_shuffle_epi32(lhs_mat_01_11, 245); //A10(12-15) A10(12-15) A11(12-15) A11(12-15)
+                    const __m256i lhs_mat_23_11_sp2 = _mm256_shuffle_epi32(lhs_mat_23_11, 245); //A12(12-15) A13(12-15) A12(12-15) A13(12-15)
 
-                    const __m256i lhs_mat_01_20_sp2 = _mm256_shuffle_epi32(lhs_mat_01_20, 245); //A20(4-7) A20(4-7) A21(4-7) A21(4-7) A20(4-7) A20(4-7) A21(4-7) A21(4-7)
-                    const __m256i lhs_mat_23_20_sp2 = _mm256_shuffle_epi32(lhs_mat_23_20, 245); //A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7)
+                    const __m256i lhs_mat_01_20_sp2 = _mm256_shuffle_epi32(lhs_mat_01_20, 245); //A20(4-7) A20(4-7) A21(4-7) A21(4-7)
+                    const __m256i lhs_mat_23_20_sp2 = _mm256_shuffle_epi32(lhs_mat_23_20, 245); //A22(4-7) A23(4-7) A22(4-7) A23(4-7)
 
-                    const __m256i lhs_mat_01_21_sp2 = _mm256_shuffle_epi32(lhs_mat_01_21, 245); //A20(12-15) A20(12-15) A21(12-15) A21(12-15) A20(12-15) A20(12-15) A21(12-15) A21(12-15)
-                    const __m256i lhs_mat_23_21_sp2 = _mm256_shuffle_epi32(lhs_mat_23_21, 245); //A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15)
+                    const __m256i lhs_mat_01_21_sp2 = _mm256_shuffle_epi32(lhs_mat_01_21, 245); //A20(12-15) A20(12-15) A21(12-15) A21(12-15)
+                    const __m256i lhs_mat_23_21_sp2 = _mm256_shuffle_epi32(lhs_mat_23_21, 245); //A22(12-15) A23(12-15) A22(12-15) A23(12-15)
 
-                    const __m256i lhs_mat_01_30_sp2 = _mm256_shuffle_epi32(lhs_mat_01_30, 245); //A30(4-7) A30(4-7) A31(4-7) A31(4-7) A30(4-7) A30(4-7) A31(4-7) A31(4-7)
-                    const __m256i lhs_mat_23_30_sp2 = _mm256_shuffle_epi32(lhs_mat_23_30, 245); //A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7)
+                    const __m256i lhs_mat_01_30_sp2 = _mm256_shuffle_epi32(lhs_mat_01_30, 245); //A30(4-7) A30(4-7) A31(4-7) A31(4-7)
+                    const __m256i lhs_mat_23_30_sp2 = _mm256_shuffle_epi32(lhs_mat_23_30, 245); //A32(4-7) A33(4-7) A32(4-7) A33(4-7)
 
-                    const __m256i lhs_mat_01_31_sp2 = _mm256_shuffle_epi32(lhs_mat_01_31, 245); //A30(12-15) A30(12-15) A31(12-15) A31(12-15) A30(12-15) A30(12-15) A31(12-15) A31(12-15)
-                    const __m256i lhs_mat_23_31_sp2 = _mm256_shuffle_epi32(lhs_mat_23_31, 245); //A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15)
+                    const __m256i lhs_mat_01_31_sp2 = _mm256_shuffle_epi32(lhs_mat_01_31, 245); //A30(12-15) A30(12-15) A31(12-15) A31(12-15)
+                    const __m256i lhs_mat_23_31_sp2 = _mm256_shuffle_epi32(lhs_mat_23_31, 245); //A32(12-15) A33(12-15) A32(12-15) A33(12-15)
 
-                    const __m256i lhs_mat_01_40_sp2 = _mm256_shuffle_epi32(lhs_mat_01_40, 245); //A40(4-7) A40(4-7) A41(4-7) A41(4-7) A40(4-7) A40(4-7) A41(4-7) A41(4-7)
-                    const __m256i lhs_mat_23_40_sp2 = _mm256_shuffle_epi32(lhs_mat_23_40, 245); //A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7)
+                    const __m256i lhs_mat_01_40_sp2 = _mm256_shuffle_epi32(lhs_mat_01_40, 245); //A40(4-7) A40(4-7) A41(4-7) A41(4-7)
+                    const __m256i lhs_mat_23_40_sp2 = _mm256_shuffle_epi32(lhs_mat_23_40, 245); //A42(4-7) A43(4-7) A42(4-7) A43(4-7)
 
-                    const __m256i lhs_mat_01_41_sp2 = _mm256_shuffle_epi32(lhs_mat_01_41, 245); //A40(12-15) A40(12-15) A41(12-15) A41(12-15) A40(12-15) A40(12-15) A41(12-15) A41(12-15)
-                    const __m256i lhs_mat_23_41_sp2 = _mm256_shuffle_epi32(lhs_mat_23_41, 245); //A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15)
+                    const __m256i lhs_mat_01_41_sp2 = _mm256_shuffle_epi32(lhs_mat_01_41, 245); //A40(12-15) A40(12-15) A41(12-15) A41(12-15)
+                    const __m256i lhs_mat_23_41_sp2 = _mm256_shuffle_epi32(lhs_mat_23_41, 245); //A42(12-15) A43(12-15) A42(12-15) A43(12-15)
 
-                    const __m256i lhs_mat_01_50_sp2 = _mm256_shuffle_epi32(lhs_mat_01_50, 245); //A50(4-7) A50(4-7) A51(4-7) A51(4-7) A50(4-7) A50(4-7) A51(4-7) A51(4-7)
-                    const __m256i lhs_mat_23_50_sp2 = _mm256_shuffle_epi32(lhs_mat_23_50, 245); //A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7)
+                    const __m256i lhs_mat_01_50_sp2 = _mm256_shuffle_epi32(lhs_mat_01_50, 245); //A50(4-7) A50(4-7) A51(4-7) A51(4-7)
+                    const __m256i lhs_mat_23_50_sp2 = _mm256_shuffle_epi32(lhs_mat_23_50, 245); //A52(4-7) A53(4-7) A52(4-7) A53(4-7)
 
-                    const __m256i lhs_mat_01_51_sp2 = _mm256_shuffle_epi32(lhs_mat_01_51, 245); //A50(12-15) A50(12-15) A51(12-15) A51(12-15) A50(12-15) A50(12-15) A51(12-15) A51(12-15)
-                    const __m256i lhs_mat_23_51_sp2 = _mm256_shuffle_epi32(lhs_mat_23_51, 245); //A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15)
+                    const __m256i lhs_mat_01_51_sp2 = _mm256_shuffle_epi32(lhs_mat_01_51, 245); //A50(12-15) A50(12-15) A51(12-15) A51(12-15)
+                    const __m256i lhs_mat_23_51_sp2 = _mm256_shuffle_epi32(lhs_mat_23_51, 245); //A52(12-15) A53(12-15) A52(12-15) A53(12-15)
 
-                    const __m256i lhs_mat_01_60_sp2 = _mm256_shuffle_epi32(lhs_mat_01_60, 245); //A60(4-7) A60(4-7) A61(4-7) A61(4-7) A60(4-7) A60(4-7) A61(4-7) A61(4-7)
-                    const __m256i lhs_mat_23_60_sp2 = _mm256_shuffle_epi32(lhs_mat_23_60, 245); //A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7)
+                    const __m256i lhs_mat_01_60_sp2 = _mm256_shuffle_epi32(lhs_mat_01_60, 245); //A60(4-7) A60(4-7) A61(4-7) A61(4-7)
+                    const __m256i lhs_mat_23_60_sp2 = _mm256_shuffle_epi32(lhs_mat_23_60, 245); //A62(4-7) A63(4-7) A62(4-7) A63(4-7)
 
-                    const __m256i lhs_mat_01_61_sp2 = _mm256_shuffle_epi32(lhs_mat_01_61, 245); //A60(12-15) A60(12-15) A61(12-15) A61(12-15) A60(12-15) A60(12-15) A61(12-15) A61(12-15)
-                    const __m256i lhs_mat_23_61_sp2 = _mm256_shuffle_epi32(lhs_mat_23_61, 245); //A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15)
+                    const __m256i lhs_mat_01_61_sp2 = _mm256_shuffle_epi32(lhs_mat_01_61, 245); //A60(12-15) A60(12-15) A61(12-15) A61(12-15)
+                    const __m256i lhs_mat_23_61_sp2 = _mm256_shuffle_epi32(lhs_mat_23_61, 245); //A62(12-15) A63(12-15) A62(12-15) A63(12-15)
 
-                    const __m256i lhs_mat_01_70_sp2 = _mm256_shuffle_epi32(lhs_mat_01_70, 245); //A70(4-7) A70(4-7) A71(4-7) A71(4-7) A70(4-7) A70(4-7) A71(4-7) A71(4-7)
-                    const __m256i lhs_mat_23_70_sp2 = _mm256_shuffle_epi32(lhs_mat_23_70, 245); //A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7)
+                    const __m256i lhs_mat_01_70_sp2 = _mm256_shuffle_epi32(lhs_mat_01_70, 245); //A70(4-7) A70(4-7) A71(4-7) A71(4-7)
+                    const __m256i lhs_mat_23_70_sp2 = _mm256_shuffle_epi32(lhs_mat_23_70, 245); //A72(4-7) A73(4-7) A72(4-7) A73(4-7)
 
-                    const __m256i lhs_mat_01_71_sp2 = _mm256_shuffle_epi32(lhs_mat_01_71, 245); //A70(12-15) A70(12-15) A71(12-15) A71(12-15) A70(12-15) A70(12-15) A71(12-15) A71(12-15)
-                    const __m256i lhs_mat_23_71_sp2 = _mm256_shuffle_epi32(lhs_mat_23_71, 245); //A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15)
+                    const __m256i lhs_mat_01_71_sp2 = _mm256_shuffle_epi32(lhs_mat_01_71, 245); //A70(12-15) A70(12-15) A71(12-15) A71(12-15)
+                    const __m256i lhs_mat_23_71_sp2 = _mm256_shuffle_epi32(lhs_mat_23_71, 245); //A72(12-15) A73(12-15) A72(12-15) A73(12-15)
 
                     // Shuffle pattern one - left side input
-                    const __m256i lhs_mat_s_01_00_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_00, 160); //A00(0-3) A00(0-3) A01(0-3) A01(0-3) A00(0-3) A00(0-3) A01(0-3) A01(0-3)
-                    const __m256i lhs_mat_s_23_00_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_00, 160); //A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3) A02(0-3) A03(0-3)
+                    const __m256i lhs_mat_s_01_00_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_00, 160); //A00(0-3) A00(0-3) A01(0-3) A01(0-3)
+                    const __m256i lhs_mat_s_23_00_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_00, 160); //A02(0-3) A03(0-3) A02(0-3) A03(0-3)
 
-                    const __m256i lhs_mat_s_01_01_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_01, 160); //A00(8-11) A00(8-11) A01(8-11) A01(8-11) A00(8-11) A00(8-11) A01(8-11) A01(8-11)
-                    const __m256i lhs_mat_s_23_01_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_01, 160); //A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11) A02(8-11) A03(8-11)
+                    const __m256i lhs_mat_s_01_01_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_01, 160); //A00(8-11) A00(8-11) A01(8-11) A01(8-11)
+                    const __m256i lhs_mat_s_23_01_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_01, 160); //A02(8-11) A03(8-11) A02(8-11) A03(8-11)
 
-                    const __m256i lhs_mat_s_01_10_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_10, 160); //A10(0-3) A10(0-3) A11(0-3) A11(0-3) A10(0-3) A10(0-3) A11(0-3) A11(0-3)
-                    const __m256i lhs_mat_s_23_10_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_10, 160); //A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3) A12(0-3) A13(0-3)
+                    const __m256i lhs_mat_s_01_10_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_10, 160); //A10(0-3) A10(0-3) A11(0-3) A11(0-3)
+                    const __m256i lhs_mat_s_23_10_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_10, 160); //A12(0-3) A13(0-3) A12(0-3) A13(0-3)
 
-                    const __m256i lhs_mat_s_01_11_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_11, 160); //A10(8-11) A10(8-11) A11(8-11) A11(8-11) A10(8-11) A10(8-11) A11(8-11) A11(8-11)
-                    const __m256i lhs_mat_s_23_11_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_11, 160); //A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11) A12(8-11) A13(8-11)
+                    const __m256i lhs_mat_s_01_11_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_11, 160); //A10(8-11) A10(8-11) A11(8-11) A11(8-11)
+                    const __m256i lhs_mat_s_23_11_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_11, 160); //A12(8-11) A13(8-11) A12(8-11) A13(8-11)
 
-                    const __m256i lhs_mat_s_01_20_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_20, 160); //A20(0-3) A20(0-3) A21(0-3) A21(0-3) A20(0-3) A20(0-3) A21(0-3) A21(0-3)
-                    const __m256i lhs_mat_s_23_20_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_20, 160); //A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3) A22(0-3) A23(0-3)
+                    const __m256i lhs_mat_s_01_20_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_20, 160); //A20(0-3) A20(0-3) A21(0-3) A21(0-3)
+                    const __m256i lhs_mat_s_23_20_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_20, 160); //A22(0-3) A23(0-3) A22(0-3) A23(0-3)
 
-                    const __m256i lhs_mat_s_01_21_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_21, 160); //A20(8-11) A20(8-11) A21(8-11) A21(8-11) A20(8-11) A20(8-11) A21(8-11) A21(8-11)
-                    const __m256i lhs_mat_s_23_21_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_21, 160); //A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11) A22(8-11) A23(8-11)
+                    const __m256i lhs_mat_s_01_21_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_21, 160); //A20(8-11) A20(8-11) A21(8-11) A21(8-11)
+                    const __m256i lhs_mat_s_23_21_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_21, 160); //A22(8-11) A23(8-11) A22(8-11) A23(8-11)
 
-                    const __m256i lhs_mat_s_01_30_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_30, 160); //A30(0-3) A30(0-3) A31(0-3) A31(0-3) A30(0-3) A30(0-3) A31(0-3) A31(0-3)
-                    const __m256i lhs_mat_s_23_30_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_30, 160); //A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3) A32(0-3) A33(0-3)
+                    const __m256i lhs_mat_s_01_30_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_30, 160); //A30(0-3) A30(0-3) A31(0-3) A31(0-3)
+                    const __m256i lhs_mat_s_23_30_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_30, 160); //A32(0-3) A33(0-3) A32(0-3) A33(0-3)
 
-                    const __m256i lhs_mat_s_01_31_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_31, 160); //A30(8-11) A30(8-11) A31(8-11) A31(8-11) A30(8-11) A30(8-11) A31(8-11) A31(8-11)
-                    const __m256i lhs_mat_s_23_31_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_31, 160); //A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11) A32(8-11) A33(8-11)
+                    const __m256i lhs_mat_s_01_31_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_31, 160); //A30(8-11) A30(8-11) A31(8-11) A31(8-11)
+                    const __m256i lhs_mat_s_23_31_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_31, 160); //A32(8-11) A33(8-11) A32(8-11) A33(8-11)
 
-                    const __m256i lhs_mat_s_01_40_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_40, 160); //A40(0-3) A40(0-3) A41(0-3) A41(0-3) A40(0-3) A40(0-3) A41(0-3) A41(0-3)
-                    const __m256i lhs_mat_s_23_40_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_40, 160); //A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3) A42(0-3) A43(0-3)
+                    const __m256i lhs_mat_s_01_40_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_40, 160); //A40(0-3) A40(0-3) A41(0-3) A41(0-3)
+                    const __m256i lhs_mat_s_23_40_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_40, 160); //A42(0-3) A43(0-3) A42(0-3) A43(0-3)
 
-                    const __m256i lhs_mat_s_01_41_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_41, 160); //A40(8-11) A40(8-11) A41(8-11) A41(8-11) A40(8-11) A40(8-11) A41(8-11) A41(8-11)
-                    const __m256i lhs_mat_s_23_41_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_41, 160); //A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11) A42(8-11) A43(8-11)
+                    const __m256i lhs_mat_s_01_41_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_41, 160); //A40(8-11) A40(8-11) A41(8-11) A41(8-11)
+                    const __m256i lhs_mat_s_23_41_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_41, 160); //A42(8-11) A43(8-11) A42(8-11) A43(8-11)
 
-                    const __m256i lhs_mat_s_01_50_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_50, 160); //A50(0-3) A50(0-3) A51(0-3) A51(0-3) A50(0-3) A50(0-3) A51(0-3) A51(0-3)
-                    const __m256i lhs_mat_s_23_50_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_50, 160); //A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3) A52(0-3) A53(0-3)
+                    const __m256i lhs_mat_s_01_50_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_50, 160); //A50(0-3) A50(0-3) A51(0-3) A51(0-3)
+                    const __m256i lhs_mat_s_23_50_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_50, 160); //A52(0-3) A53(0-3) A52(0-3) A53(0-3)
 
-                    const __m256i lhs_mat_s_01_51_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_51, 160); //A50(8-11) A50(8-11) A51(8-11) A51(8-11) A50(8-11) A50(8-11) A51(8-11) A51(8-11)
-                    const __m256i lhs_mat_s_23_51_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_51, 160); //A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11) A52(8-11) A53(8-11)
+                    const __m256i lhs_mat_s_01_51_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_51, 160); //A50(8-11) A50(8-11) A51(8-11) A51(8-11)
+                    const __m256i lhs_mat_s_23_51_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_51, 160); //A52(8-11) A53(8-11) A52(8-11) A53(8-11)
 
-                    const __m256i lhs_mat_s_01_60_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_60, 160); //A60(0-3) A60(0-3) A61(0-3) A61(0-3) A60(0-3) A60(0-3) A61(0-3) A61(0-3)
-                    const __m256i lhs_mat_s_23_60_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_60, 160); //A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3) A62(0-3) A63(0-3)
+                    const __m256i lhs_mat_s_01_60_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_60, 160); //A60(0-3) A60(0-3) A61(0-3) A61(0-3)
+                    const __m256i lhs_mat_s_23_60_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_60, 160); //A62(0-3) A63(0-3) A62(0-3) A63(0-3)
 
-                    const __m256i lhs_mat_s_01_61_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_61, 160); //A60(8-11) A60(8-11) A61(8-11) A61(8-11) A60(8-11) A60(8-11) A61(8-11) A61(8-11)
-                    const __m256i lhs_mat_s_23_61_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_61, 160); //A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11) A62(8-11) A63(8-11)
+                    const __m256i lhs_mat_s_01_61_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_61, 160); //A60(8-11) A60(8-11) A61(8-11) A61(8-11)
+                    const __m256i lhs_mat_s_23_61_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_61, 160); //A62(8-11) A63(8-11) A62(8-11) A63(8-11)
 
-                    const __m256i lhs_mat_s_01_70_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_70, 160); //A70(0-3) A70(0-3) A71(0-3) A71(0-3) A70(0-3) A70(0-3) A71(0-3) A71(0-3)
-                    const __m256i lhs_mat_s_23_70_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_70, 160); //A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3) A72(0-3) A73(0-3)
+                    const __m256i lhs_mat_s_01_70_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_70, 160); //A70(0-3) A70(0-3) A71(0-3) A71(0-3)
+                    const __m256i lhs_mat_s_23_70_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_70, 160); //A72(0-3) A73(0-3) A72(0-3) A73(0-3)
 
-                    const __m256i lhs_mat_s_01_71_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_71, 160); //A70(8-11) A70(8-11) A71(8-11) A71(8-11) A70(8-11) A70(8-11) A71(8-11) A71(8-11)
-                    const __m256i lhs_mat_s_23_71_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_71, 160); //A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11) A72(8-11) A73(8-11)
+                    const __m256i lhs_mat_s_01_71_sp1 = _mm256_shuffle_epi32(lhs_mat_s_01_71, 160); //A70(8-11) A70(8-11) A71(8-11) A71(8-11)
+                    const __m256i lhs_mat_s_23_71_sp1 = _mm256_shuffle_epi32(lhs_mat_s_23_71, 160); //A72(8-11) A73(8-11) A72(8-11) A73(8-11)
 
                     // Shuffle pattern two- left side input
-                    const __m256i lhs_mat_s_01_00_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_00, 245); //A00(4-7) A00(4-7) A01(4-7) A01(4-7) A00(4-7) A00(4-7) A01(4-7) A01(4-7)
-                    const __m256i lhs_mat_s_23_00_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_00, 245); //A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7) A02(4-7) A03(4-7)
+                    const __m256i lhs_mat_s_01_00_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_00, 245); //A00(4-7) A00(4-7) A01(4-7) A01(4-7)
+                    const __m256i lhs_mat_s_23_00_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_00, 245); //A02(4-7) A03(4-7) A02(4-7) A03(4-7)
 
-                    const __m256i lhs_mat_s_01_01_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_01, 245); //A00(12-15) A00(12-15) A01(12-15) A01(12-15) A00(12-15) A00(12-15) A01(12-15) A01(12-15)
-                    const __m256i lhs_mat_s_23_01_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_01, 245); //A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15) A02(12-15) A03(12-15)
+                    const __m256i lhs_mat_s_01_01_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_01, 245); //A00(12-15) A00(12-15) A01(12-15) A01(12-15)
+                    const __m256i lhs_mat_s_23_01_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_01, 245); //A02(12-15) A03(12-15) A02(12-15) A03(12-15)
 
-                    const __m256i lhs_mat_s_01_10_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_10, 245); //A10(4-7) A10(4-7) A11(4-7) A11(4-7) A10(4-7) A10(4-7) A11(4-7) A11(4-7)
-                    const __m256i lhs_mat_s_23_10_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_10, 245); //A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7) A12(4-7) A13(4-7)
+                    const __m256i lhs_mat_s_01_10_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_10, 245); //A10(4-7) A10(4-7) A11(4-7) A11(4-7)
+                    const __m256i lhs_mat_s_23_10_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_10, 245); //A12(4-7) A13(4-7) A12(4-7) A13(4-7)
 
-                    const __m256i lhs_mat_s_01_11_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_11, 245); //A10(12-15) A10(12-15) A11(12-15) A11(12-15) A10(12-15) A10(12-15) A11(12-15) A11(12-15)
-                    const __m256i lhs_mat_s_23_11_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_11, 245); //A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15) A12(12-15) A13(12-15)
+                    const __m256i lhs_mat_s_01_11_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_11, 245); //A10(12-15) A10(12-15) A11(12-15) A11(12-15)
+                    const __m256i lhs_mat_s_23_11_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_11, 245); //A12(12-15) A13(12-15) A12(12-15) A13(12-15)
 
-                    const __m256i lhs_mat_s_01_20_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_20, 245); //A20(4-7) A20(4-7) A21(4-7) A21(4-7) A20(4-7) A20(4-7) A21(4-7) A21(4-7)
-                    const __m256i lhs_mat_s_23_20_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_20, 245); //A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7) A22(4-7) A23(4-7)
+                    const __m256i lhs_mat_s_01_20_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_20, 245); //A20(4-7) A20(4-7) A21(4-7) A21(4-7)
+                    const __m256i lhs_mat_s_23_20_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_20, 245); //A22(4-7) A23(4-7) A22(4-7) A23(4-7)
 
-                    const __m256i lhs_mat_s_01_21_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_21, 245); //A20(12-15) A20(12-15) A21(12-15) A21(12-15) A20(12-15) A20(12-15) A21(12-15) A21(12-15)
-                    const __m256i lhs_mat_s_23_21_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_21, 245); //A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15) A22(12-15) A23(12-15)
+                    const __m256i lhs_mat_s_01_21_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_21, 245); //A20(12-15) A20(12-15) A21(12-15) A21(12-15)
+                    const __m256i lhs_mat_s_23_21_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_21, 245); //A22(12-15) A23(12-15) A22(12-15) A23(12-15)
 
-                    const __m256i lhs_mat_s_01_30_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_30, 245); //A30(4-7) A30(4-7) A31(4-7) A31(4-7) A30(4-7) A30(4-7) A31(4-7) A31(4-7)
-                    const __m256i lhs_mat_s_23_30_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_30, 245); //A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7) A32(4-7) A33(4-7)
+                    const __m256i lhs_mat_s_01_30_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_30, 245); //A30(4-7) A30(4-7) A31(4-7) A31(4-7)
+                    const __m256i lhs_mat_s_23_30_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_30, 245); //A32(4-7) A33(4-7) A32(4-7) A33(4-7)
 
-                    const __m256i lhs_mat_s_01_31_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_31, 245); //A30(12-15) A30(12-15) A31(12-15) A31(12-15) A30(12-15) A30(12-15) A31(12-15) A31(12-15)
-                    const __m256i lhs_mat_s_23_31_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_31, 245); //A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15) A32(12-15) A33(12-15)
+                    const __m256i lhs_mat_s_01_31_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_31, 245); //A30(12-15) A30(12-15) A31(12-15) A31(12-15)
+                    const __m256i lhs_mat_s_23_31_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_31, 245); //A32(12-15) A33(12-15) A32(12-15) A33(12-15)
 
-                    const __m256i lhs_mat_s_01_40_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_40, 245); //A40(4-7) A40(4-7) A41(4-7) A41(4-7) A40(4-7) A40(4-7) A41(4-7) A41(4-7)
-                    const __m256i lhs_mat_s_23_40_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_40, 245); //A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7) A42(4-7) A43(4-7)
+                    const __m256i lhs_mat_s_01_40_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_40, 245); //A40(4-7) A40(4-7) A41(4-7) A41(4-7)
+                    const __m256i lhs_mat_s_23_40_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_40, 245); //A42(4-7) A43(4-7) A42(4-7) A43(4-7)
 
-                    const __m256i lhs_mat_s_01_41_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_41, 245); //A40(12-15) A40(12-15) A41(12-15) A41(12-15) A40(12-15) A40(12-15) A41(12-15) A41(12-15)
-                    const __m256i lhs_mat_s_23_41_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_41, 245); //A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15) A42(12-15) A43(12-15)
+                    const __m256i lhs_mat_s_01_41_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_41, 245); //A40(12-15) A40(12-15) A41(12-15) A41(12-15)
+                    const __m256i lhs_mat_s_23_41_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_41, 245); //A42(12-15) A43(12-15) A42(12-15) A43(12-15)
 
-                    const __m256i lhs_mat_s_01_50_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_50, 245); //A50(4-7) A50(4-7) A51(4-7) A51(4-7) A50(4-7) A50(4-7) A51(4-7) A51(4-7)
-                    const __m256i lhs_mat_s_23_50_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_50, 245); //A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7) A52(4-7) A53(4-7)
+                    const __m256i lhs_mat_s_01_50_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_50, 245); //A50(4-7) A50(4-7) A51(4-7) A51(4-7)
+                    const __m256i lhs_mat_s_23_50_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_50, 245); //A52(4-7) A53(4-7) A52(4-7) A53(4-7)
 
-                    const __m256i lhs_mat_s_01_51_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_51, 245); //A50(12-15) A50(12-15) A51(12-15) A51(12-15) A50(12-15) A50(12-15) A51(12-15) A51(12-15)
-                    const __m256i lhs_mat_s_23_51_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_51, 245); //A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15) A52(12-15) A53(12-15)
+                    const __m256i lhs_mat_s_01_51_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_51, 245); //A50(12-15) A50(12-15) A51(12-15) A51(12-15)
+                    const __m256i lhs_mat_s_23_51_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_51, 245); //A52(12-15) A53(12-15) A52(12-15) A53(12-15)
 
-                    const __m256i lhs_mat_s_01_60_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_60, 245); //A60(4-7) A60(4-7) A61(4-7) A61(4-7) A60(4-7) A60(4-7) A61(4-7) A61(4-7)
-                    const __m256i lhs_mat_s_23_60_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_60, 245); //A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7) A62(4-7) A63(4-7)
+                    const __m256i lhs_mat_s_01_60_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_60, 245); //A60(4-7) A60(4-7) A61(4-7) A61(4-7)
+                    const __m256i lhs_mat_s_23_60_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_60, 245); //A62(4-7) A63(4-7) A62(4-7) A63(4-7)
 
-                    const __m256i lhs_mat_s_01_61_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_61, 245); //A60(12-15) A60(12-15) A61(12-15) A61(12-15) A60(12-15) A60(12-15) A61(12-15) A61(12-15)
-                    const __m256i lhs_mat_s_23_61_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_61, 245); //A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15) A62(12-15) A63(12-15)
+                    const __m256i lhs_mat_s_01_61_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_61, 245); //A60(12-15) A60(12-15) A61(12-15) A61(12-15)
+                    const __m256i lhs_mat_s_23_61_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_61, 245); //A62(12-15) A63(12-15) A62(12-15) A63(12-15)
 
-                    const __m256i lhs_mat_s_01_70_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_70, 245); //A70(4-7) A70(4-7) A71(4-7) A71(4-7) A70(4-7) A70(4-7) A71(4-7) A71(4-7)
-                    const __m256i lhs_mat_s_23_70_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_70, 245); //A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7) A72(4-7) A73(4-7)
+                    const __m256i lhs_mat_s_01_70_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_70, 245); //A70(4-7) A70(4-7) A71(4-7) A71(4-7)
+                    const __m256i lhs_mat_s_23_70_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_70, 245); //A72(4-7) A73(4-7) A72(4-7) A73(4-7)
 
-                    const __m256i lhs_mat_s_01_71_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_71, 245); //A70(12-15) A70(12-15) A71(12-15) A71(12-15) A70(12-15) A70(12-15) A71(12-15) A71(12-15)
-                    const __m256i lhs_mat_s_23_71_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_71, 245); //A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15) A72(12-15) A73(12-15)
+                    const __m256i lhs_mat_s_01_71_sp2 = _mm256_shuffle_epi32(lhs_mat_s_01_71, 245); //A70(12-15) A70(12-15) A71(12-15) A71(12-15)
+                    const __m256i lhs_mat_s_23_71_sp2 = _mm256_shuffle_epi32(lhs_mat_s_23_71, 245); //A72(12-15) A73(12-15) A72(12-15) A73(12-15)
 
                     // The values arranged in shuffle patterns are operated with dot product operation within 16 bit lane i.e corresponding bytes and multiplied and added into 16 bit integers within 16 bit lane
                     __m256i iacc_mat_00_0_sp1 = _mm256_add_epi16(_mm256_sub_epi16(_mm256_maddubs_epi16(rhs_mat_0145_00_sp1, lhs_mat_01_00_sp1), lhs_mat_s_01_00_sp1), _mm256_sub_epi16(_mm256_maddubs_epi16(rhs_mat_0145_01_sp1, lhs_mat_01_01_sp1), lhs_mat_s_01_01_sp1));
