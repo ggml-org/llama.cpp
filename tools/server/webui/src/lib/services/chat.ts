@@ -160,13 +160,6 @@ export class ChatService {
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
-							// Log final separated content
-							if (thinkContent.trim()) {
-								console.log('🤔 Think content:', thinkContent.trim());
-							}
-							if (regularContent.trim()) {
-								console.log('💬 Regular response:', regularContent.trim());
-							}
 							onComplete?.(fullResponse);
 							return;
 						}
@@ -362,9 +355,7 @@ export class ChatService {
 			if ('id' in msg && 'convId' in msg && 'timestamp' in msg) {
 				// This is a DatabaseMessage, convert it
 				const dbMsg = msg as DatabaseMessage & { extra?: DatabaseMessageExtra[] };
-				console.log('Converting message to API format:', { role: dbMsg.role, content: dbMsg.content, extra: dbMsg.extra });
 				const converted = ChatService.convertMessageToChatServiceData(dbMsg);
-				console.log('Converted message:', converted);
 				return converted;
 			} else {
 				// This is already an ApiChatMessageData object

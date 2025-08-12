@@ -332,12 +332,6 @@ class ChatStore {
 			try {
 				const partialThinking = extractPartialThinking(this.currentResponse);
 				
-				console.log('Saving partial response:', {
-					messageId: lastMessage.id,
-					currentResponse: this.currentResponse,
-					remainingContent: partialThinking.remainingContent,
-					thinking: partialThinking.thinking
-				});
 				
 				const updateData: { content: string; thinking?: string } = {
 					content: partialThinking.remainingContent || this.currentResponse
@@ -348,16 +342,14 @@ class ChatStore {
 				}
 				
 				await DatabaseService.updateMessage(lastMessage.id, updateData);
-				console.log('Successfully saved partial response to database');
 
 				lastMessage.content = partialThinking.remainingContent || this.currentResponse;
 			} catch (error) {
-				console.error('Failed to save partial response:', error);
-
 				lastMessage.content = this.currentResponse;
+				console.error('Failed to save partial response:', error);
 			}
 		} else {
-			console.log('No assistant message found to save partial response to');
+			console.error('Last message is not an assistant message');
 		}
 	}
 

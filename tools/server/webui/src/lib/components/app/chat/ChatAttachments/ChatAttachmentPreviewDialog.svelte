@@ -65,8 +65,7 @@
 	let isPdf = $derived(displayType === PdfMimeType.PDF);
 	let isAudio = $derived(getFileTypeCategory(displayType) === FileTypeCategory.AUDIO || displayType === 'audio');
 
-	// PDF preview state
-	let pdfViewMode = $state<'text' | 'pages'>('pages'); // Default to pages view
+	let pdfViewMode = $state<'text' | 'pages'>('pages');
 	let pdfImages = $state<string[]>([]);
 	let pdfImagesLoading = $state(false);
 	let pdfImagesError = $state<string | null>(null);
@@ -91,8 +90,6 @@
 	async function loadPdfImages() {
 		if (!isPdf || pdfImages.length > 0 || pdfImagesLoading) return;
 		
-		if (import.meta.env.DEV) console.log('Loading PDF images...', { isPdf, attachment, uploadedFile });
-		
 		pdfImagesLoading = true;
 		pdfImagesError = null;
 		
@@ -100,14 +97,11 @@
 			let file: File | null = null;
 			
 			if (uploadedFile?.file) {
-				if (import.meta.env.DEV) console.log('Using uploaded file:', uploadedFile.file);
 				file = uploadedFile.file;
 			} else if (attachment?.type === 'pdfFile') {
-				if (import.meta.env.DEV) console.log('Processing stored PDF attachment:', attachment);
 				
 				// Check if we have pre-processed images
 				if ((attachment as any).images && Array.isArray((attachment as any).images)) {
-					if (import.meta.env.DEV) console.log('Using pre-processed PDF images:', (attachment as any).images.length);
 					pdfImages = (attachment as any).images;
 					return;
 				}
@@ -122,28 +116,22 @@
 					}
 					const byteArray = new Uint8Array(byteNumbers);
 					file = new File([byteArray], displayName, { type: PdfMimeType.PDF });
-					if (import.meta.env.DEV) console.log('Created file from base64 data, size:', file.size);
 				}
 			}
 			
 			if (file) {
-				if (import.meta.env.DEV) console.log('Converting PDF to images...');
 				const images = await convertPDFToImage(file);
-				if (import.meta.env.DEV) console.log('PDF conversion successful, got', images.length, 'images');
 				pdfImages = images;
 			} else {
 				throw new Error('No PDF file available for conversion');
 			}
 		} catch (error) {
-			if (import.meta.env.DEV) console.error('Failed to convert PDF to images:', error);
 			pdfImagesError = error instanceof Error ? error.message : 'Failed to load PDF images';
-			// Don't automatically fallback to text view, let user choose
 		} finally {
 			pdfImagesLoading = false;
 		}
 	}
 
-	// Load PDF images when dialog opens and it's a PDF
 	$effect(() => {
 		if (open && isPdf && pdfViewMode === 'pages') {
 			loadPdfImages();
