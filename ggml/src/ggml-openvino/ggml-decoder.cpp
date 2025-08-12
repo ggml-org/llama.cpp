@@ -76,13 +76,15 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
     add_extra_inputs();
 }
 
-GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph) {
+GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
+                             std::map<std::string, std::shared_ptr<ov::Node>>& model_weights) {
     if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
         std::string filename = "cgraph.txt";
         dump_cgraph(cgraph, filename);
     }
 
     m_cgraph = cgraph;
+    m_model_weights = model_weights;
     for (int node_n = 0; node_n < cgraph->n_nodes; node_n++) {
         auto* cur_node = cgraph->nodes[node_n];
         if (cur_node->op == GGML_OP_NONE) {
@@ -123,10 +125,12 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
 
         // Add model inputs and weights constants, if called for the whole graph
         if (naive) {
-            auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(src));
-            param_node->set_friendly_name(src_name);
-            param_node->output(0).get_tensor().set_names({src_name});
-            m_model_inputs[src_name] = param_node;
+            if (m_model_weights.find(src_name) == m_model_weights.end()) {
+                auto param_node = std::make_shared<ov::op::v0::Parameter>(get_ov_type(src), get_graph_input_shape(src));
+                param_node->set_friendly_name(src_name);
+                param_node->output(0).get_tensor().set_names({src_name});
+                m_model_inputs[src_name] = param_node;
+            }
 
         } else if (!m_node && !src->view_src) {
             ggml_backend_buffer* buffer = src->buffer;
@@ -381,7 +385,7 @@ std::map<std::string, std::shared_ptr<ov::Node>> GgmlOvDecoder::create_weight_no
             std::string src_name(src->name);
             if (!src->view_src) {
                 ggml_backend_buffer* buffer = src->buffer;
-                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+                if (buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS || ggml_is_quantized(src->type)) {
                     bool should_create = false;
                     {
                         std::lock_guard<std::mutex> lock(weights_mutex);
