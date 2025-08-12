@@ -125,8 +125,6 @@ struct webgpu_context_struct {
 
     std::recursive_mutex mutex;
 
-    bool device_init = false;
-
     webgpu_buf_pool param_buf_pool;
     webgpu_buf_pool set_rows_error_buf_pool;
 
@@ -454,6 +452,7 @@ static wgpu::Buffer ggml_webgpu_tensor_buf(const ggml_tensor * tensor) {
     ggml_backend_webgpu_buffer_context * ctx = (ggml_backend_webgpu_buffer_context *) tensor->buffer->context;
     return ctx->buffer;
 }
+
 static size_t ggml_webgpu_tensor_misalignment(webgpu_context & ctx, ggml_tensor * t) {
     size_t offset = ggml_webgpu_tensor_offset(t);
     return offset & (ctx->limits.minStorageBufferOffsetAlignment - 1);
@@ -911,7 +910,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_pipeline_info pipeline_infos[5] = {
+    webgpu_pipeline_info pipeline_infos[6] = {
         { .name        = "mul_mat_f32_f32",
          .shader_code = wgsl_mul_mat_f32_f32,
          .src0_type   = GGML_TYPE_F32,
@@ -928,10 +927,14 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
          .shader_code = wgsl_mul_mat_f16_f32,
          .src0_type   = GGML_TYPE_F16,
          .src1_type   = GGML_TYPE_F32 },
-         { .name = "mul_mat_q4_0_f32",
-           .shader_code = wgsl_mul_mat_q4_0_f32,
-           .src0_type = GGML_TYPE_Q4_0,
-           .src1_type = GGML_TYPE_F32 }
+        { .name        = "mul_mat_q4_0_f32",
+         .shader_code = wgsl_mul_mat_q4_0_f32,
+         .src0_type   = GGML_TYPE_Q4_0,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_q4_0_f16",
+         .shader_code = wgsl_mul_mat_q4_0_f16,
+         .src0_type   = GGML_TYPE_Q4_0,
+         .src1_type   = GGML_TYPE_F16 }
     };
 
     for (auto & pipeline_info : pipeline_infos) {
@@ -964,79 +967,6 @@ static ggml_backend_t ggml_backend_webgpu_device_init(ggml_backend_dev_t dev, co
 
     ggml_backend_webgpu_device_context * dev_ctx    = static_cast<ggml_backend_webgpu_device_context *>(dev->context);
     webgpu_context                       webgpu_ctx = dev_ctx->webgpu_ctx;
-
-    // Multiple threads may try to initialize the device
-    std::lock_guard<std::recursive_mutex> lock(webgpu_ctx->mutex);
-    if (!webgpu_ctx->device_init) {
-        // Initialize device
-        std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16,
-                                                             wgpu::FeatureName::ImplicitDeviceSynchronization };
-        wgpu::DeviceDescriptor         dev_desc;
-        dev_desc.requiredLimits       = &webgpu_ctx->limits;
-        dev_desc.requiredFeatures     = required_features.data();
-        dev_desc.requiredFeatureCount = required_features.size();
-        dev_desc.SetDeviceLostCallback(
-            wgpu::CallbackMode::AllowSpontaneous,
-            [](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
-                GGML_UNUSED(device);
-                GGML_LOG_ERROR(
-                    "ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
-            });
-        dev_desc.SetUncapturedErrorCallback(
-            [](const wgpu::Device & device, wgpu::ErrorType reason, wgpu::StringView message) {
-                GGML_UNUSED(device);
-                GGML_LOG_ERROR(
-                    "ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
-            });
-        webgpu_ctx->instance.WaitAny(
-            webgpu_ctx->adapter.RequestDevice(
-                &dev_desc,
-                wgpu::CallbackMode::AllowSpontaneous,
-                [webgpu_ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
-                    if (status != wgpu::RequestDeviceStatus::Success) {
-                        GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", message.data);
-                        return;
-                    }
-                    webgpu_ctx->device = std::move(device);
-                }),
-            UINT64_MAX);
-        GGML_ASSERT(webgpu_ctx->device != nullptr);
-
-        // Initialize (compute) queue
-        webgpu_ctx->queue = webgpu_ctx->device.GetQueue();
-
-        // Create buffer pool for shader parameters
-        webgpu_ctx->param_buf_pool.init(webgpu_ctx->device,
-                                        WEBGPU_NUM_PARAM_BUFS,
-                                        WEBGPU_PARAMS_BUF_SIZE_BYTES,
-                                        wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
-                                        wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite);
-        webgpu_ctx->set_rows_error_buf_pool.init(webgpu_ctx->device,
-                                                 WEBGPU_NUM_SET_ROWS_ERROR_BUFS,
-                                                 WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES,
-                                                 wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage,
-                                                 wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead);
-
-        ggml_webgpu_init_memset_pipeline(webgpu_ctx);
-        ggml_webgpu_init_mul_mat_pipeline(webgpu_ctx);
-        ggml_webgpu_init_set_rows_pipeline(webgpu_ctx);
-        ggml_webgpu_init_cpy_pipeline(webgpu_ctx);
-
-#ifdef GGML_WEBGPU_DEBUG
-        // Initialize debug buffers
-        ggml_webgpu_create_buffer(webgpu_ctx->device,
-                                  webgpu_ctx->debug_host_buf,
-                                  WEBGPU_DEBUG_BUF_ELEMS * sizeof(uint32_t),
-                                  wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead,
-                                  "debug_host_buf");
-        ggml_webgpu_create_buffer(webgpu_ctx->device,
-                                  webgpu_ctx->debug_dev_buf,
-                                  WEBGPU_DEBUG_BUF_ELEMS * sizeof(uint32_t),
-                                  wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc,
-                                  "debug_dev_buf");
-#endif
-        webgpu_ctx->device_init = true;
-    }
 
     static ggml_backend_webgpu_context backend_ctx;
     backend_ctx.name       = GGML_WEBGPU_NAME + std::string(": ") + dev_ctx->device_name;
@@ -1088,9 +1018,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_CPY | GGML_OP_SET_ROWS:
             return op->type == GGML_TYPE_F16 && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_MUL_MAT:
-            return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
-                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16)) ||
-                   (op->src[0]->type == GGML_TYPE_Q4_0 && op->src[1]->type == GGML_TYPE_F32);
+            return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 ||
+                    op->src[0]->type == GGML_TYPE_Q4_0) &&
+                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16);
         default:
             return false;
     }
@@ -1156,6 +1086,73 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
 
     wgpu::AdapterInfo info{};
     ctx->adapter.GetInfo(&info);
+
+    // Initialize device
+    std::vector<wgpu::FeatureName> required_features = { wgpu::FeatureName::ShaderF16,
+                                                         wgpu::FeatureName::ImplicitDeviceSynchronization };
+    wgpu::DeviceDescriptor         dev_desc;
+    dev_desc.requiredLimits       = &ctx->limits;
+    dev_desc.requiredFeatures     = required_features.data();
+    dev_desc.requiredFeatureCount = required_features.size();
+    dev_desc.SetDeviceLostCallback(
+        wgpu::CallbackMode::AllowSpontaneous,
+        [](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
+            GGML_UNUSED(device);
+            GGML_LOG_ERROR(
+                "ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+        });
+    dev_desc.SetUncapturedErrorCallback(
+        [](const wgpu::Device & device, wgpu::ErrorType reason, wgpu::StringView message) {
+            GGML_UNUSED(device);
+            GGML_LOG_ERROR(
+                "ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+        });
+    ctx->instance.WaitAny(ctx->adapter.RequestDevice(
+                              &dev_desc,
+                              wgpu::CallbackMode::AllowSpontaneous,
+                              [ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
+                                  if (status != wgpu::RequestDeviceStatus::Success) {
+                                      GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", message.data);
+                                      return;
+                                  }
+                                  ctx->device = std::move(device);
+                              }),
+                          UINT64_MAX);
+    GGML_ASSERT(ctx->device != nullptr);
+
+    // Initialize (compute) queue
+    ctx->queue = ctx->device.GetQueue();
+
+    // Create buffer pool for shader parameters
+    ctx->param_buf_pool.init(ctx->device,
+                             WEBGPU_NUM_PARAM_BUFS,
+                             WEBGPU_PARAMS_BUF_SIZE_BYTES,
+                             wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::Uniform,
+                             wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite);
+    ctx->set_rows_error_buf_pool.init(ctx->device,
+                                      WEBGPU_NUM_SET_ROWS_ERROR_BUFS,
+                                      WEBGPU_SET_ROWS_ERROR_BUF_SIZE_BYTES,
+                                      wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::Storage,
+                                      wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead);
+
+    ggml_webgpu_init_memset_pipeline(ctx);
+    ggml_webgpu_init_mul_mat_pipeline(ctx);
+    ggml_webgpu_init_set_rows_pipeline(ctx);
+    ggml_webgpu_init_cpy_pipeline(ctx);
+
+#ifdef GGML_WEBGPU_DEBUG
+    // Initialize debug buffers
+    ggml_webgpu_create_buffer(ctx->device,
+                              ctx->debug_host_buf,
+                              WEBGPU_DEBUG_BUF_ELEMS * sizeof(uint32_t),
+                              wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead,
+                              "debug_host_buf");
+    ggml_webgpu_create_buffer(ctx->device,
+                              ctx->debug_dev_buf,
+                              WEBGPU_DEBUG_BUF_ELEMS * sizeof(uint32_t),
+                              wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc,
+                              "debug_dev_buf");
+#endif
 
     static ggml_backend_webgpu_device_context device_ctx;
     device_ctx.webgpu_ctx  = ctx;

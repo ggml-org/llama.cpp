@@ -40,7 +40,16 @@
       "BLOCK_SIZE": 32
     },
     "DECLS": "Q4_0"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q4_0",
+      "SRC1_TYPE": "f16",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q4_0"
   }
+
 ]
 
 #end(VARIANTS)
@@ -70,8 +79,8 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
             let q_hi = (f32((q_byte >> 4) & 0xF) - 8.0f) * d;
             let q_lo = (f32(q_byte & 0xF) - 8.0f) * d;
             let src1_offset = src1_idx_base + offset * 32 + j * 4 + k;
-            sum += q_lo * src1[src1_offset];
-            sum += q_hi * src1[src1_offset + 16];
+            sum += q_lo * f32(src1[src1_offset]);
+            sum += q_hi * f32(src1[src1_offset + 16]);
         }
     }
     return sum;
