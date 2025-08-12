@@ -281,10 +281,14 @@ enum ggml_status naive_compute(struct ggml_cgraph* cgraph,
         return GGML_STATUS_FAILED;
     }
 
-    auto decoder = std::make_shared<GgmlOvDecoder>(cgraph);
+    auto model_weights = GgmlOvDecoder::create_weight_nodes(cgraph);
+    auto decoder = std::make_shared<GgmlOvDecoder>(cgraph, model_weights);
     auto input_model = std::make_shared<ov::frontend::ggml::InputModel>(decoder);
     auto naive = true;
     auto model = ov::frontend::ggml::FrontEnd::convert(input_model, naive);
+    if (getenv("GGML_OPENVINO_DUMP_IR")) {
+        ov::serialize(model, "IR_naive.xml");
+    }
     auto infer_request = core.compile_model(model, device, config).create_infer_request();
 
     auto ov_params = model->get_parameters();

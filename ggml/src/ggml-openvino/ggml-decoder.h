@@ -20,7 +20,7 @@ public:
                   int context_size, int num_heads, int num_heads_kv, int head_size);
 
     // Naive graph decoder
-    GgmlOvDecoder(struct ggml_cgraph* cgraph);
+    GgmlOvDecoder(struct ggml_cgraph* cgraph, std::map<std::string, std::shared_ptr<ov::Node>>& model_weights);
 
     virtual ov::Any get_attribute(const std::string& name) const override {
         return nullptr;
@@ -115,6 +115,8 @@ public:
 
     ov::PartialShape get_graph_input_shape(const ggml_tensor* src) const;
 
+    static void dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename);
+
     static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
     static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(struct ggml_cgraph* cgraph);
 
@@ -126,7 +128,6 @@ public:
 private:
     void set_input_output(ggml_tensor* node, bool naive = false);
     void add_extra_inputs();
-    static void dump_cgraph(const struct ggml_cgraph* cgraph, std::string& filename);
     static std::vector<size_t> get_shape(const ggml_tensor* tensor);
     static std::vector<size_t> get_stride(const ggml_tensor* tensor);
     static ov::element::Type get_ov_type(const ggml_tensor* tensor);
