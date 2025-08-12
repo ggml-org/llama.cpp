@@ -12,6 +12,7 @@
 		updateMultipleConfig,
 		resetConfig
 	} from '$lib/stores/settings.svelte';
+	import { supportsVision } from '$lib/stores/server.svelte';
 
 	interface Props {
 		onOpenChange?: (open: boolean) => void;
@@ -205,10 +206,12 @@
 										</p>
 									{/if}
 								{:else if field.type === 'checkbox'}
+									{@const isDisabled = field.key === 'pdfAsImage' && !supportsVision()}
 									<div class="flex items-start space-x-3">
 										<Checkbox
 											id={field.key}
 											checked={Boolean(localConfig[field.key])}
+											disabled={isDisabled}
 											onCheckedChange={(checked) =>
 												(localConfig[field.key] = checked)}
 											class="mt-1"
@@ -217,7 +220,7 @@
 										<div class="space-y-1">
 											<label
 												for={field.key}
-												class="cursor-pointer text-sm font-medium leading-none"
+												class="cursor-pointer text-sm font-medium leading-none {isDisabled ? 'text-muted-foreground' : ''}"
 											>
 												{field.label}
 											</label>
@@ -225,6 +228,10 @@
 											{#if field.help}
 												<p class="text-muted-foreground text-xs">
 													{field.help}
+												</p>
+											{:else if field.key === 'pdfAsImage' && !supportsVision()}
+												<p class="text-muted-foreground text-xs">
+													PDF-to-image processing requires a vision-capable model. PDFs will be processed as text.
 												</p>
 											{/if}
 										</div>

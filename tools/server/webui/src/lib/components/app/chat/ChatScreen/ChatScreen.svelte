@@ -3,6 +3,7 @@
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
+	import { filterFilesByModalities, generateModalityErrorMessage } from '$lib/utils/modality-file-validation';
 	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo } from '$lib/components/app';
 	import {
 		activeMessages,
@@ -17,6 +18,7 @@
 	import { AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
 	import { navigating } from '$app/state';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -25,6 +27,20 @@
 	let uploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isDragOver = $state(false);
 	let dragCounter = $state(0);
+	
+	// Alert Dialog state for file upload errors
+	let showFileErrorDialog = $state(false);
+	let fileErrorData = $state<{
+		generallyUnsupported: File[];
+		modalityUnsupported: File[];
+		modalityReasons: Record<string, string>;
+		supportedTypes: string[];
+	}>({
+		generallyUnsupported: [],
+		modalityUnsupported: [],
+		modalityReasons: {},
+		supportedTypes: []
+	});
 
 	const isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
@@ -117,24 +133,38 @@
 	}
 
 	async function processFiles(files: File[]) {
-		const supportedFiles: File[] = [];
-		const unsupportedFiles: File[] = [];
+		// First filter by general file type support
+		const generallySupported: File[] = [];
+		const generallyUnsupported: File[] = [];
 
 		for (const file of files) {
 			if (isFileTypeSupported(file.name, file.type)) {
-				supportedFiles.push(file);
+				generallySupported.push(file);
 			} else {
-				unsupportedFiles.push(file);
+				generallyUnsupported.push(file);
 			}
 		}
 
-		if (unsupportedFiles.length > 0) {
-			const fileNames = unsupportedFiles.map(f => f.name).join(', ');
-			const message = unsupportedFiles.length === 1 
-				? `The file "${fileNames}" is not supported. Please upload images (JPG, PNG, GIF, WebP, SVG), audio files (MP3, WAV), PDFs, or text files.`
-				: `The following files are not supported: ${fileNames}. Please upload images (JPG, PNG, GIF, WebP, SVG), audio files (MP3, WAV), PDFs, or text files.`;
+		// Then filter by model modalities
+		const { supportedFiles, unsupportedFiles, modalityReasons } = filterFilesByModalities(generallySupported);
+
+		// Combine all unsupported files
+		const allUnsupportedFiles = [...generallyUnsupported, ...unsupportedFiles];
+
+		if (allUnsupportedFiles.length > 0) {
+			// Determine supported types for current model
+			const supportedTypes: string[] = ['text files', 'PDFs'];
+			if (supportsVision()) supportedTypes.push('images');
+			if (supportsAudio()) supportedTypes.push('audio files');
 			
-			alert(message);
+			// Structure error data for better presentation
+			fileErrorData = {
+				generallyUnsupported,
+				modalityUnsupported: unsupportedFiles,
+				modalityReasons,
+				supportedTypes
+			};
+			showFileErrorDialog = true;
 		}
 
 		if (supportedFiles.length > 0) {
@@ -241,6 +271,69 @@
 		</div>
 	</div>
 {/if}
+
+<!-- File Upload Error Alert Dialog -->
+<AlertDialog.Root bind:open={showFileErrorDialog}>
+	<AlertDialog.Portal>
+		<AlertDialog.Overlay />
+		<AlertDialog.Content class="max-w-md">
+			<AlertDialog.Header>
+				<AlertDialog.Title>File Upload Error</AlertDialog.Title>
+				<AlertDialog.Description class="text-sm text-muted-foreground">
+					Some files cannot be uploaded with the current model.
+				</AlertDialog.Description>
+			</AlertDialog.Header>
+			
+			<div class="space-y-4">
+				<!-- Generally unsupported files -->
+				{#if fileErrorData.generallyUnsupported.length > 0}
+					<div class="space-y-2">
+						<h4 class="text-sm font-medium text-destructive">Unsupported File Types</h4>
+						<div class="space-y-1">
+							{#each fileErrorData.generallyUnsupported as file}
+								<div class="rounded-md bg-destructive/10 px-3 py-2">
+									<p class="text-sm font-mono text-destructive break-all">{file.name}</p>
+									<p class="text-xs text-muted-foreground mt-1">File type not supported</p>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+				
+				<!-- Modality-restricted files -->
+				{#if fileErrorData.modalityUnsupported.length > 0}
+					<div class="space-y-2">
+						<h4 class="text-sm font-medium text-destructive">Model Compatibility Issues</h4>
+						<div class="space-y-1">
+							{#each fileErrorData.modalityUnsupported as file}
+								<div class="rounded-md bg-destructive/10 px-3 py-2">
+									<p class="text-sm font-mono text-destructive break-all">{file.name}</p>
+									<p class="text-xs text-muted-foreground mt-1">
+										{fileErrorData.modalityReasons[file.name] || 'Not supported by current model'}
+									</p>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{/if}
+				
+				<!-- Supported file types -->
+				<div class="rounded-md bg-muted/50 p-3">
+					<h4 class="text-sm font-medium mb-2">This model supports:</h4>
+					<p class="text-sm text-muted-foreground">
+						{fileErrorData.supportedTypes.join(', ')}
+					</p>
+				</div>
+			</div>
+			
+			<AlertDialog.Footer>
+				<AlertDialog.Action onclick={() => showFileErrorDialog = false}>
+					Got it
+				</AlertDialog.Action>
+			</AlertDialog.Footer>
+		</AlertDialog.Content>
+	</AlertDialog.Portal>
+</AlertDialog.Root>
 
 <style>
 	.conversation-chat-form {

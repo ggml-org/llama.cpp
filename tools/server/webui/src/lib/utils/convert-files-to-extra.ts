@@ -1,13 +1,11 @@
 import { convertPDFToImage, convertPDFToText, isPdfMimeType } from "./pdf-processing";
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from "./svg-to-png";
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from "./webp-to-png";
-import { config } from '$lib/stores/settings.svelte';
-import { isLikelyTextFile, readFileAsText } from "./text-files";
-import { 
-    FileTypeCategory, 
-    AudioMimeType, 
-    getFileTypeCategory 
-} from '$lib/constants/supported-file-types';
+import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { supportsVision } from '$lib/stores/server.svelte';
+import { FileTypeCategory, getFileTypeCategory } from '$lib/constants/supported-file-types';
+import { readFileAsText, isLikelyTextFile } from './text-files';
+import { toast } from 'svelte-sonner';
 
 function readFileAsBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -87,10 +85,28 @@ export async function parseFilesToMessageExtras(
                 // Always get base64 data for preview functionality
                 const base64Data = await readFileAsBase64(file.file);
                 const currentConfig = config();
-                const shouldProcessAsImages = Boolean(currentConfig.pdfAsImage);
+                const hasVisionSupport = supportsVision();
+                
+                // Force PDF-to-text for non-vision models
+                let shouldProcessAsImages = Boolean(currentConfig.pdfAsImage) && hasVisionSupport;
+                
+                // If user had pdfAsImage enabled but model doesn't support vision, update setting and notify
+                if (currentConfig.pdfAsImage && !hasVisionSupport) {
+                    console.log('Non-vision model detected: forcing PDF-to-text mode and updating settings');
+                    
+                    // Update the setting in localStorage
+                    settingsStore.updateConfig('pdfAsImage', false);
+                    
+                    // Show toast notification to user
+                    toast.warning('PDF setting changed: Non-vision model detected, PDFs will be processed as text instead of images.', {
+                        duration: 5000
+                    });
+                    
+                    shouldProcessAsImages = false;
+                }
                 
                 if (shouldProcessAsImages) {
-                    // Process PDF as images
+                    // Process PDF as images (only for vision models)
                     try {
                         const images = await convertPDFToImage(file.file);
 
@@ -117,7 +133,7 @@ export async function parseFilesToMessageExtras(
                         });
                     }
                 } else {
-                    // Process PDF as text (default)
+                    // Process PDF as text (default or forced for non-vision models)
                     const content = await convertPDFToText(file.file);
 
                     extras.push({

@@ -25,6 +25,11 @@
 		isRecording = false,
 		class: className = ''
 	}: Props = $props();
+
+	const fileUploadDisabled = disabled || isLoading;
+	const fileUploadTooltipText = !supportsVision() 
+		? 'Text files and PDFs supported. Images, audio, and video require vision models.'
+		: 'Attach files';
 </script>
 
 <div class="flex items-center justify-between gap-1 {className}">
@@ -33,21 +38,17 @@
 			<Tooltip.Trigger>
 				<Button
 					type="button"
-					class="text-muted-foreground bg-transparent hover:bg-foreground/10 hover:text-foreground h-8 w-8 rounded-full p-0 {!supportsVision()
-						? 'opacity-50 cursor-not-allowed'
-						: ''}"
-					disabled={disabled || isLoading || !supportsVision()}
+					class="text-muted-foreground bg-transparent hover:bg-foreground/10 hover:text-foreground h-8 w-8 rounded-full p-0"
+					disabled={fileUploadDisabled}
 					onclick={onFileUpload}
 				>
 					<span class="sr-only">Attach files</span>
 					<Paperclip class="h-4 w-4" />
 				</Button>
 			</Tooltip.Trigger>
-			{#if !supportsVision()}
-				<Tooltip.Content>
-					<p>Current model does not support vision</p>
-				</Tooltip.Content>
-			{/if}
+			<Tooltip.Content>
+				<p>{fileUploadTooltipText}</p>
+			</Tooltip.Content>
 		</Tooltip.Root>
 	</div>
 

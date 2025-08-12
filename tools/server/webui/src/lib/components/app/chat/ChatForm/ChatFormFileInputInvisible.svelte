@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { ALL_SUPPORTED_EXTENSIONS, ALL_SUPPORTED_MIME_TYPES } from '$lib/constants/supported-file-types';
+	import { generateModalityAwareAcceptString } from '$lib/utils/modality-file-validation';
 
 	interface Props {
 		accept?: string;
@@ -15,11 +16,14 @@
 	].join(',');
 
 	let {
-		accept = defaultAccept,
+		accept,
 		multiple = true,
 		onFileSelect,
 		class: className = ''
 	}: Props = $props();
+
+	// Use modality-aware accept string by default, but allow override
+	const finalAccept = $derived(accept ?? generateModalityAwareAcceptString());
 
 	let fileInputElement: HTMLInputElement | undefined;
 
@@ -39,7 +43,7 @@
 	bind:this={fileInputElement}
 	type="file"
 	{multiple}
-	{accept}
+	accept={finalAccept}
 	onchange={handleFileSelect}
 	class="hidden {className}"
 />
