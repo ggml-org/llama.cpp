@@ -8795,60 +8795,62 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
                     // Index : 0 -7, 64 - 71
-                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_0, m4), rhs_hbit_0145_00);
-                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_0, 4), m4), rhs_hbit_0145_40);
+                    // Comments indicate the indices of elements from individual super block in non interleaved fashion
+                    // Index : 0 -7, 64 - 71
+                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_0, m4), rhs_hbit_0145_00);
+                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_0, 4), m4), rhs_hbit_0145_40);
 
-                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_0, m4), rhs_hbit_2367_00);
-                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_0, 4), m4), rhs_hbit_2367_40);
+                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_0, m4), rhs_hbit_2367_00);
+                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_0, 4), m4), rhs_hbit_2367_40);
 
                     // Index : 8 - 15, 72 - 79
-                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_1, m4), rhs_hbit_0145_01);
-                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_1, 4), m4), rhs_hbit_0145_41);
+                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_1, m4), rhs_hbit_0145_01);
+                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_1, 4), m4), rhs_hbit_0145_41);
 
-                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_1, m4), rhs_hbit_2367_01);
-                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_1, 4), m4), rhs_hbit_2367_41);
+                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_1, m4), rhs_hbit_2367_01);
+                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_1, 4), m4), rhs_hbit_2367_41);
 
                     // Index : 16 - 23, 80 - 87
-                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_2, m4), rhs_hbit_0145_10);
-                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_2, 4), m4), rhs_hbit_0145_50);
+                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_2, m4), rhs_hbit_0145_10);
+                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_2, 4), m4), rhs_hbit_0145_50);
 
-                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_2, m4), rhs_hbit_2367_10);
-                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_2, 4), m4), rhs_hbit_2367_50);
+                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_2, m4), rhs_hbit_2367_10);
+                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_2, 4), m4), rhs_hbit_2367_50);
 
                     // Index : 24 - 31, 88 - 95
-                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_3, m4), rhs_hbit_0145_11);
-                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_3, 4), m4), rhs_hbit_0145_51);
+                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_3, m4), rhs_hbit_0145_11);
+                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_3, 4), m4), rhs_hbit_0145_51);
 
-                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_3, m4), rhs_hbit_2367_11);
-                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_3, 4), m4), rhs_hbit_2367_51);
+                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_3, m4), rhs_hbit_2367_11);
+                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_3, 4), m4), rhs_hbit_2367_51);
 
                     // Index : 32 - 39, 96 - 103
-                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_4, m4), rhs_hbit_0145_20);
-                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_4, 4), m4), rhs_hbit_0145_60);
+                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_4, m4), rhs_hbit_0145_20);
+                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_4, 4), m4), rhs_hbit_0145_60);
 
-                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_4, m4), rhs_hbit_2367_20);
-                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_4, 4), m4), rhs_hbit_2367_60);
+                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_4, m4), rhs_hbit_2367_20);
+                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_4, 4), m4), rhs_hbit_2367_60);
 
                     // Index : 40 - 47, 104 - 111
-                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_5, m4), rhs_hbit_0145_21);
-                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_5, 4), m4), rhs_hbit_0145_61);
+                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_5, m4), rhs_hbit_0145_21);
+                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_5, 4), m4), rhs_hbit_0145_61);
 
-                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_5, m4), rhs_hbit_2367_21);
-                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_5, 4), m4), rhs_hbit_2367_61);
+                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_5, m4), rhs_hbit_2367_21);
+                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_5, 4), m4), rhs_hbit_2367_61);
 
                     // Index : 48 - 55, 112 - 119
-                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_6, m4), rhs_hbit_0145_30);
-                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_6, 4), m4), rhs_hbit_0145_70);
+                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_6, m4), rhs_hbit_0145_30);
+                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_6, 4), m4), rhs_hbit_0145_70);
 
-                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_6, m4), rhs_hbit_2367_30);
-                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_6, 4), m4), rhs_hbit_2367_70);
+                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_6, m4), rhs_hbit_2367_30);
+                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_6, 4), m4), rhs_hbit_2367_70);
 
                     // Index : 56 - 63, 120 - 127
-                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_7, m4), rhs_hbit_0145_31);
-                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_7, 4), m4), rhs_hbit_0145_71);
+                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_7, m4), rhs_hbit_0145_31);
+                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_7, 4), m4), rhs_hbit_0145_71);
 
-                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_7, m4), rhs_hbit_2367_31);
-                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_7, 4), m4), rhs_hbit_2367_71);
+                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_7, m4), rhs_hbit_2367_31);
+                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_7, 4), m4), rhs_hbit_2367_71);
 
                     // Shuffle pattern one - right side input
                     const __m256i rhs_mat_0145_00_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_00, 136); //B00(0-3) B01(0-3) B00(0-3) B01(0-3) B04(0-3) B05(0-3) B04(0-3) B05(0-3)
@@ -9605,60 +9607,62 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                     // Comments indicate the indices of elements from individual super block in non interleaved fashion
                     // Index : 0 -7, 64 - 71
-                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_0, m4), rhs_hbit_0145_00);
-                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_0, 4), m4), rhs_hbit_0145_40);
+                    // Comments indicate the indices of elements from individual super block in non interleaved fashion
+                    // Index : 0 -7, 64 - 71
+                    const __m256i rhs_mat_0145_00 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_0, m4), rhs_hbit_0145_00);
+                    const __m256i rhs_mat_0145_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_0, 4), m4), rhs_hbit_0145_40);
 
-                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_0, m4), rhs_hbit_2367_00);
-                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_0, 4), m4), rhs_hbit_2367_40);
+                    const __m256i rhs_mat_2367_00 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_0, m4), rhs_hbit_2367_00);
+                    const __m256i rhs_mat_2367_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_0, 4), m4), rhs_hbit_2367_40);
 
                     // Index : 8 - 15, 72 - 79
-                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_1, m4), rhs_hbit_0145_01);
-                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_1, 4), m4), rhs_hbit_0145_41);
+                    const __m256i rhs_mat_0145_01 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_1, m4), rhs_hbit_0145_01);
+                    const __m256i rhs_mat_0145_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_1, 4), m4), rhs_hbit_0145_41);
 
-                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_1, m4), rhs_hbit_2367_01);
-                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_1, 4), m4), rhs_hbit_2367_41);
+                    const __m256i rhs_mat_2367_01 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_1, m4), rhs_hbit_2367_01);
+                    const __m256i rhs_mat_2367_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_1, 4), m4), rhs_hbit_2367_41);
 
                     // Index : 16 - 23, 80 - 87
-                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_2, m4), rhs_hbit_0145_10);
-                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_2, 4), m4), rhs_hbit_0145_50);
+                    const __m256i rhs_mat_0145_10 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_2, m4), rhs_hbit_0145_10);
+                    const __m256i rhs_mat_0145_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_2, 4), m4), rhs_hbit_0145_50);
 
-                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_2, m4), rhs_hbit_2367_10);
-                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_2, 4), m4), rhs_hbit_2367_50);
+                    const __m256i rhs_mat_2367_10 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_2, m4), rhs_hbit_2367_10);
+                    const __m256i rhs_mat_2367_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_2, 4), m4), rhs_hbit_2367_50);
 
                     // Index : 24 - 31, 88 - 95
-                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_3, m4), rhs_hbit_0145_11);
-                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_3, 4), m4), rhs_hbit_0145_51);
+                    const __m256i rhs_mat_0145_11 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_3, m4), rhs_hbit_0145_11);
+                    const __m256i rhs_mat_0145_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_3, 4), m4), rhs_hbit_0145_51);
 
-                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_3, m4), rhs_hbit_2367_11);
-                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_3, 4), m4), rhs_hbit_2367_51);
+                    const __m256i rhs_mat_2367_11 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_3, m4), rhs_hbit_2367_11);
+                    const __m256i rhs_mat_2367_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_3, 4), m4), rhs_hbit_2367_51);
 
                     // Index : 32 - 39, 96 - 103
-                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_4, m4), rhs_hbit_0145_20);
-                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_4, 4), m4), rhs_hbit_0145_60);
+                    const __m256i rhs_mat_0145_20 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_4, m4), rhs_hbit_0145_20);
+                    const __m256i rhs_mat_0145_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_4, 4), m4), rhs_hbit_0145_60);
 
-                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_4, m4), rhs_hbit_2367_20);
-                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_4, 4), m4), rhs_hbit_2367_60);
+                    const __m256i rhs_mat_2367_20 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_4, m4), rhs_hbit_2367_20);
+                    const __m256i rhs_mat_2367_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_4, 4), m4), rhs_hbit_2367_60);
 
                     // Index : 40 - 47, 104 - 111
-                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_5, m4), rhs_hbit_0145_21);
-                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_5, 4), m4), rhs_hbit_0145_61);
+                    const __m256i rhs_mat_0145_21 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_5, m4), rhs_hbit_0145_21);
+                    const __m256i rhs_mat_0145_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_5, 4), m4), rhs_hbit_0145_61);
 
-                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_5, m4), rhs_hbit_2367_21);
-                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_5, 4), m4), rhs_hbit_2367_61);
+                    const __m256i rhs_mat_2367_21 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_5, m4), rhs_hbit_2367_21);
+                    const __m256i rhs_mat_2367_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_5, 4), m4), rhs_hbit_2367_61);
 
                     // Index : 48 - 55, 112 - 119
-                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_6, m4), rhs_hbit_0145_30);
-                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_6, 4), m4), rhs_hbit_0145_70);
+                    const __m256i rhs_mat_0145_30 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_6, m4), rhs_hbit_0145_30);
+                    const __m256i rhs_mat_0145_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_6, 4), m4), rhs_hbit_0145_70);
 
-                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_6, m4), rhs_hbit_2367_30);
-                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_6, 4), m4), rhs_hbit_2367_70);
+                    const __m256i rhs_mat_2367_30 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_6, m4), rhs_hbit_2367_30);
+                    const __m256i rhs_mat_2367_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_6, 4), m4), rhs_hbit_2367_70);
 
                     // Index : 56 - 63, 120 - 127
-                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_0145_7, m4), rhs_hbit_0145_31);
-                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_0145_7, 4), m4), rhs_hbit_0145_71);
+                    const __m256i rhs_mat_0145_31 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_0145_7, m4), rhs_hbit_0145_31);
+                    const __m256i rhs_mat_0145_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_0145_7, 4), m4), rhs_hbit_0145_71);
 
-                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_mat_2367_7, m4), rhs_hbit_2367_31);
-                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_mat_2367_7, 4), m4), rhs_hbit_2367_71);
+                    const __m256i rhs_mat_2367_31 = _mm256_or_si256(_mm256_and_si256(rhs_lbit_mat_2367_7, m4), rhs_hbit_2367_31);
+                    const __m256i rhs_mat_2367_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_lbit_mat_2367_7, 4), m4), rhs_hbit_2367_71);
 
                     // Shuffle pattern one - right side input
                     const __m256i rhs_mat_0145_00_sp1 = _mm256_shuffle_epi32(rhs_mat_0145_00, 136); //B00(0-3) B01(0-3) B00(0-3) B01(0-3) B04(0-3) B05(0-3) B04(0-3) B05(0-3)
