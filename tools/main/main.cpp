@@ -785,14 +785,17 @@ int main(int argc, char ** argv) {
                 }
 
                 // check for reverse prompt using special tokens
-                llama_token last_token = common_sampler_last(smpl);
-                for (auto token : antiprompt_token) {
-                    if (token == last_token) {
-                        if (params.interactive) {
-                            is_interacting = true;
+                // avoid calling common_sampler_last() if last_output is empty
+                if (!last_output.empty()) {
+                    llama_token last_token = common_sampler_last(smpl);
+                    for (auto token : antiprompt_token) {
+                        if (token == last_token) {
+                            if (params.interactive) {
+                                is_interacting = true;
+                            }
+                            is_antiprompt = true;
+                            break;
                         }
-                        is_antiprompt = true;
-                        break;
                     }
                 }
 

@@ -47,17 +47,16 @@ static void rope_norm(const T * x, T * dst, const int ne0, const int ne1, const 
 
     const int row = item_ct1.get_local_range(2) * item_ct1.get_group(2) + item_ct1.get_local_id(2);
 
-    if (i0 >= n_dims) {
-        const int i = row * ne0 + i0;
-        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i);
-        return;
-    }
-
     const int row0     = row % ne1;
     const int channel0 = row / ne1;
 
     const int i  = row * ne0 + i0;
     const int i2 = channel0 * s2 + row0 * s1 + i0;
+
+    if (i0 >= n_dims) {
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i2);
+        return;
+    }
 
     const float theta_base = pos[channel0] * sycl::pow(theta_scale, i0 / 2.0f);
 
@@ -88,17 +87,16 @@ static void rope_neox(const T * x, T * dst, const int ne0, const int ne1, const 
 
     const int row = item_ct1.get_local_range(2) * item_ct1.get_group(2) + item_ct1.get_local_id(2);
 
-    if (i0 >= n_dims) {
-        const int i = row * ne0 + i0;
-        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i);
-        return;
-    }
-
     const int row0     = row % ne1;
     const int channel0 = row / ne1;
 
     const int i  = row * ne0 + i0 / 2;
     const int i2 = channel0 * s2 + row0 * s1 + i0 / 2;
+
+    if (i0 >= n_dims) {
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i + i0 / 2) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i2 + i0 / 2);
+        return;
+    }
 
     const float theta_base = pos[channel0] * sycl::pow(theta_scale, i0 / 2.0f);
 
@@ -129,16 +127,15 @@ static void rope_multi(const T * x, T * dst, const int ne0, const int ne1, const
     }
     const int    row_dst   = (item_ct1.get_group(2) * item_ct1.get_local_range(2)) + item_ct1.get_local_id(2);
 
-    if (i0 >= n_dims) {
-        const int i = row_dst*ne0 + i0;
-        *reinterpret_cast<sycl::vec<T, 2> *>(dst + i) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i);
-        return;
-    }
-
     const int    row_x     = row_dst % ne1;
     const int    channel_x = row_dst / ne1;
     const int    idst      = (row_dst * ne0) + (i0 / 2);
     const size_t ix        = ((size_t) channel_x * s2) + ((size_t) row_x * s1) + (i0 / 2);
+
+    if (i0 >= n_dims) {
+        *reinterpret_cast<sycl::vec<T, 2> *>(dst + idst + i0 / 2) = *reinterpret_cast<const sycl::vec<T, 2> *>(x + i0 / 2 + ix);
+        return;
+    }
 
     const int sect_dims = sections.v[0] + sections.v[1] + sections.v[2] + sections.v[3];
     const int sec_w = sections.v[1] + sections.v[0];
