@@ -5,16 +5,7 @@ import { config } from '$lib/stores/settings.svelte';
  * Provides methods for sending messages, handling streaming responses, and managing chat sessions.
  */
 export class ChatService {
-	private baseUrl: string;
 	private abortController: AbortController | null = null;
-
-	/**
-	 * Creates a new ChatService instance.
-	 * @param baseUrl - The base URL for the llama.cpp server API. Defaults to 'http://localhost:8080'.
-	 */
-	constructor(baseUrl = import.meta.env.VITE_BASE_URL || 'http://localhost:8080') {
-		this.baseUrl = baseUrl;
-	}
 
 	/**
 	 * Sends a chat completion request to the llama.cpp server.
@@ -97,7 +88,7 @@ export class ChatService {
 		}
 
 		try {
-			const response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
+			const response = await fetch(`/v1/chat/completions`, {
 				method: 'POST',
 				headers: {
 					'Content-Type': 'application/json'
@@ -427,7 +418,7 @@ export class ChatService {
 	 */
 	static async getServerProps(): Promise<ApiLlamaCppServerProps> {
 		try {
-			const response = await fetch(`${import.meta.env.VITE_BASE_URL}/props`, {
+			const response = await fetch(`/props`, {
 				headers: {
 					'Content-Type': 'application/json'
 				}
