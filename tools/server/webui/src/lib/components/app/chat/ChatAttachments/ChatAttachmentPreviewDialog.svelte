@@ -3,6 +3,7 @@
 	import { FileText, Image, Music, FileIcon, Eye } from '@lucide/svelte';
 	import { convertPDFToImage } from '$lib/utils/pdf-processing';
 	import { Button } from '$lib/components/ui/button';
+	import { FileTypeCategory, PdfMimeType, getFileTypeCategory } from '$lib/constants/supported-file-types';
 
 	interface Props {
 		open: boolean;
@@ -59,10 +60,10 @@
 					: textContent)
 	);
 
-	let isImage = $derived(displayType.startsWith('image/') || displayType === 'image');
-	let isText = $derived(displayType.startsWith('text/') || displayType === 'text');
-	let isPdf = $derived(displayType === 'application/pdf');
-	let isAudio = $derived(displayType.startsWith('audio/') || displayType === 'audio');
+	let isImage = $derived(getFileTypeCategory(displayType) === FileTypeCategory.IMAGE || displayType === 'image');
+	let isText = $derived(getFileTypeCategory(displayType) === FileTypeCategory.TEXT || displayType === 'text');
+	let isPdf = $derived(displayType === PdfMimeType.PDF);
+	let isAudio = $derived(getFileTypeCategory(displayType) === FileTypeCategory.AUDIO || displayType === 'audio');
 
 	// PDF preview state
 	let pdfViewMode = $state<'text' | 'pages'>('pages'); // Default to pages view
@@ -120,7 +121,7 @@
 						byteNumbers[i] = byteCharacters.charCodeAt(i);
 					}
 					const byteArray = new Uint8Array(byteNumbers);
-					file = new File([byteArray], displayName, { type: 'application/pdf' });
+					file = new File([byteArray], displayName, { type: PdfMimeType.PDF });
 					if (import.meta.env.DEV) console.log('Created file from base64 data, size:', file.size);
 				}
 			}

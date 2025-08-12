@@ -3,6 +3,11 @@ import { isSvgMimeType, svgBase64UrlToPngDataURL } from "./svg-to-png";
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from "./webp-to-png";
 import { config } from '$lib/stores/settings.svelte';
 import { isLikelyTextFile, readFileAsText } from "./text-files";
+import { 
+    FileTypeCategory, 
+    AudioMimeType, 
+    getFileTypeCategory 
+} from '$lib/constants/supported-file-types';
 
 function readFileAsBase64(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -21,13 +26,10 @@ function readFileAsBase64(file: File): Promise<string> {
     });
 }
 
+// Note: This function is now redundant since we use getFileTypeCategory(file.type) === FileTypeCategory.AUDIO
+// Keeping for backward compatibility, but consider removing in future cleanup
 function isAudioMimeType(mimeType: string): boolean {
-    return mimeType === 'audio/mpeg' || 
-           mimeType === 'audio/wav' || 
-           mimeType === 'audio/mp3' || 
-           mimeType === 'audio/webm' ||
-           mimeType === 'audio/ogg' ||
-           mimeType === 'audio/m4a';
+    return getFileTypeCategory(mimeType) === FileTypeCategory.AUDIO;
 }
 
 export async function parseFilesToMessageExtras(
@@ -36,7 +38,7 @@ export async function parseFilesToMessageExtras(
     const extras: DatabaseMessageExtra[] = [];
 
     for (const file of files) {
-        if (file.type.startsWith('image/')) {
+        if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
             if (file.preview) {
                 let base64Url = file.preview;
 
@@ -66,7 +68,7 @@ export async function parseFilesToMessageExtras(
                     base64Url
                 });
             }
-        } else if (isAudioMimeType(file.type)) {
+        } else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
             // Process audio files (MP3 and WAV)
             try {
                 const base64Data = await readFileAsBase64(file.file);
@@ -80,7 +82,7 @@ export async function parseFilesToMessageExtras(
             } catch (error) {
                 console.error(`Failed to process audio file ${file.name}:`, error);
             }
-        } else if (isPdfMimeType(file.type)) {
+        } else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
             try {
                 // Always get base64 data for preview functionality
                 const base64Data = await readFileAsBase64(file.file);

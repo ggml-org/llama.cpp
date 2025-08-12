@@ -4,6 +4,7 @@
  */
 
 import { browser } from '$app/environment';
+import { ImageMimeType, PdfMimeType } from '$lib/constants/supported-file-types';
 
 // Types for PDF.js (imported conditionally)
 type TextContent = {
@@ -136,7 +137,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 			});
 			pages.push(
 				task.promise.then(() => {
-					return canvas.toDataURL('image/png');
+					return canvas.toDataURL(ImageMimeType.PNG);
 				})
 			);
 		}
@@ -154,7 +155,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
  * @returns True if the file is a PDF
  */
 export function isPdfFile(file: File): boolean {
-	return file.type === 'application/pdf';
+	return file.type === PdfMimeType.PDF;
 }
 
 /**
@@ -163,5 +164,5 @@ export function isPdfFile(file: File): boolean {
  * @returns True if the MIME type is application/pdf
  */
 export function isPdfMimeType(mimeType: string): boolean {
-	return mimeType === 'application/pdf';
+	return mimeType === PdfMimeType.PDF;
 }

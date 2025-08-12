@@ -1,3 +1,5 @@
+import { ImageMimeType, ImageExtension } from '$lib/constants/supported-file-types';
+
 /**
  * Convert a WebP base64 data URL to a PNG data URL
  * @param base64UrlWebp - The WebP base64 data URL to convert
@@ -33,7 +35,7 @@ export function webpBase64UrlToPngDataURL(
 				}
 				ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
 				
-				resolve(canvas.toDataURL('image/png'));
+				resolve(canvas.toDataURL(ImageMimeType.PNG));
 			};
 
 			img.onerror = () => {
@@ -58,7 +60,7 @@ export function webpBase64UrlToPngDataURL(
  * @returns True if the file is a WebP
  */
 export function isWebpFile(file: File): boolean {
-	return file.type === 'image/webp' || file.name.toLowerCase().endsWith('.webp');
+	return file.type === ImageMimeType.WEBP || file.name.toLowerCase().endsWith(ImageExtension.WEBP);
 }
 
 /**
@@ -67,5 +69,5 @@ export function isWebpFile(file: File): boolean {
  * @returns True if the MIME type is image/webp
  */
 export function isWebpMimeType(mimeType: string): boolean {
-	return mimeType === 'image/webp';
+	return mimeType === ImageMimeType.WEBP;
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
 	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
+	import { FileTypeCategory, PdfMimeType, getFileTypeCategory } from '$lib/constants/supported-file-types';
 
 	interface Props {
 		class?: string;
@@ -77,7 +78,7 @@
 				size: file.size,
 				preview: file.preview,
 				type: file.type,
-				isImage: file.type.startsWith('image/'),
+				isImage: getFileTypeCategory(file.type) === FileTypeCategory.IMAGE,
 				uploadedFile: file,
 				textContent: file.textContent
 			});
