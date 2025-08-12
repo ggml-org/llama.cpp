@@ -3539,16 +3539,13 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             if (op->src[0]->ne[0] == 192) {
                 return false;
             }
-            if (op->src[1]->type == GGML_TYPE_BF16 || op->src[2]->type == GGML_TYPE_BF16) {
-                return false;
-            }
-            if (op->src[0]->ne[0] ==  64 && op->src[1]->type == GGML_TYPE_F16) {
+            if (op->src[0]->ne[0] ==  64) {
                 return true;
             }
             if (op->src[0]->ne[0] == 128) {
                 return true;
             }
-            if (op->src[0]->ne[0] == 256 && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16) {
+            if (op->src[0]->ne[0] == 256) {
                 return true;
             }
             if (op->src[3] && op->src[3]->ne[2] != 1) {
