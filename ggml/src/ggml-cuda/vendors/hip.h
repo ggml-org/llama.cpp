@@ -1,6 +1,6 @@
 #pragma once
 
-#define HIP_ENABLE_WARP_SYNC_BUILTINS 1
+#define HIP_DISABLE_WARP_SYNC_BUILTINS 1
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <hip/hip_fp16.h>
