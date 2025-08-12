@@ -6,9 +6,10 @@
 		value?: string;
 		placeholder?: string;
 		onInput?: (value: string) => void;
+		class?: string;
 	}
 
-	let { value = $bindable(''), placeholder = 'Search conversations...', onInput }: Props = $props();
+	let { value = $bindable(''), placeholder = 'Search conversations...', onInput, class: className }: Props = $props();
 
 	function handleInput(event: Event) {
 		const target = event.target as HTMLInputElement;
@@ -17,7 +18,7 @@
 	}
 </script>
 
-<div class="relative mb-4">
+<div class="relative mb-4 {className}">
 	<Search
 		class="text-muted-foreground absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 transform"
 	/>
