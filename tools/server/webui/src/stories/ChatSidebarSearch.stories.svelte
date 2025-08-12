@@ -13,6 +13,10 @@
 
 <Story name="Default" args={{ class: 'w-80' }} />
 
+<Story name="Focus" args={{ class: 'w-80' }} play={({ canvasElement }) => {
+	canvasElement.querySelector('input')?.focus();
+}}/>
+
 <Story
 	name="WithValue"
 	args={{
