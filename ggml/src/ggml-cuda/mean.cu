@@ -1,10 +1,10 @@
 #include "mean.cuh"
 #include "reduce_rows.cuh"
 
-#ifdef USE_CUB
+#ifdef GGML_CUDA_USE_CUB
 #    include <cub/cub.cuh>
 using namespace cub;
-#endif  // USE_CUB
+#endif  // GGML_CUDA_USE_CUB
 
 template <typename T> __global__ void divide_by_count(T * result, size_t count) {
     *result /= static_cast<T>(count);
@@ -24,7 +24,7 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t nrows = ggml_nrows(src0);
 
 // Special case for reducing vectors
-#ifdef USE_CUB
+#ifdef GGML_CUDA_USE_CUB
     cudaStreamCaptureStatus iscapturing;
     CUDA_CHECK(cudaStreamIsCapturing(stream, &iscapturing));
     if ((nrows == 1) &&
