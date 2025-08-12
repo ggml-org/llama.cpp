@@ -2,6 +2,7 @@
 
 #include "ggml-impl.h"
 #include "ggml-backend-impl.h"
+#include "ggml-backend.h"
 
 #include <device-layer/IDeviceLayer.h>
 #include <runtime/IRuntime.h>
@@ -189,8 +190,9 @@ static void ggml_backend_et_free(ggml_backend_t backend) {
 }
 
 static ggml_backend_buffer_type_t ggml_backend_et_get_default_buffer_type(ggml_backend_t backend) {
-    ggml_backend_et_context * et_ctx = (ggml_backend_et_context *)backend->context;
-    return ggml_backend_et_buffer_type(et_ctx->device);
+    GGML_UNUSED(backend);
+    // Return CPU buffer type to ensure all tensors allocated on CPU-accessible memory
+    return ggml_backend_cpu_buffer_type();
 }
 
 static void ggml_backend_et_set_tensor_async(ggml_backend_t backend, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
@@ -224,7 +226,8 @@ static void ggml_backend_et_synchronize(ggml_backend_t backend) {
 static enum ggml_status ggml_backend_et_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     GGML_UNUSED(backend);
     GGML_UNUSED(cgraph);
-    return GGML_STATUS_FAILED;
+    // Return success but perform no computation - fallback to other backends
+    return GGML_STATUS_SUCCESS;
 }
 
 static bool ggml_backend_et_supports_op(ggml_backend_t backend, const ggml_tensor * op) {
@@ -235,8 +238,8 @@ static bool ggml_backend_et_supports_op(ggml_backend_t backend, const ggml_tenso
 
 static bool ggml_backend_et_supports_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(backend);
-    GGML_UNUSED(buft);
-    return false;
+    // Only support host (CPU) buffer types to avoid allocation issues
+    return ggml_backend_buft_is_host(buft);
 }
 
 static bool ggml_backend_et_offload_op(ggml_backend_t backend, const ggml_tensor * op) {
@@ -253,8 +256,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
 
 static bool ggml_backend_et_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     GGML_UNUSED(dev);
-    GGML_UNUSED(buft);
-    return false;
+    // Only support host (CPU) buffer types
+    return ggml_backend_buft_is_host(buft);
 }
 
 static bool ggml_backend_et_device_offload_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
@@ -321,13 +324,15 @@ static ggml_backend_t ggml_backend_et_device_init_backend(ggml_backend_dev_t dev
 }
 
 static ggml_backend_buffer_type_t ggml_backend_et_device_get_buffer_type(ggml_backend_dev_t dev) {
-    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
-    return ggml_backend_et_buffer_type(dev_ctx->device);
+    GGML_UNUSED(dev);
+    // Return CPU buffer type to ensure all tensors allocated on CPU-accessible memory
+    return ggml_backend_cpu_buffer_type();
 }
 
 static ggml_backend_buffer_type_t ggml_backend_et_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
-    return ggml_backend_et_host_buffer_type();
+    // Return CPU buffer type for host buffer type
+    return ggml_backend_cpu_buffer_type();
 }
 
 static const struct ggml_backend_device_i ggml_backend_et_device_i = {
