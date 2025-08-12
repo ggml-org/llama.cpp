@@ -22,13 +22,13 @@ static __global__ void pad_f32(const float * src, float * dst,
          && (i1 >= lp1 && i1 < ne1 - rp1) \
          && (i2 >= lp2 && i2 < ne2 - rp2) \
          && (i3 >= lp3 && i3 < ne3 - rp3)) {
-        int i00 = i0 - lp0;
-        int i01 = i1 - lp1;
-        int i02 = i2 - lp2;
-        int i03 = i3 - lp3;
-        int ne02 = ne2 - lp2 - rp2;
-        int ne01 = ne1 - lp1 - rp1;
-        int ne00 = ne0 - lp0 - rp0;
+        int64_t i00 = i0 - lp0;
+        int64_t i01 = i1 - lp1;
+        int64_t i02 = i2 - lp2;
+        int64_t i03 = i3 - lp3;
+        int64_t ne02 = ne2 - lp2 - rp2;
+        int64_t ne01 = ne1 - lp1 - rp1;
+        int64_t ne00 = ne0 - lp0 - rp0;
 
         int64_t src_idx = i03*(ne00*ne01*ne02) + i02*(ne00*ne01) + i01*ne00 + i00;
 

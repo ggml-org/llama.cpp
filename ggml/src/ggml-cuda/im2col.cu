@@ -142,9 +142,9 @@ static  __global__ void im2col_3d_kernel(
         const int64_t iih = ioh * s1 + ikh * d1 - p1;
         const int64_t iid = iod * s2 + ikd * d2 - p2;
 
-        const int64_t offset_dst = (in*OH_OW + ioh*OW + iow)*IC_KD_KH_KW + iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw;
+        const int64_t offset_dst = (in*OD*OH_OW + iod*OH_OW + ioh*OW + iow)*IC_KD_KH_KW + iic*KD_KH_KW + ikd * KH_KW + ikh*KW + ikw;
 
-        if (iih < 0 || iih >= IH || iiw < 0 || iiw >= IW) {
+        if (iih < 0 || iih >= IH || iiw < 0 || iiw >= IW || iid < 0 || iid >= ID) {
             dst[offset_dst] = 0.0f;
         } else {
             const int64_t offset_src = (in*IC + iic)*ID_IH_IW + iid*IH_IW + iih*IW + iiw;
