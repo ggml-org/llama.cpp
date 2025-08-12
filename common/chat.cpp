@@ -1423,6 +1423,9 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
     static const common_regex user_tool_call_regex("(?: <\\|constrain\\|>([a-zA-Z]+))?<\\|message\\|>");
     static const common_regex builtin_tool_call_regex("(?:browser|python)[\\s\\S]*<\\|message\\|>");
 
+    // Save the channel start so we can roll back to delegate reasoning parsing to builder.
+    size_t channel_start_pos = 0;
+
     auto consume_until_next = [&](size_t from = std::string::npos) {
         if (auto res = builder.try_find_regex(start_regex, from, false)) {
             auto begin = res->groups[0].begin;
@@ -1501,25 +1504,11 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
         if (builder.try_consume_regex(to_regex)) {
             tool_call(false); // built-in tools can be called in the analysis channel
         } else if (builder.try_consume_regex(message_regex)) {
-            std::string reasoning;
-            bool has_end = false;
-            if (auto res = builder.try_find_regex(end_regex, std::string::npos, false)) {
-                reasoning = res->prelude;
-                has_end = true;
-            } else {
-                reasoning = builder.consume_rest();
-            }
-
+            builder.move_to(channel_start_pos);
             if (builder.syntax().reasoning_format == COMMON_REASONING_FORMAT_NONE || builder.syntax().reasoning_in_content) {
-                // the templates raise an exception if <|channel|> is present
-                // an assistant's content, so wrap it in think tags
-                builder.add_content("<think>");
-                builder.add_content(reasoning);
-                if (has_end) {
-                    builder.add_content("</think>");
-                }
+                builder.add_content(consume_until_next());
             } else {
-                builder.add_reasoning_content(reasoning);
+                builder.try_parse_reasoning("<|channel|>analysis<|message|>", "<|end|>");
             }
         } else {
             throw common_chat_msg_parse_exception("expected: <|message|>, got: " + consume_until_next());
@@ -1543,6 +1532,7 @@ static void common_chat_parse_gpt_oss(common_chat_msg_parser & builder) {
 
     auto message = [&]() {
         if (auto res = builder.try_consume_regex(channel_regex)) {
+            channel_start_pos = res->groups[0].begin;
             channel(*res);
         } else if (builder.try_consume_regex(to_regex)) {
             tool_call(true);

@@ -1710,7 +1710,7 @@ static void test_template_output_parsers() {
         // Test reasoning formats
         assert_msg_equals(
             simple_assist_msg(
-                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?"),
+                "<|channel|>analysis<|message|>I'm\nthinking<|end|>Hello, world!\nWhat's up?"),
             common_chat_parse(
                 "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
                 "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
@@ -1722,7 +1722,7 @@ static void test_template_output_parsers() {
 
         assert_msg_equals(
             simple_assist_msg(
-                "<think>I'm\nthinking</think>Hello, world!\nWhat's up?"),
+                "<|channel|>analysis<|message|>I'm\nthinking<|end|>Hello, world!\nWhat's up?"),
             common_chat_parse(
                 "<|channel|>analysis<|message|>I'm\nthinking<|end|>"
                 "<|start|>assistant<|channel|>final<|message|>Hello, world!\nWhat's up?",
