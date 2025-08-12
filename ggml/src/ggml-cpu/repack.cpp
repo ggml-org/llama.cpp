@@ -647,10 +647,10 @@ void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         }
         for (int l = 0; l < nb; l++) {
             for (int k = 0; k < (qk / (4 * blocklen)); k++) {
-                const uint8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64 ;
-                const uint8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
-                const uint8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
-                const uint8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
+                const int8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64;
+                const int8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
+                const int8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
+                const int8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sumi1 = 0;
                     sumi2 = 0;
@@ -659,22 +659,10 @@ void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                     sumi = 0;
                     int offset = ((k / 2) % 2) + j * 2;
                     for (int i = 0; i < blocklen; ++i) {
-                        const int hbits_index = k * ncols_interleaved * blocklen + j * blocklen + i;
-                        const int lbits_index = (hbits_index / 32) * 64 + (hbits_index % 32);
-                        const int v0_hbits = (int8_t) ((b_ptr[l].qh[hbits_index] & 3) << 4);
-                        const int v1_hbits = (int8_t) (((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4);
-                        const int v2_hbits = (int8_t) (((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4);
-                        const int v3_hbits = (int8_t) (((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4);
-
-                        const int v0_lbits = (int8_t) (b_ptr[l].qh[lbits_index] & 0xF);
-                        const int v1_lbits = (int8_t) (b_ptr[l].qh[lbits_index + 32] & 0xF);
-                        const int v2_lbits = (int8_t) ((b_ptr[l].qh[lbits_index] >> 4) & 0xF);
-                        const int v3_lbits = (int8_t) ((b_ptr[l].qh[lbits_index + 32] >> 4) & 0xF);
-
-                        const int v0 = v0_hbits | v0_lbits;
-                        const int v1 = v1_hbits | v1_lbits;
-                        const int v2 = v2_hbits | v2_lbits;
-                        const int v3 = v3_hbits | v3_lbits;
+                        int8_t v0 = (int8_t)((b_ptr[l].qh[hbits_index] & 3) << 4) | (b_ptr[l].ql[lbits_index] & 0xF) - 32;
+                        int8_t v1 = (int8_t)(((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4) | (b_ptr[l].ql[lbits_index + 32] & 0xF) - 32;
+                        int8_t v2 = (int8_t)(((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index] >> 4) & 0xF) - 32;
+                        int8_t v3 = (int8_t)(((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index + 32] >> 4) & 0xF) - 32;
 
                         sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 128 + (k % 4) * blocklen + i]);
                         sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 128 + (k % 4) * blocklen + i + 32]);
@@ -1226,20 +1214,19 @@ void ggml_gemm_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
     for (int y = 0; y < nr / 4; y++) {
         const block_q8_Kx4 * a_ptr = (const block_q8_Kx4 *) vy + (y * nb);
         for (int x = 0; x < nc / ncols_interleaved; x++) {
-            const block_q2_Kx8 * b_ptr = (const block_q2_Kx8 *) vx + (x * nb);
+            const block_q6_Kx8 * b_ptr = (const block_q6_Kx8 *) vx + (x * nb);
             for (int m = 0; m < 4; m++) {
                 for (int j = 0; j < ncols_interleaved; j++) {
                     sumf[m][j] = 0.0;
-                    sum_minf[m][j] = 0.0;
                 }
             }
             for (int l = 0; l < nb; l++) {
                 for (int k = 0; k < (qk / (4 * blocklen)); k++) {
 
-                    const uint8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64 ;
-                    const uint8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
-                    const uint8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
-                    const uint8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
+                    const int8_t *scales_0 = b_ptr[l].scales + (k / 4) * 64;
+                    const int8_t *scales_1 = b_ptr[l].scales + (k / 4) * 64 + 16;
+                    const int8_t *scales_2 = b_ptr[l].scales + (k / 4) * 64 + 32;
+                    const int8_t *scales_3 = b_ptr[l].scales + (k / 4) * 64 + 48;
                     for (int m = 0; m < 4; m++) {
                         for (int j = 0; j < ncols_interleaved; j++) {
                             sumi1 = 0;
@@ -1251,20 +1238,11 @@ void ggml_gemm_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                             for (int i = 0; i < blocklen; ++i){
                                 const int hbits_index = k * ncols_interleaved * blocklen + j * blocklen + i;
                                 const int lbits_index = (hbits_index / 32) * 64 + (hbits_index % 32);
-                                const int v0_hbits = (int8_t) ((b_ptr[l].qh[hbits_index] & 3) << 4);
-                                const int v1_hbits = (int8_t) (((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4);
-                                const int v2_hbits = (int8_t) (((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4);
-                                const int v3_hbits = (int8_t) (((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4);
 
-                                const int v0_lbits = (int8_t) (b_ptr[l].qh[lbits_index] & 0xF);
-                                const int v1_lbits = (int8_t) (b_ptr[l].qh[lbits_index + 32] & 0xF);
-                                const int v2_lbits = (int8_t) ((b_ptr[l].qh[lbits_index] >> 4) & 0xF);
-                                const int v3_lbits = (int8_t) ((b_ptr[l].qh[lbits_index + 32] >> 4) & 0xF);
-
-                                const int v0 = v0_hbits | v0_lbits;
-                                const int v1 = v1_hbits | v1_lbits;
-                                const int v2 = v2_hbits | v2_lbits;
-                                const int v3 = v3_hbits | v3_lbits;
+                                int8_t v0 = (int8_t)((b_ptr[l].qh[hbits_index] & 3) << 4) | (b_ptr[l].ql[lbits_index] & 0xF) - 32;
+                                int8_t v1 = (int8_t)(((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4) | (b_ptr[l].ql[lbits_index + 32] & 0xF) - 32;
+                                int8_t v2 = (int8_t)(((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index] >> 4) & 0xF) - 32;
+                                int8_t v3 = (int8_t)(((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index + 32] >> 4) & 0xF) - 32;
 
                                 sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 512 + (k % 4) * 4 * blocklen + m * blocklen + i]);
                                 sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 512  + (k % 4) * 4 * blocklen + m * blocklen + i + 128]);
