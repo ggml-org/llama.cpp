@@ -1,4 +1,5 @@
 import type { ApiSlotData, ApiProcessingState } from '$lib/types/api';
+import { serverStore } from '$lib/stores/server.svelte';
 
 export class SlotsService {
 	private baseUrl: string;

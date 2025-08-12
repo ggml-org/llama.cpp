@@ -7,7 +7,7 @@
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 	import { isLoading } from '$lib/stores/chat.svelte';
-	import { useProcessingState } from '$lib/hooks/use-processing-state';
+	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { fade } from 'svelte/transition';
 
 	interface Props {
