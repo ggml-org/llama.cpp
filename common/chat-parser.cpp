@@ -106,6 +106,19 @@ bool common_chat_msg_parser::try_consume_literal(const std::string & literal) {
     return true;
 }
 
+bool common_chat_msg_parser::try_consume_partial_literal(const std::string & literal) {
+    if (is_partial_) {
+        auto idx = string_find_partial_stop(input_, literal);
+        if (idx != std::string::npos && idx >= pos_) {
+            auto end = input_.size();
+            if (end < idx + literal.size()) {
+                throw common_chat_msg_partial_exception(literal);
+            }
+        }
+    }
+    return try_consume_literal(literal);
+}
+
 std::optional<common_chat_msg_parser::find_regex_result>  common_chat_msg_parser::try_find_literal(const std::string & literal) {
     auto idx = input_.find(literal, pos_);
     if (idx != std::string::npos) {
@@ -153,7 +166,7 @@ bool common_chat_msg_parser::try_parse_reasoning(const std::string & start_think
         }
     };
     if (syntax_.reasoning_format != COMMON_REASONING_FORMAT_NONE) {
-        if (syntax_.thinking_forced_open || try_consume_literal(start_think)) {
+        if (syntax_.thinking_forced_open || try_consume_partial_literal(start_think)) {
             if (auto res = try_find_literal(end_think)) {
                 handle_reasoning(res->prelude, /* closed */ true);
                 consume_spaces();
