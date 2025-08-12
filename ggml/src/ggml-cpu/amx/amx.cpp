@@ -16,6 +16,10 @@
 #include <cstring>
 #include <memory>
 
+#ifdef GGML_USE_NUMA_MIGRATE
+#include <numa.h>
+#endif
+
 #if defined(__AMX_INT8__) && defined(__AVX512VNNI__)
 
 // AMX type_trais
@@ -43,7 +47,11 @@ static ggml::cpu::tensor_traits * get_tensor_traits(ggml_backend_buffer_t, struc
 
 // AMX buffer interface
 static void ggml_backend_amx_buffer_free_buffer(ggml_backend_buffer_t buffer) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    numa_free(buffer->context, buffer->size);
+#else
     free(buffer->context);
+#endif
 }
 
 static void * ggml_backend_amx_buffer_get_base(ggml_backend_buffer_t buffer) {
@@ -123,7 +131,11 @@ static const char * ggml_backend_amx_buffer_type_get_name(ggml_backend_buffer_ty
 }
 
 static ggml_backend_buffer_t ggml_backend_amx_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
+#ifdef GGML_USE_NUMA_MIGRATE
+    void * data = numa_alloc_onnode(size, 0);
+#else
     void * data = ggml_aligned_malloc(size);
+#endif
     if (data == NULL) {
         fprintf(stderr, "%s: failed to allocate buffer of size %zu\n", __func__, size);
         return NULL;
