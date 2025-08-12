@@ -159,7 +159,7 @@
 		<ChatFormActionButtons
 			{disabled}
 			{isLoading}
-			canSend={message.trim().length > 0}
+			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
 			onFileUpload={handleFileUpload}
 			onStop={handleStop}
 		/>

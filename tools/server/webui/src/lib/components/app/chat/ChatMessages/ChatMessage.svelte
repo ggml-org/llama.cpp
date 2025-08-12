@@ -143,11 +143,13 @@
 				</div>
 			{/if}
 
-			<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
-				<div class="text-md whitespace-pre-wrap">
-					{message.content}
-				</div>
-			</Card>
+			{#if message.content.trim()}
+				<Card class="bg-primary text-primary-foreground max-w-[80%] rounded-2xl px-2.5 py-1.5">
+					<div class="text-md whitespace-pre-wrap">
+						{message.content}
+					</div>
+				</Card>
+			{/if}
 
 			<div class="relative flex h-6 items-center">
 				{@render messageActions({ role: 'user' })}
