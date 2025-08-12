@@ -2,7 +2,7 @@
 extern "C" {
 #endif
 
-const void* loadModel();
+const void* loadModel(const char* model_path);
 void closeModel(const void* model);
 void predictWith(const void* model, float* embed, float* encoderOutput);
 

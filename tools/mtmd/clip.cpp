@@ -380,6 +380,9 @@ struct clip_ctx {
     // for debugging
     bool debug_graph = false;
     std::vector<ggml_tensor *> debug_print_tensors;
+    
+    // ANE model path for iOS
+    std::string ane_model_path;
 
     clip_ctx(clip_context_params & ctx_params) {
         debug_graph = std::getenv("MTMD_DEBUG_GRAPH") != nullptr;
@@ -3803,15 +3806,27 @@ static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, co
 }
 
 #ifdef __APPLE__
-static bool clip_image_encode_ane(float * data, float * vec) {
+static bool clip_image_encode_ane(float * data, float * vec, const char* ane_model_path) {
 
     static int flag = 0;
     static const void* coremlEncoder = NULL;
-    if (flag == 0) {
-        coremlEncoder = loadModel();
+    static std::string cached_model_path = "";
+    
+    // Check if we need to load a new model
+    if (flag == 0 || (ane_model_path && cached_model_path != ane_model_path)) {
+        if (coremlEncoder) {
+            closeModel(coremlEncoder);
+        }
+        coremlEncoder = loadModel(ane_model_path);
+        if (!coremlEncoder) {
+            printf("Failed to load ANE model from: %s\n", ane_model_path ? ane_model_path : "null");
+            return false;
+        }
+        cached_model_path = ane_model_path ? ane_model_path : "";
         flag = 1;
     }
     predictWith(coremlEncoder, data, vec);
+    return true;
 }
 #endif
 
@@ -3829,7 +3844,7 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
         float * vit_embedding2 = (float *)malloc(1100*1152*sizeof(float));
 
         ane_embedding(ctx, n_threads, &imgs, vit_embedding1);
-        clip_image_encode_ane(vit_embedding1, vit_embedding2);
+        clip_image_encode_ane(vit_embedding1, vit_embedding2, ctx->ane_model_path.c_str());
         ane_resampler(ctx, n_threads, &imgs, vit_embedding2, vec);
         free(vit_embedding1);
         free(vit_embedding2);
@@ -4633,4 +4648,10 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
 
     batch->entries.push_back(clip_image_f32_ptr(audio));
     batch->is_audio = true;
+}
+
+void clip_set_ane_model_path(struct clip_ctx * ctx, const char * ane_model_path) {
+    if (ctx && ane_model_path) {
+        ctx->ane_model_path = ane_model_path;
+    }
 }

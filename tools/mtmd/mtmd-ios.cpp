@@ -61,11 +61,14 @@ mtmd_ios_params mtmd_ios_params_default(void) {
     mtmd_ios_params params = {};
     params.model_path = "";
     params.mmproj_path = "";
+    params.ane_path = "";
     params.n_predict = -1;
     params.n_ctx = 4096;
     params.n_threads = 4;
     params.temperature = 0.2f;
     params.use_gpu = true;
+    params.mmproj_use_gpu = true;
+    params.warmup = true;
     return params;
 }
 
@@ -86,6 +89,7 @@ mtmd_ios_context* mtmd_ios_init(const mtmd_ios_params* params) {
     common_params common_params;
     common_params.model.path = params->model_path;
     common_params.mmproj.path = params->mmproj_path;
+    common_params.ane.path = params->ane_path;
     common_params.n_ctx = params->n_ctx;
     common_params.n_batch = 2048;  // 增加batch大小，与标准mtmd保持一致
     common_params.cpuparams.n_threads = params->n_threads;
@@ -132,6 +136,7 @@ mtmd_ios_context* mtmd_ios_init(const mtmd_ios_params* params) {
     mparams.print_timings = false;
     mparams.n_threads = params->n_threads;
     mparams.verbosity = GGML_LOG_LEVEL_INFO;
+    mparams.ane_model_path = params->ane_path.empty() ? nullptr : params->ane_path.c_str();
     
     ctx->ctx_vision.reset(mtmd_init_from_file(params->mmproj_path.c_str(), ctx->model, mparams));
     if (!ctx->ctx_vision.get()) {

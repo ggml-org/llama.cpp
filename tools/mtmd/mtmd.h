@@ -82,6 +82,7 @@ struct mtmd_context_params {
     enum ggml_log_level verbosity;
     const char * image_marker; // deprecated, use media_marker instead
     const char * media_marker;
+    const char * ane_model_path; // path to ANE model for iOS
 };
 
 MTMD_API const char * mtmd_default_marker(void);

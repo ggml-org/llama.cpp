@@ -353,6 +353,9 @@ struct common_params {
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
     std::vector<std::string> image; // path to image file(s)
+    
+    // Apple Neural Engine support
+    struct common_params_model ane;
 
     // embedding
     bool embedding         = false; // get only sentence embedding

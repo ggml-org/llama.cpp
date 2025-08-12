@@ -15,6 +15,7 @@ typedef struct mtmd_ios_context mtmd_ios_context;
 typedef struct mtmd_ios_params {
     std::string model_path;
     std::string mmproj_path;
+    std::string ane_path;
     int         n_predict;
     int         n_ctx;
     int         n_threads;

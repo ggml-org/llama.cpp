@@ -8,18 +8,30 @@
 extern "C" {
 #endif
 
-const void* loadModel() {
-    // 新的，从 documents directionary 中加载 begin
-    // 获取文件管理器实例
-    NSFileManager *fileManager = [NSFileManager defaultManager];
-    // 获取应用的 Documents 目录的 URL
-    NSURL *documentsURL = [[fileManager URLsForDirectory:NSDocumentDirectory inDomains:NSUserDomainMask] firstObject];
-    NSString *pathString = [documentsURL.absoluteString stringByAppendingString:@"ane_minicpmv4_vit_f16.mlmodelc"];
-    NSURL *modelURL = [NSURL URLWithString:pathString];
-
-    NSLog(modelURL.absoluteString);
-
-    const void* model = CFBridgingRetain([[ane_minicpmv4_vit_f16 alloc] initWithContentsOfURL:modelURL error:nil]);
+const void* loadModel(const char* model_path) {
+    if (!model_path) {
+        NSLog(@"Error: model_path is null");
+        return nullptr;
+    }
+    
+    NSString *pathString = [NSString stringWithUTF8String:model_path];
+    NSURL *modelURL = [NSURL fileURLWithPath:pathString];
+    
+    NSLog(@"Loading ANE model from: %@", modelURL.absoluteString);
+    
+    NSError *error = nil;
+    const void* model = CFBridgingRetain([[ane_minicpmv4_vit_f16 alloc] initWithContentsOfURL:modelURL error:&error]);
+    
+    if (error) {
+        NSLog(@"Error loading ANE model: %@", error.localizedDescription);
+        return nullptr;
+    }
+    
+    if (!model) {
+        NSLog(@"Error: Failed to create ANE model instance");
+        return nullptr;
+    }
+    
     return model;
 }
 

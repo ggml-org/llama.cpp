@@ -2,6 +2,9 @@
 
 find_package(Threads REQUIRED)
 
+# ANE support option
+option(ENABLE_ANE "Enable Apple Neural Engine support" OFF)
+
 add_library(mtmd
             mtmd.cpp
             mtmd-audio.cpp
@@ -15,8 +18,8 @@ add_library(mtmd
             mtmd-ios.h
             )
 
-# Add ANE related files on Apple platforms
-if(APPLE)
+# Add ANE related files when enabled
+if(ENABLE_ANE)
     target_sources(mtmd PRIVATE
         ane/ane.h
         ane/ane.mm
@@ -40,8 +43,8 @@ target_include_directories(mtmd PRIVATE ../../src)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
-# Link CoreML and Accelerate frameworks on Apple platforms
-if(APPLE)
+# Link CoreML and Accelerate frameworks when ANE is enabled
+if(ENABLE_ANE)
     target_link_libraries(mtmd PRIVATE 
         "-framework Foundation" 
         "-framework CoreML" 
@@ -62,8 +65,8 @@ set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-ios.h
     )
 
-# Add ANE public headers on Apple platforms
-if(APPLE)
+# Add ANE public headers when enabled
+if(ENABLE_ANE)
     list(APPEND MTMD_PUBLIC_HEADERS
         ${CMAKE_CURRENT_SOURCE_DIR}/ane/ane.h
     )
@@ -117,8 +120,8 @@ if (TARGET common)
     add_dependencies(${TARGET_IOS} common)
 endif()
 
-# Add additional linking settings for iOS testing on Apple platforms
-if(APPLE)
+# Add additional linking settings for iOS testing when ANE is enabled
+if(ENABLE_ANE)
     target_link_libraries(${TARGET_IOS} PRIVATE 
         "-framework Foundation" 
         "-framework CoreML" 
