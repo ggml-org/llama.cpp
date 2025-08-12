@@ -151,7 +151,6 @@ static void mul_mat_f_cuda(
         cudaStream_t stream) {
     typedef tile<16, 8, T>     tile_A;
     typedef tile< 8, 8, T>     tile_B;
-    typedef tile<16, 8, float> tile_C;
 
     GGML_ASSERT(!ids && "mul_mat_id not implemented");
 
@@ -351,9 +350,6 @@ void ggml_cuda_mul_mat_f(ggml_backend_cuda_context & ctx, const ggml_tensor * sr
     GGML_ASSERT(        nb10       == ts_src1);
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
     GGML_ASSERT(        nb0        == ts_dst);
-
-    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
-    const enum ggml_prec prec = fast_fp16_available(cc) ? ggml_prec(dst->op_params[0]) : GGML_PREC_F32;
 
     const float   * src1_d =       (const float   *) src1->data;
     const int32_t *  ids_d = ids ? (const int32_t *)  ids->data : nullptr;
