@@ -15,6 +15,22 @@ const void* loadModel(const char* model_path) {
     }
     
     NSString *pathString = [NSString stringWithUTF8String:model_path];
+    
+    // Check if file exists
+    NSFileManager *fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:pathString]) {
+        NSLog(@"Error: ANE model file does not exist at path: %@", pathString);
+        return nullptr;
+    }
+    
+    // Check if it's a directory (for .mlmodelc packages)
+    BOOL isDirectory;
+    if ([fileManager fileExistsAtPath:pathString isDirectory:&isDirectory]) {
+        if (!isDirectory && ![pathString hasSuffix:@".mlmodelc"]) {
+            NSLog(@"Warning: ANE model path should typically be a .mlmodelc directory: %@", pathString);
+        }
+    }
+    
     NSURL *modelURL = [NSURL fileURLWithPath:pathString];
     
     NSLog(@"Loading ANE model from: %@", modelURL.absoluteString);
@@ -32,6 +48,7 @@ const void* loadModel(const char* model_path) {
         return nullptr;
     }
     
+    NSLog(@"Successfully loaded ANE model from: %@", pathString);
     return model;
 }
 

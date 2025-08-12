@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <vector>
 
@@ -159,7 +160,15 @@ struct mtmd_context {
         
         // Set ANE model path for iOS
         if (ctx_params.ane_model_path && ctx_v) {
+            // Check if ANE model file exists
+            std::ifstream ane_file(ctx_params.ane_model_path);
+            if (!ane_file.good()) {
+                throw std::runtime_error(string_format("ANE model file does not exist: %s", ctx_params.ane_model_path));
+            }
+            ane_file.close();
+            
             clip_set_ane_model_path(ctx_v, ctx_params.ane_model_path);
+            LOG_INF("ANE model path set to: %s\n", ctx_params.ane_model_path);
         }
         if (!ctx_v && !ctx_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));
