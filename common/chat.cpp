@@ -1825,7 +1825,7 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
                 builder.add_rule("thinking", "\"<think>\" [^\\x00]* \"</think>\" space");
             }
             builder.add_rule("root",
-                std::string(supports_thinking ? "(thinking)? space " : 
+                std::string(supports_thinking ? "(thinking)? space " :
                             data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
                 (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
             // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
