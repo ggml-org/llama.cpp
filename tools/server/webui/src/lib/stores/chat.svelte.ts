@@ -4,6 +4,7 @@ import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { extractPartialThinking } from '$lib/utils/thinking';
 import { config } from '$lib/stores/settings.svelte';
+import { slotsService } from '$lib/services/slots';
 
 class ChatStore {
 	activeConversation = $state<DatabaseConversation | null>(null);
@@ -209,6 +210,8 @@ class ChatStore {
 						this.isLoading = false;
 						this.currentResponse = '';
 
+						slotsService.stopPolling();
+
 						// Remove the assistant message that was created but failed
 						const messageIndex = this.activeMessages.findIndex(
 							(m: DatabaseMessage) => m.id === assistantMessage.id
@@ -321,6 +324,8 @@ class ChatStore {
 			await this.streamChatCompletion(allMessages, assistantMessage, undefined, (error: Error) => {
 				// Handle context errors by also removing the user message
 				if (error.name === 'ContextError' && userMessage) {
+					slotsService.stopPolling();
+					
 					// Remove user message from UI
 					const userMessageIndex = this.activeMessages.findIndex(
 						(m: DatabaseMessage) => m.id === userMessage!.id
@@ -340,6 +345,8 @@ class ChatStore {
 
 			// Handle context errors by removing the user message if it was added
 			if (error instanceof Error && error.name === 'ContextError' && userMessage) {
+				slotsService.stopPolling();
+				
 				const userMessageIndex = this.activeMessages.findIndex(
 					(m: DatabaseMessage) => m.id === userMessage.id
 				);
