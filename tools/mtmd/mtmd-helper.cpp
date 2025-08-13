@@ -428,7 +428,7 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
 
     // otherwise, we assume it's an image
     mtmd_bitmap * result = nullptr;
-    if (len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf  8, "WEBP", 4) == 0) {
+    if (len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0) {
         int nx, ny;
         uint8_t* rgb = WebPDecodeRGB(buf, len, &nx, &ny);
         if (!rgb) {
@@ -439,7 +439,7 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
         WebPFree(rgb);
         return result;
     }
-    
+
     {
 
         int nx, ny, nc;
