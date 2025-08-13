@@ -67,6 +67,9 @@ struct llama_adapter_lora {
 
     float alpha;
 
+    // activated lora (aLoRA)
+    std::string invocation_string;
+
     llama_adapter_lora() = default;
     ~llama_adapter_lora() = default;
 
