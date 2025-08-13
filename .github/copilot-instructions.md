@@ -47,6 +47,8 @@ cmake -B build -DGGML_METAL=ON
 cmake --build build --config Release -j $(nproc)
 ```
 
+**Important Note**: While all backends can be built as long as the correct requirements for that backend are installed, you will not be able to run them without the correct hardware. The only backend that can be run for testing and validation is the CPU backend.
+
 ### Debug Builds
 Single-config generators:
 ```bash
@@ -76,6 +78,21 @@ ctest --test-dir build --output-on-failure -j $(nproc)
 **Test suite**: 38 tests covering tokenizers, grammar parsing, sampling, backends, and integration
 **Expected failures**: 2-3 tests may fail if network access is unavailable (they download models)
 **Test time**: ~30 seconds for passing tests
+
+### Server Unit Tests
+Run server-specific unit tests after building the server:
+```bash
+# Build the server first
+cmake --build build --target llama-server
+
+# Navigate to server tests and run
+cd tools/server/tests
+source ../../../.venv/bin/activate
+pip install -r requirements.txt
+./tests.sh
+```
+
+**Server test dependencies**: The `.venv` environment includes the required dependencies for server unit tests (pytest, aiohttp, etc.). Tests can be run individually or with various options as documented in `tools/server/tests/README.md`.
 
 ### Test Categories
 - Tokenizer tests: Various model tokenizers (BERT, GPT-2, LLaMA, etc.)
@@ -202,7 +219,8 @@ Primary tools:
 1. **Format code**: `clang-format -i modified_files.cpp`
 2. **Build**: `cmake --build build --config Release`
 3. **Test**: `ctest --test-dir build --output-on-failure`
-4. **Manual validation**: Test relevant tools in `build/bin/`
+4. **Server tests** (if modifying server): `cd tools/server/tests && source ../../../.venv/bin/activate && ./tests.sh`
+5. **Manual validation**: Test relevant tools in `build/bin/`
 
 ### Performance Validation
 ```bash
