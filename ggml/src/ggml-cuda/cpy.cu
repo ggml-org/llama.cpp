@@ -282,8 +282,13 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     const int64_t ne = ggml_nelements(src0);
     GGML_ASSERT(ne == ggml_nelements(src1));
 
+    #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    // No INT_MAX limit – ggml_nbytes may exceed 2GB on large contexts.
+    // The underlying cudaMemcpyAsync can handle size_t lengths.
+    #else
     GGML_ASSERT(ggml_nbytes(src0) <= INT_MAX);
     GGML_ASSERT(ggml_nbytes(src1) <= INT_MAX);
+    #endif
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
