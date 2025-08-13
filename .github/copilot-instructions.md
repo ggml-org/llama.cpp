@@ -63,8 +63,6 @@ cmake --build build --config Debug
 ```
 
 ### Common Build Issues
-- **Issue**: ccache cache grows large during development
-  **Solution**: Add `.ccache/` to .gitignore and exclude from commits
 - **Issue**: Network tests fail in isolated environments
   **Solution**: Expected behavior - core functionality tests will still pass
 
@@ -88,7 +86,6 @@ cmake --build build --target llama-server
 # Navigate to server tests and run
 cd tools/server/tests
 source ../../../.venv/bin/activate
-pip install -r requirements.txt
 ./tests.sh
 ```
 
@@ -129,12 +126,6 @@ Configuration is in `.clang-format` with these key rules:
 ```bash
 # Activate virtual environment
 source .venv/bin/activate
-
-# Use flake8 from the virtual environment
-flake8 *.py
-
-# Use pyright from the virtual environment  
-pyright
 ```
 
 Configuration files:
@@ -154,6 +145,7 @@ Key workflows that run on every PR:
 - `.github/workflows/build.yml`: Multi-platform builds
 - `.github/workflows/server.yml`: Server functionality tests  
 - `.github/workflows/python-lint.yml`: Python code quality
+- `.github/workflows/python-type-check.yml`: Python type checking
 
 ### Local CI Validation
 **Run full CI locally before submitting PRs:**
@@ -162,9 +154,6 @@ mkdir tmp
 
 # CPU-only build
 bash ./ci/run.sh ./tmp/results ./tmp/mnt
-
-# With CUDA support
-GG_BUILD_CUDA=1 bash ./ci/run.sh ./tmp/results ./tmp/mnt
 ```
 
 **CI Runtime**: 30-60 minutes depending on backend configuration
@@ -268,7 +257,6 @@ Primary tools:
 - Always create feature branches from `master`
 - **Never** commit build artifacts (`build/`, `.ccache/`, `*.o`, `*.gguf`)
 - Use descriptive commit messages following project conventions
-- Squash-merge PRs with format: `<module> : <description> (#<issue>)`
 
 ### Trust These Instructions
 Only search for additional information if these instructions are incomplete or found to be incorrect. This document contains validated build and test procedures that work reliably across different environments.
