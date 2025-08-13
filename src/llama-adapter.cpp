@@ -190,6 +190,11 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
         }
 
         adapter.alpha = get_kv_f32(llm_kv(LLM_KV_ADAPTER_LORA_ALPHA));
+
+        adapter.invocation_string = get_kv_str(llm_kv(LLM_KV_ADAPTER_LORA_INVOCATION_STRING));
+        if (!adapter.invocation_string.empty()) {
+            LLAMA_LOG_INFO("%s: activated LoRA invocation string: '%s'\n", __func__, adapter.invocation_string.c_str());
+        }
     }
 
     int n_tensors = gguf_get_n_tensors(ctx_gguf.get());
