@@ -111,7 +111,7 @@ source ../../../.venv/bin/activate
 ### C++ Code Formatting
 **ALWAYS format C++ code before committing:**
 ```bash
-clang-format -i src/**/*.cpp include/**/*.h
+git clang-format --binary clang-format-16
 ```
 
 Configuration is in `.clang-format` with these key rules:
@@ -205,7 +205,7 @@ Primary tools:
 ## Common Validation Steps
 
 ### After Making Changes
-1. **Format code**: `clang-format -i modified_files.cpp`
+1. **Format code**: `git clang-format --binary clang-format-16`
 2. **Build**: `cmake --build build --config Release`
 3. **Test**: `ctest --test-dir build --output-on-failure`
 4. **Server tests** (if modifying server): `cd tools/server/tests && source ../../../.venv/bin/activate && ./tests.sh`
