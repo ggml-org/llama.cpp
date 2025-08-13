@@ -110,7 +110,7 @@ source ../../../.venv/bin/activate
 ### C++ Code Formatting
 **ALWAYS format C++ code before committing:**
 ```bash
-git clang-format --binary clang-format-16
+git clang-format
 ```
 
 Configuration is in `.clang-format` with these key rules:
