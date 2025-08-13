@@ -6,6 +6,7 @@
 
 #include <map>
 #include <cassert>
+#include <sstream>
 #include <stdexcept>
 
 // vec
@@ -191,9 +192,34 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
 
         adapter.alpha = get_kv_f32(llm_kv(LLM_KV_ADAPTER_LORA_ALPHA));
 
-        adapter.invocation_string = get_kv_str(llm_kv(LLM_KV_ADAPTER_LORA_INVOCATION_STRING));
-        if (!adapter.invocation_string.empty()) {
-            LLAMA_LOG_INFO("%s: activated LoRA invocation string: '%s'\n", __func__, adapter.invocation_string.c_str());
+        // parse alora invocation sequence vector
+        const auto & key = llm_kv(LLM_KV_ADAPTER_ALORA_INVOCATION_TOKENS);
+        const int kid = gguf_find_key(ctx_gguf.get(), key.c_str());
+        if (kid >= 0) {
+            if (gguf_get_kv_type(ctx_gguf.get(), kid) != GGUF_TYPE_ARRAY) {
+                throw std::runtime_error("invalid gguf type for " + key);
+            }
+            const auto arr_type = gguf_get_arr_type(ctx_gguf.get(), kid);
+            if (arr_type != GGUF_TYPE_UINT32) {
+                throw std::runtime_error("invalid gguf element type for " + key);
+            }
+            const size_t seq_len = gguf_get_arr_n(ctx_gguf.get(), kid);
+            const void * data = gguf_get_arr_data(ctx_gguf.get(), kid);
+            adapter.alora_invocation_tokens.resize(seq_len);
+            std::copy(
+                (const llama_token *)data,
+                (const llama_token *)data + seq_len,
+                adapter.alora_invocation_tokens.begin());
+            std::stringstream ss;
+            ss << "[";
+            for (size_t i = 0; i < adapter.alora_invocation_tokens.size(); ++i) {
+                ss << adapter.alora_invocation_tokens[i];
+                if (i < adapter.alora_invocation_tokens.size() - 1) {
+                    ss << ", ";
+                }
+            }
+            ss << "]";
+            LLAMA_LOG_INFO("%s: %s = %s\n", __func__, key.c_str(), ss.str().c_str());
         }
     }
 
