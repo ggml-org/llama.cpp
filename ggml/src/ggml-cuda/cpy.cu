@@ -141,69 +141,147 @@ void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_des
 
 template<typename src_t, typename dst_t>
 static void ggml_cpy_flt_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
+    #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    const int64_t max_chunk = INT_MAX;
+    for (int64_t offset = 0; offset < ne; offset += max_chunk) {
+        const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
+        const int num_blocks = (chunk + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
+        cpy_flt<cpy_1_flt<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
+            (cx + offset * sizeof(src_t), cdst + offset * sizeof(dst_t), chunk, 
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+             cdst_indirect, graph_cpynode_index++);
+    }
+    #else
     const int num_blocks = (ne + CUDA_CPY_BLOCK_SIZE - 1) / CUDA_CPY_BLOCK_SIZE;
     cpy_flt<cpy_1_flt<src_t, dst_t>><<<num_blocks, CUDA_CPY_BLOCK_SIZE, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    #endif
 }
 
 static void ggml_cpy_f32_q8_0_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
     GGML_ASSERT(ne % QK8_0 == 0);
+    #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    const int64_t max_chunk = INT_MAX;
+    for (int64_t offset = 0; offset < ne; offset += max_chunk) {
+        const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
+        const int64_t chunk_blocks = chunk / QK8_0;
+        cpy_f32_q<cpy_blck_f32_q8_0, QK8_0><<<chunk_blocks, 1, 0, stream>>>
+            (cx + offset * sizeof(float), cdst + (offset / QK8_0) * sizeof(block_q8_0), chunk, 
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+             cdst_indirect, graph_cpynode_index++);
+    }
+    #else
     const int num_blocks = ne / QK8_0;
     cpy_f32_q<cpy_blck_f32_q8_0, QK8_0><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    #endif
 }
 
 static void ggml_cpy_q8_0_f32_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
+    #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    const int64_t max_chunk = INT_MAX;
+    for (int64_t offset = 0; offset < ne; offset += max_chunk) {
+        const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
+        const int64_t chunk_blocks = chunk;
+        cpy_q_f32<cpy_blck_q8_0_f32, QK8_0><<<chunk_blocks, 1, 0, stream>>>
+            (cx + (offset / QK8_0) * sizeof(block_q8_0), cdst + offset * sizeof(float), chunk, 
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+             cdst_indirect, graph_cpynode_index++);
+    }
+    #else
     const int num_blocks = ne;
     cpy_q_f32<cpy_blck_q8_0_f32, QK8_0><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    #endif
 }
 
 static void ggml_cpy_f32_q4_0_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
     GGML_ASSERT(ne % QK4_0 == 0);
+    #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    const int64_t max_chunk = INT_MAX;
+    for (int64_t offset = 0; offset < ne; offset += max_chunk) {
+        const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
+        const int64_t chunk_blocks = chunk / QK4_0;
+        cpy_f32_q<cpy_blck_f32_q4_0, QK4_0><<<chunk_blocks, 1, 0, stream>>>
+            (cx + offset * sizeof(float), cdst + (offset / QK4_0) * sizeof(block_q4_0), chunk, 
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+             cdst_indirect, graph_cpynode_index++);
+    }
+    #else
     const int num_blocks = ne / QK4_0;
     cpy_f32_q<cpy_blck_f32_q4_0, QK4_0><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    #endif
 }
 
 static void ggml_cpy_q4_0_f32_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02,
-    const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12,
-    const int nb10, const int nb11, const int nb12, const int nb13,
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02,
+    const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12,
+    const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13,
     cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    const int64_t max_chunk = INT_MAX;
+    for (int64_t offset = 0; offset < ne; offset += max_chunk) {
+        const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
+        const int64_t chunk_blocks = chunk;
+        cpy_q_f32<cpy_blck_q_f32<dequantize_q4_0, QK4_0>, QK4_0><<<chunk_blocks, 1, 0, stream>>>(
+            cx + (offset / QK4_0) * sizeof(block_q4_0), cdst + offset * sizeof(float), chunk, 
+            ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+            ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+            cdst_indirect, graph_cpynode_index++);
+    }
+    #else
     const int num_blocks = ne;
     cpy_q_f32<cpy_blck_q_f32<dequantize_q4_0, QK4_0>, QK4_0><<<num_blocks, 1, 0, stream>>>(
         cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
-         ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+        ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    #endif
 }
 
 static void ggml_cpy_f32_q4_1_cuda(
-    const char * cx, char * cdst, const int ne,
-    const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
-    const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
+    const char * cx, char * cdst, const int64_t ne,
+    const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t nb00, const int64_t nb01, const int64_t nb02,
+    const int64_t nb03, const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t nb10, const int64_t nb11, const int64_t nb12, const int64_t nb13, cudaStream_t stream, char ** cdst_indirect, int & graph_cpynode_index) {
 
     GGML_ASSERT(ne % QK4_1 == 0);
+    #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    const int64_t max_chunk = INT_MAX;
+    for (int64_t offset = 0; offset < ne; offset += max_chunk) {
+        const int64_t chunk = (ne - offset) < max_chunk ? (ne - offset) : max_chunk;
+        const int64_t chunk_blocks = chunk / QK4_1;
+        cpy_f32_q<cpy_blck_f32_q4_1, QK4_1><<<chunk_blocks, 1, 0, stream>>>
+            (cx + offset * sizeof(float), cdst + (offset / QK4_1) * sizeof(block_q4_1), chunk, 
+             ne00, ne01, ne02, nb00, nb01, nb02, nb03, 
+             ne10, ne11, ne12, nb10, nb11, nb12, nb13, 
+             cdst_indirect, graph_cpynode_index++);
+    }
+    #else
     const int num_blocks = ne / QK4_1;
     cpy_f32_q<cpy_blck_f32_q4_1, QK4_1><<<num_blocks, 1, 0, stream>>>
         (cx, cdst, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, cdst_indirect, graph_cpynode_index++);
+    #endif
 }
 
 static void ggml_cpy_q4_1_f32_cuda(
