@@ -50,3 +50,4 @@ jobs:
           python3 -m venv .venv
           .venv/bin/activate
           pip install -r requirements/requirements-all.txt
+          pip install flake8 pyright
