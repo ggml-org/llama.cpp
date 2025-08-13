@@ -88,7 +88,6 @@ cd tools/server/tests
 source ../../../.venv/bin/activate
 ./tests.sh
 ```
-
 **Server test dependencies**: The `.venv` environment includes the required dependencies for server unit tests (pytest, aiohttp, etc.). Tests can be run individually or with various options as documented in `tools/server/tests/README.md`.
 
 ### Test Categories
@@ -260,3 +259,4 @@ Primary tools:
 
 ### Trust These Instructions
 Only search for additional information if these instructions are incomplete or found to be incorrect. This document contains validated build and test procedures that work reliably across different environments.
+
