@@ -40,7 +40,7 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
            ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
            ctx.cuda_graph->disable_due_to_failed_graph_capture))) {
 #else
-        (ncols > 65536)) {
+        (ncols > 65536) && (iscapturing == cudaStreamCaptureStatusNone)) {
 #endif // USE_CUDA_GRAPH
         // Single row - use device-wide reduction
         size_t           tmp_size = 0;
