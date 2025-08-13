@@ -108,9 +108,21 @@ Configuration is in `.clang-format` with these key rules:
 - Reference alignment: `int & ref` (middle)
 
 ### Python Code
+**ALWAYS activate the Python environment in `.venv` and use tools from that environment:**
 ```bash
-flake8 --max-line-length=120 *.py
+# Activate virtual environment
+source .venv/bin/activate
+
+# Use flake8 from the virtual environment
+flake8 *.py
+
+# Use pyright from the virtual environment  
+pyright
 ```
+
+Configuration files:
+- `.flake8`: flake8 settings (max-line-length=125, excludes examples/tools)
+- `pyrightconfig.json`: pyright type checking configuration
 
 ### Pre-commit Hooks
 Run before committing:
@@ -150,6 +162,7 @@ Add `ggml-ci` to commit message to trigger heavy CI workloads on the custom CI i
 - **`include/`**: Public API headers, primarily `include/llama.h`
 - **`ggml/`**: Core tensor library (submodule with custom GGML framework)
 - **`examples/`**: 30+ example applications and tools
+- **`tools/`**: Additional development and utility tools (server benchmarks, tests)
 - **`tests/`**: Comprehensive test suite with CTest integration
 - **`docs/`**: Detailed documentation (build guides, API docs, etc.)
 - **`scripts/`**: Utility scripts for CI, data processing, and automation
@@ -212,6 +225,7 @@ Primary tools:
 - CMake 3.14+ (install via system package manager)
 - Modern C++ compiler with C++17 support
 - Git (for submodule management)
+- Python 3.9+ with virtual environment (`.venv` is provided)
 
 ### Optional but Recommended
 - ccache: `apt install ccache` or `brew install ccache`
