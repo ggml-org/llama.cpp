@@ -258,7 +258,7 @@ function(ggml_add_backend_library backend)
     else()
         add_library(${backend} ${ARGN})
         target_link_libraries(ggml PUBLIC ${backend})
-        install(TARGETS ${backend} LIBRARY)
+        install(TARGETS ${backend} EXPORT ggml-targets)
     endif()
 
     target_link_libraries(${backend} PRIVATE ggml-base)

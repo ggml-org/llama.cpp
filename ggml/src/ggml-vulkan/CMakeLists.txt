@@ -13,6 +13,10 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     add_definitions(/MP)
 endif()
 
+# Add options to disable cooperative matrix support
+option(GGML_VULKAN_DISABLE_COOPMAT "Disable VK_KHR_cooperative_matrix support" OFF)
+option(GGML_VULKAN_DISABLE_COOPMAT2 "Disable VK_NV_cooperative_matrix2 support" OFF)
+
 function(detect_host_compiler)
     if (CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
         find_program(HOST_C_COMPILER NAMES cl gcc clang NO_CMAKE_FIND_ROOT_PATH)
@@ -62,17 +66,25 @@ if (Vulkan_FOUND)
     set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
 
     # Test all shader extensions
+    if (NOT GGML_VULKAN_DISABLE_COOPMAT)
     test_shader_extension_support(
         "GL_KHR_cooperative_matrix"
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat.comp"
         "GGML_VULKAN_COOPMAT_GLSLC_SUPPORT"
     )
+else()
+    message(STATUS "VK_KHR_cooperative_matrix support disabled by GGML_VULKAN_DISABLE_COOPMAT")
+endif()
 
+if (NOT GGML_VULKAN_DISABLE_COOPMAT2)
     test_shader_extension_support(
         "GL_NV_cooperative_matrix2"
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2.comp"
         "GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT"
     )
+else()
+    message(STATUS "VK_NV_cooperative_matrix2 support disabled by GGML_VULKAN_DISABLE_COOPMAT2")
+endif()
 
     test_shader_extension_support(
         "GL_EXT_integer_dot_product"
@@ -88,6 +100,7 @@ if (Vulkan_FOUND)
 
     target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+    target_include_directories(ggml-vulkan PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vulkan_cpp_wrapper/include")
 
     # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build
     # Posssibly relevant: https://stackoverflow.com/questions/74748276/visual-studio-no-displays-the-correct-length-of-stdvector

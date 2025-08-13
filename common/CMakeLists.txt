@@ -44,36 +44,46 @@ endif()
 
 set(TARGET common)
 
+set(${TARGET}_HEADERS
+  arg.h
+  base64.hpp
+  chat-parser.h
+  chat.h
+  common.h
+  console.h
+  json-partial.h
+  json-schema-to-grammar.h
+  log.h
+  ngram-cache.h
+  regex-partial.h
+  sampling.h
+  speculative.h
+)
+
+list(TRANSFORM ${TARGET}_HEADERS PREPEND ${CMAKE_SOURCE_DIR}/common/)
+
 add_library(${TARGET} STATIC
     arg.cpp
-    arg.h
-    base64.hpp
     chat-parser.cpp
-    chat-parser.h
     chat.cpp
-    chat.h
     common.cpp
-    common.h
     console.cpp
     console.h
     download.cpp
     download.h
     http.h
     json-partial.cpp
-    json-partial.h
     json-schema-to-grammar.cpp
     llguidance.cpp
     log.cpp
-    log.h
     ngram-cache.cpp
-    ngram-cache.h
     regex-partial.cpp
-    regex-partial.h
     sampling.cpp
-    sampling.h
     speculative.cpp
-    speculative.h
+    ${${TARGET}_HEADERS}
     )
+
+set_target_properties(${TARGET} PROPERTIES PUBLIC_HEADER "${${TARGET}_HEADERS}")
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -176,7 +186,12 @@ if (LLAMA_LLGUIDANCE)
     set(LLAMA_COMMON_EXTRA_LIBS ${LLAMA_COMMON_EXTRA_LIBS} llguidance ${LLGUIDANCE_PLATFORM_LIBS})
 endif ()
 
-target_include_directories(${TARGET} PUBLIC . ../vendor)
+target_include_directories(
+  ${TARGET}
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/common$<SEMICOLON>${CMAKE_SOURCE_DIR}/vendor>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 target_link_libraries     (${TARGET} PRIVATE ${LLAMA_COMMON_EXTRA_LIBS} PUBLIC llama Threads::Threads)
 
