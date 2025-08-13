@@ -1615,7 +1615,7 @@ void lr_opt::init() {
 float lr_opt::get_lr(float epoch) const {
     float r = lr_min <= 0 ? lr0 :
         epoch >= decay_epochs ? lr_min :
-        lr0 * std::powf(0.5f, epoch * scale_epoch);
+        lr0 * std::pow(0.5f, epoch * scale_epoch);
     LOG_INF("epoch %.2g lr=%.2g\n", epoch, r);
     return r;
 }
