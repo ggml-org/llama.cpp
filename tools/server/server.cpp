@@ -31,6 +31,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#define SERVER_MAX_SWA_CHECKPOINTS_PER_SLOT 3
+
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
@@ -693,10 +695,10 @@ struct completion_token_output {
 };
 
 struct swa_checkpoint {
-    std::vector<uint8_t> data;
-
     llama_pos pos_min;
     llama_pos pos_max;
+
+    std::vector<uint8_t> data;
 };
 
 struct server_task_result_cmpl_final : server_task_result {
@@ -3300,6 +3302,8 @@ struct server_context {
                                 slot.n_past = 0;
                             }
 
+                            const auto n_swa = llama_model_n_swa(model);
+
                             if (slot.n_past > 0 && slot.n_past < (int) slot.cache_tokens.size()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
@@ -3307,43 +3311,47 @@ struct server_context {
                                     GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
                                 }
 
-                                const auto n_swa = llama_model_n_swa(model);
-                                if (pos_min > std::max(0, slot.n_past - n_swa)) {
+                                const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
+
+                                if (pos_min > pos_min_thold) {
                                     // search for a SWA checkpoint
-                                    int ic = -1;
-                                    int np = std::numeric_limits<int>::max();
-                                    for (int i = 0; i < (int) slot.swa_checkpoints.size(); i++) {
-                                        const auto & cur = slot.swa_checkpoints[i];
-                                        if (cur.pos_min <= std::max(0, slot.n_past - n_swa)) {
-                                            const int p = std::max(0, slot.n_past - cur.pos_max);
-
-                                            if (p < np) {
-                                                ic = i;
-                                                np = p;
-                                            }
+                                    auto it = std::find_if(
+                                        slot.swa_checkpoints.rbegin(),
+                                        slot.swa_checkpoints.rend(),
+                                        [&](const auto & cur) {
+                                            return cur.pos_min <= pos_min_thold;
                                         }
-                                    }
+                                    );
 
-                                    if (ic == -1) {
+                                    if (it == slot.swa_checkpoints.rend()) {
                                         SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
                                         SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
                                                 "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                                        slot.n_past = 0;
 
+                                        slot.n_past = 0;
                                         slot.swa_checkpoints.clear();
                                     } else {
-                                        // erase all checkpoints after the one we are using
-                                        slot.swa_checkpoints.erase(slot.swa_checkpoints.begin() + ic + 1, slot.swa_checkpoints.end());
-
                                         // restore the checkpoint
-                                        const auto & cur = slot.swa_checkpoints[ic];
+                                        const size_t swa_size = it->data.size();
+                                        llama_state_seq_set_data(ctx, it->data.data(), swa_size, slot.id);
 
-                                        const size_t swa_size = cur.data.size();
-                                        llama_state_seq_set_data(ctx, cur.data.data(), swa_size, slot.id);
+                                        slot.n_past = std::min(slot.n_past, it->pos_max);
 
-                                        slot.n_past = std::min(slot.n_past, cur.pos_max);
+                                        SLT_WRN(slot, "SWA checkpoint restore, pos_min = %d, pos_max = %d, size = %.3f MiB\n", it->pos_min, it->pos_max, (float) swa_size / 1024 / 1024);
+                                    }
+                                }
+                            }
 
-                                        SLT_WRN(slot, "prompt swa checkpoint restored, pos_min = %d, pos_max = %d, size = %f MB\n", cur.pos_min, cur.pos_max, (float) swa_size / 1024 / 1024);
+                            if (n_swa > 0) {
+                                const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
+
+                                // erase any checkpoints with pos_min > pos_min_thold
+                                for (int i = (int) slot.swa_checkpoints.size() - 1; i >= 0; i--) {
+                                    const auto & cur = slot.swa_checkpoints[i];
+                                    if (cur.pos_min > pos_min_thold) {
+                                        slot.swa_checkpoints.erase(slot.swa_checkpoints.begin() + i);
+
+                                        SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %f MiB\n", cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
                                     }
                                 }
                             }
@@ -3559,23 +3567,29 @@ struct server_context {
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;
 
-                    // make a checkpoint
+                    // make a checkpoint with the SWA memory
                     if (llama_model_n_swa(model) > 0) {
-                        if (slot.swa_checkpoints.size() > 8) {
+                        if (slot.swa_checkpoints.size() >= SERVER_MAX_SWA_CHECKPOINTS_PER_SLOT) {
+                            {
+                                const auto & cur = slot.swa_checkpoints.back();
+
+                                SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %f MiB\n", cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
+                            }
+
                             slot.swa_checkpoints.erase(slot.swa_checkpoints.begin());
                         }
 
-                        auto & cur = slot.swa_checkpoints.emplace_back();
-
-                        cur.pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
-                        cur.pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), slot.id);
-
                         const size_t swa_size = llama_state_seq_get_size(ctx, slot.id);
-                        cur.data.resize(swa_size);
+
+                        auto & cur = slot.swa_checkpoints.emplace_back(swa_checkpoint{
+                            /*.pos_min = */ llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id),
+                            /*.pos_max = */ llama_memory_seq_pos_max(llama_get_memory(ctx), slot.id),
+                            /*.data    = */ std::vector<uint8_t>(swa_size),
+                        });
 
                         llama_state_seq_get_data(ctx, cur.data.data(), swa_size, slot.id);
 
-                        SLT_WRN(slot, "prompt swa checkpoint, pos_min = %d, pos_max = %d, size = %f MB\n", cur.pos_min, cur.pos_max, (float) swa_size / 1024 / 1024);
+                        SLT_WRN(slot, "SWA checkpoint create, pos_min = %d, pos_max = %d, size = %f MiB\n", cur.pos_min, cur.pos_max, (float) swa_size / 1024 / 1024);
                     }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
