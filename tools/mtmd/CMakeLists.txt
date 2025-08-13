@@ -24,6 +24,8 @@ if(ENABLE_ANE)
         ane/ane_minicpmv4_vit_f16.h
         ane/ane_minicpmv4_vit_f16.m
     )
+    # Define compile-time macro for code guards
+    target_compile_definitions(mtmd PRIVATE ENABLE_ANE)
     
     # Enable ARC for Objective-C files
     set_source_files_properties(ane/ane.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")

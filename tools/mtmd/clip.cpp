@@ -10,7 +10,7 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
-#ifdef __APPLE__
+#if defined(ENABLE_ANE)
 #include "ane/ane.h"
 #endif
 
@@ -3840,7 +3840,7 @@ static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, co
     return pos_embed_2d;
 }
 
-#ifdef __APPLE__
+#if defined(ENABLE_ANE)
 static bool clip_image_encode_ane(float * data, float * vec, const char* ane_model_path) {
 
     static int flag = 0;
@@ -3871,7 +3871,7 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     *img_copy = *img;
     imgs.entries.push_back(std::move(img_copy));
 
-#ifdef __APPLE__
+#if defined(ENABLE_ANE)
     bool ios_ctx = true;
     if (ios_ctx){
         printf("clip use ane\n");
@@ -3890,8 +3890,8 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
 }
 
-#ifdef __APPLE__
-bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+#if defined(ENABLE_ANE)
+static bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
 
@@ -4063,7 +4063,7 @@ bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_bat
     return true;
 }
 
-bool ane_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, const float * vit_embedding, float * vec) {
+static bool ane_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, const float * vit_embedding, float * vec) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
 
