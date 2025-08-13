@@ -180,30 +180,6 @@ static int ggml_cuda_parse_id(char devName[]) {
 #endif // defined(GGML_USE_HIP)
 
 static ggml_cuda_device_info ggml_cuda_init() {
-#if defined(GGML_USE_HIP)
-    // Workaround for a rocBLAS bug when using multiple graphics cards:
-    // https://github.com/ROCmSoftwarePlatform/rocBLAS/issues/1346
-    {
-        int major_version = 0;
-        size_t version_length = 0;
-        if (rocblas_get_version_string_size(&version_length) == rocblas_status_success) {
-            std::vector<char> version(version_length+1, '\0');
-            if (rocblas_get_version_string(version.data(), version.size()) == rocblas_status_success) {
-                version.resize(::strlen(version.data()));
-                int parsed_value = 0;
-                if (std::from_chars(version.data(), version.data() + version.size(), parsed_value).ec == std::errc()) {
-                    major_version = parsed_value;
-                }
-            }
-        }
-        if (major_version < 4) {
-            GGML_LOG_DEBUG(GGML_CUDA_NAME " calling rocblas_initialize as a workaround for a rocBLAS bug\n");
-            rocblas_initialize();
-            CUDA_CHECK(cudaDeviceSynchronize());
-        }
-    }
-#endif
-
     ggml_cuda_device_info info = {};
 
     cudaError_t err = cudaGetDeviceCount(&info.device_count);
