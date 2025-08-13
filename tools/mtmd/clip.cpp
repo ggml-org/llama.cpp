@@ -265,6 +265,7 @@ struct clip_model {
 
     // LLaVA projection
     ggml_tensor * mm_input_norm_w = nullptr;
+    ggml_tensor * mm_input_norm_b = nullptr;
     ggml_tensor * mm_0_w = nullptr;
     ggml_tensor * mm_0_b = nullptr;
     ggml_tensor * mm_2_w = nullptr;
@@ -542,6 +543,36 @@ struct clip_graph {
                 bsz);
 
             cur = ggml_mul_mat(ctx0, model.projection, cur);
+        } else if (ctx->proj_type() == PROJECTOR_TYPE_LFM2) {
+            const int scale_factor = model.hparams.proj_scale_factor;
+            const int n_embd = cur->ne[0];
+            const int seq    = cur->ne[1];
+            const int bsz    = 1; // batch size, always 1 for now since we don't support batching
+            const int height = std::sqrt(seq);
+            const int width  = std::sqrt(seq);
+            GGML_ASSERT(scale_factor != 0);
+            cur = ggml_reshape_4d(ctx0, cur, n_embd * scale_factor, width / scale_factor, height, bsz);
+            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+            cur = ggml_reshape_4d(ctx0, ggml_cont(ctx0, cur),
+                n_embd * scale_factor * scale_factor,
+                height / scale_factor,
+                width / scale_factor,
+                bsz);
+            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+            cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur),
+                n_embd * scale_factor * scale_factor,
+                seq / (scale_factor * scale_factor),
+                bsz);
+
+            cur = ggml_norm(ctx0, cur, 1e-5); // default nn.LayerNorm
+            cur = ggml_mul(ctx0, cur, model.mm_input_norm_w);
+            cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
+
+            cur = ggml_mul_mat(ctx0, model.mm_1_w, cur);
+            cur = ggml_add(ctx0, cur, model.mm_1_b);
+            cur = ggml_gelu(ctx0, cur);
+            cur = ggml_mul_mat(ctx0, model.mm_2_w, cur);
+            cur = ggml_add(ctx0, cur, model.mm_2_b);
         } else {
             GGML_ABORT("SigLIP: Unsupported projector type");
         }
@@ -1966,6 +1997,7 @@ static ggml_cgraph * clip_image_build_graph(clip_ctx * ctx, const clip_image_f32
     switch (ctx->proj_type()) {
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
+        case PROJECTOR_TYPE_LFM2:
             {
                 res = graph.build_siglip();
             } break;
@@ -2230,6 +2262,7 @@ struct clip_model_loader {
                         }
                     } break;
                 case PROJECTOR_TYPE_IDEFICS3:
+                case PROJECTOR_TYPE_LFM2:
                 case PROJECTOR_TYPE_INTERNVL:
                     {
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.proj_scale_factor, false);
@@ -2532,6 +2565,15 @@ struct clip_model_loader {
             case PROJECTOR_TYPE_IDEFICS3:
                 {
                     model.projection = get_tensor(TN_MM_PROJECTOR);
+                } break;
+            case PROJECTOR_TYPE_LFM2:
+                {
+                    model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
+                    model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B);
+                    model.mm_1_w = get_tensor(string_format(TN_LLAVA_PROJ, 1, "weight"));
+                    model.mm_1_b = get_tensor(string_format(TN_LLAVA_PROJ, 1, "bias"));
+                    model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                 } break;
             case PROJECTOR_TYPE_PIXTRAL:
                 {
@@ -3591,6 +3633,7 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 n_patches_sq = n_per_side_2d_pool * n_per_side_2d_pool;
             } break;
         case PROJECTOR_TYPE_IDEFICS3:
+        case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_INTERNVL:
             {
                 // both W and H are divided by proj_scale_factor
@@ -4034,6 +4077,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, const int n_threads, const clip_ima
         case PROJECTOR_TYPE_INTERNVL:
         case PROJECTOR_TYPE_QWEN2A:
         case PROJECTOR_TYPE_ULTRAVOX:
+        case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_VOXTRAL:
             {
                 // do nothing
@@ -4135,6 +4179,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.mm_model_proj->ne[1];
         case PROJECTOR_TYPE_QWEN2A:
             return ctx->model.mm_fc_w->ne[1];
+        case PROJECTOR_TYPE_LFM2:
+            return ctx->model.mm_2_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }
