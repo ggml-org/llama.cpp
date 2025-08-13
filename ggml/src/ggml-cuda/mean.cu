@@ -25,8 +25,10 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 // Special case for reducing vectors
 #ifdef GGML_CUDA_USE_CUB
+#ifdef USE_CUDA_GRAPH
     cudaStreamCaptureStatus iscapturing;
     CUDA_CHECK(cudaStreamIsCapturing(stream, &iscapturing));
+#endif // USE_CUDA_GRAPH
     if ((nrows == 1) &&
 #ifdef USE_CUDA_GRAPH
             // CUDA_GRAPHS_DISABLED
@@ -40,7 +42,7 @@ void ggml_cuda_op_mean(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
            ctx.cuda_graph->disable_due_to_gpu_arch || ctx.cuda_graph->disable_due_to_too_many_updates ||
            ctx.cuda_graph->disable_due_to_failed_graph_capture))) {
 #else
-        (ncols > 65536) && (iscapturing == cudaStreamCaptureStatusNone)) {
+        (ncols > 65536)) {
 #endif // USE_CUDA_GRAPH
         // Single row - use device-wide reduction
         size_t           tmp_size = 0;
