@@ -87,6 +87,10 @@
 #define GGML_CUDA_CC_IS_QY2(cc)      (cc >= GGML_CUDA_CC_QY2 && cc < GGML_CUDA_CC_NG)
 #define GGML_CUDA_CC_IS_NG(cc)       (cc >= GGML_CUDA_CC_NG)
 
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+#    define GGML_CUDA_USE_CUB
+#endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
+
 #ifdef __CUDA_ARCH_LIST__
 constexpr bool ggml_cuda_has_arch_impl(int) {
     return false;
@@ -418,26 +422,6 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
     NO_DEVICE_CODE;
     return a;
 #endif // FP16_AVAILABLE
-}
-
-// Row reduction kernel template - compute sum (norm=false) or mean (norm=true)
-template<bool norm>
-static __global__ void reduce_rows_f32(const float * x, float * dst, const int ncols) {
-    const int row = blockIdx.x;
-    const int col = threadIdx.x;
-
-    float sum = 0.0f;
-    for (int i = col; i < ncols; i += blockDim.x) {
-        sum += x[row * ncols + i];
-    }
-
-    sum = warp_reduce_sum(sum);
-
-    if (col != 0) {
-        return;
-    }
-
-    dst[row] = norm ? sum / ncols : sum;
 }
 
 template<int width = WARP_SIZE>
