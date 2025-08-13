@@ -1,0 +1,92 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+
+#include "generic_head.comp"
+#include "types.comp"
+
+#define FLOAT_TYPE float
+
+layout(constant_id = 0) const uint BLOCK_SIZE = 256;
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {A_TYPE data_a[];};  // Grad(scalar)
+layout (binding = 1) readonly buffer B {B_TYPE data_b[];};  // logits => raw model outputs(unnormalized scored)
+layout (binding = 2) readonly buffer C {C_TYPE data_c[];};  // true labels(one hot encoded) 
+layout (binding = 3) writeonly buffer D {D_TYPE data_d[];}; // output gradients
+
+shared FLOAT_TYPE vals[BLOCK_SIZE];
+
+void main() {
+    const uint nclasses = p.KX;
+    const uint nrows = p.KY;
+    
+    const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
+    if (row >= nrows) {
+        return;
+    }
+    
+    const uint tid = gl_LocalInvocationID.x;
+    const uint warp_size = gl_WorkGroupSize.x;
+    
+    const uint logits_offset = row * nclasses;
+    const uint labels_offset = row * nclasses;
+    const uint dst_offset = row * nclasses;
+    
+    // Gradient scaling (grad / batch_size)
+    const FLOAT_TYPE d_by_nrows = FLOAT_TYPE(data_a[0]) / FLOAT_TYPE(nrows);
+    
+    // Get max value per thread
+    FLOAT_TYPE thread_max = FLOAT_TYPE(uintBitsToFloat(0xFF800000));    // -INFINITY
+    for (uint i = tid; i < nclasses; i += warp_size) {
+        FLOAT_TYPE val = FLOAT_TYPE(data_b[logits_offset + i]);
+        thread_max = max(thread_max, val);
+    }
+    
+    vals[tid] = thread_max;
+    barrier();
+    
+    // Get global maximum for the row(batch)
+    [[unroll]]
+    for (uint s = warp_size / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            vals[tid] = max(vals[tid], vals[tid + s]);
+        }
+        barrier();
+    }
+    
+    const FLOAT_TYPE row_max = vals[0];
+    barrier();
+    
+    // Compute sum of exp(logits - max) for softmax normalization  
+    FLOAT_TYPE thread_sum = FLOAT_TYPE(0.0);
+    for (uint i = tid; i < nclasses; i += warp_size) {
+        FLOAT_TYPE val = FLOAT_TYPE(data_b[logits_offset + i]);
+        thread_sum += exp(val - row_max);
+    }
+    
+    vals[tid] = thread_sum;
+    barrier();
+    
+    [[unroll]] 
+    for (uint s = warp_size / 2; s > 0; s >>= 1) {
+        if (tid < s) {
+            vals[tid] += vals[tid + s];
+        }
+        barrier();
+    }
+    
+    const FLOAT_TYPE row_sum = vals[0];
+    const FLOAT_TYPE sm_scale = FLOAT_TYPE(1.0) / row_sum;
+    barrier();
+    
+    // Compute final gradients: (softmax - labels) * d_by_nrows
+    for (uint i = tid; i < nclasses; i += warp_size) {
+        FLOAT_TYPE logit = FLOAT_TYPE(data_b[logits_offset + i]);
+        FLOAT_TYPE softmax_val = exp(logit - row_max) * sm_scale;
+        
+        FLOAT_TYPE label = FLOAT_TYPE(data_c[labels_offset + i]);
+
+        data_d[dst_offset + i] = D_TYPE((softmax_val - label) * d_by_nrows);
+    }
+}
