@@ -48,8 +48,87 @@
       "BLOCK_SIZE": 32
     },
     "DECLS": "Q4_0"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q4_1",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q4_1"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q4_1",
+      "SRC1_TYPE": "f16",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q4_1"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q5_0",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q5_0"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q5_0",
+      "SRC1_TYPE": "f16",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q5_0"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q5_1",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q5_1"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q5_1",
+      "SRC1_TYPE": "f16",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q5_1"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q8_0",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q8_0"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q8_0",
+      "SRC1_TYPE": "f16",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q8_0"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q8_1",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q8_1"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q8_1",
+      "SRC1_TYPE": "f16",
+      "BLOCK_SIZE": 32
+    },
+    "DECLS": "Q8_1"
   }
-
 ]
 
 #end(VARIANTS)
@@ -69,7 +148,7 @@ struct q4_0 {
 };
 
 fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
-    let block_q4_0: q4_0 = src0[src0_idx_base + offset];
+    let block_q4_0 = src0[src0_idx_base + offset];
     let d = f32(block_q4_0.d);
     var sum: f32 = 0.0;
     for (var j: u32 = 0; j < 4; j++) {
@@ -86,6 +165,141 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     return sum;
 }
 #enddecl(Q4_0)
+
+#decl(Q4_1)
+struct q4_1 {
+    d: f16,
+    m: f16,
+    qs: array<u32, 4>
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block_q4_1 = src0[src0_idx_base + offset];
+    let d = f32(block_q4_1.d);
+    let m = f32(block_q4_1.m);
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0; j < 4; j++) {
+        let q_packed = block_q4_1.qs[j];
+        for (var k: u32 = 0; k < 4; k++) {
+            let q_byte = (q_packed >> (k * 8)) & 0xFF;
+            let q_hi = f32((q_byte >> 4) & 0xF) * d + m;
+            let q_lo = f32(q_byte & 0xF) * d + m;
+            let src1_offset = src1_idx_base + offset * 32 + j * 4 + k;
+            sum += q_lo * f32(src1[src1_offset]);
+            sum += q_hi * f32(src1[src1_offset + 16]);
+        }
+    }
+    return sum;
+}
+#enddecl(Q4_1)
+
+#decl(Q5_0)
+struct q5_0 {
+    d: f16,
+    qh: array<f16, 2>,
+    qs: array<f16, 8>
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block_q5_0 = src0[src0_idx_base + offset];
+    let d = f32(block_q5_0.d);
+    var sum: f32 = 0.0;
+    let qh_packed = bitcast<u32>(vec2(block_q5_0.qh[0], block_q5_0.qh[1]));
+    for (var j: u32 = 0; j < 4; j++) {
+        let q_packed = bitcast<u32>(vec2(block_q5_0.qs[2 * j], block_q5_0.qs[2 * j + 1]));
+        for (var k: u32 = 0; k < 4; k++) {
+            let q_byte = (q_packed >> (k * 8)) & 0xFF;
+            let qh_hi = (qh_packed >> (j * 4 + k + 12)) & 0x10;
+            let q_hi = (f32(((q_byte >> 4) & 0xF) | qh_hi) - 16.0) * d;
+            let qh_lo = ((qh_packed >> (j * 4 + k)) << 4) & 0x10;
+            let q_lo = (f32((q_byte & 0xF) | qh_lo) - 16.0) * d;
+            let src1_offset = src1_idx_base + offset * 32 + j * 4 + k;
+            sum += q_lo * f32(src1[src1_offset]);
+            sum += q_hi * f32(src1[src1_offset + 16]);
+        }
+    }
+    return sum;
+}
+#enddecl(Q5_0)
+
+#decl(Q5_1)
+struct q5_1 {
+    d: f16,
+    m: f16,
+    qh: u32,
+    qs: array<u32, 4>
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block_q5_1 = src0[src0_idx_base + offset];
+    let d = f32(block_q5_1.d);
+    let m = f32(block_q5_1.m);
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0; j < 4; j++) {
+        let q_packed = block_q5_1.qs[j];
+        for (var k: u32 = 0; k < 4; k++) {
+            let q_byte = (q_packed >> (k * 8)) & 0xFF;
+            let qh_hi = (block_q5_1.qh >> (j * 4 + k + 12)) & 0x10;
+            let q_hi = f32(((q_byte >> 4) & 0xF) | qh_hi) * d + m;
+            let qh_lo = ((block_q5_1.qh >> (j * 4 + k)) << 4) & 0x10;
+            let q_lo = f32((q_byte & 0xF) | qh_lo) * d + m;
+            let src1_offset = src1_idx_base + offset * 32 + j * 4 + k;
+            sum += q_lo * f32(src1[src1_offset]);
+            sum += q_hi * f32(src1[src1_offset + 16]);
+        }
+    }
+    return sum;
+}
+#enddecl(Q5_1)
+
+#decl(Q8_0)
+struct q8_0 {
+    d: f16,
+    qs: array<f16, 16>
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block_q8_0 = src0[src0_idx_base + offset];
+    let d = f32(block_q8_0.d);
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0; j < 8; j++) {
+        let q_packed = bitcast<u32>(vec2(block_q8_0.qs[2 * j], block_q8_0.qs[2 * j + 1]));
+        for (var k: u32 = 0; k < 4; k++) {
+            let q_byte = bitcast<i32>((((q_packed >> (k * 8)) & 0xFF) << 24)) >> 24; // sign-extend
+            let q_val = f32(q_byte) * d;
+            let src1_offset = src1_idx_base + offset * 32 + j * 4 + k;
+            sum += q_val * f32(src1[src1_offset]);
+        }
+    }
+    return sum;
+}
+#enddecl(Q8_0)
+
+#decl(Q8_1)
+struct q8_1 {
+    d: f16,
+    m: f16,
+    qs: array<u32, 8>
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block_q8_1 = src0[src0_idx_base + offset];
+    let d = f32(block_q8_1.d);
+    let m = f32(block_q8_1.m);
+    var sum: f32 = 0.0;
+    for (var j: u32 = 0; j < 8; j++) {
+        let q_packed = block_q8_1.qs[j];
+        for (var k: u32 = 0; k < 4; k++) {
+            let q_byte = bitcast<i32>((((q_packed >> (k * 8)) & 0xFF) << 24)) >> 24; // sign-extend
+            let q_val = f32(q_byte) * d + m;
+            let src1_offset = src1_idx_base + offset * 32 + j * 4 + k;
+            sum += q_val * f32(src1[src1_offset]);
+        }
+    }
+    return sum;
+}
+#enddecl(Q8_1)
+
 #end(DECLS)
 
 #define(SHADER)
