@@ -2015,6 +2015,8 @@ struct server_context {
             params_dft.cache_type_k = params_base.speculative.cache_type_k;
             params_dft.cache_type_v = params_base.speculative.cache_type_v;
 
+            params_dft.tensor_buft_overrides = params_base.speculative.tensor_buft_overrides;
+
             llama_init_dft = common_init_from_params(params_dft);
 
             model_dft = llama_init_dft.model.get();
