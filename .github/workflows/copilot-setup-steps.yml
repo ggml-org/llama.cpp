@@ -38,7 +38,7 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install build-essential libcurl4-openssl-dev
+          sudo apt-get install build-essential libcurl4-openssl-dev git-clang-format
 
       - name: Set up Python
         uses: actions/setup-python@v5
