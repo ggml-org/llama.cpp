@@ -84,8 +84,7 @@
 
     {%- elif param_spec.type == "object" -%}
         {%- if param_spec.properties -%}
-            {{- "{
-" }}
+            {{- "{\n" }}
             {%- for prop_name, prop_spec in param_spec.properties.items() -%}
                 {{- prop_name -}}
                 {%- if prop_name not in (param_spec.required or []) -%}
@@ -107,24 +106,17 @@
 {%- endmacro -%}
 
 {%- macro render_tool_namespace(namespace_name, tools) -%}
-    {{- "## " + namespace_name + "
-
-" }}
-    {{- "namespace " + namespace_name + " {
-
-" }}
+    {{- "## " + namespace_name + "\n\n" }}
+    {{- "namespace " + namespace_name + " {\n\n" }}
     {%- for tool in tools %}
         {%- set tool = tool.function %}
-        {{- "// " + tool.description + "
-" }}
+        {{- "// " + tool.description + "\n" }}
         {{- "type "+ tool.name + " = " }}
         {%- if tool.parameters and tool.parameters.properties %}
-            {{- "(_: {
-" }}
+            {{- "(_: {\n" }}
             {%- for param_name, param_spec in tool.parameters.properties.items() %}
                 {%- if param_spec.description %}
-                    {{- "// " + param_spec.description + "
-" }}
+                    {{- "// " + param_spec.description + "\n" }}
                 {%- endif %}
                 {{- param_name }}
                 {%- if param_name not in (tool.parameters.required or []) -%}
@@ -142,20 +134,14 @@
                     {%- endif -%}
                 {%- endif -%}
                 {%- if not loop.last %}
-                    {{- ",
-" }}
+                    {{- ",\n" }}
                 {%- else %}
-                    {{- "
-" }}
+                    {{- ",\n" }}
                 {%- endif -%}
             {%- endfor %}
-            {{- "}) => any;
-
-" }}
+            {{- "}) => any;\n\n" }}
         {%- else -%}
-            {{- "() => any;
-
-" }}
+            {{- "() => any;\n\n" }}
         {%- endif -%}
     {%- endfor %}
     {{- "} // namespace " + namespace_name }}
@@ -163,92 +149,46 @@
 
 {%- macro render_builtin_tools(browser_tool, python_tool) -%}
     {%- if browser_tool %}
-        {{- "## browser
-
-" }}
-        {{- "// Tool for browsing.
-" }}
-        {{- "// The `cursor` appears in brackets before each browsing display: `[{cursor}]`.
-" }}
-        {{- "// Cite information from the tool using the following format:
-" }}
-        {{- "// `【{cursor}†L{line_start}(-L{line_end})?】`, for example: `【6†L9-L11】` or `【8†L3】`.
-" }}
-        {{- "// Do not quote more than 10 words directly from the tool output.
-" }}
-        {{- "// sources=web (default: web)
-" }}
-        {{- "namespace browser {
-
-" }}
-        {{- "// Searches for information related to `query` and displays `topn` results.
-" }}
-        {{- "type search = (_: {
-" }}
-        {{- "query: string,
-" }}
-        {{- "topn?: number, // default: 10
-" }}
-        {{- "source?: string,
-" }}
-        {{- "}) => any;
-
-" }}
-        {{- "// Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines.
-" }}
-        {{- "// Valid link ids are displayed with the formatting: `【{id}†.*】`.
-" }}
-        {{- "// If `cursor` is not provided, the most recent page is implied.
-" }}
-        {{- "// If `id` is a string, it is treated as a fully qualified URL associated with `source`.
-" }}
-        {{- "// If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.
-" }}
-        {{- "// Use this function without `id` to scroll to a new location of an opened page.
-" }}
-        {{- "type open = (_: {
-" }}
-        {{- "id?: number | string, // default: -1
-" }}
-        {{- "cursor?: number, // default: -1
-" }}
-        {{- "loc?: number, // default: -1
-" }}
-        {{- "num_lines?: number, // default: -1
-" }}
-        {{- "view_source?: boolean, // default: false
-" }}
-        {{- "source?: string,
-" }}
-        {{- "}) => any;
-
-" }}
-        {{- "// Finds exact matches of `pattern` in the current page, or the page given by `cursor`.
-" }}
-        {{- "type find = (_: {
-" }}
-        {{- "pattern: string,
-" }}
-        {{- "cursor?: number, // default: -1
-" }}
-        {{- "}) => any;
-
-" }}
-        {{- "} // namespace browser
-
-" }}
+        {{- "## browser\n\n" }}
+        {{- "// Tool for browsing.\n" }}
+        {{- "// The `cursor` appears in brackets before each browsing display: `[{cursor}]`.\n" }}
+        {{- "// Cite information from the tool using the following format:\n" }}
+        {{- "// `【{cursor}†L{line_start}(-L{line_end})?】`, for example: `【6†L9-L11】` or `【8†L3】`.\n" }}
+        {{- "// Do not quote more than 10 words directly from the tool output.\n" }}
+        {{- "// sources=web (default: web)\n" }}
+        {{- "namespace browser {\n\n" }}
+        {{- "// Searches for information related to `query` and displays `topn` results.\n" }}
+        {{- "type search = (_: {\n" }}
+        {{- "query: string,\n" }}
+        {{- "topn?: number, // default: 10\n" }}
+        {{- "source?: string,\n" }}
+        {{- "}) => any;\n\n" }}
+        {{- "// Opens the link `id` from the page indicated by `cursor` starting at line number `loc`, showing `num_lines` lines.\n" }}
+        {{- "// Valid link ids are displayed with the formatting: `【{id}†.*】`.\n" }}
+        {{- "// If `cursor` is not provided, the most recent page is implied.\n" }}
+        {{- "// If `id` is a string, it is treated as a fully qualified URL associated with `source`.\n" }}
+        {{- "// If `loc` is not provided, the viewport will be positioned at the beginning of the document or centered on the most relevant passage, if available.\n" }}
+        {{- "// Use this function without `id` to scroll to a new location of an opened page.\n" }}
+        {{- "type open = (_: {\n" }}
+        {{- "id?: number | string, // default: -1\n" }}
+        {{- "cursor?: number, // default: -1\n" }}
+        {{- "loc?: number, // default: -1\n" }}
+        {{- "num_lines?: number, // default: -1\n" }}
+        {{- "view_source?: boolean, // default: false\n" }}
+        {{- "source?: string,\n" }}
+        {{- "}) => any;\n\n" }}
+        {{- "// Finds exact matches of `pattern` in the current page, or the page given by `cursor`.\n" }}
+        {{- "type find = (_: {\n" }}
+        {{- "pattern: string,\n" }}
+        {{- "cursor?: number, // default: -1\n" }}
+        {{- "}) => any;\n\n" }}
+        {{- "} // namespace browser\n\n" }}
     {%- endif -%}
 
     {%- if python_tool %}
-        {{- "## python
-
-" }}
-        {{- "Use this tool to execute Python code in your chain of thought. The code will not be shown to the user. This tool should be used for internal reasoning, but not for code that is intended to be visible to the user (e.g. when creating plots, tables, or files).
-
-" }}
-        {{- "When you send a message containing Python code to python, it will be executed in a stateful Jupyter notebook environment. python will respond with the output of the execution or time out after 120.0 seconds. The drive at '/mnt/data' can be used to save and persist user files. Internet access for this session is UNKNOWN. Depends on the cluster.
-
-" }}
+        {{- "## python\n\n" }}
+        {{- "Use this tool to execute Python code in your chain of thought. The code will not be shown to the user. This tool should be used for internal reasoning, but not for code that is intended to be visible to the user (e.g. when creating plots, tables, or files).\n\n" }}
+        {{- "When you send a message containing Python code to python, it will be executed in a stateful Jupyter notebook environment. python will respond with the output of the execution or time out after 120.0 seconds. The drive at '/mnt/data' can be used to save and persist user files. Internet access for this session is UNKNOWN. Depends on the cluster.\n\n" }}
     {%- endif -%}
 {%- endmacro -%}
 
@@ -257,23 +197,15 @@
     {%- if model_identity is not defined %}
         {%- set model_identity = "You are ChatGPT, a large language model trained by OpenAI." %}
     {%- endif %}
-    {{- model_identity + "
-" }}
-    {{- "Knowledge cutoff: 2024-06
-" }}
-    {{- "Current date: " + strftime_now("%Y-%m-%d") + "
-
-" }}
+    {{- model_identity + "\n" }}
+    {{- "Knowledge cutoff: 2024-06\n" }}
+    {{- "Current date: " + strftime_now("%Y-%m-%d") + "\n\n" }}
     {%- if reasoning_effort is not defined %}
         {%- set reasoning_effort = "medium" %}
     {%- endif %}
-    {{- "Reasoning: " + reasoning_effort + "
-
-" }}
+    {{- "Reasoning: " + reasoning_effort + "\n\n" }}
     {%- if builtin_tools %}
-        {{- "# Tools
-
-" }}
+        {{- "# Tools\n\n" }}
         {%- set available_builtin_tools = namespace(browser=false, python=false) %}
         {%- for tool in builtin_tools %}
             {%- if tool == "browser" %}
@@ -286,8 +218,7 @@
     {%- endif -%}
     {{- "# Valid channels: analysis, commentary, final. Channel must be included for every message." }}
     {%- if tools -%}
-        {{- "
-Calls to these tools must go to the commentary channel: 'functions'." }}
+        {{- "\nCalls to these tools must go to the commentary channel: 'functions'." }}
     {%- endif -%}
 {%- endmacro -%}
 
@@ -312,18 +243,12 @@ Calls to these tools must go to the commentary channel: 'functions'." }}
 {%- if developer_message or tools %}
     {{- "<|start|>developer<|message|>" }}
     {%- if developer_message %}
-        {{- "# Instructions
-
-" }}
+        {{- "# Instructions\n\n" }}
         {{- developer_message }}
+        {{- "\n\n" }}
     {%- endif %}
     {%- if tools -%}
-        {{- "
-
-" }}
-        {{- "# Tools
-
-" }}
+        {{- "# Tools\n\n" }}
         {{- render_tool_namespace("functions", tools) }}
     {%- endif -%}
     {{- "<|end|>" }}
@@ -346,6 +271,15 @@ Calls to these tools must go to the commentary channel: 'functions'." }}
             {%- endif %}
         {%- endif %}
         {%- if "tool_calls" in message %}
+            {#- We need very careful handling here - we want to drop the tool call analysis message if the model #}
+            {#- has output a later <|final|> message, but otherwise we want to retain it. This is the only case #}
+            {#- when we render CoT/analysis messages in inference. #}
+            {%- set future_final_message = namespace(found=false) %}
+            {%- for future_message in loop_messages[loop.index:] %}
+                {%- if future_message.role == 'assistant' and "tool_calls" not in future_message %}
+                    {%- set future_final_message.found = true %}
+                {%- endif %}
+            {%- endfor %}
             {#- We assume max 1 tool call per message, and so we infer the tool call name #}
             {#- in "tool" messages from the most recent assistant tool call name #}
             {%- set tool_call = message.tool_calls[0] %}
@@ -354,9 +288,9 @@ Calls to these tools must go to the commentary channel: 'functions'." }}
             {%- endif %}
             {%- if message.content and message.thinking %}
                 {{- raise_exception("Cannot pass both content and thinking in an assistant message with tool calls! Put the analysis message in one or the other, but not both.") }}
-            {%- elif message.content %}
+            {%- elif message.content and not future_final_message.found %}
                 {{- "<|start|>assistant<|channel|>analysis<|message|>" + message.content + "<|end|>" }}
-            {%- elif message.thinking %}
+            {%- elif message.thinking and not future_final_message.found %}
                 {{- "<|start|>assistant<|channel|>analysis<|message|>" + message.thinking + "<|end|>" }}
             {%- endif %}
             {{- "<|start|>assistant to=" }}
