@@ -29,8 +29,11 @@
 #include <cstring>
 #include <fstream>
 #include <filesystem>
+#include <algorithm>
 
 namespace fs = std::filesystem;
+
+static constexpr size_t MAX_CHUNK_SIZE = 1024ull * 1024ull * 1024ull; // 1 GiB
 
 #ifdef _WIN32
 typedef SOCKET sockfd_t;
@@ -323,11 +326,14 @@ static std::shared_ptr<socket_t> create_server_socket(const char * host, int por
 static bool send_data(sockfd_t sockfd, const void * data, size_t size) {
     size_t bytes_sent = 0;
     while (bytes_sent < size) {
-        ssize_t n = send(sockfd, (const char *)data + bytes_sent, size - bytes_sent, 0);
+        size_t size_to_send = std::min(size - bytes_sent, MAX_CHUNK_SIZE);
+        ssize_t n = send(sockfd, (const char *)data + bytes_sent, size_to_send, 0);
         if (n < 0) {
+            GGML_LOG_ERROR("send failed (bytes_sent=%zu, size_to_send=%zu)\n",
+                           bytes_sent, size_to_send);
             return false;
         }
-        bytes_sent += n;
+        bytes_sent += (size_t)n;
     }
     return true;
 }
@@ -335,11 +341,18 @@ static bool send_data(sockfd_t sockfd, const void * data, size_t size) {
 static bool recv_data(sockfd_t sockfd, void * data, size_t size) {
     size_t bytes_recv = 0;
     while (bytes_recv < size) {
-        ssize_t n = recv(sockfd, (char *)data + bytes_recv, size - bytes_recv, 0);
-        if (n <= 0) {
+        size_t size_to_recv = std::min(size - bytes_recv, MAX_CHUNK_SIZE);
+        ssize_t n = recv(sockfd, (char *)data + bytes_recv, size_to_recv, 0);
+        if (n < 0) {
+            GGML_LOG_ERROR("recv failed (bytes_recv=%zu, size_to_recv=%zu)\n",
+                           bytes_recv, size_to_recv);
             return false;
         }
-        bytes_recv += n;
+        if (n == 0) {
+            GGML_LOG_ERROR("recv returned 0 (peer closed?)\n");
+            return false;
+        }
+        bytes_recv += (size_t)n;
     }
     return true;
 }

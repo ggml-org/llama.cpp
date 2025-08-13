@@ -13,7 +13,7 @@ If there are differences in usage, please refer to the official build [documenta
 
 Clone llama.cpp:
 ```bash
-git clone https://github.com/ggerganov/llama.cpp
+git clone https://github.com/ggml-org/llama.cpp
 cd llama.cpp
 ```
 
