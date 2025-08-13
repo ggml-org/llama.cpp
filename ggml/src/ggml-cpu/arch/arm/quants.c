@@ -2044,6 +2044,7 @@ void ggml_vec_dot_q3_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
 
 }
 
+#ifdef __ARM_FEATURE_SVE
 static inline svuint32_t ggml_decode_q4scales_and_mins_for_mmla(const uint32_t *vx_scales) {
   const svbool_t pg_all   = svptrue_pat_b32(SV_VL4);
   const svbool_t pg_false = svpfalse_b();            // 0x0000
@@ -2061,6 +2062,7 @@ static inline svuint32_t ggml_decode_q4scales_and_mins_for_mmla(const uint32_t *
   svuint32_t vutmp = svorr_u32_z(pg_all, vutmp_hi, vutmp_lo);
   return vutmp;
 }
+#endif
 
 void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     assert(n % QK_K == 0);
@@ -2084,12 +2086,12 @@ void ggml_vec_dot_q4_K_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const voi
     static const uint32_t kmask3 = 0x03030303;
 
     uint32_t utmp[4];
-#if __ARM_FEATURE_SVE
+#ifdef __ARM_FEATURE_SVE
     const int vector_length = ggml_cpu_get_sve_cnt()*8;
 #endif
 
 #if defined(__ARM_FEATURE_MATMUL_INT8)
-#if __ARM_FEATURE_SVE
+#ifdef __ARM_FEATURE_SVE
     if (nrc==2) {
         svbool_t pg32_2 = svptrue_pat_b32(SV_VL2);
         const block_q4_K * GGML_RESTRICT vx0 = vx;
