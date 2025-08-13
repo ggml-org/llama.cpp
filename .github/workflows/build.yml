@@ -443,7 +443,7 @@ jobs:
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
-    container: rocm/dev-ubuntu-22.04:6.0.2
+    container: rocm/dev-ubuntu-22.04:6.1.2
 
     steps:
       - name: Clone
@@ -470,16 +470,6 @@ jobs:
             -DGGML_HIP_ROCWMMA_FATTN=ON \
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
-
-      - name: Build with legacy HIP support
-        id: cmake_build_legacy_hip
-        run: |
-          cmake -B build2 -S . \
-            -DCMAKE_C_COMPILER=hipcc \
-            -DCMAKE_CXX_COMPILER=hipcc \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
-            -DGGML_HIP=ON
-          cmake --build build2 --config Release -j $(nproc)
 
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
