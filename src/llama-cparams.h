@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <cstdint>
+#include <vector>
 
 #define LLAMA_MAX_SEQ 64
 
@@ -25,6 +26,9 @@ struct llama_cparams {
     float yarn_beta_fast;
     float yarn_beta_slow;
     float defrag_thold;
+
+    std::vector<int32_t> omit_experts;
+    std::vector<int32_t> force_experts;
 
     bool embeddings;
     bool causal_attn;

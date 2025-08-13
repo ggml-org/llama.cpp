@@ -5986,6 +5986,8 @@ struct llm_build_llama : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -6088,6 +6090,7 @@ struct llm_build_llama : public llm_graph_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
                         il);
                 cb(cur, "ffn_moe_out", il);
             }
@@ -6145,6 +6148,8 @@ struct llm_build_llama_iswa : public llm_graph_context {
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -6260,6 +6265,7 @@ struct llm_build_llama_iswa : public llm_graph_context {
                         LLM_FFN_SILU, false,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID,
+                        inp_expert_mask->mask,
                         il);
 
                 // Shared experts
@@ -6839,6 +6845,8 @@ struct llm_build_grok : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -6932,6 +6940,7 @@ struct llm_build_grok : public llm_graph_context {
                     LLM_FFN_GELU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    inp_expert_mask->mask,
                     il);
             cb(cur, "ffn_moe_out", il);
 
@@ -6998,6 +7007,8 @@ struct llm_build_dbrx : public llm_graph_context {
         auto * inp_attn = build_attn_inp_kv_unified();
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -7072,6 +7083,7 @@ struct llm_build_dbrx : public llm_graph_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    inp_expert_mask->mask,
                     il);
             cb(cur, "ffn_moe_out", il);
 
@@ -7348,6 +7360,8 @@ struct llm_build_bert : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * cur = inpL;
 
@@ -7451,7 +7465,9 @@ struct llm_build_bert : public llm_graph_context {
                         LLM_FFN_GELU,
                         false, false,
                         0.0f,
-                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX, il);
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
+                        il);
                 cb(cur, "ffn_moe_out", il);
             } else if (model.arch == LLM_ARCH_BERT || model.arch == LLM_ARCH_NOMIC_BERT_MOE) {
                 cur = build_ffn(cur,
@@ -8593,6 +8609,8 @@ struct llm_build_qwen2moe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -8676,6 +8694,7 @@ struct llm_build_qwen2moe : public llm_graph_context {
                         LLM_FFN_SILU, false,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
                         il);
             cb(moe_out, "ffn_moe_out", il);
 
@@ -8873,6 +8892,8 @@ struct llm_build_qwen3moe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -8950,6 +8971,7 @@ struct llm_build_qwen3moe : public llm_graph_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
                         il);
             cb(moe_out, "ffn_moe_out", il);
             cur = moe_out;
@@ -9139,6 +9161,8 @@ struct llm_build_phi3 : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             auto * residual = inpL;
 
@@ -9236,6 +9260,7 @@ struct llm_build_phi3 : public llm_graph_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
                         il);
                 cb(cur, "ffn_moe_out", il);
             }
@@ -11349,6 +11374,8 @@ struct llm_build_jamba : public llm_graph_context_mamba {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             const int64_t n_head_kv = hparams.n_head_kv(il);
 
@@ -11414,6 +11441,7 @@ struct llm_build_jamba : public llm_graph_context_mamba {
                         LLM_FFN_SILU, false,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
                         il);
                 cb(cur, "ffn_moe_out", il);
             }
@@ -12003,6 +12031,8 @@ struct llm_build_olmoe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -12081,6 +12111,7 @@ struct llm_build_olmoe : public llm_graph_context {
                     LLM_FFN_SILU, false,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    inp_expert_mask->mask,
                     il);
             cb(cur, "ffn_moe_out", il);
 
@@ -12406,6 +12437,8 @@ struct llm_build_arctic : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -12493,6 +12526,7 @@ struct llm_build_arctic : public llm_graph_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    inp_expert_mask->mask,
                     il);
             cb(cur, "ffn_moe_out", il);
 
@@ -12545,6 +12579,8 @@ struct llm_build_deepseek : public llm_graph_context {
         const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -12641,6 +12677,7 @@ struct llm_build_deepseek : public llm_graph_context {
                             LLM_FFN_SILU, false,
                             false, hparams.expert_weights_scale,
                             LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                            inp_expert_mask->mask,
                             il);
                 cb(moe_out, "ffn_moe_out", il);
 
@@ -12720,6 +12757,8 @@ struct llm_build_deepseek2 : public llm_graph_context {
         auto * inp_attn = build_attn_inp_kv_unified();
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -12904,6 +12943,7 @@ struct llm_build_deepseek2 : public llm_graph_context {
                             LLM_FFN_SILU, hparams.expert_weights_norm,
                             true, hparams.expert_weights_scale,
                             (llama_expert_gating_func_type) hparams.expert_gating_func,
+                            inp_expert_mask->mask,
                             il);
                 cb(moe_out, "ffn_moe_out", il);
 
@@ -13778,6 +13818,8 @@ struct llm_build_glm4_moe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         // Only process up to last layer (skip final NextN layer)
         // Final layer tensors are loaded but not processed in forward pass
         const int n_transformer_layers = n_layer - hparams.nextn_predict_layers;
@@ -13877,6 +13919,7 @@ struct llm_build_glm4_moe : public llm_graph_context {
                         LLM_FFN_SILU, hparams.expert_weights_norm,
                         true, hparams.expert_weights_scale,
                         (llama_expert_gating_func_type) hparams.expert_gating_func,
+                        inp_expert_mask->mask,
                         il);
                 cb(routed_out, "ffn_moe_out", il);
 
@@ -15242,6 +15285,7 @@ struct llm_build_granite : public llm_graph_context {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    nullptr,
                     il);
             cb(moe_out, "ffn_moe_out", il);
 
@@ -15461,6 +15505,7 @@ struct llm_build_granite_hybrid : public llm_graph_context_mamba {
                     LLM_FFN_SILU, true,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    nullptr,
                     il);
             cb(moe_out, "ffn_moe_out", il);
 
@@ -16016,6 +16061,8 @@ struct llm_build_bailingmoe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -16101,6 +16148,7 @@ struct llm_build_bailingmoe : public llm_graph_context {
                         LLM_FFN_SILU, hparams.expert_weights_norm,
                         false, hparams.expert_weights_scale,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
                         il);
             cb(moe_out, "ffn_moe_out", il);
 
@@ -16164,6 +16212,8 @@ struct llm_build_dots1 : public llm_graph_context {
         auto * inp_attn = build_attn_inp_kv_unified();
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
 
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -16251,6 +16301,7 @@ struct llm_build_dots1 : public llm_graph_context {
                             LLM_FFN_SILU, hparams.expert_weights_norm,
                             true, hparams.expert_weights_scale,
                             (llama_expert_gating_func_type) hparams.expert_gating_func,
+                            inp_expert_mask->mask,
                             il);
                 cb(moe_out, "ffn_moe_out", il);
 
@@ -16445,6 +16496,8 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         GGML_ASSERT(hparams.n_moe_layer_step > 0 && "Ernie 4.5 MoE requires n_moe_layer_step > 0");
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
@@ -16547,6 +16600,7 @@ struct llm_build_ernie4_5_moe : public llm_graph_context {
                         LLM_FFN_SILU, true,
                         false, 0.0,
                         LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        inp_expert_mask->mask,
                         il);
                 cb(moe_out, "ffn_moe_out", il);
 
@@ -17191,6 +17245,8 @@ struct llm_build_hunyuan_moe : public llm_graph_context {
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -17298,6 +17354,7 @@ struct llm_build_hunyuan_moe : public llm_graph_context {
                     false,
                     0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    inp_expert_mask->mask,
                     il);
             cb(cur_moe, "ffn_moe_out", il);
 
@@ -17618,6 +17675,8 @@ struct llm_build_openai_moe_iswa : public llm_graph_context {
 
         auto * inp_attn = build_attn_inp_kv_unified_iswa();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA = inpL;
 
@@ -17705,6 +17764,7 @@ struct llm_build_openai_moe_iswa : public llm_graph_context {
                     LLM_FFN_SWIGLU_OAI_MOE, false,
                     false, 0.0,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT,
+                    inp_expert_mask->mask,
                     il);
             cb(cur, "ffn_moe_out", il);
 
@@ -17940,6 +18000,8 @@ struct llm_build_smallthinker : public llm_graph_context{
 
         ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+        llm_graph_input_expert_mask * inp_expert_mask = build_inp_expert_mask();
+
         for (int il = 0; il < n_layer; ++il) {
             ggml_tensor * inpSA  = inpL;
             ggml_tensor * probs  = nullptr;
@@ -18007,6 +18069,7 @@ struct llm_build_smallthinker : public llm_graph_context{
                         LLM_FFN_RELU, true,
                         false, 0.0,
                         static_cast<llama_expert_gating_func_type>(hparams.expert_gating_func),
+                        inp_expert_mask->mask,
                         il, probs);
 
             cb(ffn_out, "ffn_out", il);
@@ -18524,6 +18587,7 @@ llama_model_params llama_model_default_params() {
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.n_experts_used_override     =*/ 0,
         /*.vocab_only                  =*/ false,
         /*.use_mmap                    =*/ true,
         /*.use_mlock                   =*/ false,
