@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Options
 IOS_MIN_OS_VERSION=16.4

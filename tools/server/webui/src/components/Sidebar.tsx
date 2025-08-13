@@ -231,7 +231,7 @@ function ConversationItem({
       >
         {conv.name}
       </button>
-      <div className="dropdown dropdown-end h-5">
+      <div tabIndex={0} className="dropdown dropdown-end h-5">
         <BtnWithTooltips
           // on mobile, we always show the ellipsis icon
           // on desktop, we only show it when the user hovers over the conversation item

@@ -335,7 +335,11 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
 
         for (uint32_t i = 0; i < magic.size(); i++) {
             if (magic[i] != GGUF_MAGIC[i]) {
-                GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF'\n", __func__, magic[0], magic[1], magic[2], magic[3]);
+                char c0 = isprint(magic[0]) ? magic[0] : '?';
+                char c1 = isprint(magic[1]) ? magic[1] : '?';
+                char c2 = isprint(magic[2]) ? magic[2] : '?';
+                char c3 = isprint(magic[3]) ? magic[3] : '?';
+                GGML_LOG_ERROR("%s: invalid magic characters: '%c%c%c%c', expected 'GGUF'\n", __func__, c0, c1, c2, c3);
                 gguf_free(ctx);
                 return nullptr;
             }
@@ -627,7 +631,14 @@ struct gguf_context * gguf_init_from_file_impl(FILE * file, struct gguf_init_par
                 gguf_free(ctx);
                 return nullptr;
             }
-            ctx->size += GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
+            size_t padded_size = GGML_PAD(ggml_nbytes(&ti.t), ctx->alignment);
+            if (SIZE_MAX - ctx->size < padded_size) {
+                GGML_LOG_ERROR("%s: tensor '%s' size overflow, cannot accumulate size %zu + %zu\n",
+                    __func__, ti.t.name, ctx->size, padded_size);
+                gguf_free(ctx);
+                return nullptr;
+            }
+            ctx->size += padded_size;
         }
     }
 

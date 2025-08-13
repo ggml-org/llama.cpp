@@ -39,6 +39,7 @@ public:
                              /* common */
                  uint32_t    n_seq_max,
                      bool    offload,
+                     bool    unified,
                              /* layer filters */
           layer_filter_cb && filter_attn = nullptr,
           layer_filter_cb && filter_recr = nullptr);
@@ -92,6 +93,8 @@ private:
 
 class llama_memory_hybrid_context : public llama_memory_context_i {
 public:
+    using slot_info_vec_t = llama_kv_cache_unified::slot_info_vec_t;
+
     // init failure
     explicit llama_memory_hybrid_context(llama_memory_status status);
 
@@ -107,7 +110,7 @@ public:
     // init success
     llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
-            std::vector<uint32_t>   heads_attn,
+                  slot_info_vec_t   sinfos_attn,
         std::vector<llama_ubatch>   ubatches);
 
     ~llama_memory_hybrid_context() = default;

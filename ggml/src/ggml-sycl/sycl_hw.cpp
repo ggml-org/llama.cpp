@@ -1,6 +1,7 @@
 #include "sycl_hw.hpp"
 
-
+// TODO: currently not used
+/*
 sycl_hw_info get_device_hw_info(sycl::device *device_ptr) {
   sycl_hw_info res;
   int32_t id = device_ptr->get_info<sycl::ext::intel::info::device::device_id>();
@@ -11,3 +12,4 @@ sycl_hw_info get_device_hw_info(sycl::device *device_ptr) {
 
   return res;
 }
+*/

@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 cp -rpv ../ggml/CMakeLists.txt       ./ggml/CMakeLists.txt
 cp -rpv ../ggml/src/CMakeLists.txt   ./ggml/src/CMakeLists.txt
@@ -15,7 +15,6 @@ cp -rpv ../ggml/src/ggml-cann/*    ./ggml/src/ggml-cann/
 cp -rpv ../ggml/src/ggml-cpu/*     ./ggml/src/ggml-cpu/
 cp -rpv ../ggml/src/ggml-cuda/*    ./ggml/src/ggml-cuda/
 cp -rpv ../ggml/src/ggml-hip/*     ./ggml/src/ggml-hip/
-cp -rpv ../ggml/src/ggml-kompute/* ./ggml/src/ggml-kompute/
 cp -rpv ../ggml/src/ggml-metal/*   ./ggml/src/ggml-metal/
 cp -rpv ../ggml/src/ggml-musa/*    ./ggml/src/ggml-musa/
 cp -rpv ../ggml/src/ggml-opencl/*  ./ggml/src/ggml-opencl/
