@@ -143,7 +143,7 @@ pre-commit run --all-files
 ### GitHub Actions Workflows
 Key workflows that run on every PR:
 - `.github/workflows/build.yml`: Multi-platform builds
-- `.github/workflows/server.yml`: Server functionality tests  
+- `.github/workflows/server.yml`: Server functionality tests
 - `.github/workflows/python-lint.yml`: Python code quality
 - `.github/workflows/python-type-check.yml`: Python type checking
 
