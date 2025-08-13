@@ -147,6 +147,7 @@ export class ChatService {
 		let thinkContent = '';
 		let regularContent = '';
 		let insideThinkTag = false;
+		let hasReceivedData = false;
 
 		try {
 			while (true) {
@@ -160,6 +161,14 @@ export class ChatService {
 					if (line.startsWith('data: ')) {
 						const data = line.slice(6);
 						if (data === '[DONE]') {
+							// Check if we received any actual content
+							if (!hasReceivedData && fullResponse.length === 0) {
+								// Empty response - likely a context error
+								const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+								contextError.name = 'ContextError';
+								onError?.(contextError);
+								return;
+							}
 							onComplete?.(fullResponse);
 							return;
 						}
@@ -168,6 +177,7 @@ export class ChatService {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
 							const content = parsed.choices[0]?.delta?.content;
 							if (content) {
+								hasReceivedData = true;
 								fullResponse += content;
 
 								// Process content character by character to handle think tags
@@ -189,6 +199,14 @@ export class ChatService {
 						}
 					}
 				}
+			}
+
+			// If we reach here without receiving [DONE] and no data, it's likely a context error
+			if (!hasReceivedData && fullResponse.length === 0) {
+				const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+				contextError.name = 'ContextError';
+				onError?.(contextError);
+				return;
 			}
 		} catch (error) {
 			const err = error instanceof Error ? error : new Error('Stream error');
@@ -217,13 +235,36 @@ export class ChatService {
 		onError?: (error: Error) => void
 	): Promise<string> {
 		try {
-			const data: ApiChatCompletionResponse = await response.json();
+			// Check if response body is empty
+			const responseText = await response.text();
+			if (!responseText.trim()) {
+				// Empty response - likely a context error
+				const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+				contextError.name = 'ContextError';
+				onError?.(contextError);
+				throw contextError;
+			}
+
+			const data: ApiChatCompletionResponse = JSON.parse(responseText);
 			const content = data.choices[0]?.message?.content || '';
+
+			// Check if content is empty even with valid JSON structure
+			if (!content.trim()) {
+				const contextError = new Error('The request exceeds the available context size. Try increasing the context size or enable context shift.');
+				contextError.name = 'ContextError';
+				onError?.(contextError);
+				throw contextError;
+			}
 
 			onComplete?.(content);
 
 			return content;
 		} catch (error) {
+			// If it's already a ContextError, re-throw it
+			if (error instanceof Error && error.name === 'ContextError') {
+				throw error;
+			}
+
 			const err = error instanceof Error ? error : new Error('Parse error');
 
 			onError?.(err);

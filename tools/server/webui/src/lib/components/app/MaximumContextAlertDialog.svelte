@@ -32,13 +32,6 @@
 						</div>
 						
 						<div>
-							Maximum allowed:
-							<span class="font-mono">
-								{maxContextError()?.maxAllowed.toLocaleString()}
-							</span>
-						</div>
-
-						<div>
 							Context window:
 							<span class="font-mono">
 								{maxContextError()?.maxContext.toLocaleString()}

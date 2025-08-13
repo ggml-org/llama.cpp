@@ -2,18 +2,48 @@ import type { ApiSlotData, ApiProcessingState } from '$lib/types/api';
 import { serverStore } from '$lib/stores/server.svelte';
 
 export class SlotsService {
-	private baseUrl: string;
 	private pollingInterval: number;
 	private pollingTimer: number | null = null;
 	private callbacks: Set<(state: ApiProcessingState) => void> = new Set();
+	private slotsAvailable: boolean | null = null;
 
-	constructor(baseUrl = '', pollingInterval = 500) {
-		this.baseUrl = baseUrl;
+	constructor(pollingInterval = 500) {
 		this.pollingInterval = pollingInterval;
+	}
+
+	/**
+	 * Check if slots endpoint is available based on server properties
+	 */
+	private isSlotsEndpointAvailable(): boolean {
+		if (this.slotsAvailable !== null) {
+			return this.slotsAvailable;
+		}
+
+		const serverProps = serverStore.serverProps;
+		if (!serverProps) {
+			return false;
+		}
+
+		// Check if server has slots support (total_slots > 0)
+		this.slotsAvailable = serverProps.total_slots > 0;
+		return this.slotsAvailable;
+	}
+
+	/**
+	 * Reset slots availability check (call when server properties change)
+	 */
+	resetAvailabilityCheck(): void {
+		this.slotsAvailable = null;
 	}
 
 	startPolling(): void {
 		if (this.pollingTimer) {
+			return;
+		}
+
+		// Only start polling if slots endpoint is available
+		if (!this.isSlotsEndpointAvailable()) {
+			console.warn('Slots endpoint not available - server does not support slots');
 			return;
 		}
 
@@ -39,7 +69,7 @@ export class SlotsService {
 
 	private async poll(): Promise<void> {
 		try {
-			const response = await fetch(`${this.baseUrl}/slots`);
+			const response = await fetch(`/slots`);
 			if (!response.ok) {
 				console.warn('Failed to fetch slots data:', response.statusText);
 				return;
@@ -105,8 +135,13 @@ export class SlotsService {
 	}
 
 	async getCurrentState(): Promise<ApiProcessingState | null> {
+		// Check if slots endpoint is available before making request
+		if (!this.isSlotsEndpointAvailable()) {
+			return null;
+		}
+
 		try {
-			const response = await fetch(`${this.baseUrl}/slots`);
+			const response = await fetch(`/slots`);
 			if (!response.ok) {
 				return null;
 			}

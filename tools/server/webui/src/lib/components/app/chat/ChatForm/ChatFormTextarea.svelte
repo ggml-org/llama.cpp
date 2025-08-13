@@ -39,7 +39,7 @@
 
 	export function resetHeight() {
 		if (textareaElement) {
-			textareaElement.style.height = 'auto';
+			textareaElement.style.height = '1rem';
 		}
 	}
 </script>
@@ -48,7 +48,7 @@
 	<textarea
 		bind:this={textareaElement}
 		bind:value
-		class="placeholder:text-muted-foreground text-md max-h-32 min-h-[24px] w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
+		class="placeholder:text-muted-foreground text-md max-h-32 min-h-12 w-full resize-none border-0 bg-transparent p-0 leading-6 outline-none focus-visible:ring-0 focus-visible:ring-offset-0"
 		onkeydown={onKeydown}
 		oninput={(event) => autoResizeTextarea(event.currentTarget)}
 		onpaste={onPaste}

@@ -4,6 +4,7 @@
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
 	import { filterFilesByModalities, generateModalityErrorMessage } from '$lib/utils/modality-file-validation';
+	import { supportsVision, supportsAudio } from '$lib/stores/server.svelte';
 	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo } from '$lib/components/app';
 	import {
 		activeMessages,
@@ -13,7 +14,7 @@
 		stopGeneration,
 		setMaxContextError
 	} from '$lib/stores/chat.svelte';
-	import { wouldExceedContextLength } from '$lib/utils/token-estimation';
+	import { contextService } from '$lib/services/context';
 	import { fade, fly, slide } from 'svelte/transition';
 	import { AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
 	import { navigating } from '$app/state';
@@ -102,28 +103,21 @@
 		files?: ChatUploadedFile[]
 	): Promise<boolean> {
 		const extras = files ? await parseFilesToMessageExtras(files) : undefined;
-		const maxContextLength = serverStore.serverProps?.default_generation_settings.n_ctx;
 
-		if (maxContextLength) {
-			const contextCheck = wouldExceedContextLength(
-				activeMessages(),
-				message,
-				extras,
-				maxContextLength
-			);
+		// Check context limit using real-time slots data
+		const contextCheck = await contextService.checkContextLimit();
+		
+		if (contextCheck && contextCheck.wouldExceed) {
+			const errorMessage = contextService.getContextErrorMessage(contextCheck);
 
-			if (contextCheck.wouldExceed) {
-				const errorMessage = `Message too long for context window. Estimated tokens: ${contextCheck.estimatedTokens.toLocaleString()}, Maximum allowed: ${contextCheck.maxAllowed.toLocaleString()} (Context: ${maxContextLength.toLocaleString()})`;
+			setMaxContextError({
+				message: errorMessage,
+				estimatedTokens: contextCheck.currentUsage,
+				maxAllowed: contextCheck.availableTokens,
+				maxContext: contextCheck.maxContext
+			});
 
-				setMaxContextError({
-					message: errorMessage,
-					estimatedTokens: contextCheck.estimatedTokens,
-					maxAllowed: contextCheck.maxAllowed,
-					maxContext: maxContextLength
-				});
-
-				return false;
-			}
+			return false;
 		}
 
 		await sendMessage(message, extras);

@@ -195,18 +195,20 @@
 
 {#snippet messageActions(config?: { role: ChatRole })}
 	{#if config?.role === 'assistant' && !message.content && isLoading()}
-		<div class="mx-auto w-full max-w-[48rem] mb-16" in:fade>
-			<span class="processing-text">
-				{processingState.getProcessingMessage()}
-			</span>
-			
-			{#if processingState.shouldShowDetails()}
-				<div class="processing-details">
-					{#each processingState.getProcessingDetails() as detail}
-						<span class="processing-detail">{detail}</span>
-					{/each}
-				</div>
-			{/if}
+		<div class="w-full max-w-[48rem] mb-24" in:fade>
+			<div class="processing-container">
+				<span class="processing-text">
+					{processingState.getProcessingMessage()}
+				</span>
+				
+				{#if processingState.shouldShowDetails()}
+					<div class="processing-details">
+						{#each processingState.getProcessingDetails() as detail}
+							<span class="processing-detail">{detail}</span>
+						{/each}
+					</div>
+				{/if}
+			</div>
 		</div>
 	{/if}
 
@@ -256,21 +258,30 @@
 		{/if}
 	</div>
 
-	<div
-		class="{config?.role === 'user'
-			? 'right-0'
-			: 'left-0'} text-muted-foreground absolute text-xs transition-all duration-150 group-hover:pointer-events-none group-hover:opacity-0"
-	>
-		{message.timestamp
-			? new Date(message.timestamp).toLocaleTimeString(undefined, {
-					hour: '2-digit',
-					minute: '2-digit'
-				})
-			: ''}
-	</div>
+	{#if messageContent.trim().length > 0}
+		<div
+			class="{config?.role === 'user'
+				? 'right-0'
+				: 'left-0'} text-muted-foreground absolute text-xs transition-all duration-150 group-hover:pointer-events-none group-hover:opacity-0"
+		>
+			{message.timestamp
+				? new Date(message.timestamp).toLocaleTimeString(undefined, {
+						hour: '2-digit',
+						minute: '2-digit'
+					})
+				: ''}
+		</div>
+	{/if}
 {/snippet}
 
 <style>
+	.processing-container {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-start;
+		gap: 0.5rem;
+	}
+
 	.processing-text {
 		background: linear-gradient(90deg, var(--muted-foreground), var(--foreground), var(--muted-foreground));
 		background-size: 200% 100%;
@@ -285,18 +296,20 @@
 	.processing-details {
 		display: flex;
 		flex-wrap: wrap;
-		justify-content: center;
-		gap: 0.75rem;
-		margin-top: 0.25rem;
+		align-items: center;
+		gap: 0.5rem;
+		margin-top: 0;
 	}
 
 	.processing-detail {
 		color: var(--muted-foreground);
 		font-size: 0.75rem;
-		padding: 0.125rem 0.5rem;
+		padding: 0.25rem 0.5rem;
 		background: var(--muted);
-		border-radius: 0.375rem;
+		border-radius: 0.5rem;
 		font-family: ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+		white-space: nowrap;
+		line-height: 1.2;
 	}
 
 	@keyframes shine {
