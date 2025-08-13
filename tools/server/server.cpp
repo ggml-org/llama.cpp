@@ -692,6 +692,13 @@ struct completion_token_output {
     }
 };
 
+struct swa_checkpoint {
+    std::vector<uint8_t> data;
+
+    llama_pos pos_min;
+    llama_pos pos_max;
+};
+
 struct server_task_result_cmpl_final : server_task_result {
     int index = 0;
 
@@ -1335,6 +1342,8 @@ struct server_slot {
     server_tokens cache_tokens;
 
     std::vector<completion_token_output> generated_token_probs;
+
+    std::vector<swa_checkpoint> swa_checkpoints;
 
     bool has_next_token = true;
     bool has_new_line   = false;
@@ -3300,10 +3309,42 @@ struct server_context {
 
                                 const auto n_swa = llama_model_n_swa(model);
                                 if (pos_min > std::max(0, slot.n_past - n_swa)) {
-                                    SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
-                                    SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
-                                            "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                                    slot.n_past = 0;
+                                    // search for a SWA checkpoint
+                                    int ic = -1;
+                                    int np = std::numeric_limits<int>::max();
+                                    for (int i = 0; i < (int) slot.swa_checkpoints.size(); i++) {
+                                        const auto & cur = slot.swa_checkpoints[i];
+                                        if (cur.pos_min <= std::max(0, slot.n_past - n_swa)) {
+                                            const int p = std::max(0, slot.n_past - cur.pos_max);
+
+                                            if (p < np) {
+                                                ic = i;
+                                                np = p;
+                                            }
+                                        }
+                                    }
+
+                                    if (ic == -1) {
+                                        SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
+                                        SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
+                                                "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                                        slot.n_past = 0;
+
+                                        slot.swa_checkpoints.clear();
+                                    } else {
+                                        // erase all checkpoints after the one we are using
+                                        slot.swa_checkpoints.erase(slot.swa_checkpoints.begin() + ic + 1, slot.swa_checkpoints.end());
+
+                                        // restore the checkpoint
+                                        const auto & cur = slot.swa_checkpoints[ic];
+
+                                        const size_t swa_size = cur.data.size();
+                                        llama_state_seq_set_data(ctx, cur.data.data(), swa_size, slot.id);
+
+                                        slot.n_past = std::min(slot.n_past, cur.pos_max);
+
+                                        SLT_WRN(slot, "prompt swa checkpoint restored, pos_min = %d, pos_max = %d, size = %f MB\n", cur.pos_min, cur.pos_max, (float) swa_size / 1024 / 1024);
+                                    }
                                 }
                             }
                         }
@@ -3517,6 +3558,25 @@ struct server_context {
 
                     // prompt evaluated for next-token prediction
                     slot.state = SLOT_STATE_GENERATING;
+
+                    // make a checkpoint
+                    if (llama_model_n_swa(model) > 0) {
+                        if (slot.swa_checkpoints.size() > 8) {
+                            slot.swa_checkpoints.erase(slot.swa_checkpoints.begin());
+                        }
+
+                        auto & cur = slot.swa_checkpoints.emplace_back();
+
+                        cur.pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
+                        cur.pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), slot.id);
+
+                        const size_t swa_size = llama_state_seq_get_size(ctx, slot.id);
+                        cur.data.resize(swa_size);
+
+                        llama_state_seq_get_data(ctx, cur.data.data(), swa_size, slot.id);
+
+                        SLT_WRN(slot, "prompt swa checkpoint, pos_min = %d, pos_max = %d, size = %f MB\n", cur.pos_min, cur.pos_max, (float) swa_size / 1024 / 1024);
+                    }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
                 }
