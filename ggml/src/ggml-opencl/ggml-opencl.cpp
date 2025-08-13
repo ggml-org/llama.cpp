@@ -581,6 +581,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_transpose_32;
     cl_kernel kernel_transpose_32_16;
     cl_kernel kernel_transpose_16;
+    cl_kernel kernel_transpose_16_4x1;
 
     cl_mem A_s_d_max;            // max scale buffer size for transpose
     cl_mem A_q_d_max;            // max weight buffer size for transpose
@@ -1664,6 +1665,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx, ggml_cl_ve
         CL_CHECK((backend_ctx->kernel_transpose_32_16 = clCreateKernel(backend_ctx->program_transpose, "kernel_transpose_32_16", &err), err));
         CL_CHECK((backend_ctx->kernel_transpose_32    = clCreateKernel(backend_ctx->program_transpose, "kernel_transpose_32", &err), err));
         CL_CHECK((backend_ctx->kernel_transpose_16    = clCreateKernel(backend_ctx->program_transpose, "kernel_transpose_16", &err), err));
+        CL_CHECK((backend_ctx->kernel_transpose_16_4x1    = clCreateKernel(backend_ctx->program_transpose, "kernel_transpose_16_4x1", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -2981,7 +2983,10 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         // cl_mem qT_d = clCreateBuffer(context, CL_MEM_READ_WRITE, q_size_bytes, NULL, &err);
         CL_CHECK(err);
 
-        // size_t d_size_bytes = M * (K / 32) / 2 * sizeof(float);
+        bool K_tile_trans = true;
+        if ((K / 32) % 4 != 0){
+            K_tile_trans =false;
+        }
         size_t d_size_bytes = M * (K / 32) * 2;
         region.origin = 0;
         region.size = d_size_bytes;
@@ -3022,10 +3027,15 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         qT_d_image1D = clCreateImage(context, 0, &img_fmt_1d, &img_desc_1d, NULL, &err);
         CL_CHECK(err);
 
-        img_fmt_1d = { CL_RGBA, CL_HALF_FLOAT };
         memset(&img_desc_1d, 0, sizeof(img_desc_1d));
+        if (K_tile_trans) {
+            img_fmt_1d = { CL_RGBA, CL_HALF_FLOAT };
+            img_desc_1d.image_width = M * K / 32 / 4;
+        } else {
+            img_fmt_1d = { CL_R, CL_HALF_FLOAT };
+            img_desc_1d.image_width = M * K / 32;
+        }
         img_desc_1d.image_type = CL_MEM_OBJECT_IMAGE1D_BUFFER;
-        img_desc_1d.image_width = M * K / 32 / 4;
         img_desc_1d.buffer = extra->d;
         d_d_image1D = clCreateImage(context, 0, &img_fmt_1d, &img_desc_1d, NULL, &err);
         CL_CHECK(err);
@@ -3061,6 +3071,10 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         int width_s = K / 32 / 4;
 
         kernel = backend_ctx->kernel_transpose_16;
+        if (!K_tile_trans) {
+            kernel = backend_ctx->kernel_transpose_16_4x1;
+            width_s = K / 32;
+        }
         CL_CHECK(clSetKernelArg(kernel, 0, sizeof(cl_mem), &d_d_image1D));
         CL_CHECK(clSetKernelArg(kernel, 1, sizeof(cl_mem), &dT_d_image1D));
         CL_CHECK(clSetKernelArg(kernel, 2, sizeof(int), &height_s));
