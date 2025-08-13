@@ -13,8 +13,10 @@ if (GGML_OPENCL_PROFILING)
     message(STATUS "OpenCL profiling enabled (increases CPU overhead)")
     add_compile_definitions(GGML_OPENCL_PROFILING)
 endif ()
+if (GGML_OPENCL_SOA_Q)
+    add_compile_definitions(GGML_OPENCL_SOA_Q)
+endif()
 
-add_compile_definitions(GGML_OPENCL_SOA_Q)
 add_compile_definitions(GGML_OPENCL_TARGET_VERSION=${GGML_OPENCL_TARGET_VERSION})
 
 if (GGML_OPENCL_USE_ADRENO_KERNELS)
@@ -85,6 +87,7 @@ set(GGML_OPENCL_KERNELS
     mul_mv_mxfp4_f32
     mul_mv_id_q4_0_f32_8x_flat
     mul_mv_id_mxfp4_f32
+    mul_mv_id_mxfp4_f32_flat
     mul_mm_f32_f32_l4_lm
     mul_mm_f16_f32_l4_lm
     mul
