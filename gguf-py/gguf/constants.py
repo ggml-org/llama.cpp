@@ -231,8 +231,9 @@ class Keys:
         MIDDLE_ID            = "tokenizer.ggml.middle_token_id"
 
     class Adapter:
-        TYPE       = "adapter.type"
-        LORA_ALPHA = "adapter.lora.alpha"
+        TYPE                   = "adapter.type"
+        LORA_ALPHA             = "adapter.lora.alpha"
+        LORA_INVOCATION_STRING = "adapter.lora.invocation_string"
 
     class IMatrix:
         CHUNK_COUNT = "imatrix.chunk_count"

@@ -369,7 +369,11 @@ if __name__ == '__main__':
                 self.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
 
             def set_gguf_parameters(self):
+                logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
+                if invocation_string := lparams.get("invocation_string"):
+                    logger.debug("GGUF KV: %s = %s", gguf.Keys.Adapter.LORA_INVOCATION_STRING, invocation_string)
+                    self.gguf_writer.add_string(gguf.Keys.Adapter.LORA_INVOCATION_STRING, invocation_string)
 
             def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
                 # Never add extra tensors (e.g. rope_freqs) for LoRA adapters
