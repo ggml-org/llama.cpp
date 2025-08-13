@@ -90,7 +90,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph) {
 // 3. constructing a decoder for the whole graph naively (op test case)
 void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
     std::string node_name;
-    if (node->op == GGML_OP_CPY) {
+    if (node->op == GGML_OP_CPY || node->op == GGML_OP_SET_ROWS) {
         // CPY updates the input tensor in place. For later ov op that uses the
         // input tensor of CPY, we need to make sure they get the updated tensor
         // by putting the src tensor name in the tensor_map in
@@ -151,9 +151,11 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             if (node->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY) {
                 assert(name.find("cache_k") == 0 || name.find("cache_v") == 0);
             }
-            auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), name);
-            if (it == m_model_output_names.end()) {
+            if (auto it = std::find(m_model_output_names.begin(), m_model_output_names.end(), name);
+                it == m_model_output_names.end()) {
                 m_model_output_names.push_back(name);
+            }
+            if (auto it = std::find(m_kv_names.begin(), m_kv_names.end(), name); it == m_kv_names.end()) {
                 m_kv_names.push_back(name);
             }
         }
@@ -166,6 +168,8 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
                 m_op_case = 1;
             } else if (node->src[0]->ne[0] * node->src[0]->ne[1] == node->ne[0]) {
                 m_op_case = 2;
+            } else if (node->src[0]->ne[0] * node->src[0]->ne[1] == node->ne[1]) {
+                m_op_case = 3;
             }
             break;
         }
@@ -270,6 +274,8 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
         input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
     } else if (name.find("cache_v") == 0) {
         input_shape = ov::PartialShape{m_num_heads_kv, m_head_size, m_context_size};
+    } else if (get_tensor_used_op(src)->op == GGML_OP_SET_ROWS) {
+        input_shape = ov::PartialShape{1, 1, -1};
     } else if (src->op == GGML_OP_VIEW) {
         // This case is added to make test-backend-ops work
         input_shape = ov::PartialShape{get_shape(src->view_src)};
@@ -283,6 +289,8 @@ void GgmlOvDecoder::add_extra_inputs() {
     // Extra inputs:
     // 1. `past_token_len`, used to create indices for updating kv cache. Usually equal to inp_pos[0], except for
     //     llama-perplexity.
+    //     Update: SET_ROWS replaces CPY for updating kv cache. The indices creation is not needed anymore. See:
+    //     https://github.com/ggml-org/llama.cpp/pull/14285
     // 2. `attention_size`, used in matmul's in the attention block. The shape of those matmul's are 32 aligned,
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
     //     Not used for NPU
@@ -304,6 +312,10 @@ void GgmlOvDecoder::add_extra_inputs() {
             past_token_len =
                 (int64_t) (node->src[1]->op_params[0] / node->src[1]->nb[0] / m_head_size / m_num_heads_kv);
             break;
+        }
+        if (node->op == GGML_OP_SET_ROWS && std::string(node->name).find("cache_k") == 0) {
+            assert(node->src[1]->type == GGML_TYPE_I64);
+            past_token_len = *(int64_t*) (node->src[1]->data);
         }
     }
 
@@ -340,6 +352,18 @@ void GgmlOvDecoder::add_extra_inputs() {
         *tensor->data<int64_t>() = attention_size;
         m_model_extra_input_values[name] = tensor;
     }
+}
+
+const ggml_tensor* GgmlOvDecoder::get_tensor_used_op(const ggml_tensor* tensor) const {
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const auto* node = m_cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            if (node->src[j] == tensor) {
+                return node;
+            }
+        }
+    }
+    throw std::runtime_error("Tensor not found in cgraph");
 }
 
 std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
@@ -618,7 +642,8 @@ const std::string& GgmlOvDecoder::get_op_type() const {
         {GGML_OP_SOFT_MAX,  "GGML_OP_SOFT_MAX" },
         {GGML_OP_SUB,       "GGML_OP_SUB"      },
         {GGML_OP_TRANSPOSE, "GGML_OP_TRANSPOSE"},
-        {GGML_OP_VIEW,      "GGML_OP_VIEW"     }
+        {GGML_OP_VIEW,      "GGML_OP_VIEW"     },
+        {GGML_OP_SET_ROWS,  "GGML_OP_SET_ROWS" },
     };
     static const std::map<ggml_unary_op, std::string> unary_ops = {
         {GGML_UNARY_OP_ABS,         "GGML_UNARY_OP_ABS"        },

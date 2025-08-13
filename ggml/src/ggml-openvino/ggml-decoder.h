@@ -117,6 +117,9 @@ public:
 
     static std::shared_ptr<ov::Node> create_weight_node(ggml_tensor* tensor);
     static std::map<std::string, std::shared_ptr<ov::Node>> create_weight_nodes(struct ggml_cgraph* cgraph);
+
+    const ggml_tensor* get_tensor_used_op(const ggml_tensor* tensor) const;
+
     void clear_model_weights() { m_model_weights.clear(); }
 
 private:
