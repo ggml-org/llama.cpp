@@ -10,12 +10,12 @@ jobs:
     steps:
       - name: Install prerequisites
         run: |
-          sudo apt-get update || true   
+          sudo apt-get update || true
           sudo apt-get install -y libatomic1
       - uses: actions/checkout@v4
       - name: Setup Riscv
         run: |
-          sudo apt-get update || true   
+          sudo apt-get update || true
           sudo apt-get install -y --no-install-recommends \
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
