@@ -466,9 +466,9 @@ static __device__ __forceinline__ half ggml_cuda_hmax(const half a, const half b
 static __device__ __forceinline__ half2 ggml_cuda_hmax2(const half2 a, const half2 b) {
 #if defined(GGML_USE_HIP)
     return half2(__hmax(a.x, b.x), __hmax(a.y, b.y));
-#elif !defined(GGML_USE_HIP) && CUDART_VERSION >= CUDART_HMAX
+#elif CUDART_VERSION >= CUDART_HMAX
     return __hmax2(a, b);
-#elif !defined(GGML_USE_HIP)
+#else
     half2 ret;
     reinterpret_cast<half&>(ret.x) = __float2half(fmaxf( __low2float(a),  __low2float(b)));
     reinterpret_cast<half&>(ret.y) = __float2half(fmaxf(__high2float(a), __high2float(b)));
