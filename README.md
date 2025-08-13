@@ -602,3 +602,4 @@ $ echo "source ~/.llama-completion.bash" >> ~/.bashrc
 - [linenoise.cpp](./tools/run/linenoise.cpp/linenoise.cpp) - C++ library that provides readline-like line editing capabilities, used by `llama-run` - BSD 2-Clause License
 - [curl](https://curl.se/) - Client-side URL transfer library, used by various tools/examples - [CURL License](https://curl.se/docs/copyright.html)
 - [miniaudio.h](https://github.com/mackron/miniaudio) - Single-header audio format decoder, used by multimodal subsystem - Public domain
+- [libwebp](https://chromium.googlesource.com/webm/libwebp) - Library for encoding and decoding WebP image format. Used in the multimodal subsystem to load and process WebP images.
