@@ -36,9 +36,6 @@
   # ```
   # nixConfig = {
   #   extra-substituters = [
-  #     # Populated by the CI in ggml-org/llama.cpp
-  #     "https://llama-cpp.cachix.org"
-  #
   #     # A development cache for nixpkgs imported with `config.cudaSupport = true`.
   #     # Populated by https://hercules-ci.com/github/SomeoneSerge/nixpkgs-cuda-ci.
   #     # This lets one skip building e.g. the CUDA-enabled openmpi.
@@ -47,10 +44,8 @@
   #   ];
   #
   #   # Verify these are the same keys as published on
-  #   # - https://app.cachix.org/cache/llama-cpp
   #   # - https://app.cachix.org/cache/cuda-maintainers
   #   extra-trusted-public-keys = [
-  #     "llama-cpp.cachix.org-1:H75X+w83wUKTIPSO1KWy9ADUrzThyGs8P5tmAbkWhQc="
   #     "cuda-maintainers.cachix.org-1:0dq3bujKpuEPMCX6U4WylrUDZ9JyUG0VpVZa7CNfq5E="
   #   ];
   # };
