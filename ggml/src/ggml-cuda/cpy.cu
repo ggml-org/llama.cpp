@@ -1,6 +1,7 @@
 #include "cpy.cuh"
 #include "dequantize.cuh"
 #include "cpy-utils.cuh"
+#include <climits>  // For SIZE_MAX
 #if defined(GGML_USE_MUSA) && defined(GGML_MUSA_MUDNN_COPY)
 #include "ggml-musa/mudnn.cuh"
 #endif // GGML_USE_MUSA && GGML_MUSA_MUDNN_COPY
@@ -363,6 +364,8 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     #if defined(GGML_CUDA_ALLOW_LARGE_TENSORS)
     // No INT_MAX limit – ggml_nbytes may exceed 2GB on large contexts.
     // The underlying cudaMemcpyAsync can handle size_t lengths.
+    GGML_ASSERT(ggml_nbytes(src0) <= SIZE_MAX / 4); // Reasonable upper bound with safety margin
+    GGML_ASSERT(ggml_nbytes(src1) <= SIZE_MAX / 4); // Reasonable upper bound with safety margin
     #else
     GGML_ASSERT(ggml_nbytes(src0) <= INT_MAX);
     GGML_ASSERT(ggml_nbytes(src1) <= INT_MAX);
