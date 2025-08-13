@@ -252,6 +252,16 @@ if (LLAMA_BUILD_COMMON)
 
 endif()
 
+if (LLAMA_BUILD_TOOLS)
+
+  install(
+    TARGETS mtmd
+    EXPORT llama-targets
+    PUBLIC_HEADER
+      DESTINATION ${LLAMA_INCLUDE_INSTALL_DIR}/mtmd)
+
+endif()
+
 install(
   EXPORT llama-targets
   FILE llama-targets.cmake

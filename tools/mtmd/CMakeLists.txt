@@ -20,7 +20,12 @@ set_target_properties(mtmd PROPERTIES
 
 target_link_libraries     (mtmd PUBLIC ggml llama)
 target_link_libraries     (mtmd PRIVATE Threads::Threads)
-target_include_directories(mtmd PUBLIC  .)
+target_include_directories(
+  mtmd
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
 target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
@@ -39,8 +44,6 @@ set(MTMD_PUBLIC_HEADERS
 set_target_properties(mtmd
     PROPERTIES
     PUBLIC_HEADER "${MTMD_PUBLIC_HEADERS}")
-
-install(TARGETS mtmd LIBRARY PUBLIC_HEADER)
 
 if (NOT MSVC)
     # for stb_image.h and miniaudio.h
