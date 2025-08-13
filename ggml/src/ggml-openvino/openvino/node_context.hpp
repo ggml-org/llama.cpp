@@ -46,6 +46,8 @@ public:
         return m_decoder->get_input_stride(m_input_names[index]);
     }
 
+    std::string get_output_name() const { return m_output_names[0]; }
+
     PartialShape get_output_shape(size_t index) const {
         return m_decoder->get_output_shape(m_output_names[index]);
     }
