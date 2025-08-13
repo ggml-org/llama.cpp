@@ -19,6 +19,7 @@ target_include_directories(mtmd PUBLIC  .)
 target_include_directories(mtmd PRIVATE ../..)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
+target_link_libraries     (mtmd PUBLIC  webp)
 
 if (BUILD_SHARED_LIBS)
     set_target_properties     (mtmd PROPERTIES POSITION_INDEPENDENT_CODE ON)

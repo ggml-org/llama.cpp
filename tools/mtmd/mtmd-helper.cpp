@@ -32,6 +32,10 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb/stb_image.h"
 
+extern "C" {
+    #include <webp/decode.h>
+}
+
 #define LOG_INF(...) fprintf(stdout, __VA_ARGS__)
 #define LOG_ERR(...) fprintf(stderr, __VA_ARGS__)
 
@@ -354,6 +358,7 @@ static bool is_audio_file(const char * buf, size_t len) {
     // RIFF ref: https://en.wikipedia.org/wiki/Resource_Interchange_File_Format
     // WAV ref: https://www.mmsp.ece.mcgill.ca/Documents/AudioFormats/WAVE/WAVE.html
     bool is_wav = memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WAVE", 4) == 0;
+    bool is_webp = memcmp(buf, "RIFF", 4) == 0 && memcmp(buf + 8, "WEBP", 4) == 0;
     bool is_mp3 = len >= 3 && (
         memcmp(buf, "ID3", 3) == 0 ||
         // Check for MPEG sync word (simplified check)
@@ -361,7 +366,7 @@ static bool is_audio_file(const char * buf, size_t len) {
     );
     bool is_flac = memcmp(buf, "fLaC", 4) == 0;
 
-    return is_wav || is_mp3 || is_flac;
+    return (is_wav || is_mp3 || is_flac) && !is_webp; // webp is not an audio file
 }
 
 // returns true if the buffer is a valid audio file
@@ -423,7 +428,20 @@ mtmd_bitmap * mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, const unsigne
 
     // otherwise, we assume it's an image
     mtmd_bitmap * result = nullptr;
+    if (len >= 12 && memcmp(buf, "RIFF", 4) == 0 && memcmp(buf  8, "WEBP", 4) == 0) {
+        int nx, ny;
+        uint8_t* rgb = WebPDecodeRGB(buf, len, &nx, &ny);
+        if (!rgb) {
+            LOG_ERR("libwebp failed to decode WebP\n");
+            return nullptr;
+        }
+        result = mtmd_bitmap_init(nx, ny, rgb);
+        WebPFree(rgb);
+        return result;
+    }
+    
     {
+
         int nx, ny, nc;
         auto * data = stbi_load_from_memory(buf, len, &nx, &ny, &nc, 3);
         if (!data) {
