@@ -2390,7 +2390,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--override-tensor-draft"}, "<tensor name pattern>=<buffer type>,...",
+        {"--override-tensor-draft", "-otd"}, "<tensor name pattern>=<buffer type>,...",
         "override tensor buffer type for draft model", [](common_params & params, const std::string & value) {
             parse_tensor_buffer_overrides(value, params.speculative.tensor_buft_overrides);
         }
