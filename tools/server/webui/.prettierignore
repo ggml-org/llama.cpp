@@ -1,10 +1,9 @@
-**/.vscode
-**/.github
-**/.git
-**/.svn
-**/.hg
-**/node_modules
-**/dist
-**/build
+# Package Managers
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+bun.lock
+bun.lockb
 
-*.config.js
+# Miscellaneous
+/static/
