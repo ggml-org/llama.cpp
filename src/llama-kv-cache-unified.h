@@ -146,6 +146,9 @@ public:
     uint32_t get_size()     const;
     uint32_t get_n_stream() const;
 
+    // Resizing the cells size to get dynamic context size at runtime.
+    bool resize(uint32_t);
+
     bool get_has_shift() const;
 
     //

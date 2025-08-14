@@ -412,6 +412,46 @@ ggml_backend_sched_t llama_context::get_sched() const {
     return sched.get();
 }
 
+std::vector<uint8_t> dump_state(llama_context *ctx) {
+    std::vector<uint8_t> state_mem(llama_state_get_size(ctx));
+    const size_t written = llama_state_get_data(ctx, state_mem.data(), state_mem.size());
+    return state_mem;
+}
+
+void load_state(llama_context* ctx, std::vector<uint8_t> state_mem){
+    if (llama_state_set_data(ctx, state_mem.data(), state_mem.size()) == 0) {
+        fprintf(stderr, "\n%s : failed to read state\n", __func__);
+        
+        // Free up resources
+        llama_free(ctx);
+        llama_free_model(const_cast<llama_model*>(&ctx->get_model()));
+    }
+}
+
+void llama_context::mod_n_ctx(uint32_t new_n_ctx, llama_context_params params){
+    // Allow only to increase the context size.
+    if (cparams.n_ctx < new_n_ctx) {
+        cparams.n_ctx = new_n_ctx;
+        llama_memory_params params_mem = {
+            /*.type_k =*/ params.type_k,
+            /*.type_v =*/ params.type_v,
+        };
+        // Resets the memory and sets it to new memory params with modified cparams 
+        std::vector<uint8_t> state_memory =  dump_state(this); // Dump the state here.
+        memory.reset(model.create_memory(params_mem, cparams));
+        load_state(this, state_memory); // Load the state.
+
+        // Frees the memory..
+        std::vector<uint8_t>().swap(state_memory);
+        
+        // TODO: Resize the memory rather than re-creating the memory again
+        // memory.get()->resize(new_n_ctx);
+    }
+    else{
+        LLAMA_LOG_ERROR("%s: Cannot decrease the context size.", __func__);
+    }
+}
+
 uint32_t llama_context::n_ctx() const {
     return cparams.n_ctx;
 }
@@ -2325,6 +2365,10 @@ void llama_free(llama_context * ctx) {
 
 uint32_t llama_n_ctx(const llama_context * ctx) {
     return ctx->n_ctx();
+}
+
+void llama_mod_n_ctx(struct llama_context * ctx, uint32_t new_n_ctx, llama_context_params params){
+    ctx->mod_n_ctx(new_n_ctx, params);
 }
 
 uint32_t llama_n_batch(const llama_context * ctx) {
