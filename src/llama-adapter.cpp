@@ -417,3 +417,15 @@ llama_adapter_lora * llama_adapter_lora_init(llama_model * model, const char * p
 void llama_adapter_lora_free(llama_adapter_lora * adapter) {
     delete adapter;
 }
+
+uint64_t llama_adapter_get_alora_n_invocation_tokens(const struct llama_adapter_lora * adapter) {
+    if (!adapter) {
+        return 0;
+    }
+    return adapter->alora_invocation_tokens.size();
+}
+
+const llama_token * llama_adapter_get_alora_invocation_tokens(const llama_adapter_lora * adapter) {
+    GGML_ASSERT(adapter);
+    return adapter->alora_invocation_tokens.data();
+}
