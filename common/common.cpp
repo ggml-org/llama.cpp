@@ -912,10 +912,24 @@ std::string fs_get_cache_file(const std::string & filename) {
 struct common_init_result common_init_from_params(common_params & params) {
     common_init_result iparams;
     auto mparams = common_model_params_to_llama(params);
+    llama_model * model = NULL;
 
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), mparams);
+    if (params.model.paths.empty()) {
+        LOG_ERR("%s: failed to load model 'model path not specified'\n", __func__);
+        return iparams;
+    } else if (params.model.paths.size() == 1) {
+        model = llama_model_load_from_file(params.model.paths[0].c_str(), mparams);
+    } else {
+        std::vector<const char *> paths;
+        paths.reserve(params.model.paths.size());
+        for (const auto & path : params.model.paths) {
+            paths.push_back(path.c_str());
+        }
+        model = llama_model_load_from_splits(paths.data(), paths.size(), mparams);
+    }
+
     if (model == NULL) {
-        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to load model '%s'\n", __func__, params.model.paths[0].c_str());
         return iparams;
     }
 
@@ -925,7 +939,7 @@ struct common_init_result common_init_from_params(common_params & params) {
 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
-        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.path.c_str());
+        LOG_ERR("%s: failed to create context with model '%s'\n", __func__, params.model.paths[0].c_str());
         llama_model_free(model);
         return iparams;
     }

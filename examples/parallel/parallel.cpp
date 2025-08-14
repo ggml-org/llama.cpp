@@ -495,7 +495,7 @@ int main(int argc, char ** argv) {
         params.prompt_file = "used built-in defaults";
     }
     LOG_INF("External prompt file: \033[32m%s\033[0m\n", params.prompt_file.c_str());
-    LOG_INF("Model and path used:  \033[32m%s\033[0m\n\n", params.model.path.c_str());
+    LOG_INF("Model and path used:  \033[32m%s\033[0m\n\n", params.model.paths[0].c_str());
 
     LOG_INF("Total prompt tokens: %6d, speed: %5.2f t/s\n", n_total_prompt, (double) (n_total_prompt              ) / (t_main_end - t_main_start) * 1e6);
     LOG_INF("Total gen tokens:    %6d, speed: %5.2f t/s\n", n_total_gen,    (double) (n_total_gen                 ) / (t_main_end - t_main_start) * 1e6);

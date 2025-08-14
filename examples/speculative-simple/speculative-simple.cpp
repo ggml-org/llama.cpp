@@ -24,7 +24,7 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.speculative.model.path.empty()) {
+    if (params.speculative.model.paths.empty()) {
         LOG_ERR("%s: --model-draft is required\n", __func__);
         return 1;
     }
@@ -67,7 +67,7 @@ int main(int argc, char ** argv) {
     ctx_dft   = llama_init_dft.context.get();
 
     if (!common_speculative_are_compatible(ctx_tgt, ctx_dft)) {
-        LOG_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params.speculative.model.path.c_str(), params.model.path.c_str());
+        LOG_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params.speculative.model.paths[0].c_str(), params.model.paths[0].c_str());
     }
 
     // Tokenize the prompt

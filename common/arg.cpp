@@ -496,8 +496,12 @@ static bool common_download_model(
         LOG_ERR("%s: invalid model url\n", __func__);
         return false;
     }
+    if (model.paths.size() != 1) {
+        LOG_ERR("%s: model url can only be specified with one path\n", __func__);
+        return false;
+    }
 
-    if (!common_download_file_single(model.url, model.path, bearer_token, offline)) {
+    if (!common_download_file_single(model.url, model.paths[0], bearer_token, offline)) {
         return false;
     }
 
@@ -508,9 +512,9 @@ static bool common_download_model(
             /*.no_alloc = */ true,
             /*.ctx      = */ NULL,
         };
-        auto * ctx_gguf = gguf_init_from_file(model.path.c_str(), gguf_params);
+        auto * ctx_gguf = gguf_init_from_file(model.paths[0].c_str(), gguf_params);
         if (!ctx_gguf) {
-            LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, model.path.c_str());
+            LOG_ERR("\n%s:  failed to load input GGUF from %s\n", __func__, model.paths[0].c_str());
             return false;
         }
 
@@ -529,8 +533,8 @@ static bool common_download_model(
         // Verify the first split file format
         // and extract split URL and PATH prefixes
         {
-            if (!llama_split_prefix(split_prefix, sizeof(split_prefix), model.path.c_str(), 0, n_split)) {
-                LOG_ERR("\n%s: unexpected model file name: %s n_split=%d\n", __func__, model.path.c_str(), n_split);
+            if (!llama_split_prefix(split_prefix, sizeof(split_prefix), model.paths[0].c_str(), 0, n_split)) {
+                LOG_ERR("\n%s: unexpected model file name: %s n_split=%d\n", __func__, model.paths[0].c_str(), n_split);
                 return false;
             }
 
@@ -548,7 +552,7 @@ static bool common_download_model(
             char split_url[LLAMA_CURL_MAX_URL_LENGTH] = {0};
             llama_split_path(split_url, sizeof(split_url), split_url_prefix, idx, n_split);
 
-            if (std::string(split_path) == model.path) {
+            if (std::string(split_path) == model.paths[0]) {
                 continue; // skip the already downloaded file
             }
 
@@ -798,7 +802,7 @@ static handle_model_result common_params_handle_model(
         if (!model.hf_repo.empty()) {
             // short-hand to avoid specifying --hf-file -> default it to --model
             if (model.hf_file.empty()) {
-                if (model.path.empty()) {
+                if (model.paths.empty()) {
                     auto auto_detected = common_get_hf_file(model.hf_repo, bearer_token, offline);
                     if (auto_detected.repo.empty() || auto_detected.ggufFile.empty()) {
                         exit(1); // built without CURL, error message already printed
@@ -811,30 +815,30 @@ static handle_model_result common_params_handle_model(
                         result.mmproj.hf_file = auto_detected.mmprojFile;
                     }
                 } else {
-                    model.hf_file = model.path;
+                    model.hf_file = model.paths[0];
                 }
             }
 
             std::string model_endpoint = get_model_endpoint();
             model.url = model_endpoint + model.hf_repo + "/resolve/main/" + model.hf_file;
             // make sure model path is present (for caching purposes)
-            if (model.path.empty()) {
+            if (model.paths.empty()) {
                 // this is to avoid different repo having same file name, or same file name in different subdirs
                 std::string filename = model.hf_repo + "_" + model.hf_file;
                 // to make sure we don't have any slashes in the filename
                 string_replace_all(filename, "/", "_");
-                model.path = fs_get_cache_file(filename);
+                model.paths.push_back(fs_get_cache_file(filename));
             }
 
         } else if (!model.url.empty()) {
-            if (model.path.empty()) {
+            if (model.paths.empty()) {
                 auto f = string_split<std::string>(model.url, '#').front();
                 f = string_split<std::string>(f, '?').front();
-                model.path = fs_get_cache_file(string_split<std::string>(f, '/').back());
+                model.paths.push_back(fs_get_cache_file(string_split<std::string>(f, '/').back()));
             }
 
-        } else if (model.path.empty()) {
-            model.path = model_path_default;
+        } else if (model.paths.empty() && !model_path_default.empty()) {
+            model.paths.push_back(model_path_default);
         }
     }
 
@@ -986,7 +990,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         auto res = common_params_handle_model(params.model, params.hf_token, DEFAULT_MODEL_PATH, params.offline);
         if (params.no_mmproj) {
             params.mmproj = {};
-        } else if (res.found_mmproj && params.mmproj.path.empty() && params.mmproj.url.empty()) {
+        } else if (res.found_mmproj && params.mmproj.paths.empty() && params.mmproj.url.empty()) {
             // optionally, handle mmproj model when -hf is specified
             params.mmproj = res.mmproj;
         }
@@ -2285,7 +2289,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "path to a multimodal projector file. see tools/mtmd/README.md\n"
         "note: if -hf is used, this argument can be omitted",
         [](common_params & params, const std::string & value) {
-            params.mmproj.path = value;
+            if (params.mmproj.paths.empty()) {
+                params.mmproj.paths.push_back(value);
+            } else {
+                params.mmproj.paths[0] = value;
+            }
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ"));
     add_opt(common_arg(
@@ -2597,7 +2605,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 "or `--model-url` if set, otherwise %s)", DEFAULT_MODEL_PATH
             ),
         [](common_params & params, const std::string & value) {
-            params.model.path = value;
+            params.model.paths.push_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}).set_env("LLAMA_ARG_MODEL"));
     add_opt(common_arg(
@@ -3330,7 +3338,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-md", "--model-draft"}, "FNAME",
         "draft model for speculative decoding (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.speculative.model.path = value;
+            params.speculative.model.paths.push_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MODEL_DRAFT"));
     add_opt(common_arg(
@@ -3371,7 +3379,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"-mv", "--model-vocoder"}, "FNAME",
         "vocoder model for audio generation (default: unused)",
         [](common_params & params, const std::string & value) {
-            params.vocoder.model.path = value;
+            params.vocoder.model.paths.push_back(value);
         }
     ).set_examples({LLAMA_EXAMPLE_TTS, LLAMA_EXAMPLE_SERVER}));
      add_opt(common_arg(

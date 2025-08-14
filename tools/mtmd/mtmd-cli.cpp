@@ -126,7 +126,7 @@ struct mtmd_cli_context {
     }
 
     void init_vision_context(common_params & params) {
-        const char * clip_path = params.mmproj.path.c_str();
+        const char * clip_path = params.mmproj.paths[0].c_str();
         mtmd_context_params mparams = mtmd_context_params_default();
         mparams.use_gpu = params.mmproj_use_gpu;
         mparams.print_timings = true;
@@ -257,14 +257,20 @@ int main(int argc, char ** argv) {
 
     common_init();
 
-    if (params.mmproj.path.empty()) {
+    if (params.mmproj.paths.empty()) {
         show_additional_info(argc, argv);
         LOG_ERR("ERR: Missing --mmproj argument\n");
         return 1;
     }
 
+    if (params.mmproj.paths.size() == 1) {
+        show_additional_info(argc, argv);
+        LOG_ERR("ERR: Only one --mmproj argument is supported\n");
+        return 1;
+    }
+
     mtmd_cli_context ctx(params);
-    LOG("%s: loading model: %s\n", __func__, params.model.path.c_str());
+    LOG("%s: loading model: %s\n", __func__, params.model.paths[0].c_str());
 
     bool is_single_turn = !params.prompt.empty() && !params.image.empty();
 

@@ -38,7 +38,20 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = common_model_params_to_llama(params);
 
-    llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
+    llama_model * model = NULL;
+    if (params.model.paths.empty()) {
+        fprintf(stderr, "%s: failed to load model 'model path not specified'\n", __func__);
+        return 1;
+    } else if (params.model.paths.size() == 1) {
+        model = llama_model_load_from_file(params.model.paths[0].c_str(), model_params);
+    } else {
+        std::vector<const char *> paths;
+        paths.reserve(params.model.paths.size());
+        for (const auto & path : params.model.paths) {
+            paths.push_back(path.c_str());
+        }
+        model = llama_model_load_from_splits(paths.data(), paths.size(), model_params);
+    }
 
     if (model == NULL) {
         fprintf(stderr , "%s: error: unable to load model\n" , __func__);

@@ -258,6 +258,7 @@ struct llama_model * llama_model_load_from_splits(
         return nullptr;
     }
     for (size_t i = 0; i < n_paths; ++i) {
+        LLAMA_LOG_INFO("%s: splits[%zu] = '%s'\n", __func__, i, paths[i]);
         splits.push_back(paths[i]);
     }
     return llama_model_load_from_file_impl(splits.front(), splits, params);

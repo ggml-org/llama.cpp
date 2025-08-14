@@ -1991,7 +1991,12 @@ struct server_context {
     }
 
     bool load_model(const common_params & params) {
-        SRV_INF("loading model '%s'\n", params.model.path.c_str());
+        if (params.model.paths.empty()) {
+            SRV_ERR("%s: no model path(s) specified\n", __func__);
+            return false;
+        }
+
+        SRV_INF("loading model '%s'\n", params.model.paths[0].c_str());
 
         params_base = params;
 
@@ -2001,7 +2006,7 @@ struct server_context {
         ctx   = llama_init.context.get();
 
         if (model == nullptr) {
-            SRV_ERR("failed to load model, '%s'\n", params_base.model.path.c_str());
+            SRV_ERR("failed to load model, '%s'\n", params_base.model.paths[0].c_str());
             return false;
         }
 
@@ -2011,8 +2016,13 @@ struct server_context {
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
-        if (!params_base.speculative.model.path.empty() || !params_base.speculative.model.hf_repo.empty()) {
-            SRV_INF("loading draft model '%s'\n", params_base.speculative.model.path.c_str());
+        if (!params_base.speculative.model.paths.empty() || !params_base.speculative.model.hf_repo.empty()) {
+            if (params_base.speculative.model.paths.empty()) {
+                SRV_ERR("%s: no speculative model path(s) specified\n", __func__);
+                return false;
+            }
+
+            SRV_INF("loading draft model '%s'\n", params_base.speculative.model.paths[0].c_str());
 
             auto params_dft = params_base;
 
@@ -2033,13 +2043,13 @@ struct server_context {
             model_dft = llama_init_dft.model.get();
 
             if (model_dft == nullptr) {
-                SRV_ERR("failed to load draft model, '%s'\n", params_base.speculative.model.path.c_str());
+                SRV_ERR("failed to load draft model, '%s'\n", params_base.speculative.model.paths[0].c_str());
                 return false;
             }
 
             vocab_dft_compatible = common_speculative_are_compatible(ctx, llama_init_dft.context.get());
             if (!vocab_dft_compatible) {
-                SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.path.c_str(), params_base.model.path.c_str());
+                SRV_INF("the draft model '%s' is not compatible with the target model '%s'. tokens will be translated between the draft and target models.\n", params_base.speculative.model.paths[0].c_str(), params_base.model.paths[0].c_str());
             }
 
             const int n_ctx_dft = llama_n_ctx(llama_init_dft.context.get());
@@ -2060,8 +2070,12 @@ struct server_context {
             chat_templates = common_chat_templates_init(model, "chatml");
         }
 
-        std::string & mmproj_path = params_base.mmproj.path;
-        if (!mmproj_path.empty()) {
+        if (!params_base.mmproj.paths.empty()) {
+            if (params_base.mmproj.paths.size() != 1) {
+                SRV_ERR("%s: only one mmproj path can be specified\n", __func__);
+                return false;
+            }
+            std::string & mmproj_path = params_base.mmproj.paths[0];
             mtmd_context_params mparams = mtmd_context_params_default();
             mparams.use_gpu       = params_base.mmproj_use_gpu;
             mparams.print_timings = false;
@@ -2084,7 +2098,7 @@ struct server_context {
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
 
-            if (!params_base.speculative.model.path.empty()) {
+            if (!params_base.speculative.model.paths.empty()) {
                 SRV_ERR("%s\n", "err: speculative decode is not supported by multimodal");
                 return false;
             }
@@ -4246,7 +4260,7 @@ int main(int argc, char ** argv) {
         json data = {
             { "default_generation_settings", ctx_server.default_generation_settings_for_props },
             { "total_slots",                 ctx_server.params_base.n_parallel },
-            { "model_path",                  ctx_server.params_base.model.path },
+            { "model_path",                  ctx_server.params_base.model.paths[0] },
             { "modalities",                  json{
                 {"vision", ctx_server.oai_parser_opt.allow_image},
                 {"audio",  ctx_server.oai_parser_opt.allow_audio},
@@ -4608,8 +4622,8 @@ int main(int argc, char ** argv) {
         json models = {
             {"models", {
                 {
-                    {"name", params.model_alias.empty() ? params.model.path : params.model_alias},
-                    {"model", params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"name", params.model_alias.empty() ? params.model.paths[0] : params.model_alias},
+                    {"model", params.model_alias.empty() ? params.model.paths[0] : params.model_alias},
                     {"modified_at", ""},
                     {"size", ""},
                     {"digest", ""}, // dummy value, llama.cpp does not support managing model file's hash
@@ -4631,7 +4645,7 @@ int main(int argc, char ** argv) {
             {"object", "list"},
             {"data", {
                 {
-                    {"id",       params.model_alias.empty() ? params.model.path : params.model_alias},
+                    {"id",       params.model_alias.empty() ? params.model.paths[0] : params.model_alias},
                     {"object",   "model"},
                     {"created",  std::time(0)},
                     {"owned_by", "llamacpp"},
