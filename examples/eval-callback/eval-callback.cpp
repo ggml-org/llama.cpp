@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <string>
 #include <vector>
+#include <numeric>
 
 /**
  * This the arbitrary data which will be passed to each callback.
@@ -76,6 +77,12 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
         }
         LOG("                                     ]\n");
         LOG("                                     sum = %f\n", sum);
+    }
+
+    // TODO: make this abort configurable/optional?
+    if (std::isnan(sum)) {
+        LOG_ERR("encountered NaN - aborting\n");
+        exit(0);
     }
 }
 
