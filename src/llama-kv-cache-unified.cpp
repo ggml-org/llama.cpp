@@ -1828,7 +1828,9 @@ bool llama_kv_cache_unified::is_masked_swa(llama_pos p0, llama_pos p1) const {
     return false;
 }
 
-void llama_kv_cache_unified::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+void llama_kv_cache_unified::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    GGML_UNUSED(flags);
+
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1879,7 +1881,9 @@ void llama_kv_cache_unified::state_write(llama_io_write_i & io, llama_seq_id seq
     }
 }
 
-void llama_kv_cache_unified::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+void llama_kv_cache_unified::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
 
     uint32_t n_stream_cur;
@@ -1957,10 +1961,6 @@ void llama_kv_cache_unified::state_write_data(llama_io_write_i & io, const cell_
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
 
-        if (!hparams.is_swa(il)) {
-            continue;
-        }
-
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
 
         auto * k = layer.k_stream[cr.strm];
@@ -1984,10 +1984,6 @@ void llama_kv_cache_unified::state_write_data(llama_io_write_i & io, const cell_
     if (!v_trans) {
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
-
-            if (!hparams.is_swa(il)) {
-                continue;
-            }
 
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
@@ -2014,10 +2010,6 @@ void llama_kv_cache_unified::state_write_data(llama_io_write_i & io, const cell_
 
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
-
-            if (!hparams.is_swa(il)) {
-                continue;
-            }
 
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
@@ -2174,10 +2166,6 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t strm
     for (const auto & layer : layers) {
         const uint32_t il = layer.il;
 
-        if (!hparams.is_swa(il)) {
-            continue;
-        }
-
         const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
 
         auto * k = layer.k_stream[strm];
@@ -2210,10 +2198,6 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t strm
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
 
-            if (!hparams.is_swa(il)) {
-                continue;
-            }
-
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
             auto * v = layer.v_stream[strm];
@@ -2245,10 +2229,6 @@ bool llama_kv_cache_unified::state_read_data(llama_io_read_i & io, uint32_t strm
         // For each layer, read the values for each cell (transposed)
         for (const auto & layer : layers) {
             const uint32_t il = layer.il;
-
-            if (!hparams.is_swa(il)) {
-                continue;
-            }
 
             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
 
