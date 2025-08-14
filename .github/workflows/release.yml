@@ -608,6 +608,12 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup SDKs
+        run: |
+          xcodebuild -downloadPlatform iOS
+          xcodebuild -downloadPlatform tvOS
+          xcodebuild -downloadPlatform visionOS
+
       - name: Build
         id: cmake_build
         run: |
