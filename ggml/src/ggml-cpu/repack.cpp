@@ -684,7 +684,6 @@ void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
         }
         for (int j = 0; j < ncols_interleaved; j++) {
             s[x * ncols_interleaved + j] = sumf[j];
-
         }
     }
 }
