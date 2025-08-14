@@ -328,6 +328,9 @@ ov::Tensor get_ov_input_tensor(std::shared_ptr<GgmlOvDecoder> ggml_decoder, cons
                 std::copy(padded_data.begin(), padded_data.end(), data_ptr);
             }
 
+        } else if (const auto* op = ggml_decoder->get_tensor_used_op(ggml_decoder->get_tensor_from_name(param_name));
+                   op->op == GGML_OP_SET_ROWS && is_static && is_first_token) {
+            input_tensor = ov::Tensor(ov::element::i64, ov::Shape{1});
         } else {
             input_tensor = convert_ggml_input_to_ov(ggml_decoder, param_name);
         }

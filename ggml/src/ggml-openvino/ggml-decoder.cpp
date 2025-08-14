@@ -193,6 +193,14 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
             }
             break;
         }
+        case GGML_OP_SET_ROWS: {
+            if (std::string(node->name).find("cache_k") == 0) {
+                m_op_case = 1;
+            } else {
+                m_op_case = 2;
+            }
+            break;
+        }
         case GGML_OP_PERMUTE: {
             if (node->src[0]->view_src == nullptr) {
                 // Permute Qcur
@@ -274,8 +282,18 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
         input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
     } else if (name.find("cache_v") == 0) {
         input_shape = ov::PartialShape{m_num_heads_kv, m_head_size, m_context_size};
-    } else if (get_tensor_used_op(src)->op == GGML_OP_SET_ROWS) {
+    } else if (const auto* op = get_tensor_used_op(src); op->op == GGML_OP_SET_ROWS) {
         input_shape = ov::PartialShape{1, 1, -1};
+        if (m_is_static) {
+            if (m_is_first_token) {
+                // Dummy static shape, since the indices are not used in this case
+                input_shape = ov::PartialShape{1};
+            } else if (std::string(op->name).find("cache_k") == 0) {
+                input_shape = ov::PartialShape{1, 1, 1};
+            } else {
+                input_shape = ov::PartialShape{1, 1, m_num_heads_kv * m_head_size};
+            }
+        }
     } else if (src->op == GGML_OP_VIEW) {
         // This case is added to make test-backend-ops work
         input_shape = ov::PartialShape{get_shape(src->view_src)};
@@ -316,6 +334,7 @@ void GgmlOvDecoder::add_extra_inputs() {
         if (node->op == GGML_OP_SET_ROWS && std::string(node->name).find("cache_k") == 0) {
             assert(node->src[1]->type == GGML_TYPE_I64);
             past_token_len = *(int64_t*) (node->src[1]->data);
+            break;
         }
     }
 
@@ -364,6 +383,22 @@ const ggml_tensor* GgmlOvDecoder::get_tensor_used_op(const ggml_tensor* tensor) 
         }
     }
     throw std::runtime_error("Tensor not found in cgraph");
+}
+
+const ggml_tensor* GgmlOvDecoder::get_tensor_from_name(const std::string& name) const {
+    for (int i = 0; i < m_cgraph->n_nodes; i++) {
+        const auto* node = m_cgraph->nodes[i];
+        for (int j = 0; j < GGML_MAX_SRC; j++) {
+            const auto* src = node->src[j];
+            if (src == nullptr) {
+                break;
+            }
+            if (std::string(src->name) == name) {
+                return src;
+            }
+        }
+    }
+    return nullptr;
 }
 
 std::map<std::string, std::string> GgmlOvDecoder::get_kv_param_res_names() const {
