@@ -328,10 +328,21 @@ static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, con
     static const std::set<ggml_type> supported_types{
         GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_I64, GGML_TYPE_I32};
 
-    static const std::set<ggml_op> supported_ops{GGML_OP_NONE,     GGML_OP_ADD,       GGML_OP_MUL,      GGML_OP_MUL_MAT,
-                                                 GGML_OP_VIEW,     GGML_OP_CONT,      GGML_OP_CPY,      GGML_OP_RESHAPE,
-                                                 GGML_OP_PERMUTE,  GGML_OP_TRANSPOSE, GGML_OP_GET_ROWS, GGML_OP_ROPE,
-                                                 GGML_OP_RMS_NORM, GGML_OP_SCALE,     GGML_OP_SOFT_MAX, GGML_OP_SET_ROWS};
+    static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
+                                                 GGML_OP_ADD,
+                                                 GGML_OP_MUL,
+                                                 GGML_OP_MUL_MAT,
+                                                 GGML_OP_VIEW,
+                                                 GGML_OP_CONT,
+                                                 GGML_OP_RESHAPE,
+                                                 GGML_OP_PERMUTE,
+                                                 GGML_OP_TRANSPOSE,
+                                                 GGML_OP_GET_ROWS,
+                                                 GGML_OP_ROPE,
+                                                 GGML_OP_RMS_NORM,
+                                                 GGML_OP_SCALE,
+                                                 GGML_OP_SOFT_MAX,
+                                                 GGML_OP_SET_ROWS};
     static const std::set<ggml_unary_op> supported_unary_ops{
         GGML_UNARY_OP_SILU,
     };

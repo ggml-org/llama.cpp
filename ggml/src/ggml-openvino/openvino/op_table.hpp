@@ -12,7 +12,6 @@ namespace op {
 
 GGML_OP_CONVERTER(translate_add);
 GGML_OP_CONVERTER(translate_cont);
-GGML_OP_CONVERTER(translate_cpy);
 GGML_OP_CONVERTER(translate_get_rows);
 GGML_OP_CONVERTER(translate_mul);
 GGML_OP_CONVERTER(translate_mulmat);
