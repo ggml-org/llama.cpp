@@ -992,6 +992,34 @@ static bool are_lora_equal(
     return true;
 }
 
+// if the two sets of loras are different, they require a cache clear unless the
+// current lora set is empty and the next lora set is all activated loras.
+static bool lora_should_clear_cache(
+        const std::vector<common_adapter_lora_info> & current,
+        const std::vector<common_adapter_lora_info> & next) {
+
+    // This should always be called after determining that the two sets are
+    // _not_ equal. This assert is therefore some slightly wasted work and
+    // should be safe to remove as long as this method is called correctly.
+    GGML_ASSERT(!are_lora_equal(current, next));
+
+    // If the current has _any_ non-disabled loras (activated or otherwise) and
+    // is not the same as the target set, the cache should be cleared.
+    for (const auto & lora : current) {
+        if (lora.scale != 0) {
+            return true;
+        }
+    }
+
+    // If the next has only aloras, the cache should not be cleared
+    for (const auto & lora : next) {
+        if (lora.scale != 0 && llama_adapter_get_alora_n_invocation_tokens(lora.ptr) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // parse lora config from JSON request, returned a copy of lora_base with updated scale
 static std::vector<common_adapter_lora_info> parse_lora_request(
         const std::vector<common_adapter_lora_info> & lora_base,
