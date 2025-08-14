@@ -6,27 +6,54 @@ export class SlotsService {
 	private pollingTimer: number | null = null;
 	private callbacks: Set<(state: ApiProcessingState) => void> = new Set();
 	private slotsAvailable: boolean | null = null;
+	private slotsEndpointSupported: boolean | null = null;
 
 	constructor(pollingInterval = 500) {
 		this.pollingInterval = pollingInterval;
 	}
 
 	/**
-	 * Check if slots endpoint is available based on server properties
+	 * Check if slots endpoint is available based on server properties and endpoint support
 	 */
-	private isSlotsEndpointAvailable(): boolean {
-		if (this.slotsAvailable !== null) {
-			return this.slotsAvailable;
+	private async isSlotsEndpointAvailable(): Promise<boolean> {
+		// If we've already determined endpoint support, use cached result
+		if (this.slotsEndpointSupported !== null) {
+			return this.slotsEndpointSupported;
 		}
 
+		// First check server properties
 		const serverProps = serverStore.serverProps;
 		if (!serverProps) {
+			this.slotsEndpointSupported = false;
 			return false;
 		}
 
 		// Check if server has slots support (total_slots > 0)
-		this.slotsAvailable = serverProps.total_slots > 0;
-		return this.slotsAvailable;
+		if (serverProps.total_slots <= 0) {
+			this.slotsEndpointSupported = false;
+			return false;
+		}
+
+		// Test if the endpoint is actually implemented
+		try {
+			const response = await fetch('/slots');
+			
+			// Handle 501 Not Implemented specifically
+			if (response.status === 501) {
+				console.info('Slots endpoint not implemented - server started without --slots flag');
+				this.slotsEndpointSupported = false;
+				return false;
+			}
+			
+			// If we get any successful response or other error, assume it's supported
+			this.slotsEndpointSupported = true;
+			return true;
+		} catch (error) {
+			// Network errors - assume endpoint might be supported but server is down
+			console.warn('Unable to test slots endpoint availability:', error);
+			this.slotsEndpointSupported = false;
+			return false;
+		}
 	}
 
 	/**
@@ -34,16 +61,18 @@ export class SlotsService {
 	 */
 	resetAvailabilityCheck(): void {
 		this.slotsAvailable = null;
+		this.slotsEndpointSupported = null;
 	}
 
-	startPolling(): void {
+	async startPolling(): Promise<void> {
 		if (this.pollingTimer) {
 			return;
 		}
 
 		// Only start polling if slots endpoint is available
-		if (!this.isSlotsEndpointAvailable()) {
-			console.warn('Slots endpoint not available - server does not support slots');
+		const isAvailable = await this.isSlotsEndpointAvailable();
+		if (!isAvailable) {
+			console.info('Slots endpoint not available - polling disabled');
 			return;
 		}
 
@@ -70,6 +99,15 @@ export class SlotsService {
 	private async poll(): Promise<void> {
 		try {
 			const response = await fetch(`/slots`);
+			
+			// Handle 501 Not Implemented - stop polling and mark as unsupported
+			if (response.status === 501) {
+				console.info('Slots endpoint not implemented - stopping polling');
+				this.slotsEndpointSupported = false;
+				this.stopPolling();
+				return;
+			}
+			
 			if (!response.ok) {
 				console.warn('Failed to fetch slots data:', response.statusText);
 				return;
@@ -136,12 +174,21 @@ export class SlotsService {
 
 	async getCurrentState(): Promise<ApiProcessingState | null> {
 		// Check if slots endpoint is available before making request
-		if (!this.isSlotsEndpointAvailable()) {
+		const isAvailable = await this.isSlotsEndpointAvailable();
+		if (!isAvailable) {
 			return null;
 		}
 
 		try {
 			const response = await fetch(`/slots`);
+			
+			// Handle 501 Not Implemented
+			if (response.status === 501) {
+				console.info('Slots endpoint not implemented');
+				this.slotsEndpointSupported = false;
+				return null;
+			}
+			
 			if (!response.ok) {
 				return null;
 			}

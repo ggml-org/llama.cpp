@@ -55,8 +55,27 @@ class ServerStore {
 			this._serverProps = props;
 			console.log('Server properties loaded:', props);
 		} catch (error) {
-			const errorMessage =
-				error instanceof Error ? error.message : 'Failed to fetch server properties';
+			let errorMessage = 'Failed to connect to server';
+			
+			if (error instanceof Error) {
+				// Handle specific error types with user-friendly messages
+				if (error.name === 'TypeError' && error.message.includes('fetch')) {
+					errorMessage = 'Server is not running or unreachable';
+				} else if (error.message.includes('ECONNREFUSED')) {
+					errorMessage = 'Connection refused - server may be offline';
+				} else if (error.message.includes('ENOTFOUND')) {
+					errorMessage = 'Server not found - check server address';
+				} else if (error.message.includes('ETIMEDOUT')) {
+					errorMessage = 'Connection timeout - server may be overloaded';
+				} else if (error.message.includes('500')) {
+					errorMessage = 'Server error - check server logs';
+				} else if (error.message.includes('404')) {
+					errorMessage = 'Server endpoint not found';
+				} else if (error.message.includes('403') || error.message.includes('401')) {
+					errorMessage = 'Access denied - check server permissions';
+				}
+			}
+			
 			this._error = errorMessage;
 			console.error('Error fetching server properties:', error);
 		} finally {

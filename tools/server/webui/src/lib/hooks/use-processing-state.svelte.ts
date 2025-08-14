@@ -6,7 +6,7 @@ export function useProcessingState() {
 	let isPolling = $state(false);
 	let unsubscribe: (() => void) | null = null;
 
-	function startMonitoring(): void {
+	async function startMonitoring(): Promise<void> {
 		if (isPolling) return;
 
 		isPolling = true;
@@ -15,7 +15,12 @@ export function useProcessingState() {
 			processingState = state;
 		});
 
-		slotsService.startPolling();
+		try {
+			await slotsService.startPolling();
+		} catch (error) {
+			console.warn('Failed to start slots polling:', error);
+			// Continue without slots monitoring - graceful degradation
+		}
 	}
 
 	function stopMonitoring(): void {

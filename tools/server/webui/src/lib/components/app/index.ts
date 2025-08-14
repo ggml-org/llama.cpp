@@ -28,4 +28,6 @@ export { default as ChatSidebarSearch } from './chat/ChatSidebar/ChatSidebarSear
 export { default as MarkdownContent } from './MarkdownContent.svelte';
 
 export { default as ServerStatus } from './ServerStatus.svelte';
+export { default as ServerErrorSplash } from './ServerErrorSplash.svelte';
+export { default as ServerLoadingSplash } from './ServerLoadingSplash.svelte';
 export { default as ServerInfo } from './ServerInfo.svelte';

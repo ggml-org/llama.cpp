@@ -7,8 +7,8 @@
 		filterFilesByModalities,
 		generateModalityErrorMessage
 	} from '$lib/utils/modality-file-validation';
-	import { supportsVision, supportsAudio } from '$lib/stores/server.svelte';
-	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo } from '$lib/components/app';
+	import { supportsVision, supportsAudio, serverError, serverLoading } from '$lib/stores/server.svelte';
+	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo, ServerErrorSplash, ServerLoadingSplash } from '$lib/components/app';
 	import {
 		activeMessages,
 		activeConversation,
@@ -23,6 +23,7 @@
 	import { navigating } from '$app/state';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+
 
 	let { showCenteredEmpty = false } = $props();
 	let chatScrollContainer: HTMLDivElement | undefined = $state();
@@ -49,6 +50,9 @@
 	const isEmpty = $derived(
 		showCenteredEmpty && !activeConversation() && activeMessages().length === 0 && !isLoading()
 	);
+
+	const hasServerError = $derived(serverError());
+	const isServerLoading = $derived(serverLoading());
 
 	function handleDragEnter(event: DragEvent) {
 		event.preventDefault();
@@ -233,6 +237,12 @@
 			</div>
 		</div>
 	</div>
+{:else if hasServerError}
+	<!-- Server Error State -->
+	<ServerErrorSplash error={hasServerError} />
+{:else if isServerLoading}
+	<!-- Server Loading State -->
+	<ServerLoadingSplash />
 {:else if serverStore.modelName}
 	<div
 		aria-label="Welcome screen with file drop zone"
