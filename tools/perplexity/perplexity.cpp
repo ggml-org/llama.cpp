@@ -1548,7 +1548,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
 
             int num_answers = cur_task.seq_tokens.size();
             if (s0 + num_answers > max_seq) {
-                if (i0 == i1) {
+                if (s0 == 0) {
                     LOG_ERR("%s : task %zu requires a higher -np|--parallel value (at least %d)\n", __func__, i0, num_answers);
                     return;
                 }
