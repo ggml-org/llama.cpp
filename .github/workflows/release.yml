@@ -609,9 +609,8 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
 
       - name: Build
         id: cmake_build
