@@ -27,24 +27,8 @@
   },
   {
     "REPLS": {
-      "SRC0_TYPE" : "f32",
-      "SRC1_TYPE" : "f16",
-      "BLOCK_SIZE" : 1
-    },
-    "DECLS" : "FLOAT"
-  },
-  {
-    "REPLS": {
       "SRC0_TYPE": "q4_0",
       "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": "Q4_0"
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q4_0",
-      "SRC1_TYPE": "f16",
       "BLOCK_SIZE": 32
     },
     "DECLS": "Q4_0"
@@ -59,24 +43,8 @@
   },
   {
     "REPLS": {
-      "SRC0_TYPE": "q4_1",
-      "SRC1_TYPE": "f16",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": "Q4_1"
-  },
-  {
-    "REPLS": {
       "SRC0_TYPE": "q5_0",
       "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": "Q5_0"
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q5_0",
-      "SRC1_TYPE": "f16",
       "BLOCK_SIZE": 32
     },
     "DECLS": "Q5_0"
@@ -91,14 +59,6 @@
   },
   {
     "REPLS": {
-      "SRC0_TYPE": "q5_1",
-      "SRC1_TYPE": "f16",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": "Q5_1"
-  },
-  {
-    "REPLS": {
       "SRC0_TYPE": "q8_0",
       "SRC1_TYPE": "f32",
       "BLOCK_SIZE": 32
@@ -107,27 +67,19 @@
   },
   {
     "REPLS": {
-      "SRC0_TYPE": "q8_0",
-      "SRC1_TYPE": "f16",
-      "BLOCK_SIZE": 32
-    },
-    "DECLS": "Q8_0"
-  },
-  {
-    "REPLS": {
-      "SRC0_TYPE": "q8_1",
+      "SRC0_TYPE": "q2_k",
       "SRC1_TYPE": "f32",
-      "BLOCK_SIZE": 32
+      "BLOCK_SIZE": 256
     },
-    "DECLS": "Q8_1"
+    "DECLS": "Q2_K"
   },
   {
     "REPLS": {
-      "SRC0_TYPE": "q8_1",
-      "SRC1_TYPE": "f16",
-      "BLOCK_SIZE": 32
+      "SRC0_TYPE": "q3_k",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 256
     },
-    "DECLS": "Q8_1"
+    "DECLS": "Q3_K"
   }
 ]
 
@@ -299,6 +251,116 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     return sum;
 }
 #enddecl(Q8_1)
+
+#decl(Q2_K)
+// 16 blocks of 16 elements each
+struct q2_k {
+    scales: array<u32, 4>,
+    qs: array<u32, 16>,
+    d: f16,
+    dmin: f16
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block = src0[src0_idx_base + offset];
+    let d = f32(block.d);
+    let m = f32(block.dmin);
+    var sum = 0.0;
+    var src1_i = src1_idx_base + offset * 256;
+    var is: u32 = 0;
+    // 2 halves of the block (128 elements each)
+    for (var q_b_idx: u32 = 0; q_b_idx < 64; q_b_idx += 32) {
+        // 4 groups (each group has 2 blocks of 16 elements)
+        for (var shift: u32 = 0; shift < 8; shift += 2) {
+            // 2 blocks
+            for (var k: u32 = 0; k < 32; k += 16) {
+                let sc = (block.scales[is / 4] >> ((is % 4) * 8)) & 0xFF;
+                is++;
+                let dl = d * f32(sc & 0xF);
+                let ml = m * f32(sc >> 4);
+                for (var l: u32 = 0u; l < 16; l++) {
+                    let q_idx = q_b_idx + k + l;
+                    let q_byte = (block.qs[q_idx / 4] >> ((q_idx % 4) * 8)) & 0xFF;
+                    let qs_val = (q_byte >> shift) & 3;
+                    sum += (f32(qs_val) * dl - ml) * src1[src1_i];
+                    src1_i++;
+                }
+            }
+        }
+    }
+    return sum;
+}
+
+#enddecl(Q2_K)
+
+#decl(Q3_K)
+// 16 blocks of 16 elements each
+struct q3_k {
+    hmask: array<f16, 16>,
+    qs: array<f16, 32>,
+    scales: array<f16, 6>, // 6-bit quantized values
+    d: f16
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block = src0[src0_idx_base + offset];
+    let d = f32(block.d);
+
+    // extract 6-bit scales, which consist of 4-bits from first 8 bytes of scale,
+    // and 2-bits from the last 4 bytes
+    let kmask1: u32 = 0x03030303;
+    let kmask2: u32 = 0x0f0f0f0f;
+    var scale_vals: array<u32, 4>;
+    for (var i: u32 = 0; i < 4; i++) {
+        scale_vals[i] = bitcast<u32>(vec2(block.scales[2 * i], block.scales[2 * i + 1]));
+    }
+    var tmp: u32 = scale_vals[2];
+    scale_vals[2] = ((scale_vals[0] >> 4) & kmask2) | (((tmp >> 4) & kmask1) << 4);
+    scale_vals[3] = ((scale_vals[1] >> 4) & kmask2) | (((tmp >> 6) & kmask1) << 4);
+    scale_vals[0] = (scale_vals[0] & kmask2) | ((tmp & kmask1) << 4);
+    scale_vals[1] = (scale_vals[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
+
+    // convert half-precision floats to packed 32-bit integers
+    var hmask_vals: array<u32, 8>;
+    for (var i: u32 = 0; i < 8; i++) {
+        hmask_vals[i] = bitcast<u32>(vec2(block.hmask[2 * i], block.hmask[2 * i + 1]));
+    }
+    var qs_vals: array<u32, 16>;
+    for (var i: u32 = 0; i < 16; i++) {
+        qs_vals[i] = bitcast<u32>(vec2(block.qs[2 * i], block.qs[2 * i + 1]));
+    }
+
+    var sum = 0.0;
+    var src1_i = src1_idx_base + offset * 256;
+    var is: u32 = 0;
+    var m: u32 = 1;
+    // 2 halves of the block (128 elements each)
+    for (var q_b_idx: u32 = 0; q_b_idx < 64; q_b_idx += 32) {
+        // 4 groups (each group has 2 blocks of 16 elements)
+        for (var shift: u32 = 0; shift < 8; shift += 2) {
+            // 2 blocks
+            for (var k: u32 = 0; k < 32; k += 16) {
+                let sc = (scale_vals[is / 4] >> ((is % 4) * 8)) & 0xFF;
+                is++;
+                let dl = d * (f32(sc) - 32.0);
+                for (var l: u32 = 0u; l < 16u; l++) {
+                    let q_idx = q_b_idx + k + l;
+                    let hm_idx = k + l;
+                    let q_byte = (qs_vals[q_idx / 4] >> ((q_idx % 4) * 8)) & 0xFF;
+                    let hmask_byte = (hmask_vals[hm_idx / 4] >> ((hm_idx % 4) * 8)) & 0xFF;
+                    let hm = select(4.0, 0.0, (hmask_byte & m) != 0);
+                    let qs_val = (q_byte >> shift) & 3;
+                    sum += ((f32(qs_val) - hm) * dl) * src1[src1_i];
+                    src1_i++;
+                }
+            }
+            m <<= 1;
+        }
+    }
+    return sum;
+}
+
+#enddecl(Q3_K)
 
 #end(DECLS)
 

@@ -129,7 +129,7 @@ struct webgpu_context_struct {
     webgpu_buf_pool set_rows_error_buf_pool;
 
     wgpu::ComputePipeline memset_pipeline;
-    wgpu::ComputePipeline mul_mat_pipeline[10][2];
+    wgpu::ComputePipeline mul_mat_pipeline[12][2];
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline cpy_pipeline;
 
@@ -910,7 +910,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_pipeline_info pipeline_infos[16] = {
+    webgpu_pipeline_info pipeline_infos[10] = {
         { .name        = "mul_mat_f32_f32",
          .shader_code = wgsl_mul_mat_f32_f32,
          .src0_type   = GGML_TYPE_F32,
@@ -918,10 +918,6 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
         { .name        = "mul_mat_f16_f16",
          .shader_code = wgsl_mul_mat_f16_f16,
          .src0_type   = GGML_TYPE_F16,
-         .src1_type   = GGML_TYPE_F16 },
-        { .name        = "mul_mat_f32_f16",
-         .shader_code = wgsl_mul_mat_f32_f16,
-         .src0_type   = GGML_TYPE_F32,
          .src1_type   = GGML_TYPE_F16 },
         { .name        = "mul_mat_f16_f32",
          .shader_code = wgsl_mul_mat_f16_f32,
@@ -931,50 +927,30 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
          .shader_code = wgsl_mul_mat_q4_0_f32,
          .src0_type   = GGML_TYPE_Q4_0,
          .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q4_0_f16",
-         .shader_code = wgsl_mul_mat_q4_0_f16,
-         .src0_type   = GGML_TYPE_Q4_0,
-         .src1_type   = GGML_TYPE_F16 },
         { .name        = "mul_mat_q4_1_f32",
          .shader_code = wgsl_mul_mat_q4_1_f32,
          .src0_type   = GGML_TYPE_Q4_1,
          .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q4_1_f16",
-         .shader_code = wgsl_mul_mat_q4_1_f16,
-         .src0_type   = GGML_TYPE_Q4_1,
-         .src1_type   = GGML_TYPE_F16 },
         { .name        = "mul_mat_q5_0_f32",
          .shader_code = wgsl_mul_mat_q5_0_f32,
          .src0_type   = GGML_TYPE_Q5_0,
          .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q5_0_f16",
-         .shader_code = wgsl_mul_mat_q5_0_f16,
-         .src0_type   = GGML_TYPE_Q5_0,
-         .src1_type   = GGML_TYPE_F16 },
         { .name        = "mul_mat_q5_1_f32",
          .shader_code = wgsl_mul_mat_q5_1_f32,
          .src0_type   = GGML_TYPE_Q5_1,
          .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q5_1_f16",
-         .shader_code = wgsl_mul_mat_q5_1_f16,
-         .src0_type   = GGML_TYPE_Q5_1,
-         .src1_type   = GGML_TYPE_F16 },
         { .name        = "mul_mat_q8_0_f32",
          .shader_code = wgsl_mul_mat_q8_0_f32,
          .src0_type   = GGML_TYPE_Q8_0,
          .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q8_0_f16",
-         .shader_code = wgsl_mul_mat_q8_0_f16,
-         .src0_type   = GGML_TYPE_Q8_0,
-         .src1_type   = GGML_TYPE_F16 },
-        { .name        = "mul_mat_q8_1_f32",
-         .shader_code = wgsl_mul_mat_q8_1_f32,
-         .src0_type   = GGML_TYPE_Q8_1,
+        { .name        = "mul_mat_q2_k_f32",
+         .shader_code = wgsl_mul_mat_q2_k_f32,
+         .src0_type   = GGML_TYPE_Q2_K,
          .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q8_1_f16",
-         .shader_code = wgsl_mul_mat_q8_1_f16,
-         .src0_type   = GGML_TYPE_Q8_1,
-         .src1_type   = GGML_TYPE_F16 }
+        { .name        = "mul_mat_q3_k_f32",
+         .shader_code = wgsl_mul_mat_q3_k_f32,
+         .src0_type   = GGML_TYPE_Q3_K,
+         .src1_type   = GGML_TYPE_F32 }
     };
 
     for (auto & pipeline_info : pipeline_infos) {
@@ -1058,28 +1034,29 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_CPY:
         case GGML_OP_SET_ROWS:
             return op->type == GGML_TYPE_F16 && op->src[0]->type == GGML_TYPE_F32;
-        case GGML_OP_MUL_MAT:
-            switch(op->src[0]->type) {
-                case GGML_TYPE_F32:
-                case GGML_TYPE_F16:
-                case GGML_TYPE_Q4_0:
-                case GGML_TYPE_Q4_1:
-                case GGML_TYPE_Q5_0:
-                case GGML_TYPE_Q5_1:
-                case GGML_TYPE_Q8_0:
-                case GGML_TYPE_Q8_1:
-                    break;
-                default:
-                    return false;
-            }
+        case GGML_OP_MUL_MAT: {
             switch(op->src[1]->type) {
-                case GGML_TYPE_F32:
                 case GGML_TYPE_F16:
-                    break;
+                    return op->src[0]->type == GGML_TYPE_F16;
+                case GGML_TYPE_F32:
+                    switch(op->src[0]->type) {
+                        case GGML_TYPE_F32:
+                        case GGML_TYPE_F16:
+                        case GGML_TYPE_Q4_0:
+                        case GGML_TYPE_Q4_1:
+                        case GGML_TYPE_Q5_0:
+                        case GGML_TYPE_Q5_1:
+                        case GGML_TYPE_Q8_0:
+                        case GGML_TYPE_Q2_K:
+                        case GGML_TYPE_Q3_K:
+                            return true;
+                        default:
+                            return false;
+                    }
                 default:
                     return false;
             }
-            return true;
+        }
         default:
             return false;
     }
