@@ -1113,6 +1113,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Setup SDKs
+        run: |
+          # Install SDK
+          xcodebuild -downloadPlatform iOS
+          xcodebuild -downloadPlatform tvOS
+          xcodebuild -downloadPlatform visionOS
+
       - name: Build
         id: cmake_build
         run: |
