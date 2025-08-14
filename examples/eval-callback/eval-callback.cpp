@@ -79,7 +79,9 @@ static void ggml_print_tensor(uint8_t * data, ggml_type type, const int64_t * ne
         LOG("                                     sum = %f\n", sum);
     }
 
+    // TODO: make this abort configurable/optional?
     if (std::isnan(sum)) {
+        LOG_ERR("encountered NaN - aborting\n");
         exit(0);
     }
 }
