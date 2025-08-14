@@ -1591,7 +1591,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
 
         if (i0 == i1) {
             if (max_seq_exceeded > max_seq) {
-                LOG_ERR("%s : task %zu requires a higher -np|--parallel value (at least %zu)\n", __func__, i0, max_seq_exceeded);
+                LOG_ERR("%s : task %zu requires a higher -np|--parallel value (at least %d)\n", __func__, i0, max_seq_exceeded);
             } else {
                 LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, tasks[i0].required_tokens);
             }
