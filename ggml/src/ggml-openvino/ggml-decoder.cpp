@@ -90,10 +90,10 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph) {
 // 3. constructing a decoder for the whole graph naively (op test case)
 void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
     std::string node_name;
-    if (node->op == GGML_OP_CPY || node->op == GGML_OP_SET_ROWS) {
-        // CPY updates the input tensor in place. For later ov op that uses the
-        // input tensor of CPY, we need to make sure they get the updated tensor
-        // by putting the src tensor name in the tensor_map in
+    if (node->op == GGML_OP_SET_ROWS) {
+        // SET_ROWS updates the tensor in place. For later ov op that uses the
+        // the view_src of SET_ROWS, we need to make sure they get the updated tensor
+        // by putting the view_src name in the tensor_map in
         // <openvino>/src/frontends/ggml/src/translate_session.cpp
         node_name = std::string(node->view_src->name);
     } else {
@@ -179,16 +179,6 @@ void GgmlOvDecoder::set_input_output(ggml_tensor* node, bool naive) {
                 m_op_case = 1;
             } else {
                 // The input comes from a VIEW which is subtensor
-                m_op_case = 2;
-            }
-            break;
-        }
-        case GGML_OP_CPY: {
-            if (std::string(node->src[1]->name).find("cache_k") == 0) {
-                // Write K to cache_k
-                m_op_case = 1;
-            } else {
-                // Write V to cache_v
                 m_op_case = 2;
             }
             break;
@@ -305,62 +295,22 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
 
 void GgmlOvDecoder::add_extra_inputs() {
     // Extra inputs:
-    // 1. `past_token_len`, used to create indices for updating kv cache. Usually equal to inp_pos[0], except for
-    //     llama-perplexity.
-    //     Update: SET_ROWS replaces CPY for updating kv cache. The indices creation is not needed anymore. See:
-    //     https://github.com/ggml-org/llama.cpp/pull/14285
-    // 2. `attention_size`, used in matmul's in the attention block. The shape of those matmul's are 32 aligned,
+    // 1. `attention_size`, used in matmul's in the attention block. The shape of those matmul's are 32 aligned,
     //     see llama_kv_cache_unified::get_n_kv and llama_kv_cache_unified::get_padding.
     //     Not used for NPU
-    int64_t past_token_len = -1;
     int64_t attention_size = -1;
-
-    int64_t token_len = -1;
-    int64_t past_token_len_from_inp_pos = -1;
     for (const auto& node : m_nodes) {
-        if (node->op == GGML_OP_ROPE && std::string(node->src[1]->name) == "inp_pos") {
-            if (node->src[1]->type != GGML_TYPE_I32) {
-                throw std::runtime_error("Expected cgraph input `inp_pos` to be of type GGML_TYPE_I32");
+        if (node->op == GGML_OP_SOFT_MAX) {
+            auto* mask = node->src[1];
+            if (std::string(mask->name).find("KQ_mask") != 0) {
+                throw std::runtime_error("Unexpected softmax node: " + std::string(mask->name));
             }
-            token_len = node->src[1]->ne[0];
-            past_token_len_from_inp_pos = ((int32_t*) (node->src[1]->data))[0];
-        }
-        if (node->op == GGML_OP_CPY && ggml_is_contiguous(node)) {
-            assert(std::string(node->view_src->name).find("cache_k") == 0);
-            past_token_len =
-                (int64_t) (node->src[1]->op_params[0] / node->src[1]->nb[0] / m_head_size / m_num_heads_kv);
-            break;
-        }
-        if (node->op == GGML_OP_SET_ROWS && std::string(node->name).find("cache_k") == 0) {
-            assert(node->src[1]->type == GGML_TYPE_I64);
-            past_token_len = *(int64_t*) (node->src[1]->data);
+            attention_size = mask->ne[0];
             break;
         }
     }
 
-    if (past_token_len == -1) {
-        throw std::runtime_error("Failed to find input \"cache_k\" in the graph");
-    }
-    if (past_token_len != past_token_len_from_inp_pos) {
-        GGML_LOG_DEBUG("Mismatch between past_token_len from cache_k and inp_pos: %ld vs %ld\n",
-                       past_token_len,
-                       past_token_len_from_inp_pos);
-    }
-
     {
-        std::string name = "past_token_len";
-        auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
-        param_node->set_friendly_name(name);
-        param_node->output(0).get_tensor().set_names({name});
-        m_model_extra_inputs[name] = param_node;
-
-        auto tensor = std::make_shared<ov::Tensor>(ov::element::i64, ov::Shape{1});
-        *tensor->data<int64_t>() = past_token_len;
-        m_model_extra_input_values[name] = tensor;
-    }
-    {
-        int64_t total_token_len = token_len + past_token_len;
-        attention_size = GGML_PAD(total_token_len, 32);
         std::string name = "attention_size";
         auto param_node = std::make_shared<ov::op::v0::Parameter>(ov::element::i64, ov::Shape{1});
         param_node->set_friendly_name(name);
@@ -663,7 +613,6 @@ const std::string& GgmlOvDecoder::get_op_type() const {
         {GGML_OP_ADD,       "GGML_OP_ADD"      },
         {GGML_OP_ADD1,      "GGML_OP_ADD1"     },
         {GGML_OP_CONT,      "GGML_OP_CONT"     },
-        {GGML_OP_CPY,       "GGML_OP_CPY"      },
         {GGML_OP_DIV,       "GGML_OP_DIV"      },
         {GGML_OP_DUP,       "GGML_OP_DUP"      },
         {GGML_OP_GET_ROWS,  "GGML_OP_GET_ROWS" },
