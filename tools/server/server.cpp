@@ -3314,8 +3314,10 @@ struct server_context {
                                 const auto pos_min_thold = std::max(0, slot.n_past - n_swa);
 
                                 if (pos_min > pos_min_thold) {
+                                    SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
+
                                     // search for a SWA checkpoint
-                                    auto it = std::find_if(
+                                    const auto it = std::find_if(
                                         slot.swa_checkpoints.rbegin(),
                                         slot.swa_checkpoints.rend(),
                                         [&](const auto & cur) {
@@ -3323,21 +3325,29 @@ struct server_context {
                                         }
                                     );
 
-                                    if (it == slot.swa_checkpoints.rend()) {
-                                        SLT_WRN(slot, "n_past = %d, cache_tokens.size() = %d, seq_id = %d, pos_min = %d, n_swa = %d\n", slot.n_past, (int) slot.cache_tokens.size(), slot.id, pos_min, n_swa);
+                                    bool do_reset = it == slot.swa_checkpoints.rend();
+
+                                    if (!do_reset) {
+                                        // restore the checkpoint
+                                        const size_t swa_size = it->data.size();
+                                        const size_t n = llama_state_seq_set_data(ctx, it->data.data(), swa_size, slot.id);
+
+                                        if (n != swa_size) {
+                                            SLT_ERR(slot, "failed to restore SWA checkpoint, pos_min = %d, pos_max = %d, size = %.3f MiB\n", it->pos_min, it->pos_max, (float) swa_size / 1024 / 1024);
+                                            do_reset = true;
+                                        } else {
+                                            slot.n_past = std::min(slot.n_past, it->pos_max);
+
+                                            SLT_WRN(slot, "SWA checkpoint restore, pos_min = %d, pos_max = %d, size = %.3f MiB\n", it->pos_min, it->pos_max, (float) swa_size / 1024 / 1024);
+                                        }
+                                    }
+
+                                    if (do_reset) {
                                         SLT_WRN(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA, see %s)\n",
                                                 "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
 
                                         slot.n_past = 0;
                                         slot.swa_checkpoints.clear();
-                                    } else {
-                                        // restore the checkpoint
-                                        const size_t swa_size = it->data.size();
-                                        llama_state_seq_set_data(ctx, it->data.data(), swa_size, slot.id);
-
-                                        slot.n_past = std::min(slot.n_past, it->pos_max);
-
-                                        SLT_WRN(slot, "SWA checkpoint restore, pos_min = %d, pos_max = %d, size = %.3f MiB\n", it->pos_min, it->pos_max, (float) swa_size / 1024 / 1024);
                                     }
                                 }
                             }
