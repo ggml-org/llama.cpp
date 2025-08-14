@@ -1778,7 +1778,7 @@ size_t llama_context::state_seq_load_file(llama_seq_id seq_id, const char * file
     {
         const size_t state_size = file.size() - file.tell();
         llama_io_read_file io(&file);
-        const size_t nread = state_seq_read_data(io, seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const size_t nread = state_seq_read_data(io, seq_id, 0);
         if (!nread) {
             LLAMA_LOG_ERROR("%s: failed to restore sequence state\n", __func__);
             return 0;
@@ -1802,7 +1802,7 @@ size_t llama_context::state_seq_save_file(llama_seq_id seq_id, const char * file
 
     // save the context state using stream saving
     llama_io_write_file io(&file);
-    state_seq_write_data(io, seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
+    state_seq_write_data(io, seq_id, 0);
 
     const size_t res = file.tell();
     GGML_ASSERT(res == sizeof(uint32_t) * 3 + sizeof(llama_token) * n_token_count + io.n_bytes());
@@ -2801,15 +2801,15 @@ bool llama_state_save_file(llama_context * ctx, const char * path_session, const
 }
 
 size_t llama_state_seq_get_size(llama_context * ctx, llama_seq_id seq_id) {
-    return llama_state_seq_get_size_ext(ctx, seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
+    return llama_state_seq_get_size_ext(ctx, seq_id, 0);
 }
 
 size_t llama_state_seq_get_data(llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id) {
-    return llama_state_seq_get_data_ext(ctx, dst, size, seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
+    return llama_state_seq_get_data_ext(ctx, dst, size, seq_id, 0);
 }
 
 size_t llama_state_seq_set_data(llama_context * ctx, const uint8_t * src, size_t size, llama_seq_id seq_id) {
-    return llama_state_seq_set_data_ext(ctx, src, size, seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
+    return llama_state_seq_set_data_ext(ctx, src, size, seq_id, 0);
 }
 
 size_t llama_state_seq_get_size_ext(llama_context * ctx, llama_seq_id seq_id, llama_state_seq_flags flags) {

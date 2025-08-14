@@ -870,7 +870,6 @@ extern "C" {
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
 
-#define LLAMA_STATE_SEQ_FLAGS_NONE     0
 #define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
 
     typedef uint32_t llama_state_seq_flags;
