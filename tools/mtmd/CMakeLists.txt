@@ -2,8 +2,8 @@
 
 find_package(Threads REQUIRED)
 
-# ANE support option
-option(ENABLE_ANE "Enable Apple Neural Engine support" OFF)
+# CoreML support option
+option(ENABLE_COREML "Enable CoreML support" OFF)
 
 add_library(mtmd
             mtmd.cpp
@@ -16,20 +16,20 @@ add_library(mtmd
             mtmd-helper.h
             )
 
-# Add ANE related files when enabled
-if(ENABLE_ANE)
+# Add CoreML related files when enabled
+if(ENABLE_COREML)
     target_sources(mtmd PRIVATE
-        ane/ane.h
-        ane/ane.mm
-        ane/ane_minicpmv4_vit_f16.h
-        ane/ane_minicpmv4_vit_f16.m
+        coreml/mtmd_coreml.h
+        coreml/mtmd_coreml.mm
+        coreml/ane_minicpmv4_vit_f16.h
+        coreml/ane_minicpmv4_vit_f16.m
     )
     # Define compile-time macro for code guards
-    target_compile_definitions(mtmd PRIVATE ENABLE_ANE)
+    target_compile_definitions(mtmd PRIVATE ENABLE_COREML)
     
     # Enable ARC for Objective-C files
-    set_source_files_properties(ane/ane.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-    set_source_files_properties(ane/ane_minicpmv4_vit_f16.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(coreml/mtmd_coreml.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    set_source_files_properties(coreml/ane_minicpmv4_vit_f16.m PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 endif()
 
 target_link_libraries     (mtmd PUBLIC ggml llama common)
@@ -43,8 +43,8 @@ target_include_directories(mtmd PRIVATE ../../src)
 target_include_directories(mtmd PRIVATE ../../vendor)
 target_compile_features   (mtmd PRIVATE cxx_std_17)
 
-# Link CoreML and Accelerate frameworks when ANE is enabled
-if(ENABLE_ANE)
+# Link CoreML and Accelerate frameworks when CoreML is enabled
+if(ENABLE_COREML)
     target_link_libraries(mtmd PRIVATE 
         "-framework Foundation" 
         "-framework CoreML" 
@@ -64,10 +64,10 @@ set(MTMD_PUBLIC_HEADERS
     ${CMAKE_CURRENT_SOURCE_DIR}/mtmd-helper.h
     )
 
-# Add ANE public headers when enabled
-if(ENABLE_ANE)
+# Add CoreML public headers when enabled
+if(ENABLE_COREML)
     list(APPEND MTMD_PUBLIC_HEADERS
-        ${CMAKE_CURRENT_SOURCE_DIR}/ane/ane.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/coreml/coreml.h
     )
 endif()
 

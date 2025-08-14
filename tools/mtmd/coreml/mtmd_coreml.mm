@@ -1,6 +1,6 @@
 #import <CoreML/CoreML.h>
 #import <Accelerate/Accelerate.h>
-#import "ane.h"
+#import "mtmd_coreml.h"
 #import "ane_minicpmv4_vit_f16.h"
 #include <stdlib.h>
 
@@ -19,7 +19,7 @@ const void* loadModel(const char* model_path) {
     // Check if file exists
     NSFileManager *fileManager = [NSFileManager defaultManager];
     if (![fileManager fileExistsAtPath:pathString]) {
-        NSLog(@"Error: ANE model file does not exist at path: %@", pathString);
+        NSLog(@"Error: CoreML model file does not exist at path: %@", pathString);
         return nullptr;
     }
     
@@ -27,28 +27,28 @@ const void* loadModel(const char* model_path) {
     BOOL isDirectory;
     if ([fileManager fileExistsAtPath:pathString isDirectory:&isDirectory]) {
         if (!isDirectory && ![pathString hasSuffix:@".mlmodelc"]) {
-            NSLog(@"Warning: ANE model path should typically be a .mlmodelc directory: %@", pathString);
+            NSLog(@"Warning: CoreML model path should typically be a .mlmodelc directory: %@", pathString);
         }
     }
     
     NSURL *modelURL = [NSURL fileURLWithPath:pathString];
     
-    NSLog(@"Loading ANE model from: %@", modelURL.absoluteString);
+    NSLog(@"Loading CoreML model from: %@", modelURL.absoluteString);
     
     NSError *error = nil;
     const void* model = CFBridgingRetain([[ane_minicpmv4_vit_f16 alloc] initWithContentsOfURL:modelURL error:&error]);
     
     if (error) {
-        NSLog(@"Error loading ANE model: %@", error.localizedDescription);
+        NSLog(@"Error loading CoreML model: %@", error.localizedDescription);
         return nullptr;
     }
     
     if (!model) {
-        NSLog(@"Error: Failed to create ANE model instance");
+        NSLog(@"Error: Failed to create CoreML model instance");
         return nullptr;
     }
     
-    NSLog(@"Successfully loaded ANE model from: %@", pathString);
+    NSLog(@"Successfully loaded CoreML model from: %@", pathString);
     return model;
 }
 

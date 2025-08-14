@@ -10,8 +10,8 @@
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
 #include "gguf.h"
-#if defined(ENABLE_ANE)
-#include "ane/ane.h"
+#if defined(ENABLE_COREML)
+#include "coreml/mtmd_coreml.h"
 #endif
 
 #include <cassert>
@@ -392,8 +392,8 @@ struct clip_ctx {
     bool debug_graph = false;
     std::vector<ggml_tensor *> debug_print_tensors;
     
-    // ANE model path for iOS
-    std::string ane_model_path;
+    // CoreML model path for iOS
+    std::string coreml_model_path;
 
     clip_ctx(clip_context_params & ctx_params) {
         debug_graph = std::getenv("MTMD_DEBUG_GRAPH") != nullptr;
@@ -914,8 +914,6 @@ struct clip_graph {
     }
 
     ggml_cgraph * build_minicpmv_embedding() {
-        const int batch_size = 1;
-
         GGML_ASSERT(model.class_embedding == nullptr);
         const int n_pos = n_patches;
 
@@ -3840,24 +3838,28 @@ static std::vector<std::vector<float>> get_2d_sincos_pos_embed(int embed_dim, co
     return pos_embed_2d;
 }
 
-#if defined(ENABLE_ANE)
-static bool clip_image_encode_ane(float * data, float * vec, const char* ane_model_path) {
+#if defined(ENABLE_COREML)
+// forward declarations
+static bool coreml_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec);
+static bool coreml_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, const float * vit_embedding, float * vec);
+
+static bool clip_image_encode_coreml(float * data, float * vec, const char* coreml_model_path) {
 
     static int flag = 0;
     static const void* coremlEncoder = NULL;
     static std::string cached_model_path = "";
     
     // Check if we need to load a new model
-    if (flag == 0 || (ane_model_path && cached_model_path != ane_model_path)) {
+    if (flag == 0 || (coreml_model_path && cached_model_path != coreml_model_path)) {
         if (coremlEncoder) {
             closeModel(coremlEncoder);
         }
-        coremlEncoder = loadModel(ane_model_path);
+        coremlEncoder = loadModel(coreml_model_path);
         if (!coremlEncoder) {
-            printf("Failed to load ANE model from: %s\n", ane_model_path ? ane_model_path : "null");
+            printf("Failed to load CoreML model from: %s\n", coreml_model_path ? coreml_model_path : "null");
             return false;
         }
-        cached_model_path = ane_model_path ? ane_model_path : "";
+        cached_model_path = coreml_model_path ? coreml_model_path : "";
         flag = 1;
     }
     predictWith(coremlEncoder, data, vec);
@@ -3871,18 +3873,21 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     *img_copy = *img;
     imgs.entries.push_back(std::move(img_copy));
 
-#if defined(ENABLE_ANE)
+#if defined(ENABLE_COREML)
     bool ios_ctx = true;
     if (ios_ctx){
-        printf("clip use ane\n");
-        float * vit_embedding1 = (float *)malloc(1100*1152*sizeof(float));
-        float * vit_embedding2 = (float *)malloc(1100*1152*sizeof(float));
+        printf("clip use coreml\n");
+        std::vector<float> vit_embedding1(1100*1152);
+        std::vector<float> vit_embedding2(1100*1152);
 
-        ane_embedding(ctx, n_threads, &imgs, vit_embedding1);
-        clip_image_encode_ane(vit_embedding1, vit_embedding2, ctx->ane_model_path.c_str());
-        ane_resampler(ctx, n_threads, &imgs, vit_embedding2, vec);
-        free(vit_embedding1);
-        free(vit_embedding2);
+        // call CoreML pipeline: embedding -> encoder -> resampler
+        if (!coreml_embedding(ctx, n_threads, &imgs, vit_embedding1.data())) {
+            return false;
+        }
+        clip_image_encode_coreml(vit_embedding1.data(), vit_embedding2.data(), ctx->coreml_model_path.c_str());
+        if (!coreml_resampler(ctx, n_threads, &imgs, vit_embedding2.data(), vec)) {
+            return false;
+        }
         return true;
     }
 #endif
@@ -3890,8 +3895,8 @@ bool clip_image_encode(struct clip_ctx * ctx, const int n_threads, clip_image_f3
     return clip_image_batch_encode(ctx, n_threads, &imgs, vec);
 }
 
-#if defined(ENABLE_ANE)
-static bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
+#if defined(ENABLE_COREML)
+static bool coreml_embedding(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, float * vec) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
 
@@ -3908,7 +3913,7 @@ static bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_
     clip_graph graph(ctx, *imgs.entries[0]);
     ggml_cgraph * gf;
     gf = graph.build_minicpmv_embedding();
-    ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
+        ggml_backend_sched_alloc_graph(ctx->sched.get(), gf);
 
     // set inputs
     const auto & model   = ctx->model;
@@ -3918,8 +3923,6 @@ static bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_
     const int image_size_height = imgs.entries[0]->ny;
 
     const int patch_size    = hparams.patch_size;
-    const int num_patches   = ((image_size_width / patch_size) * (image_size_height / patch_size));
-    const int n_pos = num_patches + (model.class_embedding ? 1 : 0);
     const int pos_w = image_size_width  / patch_size;
     const int pos_h = image_size_height / patch_size;
 
@@ -4054,16 +4057,13 @@ static bool ane_embedding(clip_ctx * ctx, const int n_threads, const clip_image_
     // the last node is the embedding tensor
     ggml_tensor * embeddings = ggml_graph_node(gf, -1);
 
-    // sanity check (only support batch size of 1 for now)
-    const int n_tokens_out = embeddings->ne[1];
-
     // copy the embeddings to the location passed by the user
     ggml_backend_tensor_get(embeddings, vec, 0, ggml_nbytes(embeddings));
 
     return true;
 }
 
-static bool ane_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, const float * vit_embedding, float * vec) {
+static bool coreml_resampler(clip_ctx * ctx, const int n_threads, const clip_image_f32_batch * imgs_c_ptr, const float * vit_embedding, float * vec) {
     const clip_image_f32_batch & imgs = *imgs_c_ptr;
     int batch_size = imgs.entries.size();
 
@@ -4090,8 +4090,6 @@ static bool ane_resampler(clip_ctx * ctx, const int n_threads, const clip_image_
     const int image_size_height = imgs.entries[0]->ny;
 
     const int patch_size    = hparams.patch_size;
-    const int num_patches   = ((image_size_width / patch_size) * (image_size_height / patch_size));
-    const int n_pos = num_patches + (model.class_embedding ? 1 : 0);
     const int pos_w = image_size_width  / patch_size;
     const int pos_h = image_size_height / patch_size;
 
@@ -4109,13 +4107,6 @@ static bool ane_resampler(clip_ctx * ctx, const int n_threads, const clip_image_
     auto set_input_f32 = [&get_inp_tensor](const char * name, std::vector<float> & values) {
         ggml_tensor * cur = get_inp_tensor(name);
         GGML_ASSERT(cur->type == GGML_TYPE_F32);
-        GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
-        ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
-    };
-
-    auto set_input_i32 = [&get_inp_tensor](const char * name, std::vector<int32_t> & values) {
-        ggml_tensor * cur = get_inp_tensor(name);
-        GGML_ASSERT(cur->type == GGML_TYPE_I32);
         GGML_ASSERT(ggml_nelements(cur) == (int64_t)values.size());
         ggml_backend_tensor_set(cur, values.data(), 0, ggml_nbytes(cur));
     };
@@ -4674,8 +4665,8 @@ void clip_image_f32_batch_add_mel(struct clip_image_f32_batch * batch, int n_mel
     batch->is_audio = true;
 }
 
-void clip_set_ane_model_path(struct clip_ctx * ctx, const char * ane_model_path) {
-    if (ctx && ane_model_path) {
-        ctx->ane_model_path = ane_model_path;
+void clip_set_coreml_model_path(struct clip_ctx * ctx, const char * coreml_model_path) {
+    if (ctx && coreml_model_path) {
+        ctx->coreml_model_path = coreml_model_path;
     }
 }

@@ -92,7 +92,7 @@ mtmd_context_params mtmd_context_params_default() {
     params.verbosity = GGML_LOG_LEVEL_INFO;
     params.image_marker = MTMD_DEFAULT_IMAGE_MARKER;
     params.media_marker = mtmd_default_marker();
-    params.ane_model_path = nullptr;
+    params.coreml_model_path = nullptr;
     return params;
 }
 
@@ -158,17 +158,17 @@ struct mtmd_context {
         ctx_v = res.ctx_v;
         ctx_a = res.ctx_a;
         
-        // Set ANE model path for iOS
-        if (ctx_params.ane_model_path && ctx_v) {
-            // Check if ANE model file exists
-            std::ifstream ane_file(ctx_params.ane_model_path);
-            if (!ane_file.good()) {
-                throw std::runtime_error(string_format("ANE model file does not exist: %s", ctx_params.ane_model_path));
+        // Set CoreML model path for iOS
+        if (ctx_params.coreml_model_path && ctx_v) {
+            // Check if CoreML model file exists
+            std::ifstream coreml_file(ctx_params.coreml_model_path);
+            if (!coreml_file.good()) {
+                throw std::runtime_error(string_format("CoreML model file does not exist: %s", ctx_params.coreml_model_path));
             }
-            ane_file.close();
+            coreml_file.close();
             
-            clip_set_ane_model_path(ctx_v, ctx_params.ane_model_path);
-            LOG_INF("ANE model path set to: %s\n", ctx_params.ane_model_path);
+            clip_set_coreml_model_path(ctx_v, ctx_params.coreml_model_path);
+            LOG_INF("CoreML model path set to: %s\n", ctx_params.coreml_model_path);
         }
         if (!ctx_v && !ctx_a) {
             throw std::runtime_error(string_format("Failed to load CLIP model from %s\n", mmproj_fname));

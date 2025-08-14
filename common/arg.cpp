@@ -961,7 +961,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         for (auto & ex : mmproj_examples) {
             if (ctx_arg.ex == ex) {
                 common_params_handle_model(params.mmproj,    params.hf_token, "", params.offline);
-                common_params_handle_model(params.ane,       params.hf_token, "", params.offline);
+                common_params_handle_model(params.coreml,    params.hf_token, "", params.offline);
                 break;
             }
         }
@@ -2264,13 +2264,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.mmproj_use_gpu = false;
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_NO_MMPROJ_OFFLOAD"));
+    // CoreML model path (new)
     add_opt(common_arg(
-        {"--ane"}, "FILE",
-        "path to Apple Neural Engine model file for iOS",
+        {"--coreml"}, "FILE",
+        "path to CoreML model file",
         [](common_params & params, const std::string & value) {
-            params.ane.path = value;
+            params.coreml.path = value;
         }
-    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_ANE"));
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_COREML"));
+
     add_opt(common_arg(
         {"--image", "--audio"}, "FILE",
         "path to an image or audio file. use with multimodal models, can be repeated if you have multiple files\n",

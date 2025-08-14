@@ -110,5 +110,5 @@ bool clip_has_vision_encoder(const struct clip_ctx * ctx);
 bool clip_has_audio_encoder(const struct clip_ctx * ctx);
 bool clip_has_whisper_encoder(const struct clip_ctx * ctx);
 
-// ANE support functions
-void clip_set_ane_model_path(struct clip_ctx * ctx, const char * ane_model_path);
+// CoreML support functions
+void clip_set_coreml_model_path(struct clip_ctx * ctx, const char * coreml_model_path);

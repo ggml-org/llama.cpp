@@ -132,7 +132,7 @@ struct mtmd_cli_context {
         mparams.print_timings = true;
         mparams.n_threads = params.cpuparams.n_threads;
         mparams.verbosity = params.verbosity > 0 ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_INFO;
-        mparams.ane_model_path = params.ane.path.empty() ? nullptr : params.ane.path.c_str();
+        mparams.coreml_model_path = params.coreml.path.empty() ? nullptr : params.coreml.path.c_str();
         ctx_vision.reset(mtmd_init_from_file(clip_path, model, mparams));
         if (!ctx_vision.get()) {
             LOG_ERR("Failed to load vision model from %s\n", clip_path);

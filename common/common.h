@@ -377,7 +377,7 @@ struct common_params {
     std::vector<std::string> image; // path to image file(s)
     
     // Apple Neural Engine support
-    struct common_params_model ane;
+    struct common_params_model coreml;
 
     // embedding
     bool embedding         = false; // get only sentence embedding
