@@ -4272,14 +4272,13 @@ struct ggml_tensor * ggml_conv_1d_dw(
         int                   s0,
         int                   p0,
         int                   d0) {
-    struct ggml_tensor * new_a = ggml_reshape_4d(ctx, a, a->ne[0], 1, a->ne[1], a->ne[2]);
     struct ggml_tensor * new_b = ggml_reshape_4d(ctx, b, b->ne[0], 1, b->ne[1], b->ne[2]);
 
-    struct ggml_tensor * im2col = ggml_im2col(ctx, new_a, new_b, s0, 0, p0, 0, d0, 0, false, GGML_TYPE_F16);
+    struct ggml_tensor * im2col = ggml_im2col(ctx, a, new_b, s0, 0, p0, 0, d0, 0, false, GGML_TYPE_F16);
 
     struct ggml_tensor * result = ggml_mul_mat(ctx, im2col, a);
 
-    result = ggml_reshape_3d(ctx, result, b->ne[0], b->ne[1], 1);
+    result = ggml_reshape_3d(ctx, result, result->ne[0], result->ne[2], 1);
 
     return result;
 }
