@@ -35,8 +35,8 @@ static __global__ void k_get_rows(
     dfloat2 v;
     dequantize_kernel(src0_row, ib, iqs, v);
 
-    dst_row[iybs + iqs + 0]        = ggml_cuda_cast<float, dst_t>(v.x);
-    dst_row[iybs + iqs + y_offset] = ggml_cuda_cast<float, dst_t>(v.y);
+    dst_row[iybs + iqs + 0]        = ggml_cuda_cast<dst_t>(v.x);
+    dst_row[iybs + iqs + y_offset] = ggml_cuda_cast<dst_t>(v.y);
 }
 
 template<typename src0_t, typename dst_t>
@@ -63,7 +63,7 @@ static __global__ void k_get_rows_float(
     dst_t * dst_row = dst + i10*s1 + i11*s2 + i12*s3;
     const src0_t * src0_row = (const src0_t *)((const char *) src0 + i01*nb01 + i11*nb02 + i12*nb03);
 
-    dst_row[i00] = ggml_cuda_cast<src0_t, dst_t>(src0_row[i00]);
+    dst_row[i00] = ggml_cuda_cast<dst_t>(src0_row[i00]);
 }
 
 template<typename grad_t, typename dst_t>
