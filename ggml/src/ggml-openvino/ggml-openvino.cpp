@@ -238,6 +238,10 @@ static ggml_backend_buffer_t ggml_backend_openvino_device_buffer_from_host_ptr(g
 
 static bool is_op_unsupported_case(const ggml_tensor* op) {
     if (op->op == GGML_OP_SOFT_MAX) {
+        if (op->src[2] != nullptr) {
+            GGML_LOG_WARN("OpenVINO backend does not support SOFT_MAX with sinks\n");
+            return true;
+        }
         float scale = 1.0f;
         float max_bias = 0.0f;
         const auto* op_params = op->op_params;

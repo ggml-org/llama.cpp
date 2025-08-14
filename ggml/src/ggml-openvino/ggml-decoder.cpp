@@ -272,7 +272,7 @@ ov::PartialShape GgmlOvDecoder::get_graph_input_shape(const ggml_tensor* src) co
         input_shape = ov::PartialShape{m_context_size, m_num_heads_kv, m_head_size};
     } else if (name.find("cache_v") == 0) {
         input_shape = ov::PartialShape{m_num_heads_kv, m_head_size, m_context_size};
-    } else if (const auto* op = get_tensor_used_op(src); op->op == GGML_OP_SET_ROWS) {
+    } else if (const auto* op = get_tensor_used_op(src); op && op->op == GGML_OP_SET_ROWS) {
         input_shape = ov::PartialShape{1, 1, -1};
         if (m_is_static) {
             if (m_is_first_token) {
@@ -324,6 +324,9 @@ void GgmlOvDecoder::add_extra_inputs() {
 }
 
 const ggml_tensor* GgmlOvDecoder::get_tensor_used_op(const ggml_tensor* tensor) const {
+    if (tensor == nullptr) {
+        return nullptr;
+    }
     for (int i = 0; i < m_cgraph->n_nodes; i++) {
         const auto* node = m_cgraph->nodes[i];
         for (int j = 0; j < GGML_MAX_SRC; j++) {
@@ -332,7 +335,7 @@ const ggml_tensor* GgmlOvDecoder::get_tensor_used_op(const ggml_tensor* tensor) 
             }
         }
     }
-    throw std::runtime_error("Tensor not found in cgraph");
+    return nullptr;
 }
 
 const ggml_tensor* GgmlOvDecoder::get_tensor_from_name(const std::string& name) const {
