@@ -460,7 +460,7 @@ ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float 
         vst1q_f32(y + i, val);
         sum += (ggml_float)vaddvq_f32(val);
     }
-#elif defined(__riscv) && defined(__riscv_v)
+#elif defined(__riscv) && defined(__riscv_v) && defined(__riscv_zba)
     int N = n;
     i += n;
     float* src = const_cast<float*>(reinterpret_cast<const float*>(x));
