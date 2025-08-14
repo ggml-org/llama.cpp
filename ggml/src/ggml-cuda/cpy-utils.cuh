@@ -5,11 +5,7 @@
 
 template<typename src_t, typename dst_t>
 static __device__ __forceinline__ void convert_flt(const src_t * src, dst_t * dst) {
-    if constexpr (std::is_same_v<src_t, dst_t>) {
-        *dst = *src;
-    } else {
-        *dst = ggml_cuda_convert_val<src_t, dst_t>(*src);
-    }
+    *dst = ggml_cuda_cast<src_t, dst_t>(*src);
 }
 
 static __device__ __forceinline__ int best_index_int8(int n, const int8_t * val, float x) {
