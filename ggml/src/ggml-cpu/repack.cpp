@@ -662,10 +662,10 @@ void ggml_gemv_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                         const int hbits_index = k * ncols_interleaved * blocklen + j * blocklen + i;
                         const int lbits_index = hbits_index + (k/4) * 256;
 
-                        int8_t v0 = (int8_t)(((b_ptr[l].qh[hbits_index] & 3) << 4) | (b_ptr[l].ql[lbits_index] & 0xF)) - 32;
-                        int8_t v1 = (int8_t)((((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4) | (b_ptr[l].ql[lbits_index + 256] & 0xF)) - 32;
-                        int8_t v2 = (int8_t)((((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index] >> 4) & 0xF)) - 32;
-                        int8_t v3 = (int8_t)((((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index + 256] >> 4) & 0xF)) - 32;
+                        int8_t v0 = (int8_t)((((b_ptr[l].qh[hbits_index] & 3) << 4) | (b_ptr[l].ql[lbits_index] & 0xF)) - 32);
+                        int8_t v1 = (int8_t)(((((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4) | (b_ptr[l].ql[lbits_index + 256] & 0xF)) - 32);
+                        int8_t v2 = (int8_t)(((((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index] >> 4) & 0xF)) - 32);
+                        int8_t v3 = (int8_t)(((((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index + 256] >> 4) & 0xF)) - 32);
 
                         sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 128 + (k % 4) * blocklen + i]);
                         sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 128 + (k % 4) * blocklen + i + 32]);
@@ -1243,10 +1243,10 @@ void ggml_gemm_q6_K_8x8_q8_K_generic(int n, float * GGML_RESTRICT s, size_t bs, 
                                 const int hbits_index = k * ncols_interleaved * blocklen + j * blocklen + i;
                                 const int lbits_index = hbits_index + (k/4) * 256;
 
-                                int8_t v0 = (int8_t)(((b_ptr[l].qh[hbits_index] & 3) << 4) | (b_ptr[l].ql[lbits_index] & 0xF)) - 32;
-                                int8_t v1 = (int8_t)((((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4) | (b_ptr[l].ql[lbits_index + 256] & 0xF)) - 32;
-                                int8_t v2 = (int8_t)((((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index] >> 4) & 0xF)) - 32;
-                                int8_t v3 = (int8_t)((((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index + 256] >> 4) & 0xF)) - 32;
+                                int8_t v0 = (int8_t)((((b_ptr[l].qh[hbits_index] & 3) << 4) | (b_ptr[l].ql[lbits_index] & 0xF)) - 32);
+                                int8_t v1 = (int8_t)(((((b_ptr[l].qh[hbits_index] >> 2 ) & 3) << 4) | (b_ptr[l].ql[lbits_index + 256] & 0xF)) - 32);
+                                int8_t v2 = (int8_t)(((((b_ptr[l].qh[hbits_index] >> 4 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index] >> 4) & 0xF)) - 32);
+                                int8_t v3 = (int8_t)(((((b_ptr[l].qh[hbits_index] >> 6 ) & 3) << 4) | ((b_ptr[l].ql[lbits_index + 256] >> 4) & 0xF)) - 32);
 
                                 sumi1 = (v0 * a_ptr[l].qs[(k >> 2) * 512 + (k % 4) * 4 * blocklen + m * blocklen + i]);
                                 sumi2 = (v1 * a_ptr[l].qs[(k >> 2) * 512  + (k % 4) * 4 * blocklen + m * blocklen + i + 128]);

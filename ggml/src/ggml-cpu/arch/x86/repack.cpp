@@ -2085,28 +2085,28 @@ void ggml_gemv_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     // Index : 0 -7, 64 - 71
                     const __m256i rhs_vec_0123_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_0, m4b), rhs_hbit_0123_00);
                     const __m256i rhs_vec_0123_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_0, 4), m4b), rhs_hbit_0123_40);
-                    
+
                     const __m256i rhs_vec_4567_00 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_0, m4b), rhs_hbit_4567_00);
                     const __m256i rhs_vec_4567_40 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_0, 4), m4b), rhs_hbit_4567_40);
 
                     // Index : 8 - 15, 72 - 79
                     const __m256i rhs_vec_0123_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_1, m4b), rhs_hbit_0123_01);
                     const __m256i rhs_vec_0123_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_1, 4), m4b), rhs_hbit_0123_41);
-                    
+
                     const __m256i rhs_vec_4567_01 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_1, m4b), rhs_hbit_4567_01);
                     const __m256i rhs_vec_4567_41 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_1, 4), m4b), rhs_hbit_4567_41);
 
                     // Index : 16 - 23, 80 - 87
                     const __m256i rhs_vec_0123_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_2, m4b), rhs_hbit_0123_10);
                     const __m256i rhs_vec_0123_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_2, 4), m4b), rhs_hbit_0123_50);
-                    
+
                     const __m256i rhs_vec_4567_10 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_2, m4b), rhs_hbit_4567_10);
                     const __m256i rhs_vec_4567_50 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_2, 4), m4b), rhs_hbit_4567_50);
 
                     // Index : 24 - 31, 88 - 95
                     const __m256i rhs_vec_0123_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_3, m4b), rhs_hbit_0123_11);
                     const __m256i rhs_vec_0123_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_3, 4), m4b), rhs_hbit_0123_51);
-                    
+
                     const __m256i rhs_vec_4567_11 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_3, m4b), rhs_hbit_4567_11);
                     const __m256i rhs_vec_4567_51 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_3, 4), m4b), rhs_hbit_4567_51);
 
