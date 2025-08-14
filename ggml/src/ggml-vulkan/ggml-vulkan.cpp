@@ -1111,17 +1111,23 @@ class vk_perf_logger {
             return;
         }
         if (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) {
-            const uint64_t m    = node->src[0]->ne[1];
-            const uint64_t n    = node->src[1]->ne[1];
-            const uint64_t k    = node->src[1]->ne[0];
-            std::string    name = ggml_op_name(node->op);
-            if (n == 1) {
-                name += "_VEC m=" + std::to_string(m) + " k=" + std::to_string(k);
-            } else {
-                name += " m=" + std::to_string(m) + " n=" + std::to_string(n) + " k=" + std::to_string(k);
+            const uint64_t m     = node->src[0]->ne[1];
+            const uint64_t n     = node->ne[1];
+            const uint64_t k     = node->src[1]->ne[0];
+            const uint64_t batch = node->src[1]->ne[2] * node->src[1]->ne[3];
+            std::string    name  = ggml_op_name(node->op);
+            if ((node->op == GGML_OP_MUL_MAT && n <= mul_mat_vec_max_cols) ||
+                (node->op == GGML_OP_MUL_MAT_ID && node->src[2]->ne[1] == 1)) {
+                name += "_VEC";
+            }
+            name += " ";
+            name += ggml_type_name(node->src[0]->type);
+            name += " m=" + std::to_string(m) + " n=" + std::to_string(n) + " k=" + std::to_string(k);
+            if (batch > 1) {
+                name += " batch=" + std::to_string(batch);
             }
             timings[name].push_back(time);
-            flops[name].push_back(m * n * (k + (k - 1)));
+            flops[name].push_back(m * n * (k + (k - 1)) * batch);
             return;
         }
         if (node->op == GGML_OP_CONV_2D) {
