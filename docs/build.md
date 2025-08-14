@@ -698,7 +698,7 @@ To read documentation for how to build on IBM Z & LinuxONE, [click here](./build
 
 ## OpenVINO
 
-[OpenVINO](https://docs.openvino.ai/2025/index.html) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge. 
+[OpenVINO](https://docs.openvino.ai/2025/index.html) is an open-source toolkit for optimizing and deploying high-performance AI inference, specifically designed for Intel hardware, including CPUs, GPUs, and NPUs, in the cloud, on-premises, and on the edge.
 The OpenVINO backend enhances performance by leveraging hardware-specific optimizations and can be enabled for use with llama.cpp.
 
 Follow the instructions below to install OpenVINO runtime and build llama.cpp with OpenVINO support.
@@ -800,9 +800,8 @@ export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
 
 Control OpenVINO behavior using these environment variables:
 
--   **`GGML_OPENVINO_DEVICE`**: Specify the target device for OpenVINO inference.  If not set, automatically selects the first available device in priority order: GPU, CPU, NPU. When set to `NPU` to use Intel NPUs, it enables static compilation mode for optimal performance. 
--   **`GGML_OPENVINO_CACHE_DIR`**: Directory for model caching (recommended: `/tmp/ov_cache`). If set, enables model caching in OpenVINO. Note: Not supported when using NPU devices yet.  
--   **`GGML_OPENVINO_WEIGHT_AS_INPUT`**: Pass the weights as input to the OpenVINO model instead of creating Constant nodes for them.
+-   **`GGML_OPENVINO_DEVICE`**: Specify the target device for OpenVINO inference.  If not set, automatically selects the first available device in priority order: GPU, CPU, NPU. When set to `NPU` to use Intel NPUs, it enables static compilation mode for optimal performance.
+-   **`GGML_OPENVINO_CACHE_DIR`**: Directory for model caching (recommended: `/tmp/ov_cache`). If set, enables model caching in OpenVINO. Note: Not supported when using NPU devices yet.
 -   **`GGML_OPENVINO_PROFILING`**: Enable execution time profiling.
 -   **`GGML_OPENVINO_DUMP_CGRAPH`**: Save compute graph to `cgraph.txt`.
 -   **`GGML_OPENVINO_DUMP_IR`**: Export OpenVINO IR files with timestamps.
@@ -816,20 +815,6 @@ export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
 export GGML_OPENVINO_PROFILING=1
 
 ./build/ReleaseOV/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
-```
-> **Note:** To apply your code changes, clear the `GGML_OPENVINO_CACHE_DIR` directory and rebuild the project.
-
-### Using Llama.cpp's Built-in CPU Backend (for Comparison)
-
-To compare performance with the default CPU backend:
-
-```bash
-# Build CPU-only version
-cmake --preset ReleaseCPU
-cmake --build build/ReleaseCPU --parallel
-
-# Run with the default CPU backend
-./build/ReleaseCPU/bin/llama-simple -m ~/models/Llama-3.2-1B-Instruct.fp16.gguf -n 50 "The story of AI is "
 ```
 
 ## Notes about GPU-accelerated backends

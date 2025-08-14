@@ -57,8 +57,7 @@ GgmlOvDecoder::GgmlOvDecoder(struct ggml_cgraph* cgraph,
     }
 
     if (getenv("GGML_OPENVINO_DUMP_CGRAPH")) {
-        auto timestamp = (long long) ggml_time_us();
-        std::string filename = "cgraph_" + std::to_string(timestamp) + ".txt";
+        std::string filename = "cgraph.txt";
         dump_cgraph(cgraph, filename);
     }
 
