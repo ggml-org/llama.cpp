@@ -330,6 +330,7 @@ struct common_params {
 
     bool   multiple_choice  = false;  // compute TruthfulQA score over random tasks from datafile supplied in prompt
     size_t multiple_choice_tasks = 0; // number of tasks to use when computing the TruthfulQA score. If 0, all tasks will be computed
+    bool   prompt_is_binary = false;  // don't fool around when the prompt contains binary data (as it is for multiple choice)
 
     bool   kl_divergence    = false; // compute KL divergence
 

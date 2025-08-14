@@ -969,7 +969,9 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     }
 
     if (params.escape) {
-        string_process_escapes(params.prompt);
+        if (!params.prompt_is_binary) {
+            string_process_escapes(params.prompt);
+        }
         string_process_escapes(params.input_prefix);
         string_process_escapes(params.input_suffix);
         for (auto & antiprompt : params.antiprompt) {
@@ -1503,6 +1505,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "prompt to start generation with; for system message, use -sys",
         [](common_params & params, const std::string & value) {
             params.prompt = value;
+            params.prompt_is_binary = false;
         }
     ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
@@ -1530,6 +1533,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             if (!params.prompt.empty() && params.prompt.back() == '\n') {
                 params.prompt.pop_back();
             }
+            params.prompt_is_binary = false;
         }
     ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
@@ -1567,6 +1571,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             ss << file.rdbuf();
             params.prompt = ss.str();
             fprintf(stderr, "Read %zu bytes from binary file %s\n", params.prompt.size(), value.c_str());
+            params.prompt_is_binary = true;
         }
     ).set_excludes({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
