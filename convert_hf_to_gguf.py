@@ -8290,7 +8290,7 @@ class LFM2Model(TextModel):
         if is_vision_tensor:
             # skip vision tensors
             return []
-        
+
         name = name.replace("language_model.", "")
 
         # conv op requires 2d tensor
@@ -8325,7 +8325,7 @@ class LFM2VLModel(MmprojModel):
             name = name.replace("model.multi_modal_projector.", "multi_modal_projector.")
 
             if "patch_embedding.weight" in name:
-                data_torch = data_torch.view(data_torch.shape[0], 3, 16, 16)
+                data_torch = data_torch.view(data_torch.shape[0], 16, 16, 3).permute(0, 3, 1, 2)
 
             return [(self.map_tensor_name(name), data_torch)]
 
