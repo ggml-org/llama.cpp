@@ -129,7 +129,7 @@ struct webgpu_context_struct {
     webgpu_buf_pool set_rows_error_buf_pool;
 
     wgpu::ComputePipeline memset_pipeline;
-    wgpu::ComputePipeline mul_mat_pipeline[12][2];
+    wgpu::ComputePipeline mul_mat_pipeline[15][2];
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline cpy_pipeline;
 
@@ -910,7 +910,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_pipeline_info pipeline_infos[10] = {
+    webgpu_pipeline_info pipeline_infos[13] = {
         { .name        = "mul_mat_f32_f32",
          .shader_code = wgsl_mul_mat_f32_f32,
          .src0_type   = GGML_TYPE_F32,
@@ -950,6 +950,18 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
         { .name        = "mul_mat_q3_k_f32",
          .shader_code = wgsl_mul_mat_q3_k_f32,
          .src0_type   = GGML_TYPE_Q3_K,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_q4_k_f32",
+         .shader_code = wgsl_mul_mat_q4_k_f32,
+         .src0_type   = GGML_TYPE_Q4_K,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_q5_k_f32",
+         .shader_code = wgsl_mul_mat_q5_k_f32,
+         .src0_type   = GGML_TYPE_Q5_K,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_q6_k_f32",
+         .shader_code = wgsl_mul_mat_q6_k_f32,
+         .src0_type   = GGML_TYPE_Q6_K,
          .src1_type   = GGML_TYPE_F32 }
     };
 
@@ -1049,6 +1061,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                         case GGML_TYPE_Q8_0:
                         case GGML_TYPE_Q2_K:
                         case GGML_TYPE_Q3_K:
+                        case GGML_TYPE_Q4_K:
+                        case GGML_TYPE_Q5_K:
+                        case GGML_TYPE_Q6_K:
                             return true;
                         default:
                             return false;

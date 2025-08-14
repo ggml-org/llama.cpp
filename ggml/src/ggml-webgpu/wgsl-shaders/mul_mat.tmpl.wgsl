@@ -80,6 +80,30 @@
       "BLOCK_SIZE": 256
     },
     "DECLS": "Q3_K"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q4_k",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 256
+    },
+    "DECLS": "Q4_K"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q5_k",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 256
+    },
+    "DECLS": "Q5_K"
+  },
+  {
+    "REPLS": {
+      "SRC0_TYPE": "q6_k",
+      "SRC1_TYPE": "f32",
+      "BLOCK_SIZE": 256
+    },
+    "DECLS": "Q6_K"
   }
 ]
 
@@ -320,7 +344,7 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
     scale_vals[0] = (scale_vals[0] & kmask2) | ((tmp & kmask1) << 4);
     scale_vals[1] = (scale_vals[1] & kmask2) | (((tmp >> 2) & kmask1) << 4);
 
-    // convert half-precision floats to packed 32-bit integers
+    // convert arrays of f16 -> u32
     var hmask_vals: array<u32, 8>;
     for (var i: u32 = 0; i < 8; i++) {
         hmask_vals[i] = bitcast<u32>(vec2(block.hmask[2 * i], block.hmask[2 * i + 1]));
@@ -361,6 +385,181 @@ fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
 }
 
 #enddecl(Q3_K)
+
+#decl(Q4_K)
+// 8 blocks of 32 elements each
+struct q4_k {
+    d: f16,
+    dmin: f16,
+    scales: array<u32, 3>,
+    qs: array<u32, 32>
+};
+
+fn get_scale_min(is: u32, scales: array<u32, 3>) -> vec2<f32> {
+    if (is < 4) {
+        let sc_byte = (scales[is / 4] >> ((is % 4) * 8)) & 0xFF;
+        let min_byte = (scales[(is + 4) / 4] >> ((is % 4) * 8)) & 0xFF;
+        return vec2(f32(sc_byte & 63), f32(min_byte & 63));
+    } else {
+        let sc_min_lo = (scales[(is + 4) / 4] >> (((is + 4) % 4) * 8)) & 0xFF;
+        let sc_hi = (scales[(is - 4) / 4] >> (((is - 4) % 4) * 8)) & 0xFF;
+        let min_hi = (scales[is / 4] >> ((is % 4) * 8)) & 0xFF;
+        let sc = (sc_min_lo & 0xF) | ((sc_hi >> 6) << 4);
+        let m = (sc_min_lo >> 4) | ((min_hi >> 6) << 4);
+        return vec2(f32(sc), f32(m));
+    }
+}
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block = src0[src0_idx_base + offset];
+    let d = f32(block.d);
+    let m = f32(block.dmin);
+    var sum = 0.0;
+    var src1_i = src1_idx_base + offset * 256;
+    var is: u32 = 0;
+    // 2 blocks each iteration
+    for (var q_b_idx: u32 = 0; q_b_idx < 128; q_b_idx += 32) {
+        for (var shift: u32 = 0; shift < 8; shift += 4) {
+            let scale_min = get_scale_min(is, block.scales);
+            is++;
+            let dl = d * scale_min.x;
+            let ml = m * scale_min.y;
+            for (var l: u32 = 0; l < 32; l++) {
+                let q_idx = q_b_idx + l;
+                let q_byte = (block.qs[q_idx / 4] >> ((q_idx % 4) * 8)) & 0xFF;
+                let qs_val = (q_byte >> shift) & 0xF;
+                sum += (f32(qs_val) * dl - ml) * src1[src1_i];
+                src1_i++;
+            }
+        }
+    }
+    return sum;
+}
+
+#enddecl(Q4_K)
+
+#decl(Q5_K)
+// 8 blocks of 32 elements each
+struct q5_k {
+    d: f16,
+    dmin: f16,
+    scales: array<u32, 3>,
+    qh: array<u32, 8>,
+    qs: array<u32, 32>
+};
+
+fn get_scale_min(is: u32, scales: array<u32, 3>) -> vec2<f32> {
+    if (is < 4) {
+        let sc_byte = (scales[is / 4] >> ((is % 4) * 8)) & 0xFF;
+        let min_byte = (scales[(is + 4) / 4] >> ((is % 4) * 8)) & 0xFF;
+        return vec2(f32(sc_byte & 63), f32(min_byte & 63));
+    } else {
+        let sc_min_lo = (scales[(is + 4) / 4] >> (((is + 4) % 4) * 8)) & 0xFF;
+        let sc_hi = (scales[(is - 4) / 4] >> (((is - 4) % 4) * 8)) & 0xFF;
+        let min_hi = (scales[is / 4] >> ((is % 4) * 8)) & 0xFF;
+        let sc = (sc_min_lo & 0xF) | ((sc_hi >> 6) << 4);
+        let m = (sc_min_lo >> 4) | ((min_hi >> 6) << 4);
+        return vec2(f32(sc), f32(m));
+    }
+}
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block = src0[src0_idx_base + offset];
+    let d = f32(block.d);
+    let m = f32(block.dmin);
+    var sum = 0.0;
+    var src1_i = src1_idx_base + offset * 256;
+    var is: u32 = 0;
+    var u: u32 = 1;
+    // 2 blocks each iteration
+    for (var q_b_idx: u32 = 0; q_b_idx < 128; q_b_idx += 32) {
+        for (var shift: u32 = 0; shift < 8; shift += 4) {
+            let scale_min = get_scale_min(is, block.scales);
+            is++;
+            let dl = d * scale_min.x;
+            let ml = m * scale_min.y;
+            for (var l: u32 = 0; l < 32; l++) {
+                let q_idx = q_b_idx + l;
+                let q_byte = (block.qs[q_idx / 4] >> ((q_idx % 4) * 8)) & 0xFF;
+                let qh_byte = (block.qh[l / 4] >> ((l % 4) * 8)) & 0xFF;
+                let qs_val = (q_byte >> shift) & 0xF;
+                let qh_val = select(0.0, 16.0, (qh_byte & u) != 0);
+                sum += ((f32(qs_val) + qh_val) * dl - ml) * src1[src1_i];
+               src1_i++;
+            }
+            u <<= 1;
+        }
+    }
+    return sum;
+}
+
+#enddecl(Q5_K)
+
+#decl(Q6_K)
+// 16 blocks of 16 elements each
+struct q6_k {
+    ql: array<f16, 64>,
+    qh: array<f16, 32>,
+    scales: array<f16, 8>,
+    d: f16
+};
+
+fn multiply_add(src0_idx_base: u32, src1_idx_base: u32, offset: u32) -> f32 {
+    let block = src0[src0_idx_base + offset];
+    let d = f32(block.d);
+
+    // convert arrays of f16 -> u32
+    var ql_vals: array<u32, 32>;
+    for (var i: u32 = 0; i < 32; i++) {
+        ql_vals[i] = bitcast<u32>(vec2(block.ql[2 * i], block.ql[2 * i + 1]));
+    }
+    var qh_vals: array<u32, 16>;
+    for (var i: u32 = 0; i < 16; i++) {
+        qh_vals[i] = bitcast<u32>(vec2(block.qh[2 * i], block.qh[2 * i + 1]));
+    }
+    var scale_vals: array<u32, 4>;
+    for (var i: u32 = 0; i < 4; i++) {
+        scale_vals[i] = bitcast<u32>(vec2(block.scales[2 * i], block.scales[2 * i + 1]));
+    }
+
+    var sum = 0.0;
+    var src1_i = src1_idx_base + offset * 256;
+    var qh_b_idx: u32 = 0;
+    var sc_b_idx: u32 = 0;
+    for (var ql_b_idx: u32 = 0; ql_b_idx < 128; ql_b_idx += 64) {
+        for (var l: u32 = 0; l < 32; l++) {
+            let ql13_b = (ql_vals[(ql_b_idx + l) / 4] >> (((ql_b_idx + l) % 4) * 8)) & 0xFF;
+            let ql24_b = (ql_vals[(ql_b_idx + l + 32) / 4] >> (((ql_b_idx + l + 32) % 4) * 8)) & 0xFF;
+            let qh_b = ((qh_vals[(qh_b_idx + l) / 4] >> (((qh_b_idx + l) % 4) * 8))) & 0xFF;
+
+            let q1 = f32((ql13_b & 0xF) | ((qh_b & 3) << 4)) - 32.0;
+            let q2 = f32((ql24_b & 0xF) | (((qh_b >> 2) & 3) << 4)) - 32.0;
+            let q3 = f32((ql13_b >> 4) | (((qh_b >> 4) & 3) << 4)) - 32.0;
+            let q4 = f32((ql24_b >> 4) | (((qh_b >> 6) & 3) << 4)) - 32.0;
+
+            let is = l/16;
+            let is1 = sc_b_idx + is;
+            let sc1 = bitcast<i32>(((scale_vals[is1 / 4] >> ((is1 % 4) * 8)) & 0xFF) << 24) >> 24;
+            let is2 = sc_b_idx + is + 2;
+            let sc2 = bitcast<i32>(((scale_vals[is2 / 4] >> ((is2 % 4) * 8)) & 0xFF) << 24) >> 24;
+            let is3 = sc_b_idx + is + 4;
+            let sc3 = bitcast<i32>(((scale_vals[is3 / 4] >> ((is3 % 4) * 8)) & 0xFF) << 24) >> 24;
+            let is4 = sc_b_idx + is + 6;
+            let sc4 = bitcast<i32>(((scale_vals[is4 / 4] >> ((is4 % 4) * 8)) & 0xFF) << 24) >> 24;
+
+            sum += d * f32(sc1) * q1 * src1[src1_i + l];
+            sum += d * f32(sc2) * q2 * src1[src1_i + l + 32];
+            sum += d * f32(sc3) * q3 * src1[src1_i + l + 64];
+            sum += d * f32(sc4) * q4 * src1[src1_i + l + 96];
+        }
+        src1_i += 128;
+        qh_b_idx += 32;
+        sc_b_idx += 8;
+    }
+    return sum;
+}
+
+#enddecl(Q6_K)
 
 #end(DECLS)
 
