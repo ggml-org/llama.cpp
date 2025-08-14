@@ -473,11 +473,12 @@ std::string common_chat_format_single(
     return ss.str();
 }
 
-std::string common_chat_format_example(const struct common_chat_templates * tmpls, bool use_jinja) {
+std::string common_chat_format_example(const struct common_chat_templates * tmpls, bool use_jinja, const std::map<std::string, std::string> & chat_template_kwargs) {
     common_chat_templates_inputs inputs;
     inputs.use_jinja = use_jinja;
     inputs.add_bos = tmpls->add_bos;
     inputs.add_eos = tmpls->add_eos;
+    inputs.chat_template_kwargs = chat_template_kwargs;
     auto add_simple_msg = [&](auto role, auto content) {
         common_chat_msg msg;
         msg.role = role;
