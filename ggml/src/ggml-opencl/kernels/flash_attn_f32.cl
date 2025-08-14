@@ -12,6 +12,17 @@
 #define WG_SIZE (BLOCK_M)
 #define Q1_WG_SIZE 64
 
+inline float get_alibi_slope(
+    const float max_bias, const uint h, const uint n_head_log2, const float m0, const float m1
+) {
+    if (max_bias <= 0.0f) {
+        return 1.0f;
+    }
+    const float base = h < n_head_log2 ? m0 : m1;
+    const int   exph = h < n_head_log2 ? h + 1 : 2*(h - n_head_log2) + 1;
+
+    return pow(base, exph);
+}
 __kernel void flash_attn_f32(
     const global void * q_void, ulong q_offset,
     const global void * k_void, ulong k_offset,
@@ -80,15 +91,7 @@ __kernel void flash_attn_f32(
     ACC_TYPE m_i = -INFINITY;
     ACC_TYPE l_i = 0.0f;
 
-    float slope = 1.0f;
-    if (max_bias > 0.0f) {
-        int h = head_idx;
-        if (h < n_head_log2) {
-            slope = pow(m0, (float)(h + 1));
-        } else {
-            slope = pow(m1, (float)(2 * (h - n_head_log2) + 1));
-        }
-    }
+    float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
     __local DATA_TYPE4 l_k[BLOCK_N][DK_VEC];
     __local DATA_TYPE4 l_v[BLOCK_N][DV_VEC];
@@ -235,15 +238,7 @@ __kernel void flash_attn_f32_q1(
         q_priv[i] = CONVERT_ACC4(q_ptr[i]);
     }
 
-    float slope = 1.0f;
-    if (max_bias > 0.0f) {
-        int h = head_idx;
-        if (h < n_head_log2) {
-            slope = pow(m0, (float)(h + 1));
-        } else {
-            slope = pow(m1, (float)(2 * (h - n_head_log2) + 1));
-        }
-    }
+    float slope = get_alibi_slope(max_bias, head_idx, n_head_log2, m0, m1);
 
     ACC_TYPE m_i = -INFINITY;
     for (int k_idx = tid; k_idx < n_kv; k_idx += Q1_WG_SIZE) {
