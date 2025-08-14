@@ -5,17 +5,16 @@
 #include "ggml-backend.h"
 #include "ggml-cpu.h"
 #include "ggml-opt.h"
-#include "../ggml/src/ggml-impl.h"
-#include "../common/common.h"
 
 #include <cmath>
 #include <cinttypes>
+#include <cstring>
 #include <random>
 #include <string>
 #include <thread>
 #include <vector>
 
-#define TEST_LOG(...)       GGML_LOG_DEBUG(__VA_ARGS__)
+#define TEST_LOG(...)       printf(__VA_ARGS__)
 
 static bool almost_equal(const double a, const double b, const double atol) {
     return fabs(a - b) < atol;
