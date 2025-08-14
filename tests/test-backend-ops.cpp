@@ -4791,6 +4791,45 @@ struct test_opt_step_adamw : public test_case {
     }
 };
 
+struct test_opt_step_sgd : public test_case {
+    const ggml_type              type;
+    const std::array<int64_t, 4> ne;
+
+    std::string vars() override { return VARS_TO_STR2(type, ne); }
+
+    test_opt_step_sgd(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = { 10, 5, 4, 3 })
+        : type(type), ne(ne) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_param(a);  // Despite tensor a having gradients the output tensor will not.
+        ggml_set_name(a, "a");
+
+        ggml_tensor * grad = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_set_name(grad, "grad");
+
+        ggml_tensor * sgd_params = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2);
+        ggml_set_name(sgd_params, "sgd_params");
+
+        ggml_tensor * out = ggml_opt_step_sgd(ctx, a, grad, sgd_params);
+
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, 0.0f, 1.0f);  // sgd_params need non-negative values.
+        }
+    }
+
+    bool grad_precise() override {
+        return true;
+    }
+};
+
 enum llm_norm_type {
     LLM_NORM,
     LLM_NORM_RMS,
@@ -6067,6 +6106,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {30000, 1, 1, 1}));
 
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
+    test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, {10, 5, 4, 3}));
 
 #if 0
     // these tests are disabled to save execution time, sbut they can be handy for debugging

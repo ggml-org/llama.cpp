@@ -1012,11 +1012,12 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
     "OPT_STEP_ADAMW",
+    "OPT_STEP_SGD",
 
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
+static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1113,14 +1114,14 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
     "adamw(x)",
+    "sgd(x)",
 
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 87, "GGML_OP_COUNT != 87");
+static_assert(GGML_OP_COUNT == 88, "GGML_OP_COUNT != 88");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
-
 
 static const char * GGML_UNARY_OP_NAME[GGML_UNARY_OP_COUNT] = {
     "ABS",
@@ -5602,6 +5603,28 @@ struct ggml_tensor * ggml_opt_step_adamw(
     result->src[2] = m;
     result->src[3] = v;
     result->src[4] = adamw_params;
+
+    return result;
+}
+
+// opt_step_sgd
+
+struct ggml_tensor * ggml_opt_step_sgd(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * grad,
+        struct ggml_tensor  * params) {
+    GGML_ASSERT(a->flags & GGML_TENSOR_FLAG_PARAM);
+    GGML_ASSERT(ggml_are_same_shape(a, grad));
+    GGML_ASSERT(params->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_nelements(params) == 2);
+
+    struct ggml_tensor * result = ggml_view_tensor(ctx, a);
+
+    result->op     = GGML_OP_OPT_STEP_SGD;
+    result->src[0] = a;
+    result->src[1] = grad;
+    result->src[2] = params;
 
     return result;
 }

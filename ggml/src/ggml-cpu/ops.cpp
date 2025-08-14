@@ -10330,6 +10330,7 @@ static void ggml_compute_forward_opt_step_adamw_f32(
     const int ir1 = MIN(ir0 + dr, nr);
 
     const float * adamw_params_ptr = ggml_get_data_f32(adamw_params);
+
     const float alpha  = adamw_params_ptr[0];
     const float beta1  = adamw_params_ptr[1];
     const float beta2  = adamw_params_ptr[2];
@@ -10337,7 +10338,7 @@ static void ggml_compute_forward_opt_step_adamw_f32(
     const float wd     = adamw_params_ptr[4];
     const float beta1h = adamw_params_ptr[5];
     const float beta2h = adamw_params_ptr[6];
-
+    const float keep   = 1.f - alpha * wd;
     for (int ir = ir0; ir < ir1; ++ir) {
         const int64_t i03 = ir/(ne02*ne01);
         const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
@@ -10360,7 +10361,7 @@ static void ggml_compute_forward_opt_step_adamw_f32(
             // The weight decay is applied independently of the Adam momenta m and v.
             // This is NOT equivalent to l2 regularization that adds w[i00]*w[i00] to the loss.
             // See: https://arxiv.org/pdf/1711.05101v3.pdf
-            w[i00] = w[i00]*(1.0f - alpha*wd) - alpha*mh/vh;
+            w[i00] = w[i00] * keep - alpha * mh / vh;
         }
     }
 }
@@ -10379,6 +10380,66 @@ void ggml_compute_forward_opt_step_adamw(
         default:
             {
                 GGML_ABORT("fatal error");
+            }
+    }
+}
+
+static void ggml_compute_forward_opt_step_sgd_f32(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0       = dst->src[0];
+    const ggml_tensor * src0_grad  = dst->src[1];
+    const ggml_tensor * sgd_params = dst->src[2];
+
+    GGML_ASSERT(ggml_are_same_shape(src0, src0_grad));
+    GGML_ASSERT(ggml_nelements(sgd_params) == 2);
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int nr = ggml_nrows(src0);
+
+    GGML_TENSOR_UNARY_OP_LOCALS
+    GGML_ASSERT(nb00 == sizeof(float));
+
+    // rows per thread
+    const int dr = (nr + nth - 1) / nth;
+
+    // row range for this thread
+    const int ir0 = dr * ith;
+    const int ir1 = MIN(ir0 + dr, nr);
+
+    // using adamw param subset we care about - alpha, wd - could have a separate struct
+    const float * sgd_params_ptr   = ggml_get_data_f32(sgd_params);
+    const float   alpha            = sgd_params_ptr[0];
+    const float   keep             = 1.f - alpha * sgd_params_ptr[1];
+
+    for (int ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir / (ne02 * ne01);
+        const int64_t i02 = (ir - i03 * ne02 * ne01) / ne01;
+        const int64_t i01 = (ir - i03 * ne02 * ne01 - i02 * ne01);
+
+        const size_t offset = i03 * nb03 + i02 * nb02 + i01 * nb01;
+
+        float *       w = (float *) ((char *) src0->data + offset);                   // weight
+        const float * g = (const float *) ((const char *) src0_grad->data + offset);  // grad
+
+        for (int i00 = 0; i00 < ne00; ++i00) {
+            w[i00] = w[i00] * keep - alpha * g[i00];
+        }
+    }
+}
+
+void ggml_compute_forward_opt_step_sgd(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+
+    switch (src0->type) {
+        case GGML_TYPE_F32:
+            {
+                ggml_compute_forward_opt_step_sgd_f32(params, dst);
+            }
+            break;
+        default:
+            {
+                GGML_ABORT("fatal error - sgd is F32 only");
             }
     }
 }

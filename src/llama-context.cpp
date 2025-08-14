@@ -2048,7 +2048,7 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
     opt_params.opt_period      = n_batch / n_ubatch;
     opt_params.get_opt_pars    = lopt_params.get_opt_pars;
     opt_params.get_opt_pars_ud = lopt_params.get_opt_pars_ud;
-
+    opt_params.optimizer       = lopt_params.optimizer_type;
     opt_ctx = ggml_opt_init(opt_params);
 
     llama_opt_param_filter param_filter = lopt_params.param_filter;
