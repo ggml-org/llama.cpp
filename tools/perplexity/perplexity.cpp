@@ -920,7 +920,7 @@ static void hellaswag_score(llama_context * ctx, const common_params & params) {
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, hs_data[i0].required_tokens);
             return;
         }
 
@@ -1213,7 +1213,7 @@ static void winogrande_score(llama_context * ctx, const common_params & params) 
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, data[i0].required_tokens);
             return;
         }
 
@@ -1542,12 +1542,14 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
         // the common prefix is shared among the 4 sequences to save tokens
         // we extract logits only from the last common token and from all ending tokens of each sequence
         int s0 = 0;
+        int max_seq_exceeded = 0;
         while (n_cur + (int) tasks[i1].required_tokens <= n_ctx) {
             auto& cur_task = tasks[i1];
             int n_logits = 0;
 
             int num_answers = cur_task.seq_tokens.size();
             if (s0 + num_answers > max_seq) {
+                max_seq_exceeded = s0 + num_answers;
                 break;
             }
 
@@ -1588,7 +1590,11 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
         }
 
         if (i0 == i1) {
-            LOG_ERR("%s : task %zu does not fit in the context window\n", __func__, i0);
+            if (max_seq_exceeded > max_seq) {
+                LOG_ERR("%s : task %zu requires a higher -np|--parallel value (at least %zu)\n", __func__, i0, max_seq_exceeded);
+            } else {
+                LOG_ERR("%s : task %zu does not fit in the context window (requires %lu tokens)\n", __func__, i0, tasks[i0].required_tokens);
+            }
             return;
         }
 
