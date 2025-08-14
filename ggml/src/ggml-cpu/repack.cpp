@@ -1589,7 +1589,7 @@ static block_q6_Kx8 make_block_q6_Kx8(block_q6_K* in, unsigned int blck_size_int
         int qh_src_id = i % 8;
         int qh_src_offset = (i / 8) * blck_size_interleave;
         int qh_dst_offset =  i * blck_size_interleave;
-    
+
         uint64_t qh_elems;
         memcpy(&qh_elems, &in[qh_src_id].qh[qh_src_offset], sizeof(uint64_t));
         memcpy(&out.qh[qh_dst_offset], &qh_elems, sizeof(uint64_t));

@@ -2113,28 +2113,28 @@ void ggml_gemv_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     // Index : 32 - 39, 96 - 103
                     const __m256i rhs_vec_0123_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_4, m4b), rhs_hbit_0123_20);
                     const __m256i rhs_vec_0123_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_4, 4), m4b), rhs_hbit_0123_60);
-                    
+
                     const __m256i rhs_vec_4567_20 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_4, m4b), rhs_hbit_4567_20);
                     const __m256i rhs_vec_4567_60 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_4, 4), m4b), rhs_hbit_4567_60);
 
                     // Index : 40 - 47, 104 - 111
                     const __m256i rhs_vec_0123_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_5, m4b), rhs_hbit_0123_21);
                     const __m256i rhs_vec_0123_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_5, 4), m4b), rhs_hbit_0123_61);
-                    
+
                     const __m256i rhs_vec_4567_21 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_5, m4b), rhs_hbit_4567_21);
                     const __m256i rhs_vec_4567_61 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_5, 4), m4b), rhs_hbit_4567_61);
 
                     // Index : 48 - 55, 112 - 119
                     const __m256i rhs_vec_0123_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_6, m4b), rhs_hbit_0123_30);
                     const __m256i rhs_vec_0123_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_6, 4), m4b), rhs_hbit_0123_70);
-                    
+
                     const __m256i rhs_vec_4567_30 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_6, m4b), rhs_hbit_4567_30);
                     const __m256i rhs_vec_4567_70 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_6, 4), m4b), rhs_hbit_4567_70);
 
                     // Index : 56 - 63, 120 - 127
                     const __m256i rhs_vec_0123_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_0123_7, m4b), rhs_hbit_0123_31);
                     const __m256i rhs_vec_0123_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_0123_7, 4), m4b), rhs_hbit_0123_71);
-                    
+
                     const __m256i rhs_vec_4567_31 = _mm256_or_si256(_mm256_and_si256(rhs_raw_lbit_4567_7, m4b), rhs_hbit_4567_31);
                     const __m256i rhs_vec_4567_71 = _mm256_or_si256(_mm256_and_si256(_mm256_srli_epi16(rhs_raw_lbit_4567_7, 4), m4b), rhs_hbit_4567_71);
 
@@ -2217,7 +2217,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     __m256i iacc_7 = _mm256_setzero_si256();
 
                     // Dot product done within 32 bit lanes and accumulated in the same vector
-                    // First done for 0th sub block and then for seven (1st - 7th) other sub blocks processed for each sb (sb < QK_K/128 loop)                    
+                    // First done for 0th sub block and then for seven (1st - 7th) other sub blocks processed for each sb (sb < QK_K/128 loop)
                     // B0(0-3) B4(0-3) B1(0-3) B5(0-3) B2(0-3) B6(0-3) B3(0-3) B7(0-3) with A0(0-3)
                     // B0(4-7) B4(4-7) B1(4-7) B5(4-7) B2(4-7) B6(4-7) B3(4-7) B7(4-7) with A0(4-7)
                     // B0(8-11) B4(8-11) B1(8-11) B5(8-11) B2(8-11) B6(8-11) B3(8-11) B7(8-11) with A0(8-11)
@@ -2300,7 +2300,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             // Accumulated output values permuted so as to be stored in appropriate order post accumulation
             acc_row = _mm256_permutevar8x32_ps(acc_row, finalpermutemask);
             _mm256_storeu_ps(s + (y * nr + x * 8), acc_row);
-            
+
         }
     }
 #else
@@ -7695,7 +7695,7 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 _mm512_storeu_ps((float * )(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
 
             }
-        }    
+        }
     }
 
     for (; y < nr / 4; y ++){
@@ -8648,7 +8648,7 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             for (int i = 0; i < 4; i++) {
                 _mm512_storeu_ps((float * )(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
             }
-        }    
+        }
     }
 
     if (anc != nc) {
@@ -8656,7 +8656,7 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
         y = 0;
     }
 
-#endif    
+#endif
 
     //Take group of four block_q8_Kx4 structures at each pass of the loop and perform dot product operation
     for (; y < anr / 4; y += 4){
@@ -9471,8 +9471,8 @@ void ggml_gemm_q6_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
             // Store the accumulated values
             for (int i = 0; i < 16; i++) {
                 _mm256_storeu_ps((float * )(s + ((y * 4 + i) * bs + x * 8)), acc_rows[i]);
-            } 
-        }    
+            }
+        }
     }
 
     for (; y < nr / 4; y ++) {
