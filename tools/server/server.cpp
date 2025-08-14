@@ -3330,7 +3330,7 @@ struct server_context {
                                     if (!do_reset) {
                                         // restore the checkpoint
                                         const size_t swa_size = it->data.size();
-                                        const size_t n = llama_state_seq_set_data(ctx, it->data.data(), swa_size, slot.id);
+                                        const size_t n = llama_state_seq_set_data_ext(ctx, it->data.data(), swa_size, slot.id, LLAMA_STATE_SEQ_FLAGS_SWA_ONLY);
 
                                         if (n != swa_size) {
                                             SLT_ERR(slot, "failed to restore SWA checkpoint, pos_min = %d, pos_max = %d, size = %.3f MiB\n", it->pos_min, it->pos_max, (float) swa_size / 1024 / 1024);
@@ -3361,7 +3361,7 @@ struct server_context {
                                     if (cur.pos_min > pos_min_thold) {
                                         slot.swa_checkpoints.erase(slot.swa_checkpoints.begin() + i);
 
-                                        SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %f MiB\n", cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
+                                        SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %.3f MiB\n", cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
                                     }
                                 }
                             }
@@ -3578,18 +3578,19 @@ struct server_context {
                     slot.state = SLOT_STATE_GENERATING;
 
                     // make a checkpoint with the SWA memory
-                    if (llama_model_n_swa(model) > 0) {
+                    // checkpoints are needed only if we are not using "--swa-full"
+                    if (llama_model_n_swa(model) > 0 && !params_base.swa_full) {
                         if (slot.swa_checkpoints.size() >= SERVER_MAX_SWA_CHECKPOINTS_PER_SLOT) {
                             {
                                 const auto & cur = slot.swa_checkpoints.back();
 
-                                SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %f MiB\n", cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
+                                SLT_WRN(slot, "SWA checkpoint erase, pos_min = %d, pos_max = %d, size = %.3f MiB\n", cur.pos_min, cur.pos_max, (float) cur.data.size() / 1024 / 1024);
                             }
 
                             slot.swa_checkpoints.erase(slot.swa_checkpoints.begin());
                         }
 
-                        const size_t swa_size = llama_state_seq_get_size(ctx, slot.id);
+                        const size_t swa_size = llama_state_seq_get_size_ext(ctx, slot.id, LLAMA_STATE_SEQ_FLAGS_SWA_ONLY);
 
                         auto & cur = slot.swa_checkpoints.emplace_back(swa_checkpoint{
                             /*.pos_min = */ llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id),
@@ -3597,9 +3598,9 @@ struct server_context {
                             /*.data    = */ std::vector<uint8_t>(swa_size),
                         });
 
-                        llama_state_seq_get_data(ctx, cur.data.data(), swa_size, slot.id);
+                        llama_state_seq_get_data_ext(ctx, cur.data.data(), swa_size, slot.id, LLAMA_STATE_SEQ_FLAGS_SWA_ONLY);
 
-                        SLT_WRN(slot, "SWA checkpoint create, pos_min = %d, pos_max = %d, size = %f MiB\n", cur.pos_min, cur.pos_max, (float) swa_size / 1024 / 1024);
+                        SLT_WRN(slot, "SWA checkpoint create, pos_min = %d, pos_max = %d, size = %.3f MiB\n", cur.pos_min, cur.pos_max, (float) swa_size / 1024 / 1024);
                     }
                 } else if (slot.state != SLOT_STATE_GENERATING) {
                     continue; // continue loop of slots
