@@ -3773,9 +3773,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
     ggml_vk_create_pipeline(device, device->pipeline_diag_mask_inf_f32, "diag_mask_inf_f32", diag_mask_inf_f32_len, diag_mask_inf_f32_data, "main", 2, sizeof(vk_op_diag_mask_push_constants), {1, 512, 1}, {}, 1, true);
 
-    ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {256, 1, 1}, { device->subgroup_size }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
-    ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {256, 1, 1}, { device->subgroup_size }, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_cross_entropy_loss_back_f32, "cross_entropy_loss_back_f32", cross_entropy_loss_back_f32_len, cross_entropy_loss_back_f32_data, "main", 4, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32, "soft_max_f32", soft_max_f32_len, soft_max_f32_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
     ggml_vk_create_pipeline(device, device->pipeline_soft_max_f32_wg512, "soft_max_f32_wg512", soft_max_f32_len, soft_max_f32_data, "main", 4, sizeof(vk_op_soft_max_push_constants), {1, 1, 1}, { 512 }, 1);
@@ -8852,12 +8852,23 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_L2_NORM:
     case GGML_OP_SOFT_MAX:
     case GGML_OP_SOFT_MAX_BACK:
-    case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
     case GGML_OP_SUM_ROWS:
     case GGML_OP_MEAN:
     case GGML_OP_ARGMAX:
         {
             const uint32_t nr = ggml_nrows(src0);
+            if (nr > 262144) {
+                elements = { 512, 512, CEIL_DIV(nr, 262144) };
+            } else if (nr > 512) {
+                elements = { 512, CEIL_DIV(nr, 512), 1 };
+            } else {
+                elements = { nr, 1, 1 };
+            }
+        } break;
+    case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+        {
+            // For cross entropy loss back, we need one workgroup per row of logits (src1)
+            const uint32_t nr = ggml_nrows(src1);
             if (nr > 262144) {
                 elements = { 512, 512, CEIL_DIV(nr, 262144) };
             } else if (nr > 512) {
