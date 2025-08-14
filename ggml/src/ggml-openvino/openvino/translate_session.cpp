@@ -76,65 +76,6 @@ void add_token_len(TensorMap& tensor_map) {
     tensor_map.insert({"token_len", token_len->output(0)});
 }
 
-void add_kv_update_indices(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
-    // cache_k layout: [S, N, H] (seq, num_heads, head_size)
-    // cache_v layout: [N, H, S] (num_heads, head_size, seq)
-    // When writing to cache_v, cache should be reshaped to [N*H, S] and v-curr should be flattened
-    auto past_token_len = tensor_map.at("past_token_len").get_node_shared_ptr();
-    auto token_len = tensor_map.at("token_len").get_node_shared_ptr();
-
-    Output<Node> update_indices_k;
-    Output<Node> update_indices_v;
-
-    auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-    auto zero_scalar = ov::op::v0::Constant::create(ov::element::i64, {}, {0});
-    auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
-    auto one_scalar = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {1});
-    auto two = ov::op::v0::Constant::create(ov::element::i64, {1}, {2});
-
-    auto past_token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(past_token_len, zero);
-    auto token_len_scalar = std::make_shared<ov::op::v0::Squeeze>(token_len, zero);
-    auto total_token_len_scalar = std::make_shared<ov::op::v1::Add>(past_token_len_scalar, token_len_scalar);
-
-    Output<Node> update_indices = std::make_shared<ov::op::v4::Range>(
-        past_token_len_scalar, total_token_len_scalar, one_scalar, ov::element::i64);
-    if (ggml_model_decoder.is_static()) {
-        update_indices = past_token_len;
-    }
-
-    update_indices_k = std::make_shared<ov::op::v0::Unsqueeze>(update_indices, one);
-    update_indices_k.get_node_shared_ptr()->set_friendly_name("update_indices_k");
-    tensor_map.insert({"update_indices_k", update_indices_k});
-
-    auto total_head_size = ggml_model_decoder.get_num_heads_kv() * ggml_model_decoder.get_head_size();
-    auto total_head_size_node = ov::op::v0::Constant::create(ov::element::i64, {1}, {total_head_size});
-    auto total_head_size_scalar = std::make_shared<ov::op::v0::Squeeze>(total_head_size_node, zero);
-
-    // 1D tensor of shape [total_head_size], values starting from 0
-    auto range_row =
-        std::make_shared<ov::op::v4::Range>(zero_scalar, total_head_size_scalar, one_scalar, ov::element::i64);
-    auto range_row_reshaped =
-        std::make_shared<ov::op::v0::Unsqueeze>(range_row, ov::op::v0::Constant::create(ov::element::i64, {2}, {1, 2}));
-    auto row_indices = std::make_shared<ov::op::v3::Broadcast>(
-        range_row_reshaped,
-        std::make_shared<ov::op::v0::Concat>(ov::OutputVector{total_head_size_node, token_len, one}, 0));
-
-    // 1D tensor of shape [token_len], values starting from past_token_len
-    auto range_col = update_indices;
-    auto range_col_reshaped =
-        std::make_shared<ov::op::v0::Unsqueeze>(range_col, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 2}));
-    auto col_indices = std::make_shared<ov::op::v3::Broadcast>(
-        range_col_reshaped,
-        std::make_shared<ov::op::v0::Concat>(ov::OutputVector{total_head_size_node, token_len, one}, 0));
-
-    // Stack row_indices and col_indices along last axis: [total_head_size, token_len, 2]
-    update_indices_v = std::make_shared<ov::op::v0::Concat>(OutputVector{row_indices, col_indices}, 2);
-    update_indices_v = std::make_shared<ov::op::v1::Reshape>(
-        update_indices_v, ov::op::v0::Constant::create(ov::element::i64, {2}, std::vector<int64_t>{-1, 2}), false);
-    update_indices_v.get_node_shared_ptr()->set_friendly_name("update_indices_v");
-    tensor_map.insert({"update_indices_v", update_indices_v});
-}
-
 void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     int32_t* rope_params = ggml_model_decoder.get_rope_params();
     auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
@@ -156,7 +97,6 @@ void add_rope_sin_cos(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
 // Create common patterns
 void preprocess(TensorMap& tensor_map, GgmlDecoder& ggml_model_decoder) {
     add_token_len(tensor_map);
-    add_kv_update_indices(tensor_map, ggml_model_decoder);
     add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 
