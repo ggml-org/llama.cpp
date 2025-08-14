@@ -489,11 +489,17 @@ struct clip_graph {
 
     ggml_cgraph * build_siglip() {
         ggml_tensor * inp = build_inp();
+
+        ggml_tensor * learned_pos_embd = model.position_embeddings;
+        if (ctx->proj_type() == PROJECTOR_TYPE_LFM2) {
+            learned_pos_embd = resize_position_embeddings();
+        }
+
         ggml_tensor * cur = build_vit(
                                 inp, n_patches,
                                 NORM_TYPE_NORMAL,
                                 hparams.ffn_op,
-                                model.position_embeddings,
+                                learned_pos_embd,
                                 nullptr);
 
         if (ctx->proj_type() == PROJECTOR_TYPE_GEMMA3) {
@@ -544,26 +550,35 @@ struct clip_graph {
 
             cur = ggml_mul_mat(ctx0, model.projection, cur);
         } else if (ctx->proj_type() == PROJECTOR_TYPE_LFM2) {
+            // pixel unshuffle block
             const int scale_factor = model.hparams.proj_scale_factor;
-            const int n_embd = cur->ne[0];
-            const int seq    = cur->ne[1];
-            const int bsz    = 1; // batch size, always 1 for now since we don't support batching
-            const int height = std::sqrt(seq);
-            const int width  = std::sqrt(seq);
-            GGML_ASSERT(scale_factor != 0);
-            cur = ggml_reshape_4d(ctx0, cur, n_embd * scale_factor, width / scale_factor, height, bsz);
-            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
-            cur = ggml_reshape_4d(ctx0, ggml_cont(ctx0, cur),
-                n_embd * scale_factor * scale_factor,
-                height / scale_factor,
-                width / scale_factor,
-                bsz);
-            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
-            cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur),
-                n_embd * scale_factor * scale_factor,
-                seq / (scale_factor * scale_factor),
-                bsz);
+            GGML_ASSERT(scale_factor > 1);
 
+            const int n_embd = cur->ne[0];
+            int width  = img.nx / patch_size;
+            int height = img.ny / patch_size;
+
+            // pad width and height to factor
+            const int64_t pad_width = CLIP_ALIGN(width, scale_factor) - width;
+            const int64_t pad_height = CLIP_ALIGN(height, scale_factor) - height;
+            cur = ggml_reshape_3d(ctx0, cur, n_embd, width, height);
+            if (pad_width || pad_height) {
+                cur     = ggml_pad(ctx0, cur, 0, pad_width, pad_height, 0);
+                width  += pad_width;
+                height += pad_height;
+            }
+
+            // unshuffle h
+            cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur), n_embd * scale_factor, width / scale_factor, height);
+            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+
+            // unshuffle w
+            cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur), n_embd * scale_factor * scale_factor, height / scale_factor, width / scale_factor);
+            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+
+            cur = ggml_reshape_2d(ctx0, ggml_cont(ctx0, cur), cur->ne[0], cur->ne[1] * cur->ne[2]);
+
+            // projection
             cur = ggml_norm(ctx0, cur, 1e-5); // default nn.LayerNorm
             cur = ggml_mul(ctx0, cur, model.mm_input_norm_w);
             cur = ggml_add(ctx0, cur, model.mm_input_norm_b);
@@ -1589,6 +1604,26 @@ private:
             ggml_build_forward_expand(gf, cur);
             ctx->debug_print_tensors.push_back(cur);
         }
+    }
+
+    // siglip2 naflex
+    ggml_tensor * resize_position_embeddings() {
+        ggml_tensor * pos_embd = model.position_embeddings;
+        const int height       = img.ny / patch_size;
+        const int width        = img.nx / patch_size;
+
+        if (!pos_embd || height * width == pos_embd->ne[1]) {
+            return pos_embd;
+        }
+
+        const int n_pos_embd = std::sqrt(pos_embd->ne[1]);
+        pos_embd = ggml_reshape_3d(ctx0, pos_embd, n_embd, n_pos_embd, n_pos_embd);  // -> (n_embd, n_pos_embd, n_pos_embd)
+        pos_embd = ggml_permute(ctx0, pos_embd, 2, 0, 1, 3);                         // -> (n_pos_embd, n_pos_embd, n_embd)
+        pos_embd = ggml_interpolate(ctx0, pos_embd, width, height, n_embd, 1, 1);    // -> (width, height, n_embd)
+        pos_embd = ggml_reshape_2d(ctx0, pos_embd, height * width, n_embd);          // -> (height * width, n_embd)
+        pos_embd = ggml_transpose(ctx0, pos_embd);                                   // -> (n_embd, height * width)
+
+        return pos_embd;
     }
 
     // build vision transformer (ViT) cgraph
@@ -3470,6 +3505,43 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         res_imgs->grid_y = inst.grid_size.height;
         return true;
 
+    } else if (ctx->proj_type() == PROJECTOR_TYPE_LFM2) {
+        GGML_ASSERT(params.proj_scale_factor);
+
+        // smart resize
+        const int width = img->nx;
+        const int height = img->ny;
+        const int total_factor = params.patch_size * params.proj_scale_factor;
+        constexpr int min_image_tokens = 64;
+        constexpr int max_image_tokens = 256;
+        const float min_pixels = min_image_tokens * total_factor * total_factor;
+        const float max_pixels = max_image_tokens * total_factor * total_factor;
+
+        auto round_by_factor = [f = total_factor](float x) { return static_cast<int>(std::nearbyintf(x / static_cast<float>(f))) * f; };
+        auto ceil_by_factor  = [f = total_factor](float x) { return static_cast<int>(std::ceilf(x / static_cast<float>(f))) * f; };
+        auto floor_by_factor = [f = total_factor](float x) { return static_cast<int>(std::floorf(x / static_cast<float>(f))) * f; };
+
+        int h_bar = std::max(total_factor, round_by_factor(height));
+        int w_bar = std::max(total_factor, round_by_factor(width));
+
+        if (h_bar * w_bar > max_pixels) {
+            const auto beta = std::sqrt((height * width) / max_pixels);
+            h_bar = std::max(total_factor, floor_by_factor(height / beta));
+            w_bar = std::max(total_factor, floor_by_factor(width / beta));
+        } else if (h_bar * w_bar < min_pixels) {
+            const auto beta = std::sqrt(min_pixels / (height * width));
+            h_bar = ceil_by_factor(height * beta);
+            w_bar = ceil_by_factor(width * beta);
+        }
+
+        const std::array<uint8_t, 3> pad_color = {122, 116, 104};
+
+        clip_image_u8 resized_img;
+        image_manipulation::resize_and_pad_image(*img, resized_img, clip_image_size{w_bar, h_bar}, pad_color);
+        clip_image_f32_ptr res(clip_image_f32_init());
+        normalize_image_u8_to_f32(resized_img, *res, params.image_mean, params.image_std);
+        res_imgs->entries.push_back(std::move(res));
+        return true;
     }
 
     // the logic below is to pad the shorter side to the longer side with a background color: rgb(122, 116, 104)
@@ -3633,7 +3705,6 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                 n_patches_sq = n_per_side_2d_pool * n_per_side_2d_pool;
             } break;
         case PROJECTOR_TYPE_IDEFICS3:
-        case PROJECTOR_TYPE_LFM2:
         case PROJECTOR_TYPE_INTERNVL:
             {
                 // both W and H are divided by proj_scale_factor
@@ -3672,6 +3743,10 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                     // divide by 2 because of nn.AvgPool1d(2, stride=2)
                     n_patches_sq /= 2;
                 }
+            } break;
+        case PROJECTOR_TYPE_LFM2:
+            {
+                n_patches_sq = (img->nx / (params.patch_size * params.proj_scale_factor)) * (img->ny / (params.patch_size * params.proj_scale_factor));
             } break;
         default:
             GGML_ABORT("unsupported projector type");
