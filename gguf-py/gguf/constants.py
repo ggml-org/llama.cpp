@@ -362,6 +362,7 @@ class MODEL_ARCH(IntEnum):
     BITNET           = auto()
     T5               = auto()
     T5ENCODER        = auto()
+    T5GEMMA          = auto()  # T5Gemma architecture
     JAIS             = auto()
     NEMOTRON         = auto()
     EXAONE           = auto()
@@ -528,6 +529,12 @@ class MODEL_TENSOR(IntEnum):
     DEC_FFN_DOWN         = auto()
     DEC_FFN_UP           = auto()
     DEC_OUTPUT_NORM      = auto()
+    # T5GEMMA specific post layer normalization tensors
+    DEC_POST_SELF_ATTN_NORM = auto()
+    DEC_POST_CROSS_ATTN_NORM = auto()
+    DEC_POST_FFN_NORM    = auto()
+    ENC_POST_SELF_ATTN_NORM = auto()
+    ENC_POST_FFN_NORM    = auto()
     ENC_ATTN_NORM        = auto()
     ENC_ATTN_Q           = auto()
     ENC_ATTN_K           = auto()
@@ -693,6 +700,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.BITNET:           "bitnet",
     MODEL_ARCH.T5:               "t5",
     MODEL_ARCH.T5ENCODER:        "t5encoder",
+    MODEL_ARCH.T5GEMMA:          "t5gemma",  # T5Gemma architecture
     MODEL_ARCH.JAIS:             "jais",
     MODEL_ARCH.NEMOTRON:         "nemotron",
     MODEL_ARCH.EXAONE:           "exaone",
@@ -860,6 +868,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DEC_FFN_DOWN:              "dec.blk.{bid}.ffn_down",
     MODEL_TENSOR.DEC_FFN_UP:                "dec.blk.{bid}.ffn_up",
     MODEL_TENSOR.DEC_OUTPUT_NORM:           "dec.output_norm",
+    # T5GEMMA specific post layer normalization tensors
+    MODEL_TENSOR.DEC_POST_SELF_ATTN_NORM:   "dec.blk.{bid}.post_self_attn_norm",
+    MODEL_TENSOR.DEC_POST_CROSS_ATTN_NORM:  "dec.blk.{bid}.post_cross_attn_norm",
+    MODEL_TENSOR.DEC_POST_FFN_NORM:         "dec.blk.{bid}.post_ffn_norm",
+    MODEL_TENSOR.ENC_POST_SELF_ATTN_NORM:   "enc.blk.{bid}.post_self_attn_norm",
+    MODEL_TENSOR.ENC_POST_FFN_NORM:         "enc.blk.{bid}.post_ffn_norm",
     MODEL_TENSOR.ENC_ATTN_NORM:             "enc.blk.{bid}.attn_norm",
     MODEL_TENSOR.ENC_ATTN_Q:                "enc.blk.{bid}.attn_q",
     MODEL_TENSOR.ENC_ATTN_K:                "enc.blk.{bid}.attn_k",
@@ -2237,6 +2251,45 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ENC_FFN_DOWN,
         MODEL_TENSOR.ENC_FFN_UP,
         MODEL_TENSOR.ENC_OUTPUT_NORM,
+    ],
+    MODEL_ARCH.T5GEMMA: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.DEC_ATTN_NORM,
+        MODEL_TENSOR.DEC_ATTN_Q,
+        MODEL_TENSOR.DEC_ATTN_K,
+        MODEL_TENSOR.DEC_ATTN_V,
+        MODEL_TENSOR.DEC_ATTN_OUT,
+        MODEL_TENSOR.DEC_ATTN_REL_B,
+        MODEL_TENSOR.DEC_CROSS_ATTN_NORM,
+        MODEL_TENSOR.DEC_CROSS_ATTN_Q,
+        MODEL_TENSOR.DEC_CROSS_ATTN_K,
+        MODEL_TENSOR.DEC_CROSS_ATTN_V,
+        MODEL_TENSOR.DEC_CROSS_ATTN_OUT,
+        MODEL_TENSOR.DEC_CROSS_ATTN_REL_B,
+        MODEL_TENSOR.DEC_FFN_NORM,
+        MODEL_TENSOR.DEC_FFN_GATE,
+        MODEL_TENSOR.DEC_FFN_DOWN,
+        MODEL_TENSOR.DEC_FFN_UP,
+        MODEL_TENSOR.DEC_OUTPUT_NORM,
+        MODEL_TENSOR.ENC_ATTN_NORM,
+        MODEL_TENSOR.ENC_ATTN_Q,
+        MODEL_TENSOR.ENC_ATTN_K,
+        MODEL_TENSOR.ENC_ATTN_V,
+        MODEL_TENSOR.ENC_ATTN_OUT,
+        MODEL_TENSOR.ENC_ATTN_REL_B,
+        MODEL_TENSOR.ENC_FFN_NORM,
+        MODEL_TENSOR.ENC_FFN_GATE,
+        MODEL_TENSOR.ENC_FFN_DOWN,
+        MODEL_TENSOR.ENC_FFN_UP,
+        MODEL_TENSOR.ENC_OUTPUT_NORM,
+        # T5GEMMA specific post layer normalization tensors
+        MODEL_TENSOR.DEC_POST_SELF_ATTN_NORM,
+        MODEL_TENSOR.DEC_POST_CROSS_ATTN_NORM,
+        MODEL_TENSOR.DEC_POST_FFN_NORM,
+        MODEL_TENSOR.ENC_POST_SELF_ATTN_NORM,
+        MODEL_TENSOR.ENC_POST_FFN_NORM,
     ],
     MODEL_ARCH.JAIS: [
         MODEL_TENSOR.TOKEN_EMBD,
