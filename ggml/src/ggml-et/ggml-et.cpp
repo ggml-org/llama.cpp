@@ -405,12 +405,18 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	if (!ggml_et_driver_init())
 	    return nullptr;
 
+	ggml_backend_reg_t r = new ggml_backend_reg {
+	    /* .api_version = */ GGML_BACKEND_API_VERSION,
+	    /* .iface       = */ ggml_backend_et_reg_i,
+	    /* .context     = */ nullptr, // Set later
+	};
+
 	std::vector<rt::DeviceId> rtids = ggml_et_runtime()->getDevices();
 
         for (int i = 0; i < ggml_et_devicelayer()->getDevicesCount(); i++) {
 	    ggml_backend_dev_t dev = new ggml_backend_device {
 		/* .iface   = */ ggml_backend_et_device_i,
-		/* .reg     = */ _reg,
+		/* .reg     = */ r,
 		/* .context = */ nullptr // Set later
 	    };
 
@@ -438,11 +444,7 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	    ctx->devices.push_back(dev);
 	}
 
-	ggml_backend_reg_t r = new ggml_backend_reg {
-	    /* .api_version = */ GGML_BACKEND_API_VERSION,
-	    /* .iface       = */ ggml_backend_et_reg_i,
-	    /* .context     = */ ctx,
-	};
+	r->context = ctx;
 	return r;
     }();
 
