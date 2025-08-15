@@ -2061,8 +2061,8 @@ static common_chat_params common_chat_templates_apply_jinja(
     params.enable_thinking = inputs.enable_thinking;
     params.grammar = inputs.grammar;
     params.now = inputs.now;
-    params.add_bos = inputs.add_bos;
-    params.add_eos = inputs.add_eos;
+    params.add_bos = tmpls->add_bos;
+    params.add_eos = tmpls->add_eos;
 
     params.extra_context = json::object();
     for (auto el : inputs.chat_template_kwargs) {
