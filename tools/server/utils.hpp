@@ -1029,7 +1029,7 @@ static bool lora_should_clear_cache(
     GGML_ASSERT(!are_lora_equal(current, next));
 
     return (
-        !(lora_get_enabled_ids(current).empty() or lora_all_alora(current)) or
+        !(lora_get_enabled_ids(current).empty() || lora_all_alora(current)) ||
         !lora_all_alora(next));
 }
 
