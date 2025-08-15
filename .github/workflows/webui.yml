@@ -1,11 +1,13 @@
 name: WebUI
 
+# on:
+#     pull_request_target:
+#         paths:
+#             - "tools/server/webui/**"
+#         branches:
+#             - master
 on:
-    pull_request_target:
-        paths:
-            - "tools/server/webui/**"
-        branches:
-            - master
+    - pull_request_target
 
 jobs:
     check-and-build:
