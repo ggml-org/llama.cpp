@@ -49,22 +49,22 @@ static std::shared_ptr<rt::IRuntime> ggml_et_runtime() {
 }
 
 struct ggml_backend_et_buffer_type_context {
-    int device;
+    int devidx;
     std::string name;
 };
 
 struct ggml_backend_et_buffer_context {
-    int device;
+    int devidx;
     void * data;
     size_t size;
 };
 
 struct ggml_backend_et_context {
-    int device;
+    int devidx;
 };
 
 struct ggml_backend_et_device_context {
-    int device;
+    int devidx;
     std::string name;
     ggml_backend_buffer_type_t buftype;
 };
@@ -137,7 +137,7 @@ static ggml_backend_buffer_t ggml_backend_et_buffer_type_alloc_buffer(ggml_backe
     ggml_backend_et_buffer_type_context * btctx = (ggml_backend_et_buffer_type_context *)buft->context;
 
     ggml_backend_et_buffer_context * ctx = new ggml_backend_et_buffer_context;
-    ctx->device = btctx->device;
+    ctx->devidx = btctx->devidx;
     ctx->data = malloc(size);
     ctx->size = size;
 
@@ -320,7 +320,7 @@ static void ggml_backend_et_device_get_props(ggml_backend_dev_t dev, struct ggml
 static ggml_backend_t ggml_backend_et_device_init_backend(ggml_backend_dev_t dev, const char * params) {
     GGML_UNUSED(params);
     ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
-    return ggml_backend_et_init(dev_ctx->device);
+    return ggml_backend_et_init(dev_ctx->devidx);
 }
 
 static ggml_backend_buffer_type_t ggml_backend_et_device_get_buffer_type(ggml_backend_dev_t dev) {
@@ -372,12 +372,12 @@ static size_t ggml_backend_et_reg_get_device_count(ggml_backend_reg_t reg) {
     return ctx->devices.size();
 }
 
-static ggml_backend_dev_t ggml_backend_et_reg_get_device(ggml_backend_reg_t reg, size_t device) {
+static ggml_backend_dev_t ggml_backend_et_reg_get_device(ggml_backend_reg_t reg, size_t devidx) {
     ggml_backend_et_reg_ctx * ctx = (ggml_backend_et_reg_ctx *)reg->context;
-    if (device >= ctx->devices.size()) {
+    if (devidx >= ctx->devices.size()) {
         return nullptr;
     }
-    return ctx->devices[device];
+    return ctx->devices[devidx];
 }
 
 static void * ggml_backend_et_get_proc_address(ggml_backend_reg_t reg, const char * name) {
@@ -409,11 +409,11 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 
 	    // Create device context.
 	    ggml_backend_et_device_context * dev_ctx = new ggml_backend_et_device_context;
-	    dev_ctx->device = i;
+	    dev_ctx->devidx = i;
 	    dev_ctx->name = GGML_ET_NAME + std::to_string(i);
 	    // Add buffer type for device to device context.
 	    ggml_backend_et_buffer_type_context * bufty_ctx = new ggml_backend_et_buffer_type_context;
-	    bufty_ctx->device = i;
+	    bufty_ctx->devidx = i;
 	    bufty_ctx->name = GGML_ET_NAME + std::to_string(i);
 	    dev_ctx->buftype = new ggml_backend_buffer_type {
 		/* .iface   = */ ggml_backend_et_buffer_type_i,
@@ -441,21 +441,21 @@ ggml_guid_t ggml_backend_et_guid(void) {
     return &guid;
 }
 
-ggml_backend_t ggml_backend_et_init(size_t dev_num) {
+ggml_backend_t ggml_backend_et_init(size_t devidx) {
     if (!ggml_et_driver_init())
 	return nullptr;
 
-    if (dev_num >= (size_t)ggml_backend_et_get_device_count()) {
+    if (devidx >= (size_t)ggml_backend_et_get_device_count()) {
         return nullptr;
     }
 
     ggml_backend_et_context * ctx = new ggml_backend_et_context;
-    ctx->device = (int)dev_num;
+    ctx->devidx = (int)devidx;
 
     ggml_backend_t backend = new ggml_backend {
         /* .guid    = */ ggml_backend_et_guid(),
         /* .iface   = */ ggml_backend_et_i,
-        /* .device  = */ ggml_backend_et_reg_get_device(ggml_backend_et_reg(), dev_num),
+        /* .device  = */ ggml_backend_et_reg_get_device(ggml_backend_et_reg(), devidx),
         /* .context = */ ctx,
     };
 
@@ -470,16 +470,16 @@ int ggml_backend_et_get_device_count(void) {
     return ggml_backend_et_reg_get_device_count(ggml_backend_et_reg());
 }
 
-void ggml_backend_et_get_device_description(int device, char * description, size_t description_size) {
-    if (device < 0 || device >= ggml_backend_et_get_device_count()) {
-        snprintf(description, description_size, "ET Device %d (invalid)", device);
+void ggml_backend_et_get_device_description(int devidx, char * description, size_t description_size) {
+    if (devidx < 0 || devidx >= ggml_backend_et_get_device_count()) {
+        snprintf(description, description_size, "ET Device %d (invalid)", devidx);
         return;
     }
-    snprintf(description, description_size, "ET Device %d", device);
+    snprintf(description, description_size, "ET Device %d", devidx);
 }
 
-void ggml_backend_et_get_device_memory(int device, size_t * free, size_t * total) {
-    if (device < 0 || device >= ggml_backend_et_get_device_count()) {
+void ggml_backend_et_get_device_memory(int devidx, size_t * free, size_t * total) {
+    if (devidx < 0 || devidx >= ggml_backend_et_get_device_count()) {
         *free = 0;
         *total = 0;
         return;
