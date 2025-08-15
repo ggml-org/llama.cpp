@@ -7,8 +7,7 @@ name: WebUI
 #         branches:
 #             - master
 on:
-    - pull_request_target
-
+    - push
 jobs:
     check-and-build:
         runs-on: ubuntu-latest
