@@ -120,6 +120,10 @@ if (CUDAToolkit_FOUND)
 
     set(CUDA_FLAGS -use_fast_math -extended-lambda)
 
+    if (GGML_CUDA_DEBUG)
+        list(APPEND CUDA_FLAGS -lineinfo)
+    endif()
+
     if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
         # Options are:
         # - none (not recommended)
