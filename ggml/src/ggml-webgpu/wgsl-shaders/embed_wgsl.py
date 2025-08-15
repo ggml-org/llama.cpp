@@ -44,10 +44,12 @@ def generate_variants(shader_path, output_dir, outfile):
         shader_template = extract_block(text, "SHADER")
 
         for variant in variants:
-            decls_key = variant["DECLS"]
-            if decls_key not in decls_map:
-                raise ValueError(f"DECLS key '{decls_key}' not found.")
-            decls_code = decls_map[decls_key] + "\n\n"
+            decls = variant["DECLS"]
+            decls_code = ""
+            for key in decls:
+                if key not in decls_map:
+                    raise ValueError(f"DECLS key '{key}' not found.")
+                decls_code += decls_map[key] + "\n\n"
 
             shader_variant = replace_placeholders(shader_template, variant["REPLS"])
             final_shader = re.sub(rf'\bDECLS\b', decls_code, shader_variant)

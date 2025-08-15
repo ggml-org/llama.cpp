@@ -20,7 +20,7 @@
 
 #ifdef GGML_WEBGPU_DEBUG
 #    define WEBGPU_LOG_DEBUG(msg)  std::cout << msg << std::endl
-#    define WEBGPU_DEBUG_BUF_ELEMS 32
+#    define WEBGPU_DEBUG_BUF_ELEMS 33
 #else
 #    define WEBGPU_LOG_DEBUG(msg) ((void) 0)
 #endif  // GGML_WEBGPU_DEBUG
@@ -129,7 +129,7 @@ struct webgpu_context_struct {
     webgpu_buf_pool set_rows_error_buf_pool;
 
     wgpu::ComputePipeline memset_pipeline;
-    wgpu::ComputePipeline mul_mat_pipeline[15][2];
+    wgpu::ComputePipeline mul_mat_pipeline[17][2];
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline cpy_pipeline;
 
@@ -595,12 +595,17 @@ static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_t
         { .binding = 2,
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
-         .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  }
+         .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  },
+//         { .binding = 3,
+//           .buffer  = ctx->debug_dev_buf,
+//           .offset  = 0,
+//           .size    = ctx->debug_dev_buf.GetSize() }
     };
 
     uint32_t wg_x =
         (dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3] + WEBGPU_MUL_MAT_WG_SIZE - 1) / WEBGPU_MUL_MAT_WG_SIZE;
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->mul_mat_pipeline[src0->type][src1->type], params, entries, wg_x);
+    //ggml_backend_webgpu_debug(ctx);
 }
 
 // Returns true if node has enqueued work into the queue, false otherwise
@@ -910,7 +915,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_pipeline_info pipeline_infos[13] = {
+    webgpu_pipeline_info pipeline_infos[14] = {
         { .name        = "mul_mat_f32_f32",
          .shader_code = wgsl_mul_mat_f32_f32,
          .src0_type   = GGML_TYPE_F32,
@@ -962,7 +967,11 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
         { .name        = "mul_mat_q6_k_f32",
          .shader_code = wgsl_mul_mat_q6_k_f32,
          .src0_type   = GGML_TYPE_Q6_K,
-         .src1_type   = GGML_TYPE_F32 }
+         .src1_type   = GGML_TYPE_F32 },
+         { .name        = "mul_mat_iq2_xxs_f32",
+           .shader_code = wgsl_mul_mat_iq2_xxs_f32,
+           .src0_type   = GGML_TYPE_IQ2_XXS,
+           .src1_type   = GGML_TYPE_F32 }
     };
 
     for (auto & pipeline_info : pipeline_infos) {
@@ -1064,6 +1073,7 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                         case GGML_TYPE_Q4_K:
                         case GGML_TYPE_Q5_K:
                         case GGML_TYPE_Q6_K:
+                        case GGML_TYPE_IQ2_XXS:
                             return true;
                         default:
                             return false;
