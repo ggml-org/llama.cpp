@@ -4,8 +4,6 @@ on:
     pull_request:
         paths:
             - "tools/server/webui/**"
-        branches:
-            - master
 
 jobs:
     check-and-build:
