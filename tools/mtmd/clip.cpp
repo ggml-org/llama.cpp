@@ -1622,6 +1622,7 @@ private:
         pos_embd = ggml_interpolate(ctx0, pos_embd, width, height, n_embd, 1, 1);    // -> (width, height, n_embd)
         pos_embd = ggml_reshape_2d(ctx0, pos_embd, height * width, n_embd);          // -> (height * width, n_embd)
         pos_embd = ggml_transpose(ctx0, pos_embd);                                   // -> (n_embd, height * width)
+        pos_embd = ggml_cont(ctx0, pos_embd);
 
         return pos_embd;
     }
