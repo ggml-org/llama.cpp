@@ -2174,6 +2174,8 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
 
     bool is_q = (std::strncmp(dst->name, "Qcur-", 5) == 0);
     bool is_k = (std::strncmp(dst->name, "Kcur-", 5) == 0);
+
+    // used for accuracy testing
     bool is_attention = is_q || is_k;
 
     if(ctx.init_ptr == nullptr || !is_attention) {
@@ -2181,7 +2183,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
         if(ctx.init_ptr != nullptr){
             ACL_CHECK(aclrtFree(ctx.init_ptr));
         }
-        ACL_CHECK(aclrtMalloc(&ctx.init_ptr,theta_scale_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
+        ACL_CHECK(aclrtMalloc(&ctx.init_ptr, theta_scale_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
         
         aclTensor* acl_theta_scale_tensor =
             ggml_cann_create_tensor(ctx.init_ptr, ACL_FLOAT, sizeof(float_t),
