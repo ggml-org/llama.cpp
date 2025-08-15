@@ -5,39 +5,20 @@
 
 import { browser } from '$app/environment';
 import { ImageMimeType, PdfMimeType } from '$lib/constants/supported-file-types';
+import * as pdfjs from 'pdfjs-dist';
 
-// Types for PDF.js (imported conditionally)
 type TextContent = {
 	items: Array<{ str: string }>;
 };
 
-type TextItem = {
-	str: string;
-};
-
-// PDF.js instance (loaded dynamically)
-let pdfjs: any = null;
-
-/**
- * Initialize PDF.js only on the client side
- * Sets up the PDF.js library and worker for processing
- */
-async function initializePdfJs() {
-	if (!browser || pdfjs) return;
-	
-	try {
-		// Dynamic import to prevent SSR issues
-		pdfjs = await import('pdfjs-dist');
-		
-		// Set up PDF.js worker
-		pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-			'pdfjs-dist/build/pdf.worker.min.mjs',
-			import.meta.url
-		).toString();
-	} catch (error) {
-		console.error('Failed to initialize PDF.js:', error);
-		throw new Error('PDF.js is not available');
-	}
+if (browser) {
+	// Import worker as text and create blob URL for inline bundling
+	import('pdfjs-dist/build/pdf.worker.min.mjs?raw').then((workerModule) => {
+		const workerBlob = new Blob([workerModule.default], { type: 'application/javascript' });
+		pdfjs.GlobalWorkerOptions.workerSrc = URL.createObjectURL(workerBlob);
+	}).catch(() => {
+		console.warn('Failed to load PDF.js worker, PDF processing may not work');
+	});
 }
 
 /**
@@ -74,8 +55,6 @@ export async function convertPDFToText(file: File): Promise<string> {
 	}
 	
 	try {
-		await initializePdfJs();
-		
 		const buffer = await getFileAsBuffer(file);
 		const pdf = await pdfjs.getDocument(buffer).promise;
 		const numPages = pdf.numPages;
@@ -111,8 +90,6 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 	}
 	
 	try {
-		await initializePdfJs();
-		
 		const buffer = await getFileAsBuffer(file);
 		const doc = await pdfjs.getDocument(buffer).promise;
 		const pages: Promise<string>[] = [];
