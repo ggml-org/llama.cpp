@@ -2184,7 +2184,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
             ACL_CHECK(aclrtFree(ctx.init_ptr));
         }
         ACL_CHECK(aclrtMalloc(&ctx.init_ptr, theta_scale_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
-        
+
         aclTensor* acl_theta_scale_tensor =
             ggml_cann_create_tensor(ctx.init_ptr, ACL_FLOAT, sizeof(float_t),
                                     theta_scale_ne, theta_scale_nb, GGML_MAX_DIMS);
@@ -2198,7 +2198,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
         aclScalar* acl_theta_scale = aclCreateScalar(&theta_scale, aclDataType::ACL_FLOAT);
         GGML_CANN_CALL_ACLNN_OP(ctx, PowScalarTensor, acl_theta_scale, acl_theta_scale_tensor,
                                 acl_theta_scale_tensor);
-        
+
         // freq_scale
         if (freq_scale != 1) {
             aclnn_muls(ctx, acl_theta_scale_tensor, freq_scale, nullptr, true);
@@ -2231,7 +2231,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     }
 
     bool is_fisrt_layer = (std::strncmp(dst->name, "Qcur-0", GGML_MAX_NAME) == 0);
-    
+
     if(is_fisrt_layer || !is_attention) {
 
         aclTensor* acl_theta_scale_tensor =
@@ -2242,13 +2242,13 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
         aclTensor* acl_position_tensor = ggml_cann_create_tensor(
             src1->data, ggml_cann_type_mapping(src1->type),
             ggml_type_size(src1->type), position_ne, position_nb, GGML_MAX_DIMS);
-        
+
         // power * position
         int64_t theta_length = theta_scale_length * position_length;
         ggml_cann_pool_alloc theta_allocator(ctx.pool(),
                                             theta_length * sizeof(float_t));
         void* theta_buffer = theta_allocator.get();
-        
+
         aclTensor* acl_theta_tensor =
             ggml_cann_create_tensor(theta_buffer, ACL_FLOAT, sizeof(float_t),
                                     theta_ne, theta_nb, GGML_MAX_DIMS);
@@ -2277,7 +2277,7 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     aclTensor* acl_cos_tensor = ggml_cann_create_tensor(
             ctx.cos_ptr, ACL_FLOAT, sizeof(float_t), theta_ne, theta_nb,
             GGML_MAX_DIMS, ACL_FORMAT_ND);
-   
+
     // attn_factor
     if (attn_factor != 1) {
         aclnn_muls(ctx, acl_sin_tensor, attn_factor, nullptr, true);
