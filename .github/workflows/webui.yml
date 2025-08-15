@@ -1,15 +1,16 @@
 name: WebUI
 
-# on:
-#     pull_request_target:
-#         paths:
-#             - "tools/server/webui/**"
-#         branches:
-#             - master
 on:
-    - push
+    push:
+        paths:
+            - ".github/workflows/webui.yml"
+            - "tools/server/webui/**"
+
 jobs:
     check-and-build:
+        permissions:
+            contents: read
+
         runs-on: ubuntu-latest
 
         steps:
