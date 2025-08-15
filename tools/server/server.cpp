@@ -3213,6 +3213,8 @@ struct server_context {
         int32_t n_ubatch = llama_n_ubatch(ctx);
 
         // next, batch any pending prompts without exceeding n_batch
+        float alora_scale = -1.0f;
+        size_t alora_disabled_id = 0;
         if (params_base.cont_batching || batch.n_tokens == 0) {
             for (auto & slot : slots) {
                 // check if we can batch this slot with the previous one
@@ -3511,12 +3513,34 @@ struct server_context {
                         slot.n_prompt_tokens_processed += n_pos;
                     }
 
+                    // If using an alora, there may be uncached tokens that come
+                    // before the invocation sequence. When this happens, the
+                    // tokens before the invocation sequence need to be
+                    // processed without the adpter in a separate batch, then
+                    // the adapter needs to be enabled for the remaining tokens.
+                    if (lora_all_alora(slot.lora) && slot.alora_invocation_start - 1 > slot.n_past) {
+                        SLT_DBG(slot, "processing pre-alora tokens without the adapter (n_past = %d, alora_invocation_start = %d)\n", slot.n_past, slot.alora_invocation_start);
+                        const auto & enabled_loras = lora_get_enabled_ids(slot.lora);
+                        GGML_ASSERT(enabled_loras.size() == 1);
+                        alora_scale = slot.lora[enabled_loras[0]].scale;
+                        slot.lora[enabled_loras[0]].scale = 0.0f;
+                        alora_disabled_id = enabled_loras[0];
+                    }
+
                     // add prompt tokens for processing in the current batch
                     while (slot.n_past < slot.n_prompt_tokens && batch.n_tokens < n_batch) {
                         // get next token to process
                         llama_token cur_tok = slot.prompt_tokens[slot.n_past];
                         if (cur_tok == LLAMA_TOKEN_NULL) {
                             break; // end of text chunk
+                        }
+
+                        // if this is an alora request with pre-invocation
+                        // tokens that are not cached, we need to stop filling
+                        // this batch at those pre-invocation tokens.
+                        if (alora_scale > 0 && slot.n_past == slot.alora_invocation_start - 1) {
+                            SLT_DBG(slot, "stop prompt batch filling at (n_past = %d, alora_invocation_start = %d)\n", slot.n_past, slot.alora_invocation_start);
+                            break;
                         }
 
                         // embedding requires all tokens in the batch to be output
@@ -3576,6 +3600,13 @@ struct server_context {
         if (slot_batched) {
             // apply lora, only need to do it once per batch
             common_set_adapter_lora(ctx, slot_batched->lora);
+
+            // if the lora is temporarily disabled for an alora, re-enable it
+            // for next time
+            if (alora_scale > 0.0f) {
+                SRV_DBG("re-enabling alora with scale %f\n", alora_scale);
+                slot_batched->lora[alora_disabled_id].scale = alora_scale;
+            }
 
             llama_set_embeddings(ctx, slot_batched->need_embd());
         }
