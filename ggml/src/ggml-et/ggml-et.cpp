@@ -66,6 +66,7 @@ struct ggml_backend_et_context {
 struct ggml_backend_et_device_context {
     int devidx;
     std::string name;
+    size_t total_mem;
     ggml_backend_buffer_type_t buftype;
 };
 
@@ -293,9 +294,11 @@ static const char * ggml_backend_et_device_get_description(ggml_backend_dev_t de
 }
 
 static void ggml_backend_et_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    GGML_UNUSED(dev);
-    *free = 0;
-    *total = 0;
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
+    // Currently getFreeMemory is not available on a runtime without server.
+    // For now, report total memory as free.
+    *free = dev_ctx->total_mem;
+    *total = dev_ctx->total_mem;
 }
 
 static enum ggml_backend_dev_type ggml_backend_et_device_get_type(ggml_backend_dev_t dev) {
@@ -400,6 +403,8 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	if (!ggml_et_driver_init())
 	    return nullptr;
 
+	std::vector<rt::DeviceId> rtids = ggml_et_runtime()->getDevices();
+
         for (int i = 0; i < ggml_et_devicelayer()->getDevicesCount(); i++) {
 	    ggml_backend_dev_t dev = new ggml_backend_device {
 		/* .iface   = */ ggml_backend_et_device_i,
@@ -407,10 +412,14 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 		/* .context = */ nullptr // Set later
 	    };
 
+	    rt::DeviceId rtid = rtids[i];
+	    rt::DeviceProperties prop = ggml_et_runtime()->getDeviceProperties(rtid);
+
 	    // Create device context.
 	    ggml_backend_et_device_context * dev_ctx = new ggml_backend_et_device_context;
 	    dev_ctx->devidx = i;
 	    dev_ctx->name = GGML_ET_NAME + std::to_string(i);
+	    dev_ctx->total_mem = static_cast<size_t>(prop.memorySize_);
 	    // Add buffer type for device to device context.
 	    ggml_backend_et_buffer_type_context * bufty_ctx = new ggml_backend_et_buffer_type_context;
 	    bufty_ctx->devidx = i;
@@ -484,8 +493,9 @@ void ggml_backend_et_get_device_memory(int devidx, size_t * free, size_t * total
         *total = 0;
         return;
     }
-    *free = 0;
-    *total = 0;
+
+    ggml_backend_dev_t dev = ggml_backend_et_reg_get_device(ggml_backend_et_reg(), devidx);
+    ggml_backend_et_device_get_memory(dev, free, total);
 }
 
 ggml_backend_buffer_type_t ggml_backend_et_buffer_type(size_t dev_num) {
