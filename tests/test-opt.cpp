@@ -955,7 +955,7 @@ int main(void) {
                     } break;
                     case GGML_OPT_OPTIMIZER_TYPE_COUNT: {
                         GGML_ABORT("fatal error");
-                    } break;
+                    }
                 }
                 skip = !ggml_backend_supports_op(backends[i], t);
                 ggml_free(ctx);
