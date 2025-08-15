@@ -3519,8 +3519,8 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         const float max_pixels = max_image_tokens * total_factor * total_factor;
 
         auto round_by_factor = [f = total_factor](float x) { return static_cast<int>(std::nearbyintf(x / static_cast<float>(f))) * f; };
-        auto ceil_by_factor  = [f = total_factor](float x) { return static_cast<int>(std::ceilf(x / static_cast<float>(f))) * f; };
-        auto floor_by_factor = [f = total_factor](float x) { return static_cast<int>(std::floorf(x / static_cast<float>(f))) * f; };
+        auto ceil_by_factor  = [f = total_factor](float x) { return static_cast<int>(std::ceil(x / static_cast<float>(f))) * f; };
+        auto floor_by_factor = [f = total_factor](float x) { return static_cast<int>(std::floor(x / static_cast<float>(f))) * f; };
 
         int h_bar = std::max(total_factor, round_by_factor(height));
         int w_bar = std::max(total_factor, round_by_factor(width));
