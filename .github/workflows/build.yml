@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
@@ -104,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
@@ -144,7 +144,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64-webgpu
           evict-old-files: 1d
@@ -199,7 +199,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
@@ -251,7 +251,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
           evict-old-files: 1d
@@ -330,7 +330,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-rpc
           evict-old-files: 1d
@@ -363,7 +363,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-vulkan
           evict-old-files: 1d
@@ -400,7 +400,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-webgpu
           evict-old-files: 1d
@@ -457,7 +457,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-hip
           evict-old-files: 1d
@@ -487,7 +487,7 @@ jobs:
           apt-get install -y build-essential git cmake libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-musa
           evict-old-files: 1d
@@ -532,7 +532,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl
           evict-old-files: 1d
@@ -580,7 +580,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl-fp16
           evict-old-files: 1d
@@ -611,7 +611,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-ios
           evict-old-files: 1d
@@ -648,7 +648,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-tvos
           evict-old-files: 1d
@@ -720,7 +720,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
@@ -766,7 +766,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-msys2
           variant: ccache
@@ -834,7 +834,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: ccache
@@ -948,7 +948,7 @@ jobs:
               apt install -y cmake build-essential ninja-build libgomp1 git libcurl4-openssl-dev
 
         - name: ccache
-          uses: hendrikmuhs/ccache-action@v1.2.16
+          uses: ggml-org/ccache-action@v1.2.16
           with:
             key: ubuntu-latest-cmake-cuda
             evict-old-files: 1d
@@ -977,7 +977,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -1033,7 +1033,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-sycl
           variant: ccache
@@ -1079,7 +1079,7 @@ jobs:
           & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
@@ -1146,7 +1146,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: android-build
           evict-old-files: 1d

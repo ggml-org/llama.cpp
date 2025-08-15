@@ -29,7 +29,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: copilot-setup-steps
           evict-old-files: 1d
