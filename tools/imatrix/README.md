@@ -82,7 +82,7 @@ Versions **b5942** and newer of `llama-imatrix` store data in GGUF format by def
 
 ## Statistics
 
-For current versions of `llama-imatrix`, the `--show-statistics` option has two modes of operation: If `--activation-statistics` was used to generate the imatrix and `--output-format` was set to `gguf`, precise activations statistics will be calculated. Otherwise, it will report less accurate, albeit still useful, metrics based on average squared activations. 
+For current versions of `llama-imatrix`, the `--show-statistics` option has two modes of operation: If `--activation-statistics` was used to generate the imatrix and `--output-format` was set to `gguf`, precise activations statistics will be calculated. Otherwise, it will report less accurate, albeit still useful, metrics based on average squared activations.
 
 #### Per tensor
 
