@@ -9,7 +9,7 @@
 		size?: number;
 		readonly?: boolean;
 		onRemove?: (id: string) => void;
-		onClick?: () => void;
+		onClick?: (event?: MouseEvent) => void;
 		class?: string;
 		// Customizable size props
 		width?: string;

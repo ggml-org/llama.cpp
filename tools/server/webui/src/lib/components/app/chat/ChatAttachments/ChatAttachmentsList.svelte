@@ -43,7 +43,13 @@
 		textContent?: string;
 	} | null>(null);
 
-	function openPreview(item: (typeof displayItems)[0]) {
+	function openPreview(item: (typeof displayItems)[0], event?: Event) {
+		// Prevent form submission when clicking on attachments
+		if (event) {
+			event.preventDefault();
+			event.stopPropagation();
+		}
+		
 		previewItem = {
 			uploadedFile: item.uploadedFile,
 			attachment: item.attachment,
@@ -147,7 +153,7 @@
 					height={imageHeight}
 					width={imageWidth}
 					{imageClass}
-					onClick={() => openPreview(item)}
+					onClick={(event) => openPreview(item, event)}
 				/>
 			{:else}
 				<ChatAttachmentFilePreview
@@ -159,7 +165,7 @@
 					{readonly}
 					onRemove={onFileRemove}
 					textContent={item.textContent}
-					onClick={() => openPreview(item)}
+					onClick={(event) => openPreview(item, event)}
 				/>
 			{/if}
 		{/each}

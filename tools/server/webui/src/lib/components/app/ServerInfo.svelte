@@ -9,7 +9,7 @@
 </script>
 
 {#if props}
-	<div class="text-muted-foreground flex items-center justify-center gap-3 text-sm">
+	<div class="text-muted-foreground flex flex-wrap items-center justify-center gap-4 text-sm">
 		{#if model}
 			<Badge variant="outline" class="text-xs">
 				<Server class="mr-1 h-3 w-3" />
@@ -17,7 +17,8 @@
 			</Badge>
 		{/if}
 
-		{#if props.default_generation_settings.n_ctx}
+		<div class="flex gap-4">
+			{#if props.default_generation_settings.n_ctx}
 			<Badge variant="secondary" class="text-xs">
 				ctx: {props.default_generation_settings.n_ctx.toLocaleString()}
 			</Badge>
@@ -35,5 +36,6 @@
 				</Badge>
 			{/each}
 		{/if}
+		</div>
 	</div>
 {/if}

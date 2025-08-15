@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ChatAttachmentsList } from '$lib/components/app';
-	import { ChatFormActionButtons, ChatFormFileInputInvisible, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
+	import { ChatFormActions, ChatFormFileInputInvisible, ChatFormHelperText, ChatFormTextarea } from '$lib/components/app';
 	import { inputClasses } from '$lib/constants/input-classes';
 	import { onMount } from 'svelte';
 	import { config } from '$lib/stores/settings.svelte';
@@ -10,7 +10,16 @@
 		createAudioFile, 
 		isAudioRecordingSupported 
 	} from '$lib/utils/audio-recording';
-	import { TextMimeType } from '$lib/constants/supported-file-types';
+	import { 
+		TextMimeType, 
+		ImageExtension, 
+		ImageMimeType, 
+		AudioExtension,
+		AudioMimeType,
+		PdfExtension, 
+		PdfMimeType, 
+		TextExtension 
+	} from '$lib/constants/supported-file-types';
 
 	interface Props {
 		class?: string;
@@ -41,11 +50,12 @@
 
 	let audioRecorder: AudioRecorder | undefined;
 	let isRecording = $state(false);
-	let fileInputRef: ChatFormFileInputInvisible | undefined;
+	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let message = $state('');
 	let previousIsLoading = $state(isLoading);
 	let recordingSupported = $state(false);
-	let textareaRef: ChatFormTextarea | undefined;
+	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
+	let fileAcceptString = $state<string | undefined>(undefined);
 
 	async function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter' && !event.shiftKey) {
@@ -74,8 +84,44 @@
 		onFileUpload?.(files);
 	}
 
-	function handleFileUpload() {
-		fileInputRef?.click();
+	function handleFileUpload(fileType?: 'image' | 'audio' | 'pdf' | 'file') {
+		if (fileType) {
+			fileAcceptString = getAcceptStringForFileType(fileType);
+		} else {
+			fileAcceptString = undefined;
+		}
+		
+		// Use setTimeout to ensure the accept attribute is applied before opening dialog
+		setTimeout(() => {
+			fileInputRef?.click();
+		}, 10);
+	}
+
+	function getAcceptStringForFileType(fileType: 'image' | 'audio' | 'file' | 'pdf'): string {
+		switch (fileType) {
+			case 'image':
+				return [
+					...Object.values(ImageExtension),
+					...Object.values(ImageMimeType)
+				].join(',');
+			case 'audio':
+				return [
+					...Object.values(AudioExtension),
+					...Object.values(AudioMimeType)
+				].join(',');
+			case 'pdf':
+				return [
+					...Object.values(PdfExtension),
+					...Object.values(PdfMimeType)
+				].join(',');
+			case 'file':
+				return [
+					...Object.values(TextExtension),
+					TextMimeType.PLAIN
+				].join(',');
+			default:
+				return '';
+		}
 	}
 
 	function handlePaste(event: ClipboardEvent) {
@@ -176,7 +222,7 @@
 	});
 </script>
 
-<ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
+<ChatFormFileInputInvisible bind:this={fileInputRef} bind:accept={fileAcceptString} onFileSelect={handleFileSelect} />
 
 <form
 	onsubmit={handleSubmit}
@@ -195,7 +241,7 @@
 			disabled={isLoading}
 		/>
 
-		<ChatFormActionButtons
+		<ChatFormActions
 			canSend={message.trim().length > 0 || uploadedFiles.length > 0}
 			{disabled}
 			{isLoading}

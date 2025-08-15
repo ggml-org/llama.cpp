@@ -16,16 +16,16 @@
 	].join(',');
 
 	let {
-		accept,
+		accept = $bindable(),
 		multiple = true,
 		onFileSelect,
 		class: className = ''
 	}: Props = $props();
 
+	let fileInputElement: HTMLInputElement | undefined;
+
 	// Use modality-aware accept string by default, but allow override
 	const finalAccept = $derived(accept ?? generateModalityAwareAcceptString());
-
-	let fileInputElement: HTMLInputElement | undefined;
 
 	export function click() {
 		fileInputElement?.click();
