@@ -438,7 +438,6 @@ static std::pair<int, int> test_forward_backward(
         float weights;
         ggml_backend_tensor_get(cd.weights, &weights, 0, sizeof(float));
         const bool subtest_ok = weights == -ndata * .5;
-        TEST_LOG("%s: ndata=%d weights=%f\n", __func__, (int) ndata, (double) weights);
         helper_after_test_forward_backward(optim, __func__, high_level, shuffle, "weights_after_forward_backward", subtest_ok, ntest, npass);
     }
     {
@@ -821,11 +820,7 @@ static std::pair<int, int> test_regression(
         ggml_backend_tensor_get(b, &b_fit, 0, sizeof(float));
         float tol = adamw ? 1e-2 : 5e-2;
         const bool aok = almost_equal(a_fit, a_true, tol);
-        if (!aok)
-          TEST_LOG("%s: a_fit=%f a_true=%f\n", __func__, (double)a_fit, (double)a_true);
         const bool bok = almost_equal(b_fit, b_true, tol);
-        if (!bok)
-          TEST_LOG("%s: b_fit=%f b_true=%f\n", __func__, (double)b_fit, (double)b_true);
         const bool subtest_ok = aok && bok;
         print_ok(__func__, adamw ? subtest_ok : true, npass, ntest, "subtest=weights");
     }
@@ -934,19 +929,49 @@ int main(void) {
             printf("  Device memory: %zu MB (%zu MB free)\n", total / 1024 / 1024, free / 1024 / 1024);
             printf("\n");
 
-            if (optim == GGML_OPT_OPTIMIZER_TYPE_SGD && !strcmp(devname, "Vulkan0"))
-              //TODO: even though backend returns false for currently
-              // unimplemented sgd op, we still need this
-              continue;
-            if (!strcmp(devname, "WebGPU"))
-              // GGML_OP_SUM implementation missing
-              continue;
-            std::pair<int, int> result = test_backend(backend_sched, backends[i], optim);
+            bool skip;
+            {
+                struct ggml_init_params params = {
+                    /*.mem_size   =*/ 6*ggml_tensor_overhead(),
+                    /*.mem_buffer =*/ nullptr,
+                    /*.no_alloc   =*/ true,
+                };
+                ggml_context * ctx = ggml_init(params);
+                ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+                ggml_set_param(a);
+                ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+                ggml_tensor * c = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+                ggml_tensor * d = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
 
-            printf("  %d/%d tests passed\n", result.first, result.second);
+                ggml_tensor * t = nullptr;
+                switch (optim) {
+                    case GGML_OPT_OPTIMIZER_TYPE_ADAMW: {
+                        ggml_tensor * p = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 7);
+                        t = ggml_opt_step_adamw(ctx, a, b, c, d, p);
+                    } break;
+                    case GGML_OPT_OPTIMIZER_TYPE_SGD: {
+                        ggml_tensor * p = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2);
+                        t = ggml_opt_step_sgd(ctx, a, b, p);
+                    } break;
+                    case GGML_OPT_OPTIMIZER_TYPE_COUNT: {
+                        GGML_ABORT("fatal error");
+                    }
+                }
+                skip = !ggml_backend_supports_op(backends[i], t);
+                ggml_free(ctx);
+            }
+
+            std::pair<int, int> result;
+            if (!skip) {
+                result = test_backend(backend_sched, backends[i], optim);
+                printf("  %d/%d tests passed\n", result.first, result.second);
+            }
 
             printf("  Backend %s %s: ", ggml_backend_name(backends[i]), ggml_opt_optimizer_name(optim));
-            if (result.first == result.second) {
+            if (skip) {
+                printf("\033[0;33mSKIPPED\033[0m\n");
+                n_ok++;
+            } else if (result.first == result.second) {
                 printf("\033[1;32mOK\033[0m\n");
                 n_ok++;
             } else {
