@@ -1,0 +1,35 @@
+name: WebUI
+
+on:
+    pull_request:
+        paths:
+            - "tools/server/webui/**"
+        branches:
+            - master
+
+jobs:
+    check-and-build:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+                  cache: "npm"
+                  cache-dependency-path: "tools/server/webui/package-lock.json"
+
+            - name: Install dependencies
+              run: npm ci
+              working-directory: tools/server/webui
+
+            - name: Run type checking and linting
+              run: npm run check
+              working-directory: tools/server/webui
+
+            - name: Build application
+              run: npm run build
+              working-directory: tools/server/webui
