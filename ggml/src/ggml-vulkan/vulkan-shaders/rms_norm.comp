@@ -50,8 +50,14 @@ void main() {
     const FLOAT_TYPE scale = inversesqrt(mean + FLOAT_TYPE(p.param1));
 
     if (do_multiply) {
-        [[unroll]] for (uint col = tid; col < ncols; col += BLOCK_SIZE) {
-            data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + col]));
+        if (ncols > p.ne10) {
+            [[unroll]] for (uint col = tid; col < ncols; col += BLOCK_SIZE) {
+                data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + fastmod(col, p.ne10)]));
+            }
+        } else {
+            [[unroll]] for (uint col = tid; col < ncols; col += BLOCK_SIZE) {
+                data_d[d_offset + col] = D_TYPE(scale * FLOAT_TYPE(data_a[a_offset + col]) * FLOAT_TYPE(data_b[b_offset + col]));
+            }
         }
     } else {
         [[unroll]] for (uint col = tid; col < ncols; col += BLOCK_SIZE) {

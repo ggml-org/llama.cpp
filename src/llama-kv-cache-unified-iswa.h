@@ -20,6 +20,7 @@ public:
                          bool   v_trans,
                          bool   offload,
                          bool   swa_full,
+                         bool   unified,
                      uint32_t   kv_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_ubatch,
@@ -55,8 +56,8 @@ public:
 
     // state write/load
 
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
     //
     // llama_kv_cache_unified_iswa specific API
@@ -68,12 +69,16 @@ public:
 private:
     const llama_hparams & hparams;
 
+    const bool unified;
+
     std::unique_ptr<llama_kv_cache_unified> kv_base;
     std::unique_ptr<llama_kv_cache_unified> kv_swa;
 };
 
 class llama_kv_cache_unified_iswa_context : public llama_memory_context_i {
 public:
+    using slot_info_vec_t = llama_kv_cache_unified::slot_info_vec_t;
+
     // used for errors
     llama_kv_cache_unified_iswa_context(llama_memory_status status);
 
@@ -90,8 +95,8 @@ public:
     // used to create a batch processing context from a batch
     llama_kv_cache_unified_iswa_context(
             llama_kv_cache_unified_iswa * kv,
-            std::vector<uint32_t> heads_base,
-            std::vector<uint32_t> heads_swa,
+            slot_info_vec_t sinfos_base,
+            slot_info_vec_t sinfos_swa,
             std::vector<llama_ubatch> ubatches);
 
     virtual ~llama_kv_cache_unified_iswa_context();

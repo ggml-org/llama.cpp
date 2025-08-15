@@ -185,14 +185,17 @@ llama_build_and_test(test-json-partial.cpp)
 llama_build_and_test(test-log.cpp)
 llama_build_and_test(test-regex-partial.cpp)
 
-llama_build_and_test(test-thread-safety.cpp ARGS -hf ggml-org/models -hff tinyllamas/stories15M-q4_0.gguf -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4)
+llama_build_and_test(test-thread-safety.cpp ARGS -hf ggml-org/models -hff tinyllamas/stories15M-q4_0.gguf -ngl 99 -p "The meaning of life is" -n 128 -c 256 -ub 32 -np 4 -t 2)
 
 # this fails on windows (github hosted runner) due to curl DLL not found (exit code 0xc0000135)
 if (NOT WIN32)
     llama_build_and_test(test-arg-parser.cpp)
 endif()
 
-# llama_build_and_test(test-opt.cpp) # SLOW
+if (NOT LLAMA_SANITIZE_ADDRESS)
+  # TODO: repair known memory leaks
+  llama_build_and_test(test-opt.cpp)
+endif()
 llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 

@@ -41,6 +41,7 @@
 #endif
 #include <locale>
 #include <windows.h>
+#include <string.h>
 #include <fcntl.h>
 #include <io.h>
 #else
@@ -448,6 +449,15 @@ void string_replace_all(std::string & s, const std::string & search, const std::
 bool string_ends_with(const std::string_view & str, const std::string_view & suffix) {
     return str.size() >= suffix.size() && str.compare(str.size()-suffix.size(), suffix.size(), suffix) == 0;
 }
+
+bool string_remove_suffix(std::string & str, const std::string_view & suffix) {
+    bool has_suffix = string_ends_with(str, suffix);
+    if (has_suffix) {
+        str = str.substr(0, str.size() - suffix.size());
+    }
+    return has_suffix;
+}
+
 size_t string_find_partial_stop(const std::string_view & str, const std::string_view & stop) {
     if (!str.empty() && !stop.empty()) {
         const char text_last_char = str.back();
@@ -1005,13 +1015,19 @@ struct common_init_result common_init_from_params(common_params & params) {
         params.sampling.ignore_eos = false;
     }
 
-    if (params.sampling.ignore_eos) {
-        for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
-            if (llama_vocab_is_eog(vocab, i)) {
-                LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(lctx, i).c_str(), -INFINITY);
-                params.sampling.logit_bias.push_back({i, -INFINITY});
-            }
+    // initialize once
+    for (llama_token i = 0; i < llama_vocab_n_tokens(vocab); i++) {
+        if (llama_vocab_is_eog(vocab, i)) {
+            LOG_INF("%s: added %s logit bias = %f\n", __func__, common_token_to_piece(lctx, i).c_str(), -INFINITY);
+            params.sampling.logit_bias_eog.push_back({i, -INFINITY});
         }
+    }
+
+    if (params.sampling.ignore_eos) {
+        // add EOG biases to the active set of logit biases
+        params.sampling.logit_bias.insert(
+                params.sampling.logit_bias.end(),
+                params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
 
     if (params.sampling.penalty_last_n == -1) {
@@ -1107,6 +1123,7 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.use_mmap        = params.use_mmap;
     mparams.use_mlock       = params.use_mlock;
     mparams.check_tensors   = params.check_tensors;
+    mparams.use_extra_bufts = !params.no_extra_bufts;
 
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
@@ -1157,6 +1174,7 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
     cparams.swa_full          = params.swa_full;
+    cparams.kv_unified        = params.kv_unified;
 
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
@@ -1547,4 +1565,57 @@ ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std
     }
 
     return result;
+}
+
+ggml_opt_optimizer_params common_opt_lr_pars(void * userdata) {
+    ggml_opt_optimizer_params result = ggml_opt_get_default_optimizer_params(nullptr);
+    const lr_opt &            d      = *(lr_opt *) userdata;
+    result.adamw.alpha = result.sgd.alpha = d.get_lr(d.epoch);
+    result.sgd.wd = result.adamw.wd = d.wd;
+    return result;
+}
+
+// TODO make all command line args case-insensitive
+static inline bool eq_case_insensitive(char const* a, char const* b) {
+    return !
+#if defined(_MSC_VER)
+        _stricmp
+#else
+        strcasecmp
+#endif // defined(_MSC_VER)
+        (a, b);
+}
+
+enum ggml_opt_optimizer_type common_opt_get_optimizer(const char * n) {
+    if (eq_case_insensitive("adamw", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    }
+    if (eq_case_insensitive("sgd", n)) {
+        return GGML_OPT_OPTIMIZER_TYPE_SGD;
+    }
+    return GGML_OPT_OPTIMIZER_TYPE_COUNT;
+}
+
+// TODO simplify to use just log and exp
+static float const k_log_2 = std::log(2.f);
+
+void lr_opt::init() {
+    if (lr_min > 0 && lr_min < lr0) {
+        float nhalf = std::log(lr0 / lr_min) / k_log_2;
+        float e     = epochs;
+        if (decay_epochs > 0 && decay_epochs < e) {
+            e = decay_epochs;
+        } else {
+            decay_epochs = e;
+        }
+        scale_epoch = nhalf / e;
+    }
+}
+
+float lr_opt::get_lr(float epoch) const {
+    float r = lr_min <= 0 ? lr0 :
+        epoch >= decay_epochs ? lr_min :
+        lr0 * std::pow(0.5f, epoch * scale_epoch);
+    LOG_INF("epoch %.2g lr=%.2g\n", epoch, r);
+    return r;
 }

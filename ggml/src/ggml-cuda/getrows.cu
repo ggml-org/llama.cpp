@@ -1,5 +1,6 @@
 #include "getrows.cuh"
 #include "dequantize.cuh"
+#include "convert.cuh"
 
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void k_get_rows(
@@ -34,8 +35,8 @@ static __global__ void k_get_rows(
     dfloat2 v;
     dequantize_kernel(src0_row, ib, iqs, v);
 
-    dst_row[iybs + iqs + 0]        = float(v.x);
-    dst_row[iybs + iqs + y_offset] = float(v.y);
+    dst_row[iybs + iqs + 0]        = ggml_cuda_cast<dst_t>(v.x);
+    dst_row[iybs + iqs + y_offset] = ggml_cuda_cast<dst_t>(v.y);
 }
 
 template<typename src0_t, typename dst_t>
@@ -62,7 +63,7 @@ static __global__ void k_get_rows_float(
     dst_t * dst_row = dst + i10*s1 + i11*s2 + i12*s3;
     const src0_t * src0_row = (const src0_t *)((const char *) src0 + i01*nb01 + i11*nb02 + i12*nb03);
 
-    dst_row[i00] = float(src0_row[i00]);
+    dst_row[i00] = ggml_cuda_cast<dst_t>(src0_row[i00]);
 }
 
 template<typename grad_t, typename dst_t>
@@ -168,6 +169,10 @@ static void ggml_cuda_get_rows_switch_src0_type(
             get_rows_cuda_float((const float *) src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
+        case GGML_TYPE_I32:
+            get_rows_cuda_float((const int32_t *) src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
         case GGML_TYPE_BF16:
             get_rows_cuda_float((const nv_bfloat16 *) src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
@@ -208,6 +213,10 @@ void get_rows_cuda(
     switch (dst_type) {
         case GGML_TYPE_F32:
             ggml_cuda_get_rows_switch_src0_type(src0_d, src0_type, src1_d, (float *) dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_I32:
+            ggml_cuda_get_rows_switch_src0_type(src0_d, src0_type, src1_d, (int32_t *) dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_F16:

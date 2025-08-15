@@ -31,6 +31,9 @@ enum llama_memory_status {
 // useful for implementing hybrid memory types (e.g. iSWA)
 llama_memory_status llama_memory_status_combine(llama_memory_status s0, llama_memory_status s1);
 
+// helper function for checking if a memory status indicates a failure
+bool llama_memory_status_is_fail(llama_memory_status status);
+
 // the interface for managing the memory context during batch processing
 // this interface is implemented per memory type. see:
 //   - llama_kv_cache_unified_context
@@ -101,8 +104,8 @@ struct llama_memory_i {
     // state write/read
     //
 
-    virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const = 0;
-    virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1) = 0;
+    virtual void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const = 0;
+    virtual void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) = 0;
 };
 
 using llama_memory_ptr = std::unique_ptr<llama_memory_i>;

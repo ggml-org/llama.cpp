@@ -25,6 +25,7 @@ llama_memory_hybrid::llama_memory_hybrid(
                          /* common */
              uint32_t    n_seq_max,
                  bool    offload,
+                 bool    unified,
                          /* layer filters */
       layer_filter_cb && filter_attn,
       layer_filter_cb && filter_recr) :
@@ -38,6 +39,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         type_v,
         v_trans,
         offload,
+        unified,
         kv_size,
         n_seq_max,
         n_pad,
@@ -70,7 +72,7 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
                 // if all tokens are output, split by sequence
                 ubatch = balloc.split_seq(n_ubatch);
             } else {
-                ubatch = balloc.split_equal(n_ubatch);
+                ubatch = balloc.split_equal(n_ubatch, false);
             }
 
             if (ubatch.n_tokens == 0) {
@@ -78,6 +80,11 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
             }
 
             ubatches.push_back(std::move(ubatch)); // NOLINT
+        }
+
+        if (balloc.get_n_used() < balloc.get_n_tokens()) {
+            // failed to find a suitable split
+            break;
         }
 
         // prepare the recurrent batches first
@@ -158,12 +165,16 @@ llama_pos llama_memory_hybrid::seq_pos_max(llama_seq_id seq_id) const {
     return std::min(mem_attn->seq_pos_max(seq_id), mem_recr->seq_pos_max(seq_id));
 }
 
-void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    GGML_UNUSED(flags);
+
     mem_attn->state_write(io, seq_id);
     mem_recr->state_write(io, seq_id);
 }
 
-void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
     mem_attn->state_read(io, seq_id);
     mem_recr->state_read(io, seq_id);
 }
@@ -195,11 +206,11 @@ llama_memory_hybrid_context::llama_memory_hybrid_context(
 
 llama_memory_hybrid_context::llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
-            std::vector<uint32_t>   heads_attn,
+                  slot_info_vec_t   sinfos_attn,
         std::vector<llama_ubatch>   ubatches) :
     ubatches(std::move(ubatches)),
     // note: here we copy the ubatches. not sure if this is ideal
-    ctx_attn(new llama_kv_cache_unified_context(mem->get_mem_attn(), std::move(heads_attn), this->ubatches)),
+    ctx_attn(new llama_kv_cache_unified_context(mem->get_mem_attn(), std::move(sinfos_attn), this->ubatches)),
     ctx_recr(new llama_memory_recurrent_context(mem->get_mem_recr(),                        this->ubatches)),
     status(llama_memory_status_combine(ctx_attn->get_status(), ctx_recr->get_status())) {
 }
@@ -218,7 +229,7 @@ bool llama_memory_hybrid_context::next() {
 }
 
 bool llama_memory_hybrid_context::apply() {
-    assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
+    assert(!llama_memory_status_is_fail(status));
 
     bool res = true;
 

@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
@@ -84,7 +84,8 @@ jobs:
             -DCMAKE_BUILD_RPATH="@loader_path" \
             -DLLAMA_FATAL_WARNINGS=ON \
             -DGGML_METAL_USE_BF16=ON \
-            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_METAL_EMBED_LIBRARY=OFF \
+            -DGGML_METAL_SHADER_DEBUG=ON \
             -DGGML_RPC=ON
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
 
@@ -103,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
@@ -134,6 +135,53 @@ jobs:
           cd build
           ctest -L main --verbose --timeout 900
 
+  macOS-latest-cmake-arm64-webgpu:
+    runs-on: macos-14
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: macOS-latest-cmake-arm64-webgpu
+          evict-old-files: 1d
+
+      - name: Dependencies
+        id: depends
+        continue-on-error: true
+        run: |
+          brew update
+          brew install curl
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-macos-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export CMAKE_PREFIX_PATH=dawn
+          cmake -B build -DGGML_WEBGPU=ON -DGGML_METAL=OFF -DGGML_BLAS=OFF
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          ctest -L main --verbose --timeout 900
+
   ubuntu-cpu-cmake:
     strategy:
       matrix:
@@ -151,7 +199,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
@@ -203,7 +251,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
           evict-old-files: 1d
@@ -282,7 +330,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-rpc
           evict-old-files: 1d
@@ -315,7 +363,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-vulkan
           evict-old-files: 1d
@@ -341,11 +389,61 @@ jobs:
           cd build
           export GGML_VK_VISIBLE_DEVICES=0
           # This is using llvmpipe and runs slower than other backends
+          ctest -L main --verbose --timeout 4200
+
+  ubuntu-22-cmake-webgpu:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v4
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.16
+        with:
+          key: ubuntu-22-cmake-webgpu
+          evict-old-files: 1d
+
+      - name: Vulkan SDK Dependencies
+        id: vulkan-depends
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-jammy.list https://packages.lunarg.com/vulkan/lunarg-vulkan-jammy.list
+          sudo apt-get update -y
+          sudo apt-get install -y build-essential mesa-vulkan-drivers vulkan-sdk libcurl4-openssl-dev
+
+      - name: Dawn Dependency
+        id: dawn-depends
+        run: |
+          sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-ubuntu-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          mkdir dawn
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
+
+      - name: Build
+        id: cmake_build
+        run: |
+          export Dawn_DIR=dawn/lib64/cmake/Dawn
+          cmake -B build -DGGML_WEBGPU=ON
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        id: cmake_test
+        run: |
+          cd build
+          # This is using llvmpipe and runs slower than other backends
           ctest -L main --verbose --timeout 3600
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
-    container: rocm/dev-ubuntu-22.04:6.0.2
+    container: rocm/dev-ubuntu-22.04:6.1.2
 
     steps:
       - name: Clone
@@ -359,7 +457,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-hip
           evict-old-files: 1d
@@ -373,19 +471,9 @@ jobs:
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
-      - name: Build with legacy HIP support
-        id: cmake_build_legacy_hip
-        run: |
-          cmake -B build2 -S . \
-            -DCMAKE_C_COMPILER=hipcc \
-            -DCMAKE_CXX_COMPILER=hipcc \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
-            -DGGML_HIP=ON
-          cmake --build build2 --config Release -j $(nproc)
-
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.0.1-mudnn-devel-ubuntu22.04
+    container: mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone
@@ -399,7 +487,7 @@ jobs:
           apt-get install -y build-essential git cmake libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-musa
           evict-old-files: 1d
@@ -444,7 +532,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl
           evict-old-files: 1d
@@ -492,7 +580,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl-fp16
           evict-old-files: 1d
@@ -523,7 +611,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-ios
           evict-old-files: 1d
@@ -560,7 +648,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-tvos
           evict-old-files: 1d
@@ -632,7 +720,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
@@ -678,7 +766,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-msys2
           variant: ccache
@@ -739,9 +827,6 @@ jobs:
           - build: 'llvm-arm64-opencl-adreno'
             arch: 'arm64'
             defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/arm64-windows-llvm.cmake -DCMAKE_PREFIX_PATH="$env:RUNNER_TEMP/opencl-arm64-release" -DGGML_OPENCL=ON -DGGML_OPENCL_USE_ADRENO_KERNELS=ON'
-         # - build: 'kompute-x64'
-         #   arch: 'x64'
-         #   defines: '-G "Ninja Multi-Config" -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake -DGGML_NATIVE=OFF -DLLAMA_BUILD_SERVER=ON -DGGML_RPC=ON -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_OPENMP=OFF -DGGML_KOMPUTE=ON -DKOMPUTE_OPT_DISABLE_VULKAN_VERSION_CHECK=ON'
 
     steps:
       - name: Clone
@@ -749,17 +834,11 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: ccache
           evict-old-files: 1d
-
-      - name: Clone Kompute submodule
-        id: clone_kompute
-        if: ${{ matrix.build == 'kompute-x64' }}
-        run: |
-          git submodule update --init ggml/src/ggml-kompute/kompute
 
       - name: Download OpenBLAS
         id: get_openblas
@@ -776,7 +855,7 @@ jobs:
 
       - name: Install Vulkan SDK
         id: get_vulkan
-        if: ${{ matrix.build == 'kompute-x64' || matrix.build == 'vulkan-x64' }}
+        if: ${{ matrix.build == 'vulkan-x64' }}
         run: |
           curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
           & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
@@ -869,7 +948,7 @@ jobs:
               apt install -y cmake build-essential ninja-build libgomp1 git libcurl4-openssl-dev
 
         - name: ccache
-          uses: hendrikmuhs/ccache-action@v1.2.16
+          uses: ggml-org/ccache-action@v1.2.16
           with:
             key: ubuntu-latest-cmake-cuda
             evict-old-files: 1d
@@ -898,7 +977,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -954,7 +1033,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-sycl
           variant: ccache
@@ -1000,7 +1079,7 @@ jobs:
           & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
@@ -1033,6 +1112,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - name: Build
         id: cmake_build
@@ -1067,7 +1151,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: android-build
           evict-old-files: 1d
