@@ -3333,6 +3333,12 @@ struct server_context {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 slot.n_past = slot.cache_tokens.get_common_prefix(prompt_tokens);
 
+                                // if there is an alora invoked, don't cache after the invocation start
+                                if (slot.alora_invocation_start >= 0) {
+                                    SLT_DBG(slot, "only caching to alora invocation start (n_past=%d, alora_invocation_start=%d)\n", slot.n_past, slot.alora_invocation_start);
+                                    slot.n_past = std::min(slot.n_past, slot.alora_invocation_start);
+                                }
+
                                 // reuse chunks from the cached prompt by shifting their KV cache in the new position
                                 if (params_base.n_cache_reuse > 0) {
                                     size_t head_c = slot.n_past; // cache
