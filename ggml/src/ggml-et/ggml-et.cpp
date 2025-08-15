@@ -476,7 +476,7 @@ ggml_backend_t ggml_backend_et_init(size_t devidx) {
 }
 
 bool ggml_backend_is_et(ggml_backend_t backend) {
-    return backend != nullptr && backend->iface.get_name == ggml_backend_et_get_name;
+    return backend != NULL && ggml_guid_matches(backend->guid, ggml_backend_et_guid());
 }
 
 int ggml_backend_et_get_device_count(void) {
