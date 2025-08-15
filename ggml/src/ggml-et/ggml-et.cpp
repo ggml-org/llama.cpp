@@ -66,6 +66,7 @@ struct ggml_backend_et_context {
 struct ggml_backend_et_device_context {
     int devidx;
     std::string name;
+    std::string desc;
     size_t total_mem;
     ggml_backend_buffer_type_t buftype;
 };
@@ -289,8 +290,8 @@ static const char * ggml_backend_et_device_get_name(ggml_backend_dev_t dev) {
 }
 
 static const char * ggml_backend_et_device_get_description(ggml_backend_dev_t dev) {
-    GGML_UNUSED(dev);
-    return "ET Device";
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
+    return dev_ctx->desc.c_str();
 }
 
 static void ggml_backend_et_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
@@ -419,6 +420,7 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	    ggml_backend_et_device_context * dev_ctx = new ggml_backend_et_device_context;
 	    dev_ctx->devidx = i;
 	    dev_ctx->name = GGML_ET_NAME + std::to_string(i);
+	    dev_ctx->desc = "ET device " + std::to_string(i);
 	    dev_ctx->total_mem = static_cast<size_t>(prop.memorySize_);
 	    // Add buffer type for device to device context.
 	    ggml_backend_et_buffer_type_context * bufty_ctx = new ggml_backend_et_buffer_type_context;
@@ -484,7 +486,10 @@ void ggml_backend_et_get_device_description(int devidx, char * description, size
         snprintf(description, description_size, "ET Device %d (invalid)", devidx);
         return;
     }
-    snprintf(description, description_size, "ET Device %d", devidx);
+
+    ggml_backend_dev_t dev = ggml_backend_et_reg_get_device(ggml_backend_et_reg(), devidx);
+    ggml_backend_et_device_context * dev_ctx = (ggml_backend_et_device_context *)dev->context;
+    snprintf(description, description_size, "%s", dev_ctx->desc.c_str());
 }
 
 void ggml_backend_et_get_device_memory(int devidx, size_t * free, size_t * total) {
