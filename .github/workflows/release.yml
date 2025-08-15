@@ -600,13 +600,17 @@ jobs:
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode-build:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Setup Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app
 
       - name: Build
         id: cmake_build
