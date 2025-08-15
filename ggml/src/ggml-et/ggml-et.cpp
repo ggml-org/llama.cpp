@@ -65,6 +65,7 @@ struct ggml_backend_et_context {
 
 struct ggml_backend_et_device_context {
     int devidx;
+    rt::DeviceId rtid;
     std::string name;
     std::string desc;
     size_t total_mem;
@@ -419,6 +420,7 @@ ggml_backend_reg_t ggml_backend_et_reg(void) {
 	    // Create device context.
 	    ggml_backend_et_device_context * dev_ctx = new ggml_backend_et_device_context;
 	    dev_ctx->devidx = i;
+	    dev_ctx->rtid = rtid;
 	    dev_ctx->name = GGML_ET_NAME + std::to_string(i);
 	    dev_ctx->desc = "ET device " + std::to_string(i);
 	    dev_ctx->total_mem = static_cast<size_t>(prop.memorySize_);
