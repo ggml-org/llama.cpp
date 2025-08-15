@@ -1284,15 +1284,18 @@ static bool show_statistics(const common_params & params) {
     }
 
     struct tensor_comparer {
+        bool legacy_mode;
+        explicit tensor_comparer(const bool legacy) : legacy_mode(legacy) {}
+
         bool operator()(const tensor_statistics & a, const tensor_statistics & b) const {
             std::string layer, name_a, name_b;
-            ;
             process_tensor_name(a.tensor, layer, name_a);
             process_tensor_name(b.tensor, layer, name_b);
-            return name_a < name_b || (name_a == name_b && a.sum_values > b.sum_values);
+            return legacy_mode ? name_a < name_b || (name_a == name_b && a.sum_values > b.sum_values) :
+                name_a < name_b || (name_a == name_b && a.cossim > b.cossim);
         }
     };
-    std::sort(ts.begin(), ts.end(), tensor_comparer());
+    std::sort(ts.begin(), ts.end(), tensor_comparer(legacy_mode));
 
     struct layer_stats {
         float lyr_sum    = 0.0f;
