@@ -1566,6 +1566,11 @@ ggml_tensor * llm_graph_context::build_attn_with_sinks(
 
     if (wo) {
         cur = build_lora_mm(wo, cur);
+        if (arch == LLM_ARCH_OPENAI_MOE) {
+            // similar the original build_attn
+            // TODO: this is tmp until we refactor and remove the build_attn_with_sinks() path
+            ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
+        }
     }
 
     if (wo_b) {
