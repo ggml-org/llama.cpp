@@ -6,6 +6,7 @@
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
+#include "llama-graph.h"
 
 #include <cinttypes>
 #include <cstring>
@@ -522,6 +523,18 @@ float * llama_context::get_logits() {
     return logits;
 }
 
+void llama_context::set_logits_ith(struct ggml_tensor * logit_override, ggml_backend_sched_t sched_override, int32_t i) {
+    output_reorder();
+
+    ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched_override, logit_override);
+    GGML_ASSERT(backend_res != nullptr);
+    GGML_ASSERT(logits != nullptr);
+
+    int64_t j = output_ids[i];
+
+    ggml_backend_tensor_get_async(backend_res, logit_override, logits + j*model.vocab.n_tokens(), 0, model.vocab.n_tokens() * sizeof(float));
+}
+
 float * llama_context::get_logits_ith(int32_t i) {
     int64_t j = -1;
 
@@ -615,6 +628,10 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     }
 
     return it->second.data();
+}
+
+ggml_tensor * llama_context::get_embeddings_tensor() {
+    return embd_tensor;
 }
 
 void llama_context::attach_threadpool(
@@ -1113,6 +1130,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         auto * t_logits = res->get_logits();
         auto * t_embd   = cparams.embeddings ? res->get_embd() : nullptr;
+        embd_tensor = res->get_embd();
 
         if (t_embd && res->get_embd_pooled()) {
             t_embd = res->get_embd_pooled();
@@ -1429,6 +1447,29 @@ llm_graph_params llama_context::graph_params(
     };
 }
 
+llm_graph_params llama_context::mtp_graph_params(
+    llm_graph_result* res,
+    const llama_ubatch& ubatch) {
+    size_t n_nodes = std::max<uint32_t>(1024u, 8u * 8u * (((model.hparams.nextn_predict_layers + 1) * model.n_tensors()) / model.hparams.n_layer));
+    ggml_backend_sched_t temp_sched = create_temp_scheduler(n_nodes);
+    return {
+        /*.arch        =*/ model.arch,
+        /*.hparams     =*/ model.hparams,
+        /*.cparams     =*/ cparams,
+        /*.ubatch      =*/ ubatch,
+        /*.gtype       =*/ LLM_GRAPH_TYPE_DECODER,
+        /*.sched       =*/ temp_sched,
+        /*.backend_cpu =*/ backend_cpu,
+        /*.cvec        =*/ &cvec,
+        /*.loras       =*/ &loras,
+        /*.mctx        =*/ memory->init_batch(*balloc, 1, false).get(),
+        /*.cross       =*/ &cross,
+        /*.n_outputs   =*/ 1,
+        /*.cb          =*/ graph_get_cb(temp_sched),
+        /*.res         =*/ res,
+    };
+}
+
 ggml_status llama_context::graph_compute(
             ggml_cgraph * gf,
                    bool   batched) {
@@ -1456,8 +1497,10 @@ ggml_status llama_context::graph_compute(
     return status;
 }
 
-llm_graph_cb llama_context::graph_get_cb() const {
-    return [&](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
+llm_graph_cb llama_context::graph_get_cb(ggml_backend_sched * sched_override) const {
+    ggml_backend_sched * cb_sched = sched_override ? sched_override : sched.get();
+
+    return [=](const llama_ubatch & ubatch, ggml_tensor * cur, const char * name, int il) {
         if (il >= 0) {
             ggml_format_name(cur, "%s-%d", name, il);
         } else {
@@ -1467,7 +1510,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
         if (!cparams.offload_kqv) {
             if (strcmp(name, "kqv_merged_cont") == 0) {
                 // all nodes between the KV store and the attention output are run on the CPU
-                ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend_cpu);
+                ggml_backend_sched_set_tensor_backend(cb_sched, cur, backend_cpu);
             }
         }
 
@@ -1480,13 +1523,17 @@ llm_graph_cb llama_context::graph_get_cb() const {
                 for (const auto & backend : backends) {
                     if (ggml_backend_get_device(backend.get()) == dev_layer) {
                         if (ggml_backend_supports_op(backend.get(), cur)) {
-                            ggml_backend_sched_set_tensor_backend(sched.get(), cur, backend.get());
+                            ggml_backend_sched_set_tensor_backend(cb_sched, cur, backend.get());
                         }
                     }
                 }
             }
         }
     };
+}
+
+ggml_backend_sched_t llama_context::create_temp_scheduler(size_t n_nodes) {
+    return ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), n_nodes, false, cparams.op_offload);
 }
 
 //
@@ -2233,6 +2280,7 @@ void llama_context::opt_epoch(
     llama_batch_free(batch);
 }
 
+
 //
 // interface implementation
 //
@@ -2273,6 +2321,8 @@ llama_context_params llama_context_default_params() {
 
     return result;
 }
+
+
 
 llama_context * llama_init_from_model(
                  llama_model * model,
@@ -2412,6 +2462,7 @@ float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     return ctx->get_logits_ith(i);
 }
 
+
 float * llama_get_embeddings(llama_context * ctx) {
     ctx->synchronize();
 
@@ -2429,6 +2480,13 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
 
     return ctx->get_embeddings_seq(seq_id);
 }
+
+ggml_tensor * llama_get_embeddings_tensor(llama_context * ctx) {
+    ctx->synchronize();
+
+    return ctx->get_embeddings_tensor();
+}
+
 
 // llama adapter API
 
@@ -2938,3 +2996,46 @@ void llama_opt_epoch(
         callback_train,
         callback_eval);
 }
+
+llm_graph_params llama_mtp_graph_params(llama_context* ctx, llm_graph_result* res, const llama_ubatch& ubatch) {
+    return ctx->mtp_graph_params(res, ubatch);
+}
+
+
+ggml_status llama_graph_compute(llama_context* ctx, ggml_cgraph* gf, bool batched) {
+    return ctx->graph_compute(gf, batched);
+}
+
+void llama_build_and_execute_mtp_graph(struct llama_context * ctx,
+    ggml_tensor * hidden_state_inp, llama_token last_token_id, int32_t n_past, int32_t last_tok_idx) {
+
+    const auto * model = llama_get_model(ctx);
+
+    auto res_mtp = std::make_unique<llm_graph_result>(ctx->graph_max_nodes());
+
+    llama_ubatch ubatch_mtp;
+    ubatch_mtp.n_tokens = 1;
+    ubatch_mtp.pos = &n_past;
+
+    auto params_mtp = std::make_unique<llm_graph_params>(ctx->mtp_graph_params(res_mtp.get(), ubatch_mtp));
+
+    auto* gf = model->build_mtp_graph(*params_mtp, hidden_state_inp, last_token_id, n_past);
+
+    ggml_backend_sched_t sched = params_mtp->sched;
+
+    ggml_backend_sched_reset(sched); // clear the allocation of the previous graph
+    ggml_backend_sched_alloc_graph(sched, gf); // explicitly allocate the new graph but do not execute it
+
+    ggml_tensor * mtp_token_id_input = ggml_get_tensor(res_mtp->get_ctx(), "mtp_token_id_input");
+
+    ggml_backend_tensor_set(mtp_token_id_input, &last_token_id, 0, sizeof(last_token_id)); // copy data to the newly allocated graph tensors
+    ggml_backend_sched_graph_compute(sched, gf); // execute the graph
+
+    struct ggml_tensor * logits_mtp = res_mtp->get_logits();;
+    LLAMA_LOG_INFO("logits_mtp pointer address: %p\n", (void*)logits_mtp);
+
+    if (logits_mtp) {
+        ctx->set_logits_ith(logits_mtp, sched, last_tok_idx);
+    }
+}
+

@@ -348,6 +348,11 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
 
     llama_sampler_apply(chain, &cur_p);
 
+    /*for (int k = 0; k < (int)cur_p.size; ++k) {
+        LOG_INF(" - draft candidate %3d, pos %3d: %6d (%8.3f)\n",
+            k, 0, cur_p.data[k].id, cur_p.data[k].p);
+    }*/
+
     GGML_ASSERT(cur_p.selected != -1 && "no selected token during sampling - check your sampling configuration");
 
     const llama_token id = cur_p.data[cur_p.selected].id;

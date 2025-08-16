@@ -5,6 +5,8 @@
 #include "log.h"
 #include "common.h"
 #include "sampling.h"
+#include "../src/llama-graph.h"
+#include "../src/llama-context.h"
 
 #include <cstring>
 #include <algorithm>
@@ -358,4 +360,43 @@ llama_tokens common_speculative_gen_draft(
         }
     }
     return result;
+}
+
+
+llama_token mtp_speculative_gen_draft(
+    struct common_sampler* smpl,
+    struct llama_context* ctx,
+    llama_token id_last,
+    int32_t n_past,
+    int32_t last_tok_idx) {
+
+    const auto * model = llama_get_model(ctx);
+    auto * last_embd = llama_get_embeddings_tensor(ctx);
+
+    GGML_ASSERT(model != nullptr);
+    GGML_ASSERT(last_embd != nullptr);
+    llama_build_and_execute_mtp_graph(ctx, last_embd, id_last, n_past, last_tok_idx);
+
+    common_sampler_sample(smpl, ctx, last_tok_idx, true);
+
+    const auto* cur_p = common_sampler_get_candidates(smpl);
+    /*LOG_INF("cur_p->size: %d\n", cur_p->size);
+
+    for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+        LOG_INF(" - draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                k, 0, cur_p->data[k].id, cur_p->data[k].p, common_token_to_piece(ctx, cur_p->data[k].id).c_str());
+    }*/
+
+    // add drafted token for each sequence
+    const llama_token id = cur_p->data[0].id;
+
+    // skip accepting draft token -- since we're only drafting one token this can't affect future outputs
+    // smpl will accept the token if it doesn't get rejected by main model later
+    // common_sampler_accept(smpl, id, true);
+
+    //llama_tokens result;
+    //result.reserve(1);
+    //result.push_back(id);
+    //return result;
+    return id;
 }

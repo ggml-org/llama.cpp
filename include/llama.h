@@ -495,6 +495,8 @@ extern "C" {
 
     LLAMA_API int32_t llama_vocab_n_tokens(const struct llama_vocab * vocab);
 
+    LLAMA_API int32_t llama_model_n_nextn_layer(const struct llama_model * model);
+
     // Functions to access the model's GGUF metadata scalar values
     // - The functions return the length of the string on success, or -1 on failure
     // - The output string is always null-terminated and cleared on failure
@@ -542,11 +544,16 @@ extern "C" {
     // Returns true if the model is diffusion-based (like LLaDA, Dream, etc.)
     LLAMA_API bool llama_model_is_diffusion(const struct llama_model * model);
 
+    LLAMA_API ggml_cgraph * llama_build_mtp_graph(const struct llama_model * model, const struct llm_graph_params & params,
+        struct ggml_tensor * hidden_state_inp, llama_token last_token_id, int n_past);
+
     // Returns 0 on success
     LLAMA_API uint32_t llama_model_quantize(
             const char * fname_inp,
             const char * fname_out,
             const llama_model_quantize_params * params);
+
+
 
     //
     // Adapters
@@ -1015,6 +1022,8 @@ extern "C" {
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
 
+    LLAMA_API ggml_tensor * llama_get_embeddings_tensor(struct llama_context * ctx);
+
     //
     // Vocab
     //
@@ -1474,6 +1483,17 @@ extern "C" {
             int64_t                   idata_split,
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval);
+
+    LLAMA_API llm_graph_params llama_mtp_graph_params(struct llama_context* ctx, class llm_graph_result * res, const struct llama_ubatch& ubatch);
+
+    LLAMA_API ggml_status llama_graph_compute(struct llama_context * ctx, struct ggml_cgraph * gf, bool batched);
+
+    LLAMA_API void llama_build_and_execute_mtp_graph(struct llama_context * ctx,
+        ggml_tensor* hidden_state_inp, llama_token last_token_id, int32_t n_past, int32_t last_tok_idx);
+
+    LLAMA_API ggml_tensor * llama_graph_result_get_logits(class llm_graph_result * res);
+
+
 
 #ifdef __cplusplus
 }

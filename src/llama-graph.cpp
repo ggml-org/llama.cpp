@@ -1911,3 +1911,7 @@ int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buck
 
     return relative_bucket;
 }
+
+ggml_tensor * llama_graph_result_get_logits(llm_graph_result * res) {
+    return res->get_logits();
+}
