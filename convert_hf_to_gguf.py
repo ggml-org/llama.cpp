@@ -4526,7 +4526,7 @@ class XLMRobertaModel(BertModel):
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, **kwargs: Any):
         hparams = kwargs.pop("hparams", None)
         if hparams is None:
-            hparams = ModelBase.load_hparams(dir_model)
+            hparams = ModelBase.load_hparams(dir_model, False)
 
         if lora_names := hparams.get("lora_adaptations"):
             self._lora_names = lora_names
@@ -4579,15 +4579,13 @@ class XLMRobertaModel(BertModel):
             # Split out each LoRA in their own GGUF
             for i, lora_writer in enumerate(self._lora_files.values()):
                 new_name = self.map_tensor_name(name[:-9]) + name[-7:].lower()
-                data_qtype = gguf.GGMLQuantizationType.F32
                 data = data_torch[i, :, :]
                 # Transpose/flip token_embd/types into correct shape
                 if new_name == "token_embd.weight.lora_b":
                     data = data.T
                 elif new_name.startswith("token_types.weight."):
                     new_name = new_name[:-1] + ("a" if new_name[-1:] == "b" else "b")
-                data = gguf.quants.quantize(data.numpy(), data_qtype)
-                lora_writer.add_tensor(new_name, data, raw_dtype=data_qtype)
+                lora_writer.add_tensor(new_name, data.float().numpy(), raw_dtype=gguf.GGMLQuantizationType.F32)
 
             return []
 
