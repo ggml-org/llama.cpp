@@ -885,9 +885,10 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     size_t zero_tensor_n_bytes =
         src->ne[1] * src->ne[2] * src->ne[3] * ggml_element_size(src);
     ggml_cann_pool_alloc zero_tensor_allocator(ctx.pool(), zero_tensor_n_bytes);
+    int64_t rstd_ne[GGML_MAX_DIMS] = {src->ne[1] , src->ne[2] , src->ne[3] , 1};
     aclTensor* acl_rstd =
         aclnn_zero(ctx, zero_tensor_allocator.get(), zero_tensor_n_bytes,
-                   src->ne, GGML_MAX_DIMS, ggml_cann_type_mapping(src->type),
+                   rstd_ne, 3, ggml_cann_type_mapping(src->type),
                    ggml_element_size(src));
     GGML_CANN_CALL_ACLNN_OP(ctx, RmsNorm, acl_src, acl_gamma, eps, acl_dst, acl_rstd);
     ggml_cann_release_resources(ctx, acl_src, acl_dst, acl_gamma, acl_rstd);
