@@ -8251,8 +8251,7 @@ class GptOssModel(TextModel):
         self.gguf_writer.add_rope_scaling_orig_ctx_len(rope_scaling.get("original_max_position_embeddings", 4096))
 
 
-@ModelBase.register("Lfm2ForCausalLM")
-@ModelBase.register("LFM2ForCausalLM")
+@ModelBase.register("Lfm2ForCausalLM", "LFM2ForCausalLM")
 class LFM2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.LFM2
 
@@ -8287,11 +8286,53 @@ class LFM2Model(TextModel):
         self._add_feed_forward_length()
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        is_vision_tensor = "vision_tower" in name or "multi_modal_projector" in name
+        if is_vision_tensor:
+            # skip vision tensors
+            return []
+
+        name = name.replace("language_model.", "")
+
         # conv op requires 2d tensor
         if 'conv.conv' in name:
             data_torch = data_torch.squeeze(1)
 
         return [(self.map_tensor_name(name), data_torch)]
+
+
+@ModelBase.register("Lfm2VlForConditionalGeneration")
+class LFM2VLModel(MmprojModel):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        assert self.hparams_vision is not None
+        # TODO(tarek): for dynamic resolution image_size is not specified, setting here for compatibility
+        self.hparams_vision["image_size"] = 256
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.LFM2)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.find_vparam(["layer_norm_eps"]))
+        self.gguf_writer.add_vision_projector_scale_factor(self.global_config.get("downsample_factor", 2))
+        self.gguf_writer.add_vision_use_gelu(True)
+        # python notation, e.g. for vision_feature_layer == -1, we pick last layer -> vision_feature_layers_to_drop = 0
+        vision_feature_layers_to_drop = -(self.global_config.get("vision_feature_layer", -1) + 1)
+        self.gguf_writer.add_vision_block_count(self.find_vparam(self.n_block_keys) - vision_feature_layers_to_drop)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        del bid  # unused
+        is_vision_tensor = "vision_tower" in name or "multi_modal_projector" in name
+
+        if is_vision_tensor:
+            # remove "model." prefix
+            name = name.replace("model.vision_tower.", "vision_tower.")
+            name = name.replace("model.multi_modal_projector.", "multi_modal_projector.")
+
+            if "patch_embedding.weight" in name:
+                data_torch = data_torch.view(data_torch.shape[0], 16, 16, 3).permute(0, 3, 1, 2)
+
+            return [(self.map_tensor_name(name), data_torch)]
+
+        return [] # skip other tensors
 
 
 @ModelBase.register("SmallThinkerForCausalLM")
