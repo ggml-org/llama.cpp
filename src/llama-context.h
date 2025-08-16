@@ -111,9 +111,9 @@ struct llama_context {
     size_t state_get_data(      uint8_t * dst, size_t size);
     size_t state_set_data(const uint8_t * src, size_t size);
 
-    size_t state_seq_get_size(llama_seq_id seq_id);
-    size_t state_seq_get_data(llama_seq_id seq_id,       uint8_t * dst, size_t size);
-    size_t state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size);
+    size_t state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags);
+    size_t state_seq_get_data(llama_seq_id seq_id,       uint8_t * dst, size_t size, llama_state_seq_flags flags);
+    size_t state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags);
 
     bool state_load_file(
             const char * filepath,
@@ -152,6 +152,7 @@ struct llama_context {
 
     void opt_init(struct llama_model * model, struct llama_opt_params lopt_params);
 
+    // TODO: more flexible combinations of logical/physical batch size and context size
     void opt_epoch(
             ggml_opt_dataset_t      dataset,
             ggml_opt_result_t       result_train,
@@ -180,6 +181,8 @@ private:
     // Make sure enough space is available for outputs.
     // Returns max number of outputs for which space was reserved.
     uint32_t output_reserve(int32_t n_outputs);
+
+    void output_reorder();
 
     //
     // graph
@@ -210,8 +213,8 @@ private:
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);
 
-    size_t state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id);
-    size_t state_seq_read_data (llama_io_read_i  & io, llama_seq_id seq_id);
+    size_t state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags);
+    size_t state_seq_read_data (llama_io_read_i  & io, llama_seq_id seq_id, llama_state_seq_flags flags);
 
     //
     // members
@@ -250,6 +253,13 @@ private:
 
     std::vector<int32_t> output_ids; // map batch token positions to ids of the logits and embd buffers
 
+    struct swap_info {
+        uint32_t i0;
+        uint32_t i1;
+    };
+
+    std::vector<swap_info> output_swaps;
+
     ggml_backend_sched_ptr sched;
 
     ggml_backend_t backend_cpu = nullptr;
@@ -277,6 +287,13 @@ private:
     ggml_backend_buffer_ptr buf_output;
 
     bool has_evaluated_once = false;
+
+    // env: LLAMA_SET_ROWS (temporary)
+    // ref: https://github.com/ggml-org/llama.cpp/pull/14285
+    bool supports_set_rows = true;
+
+    // env: LLAMA_GRAPH_REUSE_DISABLE
+    bool graph_reuse_disable = false;
 
     // perf
     mutable int64_t t_start_us  = 0;

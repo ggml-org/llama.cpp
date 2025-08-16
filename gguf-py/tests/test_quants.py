@@ -67,6 +67,7 @@ class GGMLQuants:
             "q4_0", "q4_1", "q5_0", "q5_1", "q8_0",
             "q2_K", "q3_K", "q4_K", "q5_K", "q6_K",
             "tq1_0", "tq2_0",
+            "mxfp4",
             "iq2_xxs", "iq2_xs", "iq2_s", "iq3_xxs", "iq3_s", "iq1_s", "iq1_m",
             "iq4_nl", "iq4_xs",
         ):
@@ -140,14 +141,21 @@ def compare_tensors(t1: np.ndarray, t2: np.ndarray, qtype: GGMLQuantizationType)
         return False
 
 
-def do_test(libggml_path: Path, quick: bool = False):
+def do_test(libggml_path: Path, quick: bool = False, user_type: GGMLQuantizationType | None = None):
     ggml_quants = GGMLQuants(libggml_path)
 
     np.set_printoptions(precision=None, threshold=(4 * 256) + 1, formatter={"int": lambda n: "0x%02X" % n})
 
     r = np.random.randn(8, 1024, 1024).astype(np.float32, copy=False)
+    # test zero blocks
+    r[0, 0, :] = 0
+    ## Maybe test infinities? (can make NANs, not really useful in practice)
+    # r[0, 1, 0] = np.inf
+    # r[0, 2, 0] = -np.inf
+    # r[0, 3, 0] = np.inf
+    # r[0, 3, 1] = -np.inf
 
-    for qtype in (GGMLQuantizationType.F16, *gguf.quants._type_traits.keys()):
+    for qtype in ((GGMLQuantizationType.F16, *gguf.quants._type_traits.keys()) if user_type is None else (user_type,)):
         has_dequantize = False
         has_quantize = False
 
@@ -228,11 +236,12 @@ def do_test(libggml_path: Path, quick: bool = False):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test Python (de)quantization against the reference C implementation")
-    parser.add_argument("--libggml", type=Path, default=Path(__file__).parent.parent.parent / "build" / "ggml" / "src" / "libggml.so", help="The path to libggml.so")
+    parser.add_argument("--libggml", type=Path, default=Path(__file__).parent.parent.parent / "build" / "bin" / "libggml.so", help="The path to libggml.so")
     parser.add_argument("--quick", action="store_true", help="Don't quantize with C when it's not strictly necessary")
+    parser.add_argument("--type", type=str, help="The quant type to test (all by default)")
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG)
 
-    do_test(args.libggml, args.quick)
+    do_test(args.libggml, args.quick, GGMLQuantizationType[args.type.upper()] if args.type is not None else None)

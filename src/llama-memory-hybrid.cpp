@@ -25,6 +25,7 @@ llama_memory_hybrid::llama_memory_hybrid(
                          /* common */
              uint32_t    n_seq_max,
                  bool    offload,
+                 bool    unified,
                          /* layer filters */
       layer_filter_cb && filter_attn,
       layer_filter_cb && filter_recr) :
@@ -38,7 +39,7 @@ llama_memory_hybrid::llama_memory_hybrid(
         type_v,
         v_trans,
         offload,
-        1,
+        unified,
         kv_size,
         n_seq_max,
         n_pad,
@@ -164,12 +165,16 @@ llama_pos llama_memory_hybrid::seq_pos_max(llama_seq_id seq_id) const {
     return std::min(mem_attn->seq_pos_max(seq_id), mem_recr->seq_pos_max(seq_id));
 }
 
-void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+void llama_memory_hybrid::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    GGML_UNUSED(flags);
+
     mem_attn->state_write(io, seq_id);
     mem_recr->state_write(io, seq_id);
 }
 
-void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+void llama_memory_hybrid::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
     mem_attn->state_read(io, seq_id);
     mem_recr->state_read(io, seq_id);
 }

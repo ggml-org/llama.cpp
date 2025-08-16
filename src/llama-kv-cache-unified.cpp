@@ -39,6 +39,10 @@ llama_kv_cache_unified::llama_kv_cache_unified(
     if (model.arch == LLM_ARCH_GEMMA3N) {
         n_layer_cache = 20;
     }
+    if (model.arch == LLM_ARCH_GLM4_MOE) {
+        // GLM-4.5: Only process up to last layer, skip final NextN layer
+        n_layer_cache = hparams.n_layer - hparams.nextn_predict_layers;
+    }
 
     // create a context for each buffer type
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
@@ -183,7 +187,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
         const size_t memory_size_k = size_k_bytes();
         const size_t memory_size_v = size_v_bytes();
 
-        LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%2u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
+        LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
                 (float)(memory_size_k + memory_size_v) / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
                 ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
                 ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
@@ -193,7 +197,7 @@ llama_kv_cache_unified::llama_kv_cache_unified(
     debug = LLAMA_KV_CACHE_DEBUG ? atoi(LLAMA_KV_CACHE_DEBUG) : 0;
 
     const char * LLAMA_SET_ROWS = getenv("LLAMA_SET_ROWS");
-    supports_set_rows = LLAMA_SET_ROWS ? atoi(LLAMA_SET_ROWS) != 0 : 0;
+    supports_set_rows = LLAMA_SET_ROWS ? atoi(LLAMA_SET_ROWS) != 0 : supports_set_rows;
 
     if (!supports_set_rows) {
         // ref: https://github.com/ggml-org/llama.cpp/pull/14363
@@ -219,12 +223,7 @@ void llama_kv_cache_unified::clear(bool data) {
 }
 
 bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
-    GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
-
-    auto & cells = v_cells[seq_to_stream[seq_id]];
-    auto & head  = v_heads[seq_to_stream[seq_id]];
-
-    uint32_t new_head = cells.size();
+    GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
 
     if (p0 < 0) {
         p0 = 0;
@@ -235,6 +234,11 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
     }
 
     if (seq_id >= 0) {
+        auto & cells = v_cells[seq_to_stream[seq_id]];
+        auto & head  = v_heads[seq_to_stream[seq_id]];
+
+        uint32_t new_head = cells.size();
+
         for (uint32_t i = 0; i < cells.size(); ++i) {
             if (!cells.pos_in(i, p0, p1)) {
                 continue;
@@ -246,24 +250,36 @@ bool llama_kv_cache_unified::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
                 }
             }
         }
+
+        // If we freed up a slot, set head to it so searching can start there.
+        if (new_head != cells.size() && new_head < head) {
+            head = new_head;
+        }
     } else {
         // match any sequence
-        for (uint32_t i = 0; i < cells.size(); ++i) {
-            if (!cells.pos_in(i, p0, p1)) {
-                continue;
+        for (uint32_t s = 0; s < n_stream; ++s) {
+            auto & cells = v_cells[s];
+            auto & head  = v_heads[s];
+
+            uint32_t new_head = cells.size();
+
+            for (uint32_t i = 0; i < cells.size(); ++i) {
+                if (!cells.pos_in(i, p0, p1)) {
+                    continue;
+                }
+
+                cells.rm(i);
+
+                if (new_head == cells.size()) {
+                    new_head = i;
+                }
             }
 
-            cells.rm(i);
-
-            if (new_head == cells.size()) {
-                new_head = i;
+            // If we freed up a slot, set head to it so searching can start there.
+            if (new_head != cells.size() && new_head < head) {
+                head = new_head;
             }
         }
-    }
-
-    // If we freed up a slot, set head to it so searching can start there.
-    if (new_head != cells.size() && new_head < head) {
-        head = new_head;
     }
 
     return true;
@@ -734,66 +750,70 @@ bool llama_kv_cache_unified::update(llama_context * lctx, bool do_shift, const d
 }
 
 llama_kv_cache_unified::slot_info llama_kv_cache_unified::find_slot(const llama_ubatch & ubatch, bool cont) const {
+
     if (debug > 0) {
-        const auto & cells = v_cells[seq_to_stream[1]];
+        for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+            const auto seq_id = ubatch.seq_id_unq[s];
+            const auto stream_id = seq_to_stream[seq_id];
+            const auto & cells = v_cells[stream_id];
+            const uint32_t head_cur = v_heads[stream_id];
 
-        const uint32_t head_cur = v_heads[1];
+            LLAMA_LOG_DEBUG("%s: stream[%d], n = %5d, used = %5d, head = %5d, size = %5d, n_swa = %5d\n",
+                    __func__, stream_id, cells.used_max_p1(), cells.get_used(), head_cur, get_size(), n_swa);
 
-        LLAMA_LOG_DEBUG("%s: n = %5d, used = %5d, head = %5d, size = %5d, n_swa = %5d\n",
-                __func__, cells.used_max_p1(), cells.get_used(), head_cur, get_size(), n_swa);
-
-        if ((debug == 2 && n_swa > 0) || debug > 2) {
-            std::string ss;
-            for (uint32_t i = 0; i < cells.size(); ++i) {
-                if (cells.is_empty(i)) {
-                    ss += '.';
-                } else {
-                    assert(cells.seq_count(i) >= 1);
-
-                    if (cells.seq_count(i) == 1) {
-                        ss += std::to_string(cells.seq_get(i));
+            if ((debug == 2 && n_swa > 0) || debug > 2) {
+                std::string ss;
+                for (uint32_t i = 0; i < cells.size(); ++i) {
+                    if (cells.is_empty(i)) {
+                        ss += '.';
                     } else {
-                        ss += 'M';
+                        assert(cells.seq_count(i) >= 1);
+
+                        if (cells.seq_count(i) == 1) {
+                            ss += std::to_string(cells.seq_get(i));
+                        } else {
+                            ss += 'M';
+                        }
+                    }
+                    if (i%256 == 255) {
+                        ss += " *";
+                        ss += '\n';
                     }
                 }
-                if (i%256 == 255) {
-                    ss += " *";
-                    ss += '\n';
-                }
-            }
-            LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
-        }
-
-        if ((debug == 2 && n_swa > 0) || debug > 2) {
-            std::string ss;
-            for (uint32_t i = 0; i < cells.size(); ++i) {
-                std::string cur;
-                if (cells.is_empty(i)) {
-                    cur = '.';
-                } else {
-                    cur = std::to_string(cells.pos_get(i));
-                }
-                const int n = cur.size();
-                for (int j = 0; j < 5 - n; ++j) {
-                    cur += ' ';
-                }
-                ss += cur;
-                if (i%256 == 255) {
-                    ss += " *";
-                }
-                if (i%64 == 63) {
-                    ss += '\n';
-                }
-            }
-            LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
-        }
-
-        for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
-            if (cells.seq_pos_min(s) < 0) {
-                continue;
+                LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
             }
 
-            LLAMA_LOG_DEBUG("%s: min[%d] = %5d, max[%d] = %5d\n", __func__, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
+            if ((debug == 2 && n_swa > 0) || debug > 2) {
+                std::string ss;
+                for (uint32_t i = 0; i < cells.size(); ++i) {
+                    std::string cur;
+                    if (cells.is_empty(i)) {
+                        cur = '.';
+                    } else {
+                        cur = std::to_string(cells.pos_get(i));
+                    }
+                    const int n = cur.size();
+                    for (int j = 0; j < 5 - n; ++j) {
+                        cur += ' ';
+                    }
+                    ss += cur;
+                    if (i%256 == 255) {
+                        ss += " *";
+                    }
+                    if (i%64 == 63) {
+                        ss += '\n';
+                    }
+                }
+                LLAMA_LOG_DEBUG("\n%s\n", ss.c_str());
+            }
+
+            for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
+                if (cells.seq_pos_min(s) < 0) {
+                    continue;
+                }
+
+                LLAMA_LOG_DEBUG("%s: stream[%d] min[%d] = %5d, max[%d] = %5d\n", __func__, stream_id, s, cells.seq_pos_min(s), s, cells.seq_pos_max(s));
+            }
         }
     }
 
@@ -1808,7 +1828,9 @@ bool llama_kv_cache_unified::is_masked_swa(llama_pos p0, llama_pos p1) const {
     return false;
 }
 
-void llama_kv_cache_unified::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+void llama_kv_cache_unified::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    GGML_UNUSED(flags);
+
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1859,7 +1881,9 @@ void llama_kv_cache_unified::state_write(llama_io_write_i & io, llama_seq_id seq
     }
 }
 
-void llama_kv_cache_unified::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+void llama_kv_cache_unified::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+    GGML_UNUSED(flags);
+
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
 
     uint32_t n_stream_cur;

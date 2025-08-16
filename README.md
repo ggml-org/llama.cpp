@@ -17,6 +17,8 @@ LLM inference in C/C++
 
 ## Hot topics
 
+- **[[FEEDBACK] Better packaging for llama.cpp to support downstream consumers 🤗](https://github.com/ggml-org/llama.cpp/discussions/15313)**
+- Support for the `gpt-oss` model with native MXFP4 format has been added | [PR](https://github.com/ggml-org/llama.cpp/pull/15091) | [Collaboration with NVIDIA](https://blogs.nvidia.com/blog/rtx-ai-garage-openai-oss) | [Comment](https://github.com/ggml-org/llama.cpp/discussions/15095)
 - Hot PRs: [All](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+label%3Ahot+) | [Open](https://github.com/ggml-org/llama.cpp/pulls?q=is%3Apr+label%3Ahot+is%3Aopen)
 - Multimodal support arrived in `llama-server`: [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) | [documentation](./docs/multimodal.md)
 - VS Code extension for FIM completions: https://github.com/ggml-org/llama.vscode
@@ -239,7 +241,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 <details>
 <summary>Infrastructure</summary>
 
-- [Paddler](https://github.com/distantmagic/paddler) - Stateful load balancer custom-tailored for llama.cpp
+- [Paddler](https://github.com/intentee/paddler) - Open-source LLMOps platform for hosting and scaling AI in your own infrastructure
 - [GPUStack](https://github.com/gpustack/gpustack) - Manage GPU clusters for running LLMs
 - [llama_cpp_canister](https://github.com/onicai/llama_cpp_canister) - llama.cpp as a smart contract on the Internet Computer, using WebAssembly
 - [llama-swap](https://github.com/mostlygeek/llama-swap) - transparent proxy that adds automatic model switching with llama-server
@@ -270,7 +272,6 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 | [CANN](docs/build.md#cann) | Ascend NPU |
 | [OpenCL](docs/backend/OPENCL.md) | Adreno GPU |
 | [WebGPU [In Progress]](docs/build.md#webgpu) | All |
-
 | [RPC](https://github.com/ggml-org/llama.cpp/tree/master/tools/rpc) | All |
 
 ## Obtaining and quantizing models

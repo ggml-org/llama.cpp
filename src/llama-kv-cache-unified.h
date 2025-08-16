@@ -136,8 +136,8 @@ public:
 
     // state write/load
 
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
     //
     // llama_kv_cache_unified specific API
@@ -230,7 +230,7 @@ private:
 
     // env: LLAMA_SET_ROWS (temporary)
     // ref: https://github.com/ggml-org/llama.cpp/pull/14285
-    bool supports_set_rows = false;
+    bool supports_set_rows = true;
 
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 

@@ -28,6 +28,7 @@
 #include "mmvq.hpp"
 #include "norm.hpp"
 #include "outprod.hpp"
+#include "quantize.hpp"
 #include "quants.hpp"
 #include "rope.hpp"
 #include "set_rows.hpp"

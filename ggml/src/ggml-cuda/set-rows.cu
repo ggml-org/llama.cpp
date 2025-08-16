@@ -3,27 +3,6 @@
 
 typedef void (*set_rows_kernel_t)(const char * src, char * dst);
 
-template<typename src_t, typename dst_t>
-__device__ void set_rows_1(const src_t * src_f, dst_t * dst_f) {
-    GGML_UNUSED(src_f);
-    GGML_UNUSED(dst_f);
-}
-
-template<>
-__device__ __forceinline__ void set_rows_1<float, half>(const float * src_f, half * dst_h) {
-    convert_f32_f16(src_f, dst_h);
-}
-
-template<>
-__device__ __forceinline__ void set_rows_1<float, nv_bfloat16>(const float * src_f, nv_bfloat16 * dst_b) {
-    convert_f32_bf16(src_f, dst_b);
-}
-
-template<>
-__device__ __forceinline__ void set_rows_1<float, float>(const float * src_f, float * dst_f) {
-    convert_f32_f32(src_f, dst_f);
-}
-
 // Generic quantized set_rows kernel template
 template<typename block_type, int qk, void (*quantize_func)(const float*, block_type*)>
 static __global__ void k_set_rows_quant(
@@ -60,6 +39,9 @@ static __global__ void k_set_rows_quant(
     block_type * dst_block = dst_row_ptr + i00 / qk;
 
     quantize_func(src_block, dst_block);
+
+    GGML_UNUSED(ne10);
+    GGML_UNUSED(ne13);
 }
 
 // Template dispatch function for quantized set_rows
@@ -130,9 +112,7 @@ static __global__ void k_set_rows(
     const src_t * src0_row = src0 + i01*s01 + i02*s02 + i03*s03;
     dst_t * dst_row_ptr    = dst + dst_row*s1 + i02*s2 + i03*s3;
 
-    const src_t* src_elem = src0_row + i00;
-    dst_t* dst_elem = dst_row_ptr + i00;
-    set_rows_1(src_elem, dst_elem);
+    dst_row_ptr[i00] = ggml_cuda_cast<dst_t>(src0_row[i00]);
 
     GGML_UNUSED(ne10);
     GGML_UNUSED(ne13);

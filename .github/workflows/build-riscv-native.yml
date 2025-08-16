@@ -1,0 +1,43 @@
+name: Build on RISCV Linux Machine by Cloud-V
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  bianbu-riscv64-native: # Bianbu 2.2
+    runs-on: self-hosted
+
+    steps:
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update || true
+          sudo apt-get install -y libatomic1
+      - uses: actions/checkout@v4
+      - name: Setup Riscv
+        run: |
+          sudo apt-get update || true
+          sudo apt-get install -y --no-install-recommends \
+                  build-essential \
+                  gcc-14-riscv64-linux-gnu \
+                  g++-14-riscv64-linux-gnu \
+                  cmake
+
+      - name: Build
+        run: |
+          cmake -B build -DLLAMA_CURL=OFF \
+                         -DCMAKE_BUILD_TYPE=Release \
+                         -DGGML_OPENMP=OFF \
+                         -DLLAMA_BUILD_EXAMPLES=ON \
+                         -DLLAMA_BUILD_TOOLS=ON \
+                         -DLLAMA_BUILD_TESTS=OFF \
+                         -DCMAKE_SYSTEM_NAME=Linux \
+                         -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+                         -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+                         -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+
+          cmake --build build --config Release -j $(nproc)
