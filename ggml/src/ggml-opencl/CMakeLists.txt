@@ -112,6 +112,9 @@ set(GGML_OPENCL_KERNELS
     mul_mat_f16_f32
     conv2d
     conv2d_f16_f32
+    flash_attn_f32_f16
+    flash_attn_f16
+    flash_attn_f32
 )
 
 foreach (K ${GGML_OPENCL_KERNELS})
