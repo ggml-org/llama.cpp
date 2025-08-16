@@ -3908,7 +3908,8 @@ int main(int argc, char ** argv) {
             "/health",
             "/models",
             "/v1/models",
-            "/api/tags"
+            "/api/tags",
+            "/api/version"
         };
 
         // If API key is not set, skip validation
@@ -3947,7 +3948,7 @@ int main(int argc, char ** argv) {
             if (req.path == "/" || tmp.back() == "html") {
                 res.set_content(reinterpret_cast<const char*>(loading_html), loading_html_len, "text/html; charset=utf-8");
                 res.status = 503;
-            } else if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags") {
+            } else if (req.path == "/models" || req.path == "/v1/models" || req.path == "/api/tags" || req.path == "/api/version") {
                 // allow the models endpoint to be accessed during loading
                 return true;
             } else {
@@ -4643,6 +4644,22 @@ int main(int argc, char ** argv) {
         res_ok(res, models);
     };
 
+    const auto handle_version = [&ctx_server, &res_ok](const httplib::Request &, httplib::Response & res) { 
+        json version;
+        char* version_override = std::getenv("LLAMA_API_VERSION_OVERRIDE");
+        if (version_override) {
+            version = {
+                {"version", std::string(version_override)}
+            };
+        } else {
+            version = {
+                {"version", std::to_string(LLAMA_BUILD_NUMBER)} 
+            };
+        }
+
+        res_ok(res, version);
+    };
+
     const auto handle_tokenize = [&ctx_server, &res_ok](const httplib::Request & req, httplib::Response & res) {
         const json body = json::parse(req.body);
 
@@ -4981,6 +4998,7 @@ int main(int argc, char ** argv) {
     svr->Get (params.api_prefix + "/models",              handle_models); // public endpoint (no API key check)
     svr->Get (params.api_prefix + "/v1/models",           handle_models); // public endpoint (no API key check)
     svr->Get (params.api_prefix + "/api/tags",            handle_models); // ollama specific endpoint. public endpoint (no API key check)
+    svr->Get (params.api_prefix + "/api/version",         handle_version); // public endpoint (no API key check)
     svr->Post(params.api_prefix + "/completion",          handle_completions); // legacy
     svr->Post(params.api_prefix + "/completions",         handle_completions);
     svr->Post(params.api_prefix + "/v1/completions",      handle_completions_oai);
