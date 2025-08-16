@@ -39,6 +39,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install build-essential libcurl4-openssl-dev
+          # Install git-clang-format script for formatting only changed code
+          wget -O /tmp/git-clang-format https://raw.githubusercontent.com/llvm/llvm-project/release/18.x/clang/tools/clang-format/git-clang-format
+          sudo cp /tmp/git-clang-format /usr/local/bin/git-clang-format
+          sudo chmod +x /usr/local/bin/git-clang-format
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -50,4 +54,4 @@ jobs:
           python3 -m venv .venv
           .venv/bin/activate
           pip install -r requirements/requirements-all.txt -r tools/server/tests/requirements.txt
-          pip install flake8 pyright
+          pip install flake8 pyright pre-commit
