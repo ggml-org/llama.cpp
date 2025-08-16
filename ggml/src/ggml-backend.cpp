@@ -19,9 +19,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <string>
-#include <vector>
 #include <algorithm>
+#include <vector>
+#include <set>
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -1378,6 +1378,70 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 } else {
                     ggml_backend_synchronize(split_backend);
                 }
+
+#if 1
+                ggml_tensor * node = split->graph.nodes[0];
+                if (split->graph.n_nodes > 0 &&
+                    ggml_backend_buffer_get_usage(input->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+                    ggml_backend_buffer_is_host(input->buffer) && (
+                    (node->src[0] == input_cpy && node->op == GGML_OP_MUL_MAT_ID)
+                    /*|| (node->src[1] == input_cpy && node->op == GGML_OP_ADD_ID) */)) {
+
+                    ggml_backend_synchronize(input_backend);
+
+                    // find the ids
+                    ggml_tensor * ids_tensor = node->src[2];
+                    std::vector<int32_t> ids(ggml_nbytes(ids_tensor) / sizeof(int32_t));
+                    ggml_backend_tensor_get_async(split_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
+
+                    ggml_backend_synchronize(split_backend);
+
+                    std::set<int32_t> unique_ids;
+                    for (int64_t i1 = 0; i1 < ids_tensor->ne[1]; i1++) {
+                        for (int64_t i0 = 0; i0 < ids_tensor->ne[0]; i0++) {
+                            int32_t id = ids[i1 * ids_tensor->nb[1]/sizeof(int32_t) + i0 * ids_tensor->nb[0]/sizeof(int32_t)];
+                            unique_ids.insert(id);
+                        }
+                    }
+
+                    // group consecutive experts and copy them together
+                    GGML_ASSERT(!unique_ids.empty());
+
+                    auto it = unique_ids.begin();
+                    int32_t first_id = *it;
+                    int32_t last_id = first_id;
+
+                    auto copy_experts = [&](int32_t first_id, int32_t last_id) {
+                        const size_t expert_size = node->op == GGML_OP_MUL_MAT_ID ? input->nb[2] : input->nb[1];
+                        const size_t expert_offset = first_id * expert_size;
+                        const size_t expert_size_copy =  (last_id - first_id + 1) * expert_size;
+                        const size_t padding = 512;
+                        const size_t padding_end = last_id < input->ne[2] - 1 ? std::min<size_t>(expert_size, padding) : 0;
+
+                        ggml_backend_tensor_set_async(split_backend,
+                            input_cpy,
+                            (const uint8_t *)input->data + expert_offset, expert_offset,
+                            // copy a bit extra to ensure there are no NaNs in the padding
+                            expert_size_copy + padding_end);
+                    };
+
+                    for (++it; it != unique_ids.end(); ++it) {
+                        const int32_t id = *it;
+
+                        if (id == last_id + 1) {
+                            last_id = id;
+                            continue;
+                        }
+
+                        copy_experts(first_id, last_id);
+
+                        first_id = id;
+                        last_id = id;
+                    }
+                    copy_experts(first_id, last_id);
+                } else
+#endif
+
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
                 if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
