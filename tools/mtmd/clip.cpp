@@ -569,14 +569,14 @@ struct clip_graph {
             }
 
             // unshuffle h
-            cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur), n_embd * scale_factor, width / scale_factor, height);
-            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+            cur = ggml_reshape_3d(ctx0, cur, n_embd * scale_factor, width / scale_factor, height);
+            cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 2, 1, 3));
 
             // unshuffle w
-            cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur), n_embd * scale_factor * scale_factor, height / scale_factor, width / scale_factor);
-            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
+            cur = ggml_reshape_3d(ctx0, cur, n_embd * scale_factor * scale_factor, height / scale_factor, width / scale_factor);
+            cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 2, 1, 3));
 
-            cur = ggml_reshape_2d(ctx0, ggml_cont(ctx0, cur), cur->ne[0], cur->ne[1] * cur->ne[2]);
+            cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
 
             // projection
             cur = ggml_norm(ctx0, cur, 1e-5); // default nn.LayerNorm
