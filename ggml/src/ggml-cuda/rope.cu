@@ -328,12 +328,16 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 
     const float * src0_d = (const float *)src0->data;
     const float * src1_d = (const float *)src1->data;
-
     float * dst_d = (float *)dst->data;
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_BF16);
+    GGML_ASSERT(src0->type == dst->type);
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
+        const __nv_bfloat16 * src0_bf16 = (const __nv_bfloat16 *)src0->data;
+        __nv_bfloat16 * dst_bf16 = (__nv_bfloat16 *)dst->data;
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(src0->type == dst->type);
 
     const int64_t ne00 = src0->ne[0]; // head dims
@@ -399,6 +403,10 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
             rope_neox_cuda<forward>(
                 (const half *) src0_d, (half *) dst_d, ne00, ne01, s01, s02, n_dims, nr, pos, freq_scale,
                 freq_base, ext_factor, attn_factor, corr_dims, freq_factors, stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            rope_neox_cuda<forward>(
+                (const __nv_bfloat16 *) src0_bf16, (__nv_bfloat16 *) dst_bf16, ne00, ne01, s01, s02, n_dims, nr, pos, freq_scale,
+                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, stream);
         } else {
             GGML_ABORT("fatal error");
         }
@@ -410,6 +418,10 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         } else if (src0->type == GGML_TYPE_F16) {
             rope_multi_cuda<forward>(
                 (const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
+                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            rope_multi_cuda<forward>(
+                (const __nv_bfloat16 *) src0_bf16, (__nv_bfloat16 *) dst_bf16, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
                 freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, stream);
         } else {
             GGML_ABORT("fatal error");
@@ -423,6 +435,10 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
             rope_vision_cuda<forward>(
                 (const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
                 freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            rope_vision_cuda<forward>(
+                (const __nv_bfloat16 *) src0_bf16, (__nv_bfloat16 *) dst_bf16, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
+                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, stream);
         } else {
             GGML_ABORT("fatal error");
         }
@@ -434,6 +450,10 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
         } else if (src0->type == GGML_TYPE_F16) {
             rope_norm_cuda<forward>(
                 (const half *) src0_d, (half *) dst_d, ne00, ne01, s01, s02, n_dims, nr, pos, freq_scale,
+                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, stream);
+        } else if (src0->type == GGML_TYPE_BF16) {
+            rope_norm_cuda<forward>(
+                (const __nv_bfloat16 *) src0_bf16, (__nv_bfloat16 *) dst_bf16, ne00, ne01, s01, s02, n_dims, nr, pos, freq_scale,
                 freq_base, ext_factor, attn_factor, corr_dims, freq_factors, stream);
         } else {
             GGML_ABORT("fatal error");
