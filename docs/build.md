@@ -395,6 +395,11 @@ First, follow the official LunarG instructions for the installation and setup of
 > [!IMPORTANT]
 > After completing the first step, ensure that you have used the `source` command on the `setup_env.sh` file inside of the Vulkan SDK in your current terminal session. Otherwise, the build won't work. Additionally, if you close out of your terminal, you must perform this step again if you intend to perform a build. However, there are ways to make this persistent. Refer to the Vulkan SDK guide linked in the first step for more information about any of this.
 
+If you want to build on the Raspbian OS, you can just run the following commands to install Vulkan SDK:
+```
+sudo apt install libvulkan-dev glslc glslang-tools
+```
+
 Second, after verifying that you have followed all of the SDK installation/setup steps, use this command to make sure before proceeding:
 ```bash
 vulkaninfo
