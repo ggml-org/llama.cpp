@@ -210,7 +210,7 @@ void main() {
 
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
             [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                Of[r][d] = float16_t(eMf[r]) * Of[r][d];
+                Of[r][d] = ACC_TYPE(eMf[r]) * Of[r][d];
             }
         }
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
@@ -233,7 +233,7 @@ void main() {
                 vec4 Vf = vec4(data_vv4[v_offset / 4 + (j * Bc + c * cols_per_iter + col_tid) * v_stride / 4 + d * D_split + d_tid]);
 #endif
                 [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-                    Of[r][d] += float16_t(Pf[r]) * ACC_TYPEV4(Vf);
+                    Of[r][d] += ACC_TYPE(Pf[r]) * ACC_TYPEV4(Vf);
                 }
             }
         }
@@ -288,7 +288,7 @@ void main() {
     [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
         [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
 
-            Of[r][d] = float16_t(eMf[r]) * Of[r][d];
+            Of[r][d] = ACC_TYPE(eMf[r]) * Of[r][d];
             tmpshv4[tid] = Of[r][d];
 
             barrier();
@@ -357,7 +357,7 @@ void main() {
 
     [[unroll]] for (uint32_t d = 0; d < HSV_per_thread / 4; ++d) {
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
-            Of[r][d] *= float16_t(Lfrcp[r]);
+            Of[r][d] *= ACC_TYPE(Lfrcp[r]);
         }
     }
 
