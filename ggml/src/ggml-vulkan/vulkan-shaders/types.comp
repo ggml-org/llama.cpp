@@ -1413,16 +1413,20 @@ float bf16_to_fp32(uint32_t u)
 }
 
 float e8m0_to_fp32(uint8_t x) {
-    uint32_t bits;
+//    uint32_t bits;
 
-    if (x == 0) {
-        bits = 0x00400000;
-    } else {
-        bits = x;
-        bits = bits << 23;
-    }
+//    if (x == 0) {
+//        bits = 0x00400000;
+//    } else {
+//        bits = x;
+//        bits = bits << 23;
+//    }
 
-    return uintBitsToFloat(bits);
+// branchless optimization	
+    uint ux = uint(x);
+    uint is_zero = uint(x == 0);
+    uint result = (ux << 23) * (1 - is_zero) + (0x00400000u * is_zero);
+    return uintBitsToFloat(result);
 }
 
 #endif // !defined(GGML_TYPES_COMP)
