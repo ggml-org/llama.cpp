@@ -433,7 +433,16 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
             ggml-cpu/arch/riscv/quants.c
             ggml-cpu/arch/riscv/repack.cpp
             )
-        if (GGML_RVV)
+        if (GGML_CPU_RISCV64_SPACEMIT)
+            list(APPEND ARCH_FLAGS -march=rv64gcv_zfh_zba_zicbop -mabi=lp64d -DGGML_RV_ZFH -D${RISCV64_SPACEMIT_IME_SPEC})
+            target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_CPU_RISCV64_SPACEMIT)
+            list(APPEND GGML_CPU_SOURCES
+                ggml-cpu/spacemit/ggml_spacemit_ime.cpp
+                ggml-cpu/spacemit/ggml_spacemit_ime.h
+                ggml-cpu/spacemit/ggml_spacemit_ime_kernels.cpp
+                ggml-cpu/spacemit/ggml_spacemit_ime_kernels.h
+            )
+        elseif (GGML_RVV)
             if (GGML_XTHEADVECTOR)
                 list(APPEND ARCH_FLAGS -march=rv64gc_xtheadvector -mabi=lp64d)
             elseif (GGML_RV_ZFH)
