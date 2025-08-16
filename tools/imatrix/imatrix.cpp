@@ -164,11 +164,11 @@ static std::vector<float> compute_tensor_averages(const Stats & tstats) {
 static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, const std::string & name, const Stats & e) {
     if (e.values.size() % e.counts.size() != 0) {
         LOG_ERR("%s: activation size mismatch for tensor %s (%zu vs %zu)\n", __func__, name.c_str(), e.counts.size(), e.values.size());
-        return -1;;
+        return false;
     }
     if (e.counts.empty()) {
         LOG_ERR("%s: there are no activations for tensor %s. The imatrix may be suboptimal\n", __func__, name.c_str());
-        return -1;
+        return false;
     }
 
     const int n_mat = e.counts.size();
