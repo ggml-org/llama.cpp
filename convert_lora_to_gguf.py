@@ -26,6 +26,8 @@ import gguf
 # reuse model definitions from convert_hf_to_gguf.py
 from convert_hf_to_gguf import LazyTorchTensor, ModelBase
 
+from gguf.constants import GGUFValueType
+
 logger = logging.getLogger("lora-to-gguf")
 
 
@@ -369,7 +371,16 @@ if __name__ == '__main__':
                 self.gguf_writer.add_string(gguf.Keys.Adapter.TYPE, "lora")
 
             def set_gguf_parameters(self):
+                logger.debug("GGUF KV: %s = %d", gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
                 self.gguf_writer.add_float32(gguf.Keys.Adapter.LORA_ALPHA, self.lora_alpha)
+                if alora_invocation_tokens := lparams.get("alora_invocation_tokens"):
+                    logger.debug("GGUF KV: %s = %s", gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS, alora_invocation_tokens)
+                    self.gguf_writer.add_key_value(
+                        gguf.Keys.Adapter.ALORA_INVOCATION_TOKENS,
+                        alora_invocation_tokens,
+                        GGUFValueType.ARRAY,
+                        GGUFValueType.UINT32,
+                    )
 
             def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
                 # Never add extra tensors (e.g. rope_freqs) for LoRA adapters
