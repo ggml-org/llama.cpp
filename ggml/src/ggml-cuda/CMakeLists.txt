@@ -99,6 +99,10 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
     endif()
 
+    if (GGML_CUDA_ALLOW_LARGE_TENSORS)
+        add_compile_definitions(GGML_CUDA_ALLOW_LARGE_TENSORS)
+    endif()
+
     if (GGML_STATIC)
         if (WIN32)
             # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
