@@ -223,7 +223,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
         if (div > 0.0) {
             for (float w : weights) {
                 const float p = w / div;
-                if (p > 0.0) entropy -= p * std::log2(p);
+                if (p > 0.0) { entropy -= p * std::log2(p); }
             }
         }
     }
@@ -268,7 +268,9 @@ static void compute_tensor_statistics(std::vector<tensor_statistics> & tstats) {
             const auto curr_avg = compute_tensor_averages(ts.stats);
             const auto prev_avg = compute_tensor_averages(prev->stats);
             if (curr_avg.size() == prev_avg.size() && !curr_avg.empty()) {
-                float dot_prod = 0.0f, vec1 = 0.0f, vec2 = 0.0f;
+                float dot_prod = 0.0f;
+                float vec1 = 0.0f;
+                float vec2 = 0.0f;
                 for (size_t i = 0; i < curr_avg.size(); ++i) {
                     dot_prod += curr_avg[i] * prev_avg[i];
                     vec1  += curr_avg[i] * curr_avg[i];
