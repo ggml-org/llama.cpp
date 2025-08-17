@@ -341,14 +341,16 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
         const auto & curr = kv.second.curr_avg;
         const auto & prev = kv.second.prev_avg;
         if (curr.size() != prev.size() || curr.empty()) continue;
-        float dot_prod = 0.0, lyr1 = 0.0, lyr2 = 0.0;
+        float dot_prod = 0.0;
+        float layer1   = 0.0;
+        float layer2   = 0.0;
         for (size_t i = 0; i < curr.size(); ++i) {
             dot_prod += curr[i] * prev[i];
-            lyr1  += curr[i] * curr[i];
-            lyr2  += prev[i] * prev[i];
+            layer1  += curr[i] * curr[i];
+            layer2  += prev[i] * prev[i];
         }
         float cossim = 0.0f;
-        if (lyr1 > 0.0 && lyr2 > 0.0) cossim = dot_prod / (std::sqrt(lyr1) * std::sqrt(lyr2));
+        if (layer1 > 0.0 && layer2 > 0.0) cossim = dot_prod / (std::sqrt(layer1) * std::sqrt(layer2));
         layer_cossim[kv.first] = cossim;
     }
 
@@ -1297,9 +1299,9 @@ static bool show_statistics(const common_params & params) {
     std::sort(ts.begin(), ts.end(), tensor_comparer(legacy_mode));
 
     struct layer_stats {
-        float lyr_sum    = 0.0f;
-        float lyr_zd     = 0.0f;
-        int   n        = 0;
+        float layer_sum = 0.0f;
+        float layer_zd  = 0.0f;
+        int   n         = 0;
     };
     std::map<int, layer_stats> ls;
 
@@ -1348,21 +1350,21 @@ static bool show_statistics(const common_params & params) {
         const float zd     = tstat.elements * tstat.zd_score;
 
         if (ls.find(blk) != ls.end()) {
-            ls[blk].lyr_sum    += tstat.sum_values;
-            ls[blk].lyr_zd     += zd;
-            ls[blk].n        += tstat.elements;
+            ls[blk].layer_sum += tstat.sum_values;
+            ls[blk].layer_zd  += zd;
+            ls[blk].n         += tstat.elements;
         } else {
             layer_stats temp_ls;
-            temp_ls.lyr_sum    = tstat.sum_values;
-            temp_ls.lyr_zd     = zd;
-            temp_ls.n        = tstat.elements;
-            ls[blk]          = temp_ls;
+            temp_ls.layer_sum = tstat.sum_values;
+            temp_ls.layer_zd  = zd;
+            temp_ls.n         = tstat.elements;
+            ls[blk]           = temp_ls;
         }
     }
 
-    std::map<int, float> lyr_cossim;
-    std::map<int, float> lyr_l2_norm;
-    compute_layer_statistics(ts, lyr_cossim, lyr_l2_norm, g_collector.get_mstats());
+    std::map<int, float> layer_cossim;
+    std::map<int, float> layer_l2_norm;
+    compute_layer_statistics(ts, layer_cossim, layer_l2_norm, g_collector.get_mstats());
 
     const auto layers = std::count_if(ls.begin(), ls.end(), [](const auto & kv) { return kv.first >= 0; });
     LOG_INF("\nComputing layer statistics (%ld layers)\n", layers);
@@ -1379,23 +1381,23 @@ static bool show_statistics(const common_params & params) {
     }
     for (const auto & [layer, stats] : ls) {
         if (layer < 0 || stats.n == 0) continue;
-        const auto lcs = lyr_cossim.find(layer);
-        const float lyr_cs = lcs != lyr_cossim.end() ? lcs->second : 0.0f;
-        const auto ll2n = lyr_l2_norm.find(layer);
-        const float lyr_l2n = ll2n != lyr_l2_norm.end() ? ll2n->second : 0.0f;
+        const auto lcs = layer_cossim.find(layer);
+        const float layer_cs = lcs != layer_cossim.end() ? lcs->second : 0.0f;
+        const auto ll2n = layer_l2_norm.find(layer);
+        const float layer_l2n = ll2n != layer_l2_norm.end() ? ll2n->second : 0.0f;
         if (legacy_mode) {
             LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\n",
             layer,
-            stats.lyr_sum,
-            100.0f * stats.lyr_zd / stats.n,
-            lyr_cs);
+            stats.layer_sum,
+            100.0f * stats.layer_zd / stats.n,
+            layer_cs);
         } else {
             LOG_INF("%5d\t%11.2f\t%6.2f%%\t%11.4f\t%8.4f\n",
             layer,
-            lyr_l2n,
-            100.0f * stats.lyr_zd / stats.n,
-            lyr_cs,
-            100.0f * std::exp(-0.01f * lyr_l2n) * std::pow(fabs(lyr_cs), 10.0f));
+            layer_l2n,
+            100.0f * stats.layer_zd / stats.n,
+            layer_cs,
+            100.0f * std::exp(-0.01f * layer_l2n) * std::pow(fabs(layer_cs), 10.0f));
         }
     }
     LOG_INF("\n");
