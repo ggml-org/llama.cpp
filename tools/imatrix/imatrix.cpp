@@ -317,7 +317,7 @@ static void compute_layer_statistics(const std::vector<tensor_statistics> & tsta
     static const std::regex pattern(R"(blk\.(\d+)\.)");
     std::unordered_map<std::string, const tensor_statistics*> tidx;
     tidx.reserve(tstats.size());
-    for (const auto & ts : tstats) tidx[ts.tensor] = &ts;
+    for (const auto & ts : tstats) { tidx[ts.tensor] = &ts; }
     std::map<int, layer_aggregation> taggr;
 
     for (const auto & ts : tstats) {
