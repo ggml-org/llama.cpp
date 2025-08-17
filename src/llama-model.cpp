@@ -10864,8 +10864,8 @@ struct llm_build_gemma3n_iswa : public llm_graph_context {
         ggml_tensor * all_coefs = build_lora_mm(model.layers[il].altup_correct_coef, modalities); // [n_altup, n_tokens]
         all_coefs = ggml_scale_bias(ctx0, all_coefs, 1.0f, 1.0f); // + 1.0
         cb(all_coefs, "all_coefs", il);
-        all_coefs = ggml_cont(ctx0, ggml_transpose(ctx0, all_coefs)); // [n_tokens, n_altup]
-        all_coefs = ggml_reshape_3d(ctx0, all_coefs, 1, n_tokens, n_altup); // [1, n_tokens, n_altup]
+        all_coefs = ggml_transpose(ctx0, all_coefs); // [n_tokens, n_altup]
+        all_coefs = ggml_cont_3d(ctx0, all_coefs, 1, n_tokens, n_altup); // [1, n_tokens, n_altup]
 
         innovation = ggml_repeat_4d(ctx0, innovation, n_embd, n_tokens, n_altup, 1);
         ggml_tensor * corrected = ggml_mul(ctx0, innovation, all_coefs); // [n_embd, n_tokens, n_altup]
@@ -15769,7 +15769,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
             };
         }
 
-        cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+        cur = ggml_transpose(ctx0, cur);
 
         cur = build_norm(cur,
                 model.tok_norm,
@@ -15789,7 +15789,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
             cur = ggml_conv_1d_dw_ph(ctx0, layer.dw, cur, 1, 1);
             cur = ggml_add(ctx0, cur, layer.dw_b);
 
-            cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+            cur = ggml_transpose(ctx0, cur);
 
             cur = build_norm(cur,
                     layer.norm,
@@ -15812,7 +15812,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
 
         cur = inpL;
 
-        cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
+        cur = ggml_transpose(ctx0, cur);
 
         cur = build_norm(cur,
                 model.output_norm,
@@ -16913,15 +16913,13 @@ private:
         cb(zx, "mamba_in_proj", il);
         // {8192, 5, 1, 1} -> {8192, 1, 5, 1}
         zx = ggml_permute(ctx0, zx, 0, 2, 1, 3);
-        zx = ggml_cont(ctx0, zx);
-        zx = ggml_reshape_4d(ctx0, zx, head_dim * 2, n_heads, n_seq_tokens, n_seqs);
+        zx = ggml_cont_4d(ctx0, zx, head_dim * 2, n_heads, n_seq_tokens, n_seqs);
         cb(zx, "mamba_in_proj_out", il);
 
         // split into z and x
         // => {head_dim * n_heads, n_seq_tokens, n_seqs}
         ggml_tensor * x = ggml_view_4d(ctx0, zx, head_dim, n_heads, n_seq_tokens, n_seqs, zx->nb[1], zx->nb[2], zx->nb[3], head_dim*ggml_element_size(zx));
-        x = ggml_cont(ctx0, x);
-        x = ggml_reshape_3d(ctx0, x, head_dim * n_heads, n_seq_tokens, n_seqs);
+        x = ggml_cont_3d(ctx0, x, head_dim * n_heads, n_seq_tokens, n_seqs);
         // x = ggml_permute(ctx0, x, 0, 2, 1, 3);
         cb(x, "mamba_x_split", il);
 
