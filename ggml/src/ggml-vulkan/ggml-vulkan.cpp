@@ -464,6 +464,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_upscale_nearest_f32, pipeline_upscale_bilinear_f32, pipeline_upscale_bilinear_ac_f32;
     vk_pipeline pipeline_scale_f32;
     vk_pipeline pipeline_sqr_f32;
+    vk_pipeline pipeline_sqrt_f32;
     vk_pipeline pipeline_sin_f32;
     vk_pipeline pipeline_cos_f32;
     vk_pipeline pipeline_clamp_f32;
@@ -3031,6 +3032,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     ggml_vk_create_pipeline(device, device->pipeline_scale_f32, "scale_f32", scale_f32_len, scale_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
     ggml_vk_create_pipeline(device, device->pipeline_sqr_f32, "sqr_f32", sqr_f32_len, sqr_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_sqrt_f32, "sqrt_f32", sqrt_f32_len, sqrt_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_sin_f32, "sin_f32", sin_f32_len, sin_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cos_f32, "cos_f32", cos_f32_len, cos_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
 
@@ -6981,6 +6983,11 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             return ctx->device->pipeline_sqr_f32;
         }
         return nullptr;
+    case GGML_OP_SQRT:
+        if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            return ctx->device->pipeline_sqrt_f32;
+        }
+        return nullptr;
     case GGML_OP_SIN:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_sin_f32;
@@ -7290,6 +7297,7 @@ static bool ggml_vk_op_supports_incontiguous(ggml_op op) {
     case GGML_OP_CONCAT:
     case GGML_OP_UPSCALE:
     case GGML_OP_SQR:
+    case GGML_OP_SQRT:
     case GGML_OP_SIN:
     case GGML_OP_COS:
     case GGML_OP_CLAMP:
@@ -7595,6 +7603,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_MUL:
     case GGML_OP_SCALE:
     case GGML_OP_SQR:
+    case GGML_OP_SQRT:
     case GGML_OP_SIN:
     case GGML_OP_COS:
     case GGML_OP_CLAMP:
@@ -8240,6 +8249,10 @@ static void ggml_vk_scale(ggml_backend_vk_context * ctx, vk_context& subctx, con
 
 static void ggml_vk_sqr(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_SQR, vk_op_unary_push_constants_init(src0, dst), dryrun);
+}
+
+static void ggml_vk_sqrt(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
+    ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_SQRT, vk_op_unary_push_constants_init(src0, dst), dryrun);
 }
 
 static void ggml_vk_sin(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -9697,6 +9710,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_UPSCALE:
     case GGML_OP_SCALE:
     case GGML_OP_SQR:
+    case GGML_OP_SQRT:
     case GGML_OP_SIN:
     case GGML_OP_COS:
     case GGML_OP_CLAMP:
@@ -9766,6 +9780,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_OP_UPSCALE:
         case GGML_OP_SCALE:
         case GGML_OP_SQR:
+        case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
@@ -9866,6 +9881,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         break;
     case GGML_OP_SQR:
         ggml_vk_sqr(ctx, compute_ctx, src0, node, dryrun);
+
+        break;
+    case GGML_OP_SQRT:
+        ggml_vk_sqrt(ctx, compute_ctx, src0, node, dryrun);
 
         break;
     case GGML_OP_SIN:
@@ -10118,6 +10137,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
     case GGML_OP_UPSCALE:
     case GGML_OP_SCALE:
     case GGML_OP_SQR:
+    case GGML_OP_SQRT:
     case GGML_OP_SIN:
     case GGML_OP_COS:
     case GGML_OP_CLAMP:
@@ -11357,6 +11377,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SILU_BACK:
         case GGML_OP_RMS_NORM_BACK:
         case GGML_OP_SQR:
+        case GGML_OP_SQRT:
         case GGML_OP_SIN:
         case GGML_OP_COS:
         case GGML_OP_CLAMP:
@@ -11801,6 +11822,8 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         tensor_clone = ggml_scale_bias(ggml_ctx, src_clone[0], params[0], params[1]);
     } else if (tensor->op == GGML_OP_SQR) {
         tensor_clone = ggml_sqr(ggml_ctx, src_clone[0]);
+    } else if (tensor->op == GGML_OP_SQRT) {
+        tensor_clone = ggml_sqrt(ggml_ctx, src_clone[0]);
     } else if (tensor->op == GGML_OP_SIN) {
         tensor_clone = ggml_sin(ggml_ctx, src_clone[0]);
     } else if (tensor->op == GGML_OP_COS) {
