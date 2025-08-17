@@ -425,7 +425,7 @@ namespace ggml_cuda_mma {
 
     template <int I, int J, typename T>
     static __device__ __forceinline__ void load_generic(tile<I, J, T> & t, const T * __restrict__ xs0, const int stride) {
-#if defined(AMD_MFMA_AVAILABLE)
+#if defined(AMD_MFMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         if constexpr (I == 64 && J == 2) { // Special tile size to load <16, 4> as <16, 8>
 #pragma unroll
             for (int l = 0; l < t.ne; ++l) {
@@ -798,6 +798,22 @@ namespace ggml_cuda_mma {
                                                      acc[0],
                                                      0, 0, 0);
 #endif // defined(CDNA3)
+
+#elif defined(AMD_WMMA_AVAILABLE)
+        using int32x16_t = __attribute__((__vector_size__(16 * sizeof(int)))) int;
+        int32x16_t * acc = (int32x16_t *) D.x;
+
+#if defined(RDNA4)
+        acc[0] = __builtin_amdgcn_wmma_i32_32x32x16_i8(A.x[0],
+                                                       B.x[0],
+                                                       acc[0],
+                                                       0, 0, 0);
+        acc[0] = __builtin_amdgcn_wmma_i32_32x32x16_i8(A.x[1],
+                                                       B.x[1],
+                                                       acc[0],
+                                                       0, 0, 0);
+#endif // defined(RDNA4)
+
 #else
         GGML_UNUSED_VARS(D, A, B);
         NO_DEVICE_CODE;
