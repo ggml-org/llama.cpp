@@ -1334,6 +1334,12 @@ class MmprojModel(ModelBase):
             return None
         raise KeyError(f"could not find any of: {keys}")
 
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        del bid, name, n_dims  # unused
+        if ".patch_embd.weight" in new_name:
+            return gguf.GGMLQuantizationType.F16 if self.ftype == gguf.LlamaFileType.MOSTLY_F16 else gguf.GGMLQuantizationType.F32
+        return False
+
 
 @ModelBase.register("GPTNeoXForCausalLM")
 class GPTNeoXModel(TextModel):
@@ -2305,10 +2311,9 @@ class SmolVLMModel(MmprojModel):
         self.gguf_writer.add_vision_use_gelu(True)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         if ".embeddings." in name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -3296,12 +3301,9 @@ class Qwen2VLVisionModel(MmprojModel):
         self.gguf_writer.add_vision_attention_layernorm_eps(self.global_config.get("rms_norm_eps", 1e-6))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, name, n_dims  # unused
-        if ".patch_embd." in new_name:
-            return gguf.GGMLQuantizationType.F16
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -3374,10 +3376,9 @@ class Qwen25OmniModel(Qwen2VLVisionModel):
         yield ("audio_tower.embed_positions.weight", pos_embd)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         if ".conv" in name and ".weight" in name:
             return gguf.GGMLQuantizationType.F16
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("thinker."):
@@ -3423,12 +3424,9 @@ class InternVisionModel(MmprojModel):
         self.gguf_writer.add_vision_projector_scale_factor(int(1.0 / downsample_ratio))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, name, n_dims  # unused
-        if ".patch_embd." in new_name:
-            return gguf.GGMLQuantizationType.F16
         if ".position_embd." in new_name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def _mapping_interns1_name(self, name):
         names_map = {
@@ -5062,13 +5060,12 @@ class Gemma3VisionModel(MmprojModel):
             self.gguf_writer.add_vision_projector_scale_factor(proj_scale_factor)
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         # related to https://github.com/ggml-org/llama.cpp/issues/13025
         if "input_projection" in name:
             return gguf.GGMLQuantizationType.F16
         if ".embeddings." in name:
             return gguf.GGMLQuantizationType.F32
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
@@ -7727,10 +7724,9 @@ class WhisperEncoderModel(MmprojModel):
         self.gguf_writer.add_audio_attention_layernorm_eps(self.hparams.get("layer_norm_eps", 1e-5))
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
-        del bid, new_name, n_dims  # unused
         if ".conv" in name and ".weight" in name:
             return gguf.GGMLQuantizationType.F16
-        return False
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         del bid  # unused
