@@ -938,9 +938,9 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
 
     for (const auto & sc : sums_counts_for) {
         const std::string &        name    = sc.first;
+        const struct ggml_tensor * in_sum   = std::get<2>(sc.second);
         const struct ggml_tensor * in_sum2 = std::get<0>(sc.second);
         const struct ggml_tensor * counts  = std::get<1>(sc.second);
-        const struct ggml_tensor * in_sum   = std::get<2>(sc.second);
 
         if (!in_sum2 || !counts) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());
