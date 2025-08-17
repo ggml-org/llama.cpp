@@ -432,7 +432,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             e.counts.resize(n_as, e.counts[0]);
         }
         if (e.values.empty()) {
-            if (activation_statistics()) e.activations.resize(src1->ne[0]*n_as, 0);
+            if (activation_statistics()) { e.activations.resize(src1->ne[0]*n_as, 0); }
             e.values.resize(src1->ne[0]*n_as, 0);
             e.counts.resize(n_as, 0);
         }
@@ -464,7 +464,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     e.counts[ex]++;
 
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
-                        if (activation_statistics()) e.activations[e_start + j] += x[j];
+                        if (activation_statistics()) { e.activations[e_start + j] += x[j]; }
                         e.values[e_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[e_start + j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[e_start + j], wname.c_str());
@@ -504,7 +504,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             }
         }
         if (e.values.empty()) {
-            if (activation_statistics()) e.activations.resize(src1->ne[0] * n_mat, 0);
+            if (activation_statistics()) { e.activations.resize(src1->ne[0] * n_mat, 0); }
             e.values.resize(src1->ne[0] * n_mat, 0);
             e.counts.resize(1, 0);
         }
@@ -523,7 +523,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                 for (int64_t row = 0; row < src1->ne[1]; ++row) {
                     const float * x = (const float *) (data + row * src1->nb[1] + i2 * src1->nb[2] + i3 * src1->nb[3]);
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
-                        if (activation_statistics()) e.activations[mat_start + j] += x[j];
+                        if (activation_statistics()) { e.activations[mat_start + j] += x[j]; }
                         e.values[mat_start + j] += x[j] * x[j];
                         if (!std::isfinite((float)e.values[j])) {
                             LOG_ERR("%f detected in %s\n", (float)e.values[j], wname.c_str());
