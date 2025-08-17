@@ -45,13 +45,18 @@ void quantize() {
     const uint ib = wgid * blocks_per_group + block_in_wg;
     const uint iqs = tid % 8;
 
+#ifndef QBLOCK_X4
     if (ib >= gl_NumWorkGroups.x * blocks_per_group) {
         return;
     }
-
-#ifdef QBLOCK_X4
+#else
     const uint ibx4_outer = ib / 4;
     const uint ibx4_inner = ib % 4;
+
+    const uint required_x4_blocks = (p.ne + 127) / 128;
+    if (ibx4_outer >= required_x4_blocks) {
+        return;
+    }
 #endif
 
     const uint a_idx = ib * 8 + iqs;
