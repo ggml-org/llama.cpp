@@ -223,7 +223,7 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
         if (div > 0.0) {
             for (float w : weights) {
                 const float p = w / div;
-                if (p > 0.0) entropy -= p * std::log2(p);
+                if (p > 0.0) { entropy -= p * std::log2(p); }
             }
         }
     }
