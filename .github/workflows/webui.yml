@@ -32,6 +32,19 @@ jobs:
               run: npm run check
               working-directory: tools/server/webui
 
+            - name: Install Playwright browsers
+              run: npx playwright install --with-deps
+              working-directory: tools/server/webui
+
+            - name: Build Storybook
+              run: npm run build-storybook
+              working-directory: tools/server/webui
+
+            - name: Run Storybook tests
+              run: |
+                  npm run test:storybook
+              working-directory: tools/server/webui
+
             - name: Build application
               run: npm run build
               working-directory: tools/server/webui
