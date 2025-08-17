@@ -101,7 +101,7 @@ layout (constant_id = 0) const uint BLOCK_SIZE = 32;
 layout (constant_id = 1) const uint NUM_ROWS = 1;
 layout (constant_id = 2) const uint NUM_COLS = 1;
 
-#ifdef USE_SUBGROUPS
+#ifdef USE_SUBGROUP_ADD_NO_SHMEM
 void reduce_result(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const in uint32_t d_offset, const in uint32_t first_row, const in uint32_t num_rows, const in uint32_t tid) {
     [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
         [[unroll]] for (uint n = 0; n < num_rows; ++n) {
