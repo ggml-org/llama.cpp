@@ -345,6 +345,9 @@ enum vk_conv_shapes {
     CONV_SHAPE_COUNT,
 };
 
+static constexpr uint32_t num_argsort_pipelines = 11;
+static constexpr uint32_t max_argsort_cols = 1 << (num_argsort_pipelines-1);
+
 struct vk_device_struct {
     std::recursive_mutex mutex;
 
@@ -505,7 +508,7 @@ struct vk_device_struct {
     vk_pipeline pipeline_rope_neox_f32, pipeline_rope_neox_f16;
     vk_pipeline pipeline_rope_multi_f32, pipeline_rope_multi_f16;
     vk_pipeline pipeline_rope_vision_f32, pipeline_rope_vision_f16;
-    vk_pipeline pipeline_argsort_f32;
+    vk_pipeline pipeline_argsort_f32[num_argsort_pipelines];
     vk_pipeline pipeline_sum_rows_f32;
     vk_pipeline pipeline_argmax_f32;
     vk_pipeline pipeline_count_equal_i32;
@@ -870,7 +873,6 @@ struct vk_op_soft_max_push_constants {
 
 struct vk_op_argsort_push_constants {
     uint32_t ncols;
-    uint32_t ncols_pad;
     int32_t order;
 };
 
@@ -3099,7 +3101,9 @@ static void ggml_vk_load_shaders(vk_device& device) {
         ggml_vk_create_pipeline(device, device->pipeline_rope_vision_f16, "rope_vision_f16", rope_vision_f16_len, rope_vision_f16_data, "main", 4, sizeof(vk_op_rope_push_constants), {1, 512, 1}, {}, 1);
     }
 
-    ggml_vk_create_pipeline(device, device->pipeline_argsort_f32, "argsort_f32", argsort_f32_len, argsort_f32_data, "main", 2, sizeof(vk_op_argsort_push_constants), {1024, 1, 1}, {}, 1);
+    for (uint32_t i = 0; i < num_argsort_pipelines; ++i) {
+        ggml_vk_create_pipeline(device, device->pipeline_argsort_f32[i], "argsort_f32_"+std::to_string(i), argsort_f32_len, argsort_f32_data, "main", 2, sizeof(vk_op_argsort_push_constants), {1u<<i, 1, 1}, {1u<<i, i}, 1, true);
+    }
 
     ggml_vk_create_pipeline(device, device->pipeline_argmax_f32, "argmax_f32", argmax_f32_len, argmax_f32_data, "main", 2, sizeof(vk_op_push_constants), {1, 1, 1}, { device->subgroup_size }, 1);
 
@@ -7160,7 +7164,8 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
     case GGML_OP_ARGSORT:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_I32) {
-            return ctx->device->pipeline_argsort_f32;
+            uint32_t idx = (uint32_t)ceilf(log2f(float(dst->ne[0])));
+            return ctx->device->pipeline_argsort_f32[idx];
         }
         return nullptr;
     case GGML_OP_SUM:
@@ -8485,16 +8490,8 @@ static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, c
 
     uint32_t ncols = src0->ne[0];
 
-    uint32_t ncols_pad = 1;
-    while (ncols_pad < ncols) {
-        ncols_pad *= 2;
-    }
-
-    GGML_ASSERT(ncols_pad <= 1024);
-
     ggml_vk_op_f32<vk_op_argsort_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_ARGSORT, {
         ncols,
-        ncols_pad,
         op_params[0],
     }, dryrun);
 }
@@ -11367,6 +11364,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_OPT_STEP_ADAMW:
         case GGML_OP_OPT_STEP_SGD:
             return op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_ARGSORT:
+            return op->ne[0] <= max_argsort_cols;
         case GGML_OP_UPSCALE:
         case GGML_OP_ACC:
         case GGML_OP_CONCAT:
@@ -11376,7 +11375,6 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
-        case GGML_OP_ARGSORT:
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_ARGMAX:
