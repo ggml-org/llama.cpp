@@ -206,9 +206,8 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     if (e.activations.empty()) {
         if (sum > 0) {
             for (const auto act : activations) {
-                if (const float p = act / sum; p > 0) {
-                    entropy -= p * std::log2(p);
-                }
+                const float p = act / sum;
+                if (p > 0) { entropy -= p * std::log2(p); }
             }
         }
     } else {
@@ -231,21 +230,22 @@ static bool compute_vector_statistics(std::vector<tensor_statistics> & tstats, c
     int zd_score = 0;
     if (std_deviation > 0.0f) {
         for (const auto act : activations) {
-            if (const float z = (act - mean) / std_deviation; std::fabs(z) > 1.0f) zd_score++;
+            const float z = (act - mean) / std_deviation;
+            if (std::fabs(z) > 1.0f) { zd_score++; }
         }
     }
 
     auto & ts = tstats.emplace_back();
-    ts.tensor       = name;
-    ts.stats        = e;
-    ts.sum_values   = sum;
-    ts.mean_values  = mean;
-    ts.max_values   = max;
-    ts.min_values   = min;
-    ts.elements     = static_cast<int>(activations.size());
-    ts.std_deviation       = std_deviation;
-    ts.entropy      = entropy;
-    ts.zd_score     = static_cast<float>(zd_score) / ts.elements;
+    ts.tensor        = name;
+    ts.stats         = e;
+    ts.sum_values    = sum;
+    ts.mean_values   = mean;
+    ts.max_values    = max;
+    ts.min_values    = min;
+    ts.elements      = static_cast<int>(activations.size());
+    ts.std_deviation = std_deviation;
+    ts.entropy       = entropy;
+    ts.zd_score      = static_cast<float>(zd_score) / ts.elements;
 
     return e.activations.empty();
 }
