@@ -302,7 +302,7 @@ class ModelBase:
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
                 # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
-                if n_dims <= 1 or new_name.endswith("_norm.weight"):
+                if n_dims <= 1 or new_name.endswith("_norm.weight") or ".patch_embd.weight" in new_name:
                     data_qtype = gguf.GGMLQuantizationType.F32
 
                 # Conditions should closely match those in llama_model_quantize_internal in llama.cpp
