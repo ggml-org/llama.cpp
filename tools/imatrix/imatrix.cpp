@@ -761,7 +761,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
                 const int32_t nact = (int32_t) stat.activations.size();
                 struct ggml_tensor * in_sum  = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nact / nmat, nmat);
                 ggml_format_name(in_sum, "%s.in_sum", name.c_str());
-                for (int32_t j = 0; j < nval; ++j) {
+                for (int32_t j = 0; j < nact; ++j) {
                     ((float *) in_sum->data)[j] = (float) stat.activations[j];
                 }
                 gguf_add_tensor(ctx_gguf, in_sum);
