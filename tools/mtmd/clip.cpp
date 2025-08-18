@@ -508,8 +508,8 @@ struct clip_graph {
             const int patches_per_image = n_patches_x;
             const int kernel_size = hparams.proj_scale_factor;
 
-            cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
-            cur = ggml_reshape_4d(ctx0, cur, patches_per_image, patches_per_image, n_embd, batch_size);
+            cur = ggml_transpose(ctx0, cur);
+            cur = ggml_cont_4d(ctx0, cur, patches_per_image, patches_per_image, n_embd, batch_size);
 
             // doing a pool2d to reduce the number of output tokens
             cur = ggml_pool_2d(ctx0, cur, GGML_OP_POOL_AVG, kernel_size, kernel_size, kernel_size, kernel_size, 0, 0);
@@ -537,13 +537,13 @@ struct clip_graph {
             GGML_ASSERT(scale_factor != 0);
             cur = ggml_reshape_4d(ctx0, cur, n_embd * scale_factor, width / scale_factor, height, bsz);
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
-            cur = ggml_reshape_4d(ctx0, ggml_cont(ctx0, cur),
+            cur = ggml_cont_4d(ctx0, cur,
                 n_embd * scale_factor * scale_factor,
                 height / scale_factor,
                 width / scale_factor,
                 bsz);
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
-            cur = ggml_reshape_3d(ctx0, ggml_cont(ctx0, cur),
+            cur = ggml_cont_3d(ctx0, cur,
                 n_embd * scale_factor * scale_factor,
                 seq / (scale_factor * scale_factor),
                 bsz);
@@ -570,13 +570,13 @@ struct clip_graph {
 
             // unshuffle h
             cur = ggml_reshape_3d(ctx0, cur, n_embd * scale_factor, width / scale_factor, height);
-            cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 2, 1, 3));
+            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
 
             // unshuffle w
-            cur = ggml_reshape_3d(ctx0, cur, n_embd * scale_factor * scale_factor, height / scale_factor, width / scale_factor);
-            cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 2, 1, 3));
+            cur = ggml_cont_3d(ctx0, cur, n_embd * scale_factor * scale_factor, height / scale_factor, width / scale_factor);
+            cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
 
-            cur = ggml_reshape_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
+            cur = ggml_cont_2d(ctx0, cur, cur->ne[0], cur->ne[1] * cur->ne[2]);
 
             // projection
             cur = ggml_norm(ctx0, cur, 1e-5); // default nn.LayerNorm
@@ -715,15 +715,15 @@ struct clip_graph {
             auto inp_1 = ggml_conv_2d(ctx0, model.patch_embeddings_1, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
             inp = ggml_add(ctx0, inp, inp_1);
 
-            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 2, 0, 3));  // [w, h, c, b] -> [c, w, h, b]
-            inp = ggml_reshape_4d(
+            inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);  // [w, h, c, b] -> [c, w, h, b]
+            inp = ggml_cont_4d(
                 ctx0, inp,
                 n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
             inp = ggml_reshape_4d(
                 ctx0, inp,
                 n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
-            inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 0, 2, 1, 3));
-            inp = ggml_reshape_3d(
+            inp = ggml_permute(ctx0, inp, 0, 2, 1, 3);
+            inp = ggml_cont_3d(
                 ctx0, inp,
                 n_embd, n_patches_x * n_patches_y, batch_size);
         }
@@ -988,14 +988,14 @@ struct clip_graph {
             GGML_ASSERT(scale_factor > 0);
             cur = ggml_reshape_4d(ctx0, cur, n_embd * scale_factor, height / scale_factor, width, bsz);
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
-            cur = ggml_reshape_4d(ctx0, ggml_cont(ctx0, cur),
+            cur = ggml_cont_4d(ctx0, cur,
                 n_embd * scale_factor * scale_factor,
                 height / scale_factor,
                 width / scale_factor,
                 bsz);
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
             // flatten to 2D
-            cur = ggml_reshape_2d(ctx0, ggml_cont(ctx0, cur),
+            cur = ggml_cont_2d(ctx0, cur,
                 n_embd * scale_factor * scale_factor,
                 cur->ne[1] * cur->ne[2]);
         }
@@ -1081,14 +1081,14 @@ struct clip_graph {
                 n_patches_y,
                 bsz);
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
-            cur = ggml_reshape_4d(ctx0, ggml_cont(ctx0, cur),
+            cur = ggml_cont_4d(ctx0, cur,
                 n_embd * scale_factor * scale_factor,
                 n_patches_x / scale_factor,
                 n_patches_y / scale_factor,
                 bsz);
             cur = ggml_permute(ctx0, cur, 0, 2, 1, 3);
             // flatten to 2D
-            cur = ggml_reshape_2d(ctx0, ggml_cont(ctx0, cur),
+            cur = ggml_cont_2d(ctx0, cur,
                 n_embd * scale_factor * scale_factor,
                 n_patches / scale_factor / scale_factor);
             cb(cur, "pixel_shuffle", -1);
@@ -1321,8 +1321,8 @@ struct clip_graph {
                 ggml_tensor * block_1 = nullptr;
                 {
                     // transpose from [1, 576, 2048] --> [1, 2048, 576] --> [1, 2048, 24, 24]
-                    mlp_3 = ggml_cont(ctx0, ggml_permute(ctx0, mlp_3, 1, 0, 2, 3));
-                    mlp_3 = ggml_reshape_4d(ctx0, mlp_3, n_patch, n_patch, mlp_3->ne[1], mlp_3->ne[2]);
+                    mlp_3 = ggml_permute(ctx0, mlp_3, 1, 0, 2, 3);
+                    mlp_3 = ggml_cont_4d(ctx0, mlp_3, n_patch, n_patch, mlp_3->ne[1], mlp_3->ne[2]);
                     // stride = 1, padding = 1, bias is nullptr
                     block_1 = ggml_conv_2d_dw(ctx0, model.mm_model_block_1_block_0_0_w, mlp_3, 1, 1, 1, 1, 1, 1);
 
@@ -1427,9 +1427,9 @@ struct clip_graph {
                 mlp_2 = ggml_add(ctx0, mlp_2, model.mm_model_mlp_2_b);
                 // mlp_2 ne = [2048, 576, 1, 1]
                 // // AVG Pool Layer 2*2, strides = 2
-                mlp_2 = ggml_cont(ctx0, ggml_permute(ctx0, mlp_2, 1, 0, 2, 3));
+                mlp_2 = ggml_permute(ctx0, mlp_2, 1, 0, 2, 3);
                 // mlp_2 ne = [576, 2048, 1, 1]
-                mlp_2 = ggml_reshape_4d(ctx0, mlp_2, n_patch, n_patch, mlp_2->ne[1], mlp_2->ne[2]);
+                mlp_2 = ggml_cont_4d(ctx0, mlp_2, n_patch, n_patch, mlp_2->ne[1], mlp_2->ne[2]);
                 // mlp_2 ne [24, 24, 2048, 1]
                 mlp_2 = ggml_pool_2d(ctx0, mlp_2, GGML_OP_POOL_AVG, 2, 2, 2, 2, 0, 0);
                 // weight ne = [3, 3, 2048, 1]
@@ -1449,8 +1449,8 @@ struct clip_graph {
         // glm projector
         else if (ctx->proj_type() == PROJECTOR_TYPE_GLM_EDGE) {
             size_t gridsz = (size_t)sqrt(embeddings->ne[1]);
-            embeddings = ggml_cont(ctx0, ggml_permute(ctx0,embeddings,1,0,2,3));
-            embeddings = ggml_reshape_3d(ctx0, embeddings, gridsz, gridsz, embeddings->ne[1]);
+            embeddings = ggml_permute(ctx0,embeddings,1,0,2,3);
+            embeddings = ggml_cont_3d(ctx0, embeddings, gridsz, gridsz, embeddings->ne[1]);
             embeddings = ggml_conv_2d(ctx0, model.mm_model_adapter_conv_w, embeddings, 2, 2, 0, 0, 1, 1);
             embeddings = ggml_reshape_3d(ctx0, embeddings,embeddings->ne[0]*embeddings->ne[1] , embeddings->ne[2], batch_size);
             embeddings = ggml_cont(ctx0, ggml_permute(ctx0,embeddings, 1, 0, 2, 3));
@@ -2005,7 +2005,6 @@ private:
                 ggml_row_size(cur->type, n_dim),
                 ggml_row_size(cur->type, n_dim*n_head),
                 n_dim/2 * ggml_element_size(cur));
-            second = ggml_cont(ctx0, second); // copy, because ggml_rope don't play well with non-contiguous tensors
             second = ggml_rope_ext(
                 ctx0,
                 second,
