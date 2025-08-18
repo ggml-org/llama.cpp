@@ -223,7 +223,8 @@ void string_to_spv_func(const std::string& _name, const std::string& in_fname, c
     std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
     // disable spirv-opt for coopmat shaders for https://github.com/ggerganov/llama.cpp/issues/10734
-    std::string opt_level = coopmat ? "" : "-O";
+    // disable spirv-opt for bf16 shaders for https://github.com/ggml-org/llama.cpp/issues/15344
+    std::string opt_level = (coopmat || name.find("bf16") != std::string::npos) ? "" : "-O";
 
     #ifdef _WIN32
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, opt_level, "\"" + in_path + "\"", "-o", "\"" + out_fname + "\""};
