@@ -16,6 +16,7 @@ shared FLOAT_TYPE tmp[BLOCK_SIZE];
 void main() {
     const uint row = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x;
     const uint col = gl_LocalInvocationID.x;
+    const float weight = p.param1;
 
     tmp[col] = FLOAT_TYPE(0.0f);
 
@@ -32,6 +33,6 @@ void main() {
     }
 
     if (col == 0) {
-        data_d[row] = D_TYPE(tmp[0]);
+        data_d[row] = D_TYPE(tmp[0] * weight);
     }
 }

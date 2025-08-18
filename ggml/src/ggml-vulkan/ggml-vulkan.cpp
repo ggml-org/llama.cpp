@@ -7207,6 +7207,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_SUM:
     case GGML_OP_SUM_ROWS:
+    case GGML_OP_MEAN:
         if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             return ctx->device->pipeline_sum_rows_f32;
         }
@@ -7554,6 +7555,7 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_SOFT_MAX:
     case GGML_OP_SOFT_MAX_BACK:
     case GGML_OP_SUM_ROWS:
+    case GGML_OP_MEAN:
     case GGML_OP_ARGMAX:
         {
             const uint32_t nr = ggml_nrows(src0);
@@ -8540,11 +8542,15 @@ static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, c
 }
 
 static void ggml_vk_sum(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_SUM, { (uint32_t)ggml_nelements(src0), 0, 0.0f, 0.0f }, dryrun);
+    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_SUM, { (uint32_t)ggml_nelements(src0), 0, 1.0f, 0.0f }, dryrun);
 }
 
 static void ggml_vk_sum_rows(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
-    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_SUM_ROWS, { (uint32_t)src0->ne[0], 0, 0.0f, 0.0f }, dryrun);
+    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_SUM_ROWS, { (uint32_t)src0->ne[0], 0, 1.0f, 0.0f }, dryrun);
+}
+
+static void ggml_vk_mean(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
+    ggml_vk_op_f32<vk_op_push_constants>(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_MEAN, { (uint32_t)src0->ne[0], 0, 1.0f / (float)src0->ne[0], 0.0f }, dryrun);
 }
 
 static void ggml_vk_argmax(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
@@ -9766,6 +9772,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
     case GGML_OP_ARGSORT:
     case GGML_OP_SUM:
     case GGML_OP_SUM_ROWS:
+    case GGML_OP_MEAN:
     case GGML_OP_ARGMAX:
     case GGML_OP_COUNT_EQUAL:
     case GGML_OP_IM2COL:
@@ -9835,6 +9842,7 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         case GGML_OP_ARGSORT:
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
+        case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_IM2COL:
@@ -10038,6 +10046,10 @@ static bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgr
         ggml_vk_sum_rows(ctx, compute_ctx, src0, node, dryrun);
 
         break;
+    case GGML_OP_MEAN:
+        ggml_vk_mean(ctx, compute_ctx, src0, node, dryrun);
+
+        break;
     case GGML_OP_ARGMAX:
         ggml_vk_argmax(ctx, compute_ctx, src0, node, dryrun);
 
@@ -10196,6 +10208,7 @@ static bool ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
     case GGML_OP_ARGSORT:
     case GGML_OP_SUM:
     case GGML_OP_SUM_ROWS:
+    case GGML_OP_MEAN:
     case GGML_OP_ARGMAX:
     case GGML_OP_COUNT_EQUAL:
     case GGML_OP_IM2COL:
@@ -11428,6 +11441,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_SOFT_MAX_BACK:
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
+        case GGML_OP_MEAN:
         case GGML_OP_ARGMAX:
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_IM2COL:
@@ -11983,6 +11997,8 @@ static void ggml_vk_check_results_0(ggml_backend_vk_context * ctx, ggml_cgraph *
         tensor_clone = ggml_sum(ggml_ctx, src_clone[0]);
     } else if (tensor->op == GGML_OP_SUM_ROWS) {
         tensor_clone = ggml_sum_rows(ggml_ctx, src_clone[0]);
+    } else if (tensor->op == GGML_OP_MEAN) {
+        tensor_clone = ggml_mean(ggml_ctx, src_clone[0]);
     } else if (tensor->op == GGML_OP_ARGMAX) {
         tensor_clone = ggml_argmax(ggml_ctx, src_clone[0]);
     } else if (tensor->op == GGML_OP_COUNT_EQUAL) {
