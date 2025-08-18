@@ -302,6 +302,7 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
     vector signed char kv = vec_xl(0, (const signed char *)kvalues_mxfp4);
 
+#pragma GCC unroll 8
     for (; ib < nb; ++ib) {
         __builtin_prefetch(x[ib].qs, 0, 1);
         __builtin_prefetch(y[ib].qs, 0, 1);
