@@ -24,6 +24,12 @@ jobs:
                   ccache \
                   cmake
 
+      - name: Setup ccache
+        run: |
+          mkdir -p $HOME/.ccache
+          ccache -M 5G
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+
       - name: Build
         run: |
           cmake -B build -DLLAMA_CURL=OFF \
