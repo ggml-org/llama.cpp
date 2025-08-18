@@ -766,6 +766,14 @@ static json oaicompat_chat_params_parse(
         inputs.chat_template_kwargs[item.key()] = item.value().dump();
     }
 
+    // parse the "enable_thinking" kwarg to override the default value
+    auto enable_thinking_kwarg = json_value(inputs.chat_template_kwargs, "enable_thinking", std::string(""));
+    if (enable_thinking_kwarg == "true") {
+        inputs.enable_thinking = true;
+    } else if (enable_thinking_kwarg == "false") {
+        inputs.enable_thinking = false;
+    }
+
     // if the assistant message appears at the end of list, we do not add end-of-turn token
     // for ex. this can be useful to modify the reasoning process in reasoning models
     bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
@@ -782,7 +790,7 @@ static json oaicompat_chat_params_parse(
         /* TODO: test this properly */
         inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
 
-        if ( inputs.enable_thinking || inputs.chat_template_kwargs.find("enable_thinking") != inputs.chat_template_kwargs.end()) {
+        if ( inputs.enable_thinking ) {
             throw std::runtime_error("Assistant response prefill is incompatible with enable_thinking.");
         }
 
