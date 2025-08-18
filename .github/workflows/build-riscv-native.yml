@@ -21,6 +21,7 @@ jobs:
                   build-essential \
                   gcc-14-riscv64-linux-gnu \
                   g++-14-riscv64-linux-gnu \
+                  ccache \
                   cmake
 
       - name: Build
