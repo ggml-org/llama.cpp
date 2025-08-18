@@ -208,7 +208,7 @@ export class ChatService {
 								onError?.(contextError);
 								return;
 							}
-							onComplete?.(fullResponse);
+							onComplete?.(regularContent);
 							return;
 						}
 
@@ -218,6 +218,9 @@ export class ChatService {
 							if (content) {
 								hasReceivedData = true;
 								fullResponse += content;
+
+								// Track the regular content before processing this chunk
+								const regularContentBefore = regularContent;
 
 								// Process content character by character to handle think tags
 								insideThinkTag = this.processContentForThinkTags(
@@ -231,7 +234,11 @@ export class ChatService {
 									}
 								);
 
-								onChunk?.(content);
+								// Only send the new regular content that was added in this chunk
+								const newRegularContent = regularContent.slice(regularContentBefore.length);
+								if (newRegularContent) {
+									onChunk?.(newRegularContent);
+								}
 							}
 						} catch (e) {
 							console.error('Error parsing JSON chunk:', e);
