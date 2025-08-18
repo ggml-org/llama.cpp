@@ -2217,13 +2217,13 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
     }
 
     if(ctx.sin_ptr == nullptr) {
-        int64_t theta_length = theta_scale_length * ctx.max_position_length;
+        int64_t theta_length = theta_scale_length * ctx.max_prompt_length;
         ACL_CHECK(aclrtMalloc(&ctx.sin_ptr, theta_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
         ACL_CHECK(aclrtMalloc(&ctx.cos_ptr, theta_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
     }
-    if(position_length > ctx.max_position_length) {
-        ctx.max_position_length = position_length;
-        int64_t theta_length = theta_scale_length * ctx.max_position_length;
+    if(position_length > ctx.max_prompt_length) {
+        ctx.max_prompt_length = position_length;
+        int64_t theta_length = theta_scale_length * ctx.max_prompt_length;
         ACL_CHECK(aclrtFree(ctx.sin_ptr));
         ACL_CHECK(aclrtFree(ctx.cos_ptr));
         ACL_CHECK(aclrtMalloc(&ctx.sin_ptr, theta_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
