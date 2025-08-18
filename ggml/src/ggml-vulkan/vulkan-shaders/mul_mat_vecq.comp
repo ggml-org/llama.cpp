@@ -3,15 +3,6 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
 #extension GL_EXT_integer_dot_product : require
 
-#ifdef USE_SUBGROUP_ADD_NO_SHMEM
-#extension GL_KHR_shader_subgroup_basic : require
-#extension GL_KHR_shader_subgroup_arithmetic : require
-
-#define INVOCATION_ID gl_SubgroupInvocationID.x
-#else
-#define INVOCATION_ID gl_LocalInvocationID.x
-#endif
-
 #define MMQ
 #define B_TYPE block_q8_1_x4
 
@@ -78,7 +69,7 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
 }
 
 void compute_outputs(const uint32_t first_row, const uint32_t num_rows) {
-    const uint tid = INVOCATION_ID;
+    const uint tid = gl_LocalInvocationID.x;
 
     get_offsets(a_offset, b_offset, d_offset);
     a_offset /= QUANT_K;
