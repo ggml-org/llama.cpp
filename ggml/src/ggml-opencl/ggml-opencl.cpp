@@ -2231,8 +2231,13 @@ static ggml_backend_opencl_context * ggml_cl2_init(ggml_backend_dev_t dev) {
         svm_caps & CL_DEVICE_SVM_ATOMICS ? "true" : "false");
 
     if (opencl_c_version.major >= 3) {
+#ifdef CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT
         CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_NON_UNIFORM_WORK_GROUP_SUPPORT, sizeof(cl_bool),
                                  &backend_ctx->non_uniform_workgroups, 0));
+#else
+        // OpenCL 3.0+ headers not available, assume support
+        backend_ctx->non_uniform_workgroups = true;
+#endif
     } else {
         GGML_ASSERT(opencl_c_version.major == 2);
         // Non-uniform workgroup sizes is mandatory feature in v2.x.
