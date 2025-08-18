@@ -15769,7 +15769,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
             };
         }
 
-        cur = ggml_transpose(ctx0, cur);
+        cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
         cur = build_norm(cur,
                 model.tok_norm,
@@ -15789,7 +15789,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
             cur = ggml_conv_1d_dw_ph(ctx0, layer.dw, cur, 1, 1);
             cur = ggml_add(ctx0, cur, layer.dw_b);
 
-            cur = ggml_transpose(ctx0, cur);
+            cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
             cur = build_norm(cur,
                     layer.norm,
@@ -15812,7 +15812,7 @@ struct llm_build_wavtokenizer_dec : public llm_graph_context {
 
         cur = inpL;
 
-        cur = ggml_transpose(ctx0, cur);
+        cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
         cur = build_norm(cur,
                 model.output_norm,

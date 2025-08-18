@@ -514,7 +514,7 @@ struct clip_graph {
             // doing a pool2d to reduce the number of output tokens
             cur = ggml_pool_2d(ctx0, cur, GGML_OP_POOL_AVG, kernel_size, kernel_size, kernel_size, kernel_size, 0, 0);
             cur = ggml_reshape_3d(ctx0, cur, cur->ne[0] * cur->ne[0], n_embd, batch_size);
-            cur = ggml_transpose(ctx0, cur);
+            cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
 
             // apply norm before projection
             cur = ggml_rms_norm(ctx0, cur, eps);
@@ -1328,11 +1328,11 @@ struct clip_graph {
 
                     // layer norm
                     // // block_1 shape = [1, 2048, 24, 24], ne = [24, 24, 2048, 1]
-                    block_1 = ggml_permute(ctx0, block_1, 1, 2, 0, 3);
+                    block_1 = ggml_cont(ctx0, ggml_permute(ctx0, block_1, 1, 2, 0, 3));
                     // block_1 shape = [1, 24, 24, 2048], ne = [2048, 24, 24, 1]
                     block_1 = ggml_norm(ctx0, block_1, eps);
                     block_1 = ggml_add(ctx0, ggml_mul(ctx0, block_1, model.mm_model_block_1_block_0_1_w), model.mm_model_block_1_block_0_1_b);
-                    block_1 = ggml_permute(ctx0, block_1, 2, 0, 1, 3);
+                    block_1 = ggml_cont(ctx0, ggml_permute(ctx0, block_1, 2, 0, 1, 3));
 
                     // block_1 shape = [1, 2048, 24, 24], ne = [24, 24, 2048, 1]
                     // hardswish
@@ -1376,11 +1376,11 @@ struct clip_graph {
 
                     // block_1 shape = [1, 2048, 12, 12], ne = [12, 12, 2048, 1]
                     // layer norm
-                    block_1 = ggml_permute(ctx0, block_1, 1, 2, 0, 3);
+                    block_1 = ggml_cont(ctx0, ggml_permute(ctx0, block_1, 1, 2, 0, 3));
                     // block_1 shape = [1, 12, 12, 2048], ne = [2048, 12, 12, 1]
                     block_1 = ggml_norm(ctx0, block_1, eps);
                     block_1 = ggml_add(ctx0, ggml_mul(ctx0, block_1, model.mm_model_block_2_block_0_1_w), model.mm_model_block_2_block_0_1_b);
-                    block_1 = ggml_permute(ctx0, block_1, 2, 0, 1, 3);
+                    block_1 = ggml_cont(ctx0, ggml_permute(ctx0, block_1, 2, 0, 1, 3));
                     // block_1 shape = [1, 2048, 12, 12], ne = [12, 12, 2048, 1]
                     // hardswish
                     ggml_tensor * block_1_hw = ggml_hardswish(ctx0, block_1);
@@ -1750,9 +1750,7 @@ private:
             cur = ggml_cont(ctx0, cur);
             cur = ggml_pool_1d(ctx0, cur, GGML_OP_POOL_AVG, 2, 2, 0);
             cur = ggml_transpose(ctx0, cur);
-            if (!model.post_ln_w) {
-                cur = ggml_cont(ctx0, cur);
-            }
+            cur = ggml_cont(ctx0, cur);
             inpL = cur;
         }
 
