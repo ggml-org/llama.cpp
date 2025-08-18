@@ -3648,8 +3648,9 @@ int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * 
 int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * img) {
     const auto & params = ctx->model.hparams;
 
-    // only for models using fixed size square images
-    int n_patches_sq = (params.image_size / params.patch_size) * (params.image_size / params.patch_size);
+    // for models with fixed size image, the input image is already pre-processed and resized to square
+    int patch_size = params.patch_size;
+    int n_patches = (img->nx / patch_size) * (img->ny / patch_size);
 
     projector_type proj = ctx->proj_type();
 
@@ -3663,27 +3664,27 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_LDPV2:
         case PROJECTOR_TYPE_GLM_EDGE:
             {
-                n_patches_sq /= 4;
+                n_patches /= 4;
                 if (ctx->model.mm_glm_tok_boi) {
-                    n_patches_sq += 2; // for BOI and EOI token embeddings
+                    n_patches += 2; // for BOI and EOI token embeddings
                 }
             } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
                 // Use actual config value if available, otherwise fall back to hardcoded values
                 if (params.minicpmv_query_num > 0) {
-                    n_patches_sq = params.minicpmv_query_num;
+                    n_patches = params.minicpmv_query_num;
                 } else {
                     // Fallback to hardcoded values for legacy models
                     if (params.minicpmv_version == 2) {
-                        n_patches_sq = 96;
+                        n_patches = 96;
                     } else if (params.minicpmv_version == 3) {
-                        n_patches_sq = 64;
+                        n_patches = 64;
                     } else if (params.minicpmv_version == 4) {
-                        n_patches_sq = 64;
+                        n_patches = 64;
                     } else if (params.minicpmv_version == 5) {
                         // MiniCPM-V 4.0
-                        n_patches_sq = 64;
+                        n_patches = 64;
                     } else {
                         GGML_ABORT("Unknown minicpmv version");
                     }
@@ -3692,67 +3693,56 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
             {
-                // dynamic size
+                // dynamic size (2 conv, so double patch size)
                 int patch_size = params.patch_size * 2;
                 int x_patch = img->nx / patch_size + (int)(img->nx % patch_size > 0);
                 int y_patch = img->ny / patch_size + (int)(img->ny % patch_size > 0);
-                n_patches_sq = x_patch * y_patch;
+                n_patches = x_patch * y_patch;
             } break;
         case PROJECTOR_TYPE_GEMMA3:
-            {
-                int n_per_side = params.image_size / params.patch_size;
-                int n_per_side_2d_pool = n_per_side / params.proj_scale_factor;
-                n_patches_sq = n_per_side_2d_pool * n_per_side_2d_pool;
-            } break;
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_INTERNVL:
+        case PROJECTOR_TYPE_LLAMA4:
+        case PROJECTOR_TYPE_LFM2:
             {
                 // both W and H are divided by proj_scale_factor
-                n_patches_sq /= (params.proj_scale_factor * params.proj_scale_factor);
+                int scale_factor = ctx->model.hparams.proj_scale_factor;
+                n_patches /= (scale_factor * scale_factor);
             } break;
         case PROJECTOR_TYPE_PIXTRAL:
             {
                 // dynamic size
                 int n_merge = params.spatial_merge_size;
-                int n_patches_x = img->nx / params.patch_size / (n_merge > 0 ? n_merge : 1);
-                int n_patches_y = img->ny / params.patch_size / (n_merge > 0 ? n_merge : 1);
-                n_patches_sq = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
-            } break;
-        case PROJECTOR_TYPE_LLAMA4:
-            {
-                int scale_factor = ctx->model.hparams.proj_scale_factor;
-                n_patches_sq /= (scale_factor * scale_factor);
+                int n_patches_x = img->nx / patch_size / (n_merge > 0 ? n_merge : 1);
+                int n_patches_y = img->ny / patch_size / (n_merge > 0 ? n_merge : 1);
+                n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
             } break;
         case PROJECTOR_TYPE_VOXTRAL:
         case PROJECTOR_TYPE_ULTRAVOX:
         case PROJECTOR_TYPE_QWEN2A:
             {
-                n_patches_sq = img->nx;
+                n_patches = img->nx;
 
                 const int proj_stack_factor = ctx->model.hparams.proj_stack_factor;
                 if (ctx->model.audio_has_stack_frames()) {
                     GGML_ASSERT(proj_stack_factor > 0);
-                    const int n_len = CLIP_ALIGN(n_patches_sq, proj_stack_factor);
-                    n_patches_sq = n_len / proj_stack_factor;
+                    const int n_len = CLIP_ALIGN(n_patches, proj_stack_factor);
+                    n_patches = n_len / proj_stack_factor;
                 }
 
                 // whisper downscales input token by half after conv1d
-                n_patches_sq /= 2;
+                n_patches /= 2;
 
                 if (ctx->model.audio_has_avgpool()) {
                     // divide by 2 because of nn.AvgPool1d(2, stride=2)
-                    n_patches_sq /= 2;
+                    n_patches /= 2;
                 }
-            } break;
-        case PROJECTOR_TYPE_LFM2:
-            {
-                n_patches_sq = (img->nx / (params.patch_size * params.proj_scale_factor)) * (img->ny / (params.patch_size * params.proj_scale_factor));
             } break;
         default:
             GGML_ABORT("unsupported projector type");
     }
 
-    return n_patches_sq;
+    return n_patches;
 }
 
 static std::vector<std::vector<std::vector<float>>> get_1d_sincos_pos_embed_from_grid_new(int embed_dim, const std::vector<std::vector<float>> & pos) {
