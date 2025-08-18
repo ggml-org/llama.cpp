@@ -2192,7 +2192,7 @@ struct server_context {
         // 1. It's not explicitly disabled (reasoning_budget == 0)
         // 2. The chat template supports it
         bool enable_thinking = params_base.reasoning_budget != 0;
-        if (enable_thinking && params_base.use_jinja) {
+        if (enable_thinking) {
             common_chat_templates_inputs dummy_inputs;
             common_chat_msg msg;
             msg.role = "user";
