@@ -2214,7 +2214,7 @@ struct server_context {
             /* common_chat_templates */ chat_templates.get(),
             /* allow_image           */ mctx ? mtmd_support_vision(mctx) : false,
             /* allow_audio           */ mctx ? mtmd_support_audio (mctx) : false,
-            /* enable_thinking       */ params_base.reasoning_budget != 0,
+            /* enable_thinking       */ enable_thinking,
         };
     }
 
