@@ -1,5 +1,6 @@
 name: Build on RISCV Linux Machine by Cloud-V
 on:
+  pull_request:
   workflow_dispatch:
   workflow_call:
 
