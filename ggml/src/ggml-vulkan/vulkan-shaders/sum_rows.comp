@@ -15,7 +15,7 @@ layout (push_constant) uniform parameter
 {
     uint n_cols;
     uint ne01, ne02;
-    uint nb00, nb01, nb02, nb03;
+    uint nb01, nb02, nb03;
     uint nb11, nb12, nb13;
     float weight;
     uint misalign_offsets;
@@ -53,7 +53,7 @@ void main() {
     tmp[col] = FLOAT_TYPE(0.0);
 
     for (uint i = col; i < p.n_cols; i += BLOCK_SIZE) {
-        tmp[col] += FLOAT_TYPE(data_a[src_idx + i * p.nb00]);
+        tmp[col] += FLOAT_TYPE(data_a[src_idx + i]);
     }
 
     barrier();

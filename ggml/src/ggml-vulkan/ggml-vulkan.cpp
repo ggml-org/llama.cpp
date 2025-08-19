@@ -1018,7 +1018,7 @@ struct vk_op_sum_rows_push_constants
 {
     uint32_t n_cols;
     uint32_t ne01, ne02;
-    uint32_t nb00, nb01, nb02, nb03;
+    uint32_t nb01, nb02, nb03;
     uint32_t nb11, nb12, nb13;
     float weight;
     uint32_t misalign_offsets;
@@ -1032,7 +1032,6 @@ vk_op_sum_rows_push_constants vk_op_sum_rows_push_constants_init(const ggml_tens
     p.n_cols = (uint32_t)n_cols;
     p.ne01 = (uint32_t)src->ne[1];
     p.ne02 = (uint32_t)src->ne[2];
-    p.nb00 = (uint32_t)src->nb[0] / type_size;
     p.nb01 = (uint32_t)src->nb[1] / type_size;
     p.nb02 = (uint32_t)src->nb[2] / type_size;
     p.nb03 = (uint32_t)src->nb[3] / type_size;
@@ -8590,7 +8589,6 @@ static void ggml_vk_argsort(ggml_backend_vk_context * ctx, vk_context& subctx, c
 
 static void ggml_vk_sum(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst, bool dryrun = false) {
     vk_op_sum_rows_push_constants p = vk_op_sum_rows_push_constants_init(src0, dst, ggml_nelements(src0));
-    p.nb00 = 1; // treat src0 as flattened 1D tensor
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, dst, GGML_OP_SUM, p, dryrun);
 }
 
@@ -11491,9 +11489,11 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_DIAG_MASK_INF:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_SOFT_MAX_BACK:
+            return true;
         case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_MEAN:
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_ARGMAX:
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_IM2COL:
