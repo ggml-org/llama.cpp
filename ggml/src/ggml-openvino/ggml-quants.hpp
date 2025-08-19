@@ -1,5 +1,7 @@
 #include <cstdint>
+#include <openvino/op/constant.hpp>
 #include <openvino/runtime/tensor.hpp>
+
 #include "ggml.h"
 
 void unpack_32_4(const uint8_t* data, uint8_t* dst);
@@ -42,3 +44,14 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor& weight,
                                        ov::Tensor& scales,
                                        ov::Tensor& biases,
                                        size_t group_size = GGML_QUANTIZATION_GROUP_SIZE);
+
+namespace ov {
+namespace op {
+namespace util {
+// From <openvino>/src/common/transformations/include/transformations/utils/utils.hpp
+bool get_single_value(const std::shared_ptr<ov::op::v0::Constant>& const_node,
+                      float& value,
+                      bool check_value_range = true);
+}  // namespace util
+}  // namespace op
+}  // namespace ov
