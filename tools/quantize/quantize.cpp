@@ -561,10 +561,11 @@ int main(int argc, char ** argv) {
     }
 
     std::vector<std::string> imatrix_datasets;
-    std::unordered_map<std::string, std::vector<float>> imatrix_data;
-    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data);
-    if (!imatrix_data.empty()) {
-        params.imatrix = &imatrix_data;
+    std::unordered_map<std::string, std::vector<float>> values_data;
+    std::unordered_map<std::string, std::vector<float>> activations_data;
+    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, values_data, activations_data);
+    if (!values_data.empty()) {
+        params.imatrix = &values_data;
         {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_FILE);
