@@ -19,6 +19,22 @@ struct tensor_quantization {
     ggml_type quant = GGML_TYPE_COUNT;
 };
 
+static bool is_iq(const enum ggml_type t) {
+    switch (t) {
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+            return true;
+        default:
+            return false;
+    }
+}
 static enum ggml_type fallback_type(const enum ggml_type new_type) {
     switch (new_type) {
         case GGML_TYPE_TQ1_0:
