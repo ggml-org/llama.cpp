@@ -8663,7 +8663,7 @@ def parse_args() -> argparse.Namespace:
         "--disable-mistral-community-chat-template", action="store_true",
         help=(
             "Whether to disable usage of Mistral community chat templates. If set, use the Mistral official `mistral-common` library for tokenization and detokenization of Mistral models. "
-            "This setting ensure correctness and zero-day support of tokenization for models converted from the Mistral format."
+            "Using `mistral-common` ensure correctness and zero-day support of tokenization for models converted from the Mistral format but requires to manually setup the tokenization server."
         )
     )
 
