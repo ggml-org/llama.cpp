@@ -1408,7 +1408,7 @@ static void test_template_output_parsers() {
                 /* is_partial= */ false,
                 {
                     /* .format = */ COMMON_CHAT_FORMAT_GRANITE,
-                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_GRANITE,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                 }));
 
         // Test parsing tool calls
