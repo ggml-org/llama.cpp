@@ -145,11 +145,6 @@ llama_context::llama_context(
                 __func__, n_ctx_per_seq, hparams.n_ctx_train);
     }
 
-    if (!params.swa_full && cparams.n_seq_max > 1 && hparams.is_swa_any()) {
-        LLAMA_LOG_WARN("%s: requested n_seq_max (%u) > 1, but swa_full is not enabled -- performance may be degraded: %s\n",
-                __func__, cparams.n_seq_max, "https://github.com/ggml-org/llama.cpp/pull/13845#issuecomment-2924800573");
-    }
-
     if (!hparams.vocab_only) {
         // GPU backends
         for (auto * dev : model.devices) {
