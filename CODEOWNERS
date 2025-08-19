@@ -5,8 +5,8 @@
 /tools/server/ @ngxson
 /ggml/src/ggml-cuda/fattn* @JohannesGaessler
 /ggml/src/ggml-cuda/mmq.* @JohannesGaessler
-/ggml/src/ggml-cuda/mmv.* @JohannesGaessler
 /ggml/src/ggml-cuda/mmvq.* @JohannesGaessler
 /ggml/src/ggml-opt.cpp @JohannesGaessler
 /ggml/src/gguf.cpp @JohannesGaessler
 /ggml/src/ggml-vulkan/ @0cc4m
+/ggml/src/ggml-zdnn/ @taronaeo

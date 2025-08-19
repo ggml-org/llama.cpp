@@ -20,7 +20,7 @@
 
 #ifdef GGML_WEBGPU_DEBUG
 #    define WEBGPU_LOG_DEBUG(msg)  std::cout << msg << std::endl
-#    define WEBGPU_DEBUG_BUF_ELEMS 33
+#    define WEBGPU_DEBUG_BUF_ELEMS 32
 #else
 #    define WEBGPU_LOG_DEBUG(msg) ((void) 0)
 #endif  // GGML_WEBGPU_DEBUG
@@ -343,7 +343,7 @@ static void ggml_backend_webgpu_debug(webgpu_context & ctx) {
     ctx->queue.Submit(1, &commands);
 
     ggml_backend_webgpu_map_buffer(ctx, ctx->debug_host_buf, wgpu::MapMode::Read, 0, ctx->debug_host_buf.GetSize());
-    const float * debug_data = (const float *) ctx->debug_host_buf.GetConstMappedRange();
+    const uint32_t * debug_data = (const uint32_t *) ctx->debug_host_buf.GetConstMappedRange();
     std::cout << "debug data:";
     for (size_t i = 0; i < WEBGPU_DEBUG_BUF_ELEMS; i++) {
         std::cout << "  " << i << ": " << debug_data[i];
@@ -596,10 +596,10 @@ static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_t
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  },
-//         { .binding = 3,
-//           .buffer  = ctx->debug_dev_buf,
-//           .offset  = 0,
-//           .size    = ctx->debug_dev_buf.GetSize() }
+        //         { .binding = 3,
+        //           .buffer  = ctx->debug_dev_buf,
+        //           .offset  = 0,
+        //           .size    = ctx->debug_dev_buf.GetSize() }
     };
 
     uint32_t wg_x =
@@ -968,42 +968,42 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
          .shader_code = wgsl_mul_mat_q6_k_f32,
          .src0_type   = GGML_TYPE_Q6_K,
          .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq2_xxs_f32",
-           .shader_code = wgsl_mul_mat_iq2_xxs_f32,
-           .src0_type   = GGML_TYPE_IQ2_XXS,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq2_xs_f32",
-           .shader_code = wgsl_mul_mat_iq2_xs_f32,
-           .src0_type   = GGML_TYPE_IQ2_XS,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq2_s_f32",
-           .shader_code = wgsl_mul_mat_iq2_s_f32,
-           .src0_type   = GGML_TYPE_IQ2_S,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq3_xxs_f32",
-           .shader_code = wgsl_mul_mat_iq3_xxs_f32,
-           .src0_type   = GGML_TYPE_IQ3_XXS,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq3_s_f32",
-           .shader_code = wgsl_mul_mat_iq3_s_f32,
-           .src0_type   = GGML_TYPE_IQ3_S,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq1_s_f32",
-           .shader_code = wgsl_mul_mat_iq1_s_f32,
-           .src0_type   = GGML_TYPE_IQ1_S,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq1_m_f32",
-           .shader_code = wgsl_mul_mat_iq1_m_f32,
-           .src0_type   = GGML_TYPE_IQ1_M,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq4_nl_f32",
-           .shader_code = wgsl_mul_mat_iq4_nl_f32,
-           .src0_type   = GGML_TYPE_IQ4_NL,
-           .src1_type   = GGML_TYPE_F32 },
-         { .name        = "mul_mat_iq4_xs_f32",
-           .shader_code = wgsl_mul_mat_iq4_xs_f32,
-           .src0_type   = GGML_TYPE_IQ4_XS,
-           .src1_type   = GGML_TYPE_F32 }
+        { .name        = "mul_mat_iq2_xxs_f32",
+         .shader_code = wgsl_mul_mat_iq2_xxs_f32,
+         .src0_type   = GGML_TYPE_IQ2_XXS,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq2_xs_f32",
+         .shader_code = wgsl_mul_mat_iq2_xs_f32,
+         .src0_type   = GGML_TYPE_IQ2_XS,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq2_s_f32",
+         .shader_code = wgsl_mul_mat_iq2_s_f32,
+         .src0_type   = GGML_TYPE_IQ2_S,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq3_xxs_f32",
+         .shader_code = wgsl_mul_mat_iq3_xxs_f32,
+         .src0_type   = GGML_TYPE_IQ3_XXS,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq3_s_f32",
+         .shader_code = wgsl_mul_mat_iq3_s_f32,
+         .src0_type   = GGML_TYPE_IQ3_S,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq1_s_f32",
+         .shader_code = wgsl_mul_mat_iq1_s_f32,
+         .src0_type   = GGML_TYPE_IQ1_S,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq1_m_f32",
+         .shader_code = wgsl_mul_mat_iq1_m_f32,
+         .src0_type   = GGML_TYPE_IQ1_M,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq4_nl_f32",
+         .shader_code = wgsl_mul_mat_iq4_nl_f32,
+         .src0_type   = GGML_TYPE_IQ4_NL,
+         .src1_type   = GGML_TYPE_F32 },
+        { .name        = "mul_mat_iq4_xs_f32",
+         .shader_code = wgsl_mul_mat_iq4_xs_f32,
+         .src0_type   = GGML_TYPE_IQ4_XS,
+         .src1_type   = GGML_TYPE_F32 }
     };
 
     for (auto & pipeline_info : pipeline_infos) {
@@ -1087,41 +1087,42 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
         case GGML_OP_CPY:
         case GGML_OP_SET_ROWS:
             return op->type == GGML_TYPE_F16 && op->src[0]->type == GGML_TYPE_F32;
-        case GGML_OP_MUL_MAT: {
-            switch(op->src[1]->type) {
-                case GGML_TYPE_F16:
-                    return op->src[0]->type == GGML_TYPE_F16;
-                case GGML_TYPE_F32:
-                    switch(op->src[0]->type) {
-                        case GGML_TYPE_F32:
-                        case GGML_TYPE_F16:
-                        case GGML_TYPE_Q4_0:
-                        case GGML_TYPE_Q4_1:
-                        case GGML_TYPE_Q5_0:
-                        case GGML_TYPE_Q5_1:
-                        case GGML_TYPE_Q8_0:
-                        case GGML_TYPE_Q2_K:
-                        case GGML_TYPE_Q3_K:
-                        case GGML_TYPE_Q4_K:
-                        case GGML_TYPE_Q5_K:
-                        case GGML_TYPE_Q6_K:
-                        case GGML_TYPE_IQ2_XXS:
-                        case GGML_TYPE_IQ2_XS:
-                        case GGML_TYPE_IQ2_S:
-                        case GGML_TYPE_IQ3_XXS:
-                        case GGML_TYPE_IQ3_S:
-                        case GGML_TYPE_IQ1_S:
-                        case GGML_TYPE_IQ1_M:
-                        case GGML_TYPE_IQ4_NL:
-                        case GGML_TYPE_IQ4_XS:
-                            return true;
-                        default:
-                            return false;
-                    }
-                default:
-                    return false;
+        case GGML_OP_MUL_MAT:
+            {
+                switch (op->src[1]->type) {
+                    case GGML_TYPE_F16:
+                        return op->src[0]->type == GGML_TYPE_F16;
+                    case GGML_TYPE_F32:
+                        switch (op->src[0]->type) {
+                            case GGML_TYPE_F32:
+                            case GGML_TYPE_F16:
+                            case GGML_TYPE_Q4_0:
+                            case GGML_TYPE_Q4_1:
+                            case GGML_TYPE_Q5_0:
+                            case GGML_TYPE_Q5_1:
+                            case GGML_TYPE_Q8_0:
+                            case GGML_TYPE_Q2_K:
+                            case GGML_TYPE_Q3_K:
+                            case GGML_TYPE_Q4_K:
+                            case GGML_TYPE_Q5_K:
+                            case GGML_TYPE_Q6_K:
+                            case GGML_TYPE_IQ2_XXS:
+                            case GGML_TYPE_IQ2_XS:
+                            case GGML_TYPE_IQ2_S:
+                            case GGML_TYPE_IQ3_XXS:
+                            case GGML_TYPE_IQ3_S:
+                            case GGML_TYPE_IQ1_S:
+                            case GGML_TYPE_IQ1_M:
+                            case GGML_TYPE_IQ4_NL:
+                            case GGML_TYPE_IQ4_XS:
+                                return true;
+                            default:
+                                return false;
+                        }
+                    default:
+                        return false;
+                }
             }
-        }
         default:
             return false;
     }

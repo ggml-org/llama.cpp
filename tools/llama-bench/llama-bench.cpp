@@ -374,7 +374,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -embd, --embeddings <0|1>                 (default: %s)\n",
            join(cmd_params_defaults.embeddings, ",").c_str());
     printf("  -ts, --tensor-split <ts0/ts1/..>          (default: 0)\n");
-    printf("  -ot --override-tensors <tensor name pattern>=<buffer type>;...\n");
+    printf("  -ot --override-tensor <tensor name pattern>=<buffer type>;...\n");
     printf("                                            (default: disabled)\n");
     printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
     printf("\n");

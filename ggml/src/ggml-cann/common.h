@@ -337,6 +337,29 @@ private:
     int32_t device_;
 };
 
+#ifdef USE_ACL_GRAPH
+struct ggml_graph_node_properties {
+    void * node_address;
+    ggml_op node_op;
+    int64_t ne[GGML_MAX_DIMS];
+    size_t nb[GGML_MAX_DIMS];
+    void * src_address[GGML_MAX_SRC];
+    int32_t op_params[GGML_MAX_OP_PARAMS / sizeof(int32_t)];
+};
+
+struct ggml_cann_graph {
+    ~ggml_cann_graph() {
+        if (graph != nullptr) {
+            aclmdlRIDestroy(graph);
+        }
+    }
+
+    aclmdlRI graph = nullptr;
+
+    std::vector<ggml_graph_node_properties> ggml_graph_properties;
+};
+#endif  // USE_ACL_GRAPH
+
 /**
  * @brief Context for managing CANN backend operations.
  */
@@ -345,8 +368,17 @@ struct ggml_backend_cann_context {
     std::string name;                /**< Name of the device. */
     std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+    void* init_ptr = nullptr;
+    void* sin_ptr = nullptr;
+    void* cos_ptr = nullptr;
+    int64_t max_prompt_length = 65536;
+#ifdef USE_ACL_GRAPH
+    /// Cached CANN ACL graph used for executing the current ggml computation graph.
+    std::unique_ptr<ggml_cann_graph> cann_graph;
+#endif
     cann_task_queue task_queue;
     bool async_mode;
+    bool support_set_rows;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -362,6 +394,14 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
+
+        support_set_rows = parse_bool(get_env("LLAMA_SET_ROWS").value_or(""));
+        GGML_LOG_INFO("%s: LLAMA_SET_ROWS is %s\n", __func__, support_set_rows ? "ON" : "OFF");
+
+        if (!support_set_rows) {
+            GGML_LOG_INFO("%s: CANN Graph currently only supports execution when LLAMA_SET_ROWS is ON. "
+                    "Falling back to eager mode.\n", __func__);
+        }
     }
 
     /**
@@ -377,6 +417,15 @@ struct ggml_backend_cann_context {
             if (streams[i] != nullptr) {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
             }
+        }
+        if(init_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(init_ptr));
+        }
+        if(sin_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(sin_ptr));
+        }
+        if(cos_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(cos_ptr));
         }
     }
 
