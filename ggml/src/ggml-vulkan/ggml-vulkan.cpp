@@ -7571,10 +7571,10 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     d_buf_offset &= ~(ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1);
 
     if (op_supports_incontiguous) {
-        x_sz = ggml_nbytes(src0);
-        y_sz = use_src1 ? ggml_nbytes(src1) : 0;
-        z_sz = use_src2 ? ggml_nbytes(src2) : 0;
-        d_sz = ggml_nbytes(dst);
+        x_sz = ggml_nbytes(src0) + get_misalign_bytes(ctx, src0);
+        y_sz = use_src1 ? ggml_nbytes(src1) + get_misalign_bytes(ctx, src1) : 0;
+        z_sz = use_src2 ? ggml_nbytes(src2) + get_misalign_bytes(ctx, src2) : 0;
+        d_sz = ggml_nbytes(dst) + get_misalign_bytes(ctx, dst);
 
         if (x_buf_offset + x_sz >= d_X->size) {
             x_sz = VK_WHOLE_SIZE;
