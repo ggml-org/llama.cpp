@@ -151,12 +151,6 @@ def benchmark(
     if os.environ.get("LLAMA_ARG_N_PARALLEL") is None:
         logger.info("LLAMA_ARG_N_PARALLEL not explicitly set, using 32")
         os.environ["LLAMA_ARG_N_PARALLEL"] = "32"
-    if not external_server and os.environ.get("LLAMA_ARG_N_GPU_LAYERS") is None:
-        logger.info("LLAMA_ARG_N_GPU_LAYERS not explicitly set, using 999")
-        os.environ["LLAMA_ARG_N_GPU_LAYERS"] = "999"
-    if not external_server and os.environ.get("LLAMA_ARG_FLASH_ATTN") is None:
-        logger.info("LLAMA_ARG_FLASH_ATTN not explicitly set, using 'true'")
-        os.environ["LLAMA_ARG_FLASH_ATTN"] = "true"
 
     parallel: int = int(os.environ.get("LLAMA_ARG_N_PARALLEL")) # type: ignore
     prompts: Union[None, list[str], list[list[int]]] = get_prompts_text(prompt_source, n_prompts)
