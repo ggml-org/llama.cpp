@@ -790,28 +790,24 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             }
 
             // Scale for the rows we didn't sample in this expert: multiply by stride-ish factor
-            const float scale_rows = rows_per_expert / std::max<int64_t>(1, rs);
+            const float scale_rows = (float)rows_per_expert / std::max(1.0f, (float)rs);
             total_err *= scale_rows;
         }
 
         return total_err;
     };
 
-    // Produce per-tensor candidate lists
     std::vector<tensor_info> all;
     all.reserve(tensors.size());
 
     for (const auto * tw : tensors) {
-        // Temporary workers for dequantization
         std::vector<std::thread> workers;
         workers.reserve(std::max(1, nthread));
 
         ggml_tensor * t = tw->tensor;
         const std::string name = ggml_get_name(t);
 
-        if (!can_quantize(t)) {
-            continue;
-        }
+        if (!can_quantize(t)) { continue; }
 
         LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12d elements)\n", __func__, name.c_str(), (int)ggml_nelements(t));
         if (!ml.use_mmap) {
@@ -820,7 +816,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
         ml.load_data_for(t);
 
-        // Prepare f32 weights for error estimates
         const int64_t nelem = ggml_nelements(t);
         std::vector<no_init<float>> f32_conv_buf;
         float * f32_data = nullptr;
@@ -955,13 +950,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (ti.choice >= (int)ti.candidate.size() - 1) { continue; }
 
             int j = next_distinct_idx(ti);
-            if (j < 0) { continue; } // no larger-size candidate remains
+            if (j < 0) { continue; }
 
             const auto &cur = ti.candidate[ti.choice];
             const auto &nxt = ti.candidate[j];
 
             size_t delta_bytes = nxt.bytes - cur.bytes;
-            if (delta_bytes == 0) { continue; } // should not happen after dedup, but be safe
+            if (delta_bytes == 0) { continue; }
 
             double err = (double)cur.error - (double)nxt.error;
             err = std::max(err, 0.0); // do not penalize due to sampling noise
