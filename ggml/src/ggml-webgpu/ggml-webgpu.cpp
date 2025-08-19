@@ -129,7 +129,7 @@ struct webgpu_context_struct {
     webgpu_buf_pool set_rows_error_buf_pool;
 
     wgpu::ComputePipeline memset_pipeline;
-    wgpu::ComputePipeline mul_mat_pipeline[24][2];
+    wgpu::ComputePipeline mul_mat_pipeline[30][2];
     wgpu::ComputePipeline set_rows_pipeline;
     wgpu::ComputePipeline cpy_pipeline;
 
@@ -915,7 +915,7 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_pipeline_info pipeline_infos[18] = {
+    webgpu_pipeline_info pipeline_infos[22] = {
         { .name        = "mul_mat_f32_f32",
          .shader_code = wgsl_mul_mat_f32_f32,
          .src0_type   = GGML_TYPE_F32,
@@ -987,6 +987,22 @@ static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
          { .name        = "mul_mat_iq3_s_f32",
            .shader_code = wgsl_mul_mat_iq3_s_f32,
            .src0_type   = GGML_TYPE_IQ3_S,
+           .src1_type   = GGML_TYPE_F32 },
+         { .name        = "mul_mat_iq1_s_f32",
+           .shader_code = wgsl_mul_mat_iq1_s_f32,
+           .src0_type   = GGML_TYPE_IQ1_S,
+           .src1_type   = GGML_TYPE_F32 },
+         { .name        = "mul_mat_iq1_m_f32",
+           .shader_code = wgsl_mul_mat_iq1_m_f32,
+           .src0_type   = GGML_TYPE_IQ1_M,
+           .src1_type   = GGML_TYPE_F32 },
+         { .name        = "mul_mat_iq4_nl_f32",
+           .shader_code = wgsl_mul_mat_iq4_nl_f32,
+           .src0_type   = GGML_TYPE_IQ4_NL,
+           .src1_type   = GGML_TYPE_F32 },
+         { .name        = "mul_mat_iq4_xs_f32",
+           .shader_code = wgsl_mul_mat_iq4_xs_f32,
+           .src0_type   = GGML_TYPE_IQ4_XS,
            .src1_type   = GGML_TYPE_F32 }
     };
 
@@ -1094,6 +1110,10 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                         case GGML_TYPE_IQ2_S:
                         case GGML_TYPE_IQ3_XXS:
                         case GGML_TYPE_IQ3_S:
+                        case GGML_TYPE_IQ1_S:
+                        case GGML_TYPE_IQ1_M:
+                        case GGML_TYPE_IQ4_NL:
+                        case GGML_TYPE_IQ4_XS:
                             return true;
                         default:
                             return false;
