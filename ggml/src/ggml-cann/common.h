@@ -368,6 +368,10 @@ struct ggml_backend_cann_context {
     std::string name;                /**< Name of the device. */
     std::string description;         /**< Description of the device. */
     aclrtEvent copy_event = nullptr; /**< Event for managing copy operations. */
+    void* init_ptr = nullptr;
+    void* sin_ptr = nullptr;
+    void* cos_ptr = nullptr;
+    int64_t max_prompt_length = 65536;
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
     std::unique_ptr<ggml_cann_graph> cann_graph;
@@ -413,6 +417,15 @@ struct ggml_backend_cann_context {
             if (streams[i] != nullptr) {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
             }
+        }
+        if(init_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(init_ptr));
+        }
+        if(sin_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(sin_ptr));
+        }
+        if(cos_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(cos_ptr));
         }
     }
 
