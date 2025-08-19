@@ -2022,12 +2022,12 @@ class LlamaModel(TextModel):
             if self.is_mistral_format:
                 logger.info(
                     "Using a Mistral community chat template. These templates can be subject to errors in early days or weeks after a release. "
-                    "The official way of using Mistral models is via `mistral-common`."
+                    "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
                 )
             template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
             self.gguf_writer.add_chat_template(template)
         else:
-            logger.info("Not using a Mistral community chat template. Ensure to perform the official tokenization and detokenization via `mistral-common`.")
+            logger.info("Not using a Mistral community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
 
     def set_vocab(self):
         if self.is_mistral_format:
