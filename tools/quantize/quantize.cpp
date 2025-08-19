@@ -247,56 +247,69 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
 
     const uint32_t chunk_size = gguf_get_val_u32(ctx_gguf, chunk_size_idx);
 
-    const std::string sums_suffix{ ".in_sum2" };
+    const std::string sums_suffix{ ".in_sum" };
+    const std::string sums2_suffix{ ".in_sum2" };
     const std::string counts_suffix{ ".counts" };
 
     // Using an ordered map to get a deterministic iteration order.
-    std::map<std::string, std::pair<struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
+    std::map<std::string, std::tuple<struct ggml_tensor *, struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
 
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
         std::string name = cur->name;
 
         if (name.empty()) { continue; }
 
-        if (string_remove_suffix(name, sums_suffix)) {
+        if (string_remove_suffix(name, sums2_suffix)) {
             // in_sum2
-            sums_counts_for[std::move(name)].first = cur;
+            std::get<0>(sums_counts_for[std::move(name)]) = cur;
         } else if (string_remove_suffix(name, counts_suffix)) {
             // counts
-            sums_counts_for[std::move(name)].second = cur;
-        } else {
+            std::get<1>(sums_counts_for[std::move(name)]) = cur;
+        }  else if (string_remove_suffix(name, sums_suffix)) {
+            // in_sum
+            std::get<2>(sums_counts_for[std::move(name)]) = cur;
+        }
+        else {
             // ignore other tensors
         }
     }
 
     for (const auto & sc : sums_counts_for) {
         const        std::string & name   = sc.first;
-        const struct ggml_tensor * sums   = sc.second.first;
-        const struct ggml_tensor * counts = sc.second.second;
+        const struct ggml_tensor * sums   = std::get<2>(sc.second);
+        const struct ggml_tensor * sums2  = std::get<0>(sc.second);
+        const struct ggml_tensor * counts = std::get<1>(sc.second);
 
-        if (!sums || !counts) {
+        // check that sums, sums2 and counts have the same shape
+        if (!sums2 || !counts || (sums != nullptr && ggml_nelements(sums) != ggml_nelements(sums2))) {
             fprintf(stderr, "%s: mismatched sums and counts for %s\n", __func__, name.c_str());
             gguf_free(ctx_gguf);
             ggml_free(ctx);
             exit(1);
         }
 
-        const int64_t ne0 = sums->ne[0];
-        const int64_t ne1 = sums->ne[1];
+        const int64_t ne0 = sums2->ne[0];
+        const int64_t ne1 = sums2->ne[1];
 
-        auto & e = imatrix_data[name];
-        e.resize(ggml_nelements(sums));
+        auto & activations = activations_data[name];
+        auto & values = values_data[name];
+        if (sums) {
+            activations.resize(ggml_nelements(sums));
+        }
+        values.resize(ggml_nelements(sums2));
         float max_count = 0.0f;
         for (int64_t j = 0; j < ne1; ++j) {
             const float count = ((const float *) counts->data)[j];
             if (count > 0.0f) {
                 for (int64_t i = 0; i < ne0; ++i) {
-                    e[j*ne0 + i] = ((const float *) sums->data)[j*ne0 + i] / count;
+                    values[j*ne0 + i] = ((const float *) sums2->data)[j*ne0 + i] / count;
+                    if (sums) { activations[j*ne0 + i] = ((const float *) sums->data)[j*ne0 + i] / count; }
                 }
             } else {
                 // Partial imatrix data, this tensor never got any input during calibration
                 for (int64_t i = 0; i < ne0; ++i) {
-                    e[j*ne0 + i] = 1;
+                    values[j*ne0 + i] = 1;
+                    if (sums) { activations[j*ne0 + i] = 0; }
                 }
             }
             if (count > max_count) {
@@ -304,7 +317,8 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
             }
         }
         if (getenv("LLAMA_TRACE")) {
-            printf("%s: loaded data (size = %6d, n_tokens = %6d, n_chunks = %6d) for '%s'\n", __func__, int(e.size()), int(max_count), int(max_count / chunk_size), name.c_str());
+            printf("%s: loaded data (size = %6d, n_tokens = %6d, n_chunks = %6d) for '%s'\n",
+                __func__, int(values.size()), int(max_count), int(max_count / chunk_size), name.c_str());
         }
     }
 
