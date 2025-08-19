@@ -441,6 +441,27 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
     return true;
 }
 
+static bool parse_target_bpw(const char * data, float & target_bpw) {
+    if (!data) {
+        printf("\n%s: no target bits per weight (bpw) provided\n\n", __func__);
+        return false;
+    }
+
+    try {
+        target_bpw = std::stof(data);
+        if (target_bpw < 0.0f || target_bpw > 8.0f) {
+            printf("\n%s: target bits per weight (bpw) must be a positive number between 0.0 and 8.0\n\n", __func__);
+            return false;
+        }
+    }
+    catch (const std::exception & e) {
+        printf("\n%s: '%s' is not valid. Target bits per weight (bpw) must be a positive number between 0.0 and 8.0\n\n", __func__, data);
+        return false;
+    }
+
+    return true;
+}
+
 int main(int argc, char ** argv) {
     if (argc < 3) {
         usage(argv[0]);
