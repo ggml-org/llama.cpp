@@ -57,6 +57,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    const llama_vocab * vocab   = llama_model_get_vocab(model);
+    const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
+
+    const auto get_token_rand = [n_vocab]() -> llama_token {
+        return std::rand() % n_vocab;
+    };
+
     auto * mem = llama_get_memory(ctx);
 
     const int32_t n_kv_max = llama_n_ctx(ctx);
@@ -93,7 +100,7 @@ int main(int argc, char ** argv) {
     // warm up
     {
         for (int i = 0; i < 16; ++i) {
-            common_batch_add(batch, 0, i, { 0 }, false);
+            common_batch_add(batch, get_token_rand(), i, { 0 }, false);
         }
 
         if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
@@ -127,7 +134,7 @@ int main(int argc, char ** argv) {
 
                 for (int j = 0; j < (is_pp_shared ? 1 : pl); ++j) {
                     for (int i = 0; i < pp; ++i) {
-                        common_batch_add(batch, 0, i, { j }, i == pp - 1);
+                        common_batch_add(batch, get_token_rand(), i, { j }, i == pp - 1);
                     }
                 }
 
@@ -154,7 +161,7 @@ int main(int argc, char ** argv) {
                     common_batch_clear(batch);
 
                     for (int j = 0; j < pl; ++j) {
-                        common_batch_add(batch, 0, pp + i, { j }, true);
+                        common_batch_add(batch, get_token_rand(), pp + i, { j }, true);
                     }
 
                     if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
