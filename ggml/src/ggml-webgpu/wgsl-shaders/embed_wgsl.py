@@ -18,7 +18,8 @@ def parse_decls(decls_text):
 
 def replace_placeholders(shader_text, replacements):
     for key, val in replacements.items():
-        pattern = rf'\b{re.escape(key)}\b'
+        # Match {{KEY}} literally, where KEY is escaped
+        pattern = r'{{\s*' + re.escape(key) + r'\s*}}'
         shader_text = re.sub(pattern, str(val), shader_text)
     return shader_text
 

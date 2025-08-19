@@ -50,13 +50,6 @@ static uint64_t webgpu_tensor_offset(const ggml_tensor * tensor) {
 
 /* Struct definitions */
 
-struct webgpu_pipeline_info {
-    std::string  name;
-    const char * shader_code;
-    ggml_type    src0_type;
-    ggml_type    src1_type;
-};
-
 // Forward reference
 static void ggml_webgpu_create_buffer(wgpu::Device &    device,
                                       wgpu::Buffer &    buffer,
@@ -571,12 +564,12 @@ static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_t
         (uint32_t) dst->ne[1],                                  // number of rows in result (M)
         (uint32_t) dst->ne[0],                                  // number of columns in result (N)
         (uint32_t) src0->ne[0],                                 // number of columns in src0/src1 (K)
-        (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),  // stride (elements) of src0 in dimension 1
-        (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)),  // stride (elements) of src1 in dimension 1
-        (uint32_t) (src0->nb[2] / ggml_type_size(src0->type)),  // stride (elements) of src0 in dimension 2
-        (uint32_t) (src1->nb[2] / ggml_type_size(src1->type)),  // stride (elements) of src1 in dimension 2
-        (uint32_t) (src0->nb[3] / ggml_type_size(src0->type)),  // stride (elements) of src0 in dimension 3
-        (uint32_t) (src1->nb[3] / ggml_type_size(src1->type)),  // stride (elements) of src1 in dimension 3
+        (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),  // stride (elements/blocks) of src0 in dimension 1
+        (uint32_t) (src1->nb[1] / ggml_type_size(src1->type)),  // stride (elements/blocks) of src1 in dimension 1
+        (uint32_t) (src0->nb[2] / ggml_type_size(src0->type)),  // stride (elements/blocks) of src0 in dimension 2
+        (uint32_t) (src1->nb[2] / ggml_type_size(src1->type)),  // stride (elements/blocks) of src1 in dimension 2
+        (uint32_t) (src0->nb[3] / ggml_type_size(src0->type)),  // stride (elements/blocks) of src0 in dimension 3
+        (uint32_t) (src1->nb[3] / ggml_type_size(src1->type)),  // stride (elements/blocks) of src1 in dimension 3
         (uint32_t) src0->ne[2],                                 // batch size in dimension 2
         (uint32_t) src0->ne[3],                                 // batch size in dimension 3
         (uint32_t) (src1->ne[2] / src0->ne[2]),                 // broadcast in dimension 2
@@ -596,16 +589,11 @@ static void ggml_webgpu_mul_mat(webgpu_context & ctx, ggml_tensor * src0, ggml_t
          .buffer  = ggml_webgpu_tensor_buf(dst),
          .offset  = ggml_webgpu_tensor_align_offset(ctx, dst),
          .size    = ggml_webgpu_tensor_binding_size(ctx, dst)  },
-        //         { .binding = 3,
-        //           .buffer  = ctx->debug_dev_buf,
-        //           .offset  = 0,
-        //           .size    = ctx->debug_dev_buf.GetSize() }
     };
 
     uint32_t wg_x =
         (dst->ne[0] * dst->ne[1] * dst->ne[2] * dst->ne[3] + WEBGPU_MUL_MAT_WG_SIZE - 1) / WEBGPU_MUL_MAT_WG_SIZE;
     ggml_backend_webgpu_build_and_enqueue(ctx, ctx->mul_mat_pipeline[src0->type][src1->type], params, entries, wg_x);
-    //ggml_backend_webgpu_debug(ctx);
 }
 
 // Returns true if node has enqueued work into the queue, false otherwise
@@ -915,103 +903,94 @@ static void ggml_webgpu_init_memset_pipeline(webgpu_context & webgpu_ctx) {
 }
 
 static void ggml_webgpu_init_mul_mat_pipeline(webgpu_context & webgpu_ctx) {
-    webgpu_pipeline_info pipeline_infos[22] = {
-        { .name        = "mul_mat_f32_f32",
-         .shader_code = wgsl_mul_mat_f32_f32,
-         .src0_type   = GGML_TYPE_F32,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_f16_f16",
-         .shader_code = wgsl_mul_mat_f16_f16,
-         .src0_type   = GGML_TYPE_F16,
-         .src1_type   = GGML_TYPE_F16 },
-        { .name        = "mul_mat_f16_f32",
-         .shader_code = wgsl_mul_mat_f16_f32,
-         .src0_type   = GGML_TYPE_F16,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q4_0_f32",
-         .shader_code = wgsl_mul_mat_q4_0_f32,
-         .src0_type   = GGML_TYPE_Q4_0,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q4_1_f32",
-         .shader_code = wgsl_mul_mat_q4_1_f32,
-         .src0_type   = GGML_TYPE_Q4_1,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q5_0_f32",
-         .shader_code = wgsl_mul_mat_q5_0_f32,
-         .src0_type   = GGML_TYPE_Q5_0,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q5_1_f32",
-         .shader_code = wgsl_mul_mat_q5_1_f32,
-         .src0_type   = GGML_TYPE_Q5_1,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q8_0_f32",
-         .shader_code = wgsl_mul_mat_q8_0_f32,
-         .src0_type   = GGML_TYPE_Q8_0,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q2_k_f32",
-         .shader_code = wgsl_mul_mat_q2_k_f32,
-         .src0_type   = GGML_TYPE_Q2_K,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q3_k_f32",
-         .shader_code = wgsl_mul_mat_q3_k_f32,
-         .src0_type   = GGML_TYPE_Q3_K,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q4_k_f32",
-         .shader_code = wgsl_mul_mat_q4_k_f32,
-         .src0_type   = GGML_TYPE_Q4_K,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q5_k_f32",
-         .shader_code = wgsl_mul_mat_q5_k_f32,
-         .src0_type   = GGML_TYPE_Q5_K,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_q6_k_f32",
-         .shader_code = wgsl_mul_mat_q6_k_f32,
-         .src0_type   = GGML_TYPE_Q6_K,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq2_xxs_f32",
-         .shader_code = wgsl_mul_mat_iq2_xxs_f32,
-         .src0_type   = GGML_TYPE_IQ2_XXS,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq2_xs_f32",
-         .shader_code = wgsl_mul_mat_iq2_xs_f32,
-         .src0_type   = GGML_TYPE_IQ2_XS,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq2_s_f32",
-         .shader_code = wgsl_mul_mat_iq2_s_f32,
-         .src0_type   = GGML_TYPE_IQ2_S,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq3_xxs_f32",
-         .shader_code = wgsl_mul_mat_iq3_xxs_f32,
-         .src0_type   = GGML_TYPE_IQ3_XXS,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq3_s_f32",
-         .shader_code = wgsl_mul_mat_iq3_s_f32,
-         .src0_type   = GGML_TYPE_IQ3_S,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq1_s_f32",
-         .shader_code = wgsl_mul_mat_iq1_s_f32,
-         .src0_type   = GGML_TYPE_IQ1_S,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq1_m_f32",
-         .shader_code = wgsl_mul_mat_iq1_m_f32,
-         .src0_type   = GGML_TYPE_IQ1_M,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq4_nl_f32",
-         .shader_code = wgsl_mul_mat_iq4_nl_f32,
-         .src0_type   = GGML_TYPE_IQ4_NL,
-         .src1_type   = GGML_TYPE_F32 },
-        { .name        = "mul_mat_iq4_xs_f32",
-         .shader_code = wgsl_mul_mat_iq4_xs_f32,
-         .src0_type   = GGML_TYPE_IQ4_XS,
-         .src1_type   = GGML_TYPE_F32 }
-    };
-
-    for (auto & pipeline_info : pipeline_infos) {
-        ggml_webgpu_create_pipeline(webgpu_ctx->device,
-                                    webgpu_ctx->mul_mat_pipeline[pipeline_info.src0_type][pipeline_info.src1_type],
-                                    pipeline_info.shader_code,
-                                    pipeline_info.name.data());
-    }
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_F32][GGML_TYPE_F32],
+                                wgsl_mul_mat_f32_f32,
+                                "mul_mat_f32_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_F16][GGML_TYPE_F16],
+                                wgsl_mul_mat_f16_f16,
+                                "mul_mat_f16_f16");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_F16][GGML_TYPE_F32],
+                                wgsl_mul_mat_f16_f32,
+                                "mul_mat_f16_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_0][GGML_TYPE_F32],
+                                wgsl_mul_mat_q4_0_f32,
+                                "mul_mat_q4_0_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_1][GGML_TYPE_F32],
+                                wgsl_mul_mat_q4_1_f32,
+                                "mul_mat_q4_1_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q5_0][GGML_TYPE_F32],
+                                wgsl_mul_mat_q5_0_f32,
+                                "mul_mat_q5_0_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q5_1][GGML_TYPE_F32],
+                                wgsl_mul_mat_q5_1_f32,
+                                "mul_mat_q5_1_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q8_0][GGML_TYPE_F32],
+                                wgsl_mul_mat_q8_0_f32,
+                                "mul_mat_q8_0_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q2_K][GGML_TYPE_F32],
+                                wgsl_mul_mat_q2_k_f32,
+                                "mul_mat_q2_k_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q3_K][GGML_TYPE_F32],
+                                wgsl_mul_mat_q3_k_f32,
+                                "mul_mat_q3_k_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q4_K][GGML_TYPE_F32],
+                                wgsl_mul_mat_q4_k_f32,
+                                "mul_mat_q4_k_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q5_K][GGML_TYPE_F32],
+                                wgsl_mul_mat_q5_k_f32,
+                                "mul_mat_q5_k_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_Q6_K][GGML_TYPE_F32],
+                                wgsl_mul_mat_q6_k_f32,
+                                "mul_mat_q6_k_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ2_XXS][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq2_xxs_f32,
+                                "mul_mat_iq2_xxs_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ2_XS][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq2_xs_f32,
+                                "mul_mat_iq2_xs_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ2_S][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq2_s_f32,
+                                "mul_mat_iq2_s_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ3_XXS][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq3_xxs_f32,
+                                "mul_mat_iq3_xxs_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ3_S][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq3_s_f32,
+                                "mul_mat_iq3_s_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ1_S][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq1_s_f32,
+                                "mul_mat_iq1_s_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ1_M][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq1_m_f32,
+                                "mul_mat_iq1_m_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ4_NL][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq4_nl_f32,
+                                "mul_mat_iq4_nl_f32");
+    ggml_webgpu_create_pipeline(webgpu_ctx->device,
+                                webgpu_ctx->mul_mat_pipeline[GGML_TYPE_IQ4_XS][GGML_TYPE_F32],
+                                wgsl_mul_mat_iq4_xs_f32,
+                                "mul_mat_iq4_xs_f32");
 }
 
 static void ggml_webgpu_init_set_rows_pipeline(webgpu_context & webgpu_ctx) {

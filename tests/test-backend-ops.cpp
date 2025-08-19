@@ -979,15 +979,6 @@ struct test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
             init_tensor_uniform(t);
         }
-        // print first 32 elements of each tensor
-//        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
-//            if (strcmp(ggml_get_name(t), "a") == 0) {
-//                std::vector<float> values = tensor_to_float(t);
-//                for (int i = 0; i < 32; i++) {
-//                    printf("%s[%d] = %f\n", ggml_get_name(t), i, values[i]);
-//                }
-//            }
-//        }
     }
 
     virtual size_t op_size(ggml_tensor * t) {

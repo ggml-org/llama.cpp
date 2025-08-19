@@ -1731,13 +1731,13 @@ enable f16;
 DECLS
 
 struct MulMatParams {
-    offset_src0: u32, // in elements
-    offset_src1: u32, // in elements
-    offset_dst: u32, // in elements
+    offset_src0: u32, // in elements/blocks
+    offset_src1: u32, // in elements/blocks
+    offset_dst: u32, // in elements/blocks
     m: u32,
     n: u32,
     k: u32,
-    // all strides are in elements
+    // all strides are in elements/blocks
     stride_01: u32,
     stride_11: u32,
     stride_02: u32,
@@ -1751,10 +1751,9 @@ struct MulMatParams {
     broadcast3: u32
 };
 
-@group(0) @binding(0) var<storage, read_write> src0: array<SRC0_TYPE>; // N rows, K columns
-@group(0) @binding(1) var<storage, read_write> src1: array<SRC1_TYPE>; // M rows, K columns (transposed)
+@group(0) @binding(0) var<storage, read_write> src0: array<{{SRC0_TYPE}}>; // N rows, K columns
+@group(0) @binding(1) var<storage, read_write> src1: array<{{SRC1_TYPE}}>; // M rows, K columns (transposed)
 @group(0) @binding(2) var<storage, read_write> dst: array<f32>; // M rows, N columns
-//@group(0) @binding(3) var<storage, read_write> debug: array<f32>;
 
 @group(0) @binding(3) var<uniform> params: MulMatParams;
 
@@ -1786,7 +1785,7 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let src1_idx_base = params.offset_src1 + src13_idx * params.stride_13 + src12_idx * params.stride_12 + row * params.stride_11;
 
     var sum = 0.0;
-    for (var i: u32 = 0u; i < params.k/BLOCK_SIZE; i = i + 1u) {
+    for (var i: u32 = 0u; i < params.k/{{BLOCK_SIZE}}; i = i + 1u) {
         sum += multiply_add(src0_idx_base, src1_idx_base, i);
     }
     dst[params.offset_dst + dst3_idx * dst3_stride + dst2_idx * dst2_stride + row * params.n + col] = sum;
