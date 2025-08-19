@@ -1,7 +1,11 @@
 <script lang="ts">
 	import { ChatAttachmentImagePreview, ChatAttachmentFilePreview } from '$lib/components/app';
 	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
-	import { FileTypeCategory, PdfMimeType, getFileTypeCategory } from '$lib/constants/supported-file-types';
+	import {
+		FileTypeCategory,
+		PdfMimeType,
+		getFileTypeCategory
+	} from '$lib/constants/supported-file-types';
 
 	interface Props {
 		class?: string;
@@ -44,12 +48,11 @@
 	} | null>(null);
 
 	function openPreview(item: (typeof displayItems)[0], event?: Event) {
-		// Prevent form submission when clicking on attachments
 		if (event) {
 			event.preventDefault();
 			event.stopPropagation();
 		}
-		
+
 		previewItem = {
 			uploadedFile: item.uploadedFile,
 			attachment: item.attachment,
