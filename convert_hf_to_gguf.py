@@ -261,6 +261,8 @@ class ModelBase:
                     # TODO: make sure it's a list of integers
                     for i, size in enumerate(weight_block_size):
                         scale = scale.repeat_interleave(size, i)
+                # unpad the scale (e.g. when the tensor size isn't a multiple of the block size)
+                scale = scale[tuple(slice(0, size) for size in weight.shape)]
 
                 return weight.float() * scale
 
