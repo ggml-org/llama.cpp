@@ -596,13 +596,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         ggml_type type;
         float bpw;
         size_t bytes;
-        float error;  // lower is better
+        float error;
     };
 
     struct tensor_info {
         const llama_model_loader::llama_tensor_weight * w;
-        std::vector<candidate_types> candidate; // sorted by bpw ascending
-        int choice = -1;             // index into cand
+        std::vector<candidate_types> candidate;
+        int choice = -1;
         float min_bpw = 0.0;
         float max_bpw = 0.0;
         size_t n_elements = 0;
@@ -610,7 +610,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     auto name_tn = LLM_TN(model.arch);
 
-    // The candidate types we consider; adjust as needed
     const ggml_type base_candidates[] = {
         // Model's
         GGML_TYPE_IQ1_S,
@@ -639,8 +638,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         bool q = name.rfind("weight") == name.size() - 6;
         q &= (ggml_n_dims(t) >= 2);
         q &= name.find("_norm.weight") == std::string::npos;
-        //q &= name != name_tn(LLM_TENSOR_TOKEN_EMBD, "weight");
-        //q &= name != name_tn(LLM_TENSOR_OUTPUT, "weight");
         q &= name.find("ffn_gate_inp.weight") == std::string::npos;
         q &= name.find("altup") == std::string::npos;
         q &= name.find("laurel") == std::string::npos;
@@ -719,7 +716,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         const ggml_type_traits * traits = ggml_get_type_traits(typ);
         if (!traits || !traits->to_float) {
-            // cannot dequantize candidate -> assign very high error
+            // Cannot dequantize candidate -> assign very high error
             return 1e35f;
         }
 
@@ -842,12 +839,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         info.w = tw;
         info.n_elements = nelem;
 
-        // Candidate build with compatibility handling and availability checks
+        // Build per-tensor candidate list
         for (ggml_type ts_type : base_candidates) {
-            // Skip IQ* without imatrix
             if (is_iq(ts_type) && !values) { continue; }
             ggml_type tt = make_compatible(t, ts_type);
-            // After fallback, if still incompatible, skip
             if (!is_compatible(t, tt)) { continue; }
 
             // Compute bpw and bytes
@@ -861,19 +856,18 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         if (info.candidate.empty()) {
-            // as a last resort, keep original type
+            // As a last resort, keep original type
             float bpw = ggml_nbytes(t) * 8.0f / nelem;
             info.candidate.push_back(candidate_types{t->type, bpw, ggml_nbytes(t), 0.0});
         }
 
-        // Sort by bpw ascending
         std::sort(info.candidate.begin(), info.candidate.end(), [](const candidate_types &a, const candidate_types &b) {
             if (a.bpw != b.bpw) { return a.bpw < b.bpw; }
             if (a.error != b.error) { return a.error < b.error; }
             return a.bytes < b.bytes;
         });
 
-        // collapse candidates with identical storage size (bytes)
+        // Collapse candidates with identical storage size (bytes)
         {
             std::vector<candidate_types> uniq;
             uniq.reserve(info.candidate.size());
@@ -903,7 +897,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     if (all.empty()) { return {}; }
 
     // Greedy allocation from minimum bpw upward to reach target_bpw
-    // Start with minimal bpw assignment
     auto current_total_bytes = [&]() -> size_t {
         size_t b = 0;
         for (const auto & ti : all) {
@@ -938,11 +931,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     }
 
     struct upgrade {
-        int idx;            // tensor index
-        int next;           // next candidate index (strictly larger bytes)
-        double err;         // error reduction
-        size_t delta_bytes; // increase in bytes
-        double ratio;       // err per added bit
+        int idx;
+        int next;
+        double err;
+        size_t delta_bytes;
+        double ratio;
     };
 
     // Find next strictly-larger candidate index for a tensor
@@ -998,6 +991,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     }
 
     // We might still be below target but taking any single upgrade overshoots.
+    // Try to find the best upgrade that overshoots the target_bpw by the least and has the best error-to-size ratio.
     {
         double under_gap = (double)target_bpw - bpw_now;
 
