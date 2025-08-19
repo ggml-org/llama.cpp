@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
@@ -85,7 +85,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
@@ -147,7 +147,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
@@ -198,7 +198,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-vulkan
           evict-old-files: 1d
@@ -256,7 +256,7 @@ jobs:
           fetch-depth: 0
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-cpu-${{ matrix.arch }}
           variant: ccache
@@ -328,7 +328,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-${{ matrix.backend }}-${{ matrix.arch }}
           variant: ccache
@@ -398,7 +398,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -471,7 +471,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-sycl
           variant: ccache
@@ -545,7 +545,7 @@ jobs:
           git clone https://github.com/rocm/rocwmma --branch rocm-6.2.4 --depth 1
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-hip-${{ matrix.name }}-x64
           evict-old-files: 1d
@@ -557,7 +557,8 @@ jobs:
           write-host "Downloading AMD HIP SDK Installer"
           Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
-          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
+          $proc.WaitForExit(600000)
           write-host "Completed AMD HIP SDK installation"
 
       - name: Verify ROCm
@@ -600,13 +601,17 @@ jobs:
           name: llama-bin-win-hip-${{ matrix.name }}-x64.zip
 
   ios-xcode-build:
-    runs-on: macos-latest
+    runs-on: macos-15
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Setup Xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app
 
       - name: Build
         id: cmake_build

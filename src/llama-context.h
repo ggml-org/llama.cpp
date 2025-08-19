@@ -111,9 +111,9 @@ struct llama_context {
     size_t state_get_data(      uint8_t * dst, size_t size);
     size_t state_set_data(const uint8_t * src, size_t size);
 
-    size_t state_seq_get_size(llama_seq_id seq_id);
-    size_t state_seq_get_data(llama_seq_id seq_id,       uint8_t * dst, size_t size);
-    size_t state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size);
+    size_t state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags);
+    size_t state_seq_get_data(llama_seq_id seq_id,       uint8_t * dst, size_t size, llama_state_seq_flags flags);
+    size_t state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags);
 
     bool state_load_file(
             const char * filepath,
@@ -152,6 +152,7 @@ struct llama_context {
 
     void opt_init(struct llama_model * model, struct llama_opt_params lopt_params);
 
+    // TODO: more flexible combinations of logical/physical batch size and context size
     void opt_epoch(
             ggml_opt_dataset_t      dataset,
             ggml_opt_result_t       result_train,
@@ -212,8 +213,8 @@ private:
     size_t state_write_data(llama_io_write_i & io);
     size_t state_read_data (llama_io_read_i  & io);
 
-    size_t state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id);
-    size_t state_seq_read_data (llama_io_read_i  & io, llama_seq_id seq_id);
+    size_t state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags);
+    size_t state_seq_read_data (llama_io_read_i  & io, llama_seq_id seq_id, llama_state_seq_flags flags);
 
     //
     // members
