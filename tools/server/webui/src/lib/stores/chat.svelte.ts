@@ -162,6 +162,8 @@ class ChatStore {
 			custom: currentConfig.custom || '',
 		};
 	
+		let streamedReasoningContent = '';
+
 		await this.chatService.sendChatCompletion(
 			allMessages,
 			{
@@ -182,10 +184,23 @@ class ChatStore {
 						this.activeMessages[messageIndex].content = partialThinking.remainingContent || streamedContent;
 					}
 				},
-				onComplete: async () => {
+				onReasoningChunk: (reasoningChunk: string) => {
+					streamedReasoningContent += reasoningChunk;
+
+					const messageIndex = this.activeMessages.findIndex(
+						(m) => m.id === assistantMessage.id
+					);
+
+					if (messageIndex !== -1) {
+						// Update message with reasoning content
+						this.activeMessages[messageIndex].thinking = streamedReasoningContent;
+					}
+				},
+				onComplete: async (finalContent?: string, reasoningContent?: string) => {
 					// Update assistant message in database
 					await DatabaseService.updateMessage(assistantMessage.id, {
-						content: streamedContent
+						content: finalContent || streamedContent,
+						thinking: reasoningContent || streamedReasoningContent
 					});
 
 					// Call custom completion handler if provided

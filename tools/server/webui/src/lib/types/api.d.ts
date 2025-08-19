@@ -100,6 +100,8 @@ export interface ApiChatCompletionRequest {
 		content: string | ApiChatMessageContentPart[];
 	}>;
 	stream?: boolean;
+	// Reasoning parameters
+	reasoning_format?: string;
 	// Generation parameters
 	temperature?: number;
 	max_tokens?: number;
@@ -131,6 +133,7 @@ export interface ApiChatCompletionStreamChunk {
 	choices: Array<{
 		delta: {
 			content?: string;
+			reasoning_content?: string;
 		};
 	}>;
 	timings?: {
@@ -145,6 +148,7 @@ export interface ApiChatCompletionResponse {
 	choices: Array<{
 		message: {
 			content: string;
+			reasoning_content?: string;
 		};
 	}>;
 }

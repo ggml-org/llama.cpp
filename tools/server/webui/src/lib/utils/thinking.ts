@@ -44,7 +44,7 @@ export function parseThinkingContent(content: string): {
  * @returns True if the content contains an opening <think> tag
  */
 export function hasThinkingStart(content: string): boolean {
-	return content.includes('<think>');
+	return content.includes('<think>') || content.includes('<|channel|>analysis');
 }
 
 /**

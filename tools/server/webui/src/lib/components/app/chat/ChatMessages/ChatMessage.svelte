@@ -50,9 +50,10 @@
 	let messageContent = $derived.by(() => {
 		if (message.role === 'assistant') {
 			const parsed = parseThinkingContent(message.content);
-			return parsed.cleanContent;
+			return parsed.cleanContent?.replace('<|channel|>analysis', '');
 		}
-		return message.content;
+
+		return message.content?.replace('<|channel|>analysis', '');
 	});
 
 	async function handleCopy() {
@@ -174,7 +175,25 @@
 		aria-label="Assistant message with actions"
 	>
 		{#if thinkingContent}
-			<ChatMessageThinkingBlock thinking={thinkingContent} isStreaming={!message.timestamp} />
+			<ChatMessageThinkingBlock reasoningContent={thinkingContent} isStreaming={!message.timestamp} />
+		{/if}
+
+		{#if message?.role === 'assistant' && !message.content && isLoading()}
+			<div class="w-full max-w-[48rem] mt-6" in:fade>
+				<div class="processing-container">
+					<span class="processing-text">
+						{processingState.getProcessingMessage()}
+					</span>
+					
+					{#if processingState.shouldShowDetails()}
+						<div class="processing-details">
+							{#each processingState.getProcessingDetails() as detail}
+								<span class="processing-detail">{detail}</span>
+							{/each}
+						</div>
+					{/if}
+				</div>
+			</div>
 		{/if}
 
 		{#if message.role === 'assistant'}
@@ -194,24 +213,6 @@
 {/if}
 
 {#snippet messageActions(config?: { role: ChatRole })}
-	{#if config?.role === 'assistant' && !message.content && isLoading()}
-		<div class="w-full max-w-[48rem] mb-24" in:fade>
-			<div class="processing-container">
-				<span class="processing-text">
-					{processingState.getProcessingMessage()}
-				</span>
-				
-				{#if processingState.shouldShowDetails()}
-					<div class="processing-details">
-						{#each processingState.getProcessingDetails() as detail}
-							<span class="processing-detail">{detail}</span>
-						{/each}
-					</div>
-				{/if}
-			</div>
-		</div>
-	{/if}
-
 	<div
 		class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
 	>

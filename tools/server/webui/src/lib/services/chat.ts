@@ -19,7 +19,7 @@ export class ChatService {
 	async sendMessage(
 		messages: ApiChatMessageData[],
 		options: SettingsChatServiceOptions = {}
-	): Promise<string | void> {
+		): Promise<string | void> {
 		const { 
 			stream, onChunk, onComplete, onError,
 			// Generation parameters
@@ -45,6 +45,7 @@ export class ChatService {
 				role: msg.role,
 				content: msg.content
 			})),
+			reasoning_format: 'auto',
 			stream
 		};
 
@@ -124,7 +125,7 @@ export class ChatService {
 			}
 
 			if (stream) {
-				return this.handleStreamResponse(response, onChunk, onComplete, onError);
+				return this.handleStreamResponse(response, onChunk, onComplete, onError, options.onReasoningChunk);
 			} else {
 				return this.handleNonStreamResponse(response, onComplete, onError);
 			}
@@ -166,14 +167,16 @@ export class ChatService {
 	 * @param onChunk - Optional callback invoked for each content chunk received
 	 * @param onComplete - Optional callback invoked when the stream is complete with full response
 	 * @param onError - Optional callback invoked if an error occurs during streaming
+	 * @param onReasoningChunk - Optional callback invoked for each reasoning content chunk
 	 * @returns {Promise<void>} Promise that resolves when streaming is complete
 	 * @throws {Error} if the stream cannot be read or parsed
 	 */
 	private async handleStreamResponse(
 		response: Response,
 		onChunk?: (chunk: string) => void,
-		onComplete?: (response: string) => void,
-		onError?: (error: Error) => void
+		onComplete?: (response: string, reasoningContent?: string) => void,
+		onError?: (error: Error) => void,
+		onReasoningChunk?: (chunk: string) => void
 	): Promise<void> {
 		const reader = response.body?.getReader();
 
@@ -183,6 +186,7 @@ export class ChatService {
 
 		const decoder = new TextDecoder();
 		let fullResponse = '';
+		let fullReasoningContent = '';
 		let thinkContent = '';
 		let regularContent = '';
 		let insideThinkTag = false;
@@ -208,13 +212,15 @@ export class ChatService {
 								onError?.(contextError);
 								return;
 							}
-							onComplete?.(regularContent);
+							onComplete?.(regularContent, fullReasoningContent || undefined);
 							return;
 						}
 
 						try {
 							const parsed: ApiChatCompletionStreamChunk = JSON.parse(data);
 							const content = parsed.choices[0]?.delta?.content;
+							const reasoningContent = parsed.choices[0]?.delta?.reasoning_content;
+
 							if (content) {
 								hasReceivedData = true;
 								fullResponse += content;
@@ -239,6 +245,12 @@ export class ChatService {
 								if (newRegularContent) {
 									onChunk?.(newRegularContent);
 								}
+							}
+
+							if (reasoningContent) {
+								hasReceivedData = true;
+								fullReasoningContent += reasoningContent;
+								onReasoningChunk?.(reasoningContent);
 							}
 						} catch (e) {
 							console.error('Error parsing JSON chunk:', e);
@@ -272,14 +284,14 @@ export class ChatService {
 	 * @param response - The fetch Response object containing the JSON data
 	 * @param onComplete - Optional callback invoked when response is successfully parsed
 	 * @param onError - Optional callback invoked if an error occurs during parsing
-	 * @returns {Promise<string>} Promise that resolves to the generated content string
+		 * @returns {Promise<string>} Promise that resolves to the generated content string
 	 * @throws {Error} if the response cannot be parsed or is malformed
 	 */
 	private async handleNonStreamResponse(
 		response: Response,
-		onComplete?: (response: string) => void,
+		onComplete?: (response: string, reasoningContent?: string) => void,
 		onError?: (error: Error) => void
-	): Promise<string> {
+		): Promise<string> {
 		try {
 			// Check if response body is empty
 			const responseText = await response.text();
@@ -293,6 +305,11 @@ export class ChatService {
 
 			const data: ApiChatCompletionResponse = JSON.parse(responseText);
 			const content = data.choices[0]?.message?.content || '';
+			const reasoningContent = data.choices[0]?.message?.reasoning_content;
+
+			if (reasoningContent) {
+				console.log('Full reasoning content:', reasoningContent);
+			}
 
 			// Check if content is empty even with valid JSON structure
 			if (!content.trim()) {
@@ -302,7 +319,7 @@ export class ChatService {
 				throw contextError;
 			}
 
-			onComplete?.(content);
+			onComplete?.(content, reasoningContent);
 
 			return content;
 		} catch (error) {
@@ -432,7 +449,8 @@ export class ChatService {
 			temperature?: number;
 			max_tokens?: number;
 			onChunk?: (chunk: string) => void;
-			onComplete?: (response?: string) => void;
+			onReasoningChunk?: (chunk: string) => void;
+			onComplete?: (response?: string, reasoningContent?: string) => void;
 			onError?: (error: Error) => void;
 		} = {}
 	): Promise<string | void> {

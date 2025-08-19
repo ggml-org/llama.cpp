@@ -6,12 +6,12 @@
 	import { slide } from 'svelte/transition';
 
 	interface Props {
-		thinking: string | null;
+		reasoningContent: string | null;
 		isStreaming?: boolean;
 		class?: string;
 	}
 
-	let { thinking, isStreaming = false, class: className = '' }: Props = $props();
+	let { reasoningContent, isStreaming = false, class: className = '' }: Props = $props();
 
 	let isExpanded = $state(false);
 </script>
@@ -26,7 +26,7 @@
 			<Brain class="h-4 w-4" />
 
 			<span class="text-sm">
-				{isStreaming ? 'Thinking...' : 'Thinking summary'}
+				{isStreaming ? 'Reasoning...' : 'Reasoning'}
 			</span>
 		</div>
 
@@ -40,7 +40,7 @@
 	{#if isExpanded}
 		<div class="border-muted border-t px-3 pb-3" transition:slide={{ duration: 200 }}>
 			<div class="pt-3">
-				<MarkdownContent content={thinking || ''} class="text-xs leading-relaxed" />
+				<MarkdownContent content={reasoningContent || ''} class="text-xs leading-relaxed" />
 			</div>
 		</div>
 	{/if}
