@@ -79,6 +79,7 @@ enum llm_type {
     LLM_TYPE_40B,
     LLM_TYPE_65B,
     LLM_TYPE_70B,
+    LLM_TYPE_120B,
     LLM_TYPE_142B,
     LLM_TYPE_236B,
     LLM_TYPE_290B,
