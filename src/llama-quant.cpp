@@ -19,6 +19,32 @@ struct tensor_quantization {
     ggml_type quant = GGML_TYPE_COUNT;
 };
 
+static enum ggml_type fallback_type(const enum ggml_type new_type) {
+    switch (new_type) {
+        case GGML_TYPE_TQ1_0:
+        case GGML_TYPE_TQ2_0:
+            return GGML_TYPE_Q4_0; // symmetric-ish fallback
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ4_XS:
+            return GGML_TYPE_IQ4_NL;
+        case GGML_TYPE_Q4_K:
+            return GGML_TYPE_Q5_0;
+        case GGML_TYPE_Q5_K:
+            return GGML_TYPE_Q5_1;
+        case GGML_TYPE_Q6_K:
+            return GGML_TYPE_Q8_0;
+        default:
+            return new_type;
+    }
+}
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
