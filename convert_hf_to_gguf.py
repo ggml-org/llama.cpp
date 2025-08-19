@@ -8462,7 +8462,7 @@ class MistralModel(LlamaModel):
             if is_mistral_format:
                 err_message += (
                     " . Please pass --disable-mistral-community-chat-template argument to the CLI "
-                    "if you want to use the Mistral official `mistral-common` pre-processing library."
+                    "if you want to skip this error and use the Mistral official `mistral-common` pre-processing library."
                 )
             raise ValueError(err_message)
 
