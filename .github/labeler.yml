@@ -22,6 +22,11 @@ Vulkan:
         - any-glob-to-any-file:
             - ggml/include/ggml-vulkan.h
             - ggml/src/ggml-vulkan/**
+IBM zDNN:
+    - changed-files:
+        - any-glob-to-any-file:
+            - ggml/include/ggml-zdnn.h
+            - ggml/src/ggml-zdnn/**
 documentation:
     - changed-files:
         - any-glob-to-any-file:

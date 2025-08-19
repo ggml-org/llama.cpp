@@ -8,7 +8,7 @@ server = ServerPreset.bert_bge_small()
 
 EPSILON = 1e-3
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.bert_bge_small()
