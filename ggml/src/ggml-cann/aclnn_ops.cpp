@@ -886,12 +886,12 @@ static void aclnn_fill_scalar(ggml_backend_cann_context& ctx, float scalar,
 
 /**
  * @brief Get or expand cached float32 tensors filled with scalar values.
- * 
- * This function manages a cache of float32 tensors (zero-filled and one-filled).  
- * If the cache does not exist, it will initialize the cache with a zero tensor  
- * and a one tensor. If the requested tensor size exceeds the current cache  
- * capacity, the cache will be expanded accordingly. The function then returns  
- * an aclTensor created from the cached memory (either zero-filled or one-filled),  
+ *
+ * This function manages a cache of float32 tensors (zero-filled and one-filled).
+ * If the cache does not exist, it will initialize the cache with a zero tensor
+ * and a one tensor. If the requested tensor size exceeds the current cache
+ * capacity, the cache will be expanded accordingly. The function then returns
+ * an aclTensor created from the cached memory (either zero-filled or one-filled),
  * depending on the input `value`.
  *
  * @param ctx   The CANN backend context that manages cache memory.
@@ -902,7 +902,7 @@ static void aclnn_fill_scalar(ggml_backend_cann_context& ctx, float scalar,
  *              to return the zero-cache tensor or the one-cache tensor.
  * @return      An aclTensor pointer corresponding to the cached tensor.
  */
-static aclTensor* get_f32_cache_acl_tensor(ggml_backend_cann_context& ctx, 
+static aclTensor* get_f32_cache_acl_tensor(ggml_backend_cann_context& ctx,
                                         int64_t* ne, size_t* nb,
                                         int64_t dims, int64_t value) {
     // init cache
@@ -911,10 +911,10 @@ static aclTensor* get_f32_cache_acl_tensor(ggml_backend_cann_context& ctx,
         size_t size = ctx.f32_cache_element * sizeof(float);
         ACL_CHECK(aclrtMalloc(&ctx.f32_zero_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
         ACL_CHECK(aclrtMemsetAsync(ctx.f32_zero_cache, size, 0, size, ctx.stream()));
-        
+
         // one-cache pool init
-        int64_t pool_ne[1] = { ctx.f32_cache_element }; 
-        size_t pool_nb[1] = { sizeof(float) }; 
+        int64_t pool_ne[1] = { ctx.f32_cache_element };
+        size_t pool_nb[1] = { sizeof(float) };
         ACL_CHECK(aclrtMalloc(&ctx.f32_one_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
         aclTensor* acl_one = ggml_cann_create_tensor(
             ctx.f32_one_cache, ACL_FLOAT, sizeof(float), pool_ne, pool_nb,
@@ -937,10 +937,10 @@ static aclTensor* get_f32_cache_acl_tensor(ggml_backend_cann_context& ctx,
         size_t size = n_element * sizeof(float);
         ACL_CHECK(aclrtMalloc(&ctx.f32_zero_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
         ACL_CHECK(aclrtMemsetAsync(ctx.f32_zero_cache, size, 0, size, ctx.stream()));
-        
+
         // one-cache pool init
-        int64_t pool_ne[1] = { n_element }; 
-        size_t pool_nb[1] = { sizeof(float) }; 
+        int64_t pool_ne[1] = { n_element };
+        size_t pool_nb[1] = { sizeof(float) };
         ACL_CHECK(aclrtMalloc(&ctx.f32_one_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
         aclTensor* acl_one = ggml_cann_create_tensor(
             ctx.f32_one_cache, ACL_FLOAT, sizeof(float), pool_ne, pool_nb,
@@ -948,14 +948,14 @@ static aclTensor* get_f32_cache_acl_tensor(ggml_backend_cann_context& ctx,
         aclnn_fill_scalar(ctx, 1, acl_one);
         ggml_cann_release_resources(ctx, acl_one);
     }
-    
+
     void* cache;
     if (value == 0) {
         cache = ctx.f32_zero_cache;
     } else {
         cache = ctx.f32_one_cache;
     }
-    
+
     return ggml_cann_create_tensor(cache, ACL_FLOAT, sizeof(float), ne, nb, dims);
 }
 
@@ -983,7 +983,7 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
         acl_rstd_nb[i] = acl_rstd_nb[i - 1] * src->ne[i - 1];
     }
     aclTensor* acl_rstd = get_f32_cache_acl_tensor(ctx, src->ne, acl_rstd_nb, GGML_MAX_DIMS, 0);
-    
+
     GGML_CANN_CALL_ACLNN_OP(ctx, RmsNorm, acl_src, acl_gamma, eps, acl_dst, acl_rstd);
     ggml_cann_release_resources(ctx, acl_src, acl_dst, acl_gamma, acl_rstd);
 }
