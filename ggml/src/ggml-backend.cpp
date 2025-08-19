@@ -346,6 +346,7 @@ bool ggml_backend_offload_op(ggml_backend_t backend, const struct ggml_tensor * 
 }
 
 ggml_backend_dev_t ggml_backend_get_device(ggml_backend_t backend) {
+    GGML_ASSERT(backend);
     return backend->device;
 }
 
