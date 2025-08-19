@@ -616,7 +616,7 @@ int main(int argc, char ** argv) {
             llama_model_kv_override kvo;
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES);
             kvo.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
-            kvo.val_i64 = imatrix_data.size();
+            kvo.val_i64 = values_data.size();
             kv_overrides.emplace_back(std::move(kvo));
         }
 
@@ -628,6 +628,9 @@ int main(int argc, char ** argv) {
             kv_overrides.emplace_back(std::move(kvo));
         }
     }
+    if (!activations_data.empty()) {
+        params.activations = &activations_data;
+    }
     if (!kv_overrides.empty()) {
         kv_overrides.emplace_back();
         kv_overrides.back().key[0] = 0;
@@ -638,6 +641,9 @@ int main(int argc, char ** argv) {
     }
     if (!prune_layers.empty()) {
         params.prune_layers = &prune_layers;
+    }
+    if (target_bpw != -1.0f) {
+        params.target_bpw = target_bpw;
     }
 
     llama_backend_init();
@@ -701,7 +707,7 @@ int main(int argc, char ** argv) {
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  ||
          params.ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S ||
          params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_S  ||
-         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) && imatrix_data.empty()) {
+         params.ftype == LLAMA_FTYPE_MOSTLY_IQ1_M) && values_data.empty()) {
         fprintf(stderr, "\n==========================================================================================================\n");
         fprintf(stderr, "Please do not use IQ1_S, IQ1_M, IQ2_S, IQ2_XXS, IQ2_XS or Q2_K_S quantization without an importance matrix\n");
         fprintf(stderr, "==========================================================================================================\n\n\n");
