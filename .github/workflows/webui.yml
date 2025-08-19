@@ -7,7 +7,7 @@ on:
             - "tools/server/webui/**"
 
 jobs:
-    check-and-build:
+    setup:
         permissions:
             contents: read
 
@@ -24,13 +24,99 @@ jobs:
                   cache: "npm"
                   cache-dependency-path: "tools/server/webui/package-lock.json"
 
+            - name: Cache node_modules
+              uses: actions/cache@v4
+              id: cache-node-modules
+              with:
+                  path: tools/server/webui/node_modules
+                  key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+                  restore-keys: |
+                      ${{ runner.os }}-node-modules-
+
             - name: Install dependencies
+              if: steps.cache-node-modules.outputs.cache-hit != 'true'
               run: npm ci
               working-directory: tools/server/webui
+
+    check:
+        needs: setup
+        permissions:
+            contents: read
+
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+
+            - name: Restore node_modules cache
+              uses: actions/cache@v4
+              with:
+                  path: tools/server/webui/node_modules
+                  key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+                  restore-keys: |
+                      ${{ runner.os }}-node-modules-
 
             - name: Run type checking and linting
               run: npm run check
               working-directory: tools/server/webui
+
+    build:
+        needs: check
+        permissions:
+            contents: read
+
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+
+            - name: Restore node_modules cache
+              uses: actions/cache@v4
+              with:
+                  path: tools/server/webui/node_modules
+                  key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+                  restore-keys: |
+                      ${{ runner.os }}-node-modules-
+
+            - name: Build application
+              run: npm run build
+              working-directory: tools/server/webui
+
+    storybook:
+        needs: build
+        permissions:
+            contents: read
+
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout code
+              uses: actions/checkout@v4
+
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "22"
+
+            - name: Restore node_modules cache
+              uses: actions/cache@v4
+              with:
+                  path: tools/server/webui/node_modules
+                  key: ${{ runner.os }}-node-modules-${{ hashFiles('tools/server/webui/package-lock.json') }}
+                  restore-keys: |
+                      ${{ runner.os }}-node-modules-
 
             - name: Install Playwright browsers
               run: npx playwright install --with-deps
@@ -41,10 +127,5 @@ jobs:
               working-directory: tools/server/webui
 
             - name: Run Storybook tests
-              run: |
-                  npm run test:storybook
-              working-directory: tools/server/webui
-
-            - name: Build application
-              run: npm run build
+              run: npm run test:storybook
               working-directory: tools/server/webui
