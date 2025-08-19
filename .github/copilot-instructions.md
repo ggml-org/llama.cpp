@@ -204,7 +204,7 @@ Primary tools:
 ## Common Validation Steps
 
 ### After Making Changes
-1. **Format code**: `git clang-format --binary clang-format-16`
+1. **Format code**: `git clang-format`
 2. **Build**: `cmake --build build --config Release`
 3. **Test**: `ctest --test-dir build --output-on-failure`
 4. **Server tests** (if modifying server): `cd tools/server/tests && source ../../../.venv/bin/activate && ./tests.sh`
