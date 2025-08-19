@@ -35,6 +35,7 @@ static bool is_iq(const enum ggml_type t) {
             return false;
     }
 }
+
 static enum ggml_type fallback_type(const enum ggml_type new_type) {
     switch (new_type) {
         case GGML_TYPE_TQ1_0:
@@ -61,6 +62,7 @@ static enum ggml_type fallback_type(const enum ggml_type new_type) {
             return new_type;
     }
 }
+
 static void zeros(std::ofstream & file, size_t n) {
     char zero = 0;
     for (size_t i = 0; i < n; ++i) {
@@ -131,10 +133,11 @@ struct quantize_state_impl {
     int i_ffn_gate     = 0;
     int i_ffn_up       = 0;
 
-    int n_k_quantized = 0;
-    int n_fallback    = 0;
+    int n_k_quantized  = 0;
+    int n_fallback     = 0;
 
-    bool has_imatrix = false;
+    bool has_imatrix     = false;
+    bool has_activations = false;
 
     // used to figure out if a model shares tok_embd with the output weight
     bool has_output = false;
@@ -652,14 +655,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (params->only_copy) {
         ftype = ml.ftype;
     }
-    const std::unordered_map<std::string, std::vector<float>> * imatrix_data = nullptr;
+    const std::unordered_map<std::string, std::vector<float>> * values_data = nullptr;
+    const std::unordered_map<std::string, std::vector<float>> * activations_data = nullptr;
     if (params->imatrix) {
-        imatrix_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
-        if (imatrix_data) {
-            LLAMA_LOG_INFO("================================ Have weights data with %d entries\n",int(imatrix_data->size()));
+        values_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
+        if (values_data) {
+            LLAMA_LOG_INFO("================================ Have weights data with %d entries\n",int(values_data->size()));
             qs.has_imatrix = true;
             // check imatrix for nans or infs
-            for (const auto & kv : *imatrix_data) {
+            for (const auto & kv : *values_data) {
                 for (float f : kv.second) {
                     if (!std::isfinite(f)) {
                         throw std::runtime_error(format("imatrix contains non-finite value %f\n", f));
@@ -668,8 +672,22 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
         }
     }
+    if (params->activations) {
+        activations_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->activations);
+        if (activations_data) {
+            LLAMA_LOG_INFO("================================ Have activations data with %d entries\n",int(activations_data->size()));
+            qs.has_activations = true;
+            // check activations for nans or infs
+            for (const auto & kv : *activations_data) {
+                for (float f : kv.second) {
+                    if (!std::isfinite(f)) {
+                        throw std::runtime_error(format("activations contain non-finite value %f\n", f));
+                    }
+                }
+            }
+        }
+    }
 
-    const size_t align = GGUF_DEFAULT_ALIGNMENT;
     gguf_context_ptr ctx_out { gguf_init_empty() };
 
     std::vector<int> prune_list = {};
@@ -846,6 +864,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     const auto tn = LLM_TN(model.arch);
     new_ofstream(0);
     for (const auto * it : tensors) {
+        const size_t  align  = GGUF_DEFAULT_ALIGNMENT;
         const auto & weight = *it;
         ggml_tensor * tensor = weight.tensor;
         if (weight.idx != cur_split && params->keep_split) {
@@ -864,10 +883,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
         ml.load_data_for(tensor);
 
         LLAMA_LOG_INFO("[%4d/%4d] %36s - [%s], type = %6s, ",
-               ++idx, ml.n_tensors,
-               ggml_get_name(tensor),
-               llama_format_tensor_shape(tensor).c_str(),
-               ggml_type_name(tensor->type));
+            ++idx, ml.n_tensors, ggml_get_name(tensor), llama_format_tensor_shape(tensor).c_str(), ggml_type_name(tensor->type));
 
         // This used to be a regex, but <regex> has an extreme cost to compile times.
         bool quantize = name.rfind("weight") == name.size() - 6; // ends with 'weight'?
@@ -967,9 +983,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             const int64_t nelements = ggml_nelements(tensor);
 
             const float * imatrix = nullptr;
-            if (imatrix_data) {
-                auto it = imatrix_data->find(remap_imatrix(tensor->name, mapped));
-                if (it == imatrix_data->end()) {
+            if (values_data) {
+                auto it = values_data->find(remap_imatrix(tensor->name, mapped));
+                if (it == values_data->end()) {
                     LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
                 } else {
                     if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
