@@ -24,6 +24,26 @@ kernel void kernel_transpose_16(
     write_imageh(output, (i_2+3)*rows+j, (half4)(temp0.s3, temp1.s3, temp2.s3, temp3.s3));
 }
 
+// Padded kernel for irregular shape
+kernel void kernel_transpose_16_4x1(
+    __read_only image1d_buffer_t input,
+    __write_only image1d_buffer_t output,
+    const uint rows,
+    const uint cols
+) {
+
+    const int i = get_global_id(0);
+    const int j = get_global_id(1);
+    const int j_2 = j << 2;
+
+    half temp0 = read_imageh(input, (j_2 + 0) * cols + i).x;
+    half temp1 = read_imageh(input, (j_2 + 1) * cols + i).x;
+    half temp2 = read_imageh(input, (j_2 + 2) * cols + i).x;
+    half temp3 = read_imageh(input, (j_2 + 3) * cols + i).x;
+
+    write_imageh(output, i * rows + j, (half4)(temp0, temp1, temp2, temp3));
+}
+
 // 32-bit transpose, loading/storing a 4x4 tile of elements
 kernel void kernel_transpose_32(
     __read_only image1d_buffer_t input,
