@@ -16,7 +16,7 @@ def create_server():
     server.draft_max = 8
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def fixture_create_server():
     return create_server()
 
@@ -91,6 +91,7 @@ def test_slot_ctx_not_exceeded():
 def test_with_ctx_shift():
     global server
     server.n_ctx = 64
+    server.enable_ctx_shift = True
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "Hello " * 56,

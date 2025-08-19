@@ -581,7 +581,6 @@ int main(int argc, char ** argv) {
 
     params.model = params.vocoder.model;
     params.embedding = true;
-    params.ctx_shift = false; // silence warning
     params.n_ubatch = params.n_batch;
 
     common_init_result llama_init_cts = common_init_from_params(params);

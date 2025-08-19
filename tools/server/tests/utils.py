@@ -79,7 +79,7 @@ class ServerProcess:
     draft: int | None = None
     api_key: str | None = None
     lora_files: List[str] | None = None
-    disable_ctx_shift: int | None = False
+    enable_ctx_shift: int | None = False
     draft_min: int | None = None
     draft_max: int | None = None
     no_webui: bool | None = None
@@ -178,8 +178,8 @@ class ServerProcess:
         if self.lora_files:
             for lora_file in self.lora_files:
                 server_args.extend(["--lora", lora_file])
-        if self.disable_ctx_shift:
-            server_args.extend(["--no-context-shift"])
+        if self.enable_ctx_shift:
+            server_args.append("--context-shift")
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
         if self.draft_max:
