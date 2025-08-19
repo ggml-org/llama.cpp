@@ -1643,7 +1643,7 @@ ggml_cgraph * llama_kv_cache_unified::build_graph_defrag(
             ggml_tensor * view_v_src;
             ggml_tensor * view_v_dst;
 
-            if (cparams.flash_attn) {
+            if (cparams.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED) {
                 // NOTE: the V cache is not transposed when using flash attention
                 view_v_src = ggml_view_2d(ctx, layer.v,
                         n_embd_v_gqa, nm,
@@ -2406,5 +2406,5 @@ void llama_kv_cache_unified_context::set_input_pos_bucket(ggml_tensor * dst, con
 
 uint32_t llama_kv_cache_unified::get_padding(const llama_cparams & cparams) {
     // the FA kernels require padding to avoid extra runtime boundary checks
-    return cparams.flash_attn ? 256u : 32u;
+    return cparams.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED ? 256u : 32u;
 }

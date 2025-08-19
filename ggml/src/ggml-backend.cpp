@@ -1625,7 +1625,7 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
         return false;
     }
 
-    ggml_backend_sched_reset(sched);
+    // ggml_backend_sched_reset(sched);
 
     return true;
 }

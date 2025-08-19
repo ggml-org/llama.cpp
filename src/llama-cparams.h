@@ -29,13 +29,13 @@ struct llama_cparams {
     bool embeddings;
     bool causal_attn;
     bool offload_kqv;
-    bool flash_attn;
     bool no_perf;
     bool warmup;
     bool op_offload;
     bool kv_unified;
 
-    enum llama_pooling_type pooling_type;
+    enum llama_pooling_type    pooling_type;
+    enum llama_flash_attn_type flash_attn_type;
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
