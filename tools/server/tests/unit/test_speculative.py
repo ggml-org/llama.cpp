@@ -16,7 +16,7 @@ def create_server():
     server.draft_max = 8
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def fixture_create_server():
     return create_server()
 
@@ -93,7 +93,6 @@ def test_with_ctx_shift():
     server.n_ctx = 64
     server.enable_ctx_shift = True
     server.start()
-    server.enable_ctx_shift = False
     res = server.make_request("POST", "/completion", data={
         "prompt": "Hello " * 56,
         "temperature": 0.0,

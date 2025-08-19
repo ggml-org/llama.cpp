@@ -11,7 +11,7 @@ Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu 
 Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
 """.strip()
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()
@@ -27,7 +27,6 @@ def test_ctx_shift_enabled():
     global server
     server.enable_ctx_shift = True
     server.start()
-    server.enable_ctx_shift = False
     res = server.make_request("POST", "/completion", data={
         "n_predict": 64,
         "prompt": LONG_TEXT,
