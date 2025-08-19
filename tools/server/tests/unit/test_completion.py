@@ -229,7 +229,7 @@ def test_nocache_long_input_prompt():
         "temperature": 1.0,
         "cache_prompt": False,
     })
-    assert res.status_code == 200
+    assert res.status_code == 400
 
 
 def test_completion_with_tokens_input():
