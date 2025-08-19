@@ -335,15 +335,14 @@ void ggml_vec_dot_mxfp4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
     vsumf0 = vec_add(vsumf0, vec_sld(vsumf0, vsumf0, 8));
     sumf = vec_extract(vsumf0, 0);
     *s = sumf;
-}
 #else
     UNUSED(x);
     UNUSED(y);
     UNUSED(ib);
     UNUSED(sumf);
     ggml_vec_dot_mxfp4_q8_0_generic(n, s, bs, vx, bx, vy, by, nrc);
-}
 #endif
+}
 
 void ggml_vec_dot_q5_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
     const int qk = QK8_0;
