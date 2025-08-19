@@ -512,6 +512,7 @@ int main(int argc, char ** argv) {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_quantization> tensor_types;
     std::vector<int> prune_layers;
+    float target_bpw = -1.0f;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -536,6 +537,10 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--tensor-type") == 0) {
             if (arg_idx == argc-1 || !parse_tensor_type(argv[++arg_idx], tensor_types)) {
+                usage(argv[0]);
+            }
+        } else if (strcmp(argv[arg_idx], "--target-bpw") == 0) {
+            if (arg_idx == argc-1 || !parse_target_bpw(argv[++arg_idx], target_bpw)) {
                 usage(argv[0]);
             }
         } else if (strcmp(argv[arg_idx], "--prune-layers") == 0) {
