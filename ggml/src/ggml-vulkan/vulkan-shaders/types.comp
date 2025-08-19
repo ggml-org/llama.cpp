@@ -1413,8 +1413,8 @@ float bf16_to_fp32(uint32_t u)
 }
 
 float e8m0_to_fp32(uint8_t x) {
-// branchless implementation	
-	uint is_zero = uint(x == 0);
+// branchless implementation
+    uint is_zero = uint(x == 0);
     uint result = (uint(x) << 23) | (is_zero << 22);
     return uintBitsToFloat(result);
 }
