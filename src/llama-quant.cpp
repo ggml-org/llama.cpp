@@ -1062,9 +1062,11 @@ llama_model_quantize_params llama_model_quantize_default_params() {
         /*.pure                        =*/ false,
         /*.keep_split                  =*/ false,
         /*.imatrix                     =*/ nullptr,
+        /*.activations                 =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
         /*.tensor_type                 =*/ nullptr,
-        /*.prune_layers                =*/ nullptr
+        /*.prune_layers                =*/ nullptr,
+        /*.target_bpw                  =*/ -1.0f
     };
 
     return result;
