@@ -575,13 +575,13 @@ static size_t llama_tensor_quantize_impl(enum ggml_type new_type, const float * 
     return new_size;
 }
 
-// Returns per-tensor overrides of quantization types to meet target BPW with best expected quality.
-// imatrix_data: map from tensor name -> length (ne[0] * ne[2]) containing per-column E[a^2] by expert
-// activations_data: optional map from tensor name -> length (ne[0] * ne[2]) containing per-column E[a] by expert
-// bias_lambda: relative weight on bias term (|sum e_j * E[a_j]|) vs MSE term (sum e_j^2 * E[a_j^2])
+// Returns per-tensor overrides of quantization types to meet target BPW with the lowest ppl
+// sample_rows_per_expert: Larger values will result in more accurate error estimates, but will take longer to compute
+// bias_lambda: Affects the weight of the bias term in the MSE error function. 0.0 means no bias, 1.0 means equal weight
+//              for bias and error, 2.0 means twice as much weight for bias
 static std::unordered_map<std::string, ggml_type> target_bpw_type(
     llama_model_loader & ml,
-    std::vector<no_init<uint8_t>> & read_data,
+    std::vector<no_init<uint8_t>> & buffer,
     const llama_model & model,
     const std::vector<const llama_model_loader::llama_tensor_weight *> & tensors,
     const std::map<int, std::string> & mapped,
@@ -735,24 +735,21 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         float total_err = 0.0;
 
-        for (int64_t i03 = 0; i03 < ne2; ++i03) {
-            const float * value = values_all ? (values_all + i03 * n_per_row) : nullptr;
-            const float * activation = activations_all ? (activations_all + i03 * n_per_row) : nullptr;
+        for (int64_t slice = 0; slice < ne2; ++slice) {
+            const float * value = values_all ? (values_all + slice * n_per_row) : nullptr;
+            const float * activation = activations_all ? (activations_all + slice * n_per_row) : nullptr;
 
-            // Assemble sampled rows into contiguous f32_sample
             int64_t rs = 0;
             for (int64_t r = 0; r < rows_per_expert && rs < sample_rows; r += stride) {
-                const float * src = f32_data + i03 * (n_per_row * rows_per_expert) + r * n_per_row;
+                const float * src = f32_data + slice * (n_per_row * rows_per_expert) + r * n_per_row;
                 std::memcpy(f32_sample.data() + rs * n_per_row, src, sizeof(float) * n_per_row);
                 ++rs;
             }
             if (rs == 0) { continue; }
 
-            // Quantize sampled rows in one chunk; pass the imatrix for this expert slice
             const size_t got = ggml_quantize_chunk(typ, f32_sample.data(), qbuf.data(), 0, rs, n_per_row, value);
-            (void)got; // not strictly needed here
+            (void)got;
 
-            // Dequantize
             traits->to_float(qbuf.data(), deq.data(), rs * n_per_row);
 
             // Compute error proxy per sampled row
@@ -821,10 +818,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         LLAMA_LOG_INFO("\t%s: - processing tensor %45s \t(%12d elements)\n", __func__, name.c_str(), (int)ggml_nelements(t));
         if (!ml.use_mmap) {
-            if (read_data.size() < ggml_nbytes(t)) {
-                read_data.resize(ggml_nbytes(t));
-            }
-            t->data = read_data.data();
+            if (buffer.size() < ggml_nbytes(t)) { buffer.resize(ggml_nbytes(t)); }
+            t->data = buffer.data();
         }
         ml.load_data_for(t);
 
