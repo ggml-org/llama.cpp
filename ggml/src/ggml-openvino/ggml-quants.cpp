@@ -230,6 +230,10 @@ ov::Output<ov::Node> make_int8_weights(ov::Tensor& weight, ov::Tensor& scales, o
     }
 
     auto zero_point = std::make_shared<ov::op::v0::Constant>(biases_u8);
+    float zp_value;
+    if (ov::op::util::get_single_value(zero_point, zp_value)) {
+        zero_point = ov::op::v0::Constant::create(zero_point->get_element_type(), {}, {zp_value});
+    }
 
     // Quantization operations
     auto weights_f16 = std::make_shared<ov::op::v0::Convert>(weights_node, ov::element::f16);
@@ -287,12 +291,11 @@ ov::Output<ov::Node> make_int4_weights(ov::Tensor& weight, ov::Tensor& scales, o
         zero_point_data[i] = (bias2 << 4) | (bias1 & 0x0F);
     }
 
-    // CVS-166438: GGUF Q4_0 zp array (U4) with all same value (8) will be converted to single U4 scalar via ConvertU4WeightsZeroPointToScalar transformation.
-    // This corner case can be handled by CPU plugin properly, but will trigger compilation error on GPU plugin.
-    // Temporal WA by adding one small bias to keep zp array shape for GPU plugin, confirm no accuracy impact for final LLM generation results.
-    zero_point_data[0] += 1;
-
     auto zero_points_node = std::make_shared<ov::op::v0::Constant>(zero_point_tensor);
+    float zp_value;
+    if (ov::op::util::get_single_value(zero_points_node, zp_value)) {
+        zero_points_node = ov::op::v0::Constant::create(zero_points_node->get_element_type(), {}, {zp_value});
+    }
     auto zero_points_f16 = std::make_shared<ov::op::v0::Convert>(zero_points_node, ov::element::f16);
 
     auto scales_f16 = std::make_shared<ov::op::v0::Constant>(scales);

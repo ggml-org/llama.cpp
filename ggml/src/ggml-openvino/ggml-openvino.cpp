@@ -333,16 +333,24 @@ static bool is_op_unsupported_case(const ggml_tensor* op) {
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor* op) {
     GGML_ASSERT(dev->reg != nullptr);
 
-    static const std::set<ggml_type> supported_types{GGML_TYPE_F32,
-                                                     GGML_TYPE_F16,
-                                                     GGML_TYPE_BF16,
-                                                     GGML_TYPE_I64,
-                                                     GGML_TYPE_I32,
-                                                     GGML_TYPE_Q4_0,
-                                                     GGML_TYPE_Q4_1,
-                                                     GGML_TYPE_Q4_K,
-                                                     GGML_TYPE_Q8_0,
-                                                     GGML_TYPE_Q6_K};
+    static std::set<ggml_type> supported_types{GGML_TYPE_F32,
+                                               GGML_TYPE_F16,
+                                               GGML_TYPE_BF16,
+                                               GGML_TYPE_I64,
+                                               GGML_TYPE_I32,
+                                               GGML_TYPE_Q4_0,
+                                               GGML_TYPE_Q4_1,
+                                               GGML_TYPE_Q4_K,
+                                               GGML_TYPE_Q8_0,
+                                               GGML_TYPE_Q6_K};
+
+    std::string device = std::string(getenv("GGML_OPENVINO_DEVICE"));
+    bool is_npu = device == "NPU";
+    if (is_npu) {
+        // NPU has poor support for asymmetric quantization
+        supported_types.erase(GGML_TYPE_Q4_1);
+        supported_types.erase(GGML_TYPE_Q4_K);
+    }
 
     static const std::set<ggml_op> supported_ops{GGML_OP_NONE,
                                                  GGML_OP_ADD,
