@@ -27,7 +27,7 @@ static __global__ void dequantize_block(const void * __restrict__ vx, dst_t * __
     const int64_t y_offset = qr == 1 ? 1 : qk/2;
 
     // dequantize
-    dfloat2 v;
+    float2 v;
     dequantize_kernel(vx, ib, iqs, v);
 
     const int64_t iy0 = ((i03*ne02 + i02)*ne01 + i01)*ne00 + iybs + iqs;

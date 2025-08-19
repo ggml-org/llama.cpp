@@ -3672,10 +3672,6 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
         features.push_back({ "NO_PEER_COPY", "1" });
     #endif
 
-    #ifdef GGML_CUDA_F16
-        features.push_back({ "F16", "1" });
-    #endif
-
     #ifdef GGML_CUDA_USE_GRAPHS
         features.push_back({ "USE_GRAPHS", "1" });
     #endif
