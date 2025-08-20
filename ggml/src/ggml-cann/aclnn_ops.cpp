@@ -902,57 +902,50 @@ static void aclnn_fill_scalar(ggml_backend_cann_context& ctx, float scalar,
  *              to return the zero-cache tensor or the one-cache tensor.
  * @return      An aclTensor pointer corresponding to the cached tensor.
  */
-static aclTensor* get_f32_cache_acl_tensor(ggml_backend_cann_context& ctx,
+static aclTensor* get_f32_zero_or_one_cache_acl_tensor(ggml_backend_cann_context& ctx,
                                         int64_t* ne, size_t* nb,
                                         int64_t dims, int64_t value) {
-    // init cache
-    if(ctx.f32_zero_cache == nullptr) {
-        // zero-cache pool init
-        size_t size = ctx.f32_cache_element * sizeof(float);
-        ACL_CHECK(aclrtMalloc(&ctx.f32_zero_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
-        ACL_CHECK(aclrtMemsetAsync(ctx.f32_zero_cache, size, 0, size, ctx.stream()));
+    // just support one and zero cache
+    GGML_ASSERT(value == 1 || value == 0);
 
-        // one-cache pool init
-        int64_t pool_ne[1] = { ctx.f32_cache_element };
-        size_t pool_nb[1] = { sizeof(float) };
-        ACL_CHECK(aclrtMalloc(&ctx.f32_one_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
-        aclTensor* acl_one = ggml_cann_create_tensor(
-            ctx.f32_one_cache, ACL_FLOAT, sizeof(float), pool_ne, pool_nb,
-            1);
-        aclnn_fill_scalar(ctx, 1, acl_one);
-        ggml_cann_release_resources(ctx, acl_one);
-    }
-
-    // Cache expansion
+    // Cache init or expansion
     int64_t n_element = 1;
     for(int i = 0; i < dims; i++) {
         n_element = n_element * ne[i];
     }
-    if (ctx.f32_cache_element < n_element) {
-        // free old mem
-        aclrtFree(ctx.f32_zero_cache);
-        aclrtFree(ctx.f32_one_cache);
-        // init zero cache
-        ctx.f32_cache_element = n_element;
-        size_t size = n_element * sizeof(float);
-        ACL_CHECK(aclrtMalloc(&ctx.f32_zero_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
-        ACL_CHECK(aclrtMemsetAsync(ctx.f32_zero_cache, size, 0, size, ctx.stream()));
-
-        // one-cache pool init
-        int64_t pool_ne[1] = { n_element };
-        size_t pool_nb[1] = { sizeof(float) };
-        ACL_CHECK(aclrtMalloc(&ctx.f32_one_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
-        aclTensor* acl_one = ggml_cann_create_tensor(
-            ctx.f32_one_cache, ACL_FLOAT, sizeof(float), pool_ne, pool_nb,
-            1);
-        aclnn_fill_scalar(ctx, 1, acl_one);
-        ggml_cann_release_resources(ctx, acl_one);
-    }
-
+    size_t size = n_element * sizeof(float);
     void* cache;
     if (value == 0) {
+        if(ctx.f32_zero_cache_element < n_element){
+            //free old mem
+            if(ctx.f32_zero_cache != nullptr){
+                aclrtFree(ctx.f32_zero_cache);
+            }
+            
+            //init zero cache
+            ctx.f32_zero_cache_element = n_element;
+            ACL_CHECK(aclrtMalloc(&ctx.f32_zero_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
+            ACL_CHECK(aclrtMemsetAsync(ctx.f32_zero_cache, size, 0, size, ctx.stream()));
+        }
         cache = ctx.f32_zero_cache;
     } else {
+        if(ctx.f32_one_cache_element < n_element){
+            //free old mem
+            if(ctx.f32_one_cache != nullptr){
+                aclrtFree(ctx.f32_one_cache);
+            }
+            
+            //init one cache
+            ctx.f32_one_cache_element = n_element;
+            int64_t pool_ne[1] = { n_element };
+            size_t pool_nb[1] = { sizeof(float) };
+            ACL_CHECK(aclrtMalloc(&ctx.f32_one_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
+            aclTensor* acl_one = ggml_cann_create_tensor(
+                ctx.f32_one_cache, ACL_FLOAT, sizeof(float), pool_ne, pool_nb,
+                1);
+            aclnn_fill_scalar(ctx, 1, acl_one);
+            ggml_cann_release_resources(ctx, acl_one);
+        }
         cache = ctx.f32_one_cache;
     }
 
@@ -974,7 +967,7 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
         acl_gamma_nb[i] = acl_gamma_nb[i - 1] * src->ne[i - 1];
     }
-    aclTensor* acl_gamma = get_f32_cache_acl_tensor(ctx, src->ne, acl_gamma_nb, 1, 1);
+    aclTensor* acl_gamma = get_f32_zero_or_one_cache_acl_tensor(ctx, src->ne, acl_gamma_nb, 1, 1);
 
     // build rstd, zero...
     size_t acl_rstd_nb[GGML_MAX_DIMS];
@@ -982,7 +975,7 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
         acl_rstd_nb[i] = acl_rstd_nb[i - 1] * src->ne[i - 1];
     }
-    aclTensor* acl_rstd = get_f32_cache_acl_tensor(ctx, src->ne, acl_rstd_nb, GGML_MAX_DIMS, 0);
+    aclTensor* acl_rstd = get_f32_zero_or_one_cache_acl_tensor(ctx, src->ne, acl_rstd_nb, GGML_MAX_DIMS, 0);
 
     GGML_CANN_CALL_ACLNN_OP(ctx, RmsNorm, acl_src, acl_gamma, eps, acl_dst, acl_rstd);
     ggml_cann_release_resources(ctx, acl_src, acl_dst, acl_gamma, acl_rstd);
@@ -998,14 +991,13 @@ void ggml_cann_diag_mask(ggml_backend_cann_context& ctx, ggml_tensor* dst,
 
     const int n_past = ((int32_t*)dst->op_params)[0];
 
-    size_t one_tensor_n_bytes = src->ne[0] * src->ne[1] * src->ne[2] *
-                                src->ne[3] * ggml_element_size(src);
-    ggml_cann_pool_alloc one_tensor_allocator(ctx.pool(), one_tensor_n_bytes);
+    ggml_cann_pool_alloc one_tensor_allocator(ctx.pool(), ggml_nbytes(src));
+    void* buffer = one_tensor_allocator.get();
 
-    aclTensor* mask_tensor =
-        aclnn_values(ctx, one_tensor_allocator.get(), one_tensor_n_bytes,
-                     src->ne, GGML_MAX_DIMS, ggml_cann_type_mapping(src->type),
-                     ggml_element_size(src), value);
+    aclTensor* mask_tensor = ggml_cann_create_tensor(buffer, ggml_cann_type_mapping(src->type),
+        ggml_type_size(src->type), src->ne, src->nb, GGML_MAX_DIMS);
+    
+    aclnn_fill_scalar(ctx, value, mask_tensor);
 
     aclScalar* alpha = nullptr;
     float alphaValue = 1.0f;
