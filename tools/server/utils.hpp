@@ -772,6 +772,8 @@ static json oaicompat_chat_params_parse(
         inputs.enable_thinking = true;
     } else if (enable_thinking_kwarg == "false") {
         inputs.enable_thinking = false;
+    } else if (!enable_thinking_kwarg.empty() && enable_thinking_kwarg[0] == '"') {
+        throw std::runtime_error("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
     // if the assistant message appears at the end of list, we do not add end-of-turn token
