@@ -222,6 +222,10 @@ typedef float2 dfloat2;
 #define FP16_AVAILABLE
 #endif // defined(GGML_USE_HIP) || __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL
 
+#if defined(GGML_USE_HIP) || __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+#define BF16_AVAILABLE
+#endif // defined(GGML_USE_HIP) || __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
+
 #if defined(FP16_AVAILABLE) && __CUDA_ARCH__ != 610
 #define FAST_FP16_AVAILABLE
 #endif // defined(FP16_AVAILABLE) && __CUDA_ARCH__ != 610
@@ -910,3 +914,7 @@ struct ggml_backend_cuda_context {
         return pool(device);
     }
 };
+
+static __device__ __forceinline__ __nv_bfloat16 ggml_cuda_bf16max(const __nv_bfloat16 a, const __nv_bfloat16 b) {
+    return __float2bfloat16(fmaxf((float)a, (float)b));
+}
