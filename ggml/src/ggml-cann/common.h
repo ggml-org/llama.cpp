@@ -371,7 +371,7 @@ struct ggml_backend_cann_context {
     void* init_ptr = nullptr;
     void* sin_ptr = nullptr;
     void* cos_ptr = nullptr;
-    int64_t max_prompt_length = 65536;
+    int64_t max_prompt_length = 0;
 #ifdef USE_ACL_GRAPH
     /// Cached CANN ACL graph used for executing the current ggml computation graph.
     std::unique_ptr<ggml_cann_graph> cann_graph;

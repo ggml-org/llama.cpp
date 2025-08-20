@@ -2216,16 +2216,14 @@ static void aclnn_cache_init(ggml_backend_cann_context& ctx, ggml_tensor* dst,
         ggml_cann_release_resources(ctx, acl_theta_scale_tensor,acl_theta_scale);
     }
 
-    if(ctx.sin_ptr == nullptr) {
-        int64_t theta_length = theta_scale_length * ctx.max_prompt_length;
-        ACL_CHECK(aclrtMalloc(&ctx.sin_ptr, theta_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
-        ACL_CHECK(aclrtMalloc(&ctx.cos_ptr, theta_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
-    }
     if(position_length > ctx.max_prompt_length) {
         ctx.max_prompt_length = position_length;
         int64_t theta_length = theta_scale_length * ctx.max_prompt_length;
-        ACL_CHECK(aclrtFree(ctx.sin_ptr));
-        ACL_CHECK(aclrtFree(ctx.cos_ptr));
+
+        if (ctx.sin_ptr != nullptr)
+            ACL_CHECK(aclrtFree(ctx.sin_ptr));
+        if (ctx.cos_ptr != nullptr)
+            ACL_CHECK(aclrtFree(ctx.cos_ptr));
         ACL_CHECK(aclrtMalloc(&ctx.sin_ptr, theta_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
         ACL_CHECK(aclrtMalloc(&ctx.cos_ptr, theta_length * sizeof(float_t), ACL_MEM_MALLOC_HUGE_FIRST));
     }
