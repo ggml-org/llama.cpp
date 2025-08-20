@@ -630,7 +630,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_Q5_1,
         GGML_TYPE_Q5_K,
         GGML_TYPE_Q6_K,
-        GGML_TYPE_Q8_0
+        GGML_TYPE_Q8_0,
+// TODO: find better way to handle F16/BF16
+#ifdef GGML_USE_METAL
+        GGML_TYPE_F16
+#else
+        GGML_TYPE_BF16
+#endif
     };
 
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
