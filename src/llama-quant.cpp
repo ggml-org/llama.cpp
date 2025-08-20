@@ -36,6 +36,26 @@ static bool is_iq(const enum ggml_type t) {
     }
 }
 
+static bool is_iq(const enum llama_ftype t) {
+    switch (t) {
+        case LLAMA_FTYPE_MOSTLY_IQ1_S:
+        case LLAMA_FTYPE_MOSTLY_IQ1_M:
+        case LLAMA_FTYPE_MOSTLY_IQ2_XXS:
+        case LLAMA_FTYPE_MOSTLY_IQ2_XS:
+        case LLAMA_FTYPE_MOSTLY_IQ2_S:
+        case LLAMA_FTYPE_MOSTLY_IQ2_M:
+        case LLAMA_FTYPE_MOSTLY_IQ3_XXS:
+        case LLAMA_FTYPE_MOSTLY_IQ3_XS:
+        case LLAMA_FTYPE_MOSTLY_IQ3_S:
+        case LLAMA_FTYPE_MOSTLY_IQ3_M:
+        case LLAMA_FTYPE_MOSTLY_IQ4_XS:
+        case LLAMA_FTYPE_MOSTLY_IQ4_NL:
+            return true;
+        default:
+            return false;
+    }
+}
+
 static enum ggml_type fallback_type(const enum ggml_type new_type) {
     switch (new_type) {
         case GGML_TYPE_TQ1_0:
@@ -587,7 +607,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const std::map<int, std::string> & mapped,
     const std::unordered_map<std::string, std::vector<float>> * values_data,
     const std::unordered_map<std::string, std::vector<float>> * activations_data,
-    float target_bpw,
+    const llama_model_quantize_params * params,
     int nthread,
     int sample_rows_per_expert = 128,
     float bias_lambda = 1.0
@@ -608,19 +628,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t n_elements = 0;
     };
 
-    auto name_tn = LLM_TN(model.arch);
-
-    const ggml_type base_candidates[] = {
-        // Model's
-        GGML_TYPE_IQ1_S,
-        GGML_TYPE_IQ1_M,
-        GGML_TYPE_IQ2_XXS,
-        GGML_TYPE_IQ2_XS,
-        GGML_TYPE_IQ2_S,
-        GGML_TYPE_IQ3_XXS,
-        GGML_TYPE_IQ3_S,
-        GGML_TYPE_IQ4_XS,
-        GGML_TYPE_IQ4_NL,
+    const ggml_type k_candidates[] = {
         GGML_TYPE_Q2_K,
         GGML_TYPE_Q3_K,
         GGML_TYPE_Q4_0,
@@ -638,6 +646,21 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_BF16
 #endif
     };
+
+    const ggml_type iq_candidates[] = {
+        GGML_TYPE_IQ1_S,
+        GGML_TYPE_IQ1_M,
+        GGML_TYPE_IQ2_XXS,
+        GGML_TYPE_IQ2_XS,
+        GGML_TYPE_IQ2_S,
+        GGML_TYPE_IQ3_XXS,
+        GGML_TYPE_IQ3_S,
+        GGML_TYPE_IQ4_XS,
+        GGML_TYPE_IQ4_NL,
+    };
+
+    auto name_tn = LLM_TN(model.arch);
+    float target_bpw = params->target_bpw;
 
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
         const std::string name = ggml_get_name(t);
@@ -838,8 +861,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         info.w = tw;
         info.n_elements = nelem;
 
+        std::vector<ggml_type> quant_candidates;
+        if (is_iq(params->ftype)) {
+            quant_candidates.assign(std::begin(iq_candidates), std::end(iq_candidates));
+        } else {
+            quant_candidates.assign(std::begin(k_candidates), std::end(k_candidates));
+        }
+
         // Build per-tensor candidate list
-        for (ggml_type ts_type : base_candidates) {
+        for (ggml_type ts_type : quant_candidates) {
             if (is_iq(ts_type) && !values) { continue; }
             ggml_type tt = make_compatible(t, ts_type);
             if (!is_compatible(t, tt)) { continue; }
@@ -1305,7 +1335,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     std::unordered_map<std::string, ggml_type> bpw_overrides = {};
     if (params->target_bpw != -1.0f) {
         LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.3f bpw at lowest ppl - this opearation may take some time\n", __func__, params->target_bpw);
-        bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params->target_bpw, nthread);
+        bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
     }
 
     int cur_split = -1;
