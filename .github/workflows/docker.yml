@@ -11,10 +11,9 @@ name: Publish Docker image
 
 on:
   workflow_dispatch: # allows manual triggering
-  # NOTE:个人仓库禁止按一定时间周期运行该workflow
-  #schedule:
-  #  # Rebuild daily rather than on every push because it is expensive
-  #  - cron: '12 4 * * *'
+  schedule:
+    # Rebuild daily rather than on every push because it is expensive
+    - cron: '12 4 * * *'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
