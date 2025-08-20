@@ -609,7 +609,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const std::unordered_map<std::string, std::vector<float>> * activations_data,
     const llama_model_quantize_params * params,
     int nthread,
-    int sample_rows_per_expert = 128,
+    int sample_rows_per_expert = 256,
     float bias_lambda = 1.0
 ) {
     struct candidate_types {
@@ -671,7 +671,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
         const std::string name = ggml_get_name(t);
         bool q = name.rfind("weight") == name.size() - 6;
-        q &= (ggml_n_dims(t) >= 2);
+        q &= ggml_n_dims(t) >= 2;
         q &= name.find("_norm.weight") == std::string::npos;
         q &= name.find("ffn_gate_inp.weight") == std::string::npos;
         q &= name.find("altup") == std::string::npos;
@@ -719,9 +719,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     auto total_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
         const int64_t n_per_row = t->ne[0];
-        const int64_t nrows     = t->ne[1];
-        const int64_t ne2       = t->ne[2] > 0 ? t->ne[2] : 1;
-        const size_t  row_sz    = ggml_row_size(typ, n_per_row);
+        const int64_t nrows = t->ne[1];
+        const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
+        const size_t  row_sz = ggml_row_size(typ, n_per_row);
         return (size_t)ne2 * (size_t)nrows * row_sz;
     };
 
@@ -734,7 +734,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     auto is_compatible = [&](const ggml_tensor * t, const ggml_type typ) -> bool {
         const int64_t n_per_row = t->ne[0];
         const int64_t blck = ggml_blck_size(typ);
-        if (blck <= 1) { return true; }  // FP16/BF16/Q8_0 etc
+        if (blck <= 1) { return true; }
         return n_per_row % blck == 0;
     };
 
@@ -742,15 +742,20 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         if (is_compatible(t, typ)) { return typ; }
         ggml_type fb = fallback_type(typ);
         if (is_compatible(t, fb)) { return fb; }
-        return GGML_TYPE_F16; // final guard
+        return GGML_TYPE_F16;
     };
 
-    // Estimate error for a given type using a sampled subset of rows.
-    // Uses both imatrix (E[a^2]) and activations (E[a]) if available.
-    auto estimate_error = [&](const ggml_tensor * t, const float * f32_data, const ggml_type typ, const float * values_all, const float * activations_all) -> double {
+    // Estimate error for a given type using a sampled subset of rows
+    auto estimate_error = [&](const ggml_tensor * t,
+        const ggml_type typ,
+        const std::vector<float> & f32_sample,
+        const std::vector<int64_t> & sample_rows_per_slice,
+        const std::vector<float> & values_sample,
+        const std::vector<float> & activations_sample) -> double
+    {
         const int64_t n_per_row = t->ne[0];
-        const int64_t nrows     = t->ne[1];
-        const int64_t ne2       = t->ne[2] > 0 ? t->ne[2] : 1;
+        const int64_t nrows = t->ne[1];
+        const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
 
         const ggml_type_traits * traits = ggml_get_type_traits(typ);
         if (!traits || !traits->to_float) {
@@ -758,70 +763,73 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             return 1e35f;
         }
 
-        // Sampling plan: for each expert slice, take up to sample_rows rows spread uniformly
-        const int64_t rows_per_expert = nrows;
-        const int64_t sample_rows = std::max<int64_t>(1, std::min<int64_t>(rows_per_expert, sample_rows_per_expert));
-        const int64_t stride = std::max<int64_t>(1, rows_per_expert / sample_rows);
+        const size_t total_sampled_rows = f32_sample.size() / n_per_row;
+        if (total_sampled_rows == 0) { return 0.0; }
 
-        const size_t row_sz = ggml_row_size(typ, n_per_row);
-        std::vector<uint8_t> qbuf(row_sz * sample_rows);
-        std::vector<float>   f32_sample(sample_rows * n_per_row);
-        std::vector<float>   deq(sample_rows * n_per_row);
+        const size_t qbuf_size = ggml_row_size(typ, n_per_row) * total_sampled_rows;
+        std::vector<uint8_t> qbuf(qbuf_size);
+        std::vector<float> deq(f32_sample.size());
 
-        double total_err = 0.0;
-
+        // Quantize all sampled rows at once and dequantize back
+        size_t qbuf_offset = 0;
+        size_t f32_offset = 0;
         for (int64_t slice = 0; slice < ne2; ++slice) {
-            const float * value = values_all ? (values_all + slice * n_per_row) : nullptr;
-            const float * activation = activations_all ? (activations_all + slice * n_per_row) : nullptr;
-
-            int64_t rs = 0;
-            for (int64_t r = 0; r < rows_per_expert && rs < sample_rows; r += stride) {
-                const float * src = f32_data + slice * (n_per_row * rows_per_expert) + r * n_per_row;
-                std::memcpy(f32_sample.data() + rs * n_per_row, src, sizeof(float) * n_per_row);
-                ++rs;
-            }
+            const int64_t rs = sample_rows_per_slice[slice];
             if (rs == 0) { continue; }
 
-            // Quantize sample rows and dequantize back
-            (void)ggml_quantize_chunk(typ, f32_sample.data(), qbuf.data(), 0, rs, n_per_row, value);
-            traits->to_float(qbuf.data(), deq.data(), rs * n_per_row);
+            const float * value = values_sample.empty() ? nullptr : values_sample.data() + slice * n_per_row;
+            (void)ggml_quantize_chunk(typ, f32_sample.data() + f32_offset, qbuf.data() + qbuf_offset, 0, rs, n_per_row, value);
+            qbuf_offset += ggml_row_size(typ, n_per_row) * rs;
+            f32_offset += rs * n_per_row;
+        }
 
-            // Compute error proxy per sampled slice
+        traits->to_float(qbuf.data(), deq.data(), f32_sample.size());
+
+        double total_err = 0.0;
+        size_t sample_offset = 0;
+
+        for (int64_t slice = 0; slice < ne2; ++slice) {
+            const float * value_slice = values_sample.empty() ? nullptr : values_sample.data() + slice * n_per_row;
+            const float * activation_slice = activations_sample.empty() ? nullptr : activations_sample.data() + slice * n_per_row;
+            const int64_t rs = sample_rows_per_slice[slice];
+
             double slice_err = 0.0;
             for (int64_t s = 0; s < rs; ++s) {
-                const float * xs = f32_sample.data() + s * n_per_row;
-                const float * ys =        deq.data() + s * n_per_row;
+                const float * xs = f32_sample.data() + sample_offset;
+                const float * ys = deq.data() + sample_offset;
 
-                double mse_w    = 0.0;
+                double mse_w = 0.0;
                 double bias_sum = 0.0;
 
-                if (value) {
+                if (value_slice) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
                         const float e = ys[j] - xs[j];
-                        mse_w += e * e * value[j];
-                        if (activation) { bias_sum += e * activation[j]; }
+                        mse_w += e * e * value_slice[j];
+                        if (activation_slice) { bias_sum += e * activation_slice[j]; }
                     }
                 } else {
                     for (int64_t j = 0; j < n_per_row; ++j) {
                         const float e = ys[j] - xs[j];
                         mse_w += e * e;
-                        if (activation) { bias_sum += e * activation[j]; }
+                        if (activation_slice) { bias_sum += e * activation_slice[j]; }
                     }
                 }
 
                 // Normalize by n_per_row to get a per-row average scale
                 double row_err = mse_w / std::max<int64_t>(1, n_per_row);
-                if (activation && bias_lambda != 0.0) {
+                if (activation_slice && bias_lambda != 0.0) {
                     // bias_sum ~= sum_j ( (w_q - w_fp)[j] * E[a_j] )
                     const double bias = std::abs(bias_sum) / std::max<int64_t>(1, n_per_row);
                     row_err += bias_lambda * bias;
                 }
 
                 slice_err += row_err;
+                sample_offset += n_per_row;
             }
 
             // Scale the slice contribution by the sampling factor
-            const auto  scale_rows = (double)rows_per_expert / std::max(1.0, (double)rs);
+            const double rows_per_expert = (double) nrows;
+            const auto   scale_rows = rows_per_expert / std::max(1.0, (double) rs);
             total_err += slice_err * scale_rows;
         }
 
@@ -858,8 +866,40 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             f32_data = (float *)f32_conv_buf.data();
         }
 
-        const float * values = get_values(name);
-        const float * activations = get_activations(name);
+        const float * values_all = get_values(name);
+        const float * activations_all = get_activations(name);
+
+        // Sample the tensor rows once, before looping through quantization candidates.
+        const int64_t n_per_row = t->ne[0];
+        const int64_t nrows_total = t->ne[1];
+        const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
+        const int64_t rows_per_expert = nrows_total;
+        const int64_t sample_rows_max = std::max<int64_t>(1, std::min<int64_t>(rows_per_expert, sample_rows_per_expert));
+        const int64_t stride = std::max<int64_t>(1, rows_per_expert / sample_rows_max);
+
+        std::vector<float> f32_sample;
+        std::vector<float> values_sample;
+        std::vector<float> activations_sample;
+        std::vector<int64_t> sample_rows_per_slice(ne2);
+
+        for (int64_t slice = 0; slice < ne2; ++slice) {
+            int64_t current_sampled_rows = 0;
+            for (int64_t r = 0; r < rows_per_expert && current_sampled_rows < sample_rows_max; r += stride) {
+                const float * src_row = f32_data + slice * (n_per_row * rows_per_expert) + r * n_per_row;
+                f32_sample.insert(f32_sample.end(), src_row, src_row + n_per_row);
+                current_sampled_rows++;
+            }
+            sample_rows_per_slice[slice] = current_sampled_rows;
+        }
+
+        if (values_all) {
+            values_sample.resize(ne2 * n_per_row);
+            std::memcpy(values_sample.data(), values_all, ne2 * n_per_row * sizeof(float));
+        }
+        if (activations_all) {
+            activations_sample.resize(ne2 * n_per_row);
+            std::memcpy(activations_sample.data(), activations_all, ne2 * n_per_row * sizeof(float));
+        }
 
         tensor_info info;
         info.w = tw;
@@ -874,7 +914,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Build per-tensor candidate list
         for (ggml_type ts_type : quant_candidates) {
-            if (is_iq(ts_type) && !values) { continue; }
+            if (is_iq(ts_type) && !values_all) { continue; }
             ggml_type tt = make_compatible(t, ts_type);
             if (!is_compatible(t, tt)) { continue; }
 
@@ -882,19 +922,18 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             auto bpw = (float)tensor_bpw(t, tt);
             size_t bytes = total_bytes(t, tt);
 
-            // Estimate error
-            auto err = (float)estimate_error(t, f32_data, tt, values, activations);
-
-            info.candidate.push_back(candidate_types{tt, bpw, bytes, err});
+            // Estimate error using the pre-sampled data
+            auto err = (float)estimate_error(t, tt, f32_sample, sample_rows_per_slice, values_sample, activations_sample);
+            info.candidate.push_back(candidate_types{ tt, bpw, bytes, err });
         }
 
         if (info.candidate.empty()) {
             // As a last resort, keep original type
             float bpw = ggml_nbytes(t) * 8.0f / nelem;
-            info.candidate.push_back(candidate_types{t->type, bpw, ggml_nbytes(t), 0.0});
+            info.candidate.push_back(candidate_types{ t->type, bpw, ggml_nbytes(t), 0.0 });
         }
 
-        std::sort(info.candidate.begin(), info.candidate.end(), [](const candidate_types &a, const candidate_types &b) {
+        std::sort(info.candidate.begin(), info.candidate.end(), [](const candidate_types & a, const candidate_types & b) {
             if (a.bpw != b.bpw) { return a.bpw < b.bpw; }
             if (a.error != b.error) { return a.error < b.error; }
             return a.bytes < b.bytes;
@@ -905,7 +944,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             std::vector<candidate_types> uniq;
             uniq.reserve(info.candidate.size());
 
-            for (size_t i = 0; i < info.candidate.size(); ) {
+            for (size_t i = 0; i < info.candidate.size();) {
                 size_t j = i + 1;
                 candidate_types best = info.candidate[i];
                 // group same-byte entries, keep the one with the lowest error
@@ -972,36 +1011,39 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     // Find next strictly-larger candidate index for a tensor
-    auto next_distinct_idx = [&](const tensor_info &ti) -> int {
-        const auto &cand = ti.candidate;
-        const auto &cur  = cand[ti.choice];
+    auto next_distinct_idx = [&](const tensor_info & ti) -> int {
+        const auto & cand = ti.candidate;
+        const auto & cur  = cand[ti.choice];
         int j = ti.choice + 1;
-        while (j < (int)cand.size() && cand[j].bytes == cur.bytes) ++j;
+        while (j < (int)cand.size() && cand[j].bytes == cur.bytes) {
+            ++j;
+        }
+
         return j < (int)cand.size() ? j : -1;
     };
 
     auto recompute_best_upgrade = [&]() -> upgrade {
         const double eps = 1e-12;
-        upgrade best{-1, -1, 0.0, 0, -1.0};
-        for (int i = 0; i < (int)all.size(); ++i) {
-            const auto &ti = all[i];
+        upgrade best{ -1, -1, 0.0, 0, -1.0 };
+        for (int i = 0; i < (int) all.size(); ++i) {
+            const auto & ti = all[i];
             if (ti.choice >= (int)ti.candidate.size() - 1) { continue; }
 
-            int j = next_distinct_idx(ti);
+            const int j = next_distinct_idx(ti);
             if (j < 0) { continue; }
 
-            const auto &cur = ti.candidate[ti.choice];
-            const auto &nxt = ti.candidate[j];
+            const auto & cur = ti.candidate[ti.choice];
+            const auto & nxt = ti.candidate[j];
 
-            size_t delta_bytes = nxt.bytes - cur.bytes;
+            const size_t delta_bytes = nxt.bytes - cur.bytes;
             if (delta_bytes == 0) { continue; }
 
-            double err = (double)cur.error - (double)nxt.error;
+            double err = cur.error - nxt.error;
             err = std::max(err, 0.0);
 
             double ratio = err / (double)(delta_bytes * 8ull);
             if (ratio > best.ratio + eps || (std::abs(ratio - best.ratio) <= eps && delta_bytes < best.delta_bytes)) {
-                best = upgrade{i, j, err, delta_bytes, ratio};
+                best = upgrade{ i, j, err, delta_bytes, ratio };
             }
         }
         return best;
@@ -1014,8 +1056,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t now_bytes = current_total_bytes();
         size_t next_bytes = now_bytes + up.delta_bytes;
         double bpw_next = (double)next_bytes * 8.0 / (double)tw;
-
-        if (bpw_next <= (double)target_bpw + 1e-12) {
+        if (bpw_next <= target_bpw + 1e-12) {
             all[up.idx].choice = up.next;
             bpw_now = bpw_next;
         } else {
@@ -1026,22 +1067,22 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     // We might still be below target but taking any single upgrade overshoots.
     // Try to find the best upgrade that overshoots the target_bpw by the least and has the best error-to-size ratio.
     {
-        double under_gap = (double)target_bpw - bpw_now;
+        double under_gap = target_bpw - bpw_now;
 
-        upgrade best_over{-1, -1, 0.0, 0, -1.0};
-        double best_over_gap = 1e300;
+        upgrade best_over{ -1, -1, 0.0, 0, -1.0 };
+        double  best_over_gap = 1e300;
 
         size_t now_bytes = current_total_bytes();
 
-        for (int i = 0; i < (int)all.size(); ++i) {
-            const auto &ti = all[i];
+        for (int i = 0; i < (int) all.size(); ++i) {
+            const auto & ti = all[i];
             if (ti.choice >= (int)ti.candidate.size() - 1) { continue; }
 
             int j = next_distinct_idx(ti);
             if (j < 0) { continue; }
 
-            const auto &cur = ti.candidate[ti.choice];
-            const auto &nxt = ti.candidate[j];
+            const auto & cur = ti.candidate[ti.choice];
+            const auto & nxt = ti.candidate[j];
 
             size_t delta_bytes = nxt.bytes - cur.bytes;
             if (delta_bytes == 0) { continue; }
@@ -1051,13 +1092,13 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
             double over_gap = std::abs(bpw_over - (double)target_bpw);
 
-            double err = (double)cur.error - (double)nxt.error;
+            double err = cur.error - nxt.error;
             if (err < 0.0) { err = 0.0; }
             double ratio = err / (double)(delta_bytes * 8ull);
 
             if (over_gap < best_over_gap - 1e-12 || (std::abs(over_gap - best_over_gap) <= 1e-12 && ratio > best_over.ratio)) {
                 best_over_gap = over_gap;
-                best_over = upgrade{i, j, err, delta_bytes, ratio};
+                best_over = upgrade{ i, j, err, delta_bytes, ratio };
             }
         }
 
