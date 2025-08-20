@@ -697,6 +697,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         q &= name.find("time_mix_decay_w2.weight") == std::string::npos;
         q &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
         q &= name.find("attn_rel_b.weight") == std::string::npos;
+        q &= params->quantize_output_tensor || name != "output.weight";
+        q &= !params->only_copy;
+
         return q;
     };
 
