@@ -54,8 +54,8 @@ static T json_value(const json & body, const std::string & key, const T & defaul
     if (body.contains(key) && !body.at(key).is_null()) {
         try {
             return body.at(key);
-        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const &) {
-            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value\n", key.c_str(), json(default_value).type_name());
+        } catch (NLOHMANN_JSON_NAMESPACE::detail::type_error const & err) {
+            LOG_WRN("Wrong type supplied for parameter '%s'. Expected '%s', using default value: %s\n", key.c_str(), json(default_value).type_name(), err.what());
             return default_value;
         }
     } else {
