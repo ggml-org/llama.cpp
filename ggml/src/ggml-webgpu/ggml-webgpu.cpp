@@ -432,6 +432,7 @@ static const char * ggml_backend_webgpu_name(ggml_backend_t backend) {
 static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     ggml_backend_webgpu_context * ctx = (ggml_backend_webgpu_context *) backend->context;
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_free(" << ctx->name << ")");
+    std::cout << "ggml_backend_webgpu_free(" << ctx->name << ")" << std::endl;
 
     // TODO: cleanup
     GGML_UNUSED(ctx);
