@@ -3,6 +3,7 @@ import re
 import ast
 import argparse
 
+
 def extract_block(text, name):
     pattern = rf'#define\({name}\)\s*(.*?)#end\({name}\)'
     match = re.search(pattern, text, re.DOTALL)
@@ -10,11 +11,13 @@ def extract_block(text, name):
         raise ValueError(f"Missing block: {name}")
     return match.group(1).strip()
 
+
 def parse_decls(decls_text):
     decls = {}
     for name, code in re.findall(r'#decl\((.*?)\)\s*(.*?)#enddecl\(\1\)', decls_text, re.DOTALL):
         decls[name.strip()] = code.strip()
     return decls
+
 
 def replace_placeholders(shader_text, replacements):
     for key, val in replacements.items():
@@ -23,12 +26,14 @@ def replace_placeholders(shader_text, replacements):
         shader_text = re.sub(pattern, str(val), shader_text)
     return shader_text
 
+
 def write_shader(shader_name, shader_code, output_dir, outfile):
     if output_dir:
         wgsl_filename = os.path.join(output_dir, f"{shader_name}.wgsl")
         with open(wgsl_filename, "w", encoding="utf-8") as f_out:
             f_out.write(shader_code)
     outfile.write(f'const char* wgsl_{shader_name} = R"({shader_code})";\n\n')
+
 
 def generate_variants(shader_path, output_dir, outfile):
     shader_base_name = shader_path.split("/")[-1].split(".")[0]
@@ -53,10 +58,11 @@ def generate_variants(shader_path, output_dir, outfile):
                 decls_code += decls_map[key] + "\n\n"
 
             shader_variant = replace_placeholders(shader_template, variant["REPLS"])
-            final_shader = re.sub(rf'\bDECLS\b', decls_code, shader_variant)
+            final_shader = re.sub(r'\bDECLS\b', decls_code, shader_variant)
 
             output_name = f"{shader_base_name}_" + "_".join([variant["REPLS"]["SRC0_TYPE"], variant["REPLS"]["SRC1_TYPE"]])
             write_shader(output_name, final_shader, output_dir, outfile)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -73,6 +79,7 @@ def main():
         for fname in sorted(os.listdir(args.input_dir)):
             if fname.endswith(".wgsl"):
                 generate_variants(os.path.join(args.input_dir, fname), args.output_dir, out)
+
 
 if __name__ == "__main__":
     main()
