@@ -657,6 +657,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_IQ3_S,
         GGML_TYPE_IQ4_XS,
         GGML_TYPE_IQ4_NL,
+        // Add higher-precision fallbacks for IQ mixes to improve ppl if bpw budget allows it
+        GGML_TYPE_Q5_0,
+        GGML_TYPE_Q5_1,
+        GGML_TYPE_Q5_K,
+        GGML_TYPE_Q6_K,
+        GGML_TYPE_Q8_0
     };
 
     auto name_tn = LLM_TN(model.arch);
