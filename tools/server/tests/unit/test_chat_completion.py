@@ -72,27 +72,29 @@ def test_chat_completion_stream(system_prompt, user_prompt, max_tokens, re_conte
     content = ""
     last_cmpl_id = None
     for i, data in enumerate(res):
-        choice = data["choices"][0]
-        if i == 0:
-            # Check first role message for stream=True
-            assert choice["delta"]["content"] is None
-            assert choice["delta"]["role"] == "assistant"
+        if data["choices"]:
+            choice = data["choices"][0]
+            if i == 0:
+                # Check first role message for stream=True
+                assert choice["delta"]["content"] is None
+                assert choice["delta"]["role"] == "assistant"
+            else:
+                assert "role" not in choice["delta"]
+            assert data["system_fingerprint"].startswith("b")
+            assert "gpt-3.5" in data["model"] # DEFAULT_OAICOMPAT_MODEL, maybe changed in the future
+            if last_cmpl_id is None:
+                last_cmpl_id = data["id"]
+            assert last_cmpl_id == data["id"] # make sure the completion id is the same for all events in the stream
+            if choice["finish_reason"] in ["stop", "length"]:
+                assert "content" not in choice["delta"]
+                assert match_regex(re_content, content)
+                assert choice["finish_reason"] == finish_reason
+            else:
+                assert choice["finish_reason"] is None
+                content += choice["delta"]["content"] or ''
         else:
-            assert "role" not in choice["delta"]
-        assert data["system_fingerprint"].startswith("b")
-        assert "gpt-3.5" in data["model"] # DEFAULT_OAICOMPAT_MODEL, maybe changed in the future
-        if last_cmpl_id is None:
-            last_cmpl_id = data["id"]
-        assert last_cmpl_id == data["id"] # make sure the completion id is the same for all events in the stream
-        if choice["finish_reason"] in ["stop", "length"]:
             assert data["usage"]["prompt_tokens"] == n_prompt
             assert data["usage"]["completion_tokens"] == n_predicted
-            assert "content" not in choice["delta"]
-            assert match_regex(re_content, content)
-            assert choice["finish_reason"] == finish_reason
-        else:
-            assert choice["finish_reason"] is None
-            content += choice["delta"]["content"] or ''
 
 
 def test_chat_completion_with_openai_library():
@@ -278,12 +280,14 @@ def test_chat_completion_with_timings_per_token():
             assert data["choices"][0]["delta"]["role"] == "assistant"
             assert "timings" not in data, f'First event should not have timings: {data}'
         else:
-            assert "role" not in data["choices"][0]["delta"]
-            assert "timings" in data
-            assert "prompt_per_second" in data["timings"]
-            assert "predicted_per_second" in data["timings"]
-            assert "predicted_n" in data["timings"]
-            assert data["timings"]["predicted_n"] <= 10
+            if data["choices"]:
+                assert "role" not in data["choices"][0]["delta"]
+            else:
+                assert "timings" in data
+                assert "prompt_per_second" in data["timings"]
+                assert "predicted_per_second" in data["timings"]
+                assert "predicted_n" in data["timings"]
+                assert data["timings"]["predicted_n"] <= 10
 
 
 def test_logprobs():
@@ -332,24 +336,25 @@ def test_logprobs_stream():
     output_text = ''
     aggregated_text = ''
     for i, data in enumerate(res):
-        choice = data.choices[0]
-        if i == 0:
-            # Check first role message for stream=True
-            assert choice.delta.content is None
-            assert choice.delta.role == "assistant"
-        else:
-            assert choice.delta.role is None
-            if choice.finish_reason is None:
-                if choice.delta.content:
-                    output_text += choice.delta.content
-                assert choice.logprobs is not None
-                assert choice.logprobs.content is not None
-                for token in choice.logprobs.content:
-                    aggregated_text += token.token
-                    assert token.logprob <= 0.0
-                    assert token.bytes is not None
-                    assert token.top_logprobs is not None
-                    assert len(token.top_logprobs) > 0
+        if data.choices:
+            choice = data.choices[0]
+            if i == 0:
+                # Check first role message for stream=True
+                assert choice.delta.content is None
+                assert choice.delta.role == "assistant"
+            else:
+                assert choice.delta.role is None
+                if choice.finish_reason is None:
+                    if choice.delta.content:
+                        output_text += choice.delta.content
+                    assert choice.logprobs is not None
+                    assert choice.logprobs.content is not None
+                    for token in choice.logprobs.content:
+                        aggregated_text += token.token
+                        assert token.logprob <= 0.0
+                        assert token.bytes is not None
+                        assert token.top_logprobs is not None
+                        assert len(token.top_logprobs) > 0
     assert aggregated_text == output_text
 
 
