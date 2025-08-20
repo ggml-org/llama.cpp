@@ -1,0 +1,5 @@
+scikit-learn~=1.7.1
+torch~=2.6.0
+torchvision~=0.21.0
+transformers~=4.54.0.dev0
+huggingface-hub~=0.33.4
