@@ -885,71 +885,66 @@ static void aclnn_fill_scalar(ggml_backend_cann_context& ctx, float scalar,
 }
 
 /**
- * @brief Get or expand cached float32 tensors filled with scalar values.
+ * @brief Get or expand a cached float32 tensor filled with a scalar value.
  *
- * This function manages a cache of float32 tensors (zero-filled and one-filled).
- * If the cache does not exist, it will initialize the cache with a zero tensor
- * and a one tensor. If the requested tensor size exceeds the current cache
- * capacity, the cache will be expanded accordingly. The function then returns
- * an aclTensor created from the cached memory (either zero-filled or one-filled),
- * depending on the input `value`.
+ * This function manages cached device memory for float32 tensors. If the current
+ * cache size is insufficient for the requested tensor shape, the old memory will
+ * be released and new memory will be allocated. The allocated buffer is then
+ * initialized either with zeros (when @p value == 0.0f) or with the given scalar
+ * value using CANN operations. Finally, an aclTensor object is created from the
+ * cached memory and returned.
  *
- * @param ctx   The CANN backend context that manages cache memory.
- * @param ne    The tensor shape array (number of elements in each dimension).
- * @param nb    The stride size for each dimension.
- * @param dims  The number of tensor dimensions.
- * @param value The scalar value (only supports 0 or 1) used to determine whether
- *              to return the zero-cache tensor or the one-cache tensor.
- * @return      An aclTensor pointer corresponding to the cached tensor.
+ * @param ctx           The CANN backend context that manages device memory.
+ * @param buffer        A pointer to the cached device buffer (will be allocated
+ *                      or reallocated if necessary).
+ * @param cache_element The current number of cached elements. This will be
+ *                      updated when the cache is expanded.
+ * @param ne            The tensor shape array (number of elements in each dimension).
+ * @param nb            The stride size for each dimension.
+ * @param dims          The number of tensor dimensions.
+ * @param value         The scalar value used to fill the tensor (supports zero
+ *                      initialization via memset or arbitrary values via fill_scalar).
+ * @return              An aclTensor pointer created from the cached buffer.
  */
-static aclTensor* get_f32_zero_or_one_cache_acl_tensor(ggml_backend_cann_context& ctx,
-                                        int64_t* ne, size_t* nb,
-                                        int64_t dims, int64_t value) {
-    // just support one and zero cache
-    GGML_ASSERT(value == 1 || value == 0);
-
-    // Cache init or expansion
+static aclTensor* get_f32_cache_acl_tensor(
+    ggml_backend_cann_context& ctx,
+    void** buffer,
+    int64_t &cache_element,
+    int64_t* ne,
+    size_t* nb,
+    int64_t dims,
+    float value) {
+    // Calculate total number of elements
     int64_t n_element = 1;
-    for(int i = 0; i < dims; i++) {
-        n_element = n_element * ne[i];
+    for (int i = 0; i < dims; i++) {
+        n_element *= ne[i];
     }
     size_t size = n_element * sizeof(float);
-    void* cache;
-    if (value == 0) {
-        if(ctx.f32_zero_cache_element < n_element){
-            //free old mem
-            if(ctx.f32_zero_cache != nullptr){
-                aclrtFree(ctx.f32_zero_cache);
-            }
-            
-            //init zero cache
-            ctx.f32_zero_cache_element = n_element;
-            ACL_CHECK(aclrtMalloc(&ctx.f32_zero_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
-            ACL_CHECK(aclrtMemsetAsync(ctx.f32_zero_cache, size, 0, size, ctx.stream()));
+
+    // Allocate or expand cache if needed
+    if (cache_element < n_element) {
+        if (*buffer != nullptr) {
+            aclrtFree(*buffer);
+            *buffer = nullptr;
         }
-        cache = ctx.f32_zero_cache;
-    } else {
-        if(ctx.f32_one_cache_element < n_element){
-            //free old mem
-            if(ctx.f32_one_cache != nullptr){
-                aclrtFree(ctx.f32_one_cache);
-            }
-            
-            //init one cache
-            ctx.f32_one_cache_element = n_element;
+
+        ACL_CHECK(aclrtMalloc(buffer, size, ACL_MEM_MALLOC_HUGE_FIRST));
+        cache_element = n_element;
+
+        // Initialize cache
+        if (value == 0.0f) {
+            ACL_CHECK(aclrtMemsetAsync(*buffer, size, 0, size, ctx.stream()));
+        } else {
             int64_t pool_ne[1] = { n_element };
             size_t pool_nb[1] = { sizeof(float) };
-            ACL_CHECK(aclrtMalloc(&ctx.f32_one_cache, size, ACL_MEM_MALLOC_HUGE_FIRST));
-            aclTensor* acl_one = ggml_cann_create_tensor(
-                ctx.f32_one_cache, ACL_FLOAT, sizeof(float), pool_ne, pool_nb,
-                1);
-            aclnn_fill_scalar(ctx, 1, acl_one);
-            ggml_cann_release_resources(ctx, acl_one);
+            aclTensor* acl_value = ggml_cann_create_tensor(
+                *buffer, ACL_FLOAT, sizeof(float), pool_ne, pool_nb, 1);
+            aclnn_fill_scalar(ctx, 1, acl_value);
+            ggml_cann_release_resources(ctx, acl_value);
         }
-        cache = ctx.f32_one_cache;
     }
 
-    return ggml_cann_create_tensor(cache, ACL_FLOAT, sizeof(float), ne, nb, dims);
+    return ggml_cann_create_tensor(*buffer, ACL_FLOAT, sizeof(float), ne, nb, dims);
 }
 
 void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
@@ -967,7 +962,15 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
         acl_gamma_nb[i] = acl_gamma_nb[i - 1] * src->ne[i - 1];
     }
-    aclTensor* acl_gamma = get_f32_zero_or_one_cache_acl_tensor(ctx, src->ne, acl_gamma_nb, 1, 1);
+    aclTensor* acl_gamma = get_f32_cache_acl_tensor(
+        ctx,
+        &ctx.f32_one_cache,
+        ctx.f32_one_cache_element,
+        src->ne,
+        acl_gamma_nb,
+        1,        // dims
+        1.0f      // value
+    );
 
     // build rstd, zero...
     size_t acl_rstd_nb[GGML_MAX_DIMS];
@@ -975,7 +978,15 @@ void ggml_cann_rms_norm(ggml_backend_cann_context& ctx, ggml_tensor* dst) {
     for (int i = 1; i < GGML_MAX_DIMS; i++) {
         acl_rstd_nb[i] = acl_rstd_nb[i - 1] * src->ne[i - 1];
     }
-    aclTensor* acl_rstd = get_f32_zero_or_one_cache_acl_tensor(ctx, src->ne, acl_rstd_nb, GGML_MAX_DIMS, 0);
+    aclTensor* acl_rstd = get_f32_cache_acl_tensor(
+        ctx,
+        &ctx.f32_zero_cache,
+        ctx.f32_zero_cache_element,
+        src->ne,
+        acl_rstd_nb,
+        GGML_MAX_DIMS,
+        0.0f      // value
+    );
 
     GGML_CANN_CALL_ACLNN_OP(ctx, RmsNorm, acl_src, acl_gamma, eps, acl_dst, acl_rstd);
     ggml_cann_release_resources(ctx, acl_src, acl_dst, acl_gamma, acl_rstd);
@@ -996,7 +1007,7 @@ void ggml_cann_diag_mask(ggml_backend_cann_context& ctx, ggml_tensor* dst,
 
     aclTensor* mask_tensor = ggml_cann_create_tensor(buffer, ggml_cann_type_mapping(src->type),
         ggml_type_size(src->type), src->ne, src->nb, GGML_MAX_DIMS);
-    
+
     aclnn_fill_scalar(ctx, value, mask_tensor);
 
     aclScalar* alpha = nullptr;
