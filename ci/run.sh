@@ -106,7 +106,7 @@ function gg_wget {
     cd $out
 
     # should not re-download if file is the same
-    wget -nv -N $url
+    wget -nv -c -N $url
 
     cd $cwd
 }
