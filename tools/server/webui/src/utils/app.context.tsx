@@ -255,7 +255,7 @@ export const AppContextProvider = ({
         if (chunk.error) {
           throw new Error(chunk.error?.message || 'Unknown error');
         }
-        const addedContent = chunk.choices[0].delta.content;
+        const addedContent = chunk.choices[0]?.delta.content;
         const lastContent = pendingMsg.content || '';
         if (addedContent) {
           pendingMsg = {
