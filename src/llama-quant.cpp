@@ -610,7 +610,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const std::unordered_map<std::string, std::vector<float>> * activations_data,
     const llama_model_quantize_params * params,
     int nthread,
-    int sample_rows_per_expert = 256,
+    int sample_rows_per_expert = 384,
     float bias_lambda = 1.0
 ) {
     struct candidate_types {
@@ -758,16 +758,17 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<float> & deq) -> double
     {
         const int64_t n_per_row = t->ne[0];
-        const int64_t nrows     = t->ne[1];
-        const int64_t ne2       = t->ne[2] > 0 ? t->ne[2] : 1;
+        const int64_t nrows = t->ne[1];
+        const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
 
-        const size_t total_sampled_rows = f32_sample.size() / n_per_row;
+        const size_t nels = f32_sample.size();
+        const size_t total_sampled_rows = nels / (size_t)n_per_row;
         if (total_sampled_rows == 0) { return 0.0; }
 
         const size_t row_sz = ggml_row_size(typ, n_per_row);
         const size_t need_q = row_sz * total_sampled_rows;
         if (qbuf.size() < need_q) { qbuf.resize(need_q); }
-        if (deq.size() < f32_sample.size()) { deq.resize(f32_sample.size()); }
+        if (deq.size() < nels) { deq.resize(nels); }
 
         // Quantize sampled rows slice-by-slice
         size_t qoff = 0;
@@ -777,31 +778,31 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             if (rs == 0) { continue; }
 
             const float * value = values_sample ? values_sample + slice * n_per_row : nullptr;
-
             (void)ggml_quantize_chunk(typ, f32_sample.data() + foff, qbuf.data() + qoff, 0, rs, n_per_row, value);
 
-            qoff += row_sz * rs;
-            foff += (size_t)rs * n_per_row;
+            qoff += row_sz * (size_t)rs;
+            foff += (size_t)rs * (size_t)n_per_row;
         }
 
-        // Dequantize to deq
+        // Dequantize into deq
         if (typ == GGML_TYPE_F16) {
-            ggml_fp16_to_fp32_row((const ggml_fp16_t *)qbuf.data(), deq.data(), (int)f32_sample.size());
+            ggml_fp16_to_fp32_row((const ggml_fp16_t *)qbuf.data(), deq.data(), (int)nels);
         } else if (typ == GGML_TYPE_BF16) {
-            ggml_bf16_to_fp32_row((const ggml_bf16_t *)qbuf.data(), deq.data(), (int)f32_sample.size());
+            ggml_bf16_to_fp32_row((const ggml_bf16_t *)qbuf.data(), deq.data(), (int)nels);
         } else {
             const ggml_type_traits * traits = ggml_get_type_traits(typ);
             if (!traits || !traits->to_float) {
-                // no dequantizer available
+                LLAMA_LOG_WARN("%s: unsupported quantization type %s\n", __func__, ggml_type_name(typ));
                 return 1e35;
             }
-            traits->to_float(qbuf.data(), deq.data(), (int) f32_sample.size());
+
+            traits->to_float(qbuf.data(), deq.data(), (int) nels);
         }
 
         // Compute error
+        const double eps = 1e-12;
         size_t off = 0;
         double total_err = 0.0;
-        const double eps = 1e-12;
 
         for (int64_t slice = 0; slice < ne2; ++slice) {
             const int64_t rs = sample_rows_per_slice[slice];
@@ -817,9 +818,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 const float * y = deq.data() + off;
 
                 double mse_w = 0.0;
-                double x2_w = 0.0;
-                double bnum = 0.0;
-                double bden = 0.0;
+                double x2_w  = 0.0;
+                double bnum  = 0.0;
+                double bden  = 0.0;
 
                 if (wv && act) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
@@ -828,8 +829,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                         const double a = act[j];
                         mse_w += w * e * e;
                         x2_w += w * x[j] * x[j];
-                        bnum += e * a;
-                        bden += a * a;
+                        bnum += w * e * a;  // weighted bias
+                        bden += w * a * a;  // weighted norm
                     }
                 } else if (wv) {
                     for (int64_t j = 0; j < n_per_row; ++j) {
@@ -856,7 +857,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 }
 
                 double row_err = mse_w / (x2_w + eps);
+
                 if (act && bias_lambda != 0.0) {
+                    // penalize squared projection of error onto activations
                     row_err += bias_lambda * (bnum * bnum) / (bden + eps);
                 }
 
@@ -864,7 +867,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 off += (size_t)n_per_row;
             }
 
-            // scale back up to the full number of rows in this slice
+            // scale to full rows in this slice (nrows)
             const double scale_rows = (double)nrows / std::max(1.0, (double)rs);
             total_err += slice_err * scale_rows;
         }
@@ -982,10 +985,14 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Compute maximum row size among compatible candidates (to size qbuf once)
         size_t max_row_sz = 0;
+        const bool has_valid_imatrix = !values_sample.empty() && values_sample.size() == (size_t)ne2 * (size_t)n_per_row;
         std::vector<ggml_type> compatible_candidates;
         compatible_candidates.reserve(quant_candidates.size());
         for (ggml_type ts_type : quant_candidates) {
-            if (is_iq(ts_type) && !values_all) { continue; }
+            if (is_iq(ts_type) && !has_valid_imatrix) {
+                LLAMA_LOG_WARN("%s: skipping IQ quantization for %s, no or mismatched imatrix provided\n", __func__, name.c_str());
+                continue;
+            }
             ggml_type tt = make_compatible(t, ts_type);
             if (!is_compatible(t, tt)) { continue; }
             compatible_candidates.push_back(tt);
@@ -996,13 +1003,37 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<float>   deq(f32_sample.size());
 
         // Now evaluate candidates
-        for (ggml_type tt : compatible_candidates) {
-            auto bpw = (float)tensor_bpw(t, tt);
-            size_t bytes = total_bytes(t, tt);
-            const float *vals_ptr = values_sample.empty() ? nullptr : values_sample.data();
-            const float *acts_ptr = activations_sample.empty() ? nullptr : activations_sample.data();
-            float  err = (float)estimate_error(t, tt, f32_sample, sample_rows_per_slice, vals_ptr, acts_ptr, qbuf, deq);
-            info.candidate.push_back(candidate_types{ tt, bpw, bytes, err });
+        std::vector<candidate_types> cand_out(compatible_candidates.size());
+        const float *vals_ptr = values_sample.empty() ? nullptr : values_sample.data();
+        const float *acts_ptr = activations_sample.empty() ? nullptr : activations_sample.data();
+
+        int n_eval_threads = std::max(1, nthread);
+        std::atomic<size_t> cidx{0};
+        std::vector<std::thread> eval_workers;
+        eval_workers.reserve(n_eval_threads);
+
+        for (int ti = 0; ti < n_eval_threads; ++ti) {
+            eval_workers.emplace_back([&] {
+                // thread-local scratch
+                std::vector<uint8_t> tl_qbuf(qbuf.size());
+                std::vector<float>   tl_deq(deq.size());
+
+                for (;;) {
+                    const size_t i = cidx.fetch_add(1, std::memory_order_relaxed);
+                    if (i >= compatible_candidates.size()) { break; }
+
+                    const ggml_type tt = compatible_candidates[i];
+                    const auto bpw = (float)tensor_bpw(t, tt);
+                    const size_t bytes = total_bytes(t, tt);
+                    const auto err = (float)estimate_error(t, tt, f32_sample, sample_rows_per_slice, vals_ptr, acts_ptr, tl_qbuf, tl_deq);
+                    cand_out[i] = candidate_types{ tt, bpw, bytes, err };
+                }
+            });
+        }
+        for (auto &th : eval_workers) { th.join(); }
+
+        for (auto &c : cand_out) {
+            if (c.bytes > 0) { info.candidate.push_back(c); }
         }
 
         if (info.candidate.empty()) {
