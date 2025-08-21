@@ -7,7 +7,7 @@ import sys
 import torch
 import numpy as np
 
-from transformers import AutoTokenizer, AutoConfig, AutoModel
+from transformers import AutoTokenizer, AutoConfig, AutoModel, AutoModelForCausalLM
 from pathlib import Path
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
