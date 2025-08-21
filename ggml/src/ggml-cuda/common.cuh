@@ -78,6 +78,8 @@
 #define GGML_CUDA_CC_IS_CDNA3(cc) (cc >= GGML_CUDA_CC_CDNA3 && cc < GGML_CUDA_CC_RDNA1)
 
 // Moore Threads
+#define MUSART_HMASK 40300 // MUSA rc4.3, min. ver. for half2 -> uint mask comparisons
+
 #define GGML_CUDA_CC_QY1 (GGML_CUDA_CC_OFFSET_MTHREADS + 0x210) // MTT S80, MTT S3000
 #define GGML_CUDA_CC_QY2 (GGML_CUDA_CC_OFFSET_MTHREADS + 0x220) // MTT S4000
 #define GGML_CUDA_CC_NG  (GGML_CUDA_CC_OFFSET_MTHREADS + 0x310) // TBD
@@ -203,14 +205,6 @@ static const char * cu_get_error_str(CUresult err) {
 #else
 #define GGML_CUDA_ASSUME(x)
 #endif // CUDART_VERSION >= 11010
-
-#ifdef GGML_CUDA_F16
-typedef half dfloat; // dequantize float
-typedef half2 dfloat2;
-#else
-typedef float dfloat; // dequantize float
-typedef float2 dfloat2;
-#endif // GGML_CUDA_F16
 
 #if (!defined(GGML_USE_HIP) && !defined(GGML_CUDA_NO_VMM)) || (defined(GGML_USE_HIP) && !defined(GGML_HIP_NO_VMM))
 #define GGML_USE_VMM
@@ -490,13 +484,14 @@ static __device__ __forceinline__ half2 warp_reduce_max(half2 x) {
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_PASCAL || defined(GGML_USE_HIP)
 }
 
-#if CUDART_VERSION < CUDART_HMASK
+#if (defined(CUDART_VERSION) && CUDART_VERSION < CUDART_HMASK) || defined(GGML_USE_HIP) || \
+    (defined(MUSART_VERSION) && MUSART_VERSION < MUSART_HMASK)
 static __device__ __forceinline__ uint32_t __hgt2_mask(const half2 a, const half2 b) {
     const uint32_t mask_low  = 0x0000FFFF * (float( __low2half(a)) > float( __low2half(b)));
     const uint32_t mask_high = 0xFFFF0000 * (float(__high2half(a)) > float(__high2half(b)));
     return mask_low | mask_high;
 }
-#endif // CUDART_VERSION < CUDART_HMASK
+#endif // (defined(CUDART_VERSION) && CUDART_VERSION < CUDART_HMASK) || defined(GGML_USE_HIP) || (defined(MUSART_VERSION) && MUSART_VERSION < MUSART_HMASK)
 
 static __device__ __forceinline__ int ggml_cuda_dp4a(const int a, const int b, int c) {
 #if defined(GGML_USE_HIP)
@@ -556,7 +551,7 @@ static __device__ __forceinline__ float ggml_cuda_e8m0_to_fp32(uint8_t x) {
 #endif // CUDART_VERSION >= 12050
 }
 
-typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, dfloat2 & v);
+typedef void (*dequantize_kernel_t)(const void * vx, const int64_t ib, const int iqs, float2 & v);
 
 static __device__ __forceinline__ float get_alibi_slope(
     const float max_bias, const uint32_t h, const uint32_t n_head_log2, const float m0, const float m1

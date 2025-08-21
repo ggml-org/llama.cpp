@@ -266,10 +266,7 @@ void ggml_cuda_op_mul_mat_q(
 
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_ddf_i);
-    GGML_UNUSED(src1_padded_row_size);
+    GGML_UNUSED_VARS(src1, dst, src1_ddf_i, src1_padded_row_size);
 }
 
 bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11) {

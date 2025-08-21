@@ -42,7 +42,7 @@ static __device__ void cpy_blck_q8_0_f32(const char * cxi, char * cdsti) {
 
 #pragma unroll
     for (int j = 0; j < QK8_0; j += 2) {
-        dfloat2 dq;
+        float2 dq;
         dequantize_q8_0(cxi, 0, j, dq);
         *(cdstf + j) = dq.x;
         *(cdstf + j + 1) = dq.y;
@@ -55,7 +55,7 @@ static __device__ void cpy_blck_q_f32(const char * cxi, char * cdsti) {
 
 #pragma unroll
     for (int j = 0; j < qk/2; j++) {
-        dfloat2 dq;
+        float2 dq;
         dequant(cxi, 0, j, dq);
         *(cdstf + j) = dq.x;
         *(cdstf + j + qk/2) = dq.y;
@@ -134,8 +134,7 @@ void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_des
     CUDA_CHECK(cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream));
     cuda_graph->graph_cpynode_index = 0; // reset index
 #else
-    GGML_UNUSED(cuda_graph); GGML_UNUSED(host_dest_ptrs);
-    GGML_UNUSED(host_dest_ptrs_size); GGML_UNUSED(stream);
+    GGML_UNUSED_VARS(cuda_graph, host_dest_ptrs, host_dest_ptrs_size, stream);
 #endif
 }
 

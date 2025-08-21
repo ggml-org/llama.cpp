@@ -1255,7 +1255,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_16_q8_1_mma(
         }
     }
 #else
-    GGML_UNUSED(x); GGML_UNUSED(y); GGML_UNUSED(sum); GGML_UNUSED(k00);
+    GGML_UNUSED_VARS(x, y, sum, k00);
     NO_DEVICE_CODE;
 #endif // AMD_MFMA_AVAILABLE
 }
@@ -1572,7 +1572,7 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
         }
     }
 #else
-    GGML_UNUSED(x); GGML_UNUSED(y); GGML_UNUSED(sum); GGML_UNUSED(k00);
+    GGML_UNUSED_VARS(x, y, sum, k00);
     NO_DEVICE_CODE;
 #endif // AMD_MFMA_AVAILABLE
 }
@@ -2301,7 +2301,7 @@ static __device__ __forceinline__ void vec_dot_q6_K_q8_1_mma(
         }
     }
 #else
-    GGML_UNUSED(x); GGML_UNUSED(y); GGML_UNUSED(sum); GGML_UNUSED(k00);
+    GGML_UNUSED_VARS(x, y, sum, k00);
     NO_DEVICE_CODE;
 #endif // AMD_MFMA_AVAILABLE
 }
@@ -2855,12 +2855,14 @@ static __device__ __forceinline__ void mmq_write_back_mma(
 #else
     typedef tile<16, 8, int> tile_C;
     constexpr int rows_per_warp = 2 * granularity;
-#endif
+#endif // defined(AMD_MFMA_AVAILABLE)
     constexpr int ntx = rows_per_warp/tile_C::I; // Number of x minitiles per warp.
 
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
 #if defined(TURING_MMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE)
     static_assert(nwarps*tile_C::I == mmq_y, "nwarps*tile_C::I != mmq_y");
+#else
+    GGML_UNUSED(nwarps);
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
 
 #pragma unroll

@@ -22,6 +22,8 @@ def create_server():
     server.model_alias = "tinyllama-2-tool-call"
     server.server_port = 8081
     server.n_slots = 1
+    server.n_ctx = 8192
+    server.n_batch = 2048
 
 class CompletionMode(Enum):
     NORMAL = "normal"

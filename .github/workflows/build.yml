@@ -1070,7 +1070,8 @@ jobs:
           write-host "Downloading AMD HIP SDK Installer"
           Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
-          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
+          $proc.WaitForExit(600000)
           write-host "Completed AMD HIP SDK installation"
 
       - name: Verify ROCm

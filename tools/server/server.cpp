@@ -911,6 +911,17 @@ struct server_task_result_cmpl_final : server_task_result {
             {"model",              oaicompat_model},
             {"system_fingerprint", build_info},
             {"object",             "chat.completion.chunk"},
+        });
+
+        // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
+        // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
+        deltas.push_back({
+            {"choices", json::array()},
+            {"created",            t},
+            {"id",                 oaicompat_cmpl_id},
+            {"model",              oaicompat_model},
+            {"system_fingerprint", build_info},
+            {"object",             "chat.completion.chunk"},
             {"usage", json {
                 {"completion_tokens", n_decoded},
                 {"prompt_tokens",     n_prompt_tokens},
@@ -1201,6 +1212,8 @@ struct server_task_result_metrics : server_task_result {
     uint64_t n_tokens_predicted_total        = 0;
     uint64_t t_tokens_generation_total       = 0;
 
+    uint64_t n_past_max = 0;
+
     uint64_t n_prompt_tokens_processed = 0;
     uint64_t t_prompt_processing       = 0;
 
@@ -1225,6 +1238,8 @@ struct server_task_result_metrics : server_task_result {
             { "t_tokens_generation_total",       t_tokens_generation_total },
             { "n_tokens_predicted_total",        n_tokens_predicted_total },
             { "t_prompt_processing_total",       t_prompt_processing_total },
+
+            { "n_past_max",                      n_past_max },
 
             { "n_prompt_tokens_processed",       n_prompt_tokens_processed },
             { "t_prompt_processing",             t_prompt_processing },
@@ -1587,6 +1602,8 @@ struct server_metrics {
     uint64_t n_tokens_predicted_total        = 0;
     uint64_t t_tokens_generation_total       = 0;
 
+    uint64_t n_past_max = 0;
+
     uint64_t n_prompt_tokens_processed = 0;
     uint64_t t_prompt_processing       = 0;
 
@@ -1605,6 +1622,10 @@ struct server_metrics {
         n_prompt_tokens_processed       += slot.n_prompt_tokens_processed;
         t_prompt_processing             += slot.t_prompt_processing;
         t_prompt_processing_total       += slot.t_prompt_processing;
+
+        if (slot.n_past > 0) {
+            n_past_max = std::max(n_past_max, (uint64_t) slot.n_past);
+        }
     }
 
     void on_prediction(const server_slot & slot) {
@@ -1619,6 +1640,9 @@ struct server_metrics {
         for (const auto & slot : slots) {
             if (slot.is_processing()) {
                 n_busy_slots_total++;
+            }
+            if (slot.n_past > 0) {
+                n_past_max = std::max(n_past_max, (uint64_t) slot.n_past);
             }
         }
     }
@@ -1716,7 +1740,7 @@ struct server_queue {
     void pop_deferred_task() {
         std::unique_lock<std::mutex> lock(mutex_tasks);
         if (!queue_tasks_deferred.empty()) {
-            queue_tasks.emplace_back(std::move(queue_tasks_deferred.front()));
+            queue_tasks.emplace_front(std::move(queue_tasks_deferred.front()));
             queue_tasks_deferred.pop_front();
         }
         condition_tasks.notify_one();
@@ -2874,6 +2898,8 @@ struct server_context {
                     res->t_prompt_processing_total       = metrics.t_prompt_processing_total;
                     res->n_tokens_predicted_total        = metrics.n_tokens_predicted_total;
                     res->t_tokens_generation_total       = metrics.t_tokens_generation_total;
+
+                    res->n_past_max = metrics.n_past_max;
 
                     res->n_prompt_tokens_processed = metrics.n_prompt_tokens_processed;
                     res->t_prompt_processing       = metrics.t_prompt_processing;
@@ -4077,6 +4103,10 @@ int main(int argc, char ** argv) {
                     {"name",  "n_decode_total"},
                     {"help",  "Total number of llama_decode() calls"},
                     {"value",  res_metrics->n_decode_total}
+            }, {
+                    {"name",  "n_past_max"},
+                    {"help",  "Largest observed n_past."},
+                    {"value",  res_metrics->n_past_max}
             }, {
                     {"name",  "n_busy_slots_per_decode"},
                     {"help",  "Average number of busy slots per llama_decode() call"},

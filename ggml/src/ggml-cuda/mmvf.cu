@@ -433,12 +433,7 @@ void ggml_cuda_op_mul_mat_vec_f(
             GGML_ABORT("unsupported type: %s", ggml_type_name(src0->type));
     }
 
-    GGML_UNUSED(ctx);
-    GGML_UNUSED(src1);
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_ddq_i);
-    GGML_UNUSED(src1_ncols);
-    GGML_UNUSED(src1_padded_row_size);
+    GGML_UNUSED_VARS(ctx, src1, dst, src1_ddq_i, src1_ncols, src1_padded_row_size);
 }
 
 bool ggml_cuda_should_use_mmvf(enum ggml_type type, int cc, const int64_t * src0_ne, int64_t ne11) {
