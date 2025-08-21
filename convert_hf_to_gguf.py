@@ -133,6 +133,7 @@ class ModelBase:
                 self.ftype = gguf.LlamaFileType.MOSTLY_BF16
 
         # Configure GGUF Writer
+        print(f"arch: {gguf.MODEL_ARCH_NAMES[self.model_arch]}")
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
 
@@ -465,6 +466,7 @@ class ModelBase:
     @classmethod
     def from_model_architecture(cls, arch: str, model_type = ModelType.TEXT) -> type[ModelBase]:
         try:
+            print(f"model_type: {model_type}, arch: {arch}")
             return cls._model_classes[model_type][arch]
         except KeyError:
             raise NotImplementedError(f'Architecture {arch!r} not supported!') from None
@@ -8303,6 +8305,40 @@ class SmallThinkerModel(TextModel):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+            
+
+@ModelBase.register("ModernBertModel")
+class ModernBertModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.MODERN_BERT
+
+    def set_gguf_parameters(self) -> None:
+        # Determine block count (number of hidden layers)
+        block_count = self.hparams.get("num_hidden_layers") or self.hparams.get("num_hidden_layers_alt")
+        if block_count is None:
+            raise ValueError("Could not determine number of hidden layers from hparams")
+
+        # Attention heads and dimensions
+        n_head = self.hparams.get("num_attention_heads")
+        if n_head is None:
+            raise ValueError("Missing 'num_attention_heads' in hparams")
+
+        hidden_size = self.hparams["hidden_size"]
+        head_dim = hidden_size // n_head
+        ffn_dim = self.hparams.get("intermediate_size", 4 * hidden_size)
+
+        # GGUF parameter assignment
+        self.gguf_writer.add_context_length(self.hparams.get("max_position_embeddings", 512))
+        self.gguf_writer.add_embedding_length(hidden_size)
+        self.gguf_writer.add_feed_forward_length(ffn_dim)
+        self.gguf_writer.add_block_count(block_count)
+        self.gguf_writer.add_head_count(n_head)
+        self.gguf_writer.add_layer_norm_eps(self.hparams.get("layer_norm_eps", 1e-12))
+        self.gguf_writer.add_file_type(self.ftype)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Directly map tensor names without QKV splitting or reordering
+        return [(self.map_tensor_name(name), data_torch)]
+    
 
 ###### CONVERSION LOGIC ######
 
