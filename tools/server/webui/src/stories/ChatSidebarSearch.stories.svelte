@@ -14,13 +14,16 @@
 <Story name="Default" args={{ class: 'w-80' }} />
 
 <Story name="Focus" args={{ class: 'w-80' }} play={({ canvasElement }) => {
-	canvasElement.querySelector('input')?.focus();
+	const input = canvasElement.querySelector('input') as HTMLInputElement;
+	if (input) {
+		input.focus();
+	}
 }}/>
 
 <Story
-	name="WithValue"
+	name="Active"
 	args={{
 		class: 'w-80',
-		value: 'Hello World'
+		value: 'Python programming'
 	}}
 />

@@ -70,3 +70,23 @@
 		onDelete: (id: string) => console.log('Delete:', id)
 	}}
 />
+
+<Story
+	name="ActionsOpen"
+	args={{
+		conversation: sampleConversation,
+		onSelect: (id: string) => console.log('Selected:', id),
+		onEdit: (id: string) => console.log('Edit:', id),
+		onDelete: (id: string) => console.log('Delete:', id)
+	}}
+	play={async ({ canvasElement }) => {
+		// Wait for component to mount
+		await new Promise(resolve => setTimeout(resolve, 100));
+		
+		// Find and click the more actions button (three dots)
+		const moreButton = canvasElement.querySelector('[data-testid="more-actions"], button[aria-label*="More"], button:has([data-lucide="more-horizontal"])') as HTMLButtonElement;
+		if (moreButton) {
+			moreButton.click();
+		}
+	}}
+/>

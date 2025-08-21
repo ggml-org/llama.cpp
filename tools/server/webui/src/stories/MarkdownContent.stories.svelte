@@ -16,15 +16,6 @@
             layout: 'centered'
         }
     });
-
-
-
-
-
-
-
-
-
 </script>
 
 <Story
