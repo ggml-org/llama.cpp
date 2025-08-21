@@ -39,6 +39,7 @@ public:
                              /* common */
                  uint32_t    n_seq_max,
                      bool    offload,
+                     bool    unified,
                              /* layer filters */
           layer_filter_cb && filter_attn = nullptr,
           layer_filter_cb && filter_recr = nullptr);
@@ -73,8 +74,8 @@ public:
 
     // state write/load
 
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const override;
-    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1)       override;
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
+    void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0)       override;
 
     //
     // llama_memory_hybrid specific API
@@ -92,6 +93,8 @@ private:
 
 class llama_memory_hybrid_context : public llama_memory_context_i {
 public:
+    using slot_info_vec_t = llama_kv_cache_unified::slot_info_vec_t;
+
     // init failure
     explicit llama_memory_hybrid_context(llama_memory_status status);
 
@@ -107,7 +110,7 @@ public:
     // init success
     llama_memory_hybrid_context(
               llama_memory_hybrid * mem,
-            std::vector<uint32_t>   heads_attn,
+                  slot_info_vec_t   sinfos_attn,
         std::vector<llama_ubatch>   ubatches);
 
     ~llama_memory_hybrid_context() = default;

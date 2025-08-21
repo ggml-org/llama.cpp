@@ -55,7 +55,15 @@ bool common_chat_msg_parser::add_tool_call(const std::string & name, const std::
 bool common_chat_msg_parser::add_tool_call(const json & tool_call) {
     std::string name = tool_call.contains("name") ? tool_call.at("name") : "";
     std::string id = tool_call.contains("id") ? tool_call.at("id") : "";
-    std::string arguments = tool_call.contains("arguments") ? tool_call.at("arguments") : "";
+    std::string arguments = "";
+    if (tool_call.contains("arguments")) {
+        if (tool_call.at("arguments").is_object()) {
+            arguments = tool_call.at("arguments").dump();
+        } else {
+            arguments = tool_call.at("arguments");
+        }
+    }
+
     return add_tool_call(name, id, arguments);
 }
 

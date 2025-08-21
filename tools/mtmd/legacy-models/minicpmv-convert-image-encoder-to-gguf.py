@@ -497,11 +497,11 @@ ap.add_argument("--projector-type", help="Type of projector. Possible values: ml
 ap.add_argument("-o", "--output-dir", help="Directory to save GGUF files. Default is the original model directory", default=None)
 # Example --image_mean 0.48145466 0.4578275 0.40821073 --image_std 0.26862954 0.26130258 0.27577711
 # Example --image_mean 0.5 0.5 0.5 --image_std 0.5 0.5 0.5
-default_image_mean = [0.48145466, 0.4578275, 0.40821073]
-default_image_std = [0.26862954, 0.26130258, 0.27577711]
+default_image_mean = [0.5, 0.5, 0.5]
+default_image_std = [0.5, 0.5, 0.5]
 ap.add_argument('--image-mean', type=float, nargs='+', help='Mean of the images for normalization (overrides processor) ', default=None)
 ap.add_argument('--image-std', type=float, nargs='+', help='Standard deviation of the images for normalization (overrides processor)', default=None)
-ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4', default=2)
+ap.add_argument('--minicpmv_version', type=int, help='minicpmv_version: MiniCPM-V-2 use 1; MiniCPM-V-2.5 use 2; MiniCPM-V-2.6 use 3; MiniCPM-o-2.6 use 4; MiniCPM-V 4.0 use 5; MiniCPM-o-4.0 use 6', default=2)
 
 # with proper
 args = ap.parse_args()
@@ -516,6 +516,27 @@ if args.use_f32:
 
 # output in the same directory as the model if output_dir is None
 dir_model = args.model_dir
+
+# Read config.json to get actual model configuration
+config_path = os.path.join(dir_model, "config.json")
+model_config = {}
+if os.path.isfile(config_path):
+    with open(config_path, "r", encoding="utf-8") as f:
+        model_config = json.load(f)
+    print(f"Loaded config from {config_path}")
+else:
+    print(f"Warning: config.json not found at {config_path}")
+
+# If minicpmv_projector is not specified but the default path exists, use the default path
+if args.minicpmv_projector is None:
+    default_projector_path = os.path.join(dir_model, "minicpmv.projector")
+    if os.path.isfile(default_projector_path):
+        args.minicpmv_projector = default_projector_path
+        print(f"Found default projector file: {default_projector_path}")
+
+# If output_dir is not specified, use model_dir as the default value
+if args.output_dir is None:
+    args.output_dir = dir_model
 
 if args.clip_model_is_vision or not os.path.exists(dir_model + "/vocab.json") or args.clip_model_is_openclip:
     vocab = None
@@ -544,37 +565,69 @@ if args.use_f32:
 #     processor = CLIPProcessor.from_pretrained(dir_model)
 
 minicpmv_version = args.minicpmv_version
-emb_dim = 4096
-block_count = 26
-if minicpmv_version == 1:
-    emb_dim = 2304
-    block_count = 26
-elif minicpmv_version == 2:
-    emb_dim = 4096
-    block_count = 27
-elif minicpmv_version == 3:
-    emb_dim = 3584
-    block_count = 27
-elif minicpmv_version == 4:
-    emb_dim = 3584
-    block_count = 27
 
-default_vision_config = {
-        "hidden_size": 1152,
-        "image_size": 980,
-        "intermediate_size": 4304,
-        "model_type": "idefics2",
-        "num_attention_heads": 16,
-        "num_hidden_layers": 27,
-        "patch_size": 14,
+# Use actual config values instead of hardcoded ones
+if model_config:
+    # For the projector/resampler, use the main model's hidden_size
+    emb_dim = model_config.get("hidden_size", 1536)
+
+    # For the vision model, use vision_config values
+    vision_config_dict = model_config.get("vision_config", {})
+    default_vision_config = {
+        "hidden_size": vision_config_dict.get("hidden_size", 1152),
+        "image_size": vision_config_dict.get("image_size", 980),
+        "intermediate_size": vision_config_dict.get("intermediate_size", 4304),
+        "model_type": vision_config_dict.get("model_type", "siglip"),
+        "num_attention_heads": vision_config_dict.get("num_attention_heads", 16),
+        "num_hidden_layers": vision_config_dict.get("num_hidden_layers", 27),
+        "patch_size": vision_config_dict.get("patch_size", 14),
     }
+
+    # Use vision model's num_hidden_layers for block_count
+    block_count = vision_config_dict.get("num_hidden_layers", 27)
+
+    print(f"Using config values: emb_dim={emb_dim}, block_count={block_count}")
+    print(f"Vision config: {default_vision_config}")
+else:
+    # Fallback to original hardcoded logic if config.json not found
+    emb_dim = 4096
+    block_count = 26
+    if minicpmv_version == 1:
+        emb_dim = 2304
+        block_count = 26
+    elif minicpmv_version == 2:
+        emb_dim = 4096
+        block_count = 27
+    elif minicpmv_version == 3:
+        emb_dim = 3584
+        block_count = 27
+    elif minicpmv_version == 4:
+        emb_dim = 3584
+        block_count = 27
+    elif minicpmv_version == 5:
+        emb_dim = 2560
+        block_count = 27
+
+    default_vision_config = {
+            "hidden_size": 1152,
+            "image_size": 980,
+            "intermediate_size": 4304,
+            "model_type": "idefics2",
+            "num_attention_heads": 16,
+            "num_hidden_layers": 27,
+            "patch_size": 14,
+        }
 
 vision_config = Idefics2VisionConfig(**default_vision_config)
 model = Idefics2VisionTransformer(vision_config)
-if minicpmv_version == 3:
+if minicpmv_version == 3 or (model_config and model_config.get("vision_config", {}).get("model_type") == "siglip"):
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
 elif minicpmv_version == 4:
+    vision_config = SiglipVisionConfig(**default_vision_config)
+    model = SiglipVisionTransformer(vision_config)
+elif minicpmv_version == 5:
+    default_vision_config["model_type"] = "siglip_vision_model"
     vision_config = SiglipVisionConfig(**default_vision_config)
     model = SiglipVisionTransformer(vision_config)
 
@@ -603,7 +656,7 @@ elif args.vision_only:
 else:
     fname_middle = ""
 
-output_dir = args.output_dir if args.output_dir is not None else dir_model
+output_dir = args.output_dir
 os.makedirs(output_dir, exist_ok=True)
 output_prefix = os.path.basename(output_dir).replace("ggml_", "")
 fname_out = os.path.join(output_dir, f"{fname_middle}model-{ftype_str[ftype]}.gguf")
@@ -626,15 +679,26 @@ else:
     fout.add_description("two-tower CLIP model")
 
 if has_vision_encoder:
-    # vision_model hparams
-    fout.add_uint32("clip.vision.image_size", 448)
-    fout.add_uint32("clip.vision.patch_size", 14)
-    fout.add_uint32(add_key_str(KEY_EMBEDDING_LENGTH, VISION), 1152)
-    fout.add_uint32(add_key_str(KEY_FEED_FORWARD_LENGTH, VISION), 4304)
+    # vision_model hparams - use actual config values
+    vision_image_size = model_config.get("image_size", 448) if model_config else 448
+    vision_patch_size = default_vision_config.get("patch_size", 14)
+    vision_hidden_size = default_vision_config.get("hidden_size", 1152)
+    vision_intermediate_size = default_vision_config.get("intermediate_size", 4304)
+    vision_attention_heads = default_vision_config.get("num_attention_heads", 16)
+
+    fout.add_uint32("clip.vision.image_size", vision_image_size)
+    fout.add_uint32("clip.vision.patch_size", vision_patch_size)
+    fout.add_uint32(add_key_str(KEY_EMBEDDING_LENGTH, VISION), vision_hidden_size)
+    fout.add_uint32(add_key_str(KEY_FEED_FORWARD_LENGTH, VISION), vision_intermediate_size)
     fout.add_uint32("clip.vision.projection_dim", 0)
-    fout.add_uint32(add_key_str(KEY_ATTENTION_HEAD_COUNT, VISION), 16)
+    fout.add_uint32(add_key_str(KEY_ATTENTION_HEAD_COUNT, VISION), vision_attention_heads)
     fout.add_float32(add_key_str(KEY_ATTENTION_LAYERNORM_EPS, VISION), 1e-6)
     fout.add_uint32(add_key_str(KEY_BLOCK_COUNT, VISION), block_count)
+
+    # Add MiniCPM-V specific parameters
+    query_num = model_config.get("query_num", 0) if model_config else 0
+    resampler_emb_dim = model_config.get("hidden_size", 0) if model_config else 0
+    fout.add_uint32("clip.minicpmv_query_num", query_num)
 
     if processor is not None:
         image_mean = processor.image_processor.image_mean if args.image_mean is None or args.image_mean == default_image_mean else args.image_mean

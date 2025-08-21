@@ -8,12 +8,17 @@
 #include <vector>
 #include <set>
 #include <bitset>
+#include <memory>
 #include <unordered_map>
 
 // keep this struct lightweight
-// it points to data in `llama_batch_allocr`
 struct llama_ubatch {
-    bool equal_seqs;
+    bool equal_seqs() const {
+        return b_equal_seqs != 0;
+    }
+
+    uint32_t b_equal_seqs; // note: this is a boolean, but we use an int32_t for alignment
+                           //       otherwise address sanitizer complains
     // TODO: whole_seqs for embeddings?
 
     uint32_t n_tokens;     // total tokens (n_seq_tokens * n_seqs)
@@ -34,6 +39,20 @@ struct llama_ubatch {
     llama_seq_id *  seq_id_unq; // [n_seqs_unq]       | s   | seq_id
     int32_t      *  seq_idx;    // [LLAMA_MAX_SEQ]    | -   | seq_idx
     int8_t       *  output;     // [n_tokens]         | i   | -
+
+    struct data_t {
+        std::vector<llama_token>    token;
+        std::vector<float>          embd;
+        std::vector<llama_pos>      pos;
+        std::vector<int32_t>        n_seq_id;
+        std::vector<llama_seq_id *> seq_id;
+        std::vector<llama_seq_id>   seq_id_unq;
+        std::vector<int32_t>        seq_idx;
+        std::vector<int8_t>         output;
+    };
+
+    // the llama_ubatch pointers above point to this data if set. otherwise - points to non-owning data
+    std::shared_ptr<data_t> data;
 };
 
 // a helper for sanitizing, fulfilling and splitting a batch
@@ -48,12 +67,14 @@ public:
             const llama_vocab & vocab,
             const llama_memory_i * memory,
             uint32_t n_embd,
+            uint32_t n_seq_max,
             bool output_all);
 
     const llama_batch & get_batch() const;
 
     uint32_t get_n_tokens()  const;
     uint32_t get_n_outputs() const;
+    uint32_t get_n_used()    const;
 
     // the array of output indices in the order they were encountered during the ubatch splitting
     std::vector<int32_t> & get_out_ids();
@@ -69,7 +90,8 @@ public:
     llama_ubatch split_simple(uint32_t n_ubatch);
 
     // make ubatches of equal-length sequences sets
-    llama_ubatch split_equal(uint32_t n_ubatch);
+    // if sequential == true, the tokens in the ubatch will have increasing sequential sequence ids
+    llama_ubatch split_equal(uint32_t n_ubatch, bool sequential);
 
     // sequence-set-wise split - each ubatch contains a single sequence-set
     llama_ubatch split_seq(uint32_t n_ubatch);
@@ -98,6 +120,7 @@ private:
     const uint32_t n_pos_per_embd;
 
     uint32_t n_embd;
+    uint32_t n_seq_max;
     uint32_t n_outputs;
 
     std::array<llama_seq_id, 1> seq_id_0 = { 0 }; // default sequence id
@@ -112,6 +135,9 @@ private:
     using pos_set_t = std::set<llama_pos>;
     using seq_cpl_t = std::vector<bool>;
 
+    // helper flag to quickly determine if there are any coupled sequences in the batch
+    bool has_cpl = false;
+
     std::vector<pos_set_t> seq_pos; // seq_pos[s]: the set of positions in sequence s
     std::vector<seq_cpl_t> seq_cpl; // seq_cpl[s0][s1]: if sequence s0 is coupled to sequence s1
 
@@ -125,23 +151,10 @@ private:
     // batch indices of the output
     std::vector<int32_t> out_ids;
 
+    uint32_t n_used;
+
     // used[i] indicates if token i has already been used in a previous ubatch
     std::vector<bool> used;
-
-    // llama_ubatch points to this data:
-    struct ubatch {
-        std::vector<llama_token>    token;
-        std::vector<float>          embd;
-        std::vector<llama_pos>      pos;
-        std::vector<int32_t>        n_seq_id;
-        std::vector<llama_seq_id *> seq_id;
-        std::vector<llama_seq_id>   seq_id_unq;
-        std::vector<int32_t>        seq_idx;
-        std::vector<int8_t>         output;
-    };
-
-    // current splitting state:
-    std::vector<ubatch> ubatches;
 
     int debug;
 };

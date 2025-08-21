@@ -45,6 +45,14 @@
 #include "ggml-vulkan.h"
 #endif
 
+#ifdef GGML_USE_WEBGPU
+#include "ggml-webgpu.h"
+#endif
+
+#ifdef GGML_USE_ZDNN
+#include "ggml-zdnn.h"
+#endif
+
 #ifdef GGML_USE_OPENCL
 #include "ggml-opencl.h"
 #endif
@@ -59,10 +67,6 @@
 
 #ifdef GGML_USE_CANN
 #include "ggml-cann.h"
-#endif
-
-#ifdef GGML_USE_KOMPUTE
-#include "ggml-kompute.h"
 #endif
 
 // disable C++17 deprecation warning for std::codecvt_utf8
@@ -177,6 +181,12 @@ struct ggml_backend_registry {
 #ifdef GGML_USE_VULKAN
         register_backend(ggml_backend_vk_reg());
 #endif
+#ifdef GGML_USE_WEBGPU
+        register_backend(ggml_backend_webgpu_reg());
+#endif
+#ifdef GGML_USE_ZDNN
+        register_backend(ggml_backend_zdnn_reg());
+#endif
 #ifdef GGML_USE_OPENCL
         register_backend(ggml_backend_opencl_reg());
 #endif
@@ -188,9 +198,6 @@ struct ggml_backend_registry {
 #endif
 #ifdef GGML_USE_RPC
         register_backend(ggml_backend_rpc_reg());
-#endif
-#ifdef GGML_USE_KOMPUTE
-        register_backend(ggml_backend_kompute_reg());
 #endif
 #ifdef GGML_USE_CPU
         register_backend(ggml_backend_cpu_reg());
@@ -498,6 +505,9 @@ static ggml_backend_reg_t ggml_backend_load_best(const char * name, bool silent,
 
     std::vector<fs::path> search_paths;
     if (user_search_path == nullptr) {
+#ifdef GGML_BACKEND_DIR
+        search_paths.push_back(fs::u8path(GGML_BACKEND_DIR));
+#endif
         // default search paths: executable directory, current directory
         search_paths.push_back(get_executable_path());
         search_paths.push_back(fs::current_path());
@@ -575,7 +585,6 @@ void ggml_backend_load_all_from_path(const char * dir_path) {
     ggml_backend_load_best("cann", silent, dir_path);
     ggml_backend_load_best("cuda", silent, dir_path);
     ggml_backend_load_best("hip", silent, dir_path);
-    ggml_backend_load_best("kompute", silent, dir_path);
     ggml_backend_load_best("metal", silent, dir_path);
     ggml_backend_load_best("rpc", silent, dir_path);
     ggml_backend_load_best("sycl", silent, dir_path);

@@ -220,7 +220,7 @@ int main(int argc, char ** argv) {
                 LOG_WRN("*** User-specified prompt will pre-start conversation, did you mean to set --system-prompt (-sys) instead?\n");
             }
 
-            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja).c_str());
+            LOG_INF("%s: chat template example:\n%s\n", __func__, common_chat_format_example(chat_templates.get(), params.use_jinja, params.default_template_kwargs).c_str());
         } else {
             LOG_INF("%s: in-suffix/prefix is specified, chat template will be disabled\n", __func__);
         }
@@ -785,14 +785,17 @@ int main(int argc, char ** argv) {
                 }
 
                 // check for reverse prompt using special tokens
-                llama_token last_token = common_sampler_last(smpl);
-                for (auto token : antiprompt_token) {
-                    if (token == last_token) {
-                        if (params.interactive) {
-                            is_interacting = true;
+                // avoid calling common_sampler_last() if last_output is empty
+                if (!last_output.empty()) {
+                    llama_token last_token = common_sampler_last(smpl);
+                    for (auto token : antiprompt_token) {
+                        if (token == last_token) {
+                            if (params.interactive) {
+                                is_interacting = true;
+                            }
+                            is_antiprompt = true;
+                            break;
                         }
-                        is_antiprompt = true;
-                        break;
                     }
                 }
 
