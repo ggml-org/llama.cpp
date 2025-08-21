@@ -6,9 +6,32 @@ import os
 import importlib
 
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM, AutoModel
-from sklearn.metrics.pairwise import cosine_similarity
 
 unreleased_model_name = os.getenv('UNRELEASED_MODEL_NAME')
+
+def cosine_similarity(a, b=None):
+    a = np.asarray(a)
+    if b is None:
+        b = a
+    else:
+        b = np.asarray(b)
+
+    if a.ndim == 1:
+        a = a.reshape(1, -1)
+    if b.ndim == 1:
+        b = b.reshape(1, -1)
+
+    a_norms = np.linalg.norm(a, axis=1, keepdims=True)
+    b_norms = np.linalg.norm(b, axis=1, keepdims=True)
+
+    a_norms = np.where(a_norms == 0, 1e-8, a_norms)
+    b_norms = np.where(b_norms == 0, 1e-8, b_norms)
+
+    a_normalized = a / a_norms
+    b_normalized = b / b_norms
+
+    # Compute cosine similarity
+    return np.dot(a_normalized, b_normalized.T)
 
 def load_embeddings_from_file(filename, n_tokens, n_embd):
     embeddings = np.fromfile(filename, dtype=np.float32)
