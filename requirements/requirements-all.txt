@@ -14,5 +14,3 @@
 -r ./requirements-tool_bench.txt
 
 -r ./requirements-gguf_editor_gui.txt
-
--r ./requirements-logits.txt
