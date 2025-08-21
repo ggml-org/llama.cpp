@@ -6,7 +6,7 @@ The motivation for having this is that the conversion process can often be an
 iterative process, where the original model is inspected, converted, updates
 made to llama.cpp, converted again, etc. Once the model has been converted it
 needs to be verified against the original model, and then optionally quantified,
-and is some cases perplexity checked of the quantized model. And finally the
+and in some cases perplexity checked of the quantized model. And finally the
 model/models need to the ggml-org on Hugging Face. This tool/example tries to
 help with this process.
 
@@ -62,7 +62,7 @@ Command line arguments take precedence over environment variables when both are 
 
 In cases where the transformer implementation for the model has not been released
 yet it is possible to set the environment variable `UNRELEASED_MODEL_NAME` which
-will the cause the transformer implementation to be loaded explicitely and not
+will then cause the transformer implementation to be loaded explicitely and not
 use AutoModelForCausalLM:
 ```
 export UNRELEASED_MODEL_NAME=SomeNewModel
@@ -87,7 +87,7 @@ from the converted model.
 # Or using command line argument
 (venv) $ make causal-run-original-model MODEL_PATH=~/work/ai/models/some_model
 ```
-This command will save two file to the `data` directory, one is a binary file
+This command will save two files to the `data` directory, one is a binary file
 containing logits which will be used for comparison with the converted model
 later, and the other is a text file which allows for manual visual inspection.
 
@@ -128,11 +128,11 @@ Quantized model saved to: /path/to/quantized/model-Q8_0.gguf
 Export the quantized model path to QUANTIZED_MODEL variable in your environment
 ```
 This will show the path to the quantized model in the terminal, which can then
-be used set the `QUANTIZED_MODEL` environment variable:
+be used to set the `QUANTIZED_MODEL` environment variable:
 ```console
 export QUANTIZED_MODEL=/path/to/quantized/model-Q8_0.gguf
 ```
-The the quantized model can be run using the following command:
+Then the quantized model can be run using the following command:
 ```console
 (venv) $ make causal-run-quantized-model
 ```
@@ -229,11 +229,11 @@ Quantized model saved to: /path/to/quantized/model-Q8_0.gguf
 Export the quantized model path to QUANTIZED_EMBEDDING_MODEL variable in your environment
 ```
 This will show the path to the quantized model in the terminal, which can then
-be used set the `QUANTIZED_EMBEDDING_MODEL` environment variable:
+be used to set the `QUANTIZED_EMBEDDING_MODEL` environment variable:
 ```console
 export QUANTIZED_EMBEDDING_MODEL=/path/to/quantized/model-Q8_0.gguf
 ```
-The the quantized model can be run using the following command:
+Then the quantized model can be run using the following command:
 ```console
 (venv) $ make embedding-run-quantized-model
 ```
@@ -246,7 +246,7 @@ token/logits file:
 ```console
 (venv) $ make perplexity-run QUANTIZED_MODEL=~/path/to/quantized/model.gguf
 ```
-This will use the wikitext dataset to run the perplexity evaluation and and
+This will use the wikitext dataset to run the perplexity evaluation and
 output the perplexity score to the terminal. This value can then be compared
 with the perplexity score of the unquantized model.
 
