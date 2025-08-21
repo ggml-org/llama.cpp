@@ -134,8 +134,7 @@ void ggml_cuda_cpy_dest_ptrs_copy(ggml_cuda_graph * cuda_graph, char ** host_des
     CUDA_CHECK(cudaMemcpyAsync(cuda_graph->dest_ptrs_d, host_dest_ptrs, host_dest_ptrs_size*sizeof(char *), cudaMemcpyHostToDevice, stream));
     cuda_graph->graph_cpynode_index = 0; // reset index
 #else
-    GGML_UNUSED(cuda_graph); GGML_UNUSED(host_dest_ptrs);
-    GGML_UNUSED(host_dest_ptrs_size); GGML_UNUSED(stream);
+    GGML_UNUSED_VARS(cuda_graph, host_dest_ptrs, host_dest_ptrs_size, stream);
 #endif
 }
 
