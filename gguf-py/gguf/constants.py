@@ -364,6 +364,7 @@ class MODEL_ARCH(IntEnum):
     T5ENCODER        = auto()
     JAIS             = auto()
     NEMOTRON         = auto()
+    NEMOTRONH        = auto()
     EXAONE           = auto()
     EXAONE4          = auto()
     GRANITE          = auto()
@@ -695,6 +696,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.T5ENCODER:        "t5encoder",
     MODEL_ARCH.JAIS:             "jais",
     MODEL_ARCH.NEMOTRON:         "nemotron",
+    MODEL_ARCH.NEMOTRONH:        "nemotronh",
     MODEL_ARCH.EXAONE:           "exaone",
     MODEL_ARCH.EXAONE4:          "exaone4",
     MODEL_ARCH.GRANITE:          "granite",
