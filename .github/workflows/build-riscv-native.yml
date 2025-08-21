@@ -23,29 +23,60 @@ jobs:
                   g++-14-riscv64-linux-gnu \
                   ccache \
                   cmake
+      
+      - name: Setup ccache build environment
+        run: |
+          export CCACHE_LOGFILE=/home/runneruser/ccache_debug/ccache.log
+          export CCACHE_DEBUGDIR="/home/runneruser/ccache_debug"
+          echo "CCACHE_LOGFILE=$CCACHE_LOGFILE" >> $GITHUB_ENV
+          echo "CCACHE_DEBUGDIR=$CCACHE_DEBUGDIR" >> $GITHUB_ENV
 
       - name: Setup ccache
         run: |
           mkdir -p $HOME/.ccache
           ccache -M 5G -d $HOME/.ccache
           echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+      
+      - name: Zero the ccache stats
+        run: |
+          ccache -z
+
+      - name: Show ccache stats
+        run: |
+          ccache -s
 
       - name: Build
         run: |
-          cmake -B build -DLLAMA_CURL=OFF \
-                         -DCMAKE_BUILD_TYPE=Release \
-                         -DGGML_OPENMP=OFF \
-                         -DLLAMA_BUILD_EXAMPLES=ON \
-                         -DLLAMA_BUILD_TOOLS=ON \
-                         -DLLAMA_BUILD_TESTS=OFF \
-                         -DCMAKE_SYSTEM_NAME=Linux \
-                         -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
-                         -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
-                         -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
-                         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-                         -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-                         -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+          cmake -B build \
+            -DLLAMA_CURL=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DGGML_OPENMP=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_TOOLS=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=riscv64 \
+            -DCMAKE_C_COMPILER=riscv64-linux-gnu-gcc-14 \
+            -DCMAKE_CXX_COMPILER=riscv64-linux-gnu-g++-14 \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_FIND_ROOT_PATH=/usr/lib/riscv64-linux-gnu \
+            -DCMAKE_FIND_ROOT_PATH_MODE_PROGRAM=NEVER \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
 
           cmake --build build --config Release -j $(nproc)
+
+      - name: Show ccache stats
+        run: |
+          ccache -s
+
+      - name: Print ccache log file
+        run: |
+          if [ -f $CCACHE_LOGFILE ]; then
+            echo "CCACHE_LOGFILE content:"
+            cat $CCACHE_LOGFILE
+          else
+            echo "CCACHE_LOGFILE does not exist."
+          fi
