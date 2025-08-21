@@ -1096,6 +1096,7 @@ struct server_task_result_embd : server_task_result {
     std::vector<std::vector<float>> embedding;
 
     int32_t n_tokens;
+    bool truncated = false;
 
     // OAI-compat fields
     oaicompat_type oaicompat = OAICOMPAT_TYPE_NONE;
@@ -1114,6 +1115,7 @@ struct server_task_result_embd : server_task_result {
         return json {
             {"index",     index},
             {"embedding", embedding},
+            {"truncated", truncated},
         };
     }
 
@@ -1122,6 +1124,7 @@ struct server_task_result_embd : server_task_result {
             {"index",            index},
             {"embedding",        embedding[0]},
             {"tokens_evaluated", n_tokens},
+            {"truncated",        truncated},
         };
     }
 };
@@ -1428,10 +1431,15 @@ struct server_slot {
 
     // if the context does not have a memory module then all embeddings have to be computed within a single ubatch
     // also we cannot split if the pooling would require any past tokens
-    bool can_split() const {
+    // @param truncate_embed: if true, allows splitting for embedding tasks to handle large inputs
+    // with automatic truncation. If false, uses original conservative logic.
+    // NOTE: When embedding inputs are truncated, the resulting embedding may not fully represent
+    // the original input. The 'truncated' field in the response indicates when this occurs.
+    bool can_split(bool truncate_embed = false) const {
         return
             !need_embd() ||
-            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST);
+            (llama_get_memory(ctx) && llama_pooling_type(ctx) == LLAMA_POOLING_TYPE_LAST) ||
+            (need_embd() && truncate_embed); // allow splitting for embedding tasks only if truncate_embed is enabled
     }
 
     bool can_batch_with(server_slot & other_slot) const {
@@ -2648,12 +2656,15 @@ struct server_context {
         res->id        = slot.id_task;
         res->index     = slot.index;
         res->n_tokens  = slot.n_prompt_tokens;
+        res->truncated = slot.truncated;
         res->oaicompat = slot.params.oaicompat;
 
         const int n_embd = llama_model_n_embd(model);
 
         std::vector<float> embd_res(n_embd, 0.0f);
 
+        // Note: If the input was truncated (slot.truncated == true), this embedding
+        // represents only the processed portion of the original input
         for (int i = 0; i < batch.n_tokens; ++i) {
             if (!batch.logits[i] || batch.seq_id[i][0] != slot.id) {
                 continue;
@@ -3211,7 +3222,7 @@ struct server_context {
                             continue;
                         }
 
-                        if (!slot.can_split()) {
+                        if (!slot.can_split(params_base.truncate_embed)) {
                             if (slot.n_prompt_tokens > n_ubatch) {
                                 slot.release();
                                 send_error(slot, "input is too large to process. increase the physical batch size", ERROR_TYPE_SERVER);
@@ -3228,7 +3239,8 @@ struct server_context {
                                 // if context shift is disabled, we make sure prompt size is smaller than KV size
                                 // TODO: there should be a separate parameter that control prompt truncation
                                 //       context shift should be applied only during the generation phase
-                                if (slot.n_prompt_tokens >= slot.n_ctx) {
+                                // For embedding tasks, allow truncation even when context shift is disabled
+                                if (slot.n_prompt_tokens >= slot.n_ctx && !slot.need_embd()) {
                                     slot.release();
                                     send_error(slot, "the request exceeds the available context size. try increasing the context size or enable context shift", ERROR_TYPE_INVALID_REQUEST);
                                     continue;
@@ -3267,6 +3279,11 @@ struct server_context {
                                 slot.n_prompt_tokens = prompt_tokens.size();
 
                                 SLT_WRN(slot, "input truncated, n_ctx = %d, n_keep = %d, n_left = %d, n_prompt_tokens = %d\n", slot.n_ctx, slot.params.n_keep, n_left, slot.n_prompt_tokens);
+
+                                // Warn specifically for embedding tasks about potential quality impact
+                                if (slot.need_embd()) {
+                                    SLT_WRN(slot, "%s", "WARNING: Embedding input was truncated. The resulting embedding may not fully represent the original input. Consider increasing context size or reducing input length for better embedding quality.");
+                                }
 
                                 GGML_ASSERT(slot.n_prompt_tokens < slot.n_ctx);
                             }
@@ -3402,7 +3419,7 @@ struct server_context {
                         slot.n_prompt_tokens_processed = 0;
                     }
 
-                    if (!slot.can_split()) {
+                    if (!slot.can_split(params_base.truncate_embed)) {
                         // cannot fit the prompt in the current batch - will try next iter
                         if (batch.n_tokens + slot.n_prompt_tokens > n_batch) {
                             continue;
