@@ -911,6 +911,17 @@ struct server_task_result_cmpl_final : server_task_result {
             {"model",              oaicompat_model},
             {"system_fingerprint", build_info},
             {"object",             "chat.completion.chunk"},
+        });
+
+        // OpenAI API spec for chat.completion.chunks specifies an empty `choices` array for the last chunk when including usage
+        // https://platform.openai.com/docs/api-reference/chat_streaming/streaming#chat_streaming/streaming-choices
+        deltas.push_back({
+            {"choices", json::array()},
+            {"created",            t},
+            {"id",                 oaicompat_cmpl_id},
+            {"model",              oaicompat_model},
+            {"system_fingerprint", build_info},
+            {"object",             "chat.completion.chunk"},
             {"usage", json {
                 {"completion_tokens", n_decoded},
                 {"prompt_tokens",     n_prompt_tokens},

@@ -1846,7 +1846,7 @@ static bool ggml_metal_supports_op(const struct ggml_backend_metal_device_contex
         case GGML_OP_ROPE:
             return true;
         case GGML_OP_IM2COL:
-            return op->src[0]->type == GGML_TYPE_F16;
+            return op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
         case GGML_OP_POOL_1D:
             return false;
         case GGML_OP_UPSCALE:
@@ -4703,7 +4703,6 @@ static int ggml_metal_encode_node(
             {
                 GGML_ASSERT(ggml_is_contiguous(src0));
                 GGML_ASSERT(ggml_is_contiguous(src1));
-                GGML_ASSERT(src0->type == GGML_TYPE_F16);
                 GGML_ASSERT(src1->type == GGML_TYPE_F32);
                 GGML_ASSERT( dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
 
