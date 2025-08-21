@@ -236,7 +236,7 @@ static void ggml_backend_webgpu_wait_on_submission(webgpu_context & ctx) {
                                   wgpu::CallbackMode::AllowSpontaneous,
                                   [](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
                                       if (status != wgpu::QueueWorkDoneStatus::Success) {
-                                          GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
+                                          GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", std::string(message).c_str());
                                       }
                                   }),
                               UINT64_MAX);
@@ -276,7 +276,7 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
         wgpu::CallbackMode::AllowSpontaneous,
         [ctx, staged_param_bufs](wgpu::QueueWorkDoneStatus status, wgpu::StringView message) {
             if (status != wgpu::QueueWorkDoneStatus::Success) {
-                GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", message.data);
+                GGML_LOG_ERROR("ggml_webgpu: Failed to submit commands: %s\n", std::string(message).c_str());
             }
             // Free the staged buffers
             ctx->param_buf_pool.free_bufs(staged_param_bufs);
@@ -292,7 +292,7 @@ static void ggml_backend_webgpu_submit_queue(webgpu_context & ctx) {
             wgpu::CallbackMode::AllowSpontaneous,
             [ctx, error_bufs](wgpu::MapAsyncStatus status, wgpu::StringView message) {
                 if (status != wgpu::MapAsyncStatus::Success) {
-                    GGML_LOG_ERROR("ggml_webgpu: Failed to map error buffer: %s\n", message.data);
+                    GGML_LOG_ERROR("ggml_webgpu: Failed to map error buffer: %s\n", std::string(message).c_str());
                 } else {
                     const uint32_t * error_data = (const uint32_t *) error_bufs.host_buf.GetConstMappedRange();
                     if (*error_data) {
@@ -1180,20 +1180,20 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
         [](const wgpu::Device & device, wgpu::DeviceLostReason reason, wgpu::StringView message) {
             GGML_UNUSED(device);
             GGML_LOG_ERROR(
-                "ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+                "ggml_webgpu: Device lost! Reason: %d, Message: %s\n", static_cast<int>(reason), std::string(message).c_str());
         });
     dev_desc.SetUncapturedErrorCallback(
         [](const wgpu::Device & device, wgpu::ErrorType reason, wgpu::StringView message) {
             GGML_UNUSED(device);
             GGML_LOG_ERROR(
-                "ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), message.data);
+                "ggml_webgpu: Device error! Reason: %d, Message: %s\n", static_cast<int>(reason), std::string(message).c_str());
         });
     ctx->instance.WaitAny(ctx->adapter.RequestDevice(
                               &dev_desc,
                               wgpu::CallbackMode::AllowSpontaneous,
                               [ctx](wgpu::RequestDeviceStatus status, wgpu::Device device, wgpu::StringView message) {
                                   if (status != wgpu::RequestDeviceStatus::Success) {
-                                      GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", message.data);
+                                      GGML_LOG_ERROR("ggml_webgpu: Failed to get a device: %s\n", std::string(message).c_str());
                                       return;
                                   }
                                   ctx->device = std::move(device);
@@ -1238,17 +1238,17 @@ static ggml_backend_dev_t ggml_backend_webgpu_reg_get_device(ggml_backend_reg_t 
     static ggml_backend_webgpu_device_context device_ctx;
     device_ctx.webgpu_ctx  = ctx;
     device_ctx.device_name = GGML_WEBGPU_NAME;
-    device_ctx.device_desc = std::string(info.description.data);
+    device_ctx.device_desc = info.description;
 
     GGML_LOG_INFO(
         "ggml_webgpu: adapter_info: vendor_id: %u | vendor: %s | architecture: %s | device_id: %u | name: %s | "
         "device_desc: %s\n",
         info.vendorID,
-        info.vendor.data,
-        info.architecture.data,
+        std::string(info.vendor).c_str(),
+        std::string(info.architecture).c_str(),
         info.deviceID,
-        info.device.data,
-        info.description.data);
+        std::string(info.device).c_str(),
+        std::string(info.description).c_str());
 
     // See GGML Backend Device Interface section
     static ggml_backend_device device = {
