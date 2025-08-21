@@ -32,7 +32,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                     let bit_offset = (idx & 3) * 8u;
                     let mask = ~(0xffu << bit_offset);
                     let existing = output_buffer[word_idx];
-                    output_buffer[word_idx] = (existing & mask) | (((params.value >> bit_offset) & 0xff) << bit_offset);
+                    output_buffer[word_idx] = (existing & mask) | (params.value & (0xffu << bit_offset));
                 }
             }
         }
