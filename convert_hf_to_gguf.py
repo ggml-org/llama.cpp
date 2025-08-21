@@ -7467,9 +7467,13 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
         ]
 
         # n_group and d_inner are used during reshape_tensors for mamba2
-        self.d_model = self.find_hparam(["hidden_size", "d_model"])
-        self.n_group = self.find_hparam(["n_groups"])
-        self.d_inner = self.find_hparam(["expand"]) * self.d_model
+        # NOTE: Explicitly include hparam prefix prefix for d_model to
+        #   disambiguate with top-level head_dim
+        # NOTE 2: If needed for future models, this can be isolated in a method
+        #   to separate the prefix setting and teh keys used
+        self.d_model = self.find_hparam([f"{self.hparam_prefixes[0]}_head_dim", "hidden_size", "d_model"])
+        self.n_group = self.find_hparam(["n_groups", "num_groups"])
+        self.d_inner = self.find_hparam(["expand", "num_heads"]) * self.d_model
 
     def get_attn_layers(self):
         # Explicit list of layer type names
@@ -7530,12 +7534,12 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
 
         ## Mamba mixer params ##
         self.gguf_writer.add_ssm_conv_kernel(self.find_hparam(["conv_kernel", "d_conv"]))
-        self.gguf_writer.add_ssm_state_size(self.find_hparam(["state_size", "d_state"]))
+        self.gguf_writer.add_ssm_state_size(self.find_hparam(["state_size", "d_state", "state_dim", "ssm_state_size"]))
         self.gguf_writer.add_ssm_group_count(self.n_group)
         self.gguf_writer.add_ssm_inner_size(self.d_inner)
         # NOTE: The mamba_dt_rank is _not_ the right field for how this is used
         #   in llama.cpp
-        self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads"]))
+        self.gguf_writer.add_ssm_time_step_rank(self.find_hparam(["n_heads", "num_heads"]))
 
         ## Attention params ##
         head_count_kv = self.find_hparam(["num_key_value_heads", "n_head_kv"])
@@ -7560,6 +7564,43 @@ class GraniteHybridModel(Mamba2Model, GraniteMoeModel):
     def set_vocab(self):
         self.hparams["pad_vocab_size_multiple"] = 8
         Mamba2Model.set_vocab(self)
+
+
+@ModelBase.register("NemotronHForCausalLM")
+class NemotronHModel(GraniteHybridModel):
+    """Hybrid mamba2/attention model from NVIDIA"""
+    model_arch = gguf.MODEL_ARCH.NEMOTRONH
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Save the top-level head_dim for later
+        self.head_dim = self.hparams["head_dim"]
+
+        # Update the ssm / attn / mlp layers
+        # M: Mamba2, *: Attention, -: MLP
+        hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
+        self._ssm_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == "M"]
+        self._mlp_layers = [i for i, val in enumerate(hybrid_override_pattern) if val == "-"]
+
+    def get_attn_layers(self):
+        hybrid_override_pattern = self.hparams["hybrid_override_pattern"]
+        assert len(hybrid_override_pattern) == self.block_count, "Mismatch between hybrid override and num_hidden_layers!"
+        return [i for i, val in enumerate(hybrid_override_pattern) if val == "*"]
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_key_length(self.head_dim)
+        self.gguf_writer.add_value_length(self.head_dim)
+
+        # Set feed_forward_length
+        # NOTE: This will trigger an override warning. This is preferrable to
+        #   duplicating all the parent logic
+        n_ff = self.find_hparam(["intermediate_size", "n_inner", "hidden_dim"])
+        self.gguf_writer.add_feed_forward_length([
+            n_ff if i in self._mlp_layers else 0 for i in range(self.block_count)
+        ])
 
 
 @ModelBase.register("BailingMoeForCausalLM")
