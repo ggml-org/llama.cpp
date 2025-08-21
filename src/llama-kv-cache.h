@@ -24,17 +24,6 @@ public:
     // this callback is used to filter out layers that should not be included in the cache
     using layer_filter_cb = std::function<bool(int32_t il)>;
 
-    struct defrag_info {
-        bool empty() const {
-            return ids.empty();
-        }
-
-        // contains information about which cell moves where:
-        //  - cell i moves to ids[i]
-        //  - if ids[i] == i || ids[i] == ids.size(), then cell i is not moved
-        std::vector<uint32_t> ids;
-    };
-
     struct stream_copy_info {
         bool empty() const {
             assert(ssrc.size() == sdst.size());
@@ -173,7 +162,7 @@ public:
     // return empty vector on failure
     slot_info_vec_t prepare(const std::vector<llama_ubatch> & ubatches);
 
-    bool update(llama_context * lctx, bool do_shift, const defrag_info & dinfo, const stream_copy_info & sc_info);
+    bool update(llama_context * lctx, bool do_shift, const stream_copy_info & sc_info);
 
     // find a slot of kv cells that can hold the ubatch
     // if cont == true, then the slot must be continuous
@@ -254,9 +243,6 @@ private:
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
 
-    // return non-empty vector if cells have been moved
-    defrag_info defrag_prepare(int32_t n_max_nodes) const;
-
     size_t total_size() const;
 
     size_t size_k_bytes() const;
@@ -277,11 +263,6 @@ private:
                llm_graph_result * res,
                   llama_context * lctx) const;
 
-    ggml_cgraph * build_graph_defrag(
-               llm_graph_result * res,
-                  llama_context * lctx,
-              const defrag_info & dinfo) const;
-
     struct cell_ranges_t {
         uint32_t strm;
 
@@ -299,7 +280,6 @@ class llama_kv_cache_context : public llama_memory_context_i {
 public:
     // some shorthands
     using slot_info_vec_t  = llama_kv_cache::slot_info_vec_t;
-    using defrag_info      = llama_kv_cache::defrag_info;
     using stream_copy_info = llama_kv_cache::stream_copy_info;
 
     // used for errors
@@ -314,7 +294,6 @@ public:
             llama_kv_cache * kv,
             llama_context * lctx,
             bool do_shift,
-            defrag_info dinfo,
             stream_copy_info sc_info);
 
     // used to create a batch procesing context from a batch
@@ -373,8 +352,6 @@ private:
     //
 
     bool do_shift = false;
-
-    defrag_info dinfo;
 
     stream_copy_info sc_info;
 
