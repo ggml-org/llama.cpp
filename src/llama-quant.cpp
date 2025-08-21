@@ -610,7 +610,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     const std::unordered_map<std::string, std::vector<float>> * activations_data,
     const llama_model_quantize_params * params,
     int nthread,
-    int sample_rows_per_expert = 384,
+    int sample_rows_per_expert = 512,
     float bias_lambda = 1.0
 ) {
     struct candidate_types {
@@ -699,7 +699,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         q &= name.find("attn_rel_b.weight") == std::string::npos;
         q &= !params->only_copy;
         // TODO: Exclude embeddings and output tensors?
-        q &= params->quantize_output_tensor || name != "output.weight";
+        // q &= params->quantize_output_tensor || name != "output.weight";
         q &= name != name_tn(LLM_TENSOR_TOKEN_EMBD, "weight");
 
         return q;
@@ -896,31 +896,35 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         const int64_t nelem = ggml_nelements(t);
         std::vector<no_init<float>> f32_conv_buf;
-        float * f32_data = nullptr;
-
-        if (t->type == GGML_TYPE_F32) {
-            f32_data = (float *)t->data;
-        } else {
-            llama_tensor_dequantize_impl(t, f32_conv_buf, workers, nelem, nthread);
-            f32_data = (float *)f32_conv_buf.data();
-        }
-
         const float * values_all = get_values(name);
         const float * activations_all = get_activations(name);
 
-        // Sample the tensor rows once, before looping through quantization candidates.
+        // Dequantize only sampled rows into f32_sample
         const int64_t n_per_row = t->ne[0];
         const int64_t nrows_total = t->ne[1];
         const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
+
+        const ggml_type src_type = t->type;
+        const ggml_type_traits *src_traits = ggml_get_type_traits(src_type);
+        const bool src_is_quant = ggml_is_quantized(src_type);
+        const size_t src_row_sz = ggml_row_size(src_type, n_per_row);
+
+        std::vector<float> f32_sample;
+        f32_sample.reserve((size_t)ne2 * (size_t)std::min<int64_t>(nrows_total, sample_rows_per_expert) * (size_t)n_per_row);
+
+        std::vector<float> values_sample;
+        std::vector<float> activations_sample;
+        std::vector<int64_t> sample_rows_per_slice(ne2, 0);
+
+        // deterministic sampling seed based on tensor name + fixed constant
+        std::mt19937 rng(std::hash<std::string>{}(name) ^0xeabada55cafed00d);
+
         const int64_t sample_rows_max = std::max<int64_t>(1, std::min<int64_t>(nrows_total, sample_rows_per_expert));
         const int64_t stride = std::max<int64_t>(1, nrows_total / sample_rows_max);
 
-        std::vector<float> f32_sample;
-        std::vector<float> values_sample;
-        std::vector<float> activations_sample;
-        std::vector<int64_t> sample_rows_per_slice(ne2);
+        // Temporary buffer for one dequantized row
+        std::vector<float> rowbuf((size_t)n_per_row);
 
-        std::mt19937 rng(std::random_device{}());
         for (int64_t slice = 0; slice < ne2; ++slice) {
             int64_t current_sampled_rows = 0;
             int64_t offset = 0;
@@ -928,10 +932,30 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 std::uniform_int_distribution<int64_t> dist(0, stride - 1);
                 offset = dist(rng);
             }
+
             for (int64_t r = offset; r < nrows_total && current_sampled_rows < sample_rows_max; r += stride) {
-                const float * src_row = f32_data + slice * (n_per_row * nrows_total) + r * n_per_row;
-                f32_sample.insert(f32_sample.end(), src_row, src_row + n_per_row);
-                current_sampled_rows++;
+                if (src_type == GGML_TYPE_F32) {
+                    const float * src_row = (const float *)t->data + slice * (n_per_row * nrows_total) + r * n_per_row;
+                    f32_sample.insert(f32_sample.end(), src_row, src_row + n_per_row);
+                } else if (src_type == GGML_TYPE_F16) {
+                    const ggml_fp16_t * src_row = (const ggml_fp16_t *)((const uint8_t *)t->data + slice * (src_row_sz * nrows_total) + r * src_row_sz);
+                    ggml_fp16_to_fp32_row(src_row, rowbuf.data(), (int)n_per_row);
+                    f32_sample.insert(f32_sample.end(), rowbuf.begin(), rowbuf.end());
+                } else if (src_type == GGML_TYPE_BF16) {
+                    const ggml_bf16_t * src_row = (const ggml_bf16_t *)((const uint8_t *)t->data + slice * (src_row_sz * nrows_total) + r * src_row_sz);
+                    ggml_bf16_to_fp32_row(src_row, rowbuf.data(), (int)n_per_row);
+                    f32_sample.insert(f32_sample.end(), rowbuf.begin(), rowbuf.end());
+                } else if (src_is_quant) {
+                    const uint8_t * qrow = (const uint8_t *)t->data + slice * (src_row_sz * nrows_total) + r * src_row_sz;
+                    if (!src_traits || !src_traits->to_float) {
+                        throw std::runtime_error(format("cannot dequantize type %s for sampling", ggml_type_name(src_type)));
+                    }
+                    src_traits->to_float(qrow, rowbuf.data(), (int)n_per_row);
+                    f32_sample.insert(f32_sample.end(), rowbuf.begin(), rowbuf.end());
+                } else {
+                    throw std::runtime_error(format("unsupported src type %s for sampling", ggml_type_name(src_type)));
+                }
+                ++current_sampled_rows;
             }
             sample_rows_per_slice[slice] = current_sampled_rows;
         }
@@ -999,15 +1023,16 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             max_row_sz = std::max(max_row_sz, ggml_row_size(tt, n_per_row));
         }
 
-        std::vector<uint8_t> qbuf(max_row_sz * total_sampled_rows);
-        std::vector<float>   deq(f32_sample.size());
+        std::sort(compatible_candidates.begin(), compatible_candidates.end());
+        compatible_candidates.erase(std::unique(compatible_candidates.begin(), compatible_candidates.end()), compatible_candidates.end());
 
         // Now evaluate candidates
         std::vector<candidate_types> cand_out(compatible_candidates.size());
         const float *vals_ptr = values_sample.empty() ? nullptr : values_sample.data();
         const float *acts_ptr = activations_sample.empty() ? nullptr : activations_sample.data();
-
-        int n_eval_threads = std::max(1, nthread);
+        std::vector<uint8_t> qbuf(max_row_sz * total_sampled_rows);
+        std::vector<float>   deq(f32_sample.size());
+        int n_eval_threads = std::max(1, std::min<int>(nthread, (int)compatible_candidates.size()));
         std::atomic<size_t> cidx{0};
         std::vector<std::thread> eval_workers;
         eval_workers.reserve(n_eval_threads);
