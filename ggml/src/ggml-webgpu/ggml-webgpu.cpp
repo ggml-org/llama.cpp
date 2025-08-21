@@ -432,7 +432,6 @@ static const char * ggml_backend_webgpu_name(ggml_backend_t backend) {
 static void ggml_backend_webgpu_free(ggml_backend_t backend) {
     ggml_backend_webgpu_context * ctx = (ggml_backend_webgpu_context *) backend->context;
     WEBGPU_LOG_DEBUG("ggml_backend_webgpu_free(" << ctx->name << ")");
-    std::cout << "ggml_backend_webgpu_free(" << ctx->name << ")" << std::endl;
 
     // TODO: cleanup
     GGML_UNUSED(ctx);
@@ -824,7 +823,7 @@ static ggml_backend_buffer_t ggml_backend_webgpu_buffer_type_alloc_buffer(ggml_b
     wgpu::Buffer buf;
     ggml_webgpu_create_buffer(ctx->webgpu_ctx->device,
                               buf,
-                              size,
+                              (size + WEBGPU_STORAGE_BUF_BINDING_MULT - 1) & ~(WEBGPU_STORAGE_BUF_BINDING_MULT - 1),
                               wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::CopyDst,
                               "allocated_buffer");
 
