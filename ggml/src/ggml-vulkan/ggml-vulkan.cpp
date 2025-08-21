@@ -1193,6 +1193,10 @@ struct ggml_backend_vk_context {
     vk::Fence fence, almost_ready_fence;
     bool almost_ready_fence_pending {};
 
+    // Cache most recent tensor that was converted into prealloc_y, and what pipeline it used to convert.
+    vk_pipeline_struct * prealloc_y_last_pipeline_used {};
+    const ggml_tensor * prealloc_y_last_tensor_used {};
+
     vk_buffer buffer_pool[MAX_VK_BUFFERS];
 
     vk_context_ref compute_ctx;
@@ -5651,10 +5655,20 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         ggml_vk_dispatch_pipeline(ctx, subctx, to_fp16_vk_0, { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc, { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
     }
     if (y_non_contig) {
-        ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+        if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
+            ctx->prealloc_y_last_tensor_used != src1) {
+            ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+            ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
+            ctx->prealloc_y_last_tensor_used = src1;
+        }
     }
     if (quantize_y) {
-        ggml_vk_quantize_q8_1(ctx, subctx, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE }, y_ne * ne12 * ne13);
+        if (ctx->prealloc_y_last_pipeline_used != to_q8_1.get() ||
+            ctx->prealloc_y_last_tensor_used != src1) {
+            ggml_vk_quantize_q8_1(ctx, subctx, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE }, y_ne * ne12 * ne13);
+            ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
+            ctx->prealloc_y_last_tensor_used = src1;
+        }
     }
 
     uint32_t stride_batch_x = ne00*ne01;
@@ -5829,7 +5843,12 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     }
     if (y_non_contig) {
         GGML_ASSERT(y_sz == ggml_type_size(src1->type) * y_ne);
-        ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+        if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
+            ctx->prealloc_y_last_tensor_used != src1) {
+            ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+            ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
+            ctx->prealloc_y_last_tensor_used = src1;
+        }
     }
 
     // For batch_n, the A matrix is the same for each batch, and B/D use the row stride as the batch stride
@@ -6259,7 +6278,12 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
             { vk_subbuffer{ d_Qx, qx_buf_offset, qx_sz * ne02 * ne03 }, vk_subbuffer{ d_X, 0, x_sz * ne02 * ne03 } }, pc, { (uint32_t)(x_ne * ne02 * ne03), 1, 1});
     }
     if (y_non_contig) {
-        ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+        if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
+            ctx->prealloc_y_last_tensor_used != src1) {
+            ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+            ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
+            ctx->prealloc_y_last_tensor_used = src1;
+        }
     }
 
     uint32_t stride_batch_x = ne00*ne01;
@@ -6447,7 +6471,12 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     }
     if (y_non_contig) {
         GGML_ASSERT(y_sz == ggml_type_size(src1->type) * y_ne);
-        ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+        if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
+            ctx->prealloc_y_last_tensor_used != src1) {
+            ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, { d_Qy, qy_buf_offset, VK_WHOLE_SIZE }, { d_Y, 0, VK_WHOLE_SIZE });
+            ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
+            ctx->prealloc_y_last_tensor_used = src1;
+        }
     }
 
     uint32_t stride_batch_y = ne10*ne11;
@@ -6491,22 +6520,29 @@ static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx
         GGML_ASSERT(nei0 <= 4096);
         const uint32_t split_size = std::min(nei1, 4096u / nei0);
 
-        ggml_tensor src1_copy = *src1;
-        ggml_tensor src2_copy = *src2;
-        ggml_tensor dst_copy = *dst;
+        if (split_size == nei1) {
+            ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, src1, src2, dst, dryrun);
+        } else {
+            ggml_tensor src1_copy = *src1;
+            ggml_tensor src2_copy = *src2;
+            ggml_tensor dst_copy = *dst;
 
-        for (uint32_t token_start = 0; token_start < nei1; token_start += split_size) {
-            const uint32_t n_tokens = std::min(split_size, nei1 - token_start);
+            for (uint32_t token_start = 0; token_start < nei1; token_start += split_size) {
+                const uint32_t n_tokens = std::min(split_size, nei1 - token_start);
 
-            src1_copy.view_offs = src1->view_offs + token_start * src1_copy.nb[2];
-            src2_copy.view_offs = src2->view_offs + token_start * src2_copy.nb[1];
-            dst_copy.view_offs = dst->view_offs + token_start * dst_copy.nb[2];
+                src1_copy.view_offs = src1->view_offs + token_start * src1_copy.nb[2];
+                src2_copy.view_offs = src2->view_offs + token_start * src2_copy.nb[1];
+                dst_copy.view_offs = dst->view_offs + token_start * dst_copy.nb[2];
 
-            src1_copy.ne[2] = n_tokens;
-            src2_copy.ne[1] = n_tokens;
-            dst_copy.ne[2] = n_tokens;
+                src1_copy.ne[2] = n_tokens;
+                src2_copy.ne[1] = n_tokens;
+                dst_copy.ne[2] = n_tokens;
 
-            ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, &src1_copy, &src2_copy, &dst_copy, dryrun);
+                ggml_vk_mul_mat_id_q_f16(ctx, subctx, src0, &src1_copy, &src2_copy, &dst_copy, dryrun);
+                // invalidate cached prealloc_y, can't cache based on the copy of the ggml_tensor
+                ctx->prealloc_y_last_pipeline_used = {};
+                ctx->prealloc_y_last_tensor_used = nullptr;
+            }
         }
     }
 }
@@ -10311,6 +10347,7 @@ static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
         ggml_vk_pool_free(ctx, buffer);
     }
     ctx->gc.temp_buffers.clear();
+    ctx->prealloc_y_last_pipeline_used = {};
 
     ggml_vk_command_pool_cleanup(ctx->device, ctx->compute_cmd_pool);
     ggml_vk_command_pool_cleanup(ctx->device, ctx->transfer_cmd_pool);
@@ -10346,6 +10383,7 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     ggml_vk_destroy_buffer(ctx->prealloc_x);
     ggml_vk_destroy_buffer(ctx->prealloc_y);
     ggml_vk_destroy_buffer(ctx->prealloc_split_k);
+    ctx->prealloc_y_last_pipeline_used = nullptr;
 
     for (auto& buffer : ctx->buffer_pool) {
         ggml_vk_destroy_buffer(buffer);
@@ -10893,6 +10931,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         ggml_vk_ctx_begin(ctx->device, compute_ctx);
         compute_ctx->s->buffer.writeTimestamp(vk::PipelineStageFlagBits::eAllCommands, ctx->device->query_pool, 0);
     }
+
+    ctx->prealloc_y_last_pipeline_used = nullptr;
+    ctx->prealloc_y_last_tensor_used = nullptr;
 
     // Submit after enough work has accumulated, to overlap CPU cmdbuffer generation with GPU execution.
     // Estimate the amount of matmul work by looking at the weight matrix size, and submit every 100MB
