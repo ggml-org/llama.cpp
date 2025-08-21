@@ -238,7 +238,7 @@
 			bind:this={textareaRef}
 			bind:value={message}
 			onKeydown={handleKeydown}
-			disabled={isLoading}
+			disabled={disabled}
 		/>
 
 		<ChatFormActions
