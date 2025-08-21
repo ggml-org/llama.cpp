@@ -55,27 +55,27 @@ fun AppScaffold(
     content: @Composable (PaddingValues) -> Unit
 ) {
     val topBar: @Composable () -> Unit = {
-        when (val topConfig = topBarconfig) {
+        when (topBarconfig) {
             is TopBarConfig.None -> {}
 
             is TopBarConfig.Default -> DefaultTopBar(
                 title = topBarconfig.title,
-                onNavigateBack = topConfig.navigationIcon.backAction,
-                onMenuOpen = topConfig.navigationIcon.menuAction,
+                onNavigateBack = topBarconfig.navigationIcon.backAction,
+                onMenuOpen = topBarconfig.navigationIcon.menuAction,
             )
 
             is TopBarConfig.Performance -> PerformanceTopBar(
                 title = topBarconfig.title,
                 memoryMetrics = topBarconfig.memoryMetrics,
                 temperatureDisplay = topBarconfig.temperatureInfo,
-                onNavigateBack = topConfig.navigationIcon.backAction,
-                onMenuOpen = topConfig.navigationIcon.menuAction,
+                onNavigateBack = topBarconfig.navigationIcon.backAction,
+                onMenuOpen = topBarconfig.navigationIcon.menuAction,
             )
 
             is TopBarConfig.Storage -> StorageTopBar(
                 title = topBarconfig.title,
                 storageMetrics = topBarconfig.storageMetrics,
-                onNavigateBack = topConfig.navigationIcon.backAction,
+                onNavigateBack = topBarconfig.navigationIcon.backAction,
             )
         }
     }
