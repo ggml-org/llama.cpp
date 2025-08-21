@@ -2339,11 +2339,6 @@ const llama_model * llama_get_model(const llama_context * ctx) {
 }
 
 // deprecated
-llama_kv_cache * llama_get_kv_self(llama_context * ctx) {
-    return dynamic_cast<llama_kv_cache *>(ctx->get_memory());
-}
-
-// deprecated
 void llama_kv_self_update(llama_context * ctx) {
     ctx->kv_self_update(false);
 }
