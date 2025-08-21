@@ -201,7 +201,7 @@ fun AppContent(
                     else TopBarConfig.Default(
                         title = "Pick your model",
                         navigationIcon = NavigationIcon.Menu {
-                            modelSelectionViewModel.resetSelection()
+                            modelSelectionViewModel.resetPreselection()
                             openDrawer()
                         }
                     ),
@@ -231,10 +231,11 @@ fun AppContent(
                     ),
                     runAction = BottomBarConfig.ModelSelection.RunActionConfig(
                         preselection = preselection,
-                        onClickRun = { preselection ->
-                            if (modelSelectionViewModel.selectModel(preselection)) {
-                                navigationActions.navigateToModelLoading()
+                        onClickRun = {
+                            if (modelSelectionViewModel.selectModel(it)) {
                                 modelSelectionViewModel.toggleSearchState(false)
+                                modelSelectionViewModel.resetPreselection()
+                                navigationActions.navigateToModelLoading()
                             }
                         }
                     )

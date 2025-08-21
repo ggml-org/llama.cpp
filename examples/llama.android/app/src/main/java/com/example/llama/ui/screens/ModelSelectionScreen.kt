@@ -155,7 +155,7 @@ fun ModelSelectionScreen(
                                     if (selected) {
                                         toggleSearchFocusAndIme(false)
                                     } else {
-                                        viewModel.resetSelection()
+                                        viewModel.resetPreselection()
                                         toggleSearchFocusAndIme(true)
                                     }
                                 },
@@ -185,7 +185,7 @@ fun ModelSelectionScreen(
                             model = model,
                             isSelected = if (model == preselection?.modelInfo) true else null,
                             onSelected = { selected ->
-                                if (!selected) viewModel.resetSelection()
+                                if (!selected) viewModel.resetPreselection()
                             },
                             isExpanded = model == preselection?.modelInfo,
                             onExpanded = { expanded ->

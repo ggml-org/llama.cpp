@@ -45,7 +45,7 @@ class ModelSelectionViewModel @Inject constructor(
     fun toggleSearchState(active: Boolean) {
         _isSearchActive.value = active
         if (active) {
-            resetSelection()
+            resetPreselection()
         } else {
             searchFieldState.clearText()
         }
@@ -164,6 +164,14 @@ class ModelSelectionViewModel @Inject constructor(
     }
 
     /**
+     * Reset preselected model to none (before navigating away)
+     */
+    fun resetPreselection() {
+        _preselectedModel.value = null
+        _showRamWarning.value = false
+    }
+
+    /**
      * Select the currently pre-selected model
      *
      * @return True if RAM enough, otherwise False.
@@ -182,6 +190,13 @@ class ModelSelectionViewModel @Inject constructor(
         }
 
     /**
+     * Dismiss the RAM warnings
+     */
+    fun dismissRamWarning() {
+        _showRamWarning.value = false
+    }
+
+    /**
      * Acknowledge RAM warnings and confirm currently pre-selected model
      *
      * @return True if confirmed, otherwise False.
@@ -196,26 +211,11 @@ class ModelSelectionViewModel @Inject constructor(
         }
 
     /**
-     * Dismiss the RAM warnings
-     */
-    fun dismissRamWarning() {
-        _showRamWarning.value = false
-    }
-
-    /**
-     * Reset selected model to none (before navigating away)
-     */
-    fun resetSelection() {
-        _preselectedModel.value = null
-        _showRamWarning.value = false
-    }
-
-    /**
      * Handle back press from both back button and top bar
      */
     fun onBackPressed() {
         if (_preselectedModel.value != null) {
-            resetSelection()
+            resetPreselection()
         }
     }
 
