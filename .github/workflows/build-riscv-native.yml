@@ -28,8 +28,10 @@ jobs:
         run: |
           export CCACHE_LOGFILE=/home/runneruser/ccache_debug/ccache.log
           export CCACHE_DEBUGDIR="/home/runneruser/ccache_debug"
+          echo "$GITHUB_WORKSPACE"
           echo "CCACHE_LOGFILE=$CCACHE_LOGFILE" >> $GITHUB_ENV
           echo "CCACHE_DEBUGDIR=$CCACHE_DEBUGDIR" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE" >> $GITHUB_ENV
 
       - name: Setup ccache
         run: |
