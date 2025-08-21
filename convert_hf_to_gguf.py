@@ -860,6 +860,9 @@ class TextModel(ModelBase):
         if chkhsh == "a1e163ecab2e718a4c829d1148b6e86824ec36163bb71941c3dca9cd5ac25756":
             # ref: https://huggingface.co/JetBrains/Mellum-4b-base
             res = "mellum"
+        if chkhsh == "a0b64b4385f123663873756336c085744376d015ff328bb1d901598f63c44152":
+            # ref: https://huggingface.co/ibm-granite/granite-embedding-small-english-r2
+            res = "modern-bert"
 
         if res is None:
             logger.warning("\n")
