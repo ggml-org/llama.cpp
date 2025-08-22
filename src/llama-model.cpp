@@ -116,6 +116,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_355B_A32B:     return "355B.A32B";
         case LLM_TYPE_E2B:           return "E2B";
         case LLM_TYPE_E4B:           return "E4B";
+        case LLM_TYPE_36B:           return "36B";
         default:                     return "?B";
     }
 }
