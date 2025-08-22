@@ -558,13 +558,6 @@ std::string string_from(const struct llama_context * ctx, const std::vector<llam
 
         auto detokenized = common_token_to_piece(ctx, token);
 
-        detokenized.erase(
-            std::remove_if(
-                detokenized.begin(),
-                detokenized.end(),
-                [](const unsigned char c) { return !std::isprint(c); }),
-            detokenized.end());
-
         buf << "'" << detokenized << "'"
             << ":" << std::to_string(token);
     }
@@ -588,13 +581,6 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
         }
 
         auto detokenized = common_token_to_piece(ctx, batch.token[i]);
-
-        detokenized.erase(
-                std::remove_if(
-                    detokenized.begin(),
-                    detokenized.end(),
-                    [](const unsigned char c) { return !std::isprint(c); }),
-                detokenized.end());
 
         buf << "\n"          << std::to_string(i)
             << ", token '"   << detokenized << "'"
@@ -1166,7 +1152,6 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.yarn_orig_ctx     = params.yarn_orig_ctx;
     cparams.pooling_type      = params.pooling_type;
     cparams.attention_type    = params.attention_type;
-    cparams.defrag_thold      = params.defrag_thold;
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
     cparams.offload_kqv       = !params.no_kv_offload;

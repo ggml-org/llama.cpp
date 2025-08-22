@@ -147,6 +147,7 @@ struct templates_params {
     json extra_context;
     bool add_bos;
     bool add_eos;
+    bool is_inference = true;
 };
 
 common_chat_tool_choice common_chat_tool_choice_parse_oaicompat(const std::string & tool_choice) {
@@ -1336,6 +1337,17 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
     common_chat_params data;
     auto prompt = apply(tmpl, inputs);
 
+    // Check if we need to replace the return token with end token during
+    // inference and without generation prompt. For more details see:
+    // https://github.com/ggml-org/llama.cpp/issues/15417
+    if (inputs.is_inference && !inputs.add_generation_prompt) {
+        static constexpr std::string_view return_token = "<|return|>";
+        static constexpr std::string_view end_token    = "<|end|>";
+        if (size_t pos = prompt.rfind(return_token); pos != std::string::npos) {
+            prompt.replace(pos, return_token.length(), end_token);
+        }
+    }
+
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_GPT_OSS;
 
@@ -1348,6 +1360,26 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         "<|start|>",
         "<|end|>",
     };
+
+    if (!inputs.json_schema.is_null()) {
+        data.grammar_lazy = false;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            auto schema = inputs.json_schema;
+            builder.resolve_refs(schema);
+
+            auto not_end = builder.add_rule("not-end",
+                "[^<] | \"<\" [^|] | \"<|\" [^e] | \"<|e\" [^n] | \"<|en\" [^d] | \"<|end\" [^|] | \"<|end|\" [^>]");
+            auto analysis = builder.add_rule("analysis",
+                "\"<|channel|>analysis<|message|>\" ( " + not_end + " )* \"<|end|>\"");
+            auto constraint = builder.add_rule("constraint", "\"<|constrain|>\"? [a-zA-Z0-9_-]+");
+            auto final = builder.add_rule("final",
+                "\"<|channel|>final\" ( \" \" " + constraint + " )? \"<|message|>\" " +
+                builder.add_schema("response", schema)
+            );
+
+            builder.add_rule("root", "( " + analysis + " \"<|start|>assistant\" )? " + final);
+        });
+    }
 
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -2109,7 +2141,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // GPT-OSS
-    if (src.find("<|channel|>") != std::string::npos && params.json_schema.is_null()) {
+    if (src.find("<|channel|>") != std::string::npos) {
         return common_chat_params_init_gpt_oss(tmpl, params);
     }
 

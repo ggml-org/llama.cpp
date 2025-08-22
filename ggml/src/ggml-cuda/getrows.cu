@@ -32,7 +32,7 @@ static __global__ void k_get_rows(
     const int y_offset = qr == 1 ? 1 : qk/2;
 
     // dequantize
-    dfloat2 v;
+    float2 v;
     dequantize_kernel(src0_row, ib, iqs, v);
 
     dst_row[iybs + iqs + 0]        = ggml_cuda_cast<dst_t>(v.x);
