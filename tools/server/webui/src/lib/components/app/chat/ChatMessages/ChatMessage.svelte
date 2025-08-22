@@ -175,7 +175,11 @@
 		aria-label="Assistant message with actions"
 	>
 		{#if thinkingContent}
-			<ChatMessageThinkingBlock reasoningContent={thinkingContent} isStreaming={!message.timestamp} />
+			<ChatMessageThinkingBlock 
+				reasoningContent={thinkingContent} 
+				isStreaming={!message.timestamp} 
+				hasRegularContent={!!messageContent?.trim()}
+			/>
 		{/if}
 
 		{#if message?.role === 'assistant' && !message.content && isLoading()}

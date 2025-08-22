@@ -8,12 +8,20 @@
 	interface Props {
 		reasoningContent: string | null;
 		isStreaming?: boolean;
+		hasRegularContent?: boolean;
 		class?: string;
 	}
 
-	let { reasoningContent, isStreaming = false, class: className = '' }: Props = $props();
+	let { reasoningContent, isStreaming = false, hasRegularContent = false, class: className = '' }: Props = $props();
 
-	let isExpanded = $state(false);
+	let isExpanded = $state(true);
+
+	// Auto-collapse when reasoning finishes and regular content starts
+	$effect(() => {
+		if (!isStreaming && hasRegularContent && reasoningContent) {
+			isExpanded = false;
+		}
+	});
 </script>
 
 <Card class="border-muted bg-muted/30 mb-6 gap-0 py-0 {className}">
