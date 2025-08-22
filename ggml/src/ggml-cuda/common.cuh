@@ -420,16 +420,34 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_all(int x) {
-#ifdef GGML_USE_HIP
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x = x && __shfl_xor_sync(0xffffffff, x, offset, width);
-    }
-    return x;
-#else
-    static_assert(width == WARP_SIZE, "width != WARP_SIZE not implemented");
-    return __all_sync(0xffffffff, x);
+#ifndef GGML_USE_HIP
+    if (width == WARP_SIZE) {
+        return __all_sync(0xffffffff, x);
+    } else
 #endif // GGML_USE_HIP
+    {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = __shfl_xor_sync(0xffffffff, x, offset, width) && x;
+        }
+        return x;
+    }
+}
+
+template<int width = WARP_SIZE>
+static __device__ __forceinline__ int warp_reduce_any(int x) {
+#ifndef GGML_USE_HIP
+    if (width == WARP_SIZE) {
+        return __any_sync(0xffffffff, x);
+    } else
+#endif // GGML_USE_HIP
+    {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x = __shfl_xor_sync(0xffffffff, x, offset, width) || x;
+        }
+        return x;
+    }
 }
 
 template<int width = WARP_SIZE>
