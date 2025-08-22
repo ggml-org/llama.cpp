@@ -76,7 +76,7 @@ enum llm_type {
     LLM_TYPE_32B,
     LLM_TYPE_34B,
     LLM_TYPE_35B,
-    LLM_TYPE_36B, // Seed OSS
+    LLM_TYPE_36B,
     LLM_TYPE_40B,
     LLM_TYPE_65B,
     LLM_TYPE_70B,
