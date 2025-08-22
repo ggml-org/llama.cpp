@@ -1049,8 +1049,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Now evaluate candidates
         std::vector<candidate_types> eval_candidates(compatible_candidates.size());
-        const float *values = values_sample.empty() ? nullptr : values_sample.data();
-        const float *activations = activations_sample.empty() ? nullptr : activations_sample.data();
+        const float * values = values_sample.empty() ? nullptr : values_sample.data();
+        const float * activations = activations_sample.empty() ? nullptr : activations_sample.data();
         std::vector<uint8_t> quantized_buffer(max_row_sz * total_sampled_rows);
         std::vector<float> dequantised_buffer(f32_sample.size());
         int n_eval_threads = std::max(1, std::min<int>(nthread, (int)compatible_candidates.size()));
@@ -1656,15 +1656,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
                 // get bpw override
                 const auto override = bpw_overrides.find(name);
-                if (override != bpw_overrides.end()) { new_type = override->second; }
-                // unless the user specifies a type, and the tensor geometry will not require fallback quantisation
+                if (override != bpw_overrides.end() && override->second != new_type) {
+                    LLAMA_LOG_DEBUG("(bpw overriding %s) ", ggml_type_name(new_type));
+                    new_type = override->second;
+                }
+                // unless the user specifies a type, and the tensor shape will not require fallback quantisation
                 if (params->tensor_types && qs.n_fallback - fallback == 0) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
                     const std::string tensor_name(tensor->name);
                     for (const auto & [tname, qtype] : tensor_types) {
                         if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
                             if  (qtype != new_type) {
-                                LLAMA_LOG_DEBUG("(overriding %s) ", ggml_type_name(new_type));
+                                LLAMA_LOG_DEBUG("(type overriding %s) ", ggml_type_name(new_type));
                                 new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
                             }
                         }
