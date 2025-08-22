@@ -1019,7 +1019,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         std::vector<float> values_sample;
         std::vector<float> activations_sample;
         if (values_all) {
-            // get size from the map (not just the raw pointer)
             auto itv = values_data->find(remap_imatrix(name, mapped));
             const size_t sz = itv == values_data->end() ? 0 : itv->second.size();
             copy_or_broadcast(values_all, sz, values_sample);
@@ -1053,7 +1052,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         compatible_candidates.reserve(quant_candidates.size());
         for (ggml_type ts_type : quant_candidates) {
             if (is_iq(ts_type) && !has_valid_imatrix) {
-                LLAMA_LOG_WARN("%s: skipping IQ quantization for %s, no or mismatched imatrix provided\n", __func__, name.c_str());
+                LLAMA_LOG_WARN("%s: skipping %s quantization for %s, no or mismatched imatrix provided\n", __func__, ggml_type_name(ts_type) , name.c_str());
                 continue;
             }
             ggml_type tt = make_compatible(t, ts_type);
@@ -1214,13 +1213,11 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
             const auto & cur = ti.candidate[ti.choice];
             const auto & nxt = ti.candidate[j];
-
             const size_t delta_bytes = nxt.bytes - cur.bytes;
             if (delta_bytes == 0) { continue; }
 
             double err = cur.error - nxt.error;
             err = std::max(err, 0.0);
-
             double ratio = err / (double)(delta_bytes * 8ull);
             if (ratio > best.ratio + eps || (std::abs(ratio - best.ratio) <= eps && delta_bytes < best.delta_bytes)) {
                 best = upgrade{ i, j, err, delta_bytes, ratio };
