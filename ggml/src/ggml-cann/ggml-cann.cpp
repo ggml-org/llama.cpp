@@ -2251,11 +2251,6 @@ static enum ggml_status ggml_backend_cann_graph_compute(
     bool use_cann_graph = true;
     bool cann_graph_update_required = false;
 
-    // check environment LLAMA_SET_ROWS
-    if (!cann_ctx->support_set_rows) {
-        use_cann_graph = false;
-    }
-
     if (use_cann_graph) {
         if (cann_ctx->cann_graph == nullptr) {
             cann_ctx->cann_graph.reset(new ggml_cann_graph());

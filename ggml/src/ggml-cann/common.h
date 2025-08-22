@@ -374,7 +374,6 @@ struct ggml_backend_cann_context {
 #endif
     cann_task_queue task_queue;
     bool async_mode;
-    bool support_set_rows;
     // Rope Cache
     void* rope_init_ptr = nullptr;
     void* rope_sin_ptr = nullptr;
@@ -400,14 +399,6 @@ struct ggml_backend_cann_context {
         async_mode = parse_bool(get_env("GGML_CANN_ASYNC_MODE").value_or(""));
         GGML_LOG_INFO("%s: device %d async operator submission is %s\n", __func__,
             device, async_mode ? "ON" : "OFF");
-
-        support_set_rows = parse_bool(get_env("LLAMA_SET_ROWS").value_or(""));
-        GGML_LOG_INFO("%s: LLAMA_SET_ROWS is %s\n", __func__, support_set_rows ? "ON" : "OFF");
-
-        if (!support_set_rows) {
-            GGML_LOG_INFO("%s: CANN Graph currently only supports execution when LLAMA_SET_ROWS is ON. "
-                    "Falling back to eager mode.\n", __func__);
-        }
     }
 
     /**
