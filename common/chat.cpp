@@ -1337,6 +1337,7 @@ static common_chat_params common_chat_params_init_glm_4_5(const common_chat_temp
 }
 
 static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
+    builder.consume_spaces();
     builder.try_parse_reasoning("<think>", "</think>");
     if (!builder.syntax().parse_tool_calls) {
         builder.add_content(builder.consume_rest());
@@ -1867,7 +1868,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // GLM 4.5: detect by <arg_key> and <arg_value> tags (check before Hermes since both use <tool_call>)
-    if (src.find("<arg_key>") != std::string::npos && src.find("<arg_value>") != std::string::npos && params.json_schema.is_null()) {
+    if (src.find("[gMASK]<sop>") != std::string::npos && src.find("<arg_key>") != std::string::npos && src.find("<arg_value>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_glm_4_5(tmpl, params);
     }
 
