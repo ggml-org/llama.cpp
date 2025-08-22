@@ -945,7 +945,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
 
         // Larger sample_rows_per_expert values may result in more accurate error estimates, but will take longer to compute
-        int sample_rows_per_expert = 512;
+        constexpr int sample_rows_per_expert = 384;
         std::vector<float> f32_sample;
         f32_sample.reserve((size_t)ne2 * (size_t)std::min<int64_t>(nrows_total, sample_rows_per_expert) * (size_t)n_per_row);
 
