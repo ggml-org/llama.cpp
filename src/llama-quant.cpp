@@ -676,10 +676,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
         const int64_t n_per_row = t->ne[0];
-        const int64_t nrows = t->ne[1];
-        const int64_t ne2 = t->ne[2] > 0 ? t->ne[2] : 1;
-        const size_t  row_sz = ggml_row_size(typ, n_per_row);
-        return (size_t)ne2 * (size_t)nrows * row_sz;
+        const size_t row_sz = ggml_row_size(typ, n_per_row);
+        const int64_t nrows = ggml_nrows(t);
+        return (size_t)nrows * row_sz;
     };
 
     auto tensor_bpw = [&](const ggml_tensor * t, const ggml_type typ) -> double {
