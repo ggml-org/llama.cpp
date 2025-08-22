@@ -733,9 +733,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         q &= name.find("time_mix_lerp_fused.weight") == std::string::npos;
         q &= name.find("attn_rel_b.weight") == std::string::npos;
         q &= !params->only_copy;
-        // TODO: Exclude embeddings and output tensors?
-        // q &= params->quantize_output_tensor || name != "output.weight";
-        q &= name != name_tn(LLM_TENSOR_TOKEN_EMBD, "weight");
 
         return q;
     };
