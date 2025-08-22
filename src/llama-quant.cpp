@@ -843,12 +843,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     LLAMA_LOG_WARN("%s: unsupported quantization type %s\n", __func__, ggml_type_name(quant_type));
                     return 1e35;
                 }
-
-                size_t done = 0;
-                while (done < sample_element_count) {
-                    const size_t chunk = std::min((size_t)n_per_row, sample_element_count - done);
-                    traits->to_float(quantized_buffer.data() + done / n_per_row * row_size, dequantized_buffer.data() + done, (int)chunk);
-                    done += chunk;
+                const size_t row_size = ggml_row_size(quant_type, n_per_row);
+                for (size_t r = 0; r < sample_row_count; ++r) {
+                    traits->to_float(quantized_buffer.data() + r * row_size, dequantized_buffer.data() + r * n_per_row, (int)n_per_row);
                 }
             }
         }
