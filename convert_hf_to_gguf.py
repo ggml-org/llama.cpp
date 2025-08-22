@@ -1210,6 +1210,54 @@ class TextModel(ModelBase):
                 raise NotImplementedError("Only MEAN, CLS, and LAST pooling types supported")
             self.gguf_writer.add_pooling_type(pooling_type)
 
+    def _set_vocab_interns1(self):
+        tokens: list[str] = []
+        toktypes: list[int] = []
+
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
+        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
+        vocab_size = self.hparams.get("vocab_size", len(vocab))
+        assert max(vocab.values()) < vocab_size
+
+        tokpre = self.get_vocab_base_pre(tokenizer)
+
+        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
+        added_vocab = tokenizer.get_added_vocab()
+
+        added_tokens_decoder = tokenizer.added_tokens_decoder
+
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+            else:
+                token: str = reverse_vocab[i]
+                if token in added_vocab:
+                    # The tokenizer in llama.cpp assumes the CONTROL and USER_DEFINED tokens are pre-normalized.
+                    # To avoid unexpected issues - we make sure to normalize non-normalized tokens
+                    if not added_tokens_decoder[i].normalized:
+                        previous_token = token
+                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
+                        if previous_token != token:
+                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
+
+                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
+                        toktypes.append(gguf.TokenType.CONTROL)
+                    else:
+                        toktypes.append(gguf.TokenType.USER_DEFINED)
+                else:
+                    toktypes.append(gguf.TokenType.NORMAL)
+                tokens.append(token)
+
+        self.gguf_writer.add_tokenizer_model("gpt2")
+        self.gguf_writer.add_tokenizer_pre(tokpre)
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_types(toktypes)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
+        special_vocab.add_to_gguf(self.gguf_writer)
+
 
 class MmprojModel(ModelBase):
     model_type = ModelType.MMPROJ
@@ -3603,69 +3651,6 @@ class Qwen3Model(Qwen2Model):
 
         super().set_vocab()
 
-    def _set_vocab_interns1(self):
-        tokens: list[str] = []
-        toktypes: list[int] = []
-
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
-        vocab_size = self.hparams.get("vocab_size", len(vocab))
-        assert max(vocab.values()) < vocab_size
-
-        tokpre = self.get_vocab_base_pre(tokenizer)
-
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()
-
-        added_tokens_decoder = tokenizer.added_tokens_decoder
-
-        for i in range(vocab_size):
-            if i not in reverse_vocab:
-                tokens.append(f"[PAD{i}]")
-                toktypes.append(gguf.TokenType.UNUSED)
-            else:
-                token: str = reverse_vocab[i]
-                if token in added_vocab:
-                    # The tokenizer in llama.cpp assumes the CONTROL and USER_DEFINED tokens are pre-normalized.
-                    # To avoid unexpected issues - we make sure to normalize non-normalized tokens
-                    if not added_tokens_decoder[i].normalized:
-                        previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
-                        if previous_token != token:
-                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
-
-                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
-                        toktypes.append(gguf.TokenType.CONTROL)
-                    else:
-                        toktypes.append(gguf.TokenType.USER_DEFINED)
-                else:
-                    toktypes.append(gguf.TokenType.NORMAL)
-                tokens.append(token)
-
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre(tokpre)
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_types(toktypes)
-
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        special_tokens_map_file = self.dir_model / 'special_tokens_map.json'
-        additional_special_tokens = []
-        if special_tokens_map_file.is_file():
-            with open(special_tokens_map_file, encoding = 'utf-8') as f:
-                additional_special_tokens = json.load(f).get('additional_special_tokens', [])
-        tokenizer_cfg_file = self.dir_model / 'special_tokens_map.json'
-        if tokenizer_cfg_file.is_file():
-            with open(tokenizer_cfg_file, encoding = 'utf-8') as f:
-                added_tokens_decoder = json.load(f).get('added_tokens_decoder', {})
-                token2ids_map = {data['content'] : int(token) for token, data in added_tokens_decoder.items() if data['special']}
-                for token in additional_special_tokens:
-                    if token in token2ids_map:
-                        special_vocab._set_special_token(token, token2ids_map[token])
-        special_vocab._set_special_token('eos', 151645)
-        special_vocab._set_special_token("bos", 151643)
-        special_vocab.add_to_gguf(self.gguf_writer)
-
 
 @ModelBase.register("Qwen3MoeForCausalLM")
 class Qwen3MoeModel(Qwen2MoeModel):
@@ -3683,69 +3668,6 @@ class Qwen3MoeModel(Qwen2MoeModel):
             return
 
         super().set_vocab()
-
-    def _set_vocab_interns1(self):
-        tokens: list[str] = []
-        toktypes: list[int] = []
-
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(self.dir_model, trust_remote_code=True)
-        vocab = getattr(tokenizer, 'vocab', tokenizer.get_vocab())
-        vocab_size = self.hparams.get("vocab_size", len(vocab))
-        assert max(vocab.values()) < vocab_size
-
-        tokpre = self.get_vocab_base_pre(tokenizer)
-
-        reverse_vocab = {id_: encoded_tok for encoded_tok, id_ in vocab.items()}
-        added_vocab = tokenizer.get_added_vocab()
-
-        added_tokens_decoder = tokenizer.added_tokens_decoder
-
-        for i in range(vocab_size):
-            if i not in reverse_vocab:
-                tokens.append(f"[PAD{i}]")
-                toktypes.append(gguf.TokenType.UNUSED)
-            else:
-                token: str = reverse_vocab[i]
-                if token in added_vocab:
-                    # The tokenizer in llama.cpp assumes the CONTROL and USER_DEFINED tokens are pre-normalized.
-                    # To avoid unexpected issues - we make sure to normalize non-normalized tokens
-                    if not added_tokens_decoder[i].normalized:
-                        previous_token = token
-                        token = tokenizer.decode(tokenizer.encode(token, add_special_tokens=False))
-                        if previous_token != token:
-                            logger.info(f"{repr(previous_token)} is encoded and decoded back to {repr(token)} using AutoTokenizer")
-
-                    if added_tokens_decoder[i].special or self.does_token_look_special(token):
-                        toktypes.append(gguf.TokenType.CONTROL)
-                    else:
-                        toktypes.append(gguf.TokenType.USER_DEFINED)
-                else:
-                    toktypes.append(gguf.TokenType.NORMAL)
-                tokens.append(token)
-
-        self.gguf_writer.add_tokenizer_model("gpt2")
-        self.gguf_writer.add_tokenizer_pre(tokpre)
-        self.gguf_writer.add_token_list(tokens)
-        self.gguf_writer.add_token_types(toktypes)
-
-        special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
-        special_tokens_map_file = self.dir_model / 'special_tokens_map.json'
-        additional_special_tokens = []
-        if special_tokens_map_file.is_file():
-            with open(special_tokens_map_file, encoding = 'utf-8') as f:
-                additional_special_tokens = json.load(f).get('additional_special_tokens', [])
-        tokenizer_cfg_file = self.dir_model / 'special_tokens_map.json'
-        if tokenizer_cfg_file.is_file():
-            with open(tokenizer_cfg_file, encoding = 'utf-8') as f:
-                added_tokens_decoder = json.load(f).get('added_tokens_decoder', {})
-                token2ids_map = {data['content'] : int(token) for token, data in added_tokens_decoder.items() if data['special']}
-                for token in additional_special_tokens:
-                    if token in token2ids_map:
-                        special_vocab._set_special_token(token, token2ids_map[token])
-        special_vocab._set_special_token('eos', 151645)
-        special_vocab._set_special_token("bos", 151643)
-        special_vocab.add_to_gguf(self.gguf_writer)
 
 
 @ModelBase.register("GPT2LMHeadModel")
