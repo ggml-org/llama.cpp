@@ -18071,7 +18071,7 @@ struct llm_build_seed_oss : public llm_graph_context {
             cur = build_norm(ffn_inp,
                     model.layers[il].attn_post_norm, NULL,
                     LLM_NORM_RMS, il);
-            cb(cur, "ffn_norm", il);
+            cb(cur, "attn_post_norm", il);
 
             cur = build_ffn(cur,
                     model.layers[il].ffn_up,   NULL, NULL,
