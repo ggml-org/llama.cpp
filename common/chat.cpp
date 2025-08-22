@@ -618,6 +618,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_FIREFUNCTION_V2: return "FireFunction v2";
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2: return "Functionary v3.2";
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_1_LLAMA_3_1: return "Functionary v3.1 Llama 3.1";
+        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_1: return "DeepSeek V3.1";
         case COMMON_CHAT_FORMAT_HERMES_2_PRO: return "Hermes 2 Pro";
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
         case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
@@ -1352,18 +1353,15 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     
     // First, try to find the "</think>" tag that separates thinking from regular content
     static const common_regex thinking_end_regex("</think>");
-    if (auto res = builder.try_find_regex(thinking_end_regex)) {
-        // Extract everything before "</think>" as reasoning content
-        auto reasoning_content = builder.str(common_string_range{0, res->groups[0].begin});
-        auto stripped_reasoning = string_strip(reasoning_content);
+    if (auto res = builder.try_find_regex(thinking_end_regex, std::string::npos, false)) {
+        // The prelude contains everything before the "</think>" tag
+        auto stripped_reasoning = string_strip(res->prelude);
         
         if (!stripped_reasoning.empty()) {
             builder.add_reasoning_content(stripped_reasoning);
         }
         
-        // Move past the "</think>" tag
-        builder.move_to(res->groups[0].end);
-        
+        // The parser position is already advanced past the "</think>" tag by try_find_regex
         // The rest is regular content
         builder.add_content(builder.consume_rest());
     } else {
