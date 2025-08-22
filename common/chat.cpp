@@ -1312,6 +1312,12 @@ static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_
     }
     return data;
 }
+
+static common_chat_params common_chat_params_init_deepseek_v3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    // For now, use the same implementation as R1
+    return common_chat_params_init_deepseek_r1(tmpl, inputs);
+}
+
 static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
     if (!builder.syntax().parse_tool_calls) {
@@ -1331,6 +1337,32 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
         function_regex,
         close_regex,
         tool_calls_end);
+}
+
+static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
+    // DeepSeek V3.1 outputs reasoning content followed by "</think>" and then regular content
+    // There's no opening "<think>" tag, so we need to handle this differently
+    
+    // First, try to find the "</think>" tag that separates thinking from regular content
+    static const common_regex thinking_end_regex("</think>");
+    if (auto res = builder.try_find_regex(thinking_end_regex)) {
+        // Extract everything before "</think>" as reasoning content
+        auto reasoning_content = builder.str(common_string_range{0, res->groups[0].begin});
+        auto stripped_reasoning = string_strip(reasoning_content);
+        
+        if (!stripped_reasoning.empty()) {
+            builder.add_reasoning_content(stripped_reasoning);
+        }
+        
+        // Move past the "</think>" tag
+        builder.move_to(res->groups[0].end);
+        
+        // The rest is regular content
+        builder.add_content(builder.consume_rest());
+    } else {
+        // If no "</think>" tag found, treat everything as regular content
+        builder.add_content(builder.consume_rest());
+    }
 }
 
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const struct templates_params & inputs) {
@@ -2100,6 +2132,12 @@ static common_chat_params common_chat_templates_apply_jinja(
         }
     }
 
+    // DeepSeek V3.1: detect based on specific patterns in the template
+    if (src.find("message['prefix'] is defined and message['prefix'] and thinking") != std::string::npos && 
+        params.json_schema.is_null()) {
+        return common_chat_params_init_deepseek_v3_1(tmpl, params);
+    }
+
     // DeepSeek R1: use handler in all cases except json schema (thinking / tools).
     if (src.find("<｜tool▁calls▁begin｜>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_deepseek_r1(tmpl, params);
@@ -2261,6 +2299,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1:
             common_chat_parse_deepseek_r1(builder);
+            break;
+        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_1:
+            common_chat_parse_deepseek_v3_1(builder);
             break;
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2:
             common_chat_parse_functionary_v3_2(builder);
