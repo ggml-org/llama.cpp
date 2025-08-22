@@ -1347,7 +1347,7 @@ static void common_chat_parse_glm_4_5(common_chat_msg_parser & builder) {
     // GLM 4.5 uses format: <tool_call>function_name\n<arg_key>key</arg_key>\n<arg_value>value</arg_value>\n</tool_call>
     static const common_regex tool_call_start("<tool_call>([^\n<]+)");
     static const common_regex arg_key_regex("<arg_key>([^<]+)</arg_key>");
-    static const common_regex arg_value_regex("<arg_value>(.*)</arg_value>");
+    static const common_regex arg_value_regex("<arg_value>(.*?)</arg_value>");
     static const common_regex tool_call_end("</tool_call>");
 
     while (auto res = builder.try_find_regex(tool_call_start)) {
