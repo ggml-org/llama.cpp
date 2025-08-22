@@ -152,6 +152,32 @@ static void test_regex() {
   }
 }
 
+static void test_deepseek_v3_1() {
+  // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
+  {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ true,
+    };
+    common_chat_msg_parser builder("REASONING</think><function=finish>\n<parameter=message>ok
+static void test_deepseek_v3_1() {
+  // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
+  {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ true,
+    };
+    common_chat_msg_parser builder("REASONING</think><function=finish>\n<parameter=message>ok
+static void test_deepseek_v3_1() {
+  // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
+  {
+    common_chat_msg_parser builder("REASONING</think><function=finish>\n<parameter=message>ok
 const std::vector<std::string> barely_healable_jsons = {
   "{",
   "{\"",

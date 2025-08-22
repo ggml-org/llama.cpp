@@ -1314,8 +1314,15 @@ static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_
 }
 
 static common_chat_params common_chat_params_init_deepseek_v3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
-    // For now, use the same implementation as R1
-    return common_chat_params_init_deepseek_r1(tmpl, inputs);
+    common_chat_params data;
+    auto prompt = apply(tmpl, inputs);
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+    
+    // For V3.1, we need to handle thinking mode differently
+    // The template should handle the thinking mode logic
+    
+    return data;
 }
 
 static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {

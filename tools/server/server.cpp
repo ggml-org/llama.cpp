@@ -774,6 +774,9 @@ struct server_task_result_cmpl_final : server_task_result {
         if (!stream && !probs_output.empty()) {
             res["completion_probabilities"] = completion_token_output::probs_vector_to_json(probs_output, post_sampling_probs);
         }
+        if (!oaicompat_msg.reasoning_content.empty()) {
+            res["reasoning_content"] = oaicompat_msg.reasoning_content;
+        }
         return response_fields.empty() ? res : json_get_nested_values(response_fields, res);
     }
 
