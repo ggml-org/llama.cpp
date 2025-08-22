@@ -5474,8 +5474,13 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_LFM2:
                 {
-                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD,      "weight"), {n_embd, n_vocab}, 0);
                     tok_norm = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD_NORM, "weight"), {n_embd}, 0);
+                    output   = create_tensor(tn(LLM_TENSOR_OUTPUT,          "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -17787,8 +17792,7 @@ struct llm_build_lfm2 : public llm_graph_context {
         cb(cur, "model.embedding_norm", -1);
         res->t_embd = cur;
 
-        // lm_head is tied with embeddings
-        cur = build_lora_mm(model.tok_embd, cur);
+        cur = build_lora_mm(model.output, cur);
         cb(cur, "lm_head", -1);
 
         res->t_logits = cur;
