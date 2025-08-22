@@ -123,6 +123,19 @@ static bool json_is_array_of_mixed_numbers_strings(const json & data) {
     return false;
 }
 
+// does array have any individual integers/tokens?
+static bool json_is_array_and_contains_numbers(const json & data) {
+    if (data.is_array()) {
+        for (const auto & e : data) {
+            if (e.is_number_integer()) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
 // get value by path(key1 / key2)
 static json json_get_nested_values(const std::vector<std::string> & paths, const json & js) {
     json result = json::object();
@@ -186,48 +199,6 @@ static llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_
     return prompt_tokens;
 }
 
-/**
- * break the input "prompt" object into multiple prompt if needed, then tokenize them
- * this supports these cases:
- * - "prompt": "string"
- * - "prompt": [12, 34, 56]
- * - "prompt": [12, 34, "string", 56, 78]
- * and multiple prompts (multi-tasks):
- * - "prompt": ["string1", "string2"]
- * - "prompt": ["string1", [12, 34, 56]]
- * - "prompt": [[12, 34, 56], [78, 90, 12]]
- * - "prompt": [[12, 34, "string", 56, 78], [12, 34, 56]]
- */
-static std::vector<llama_tokens> tokenize_input_prompts(const llama_vocab * vocab, const json & json_prompt, bool add_special, bool parse_special) {
-    std::vector<llama_tokens> result;
-    if (json_prompt.is_string() || json_is_array_of_mixed_numbers_strings(json_prompt)) {
-        // string or mixed
-        result.push_back(tokenize_mixed(vocab, json_prompt, add_special, parse_special));
-    } else if (json_is_array_of_numbers(json_prompt)) {
-        // array of tokens
-        result.push_back(json_prompt.get<llama_tokens>());
-    } else if (json_prompt.is_array()) {
-        // array of prompts
-        result.reserve(json_prompt.size());
-        for (const auto & p : json_prompt) {
-            if (p.is_string() || json_is_array_of_mixed_numbers_strings(p)) {
-                result.push_back(tokenize_mixed(vocab, p, add_special, parse_special));
-            } else if (json_is_array_of_numbers(p)) {
-                // array of tokens
-                result.push_back(p.get<llama_tokens>());
-            } else {
-                throw std::runtime_error("element of \"prompt\" must be a string, an list of tokens, or a list of mixed strings & tokens");
-            }
-        }
-    } else {
-        throw std::runtime_error("\"prompt\" must be a string, an list of tokens, a list of mixed strings & tokens, or a list of prompts");
-    }
-    if (result.empty()) {
-        throw std::runtime_error("\"prompt\" must not be empty");
-    }
-    return result;
-}
-
 // return the last index of character that can form a valid string
 // if the last character is potentially cut in half, return the index before the cut
 // if validate_utf8(text) == text.size(), then the whole text is valid utf8
@@ -261,35 +232,6 @@ static size_t validate_utf8(const std::string& text) {
 //
 // template utils
 //
-
-// format rerank task: [BOS]query[EOS][SEP]doc[EOS]
-static llama_tokens format_rerank(const struct llama_vocab * vocab, const llama_tokens & query, const llama_tokens & doc) {
-    llama_tokens result;
-
-    // Get EOS token - use SEP token as fallback if EOS is not available
-    llama_token eos_token = llama_vocab_eos(vocab);
-    if (eos_token == LLAMA_TOKEN_NULL) {
-        eos_token = llama_vocab_sep(vocab);
-    }
-
-    result.reserve(doc.size() + query.size() + 4);
-    if (llama_vocab_get_add_bos(vocab)) {
-        result.push_back(llama_vocab_bos(vocab));
-    }
-    result.insert(result.end(), query.begin(), query.end());
-    if (llama_vocab_get_add_eos(vocab)) {
-        result.push_back(eos_token);
-    }
-    if (llama_vocab_get_add_sep(vocab)) {
-        result.push_back(llama_vocab_sep(vocab));
-    }
-    result.insert(result.end(), doc.begin(), doc.end());
-    if (llama_vocab_get_add_eos(vocab)) {
-        result.push_back(eos_token);
-    }
-
-    return result;
-}
 
 // format infill task
 static llama_tokens format_infill(
@@ -1186,6 +1128,24 @@ public:
         }
     }
 
+    // appends server tokens, updates the media map. copies media chunks.
+    void push_back(server_tokens & tokens) {
+        size_t start_pos = size();
+        for (size_t i = 0; i < tokens.size(); i++) {
+            push_back(tokens[i]);
+        }
+        if (tokens.has_mtmd) {
+            // Assert if we are copying MTMD chunks to a server_tokens that does not have mtmd.
+            // We could also just check, but this will prevent silently dropping MTMD data.
+            GGML_ASSERT(has_mtmd);
+            for (auto it = tokens.map_pos_to_media.begin(); it != tokens.map_pos_to_media.end(); ) {
+                auto chunk = tokens.map_pos_to_media[it->first].get();
+                mtmd::input_chunk_ptr new_chunk(mtmd_input_chunk_copy(chunk));
+                map_pos_to_media[start_pos+it->first] = std::move(new_chunk);
+            }
+        }
+    }
+
     // for compatibility with context shift and prompt truncation
     void insert(const llama_tokens & inp_tokens) {
         GGML_ASSERT(!has_mtmd); // only allow this if mtmd is disabled
@@ -1355,4 +1315,138 @@ static std::string fnv_hash(const uint8_t * data, size_t len) {
         hash *= fnv_prime;
     }
     return std::to_string(hash);
+}
+
+
+// format rerank task: [BOS]query[EOS][SEP]doc[EOS].
+static server_tokens format_rerank(const struct llama_vocab * vocab, server_tokens & query, server_tokens & doc) {
+    server_tokens result = {};
+
+    // Get EOS token - use SEP token as fallback if EOS is not available
+    llama_token eos_token = llama_vocab_eos(vocab);
+    if (eos_token == LLAMA_TOKEN_NULL) {
+        eos_token = llama_vocab_sep(vocab);
+    }
+    if (llama_vocab_get_add_bos(vocab)) {
+        result.push_back(llama_vocab_bos(vocab));
+    }
+    result.push_back(query);
+    if (llama_vocab_get_add_eos(vocab)) {
+        result.push_back(eos_token);
+    }
+    if (llama_vocab_get_add_sep(vocab)) {
+        result.push_back(llama_vocab_sep(vocab));
+    }
+    result.push_back(doc);
+    if (llama_vocab_get_add_eos(vocab)) {
+        result.push_back(eos_token);
+    }
+    return result;
+}
+
+
+static server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files) {
+    mtmd::bitmaps bitmaps;
+    for (auto & file : files) {
+        mtmd::bitmap bmp(mtmd_helper_bitmap_init_from_buf(mctx, file.data(), file.size()));
+        if (!bmp.ptr) {
+            throw std::runtime_error("Failed to load image or audio file");
+        }
+        // calculate bitmap hash (for KV caching)
+        std::string hash = fnv_hash(bmp.data(), bmp.n_bytes());
+        bmp.set_id(hash.c_str());
+        bitmaps.entries.push_back(std::move(bmp));
+    }
+    // process prompt
+    std::vector<server_tokens> inputs;
+    // multimodal
+    mtmd_input_text inp_txt = {
+        prompt.c_str(),
+        /* add_special */   true,
+        /* parse_special */ true,
+    };
+    mtmd::input_chunks chunks(mtmd_input_chunks_init());
+    auto bitmaps_c_ptr = bitmaps.c_ptr();
+    int32_t tokenized = mtmd_tokenize(mctx,
+                                      chunks.ptr.get(),
+                                      &inp_txt,
+                                      bitmaps_c_ptr.data(),
+                                      bitmaps_c_ptr.size());
+    if (tokenized != 0) {
+        throw std::runtime_error("Failed to tokenize prompt");
+    }
+    auto result = server_tokens(chunks, true);
+    return result;
+}
+
+/**
+ * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * use tokenize_input_prompts() if the input could be an array.
+ * this supports these cases:
+ * - "prompt": "string"
+ * - "prompt": [12, 34, 56]
+ * - "prompt": [12, 34, "string", 56, 78]
+ * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
+ */
+static server_tokens tokenize_input_subprompt(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+    constexpr char JSON_STRING_PROMPT_KEY[] = "prompt_string";
+    constexpr char JSON_MTMD_DATA_KEY[] = "multimodal_data";
+    const bool has_mtmd = mctx != nullptr;
+    if (json_prompt.is_string() || json_is_array_of_mixed_numbers_strings(json_prompt)) {
+        // string or mixed
+        llama_tokens tmp = tokenize_mixed(vocab, json_prompt, add_special, parse_special);
+        return server_tokens(tmp, false);
+    } else if (json_is_array_of_numbers(json_prompt)) {
+        // array of tokens
+        llama_tokens tmp = json_prompt.get<llama_tokens>();
+        return server_tokens(tmp, false);
+    } else if (json_prompt.contains(JSON_STRING_PROMPT_KEY)) {
+        // JSON object with prompt key.
+        if (json_prompt.contains(JSON_MTMD_DATA_KEY)) {
+            if (!has_mtmd)
+                throw std::runtime_error("Multimodal data provided, but model does not support multimodal requests.");
+
+            // JSON object with prompt and multimodal key.
+            std::vector<raw_buffer> files;
+            for (const auto & entry : json_prompt.at(JSON_MTMD_DATA_KEY)) {
+                files.push_back(base64_decode(entry));
+            }
+            return process_mtmd_prompt(mctx, json_prompt.at(JSON_STRING_PROMPT_KEY), files);
+        } else {
+            // Not multimodal, but contains a subobject.
+            llama_tokens tmp = tokenize_mixed(vocab, json_prompt.at(JSON_STRING_PROMPT_KEY), add_special, parse_special);
+            return server_tokens(tmp, false);
+        }
+   } else {
+       throw std::runtime_error("\"prompt\" elements must be a string, a list of tokens, a JSON object containing a prompt string, or a list of mixed strings & tokens.");
+   }
+}
+
+/**
+ * break the input "prompt" object into multiple prompt if needed, then tokenize them
+ * this supports these cases:
+ * - "prompt": "string"
+ * - "prompt": [12, 34, 56]
+ * - "prompt": [12, 34, "string", 56, 78]
+ * - "prompt": { "prompt_string": "string", "multimodal_data": [ "base64" ] }
+ * and multiple prompts (multi-tasks):
+ * - "prompt": ["string1", "string2"]
+ * - "prompt": ["string1", [12, 34, 56]]
+ * - "prompt": [[12, 34, 56], [78, 90, 12]]
+ * - "prompt": [[12, 34, "string", 56, 78], [12, 34, 56], { "prompt_string": "string", "multimodal_data": [ "base64" ]}]
+ */
+static std::vector<server_tokens> tokenize_input_prompts(const llama_vocab * vocab, mtmd_context * mctx, const json & json_prompt, bool add_special, bool parse_special) {
+    std::vector<server_tokens> result;
+    if (json_prompt.is_array() && !json_is_array_and_contains_numbers(json_prompt)) {
+        result.reserve(json_prompt.size());
+        for (const auto & p : json_prompt) {
+            result.push_back(tokenize_input_subprompt(vocab, mctx, p,add_special, parse_special));
+        }
+    } else {
+        result.push_back(tokenize_input_subprompt(vocab, mctx, json_prompt, add_special, parse_special));
+    }
+    if (result.empty()) {
+        throw std::runtime_error("\"prompt\" must not be empty");
+    }
+    return result;
 }
