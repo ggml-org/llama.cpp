@@ -1,6 +1,9 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatSidebar from '$lib/components/app/chat/ChatSidebar/ChatSidebar.svelte';
+	import type { DatabaseConversation } from '$lib/types/database.d.ts';
+	import { waitFor, within, expect } from 'storybook/internal/test';
+	import { screen } from 'storybook/test';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatSidebar',
@@ -45,25 +48,57 @@
 	];
 </script>
 
-<Story name="Default">
-	<div class="bg-background h-screen w-80 border-r">
+<Story
+	asChild
+	name="Default"
+	play={async ({ canvas }) => {
+		const { chatStore } = await import('$lib/stores/chat.svelte');
+		
+		waitFor(() => setTimeout(() => {
+			chatStore.conversations = mockConversations;
+		}, 0));
+	}}
+>
+	<div class="bg-background h-screen w-[18rem]">
+
+		<ChatSidebar />
+	</div>
+</Story>
+
+<Story
+	asChild
+	name="SearchActive"
+	play={async ({ userEvent, canvasElement }) => {
+		let canvas = within(canvasElement);
+		const { chatStore } = await import('$lib/stores/chat.svelte');
+		
+		waitFor(() => setTimeout(() => {
+			chatStore.conversations = mockConversations;
+		}, 0));
+		
+		const searchTrigger = screen.getByText('Search conversations');
+		userEvent.click(searchTrigger);
+
+		// canvas = within(canvasElement);
+
+		// const searchInput = canvas.getAllByPlaceholderText('Search conversations...');
+		
+		console.log(canvasElement);
+
+		// await expect(canvas.getByRole('textbox')).toBeInTheDocument();
+	}}
+>
+	<div class="bg-background h-screen w-[18rem]">
 		<ChatSidebar />
 	</div>
 </Story>
 
 <Story 
-	name="SearchActive"
-	play={async ({ canvasElement }) => {
-		// Wait for component to mount
-		await new Promise(resolve => setTimeout(resolve, 100));
-		
-		// Find and interact with search input
-		const searchInput = canvasElement.querySelector('input[placeholder*="Search"]') as HTMLInputElement;
-		if (searchInput) {
-			searchInput.focus();
-			searchInput.value = 'Python';
-			searchInput.dispatchEvent(new Event('input', { bubbles: true }));
-		}
+	name="Empty"
+	play={async ({ canvas }) => {
+		// Mock empty conversations store
+		const { chatStore } = await import('$lib/stores/chat.svelte');
+		chatStore.conversations = [];
 	}}
 >
 	<div class="bg-background h-screen w-80 border-r">

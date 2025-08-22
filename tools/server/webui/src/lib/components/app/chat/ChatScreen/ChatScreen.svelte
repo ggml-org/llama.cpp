@@ -3,10 +3,7 @@
 	import { processFilesToChatUploaded } from '$lib/utils/process-uploaded-files';
 	import { serverStore } from '$lib/stores/server.svelte';
 	import { isFileTypeSupported } from '$lib/constants/supported-file-types';
-	import {
-		filterFilesByModalities,
-		generateModalityErrorMessage
-	} from '$lib/utils/modality-file-validation';
+	import { filterFilesByModalities } from '$lib/utils/modality-file-validation';
 	import { supportsVision, supportsAudio, serverError, serverLoading } from '$lib/stores/server.svelte';
 	import { ChatForm, ChatScreenHeader, ChatMessages, ServerInfo, ServerErrorSplash, ServerLoadingSplash } from '$lib/components/app';
 	import {

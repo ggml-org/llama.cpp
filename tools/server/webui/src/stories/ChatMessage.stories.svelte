@@ -3,7 +3,7 @@
 	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage.svelte';
 
 	const { Story } = defineMeta({
-		title: 'Components/ChatMessage',
+		title: 'Components/ChatScreen/ChatMessage',
 		component: ChatMessage,
 		parameters: {
 			layout: 'centered'

@@ -137,6 +137,45 @@
 
 
 <Story
+  name="AudioModality"
+  args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
+  play={async ({ canvas, userEvent }) => {
+    mockServerProps(mockConfigs.audioOnly);
+
+    await waitFor(() => {
+      const fileInput = document.querySelector('input[type="file"]');
+      const acceptAttr = fileInput?.getAttribute('accept');
+      return acceptAttr;
+    });
+
+    // Test initial file input state (should accept audio but not images)
+    const fileInput = document.querySelector('input[type="file"]');
+    const acceptAttr = fileInput?.getAttribute('accept');
+    console.log(acceptAttr);
+    await expect(fileInput).toHaveAttribute('accept');
+    await expect(acceptAttr).not.toContain('image/');
+    await expect(acceptAttr).toContain('audio/');
+
+    const fileUploadButton = canvas.getByText('Attach files');
+    await userEvent.click(fileUploadButton);
+
+    // Test that record button is enabled (audio support)
+    const recordButton = canvas.getAllByRole('button', { name: 'Start recording' })[1];
+    await expect(recordButton).not.toBeDisabled();
+
+    // Test that Images button is disabled (no vision support)
+    const imagesButton = document.querySelector('.images-button');
+    await expect(imagesButton).toHaveAttribute('data-disabled');
+
+    // Test that Audio button is enabled (audio support)
+    const audioButton = document.querySelector('.audio-button');
+    await expect(audioButton).not.toHaveAttribute('data-disabled');
+
+    console.log('✅ Audio modality: Audio/Recording enabled, Images disabled');
+  }}
+/>
+
+<Story
   name="FileAttachments"
   args={{ 
     class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
