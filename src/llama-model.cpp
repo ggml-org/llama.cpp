@@ -3977,9 +3977,7 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                 } break;
             case LLM_ARCH_SEED_OSS:
                 {
-                    const uint32_t num_heads            = hparams.ssm_dt_rank;
-                    const uint32_t intermediate_size    = hparams.ssm_d_inner;
-                    const uint32_t head_dim             = intermediate_size / num_heads;
+                    const uint32_t head_dim             = hparams.n_embd_head_k;
                     const int64_t n_qo_dim              = n_head * head_dim;
                     const int64_t n_kv_dim              = n_head_kv * head_dim;
 
@@ -4007,7 +4005,6 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
-                        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
                     }
                 } break;
 
@@ -18862,6 +18859,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_ARCEE:
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
+        case LLM_ARCH_SEED_OSS:
             return LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
@@ -18882,7 +18880,6 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_QWEN3MOE:
         case LLM_ARCH_OLMO2:
         case LLM_ARCH_OLMOE:
-        case LLM_ARCH_SEED_OSS:
         case LLM_ARCH_PHI2:
         case LLM_ARCH_PHI3:
         case LLM_ARCH_PHIMOE:
