@@ -3985,7 +3985,11 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     // output
                     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
@@ -18007,9 +18011,6 @@ struct llm_build_seed_oss : public llm_graph_context {
 
             // self-attention
             {
-                // rope freq factors for llama3; may return nullptr for llama2 and other models
-                ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
-
                 // compute Q and K and RoPE them
                 ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
                 cb(Qcur, "Qcur", il);
@@ -18037,13 +18038,13 @@ struct llm_build_seed_oss : public llm_graph_context {
                 Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
                 Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, rope_factors,
+                        ctx0, Qcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
 
                 Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, rope_factors,
+                        ctx0, Kcur, inp_pos, nullptr,
                         n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                         ext_factor, attn_factor, beta_fast, beta_slow
                         );
