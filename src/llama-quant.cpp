@@ -703,6 +703,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     auto name_tn = LLM_TN(model.arch);
     auto can_quantize = [&](const ggml_tensor * t) -> bool {
+        // This list should be kept in sync with llama_tensor_quantize_impl()
         const std::string name = ggml_get_name(t);
         bool q = name.rfind("weight") == name.size() - 6;
         q &= ggml_n_dims(t) >= 2;
@@ -902,7 +903,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 constexpr float bias_lambda = 1.0;
                 //bias_lambda defines the weight of the bias term in the weigthed MSE error function
                 // 0.0 means no bias (standard MSE) 1.0 means equal weight for bias and error,
-                // 2.0 means twice as much weight for bias, etc
+                // 2.0 means twice as much weight for bias, etc. Default is 1.0.
                 if (activations && bias_lambda != 0.0) {
                     const double proj = bias_numerator * bias_numerator / (bias_denominator + epsilon);
                     err_numerator += bias_lambda * proj;
@@ -1192,7 +1193,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     double bpw_now = current_bpw();
 
     float target_bpw = params->target_bpw;
-    // If minimal bpw is already above the target, we're constrained by geometry; return closest (min bpw)
+    // If minimal bpw is already above the target, we're constrained by the tensor's shape; return closest (min bpw)
     if (bpw_now >= target_bpw) {
         std::unordered_map<std::string, ggml_type> overrides;
         for (const auto & ti : all) {
