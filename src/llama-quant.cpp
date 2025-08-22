@@ -760,8 +760,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         if (quantized_buffer.size() < buffer_size) { quantized_buffer.resize(buffer_size); }
         if (dequantized_buffer.size() < sample_element_count) { dequantized_buffer.resize(sample_element_count); }
 
-        std::vector row_sq_norm(sample_row_count, 0.0);
-        std::vector bias_denominator_per_slice(ne2, 0.0);
+        std::vector<double> row_sq_norm(sample_row_count, 0.0);
+        std::vector<double> bias_denominator_per_slice(ne2, 0.0);
 
         // Precompute bias denominator per slice
         const bool has_values = (values_sample != nullptr);
