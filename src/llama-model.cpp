@@ -18068,7 +18068,7 @@ struct llm_build_seed_oss : public llm_graph_context {
 
             // feed-forward network
             cur = build_norm(ffn_inp,
-                    model.layers[il].ffn_norm, NULL,
+                    model.layers[il].attn_post_norm, NULL,
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
