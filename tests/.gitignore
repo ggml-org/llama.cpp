@@ -1,4 +1,5 @@
 *
 !*.*
 *.o
+*.swp
 ggml-common.h
