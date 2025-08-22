@@ -38,14 +38,17 @@
 						{disabled}
 					>
 						<span class="sr-only">Attach files</span>
+
 						<Paperclip class="h-4 w-4" />
 					</Button>
 				</Tooltip.Trigger>
+
 				<Tooltip.Content>
 					<p>{fileUploadTooltipText}</p>
 				</Tooltip.Content>
 			</Tooltip.Root>
 		</DropdownMenu.Trigger>
+
 		<DropdownMenu.Content align="start" class="w-48">
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 				<Tooltip.Trigger class="w-full" >
@@ -55,9 +58,11 @@
 						disabled={!supportsVision()}
 					>
 						<Image class="h-4 w-4" />
+
 						<span>Images</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
+
 				{#if !supportsVision()}
 					<Tooltip.Content>
 						<p>Images require vision models to be processed</p>
@@ -67,15 +72,18 @@
 
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 				<Tooltip.Trigger class="w-full" >
+
 				<DropdownMenu.Item 
 					class="audio-button flex items-center gap-2 cursor-pointer"
 					disabled={!supportsAudio()}
 					onclick={() => handleFileUpload('audio')}
 				>
-				<Volume2 class="h-4 w-4" />
-				<span>Audio Files</span>
-			</DropdownMenu.Item>
+					<Volume2 class="h-4 w-4" />
+
+					<span>Audio Files</span>
+				</DropdownMenu.Item>
 			</Tooltip.Trigger>
+
 			{#if !supportsAudio()}
 				<Tooltip.Content>
 					<p>Audio files require audio models to be processed</p>
@@ -90,6 +98,7 @@
 				<FileText class="h-4 w-4" />
 				<span>Text Files</span>
 			</DropdownMenu.Item>
+
 			<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 				<Tooltip.Trigger class="w-full">
 					<DropdownMenu.Item 
@@ -97,9 +106,11 @@
 						onclick={() => handleFileUpload('pdf')}
 					>
 						<File class="h-4 w-4" />
+
 						<span>PDF Files</span>
 					</DropdownMenu.Item>
 				</Tooltip.Trigger>
+
 				{#if !supportsVision()}
 					<Tooltip.Content>
 						<p>PDFs will be converted to text. Image-based PDFs may not work properly.</p>

@@ -3,7 +3,6 @@
 	import ChatAttachmentPreviewDialog from './ChatAttachmentPreviewDialog.svelte';
 	import {
 		FileTypeCategory,
-		PdfMimeType,
 		getFileTypeCategory
 	} from '$lib/constants/supported-file-types';
 

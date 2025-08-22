@@ -29,7 +29,7 @@
 
 <div class="flex items-center justify-between gap-1 {className}">
 	<ChatFormActionFileAttachments 
-		disabled={disabled || isLoading}
+		disabled={disabled}
 		{onFileUpload}
 	/>
 
