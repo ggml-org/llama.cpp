@@ -660,20 +660,6 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         GGML_TYPE_Q6_K
     };
 
-    auto get_values = [&](const std::string & tensor_name) -> const float * {
-        if (!values_data) { return nullptr; }
-        const auto it = values_data->find(remap_imatrix(tensor_name, mapped));
-        if (it == values_data->end()) { return nullptr; }
-        return it->second.data();
-    };
-
-    auto get_activations = [&](const std::string & tensor_name) -> const float * {
-        if (!activations_data) { return nullptr; }
-        const auto it = activations_data->find(remap_imatrix(tensor_name, mapped));
-        if (it == activations_data->end()) { return nullptr; }
-        return it->second.data();
-    };
-
     auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
         const int64_t n_per_row = t->ne[0];
         const size_t row_sz = ggml_row_size(typ, n_per_row);
@@ -991,6 +977,15 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             sample_rows_per_slice[slice] = current_sampled_rows;
         }
 
+        auto side_data = [&](const std::unordered_map<std::string, std::vector<float>> * m, const std::string & tensor_name) -> std::pair<const float*, size_t> {
+            if (!m) { return {nullptr, 0}; }
+            const std::string key = remap_imatrix(tensor_name, mapped);
+            const auto it = m->find(key);
+            if (it == m->end()) { return {nullptr, 0}; }
+            return { it->second.data(), it->second.size() };
+        };
+
+        // Copy this row's side data (values and activations), or broadcasts to all slices
         auto copy_or_broadcast = [&](const float *src, size_t src_sz, std::vector<float> &dst) {
             const size_t want = (size_t)ne2 * (size_t)n_per_row;
             dst.clear();
@@ -1005,26 +1000,17 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     std::memcpy(dst.data() + s * n_per_row, src, n_per_row * sizeof(float));
                 }
             } else {
-                // Mismatch – safer to skip using it for this tensor
                 LLAMA_LOG_WARN("%s: side data size mismatch for %s: got %zu, expected %zu or %zu; ignoring\n",
                     __func__, name.c_str(), src_sz, (size_t)n_per_row, want);
             }
         };
 
-        const float * values_all = get_values(name);
-        const float * activations_all = get_activations(name);
+        const auto [values_all, values_sz] = side_data(values_data, name);
+        const auto [activations_all, activations_sz] = side_data(activations_data, name);
         std::vector<float> values_sample;
         std::vector<float> activations_sample;
-        if (values_all) {
-            auto itv = values_data->find(remap_imatrix(name, mapped));
-            const size_t sz = itv == values_data->end() ? 0 : itv->second.size();
-            copy_or_broadcast(values_all, sz, values_sample);
-        }
-        if (activations_all) {
-            auto ita = activations_data->find(remap_imatrix(name, mapped));
-            const size_t sz = ita == activations_data->end() ? 0 : ita->second.size();
-            copy_or_broadcast(activations_all, sz, activations_sample);
-        }
+        if (values_all) { copy_or_broadcast(values_all, values_sz, values_sample); }
+        if (activations_all) { copy_or_broadcast(activations_all, activations_sz, activations_sample); }
 
         const int64_t nelem = ggml_nelements(t);
         tensor_info info;
