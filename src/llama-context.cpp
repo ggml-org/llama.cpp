@@ -39,7 +39,6 @@ llama_context::llama_context(
     cparams.yarn_attn_factor = params.yarn_attn_factor;
     cparams.yarn_beta_fast   = params.yarn_beta_fast;
     cparams.yarn_beta_slow   = params.yarn_beta_slow;
-    cparams.defrag_thold     = params.defrag_thold;
     cparams.embeddings       = params.embeddings;
     cparams.offload_kqv      = params.offload_kqv;
     cparams.flash_attn       = params.flash_attn;
@@ -978,7 +977,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     bool did_optimize = false;
 
-    // handle any pending defrags/shifts
+    // handle any pending shifts/copies
     memory_update(false);
 
     llama_memory_context_ptr mctx;

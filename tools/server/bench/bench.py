@@ -274,7 +274,6 @@ def start_server_background(args):
     server_args.extend(['--batch-size', args.batch_size])
     server_args.extend(['--ubatch-size', args.ubatch_size])
     server_args.extend(['--n-predict', args.max_tokens * 2])
-    server_args.extend(['--defrag-thold', "0.1"])
     server_args.append('--cont-batching')
     server_args.append('--metrics')
     server_args.append('--flash-attn')
