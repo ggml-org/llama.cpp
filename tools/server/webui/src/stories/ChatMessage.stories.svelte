@@ -1,6 +1,7 @@
 <script module lang="ts">
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import ChatMessage from '$lib/components/app/chat/ChatMessages/ChatMessage.svelte';
+	import { expect } from 'storybook/internal/test';
 
 	const { Story } = defineMeta({
 		title: 'Components/ChatScreen/ChatMessage',
@@ -47,17 +48,29 @@
 		children: []
 	};
 
-	const processingMessage: DatabaseMessage = {
+	let processingMessage = $state({
 		id: '4',
 		convId: 'conv-1',
 		type: 'message',
-		timestamp: Date.now(),
+		timestamp: 0, // No timestamp = processing
 		role: 'assistant',
 		content: '',
 		parent: '1',
 		thinking: '',
 		children: []
-	};
+	});
+
+	let streamingMessage = $state({
+		id: '5',
+		convId: 'conv-1',
+		type: 'message',
+		timestamp: 0, // No timestamp = streaming
+		role: 'assistant',
+		content: '',
+		parent: '1',
+		thinking: '',
+		children: []
+	});
 </script>
 
 <Story
@@ -70,32 +83,127 @@
 <Story
 	name="Assistant"
 	args={{
+		class: 'max-w-[56rem] w-[calc(100vw-2rem)]',
 		message: assistantMessage
 	}}
 />
 
 <Story
-	name="ThinkingBlock"
+	name="WithThinkingBlock"
 	args={{
-		message: thinkingMessage
+		message: streamingMessage
+	}}
+	asChild
+	play={async ({ canvas }) => {
+		// Phase 1: Stream reasoning content in chunks
+		let reasoningText = "I need to think about this carefully. Let me break down the problem:\n\n1. The user is asking for help with something complex\n2. I should provide a thorough and helpful response\n3. I need to consider multiple approaches\n4. The best solution would be to explain step by step\n\nThis approach will ensure clarity and understanding.";
+		
+		
+		let reasoningChunk = 'I';
+		let i = 0;
+		while (i < reasoningText.length) {
+			const chunkSize = Math.floor(Math.random() * 5) + 3; // Random 3-7 characters
+			const chunk = reasoningText.slice(i, i + chunkSize);
+			reasoningChunk += chunk;
+			
+			// Update the reactive state directly
+			streamingMessage.thinking = reasoningChunk;
+			
+			i += chunkSize;
+			await new Promise(resolve => setTimeout(resolve, 50));
+		}
+		
+		const regularText = "Based on my analysis, here's the solution:\n\n**Step 1:** First, we need to understand the requirements clearly.\n\n**Step 2:** Then we can implement the solution systematically.\n\n**Step 3:** Finally, we test and validate the results.\n\nThis approach ensures we cover all aspects of the problem effectively.";
+		
+		let contentChunk = '';
+		i = 0;
+
+		while (i < regularText.length) {
+			const chunkSize = Math.floor(Math.random() * 5) + 3; // Random 3-7 characters
+			const chunk = regularText.slice(i, i + chunkSize);
+			contentChunk += chunk;
+			
+			// Update the reactive state directly
+			streamingMessage.content = contentChunk;
+			
+			i += chunkSize;
+			await new Promise(resolve => setTimeout(resolve, 50));
+		}
+		
+		streamingMessage.timestamp = Date.now();
+
+
+		// const collapsibleTrigger = canvas.getByText('Reasoning');
+		// expect(collapsibleTrigger).not.toHaveAttribute('data-state', 'open');
+	}}
+>
+
+	<div class="w-[56rem]">
+		<ChatMessage
+		message={streamingMessage}
+	/>
+	</div>
+</Story>
+
+<Story
+	name="Processing"
+	args={{
+		message: processingMessage
+	}}
+	play={async ({ canvas }) => {
+		// Import the chat store to simulate loading state
+		const { chatStore } = await import('$lib/stores/chat.svelte');
+		
+		// Set loading state to true to trigger the processing UI
+		chatStore.isLoading = true;
+		
+		// Simulate the processing state hook behavior
+		// This will show the "Generating..." text and parameter details
+		await new Promise(resolve => setTimeout(resolve, 100));
 	}}
 />
 
 <Story
-	name="ProcessingState"
+	name="Processing with Slots"
 	args={{
 		message: processingMessage
 	}}
-	play={({ canvasElement }) => {
-		// Simulate processing state by setting up mock processing data
-		const processingState = {
-			slots: {
-				'slot-1': { content: 'Processing your request...', timestamp: Date.now() },
-				'slot-2': { content: 'Analyzing data...', timestamp: Date.now() + 1000 }
-			}
+	play={async () => {
+		
+		// Import the chat store and slots service to simulate loading state with slots data
+		const { chatStore } = await import('$lib/stores/chat.svelte');
+		const { slotsService } = await import('$lib/services/slots');
+		
+		// Set loading state to true to trigger the processing UI
+		chatStore.isLoading = true;
+		
+		// Mock the slots service to provide realistic slot data
+		const mockProcessingState = {
+			status: 'generating' as const,
+			tokensDecoded: 410,
+			tokensRemaining: 1000,
+			contextUsed: 429,
+			contextTotal: 4096,
+			temperature: 0.8,
+			topP: 0.95,
+			speculative: false,
+			hasNextToken: true
 		};
 		
-		// This would normally be handled by the useProcessingState hook
-		// but for Storybook we can simulate the visual state
+		// Override the parseProcessingState method to return our mock data
+		const originalParseProcessingState = slotsService['parseProcessingState'];
+		slotsService['parseProcessingState'] = () => mockProcessingState;
+		
+		// Trigger the processing state callbacks manually
+		slotsService['callbacks'].forEach(callback => {
+			try {
+				callback(mockProcessingState);
+			} catch (error) {
+				console.error('Error in slots callback:', error);
+			}
+		});
+		
+		// Restore original method
+		slotsService['parseProcessingState'] = originalParseProcessingState;
 	}}
 />

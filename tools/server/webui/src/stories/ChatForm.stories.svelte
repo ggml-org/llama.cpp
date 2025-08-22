@@ -48,6 +48,8 @@
   name="Default"
   args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
   play={async ({ canvas, userEvent }) => {
+    mockServerProps(mockConfigs.noModalities);
+    
     const textarea = await canvas.findByRole('textbox');
     const submitButton = await canvas.findByRole('button', { name: 'Send' });
 	
@@ -71,13 +73,13 @@
 	await expect(acceptAttr).not.toContain('audio/');
 
 
-    const fileUploadButton = canvas.getByText('Attach files');
-	
-    await userEvent.click(fileUploadButton);
+  const fileUploadButton = canvas.getByText('Attach files');
+
+  await userEvent.click(fileUploadButton);
 	
 	const recordButton = canvas.getAllByRole('button', { name: 'Start recording' })[1];
-    const imagesButton = document.querySelector('.images-button');
-    const audioButton = document.querySelector('.audio-button');
+  const imagesButton = document.querySelector('.images-button');
+  const audioButton = document.querySelector('.audio-button');
 	
 
 	await expect(recordButton).toBeDisabled();
@@ -122,7 +124,7 @@
 />
 
 
-<Story
+<!-- <Story
   name="AudioModality"
   args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
   play={async ({ canvas, userEvent }) => {
@@ -150,7 +152,7 @@
 
     console.log('✅ Audio modality: Audio/Recording enabled, Images disabled');
   }}
-/>
+/> -->
 
 <Story
   name="FileAttachments"

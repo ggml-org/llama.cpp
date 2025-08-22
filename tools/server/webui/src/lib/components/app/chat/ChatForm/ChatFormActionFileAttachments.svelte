@@ -54,8 +54,8 @@
 				<Tooltip.Trigger class="w-full" >
 					<DropdownMenu.Item 
 						class="images-button flex items-center gap-2 cursor-pointer" 
-						onclick={() => handleFileUpload('image')}
 						disabled={!supportsVision()}
+						onclick={() => handleFileUpload('image')}
 					>
 						<Image class="h-4 w-4" />
 
