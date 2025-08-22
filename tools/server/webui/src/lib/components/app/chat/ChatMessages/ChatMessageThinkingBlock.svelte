@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { ChevronDown, Brain } from '@lucide/svelte';
-	import { Button } from '$lib/components/ui/button';
+	import { Brain } from '@lucide/svelte';
+	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
+	import { buttonVariants } from '$lib/components/ui/button/index.js';
 	import { Card } from '$lib/components/ui/card';
 	import { MarkdownContent } from '$lib/components/app';
-	import { slide } from 'svelte/transition';
 
 	interface Props {
 		reasoningContent: string | null;
@@ -16,40 +17,42 @@
 
 	let isExpanded = $state(true);
 
-	// Auto-collapse when reasoning finishes and regular content starts
+	// Auto-collapse when regular content starts (even while streaming)
 	$effect(() => {
-		if (!isStreaming && hasRegularContent && reasoningContent) {
+		if (hasRegularContent && reasoningContent) {
 			isExpanded = false;
 		}
 	});
 </script>
 
-<Card class="border-muted bg-muted/30 mb-6 gap-0 py-0 {className}">
-	<Button
-		variant="ghost"
-		class="h-auto w-full justify-between p-3 font-normal"
-		onclick={() => (isExpanded = !isExpanded)}
-	>
-		<div class="text-muted-foreground flex items-center gap-2">
-			<Brain class="h-4 w-4" />
-
-			<span class="text-sm">
-				{isStreaming ? 'Reasoning...' : 'Reasoning'}
-			</span>
-		</div>
-
-		<ChevronDown
-			class="text-muted-foreground h-4 w-4 transition-transform duration-200 {isExpanded
-				? 'rotate-180'
-				: ''}"
-		/>
-	</Button>
-
-	{#if isExpanded}
-		<div class="border-muted border-t px-3 pb-3" transition:slide={{ duration: 200 }}>
-			<div class="pt-3">
-				<MarkdownContent content={reasoningContent || ''} class="text-xs leading-relaxed" />
+<Collapsible.Root bind:open={isExpanded} class="mb-6 {className}">
+	<Card class="border-muted bg-muted/30 gap-0 py-0">
+		<Collapsible.Trigger class="cursor-pointer flex items-center justify-between p-3">
+			<div class="text-muted-foreground flex items-center gap-2">
+				<Brain class="h-4 w-4" />
+				<span class="text-sm font-medium">
+					{isStreaming ? 'Reasoning...' : 'Reasoning'}
+				</span>
 			</div>
-		</div>
-	{/if}
-</Card>
+			
+			<div
+				class={buttonVariants({ 
+					variant: "ghost", 
+					size: "sm", 
+					class: "h-6 w-6 p-0 text-muted-foreground hover:text-foreground" 
+				})}
+			>
+				<ChevronsUpDownIcon class="h-4 w-4" />
+				<span class="sr-only">Toggle reasoning content</span>
+			</div>
+		</Collapsible.Trigger>
+
+		<Collapsible.Content>
+			<div class="border-muted border-t px-3 pb-3">
+				<div class="pt-3">
+					<MarkdownContent content={reasoningContent || ''} class="text-xs leading-relaxed" />
+				</div>
+			</div>
+		</Collapsible.Content>
+	</Card>
+</Collapsible.Root>
