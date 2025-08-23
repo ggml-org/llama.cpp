@@ -258,7 +258,7 @@ static __global__ void flash_attn_tile_ext_f16(
             const half val = hexp(sink - kqmax[j0/nwarps]);
             kqsum[j0/nwarps] = kqsum[j0/nwarps] * KQ_max_scale;
             if (threadIdx.x == 0) {
-                kqsum[j0/nwarps].x = __hadd(kqsum[j0/nwarps].x, val);
+                kqsum[j0/nwarps].x = __hadd(__low2half(kqsum[j0/nwarps]), val);
             }
 
 #pragma unroll
