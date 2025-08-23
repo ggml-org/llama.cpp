@@ -628,11 +628,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     constexpr ggml_type k_quants[] = {
         GGML_TYPE_Q2_K,
         GGML_TYPE_Q3_K,
-        GGML_TYPE_Q4_0,
-        GGML_TYPE_Q4_1,
         GGML_TYPE_Q4_K,
-        GGML_TYPE_Q5_0,
-        GGML_TYPE_Q5_1,
         GGML_TYPE_Q5_K,
         GGML_TYPE_Q6_K,
         GGML_TYPE_Q8_0,
@@ -646,19 +642,12 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     constexpr ggml_type iq_quants[] = {
         GGML_TYPE_IQ1_S,
-        GGML_TYPE_IQ1_M,
-        GGML_TYPE_IQ2_XXS,
-        GGML_TYPE_IQ2_XS,
         GGML_TYPE_IQ2_S,
-        GGML_TYPE_IQ3_XXS,
         GGML_TYPE_IQ3_S,
         GGML_TYPE_IQ4_XS,
-        GGML_TYPE_IQ4_NL,
-        // TODO: add higher-precision fallbacks for IQ mixes to improve ppl if bpw budget allows it?
-        GGML_TYPE_Q5_0,
-        GGML_TYPE_Q5_1,
         GGML_TYPE_Q5_K,
-        GGML_TYPE_Q6_K
+        GGML_TYPE_Q6_K,
+        GGML_TYPE_Q8_0
     };
 
     auto tensor_bytes = [](const ggml_tensor * t, const ggml_type typ) -> size_t {
@@ -888,8 +877,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     }
                 }
 
-                // abias_lambda djusts the trade-off between systematic bias (introduced by block‑wise scaling) and MSE
-                // larger value favours quantisation types that produce a smaller bias even if the MSE is slightly larger
+                // bias_lambda adjusts the trade-off between systematic bias (introduced by block‑wise scaling) and MSE
+                // larger value favours quantisation types that produce smaller bias even if the MSE is slightly larger
                 constexpr float bias_lambda = 1.5f;
                 constexpr double epsilon = 1e-12;
                 double err_num = weighted_mse;
