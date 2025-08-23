@@ -89,13 +89,16 @@ class ModelBase:
     block_count: int
     tensor_map: gguf.TensorNameMap
 
+    # Mistral format specifics
     is_mistral_format: bool = False
+    disable_mistral_community_chat_template: bool = False
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
                  metadata_override: Path | None = None, model_name: str | None = None,
                  split_max_tensors: int = 0, split_max_size: int = 0, dry_run: bool = False,
-                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None):
+                 small_first_shard: bool = False, hparams: dict[str, Any] | None = None, remote_hf_model_id: str | None = None,
+                 disable_mistral_community_chat_template: bool = False):
         if type(self) is ModelBase or \
                 type(self) is TextModel or \
                 type(self) is MmprojModel:
@@ -146,6 +149,9 @@ class ModelBase:
         # Configure GGUF Writer
         self.gguf_writer = gguf.GGUFWriter(path=None, arch=gguf.MODEL_ARCH_NAMES[self.model_arch], endianess=self.endianess, use_temp_file=self.use_temp_file,
                                            split_max_tensors=split_max_tensors, split_max_size=split_max_size, dry_run=dry_run, small_first_shard=small_first_shard)
+
+        # Mistral specific
+        self.disable_mistral_community_chat_template = disable_mistral_community_chat_template
 
     @classmethod
     def add_prefix_to_filename(cls, path: Path, prefix: str) -> Path:
@@ -2011,8 +2017,17 @@ class LlamaModel(TextModel):
 
         template_dir = Path(__file__).parent / "models/templates/"
 
-        template = MistralModel.get_community_chat_template(vocab, template_dir)
-        self.gguf_writer.add_chat_template(template)
+        if not self.is_mistral_format or not self.disable_mistral_community_chat_template:
+            # Log only for Mistral format that the official tokenization and detokenization is via `mistral-common`.
+            if self.is_mistral_format:
+                logger.info(
+                    "Using a Mistral community chat template. These templates can be subject to errors in early days or weeks after a release. "
+                    "Mistral recommends to use `mistral-common` to perform tokenization and detokenization."
+                )
+            template = MistralModel.get_community_chat_template(vocab, template_dir, self.is_mistral_format)
+            self.gguf_writer.add_chat_template(template)
+        else:
+            logger.info("Not using a Mistral community chat template. Ensure to perform the tokenization and detokenization via `mistral-common`.")
 
     def set_vocab(self):
         if self.is_mistral_format:
@@ -5839,6 +5854,11 @@ class OlmoModel(TextModel):
         return [(self.map_tensor_name(name), data_torch)]
 
 
+@ModelBase.register("SeedOssForCausalLM")
+class SeedOssModel(TextModel):
+    model_arch = gguf.MODEL_ARCH.SEED_OSS
+
+
 @ModelBase.register("Olmo2ForCausalLM")
 class Olmo2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.OLMO2
@@ -8422,7 +8442,7 @@ class MistralModel(LlamaModel):
     undo_permute = False
 
     @staticmethod
-    def get_community_chat_template(vocab: MistralVocab, templates_dir: Path):
+    def get_community_chat_template(vocab: MistralVocab, templates_dir: Path, is_mistral_format: bool):
         assert TokenizerVersion is not None, "mistral_common is not installed"
         assert isinstance(vocab.tokenizer, (Tekkenizer, SentencePieceTokenizer)), (
             f"Expected Tekkenizer or SentencePieceTokenizer, got {type(vocab.tokenizer)}"
@@ -8443,7 +8463,13 @@ class MistralModel(LlamaModel):
         elif vocab.tokenizer.version == TokenizerVersion.v13:
             template_file = "unsloth-mistral-Devstral-Small-2507.jinja"
         else:
-            raise ValueError(f"Unknown tokenizer type: {vocab.tokenizer_type} and version {vocab.tokenizer.version}")
+            err_message = f"Unknown tokenizer type: {vocab.tokenizer_type} and version {vocab.tokenizer.version}"
+            if is_mistral_format:
+                err_message += (
+                    " . Please pass --disable-mistral-community-chat-template argument to the CLI "
+                    "if you want to skip this error and use the Mistral official `mistral-common` pre-processing library."
+                )
+            raise ValueError(err_message)
 
         template_path = templates_dir / template_file
         if not template_path.exists():
@@ -8638,6 +8664,13 @@ def parse_args() -> argparse.Namespace:
         "--mistral-format", action="store_true",
         help="Whether the model is stored following the Mistral format.",
     )
+    parser.add_argument(
+        "--disable-mistral-community-chat-template", action="store_true",
+        help=(
+            "Whether to disable usage of Mistral community chat templates. If set, use the Mistral official `mistral-common` library for tokenization and detokenization of Mistral models. "
+            "Using `mistral-common` ensure correctness and zero-day support of tokenization for models converted from the Mistral format but requires to manually setup the tokenization server."
+        )
+    )
 
     args = parser.parse_args()
     if not args.print_supported_models and args.model is None:
@@ -8744,6 +8777,7 @@ def main() -> None:
             fname_out = ModelBase.add_prefix_to_filename(fname_out, "mmproj-")
 
     is_mistral_format = args.mistral_format
+    disable_mistral_community_chat_template = args.disable_mistral_community_chat_template
 
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
@@ -8770,7 +8804,7 @@ def main() -> None:
                                      split_max_tensors=args.split_max_tensors,
                                      split_max_size=split_str_to_n_bytes(args.split_max_size), dry_run=args.dry_run,
                                      small_first_shard=args.no_tensor_first_split,
-                                     remote_hf_model_id=hf_repo_id,
+                                     remote_hf_model_id=hf_repo_id, disable_mistral_community_chat_template=disable_mistral_community_chat_template
                                      )
 
         if args.vocab_only:

@@ -39,7 +39,7 @@ static __global__ void reduce_rows_f32(const float * __restrict__ x, float * __r
         }
         __syncthreads();
         sum = 0.0f;
-        if (lane_id < (blockDim.x / WARP_SIZE)) {
+        if (lane_id < (static_cast<int>(blockDim.x) / WARP_SIZE)) {
             sum = s_sum[lane_id];
         }
         sum = warp_reduce_sum(sum);

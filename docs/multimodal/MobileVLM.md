@@ -194,7 +194,7 @@ llama_print_timings:       total time =   44411.01 ms /   377 tokens
 ## Orin compile and run
 ### compile
 ```sh
-make GGML_CUDA=1 CUDA_DOCKER_ARCH=sm_87 GGML_CUDA_F16=1 -j 32
+make GGML_CUDA=1 CUDA_DOCKER_ARCH=sm_87 -j 32
 ```
 ### run on Orin
 ### case 1

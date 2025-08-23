@@ -288,7 +288,6 @@ struct common_params {
     float   yarn_beta_fast        = 32.0f; // YaRN low correction dim
     float   yarn_beta_slow        =  1.0f; // YaRN high correction dim
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
-    float   defrag_thold          =  0.1f; // KV cache defragmentation threshold
 
     // offload params
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
@@ -375,7 +374,7 @@ struct common_params {
     bool cont_batching     = true;  // insert new sequences for decoding on-the-fly
     bool flash_attn        = false; // flash attention
     bool no_perf           = false; // disable performance metrics
-    bool ctx_shift         = false;  // context shift on inifinite text generation
+    bool ctx_shift         = false;  // context shift on infinite text generation
     bool swa_full          = false; // use full-size SWA cache (https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
     bool kv_unified        = false; // enable unified KV cache
 

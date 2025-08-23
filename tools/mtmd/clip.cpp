@@ -3513,7 +3513,7 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         const int height = img->ny;
         const int total_factor = params.patch_size * params.proj_scale_factor;
         constexpr int min_image_tokens = 64;
-        constexpr int max_image_tokens = 256;
+        constexpr int max_image_tokens = 1024;
         const float min_pixels = min_image_tokens * total_factor * total_factor;
         const float max_pixels = max_image_tokens * total_factor * total_factor;
 
@@ -3581,10 +3581,10 @@ bool clip_image_preprocess(struct clip_ctx * ctx, const clip_image_u8 * img, str
         }
 
         return true;
-
+    } else {
+        GGML_ABORT("Unknown image preprocessing type");
     }
 
-    GGML_ASSERT(false && "Unknown image preprocessing type");
 }
 
 ggml_tensor * clip_get_newline_tensor(const struct clip_ctx * ctx) {

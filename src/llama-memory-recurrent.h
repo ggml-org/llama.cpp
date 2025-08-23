@@ -12,7 +12,7 @@
 //
 
 // TODO: extract the cache state used for graph computation into llama_memory_recurrent_context_i
-//       see the implementation of llama_kv_cache_unified_context_i for an example how to do it
+//       see the implementation of llama_kv_cache_context_i for an example how to do it
 class llama_memory_recurrent : public llama_memory_i {
 public:
 
