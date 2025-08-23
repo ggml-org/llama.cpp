@@ -1328,12 +1328,8 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
                        additional_context);
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
-    if (string_ends_with(data.prompt, "<think>\n")) {
-        if (!inputs.enable_thinking) {
-            data.prompt += "</think>";
-        } else {
-            data.thinking_forced_open = true;
-        }
+    if (inputs.enable_thinking) {
+        data.thinking_forced_open = true;
     }
     return data;
 }
@@ -1377,8 +1373,13 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
         // The rest is regular content
         builder.add_content(builder.consume_rest());
     } else {
-        // If no "</think>" tag found, treat everything as regular content
-        builder.add_reasoning_content(builder.consume_rest());
+        if (builder.syntax().thinking_forced_open) {
+            // If no "</think>" tag found, treat everything as reasoning content
+            builder.add_reasoning_content(builder.consume_rest());
+        } else {
+            // If no "</think>" tag found, treat everything as regular content
+            builder.add_content(builder.consume_rest());
+        }
     }
 }
 
