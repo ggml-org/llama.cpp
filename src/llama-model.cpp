@@ -18364,8 +18364,22 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                         /* n_seq_max         */ cparams.n_seq_max,
                         /* offload           */ cparams.offload_kqv,
                         /* unified           */ cparams.kv_unified,
-                        /* filter_attn       */ (arch == LLM_ARCH_FALCON_H1) ? [&](int32_t) { return true; } : (llama_memory_hybrid::layer_filter_cb)nullptr,
-                        /* filter_recr       */ (arch == LLM_ARCH_FALCON_H1) ? [&](int32_t) { return true; } : (llama_memory_hybrid::layer_filter_cb)nullptr);
+                        /* filter_attn       */ (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H) ? 
+                                                  [&](int32_t il) { 
+                                                      // For NEMOTRON_H: only allocate cache for attention layers (14, 21, 30, 39)
+                                                      if (arch == LLM_ARCH_NEMOTRON_H) {
+                                                          return (il == 14 || il == 21 || il == 30 || il == 39);
+                                                      }
+                                                      return true; // FALCON_H1 case
+                                                  } : (llama_memory_hybrid::layer_filter_cb)nullptr,
+                        /* filter_recr       */ (arch == LLM_ARCH_FALCON_H1 || arch == LLM_ARCH_NEMOTRON_H) ? 
+                                                  [&](int32_t il) { 
+                                                      // For NEMOTRON_H: allocate recurrent state for SSM layers (non-attention, non-MLP)
+                                                      if (arch == LLM_ARCH_NEMOTRON_H) {
+                                                          return hparams.is_recurrent(il);
+                                                      }
+                                                      return true; // FALCON_H1 case
+                                                  } : (llama_memory_hybrid::layer_filter_cb)nullptr);
                 } else {
                     const auto padding = llama_kv_cache::get_padding(cparams);
 
