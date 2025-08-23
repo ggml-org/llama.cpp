@@ -290,6 +290,14 @@ int main(void) {
             /* .bos_token= */ "",
             /* .eos_token= */ "",
         },
+        {
+            /* .name= */ "ByteDance-Seed/Seed-OSS-36B-Instruct",
+            /* .template_str */ "{%- for message in messages %}{%- if message.role in [\"user\", \"system\"] %}{{ '<seed:bos>' + message.role + \"\\n\" + message.content + '<seed:eos>' }}{%- elif message.role == \"assistant\" %}{{ '<seed:bos>' + message.role }}{%- if message.content is defined and message.content is string and message.content|trim|length > 0 %}{{ \"\n\" + message.content|trim + '<seed:eos>' }}{%- endif %}{%- else %}{{ '<seed:bos>' + message.role + \"\n\" + message.content + '<seed:eos>' }}{%- endif %}{%- endfor %}{%- if add_generation_prompt %}{{ '<seed:bos>' + \"assistant\\n\" }}{%- endif %}",
+            /* .expected_output= */ "<seed:bos>system\nYou are a helpful assistant<seed:eos><seed:bos>user\nHello<seed:eos><seed:bos>assistant\nHi there<seed:eos><seed:bos>user\nWho are you<seed:eos><seed:bos>assistant\n   I am an assistant   <seed:eos><seed:bos>user\nAnother question<seed:eos><seed:bos>assistant",
+            /* .expected_output_jinja= */ "<seed:bos>system\nYou are a helpful assistant<seed:eos><seed:bos>user\nHello<seed:eos><seed:bos>assistant\nHi there<seed:eos><seed:bos>user\nWho are you<seed:eos><seed:bos>assistant\nI am an assistant<seed:eos><seed:bos>user\nAnother question<seed:eos><seed:bos>assistant\n",
+            /* .bos_token= */ "",
+            /* .eos_token= */ "",
+        }
     };
     std::vector<char> formatted_chat(1024);
     int32_t res;
