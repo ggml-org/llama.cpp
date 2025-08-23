@@ -1291,6 +1291,12 @@ public:
     }
 };
 
+static bool in(const Value & value, const Value & container) {
+  return (((container.is_array() || container.is_object()) && container.contains(value)) ||
+      (value.is_string() && container.is_string() &&
+        container.to_str().find(value.to_str()) != std::string::npos));
+}
+
 class BinaryOpExpr : public Expression {
 public:
     enum class Op { StrConcat, Add, Sub, Mul, MulMul, Div, DivDiv, Mod, Eq, Ne, Lt, Gt, Le, Ge, And, Or, In, NotIn, Is, IsNot };
@@ -1355,8 +1361,8 @@ public:
               case Op::Gt:        return l > r;
               case Op::Le:        return l <= r;
               case Op::Ge:        return l >= r;
-              case Op::In:        return (r.is_array() || r.is_object()) && r.contains(l);
-              case Op::NotIn:     return !(r.is_array() && r.contains(l));
+              case Op::In:        return in(l, r);
+              case Op::NotIn:     return !in(l, r);
               default:            break;
           }
           throw std::runtime_error("Unknown binary operator");
@@ -1495,6 +1501,13 @@ public:
           } else if (method->get_name() == "pop") {
             vargs.expectArgs("pop method", {1, 1}, {0, 0});
             return obj.pop(vargs.args[0]);
+          } else if (method->get_name() == "keys") {
+            vargs.expectArgs("keys method", {0, 0}, {0, 0});
+            auto result = Value::array();
+            for (const auto& key : obj.keys()) {
+              result.push_back(Value(key));
+            }
+            return result;
           } else if (method->get_name() == "get") {
             vargs.expectArgs("get method", {1, 2}, {0, 0});
             auto key = vargs.args[0];
@@ -1536,6 +1549,16 @@ public:
           } else if (method->get_name() == "capitalize") {
             vargs.expectArgs("capitalize method", {0, 0}, {0, 0});
             return Value(capitalize(str));
+          } else if (method->get_name() == "upper") {
+            vargs.expectArgs("upper method", {0, 0}, {0, 0});
+            auto result = str;
+            std::transform(result.begin(), result.end(), result.begin(), ::toupper);
+            return Value(result);
+          } else if (method->get_name() == "lower") {
+            vargs.expectArgs("lower method", {0, 0}, {0, 0});
+            auto result = str;
+            std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+            return Value(result);
           } else if (method->get_name() == "endswith") {
             vargs.expectArgs("endswith method", {1, 1}, {0, 0});
             auto suffix = vargs.args[0].get<std::string>();
@@ -1552,6 +1575,19 @@ public:
               else res[i] = std::tolower(res[i]);
             }
             return res;
+          } else if (method->get_name() == "replace") {
+            vargs.expectArgs("replace method", {2, 3}, {0, 0});
+            auto before = vargs.args[0].get<std::string>();
+            auto after = vargs.args[1].get<std::string>();
+            auto count = vargs.args.size() == 3 ? vargs.args[2].get<int64_t>()
+                                                : str.length();
+            size_t start_pos = 0;
+            while ((start_pos = str.find(before, start_pos)) != std::string::npos &&
+                  count-- > 0) {
+              str.replace(start_pos, before.length(), after);
+              start_pos += after.length();
+            }
+            return str;
           }
         }
         throw std::runtime_error("Unknown method: " + method->get_name());
@@ -2128,7 +2164,7 @@ private:
             }
           }
 
-          if ((has_first_colon || has_second_colon) && (start || end || step)) {
+          if ((has_first_colon || has_second_colon)) {
             index = std::make_shared<SliceExpr>(slice_loc, std::move(start), std::move(end), std::move(step));
           } else {
             index = std::move(start);
@@ -2628,15 +2664,11 @@ inline std::shared_ptr<Context> Context::builtins() {
     auto items = Value::array();
     if (args.contains("object")) {
       auto & obj = args.at("object");
-      if (obj.is_string()) {
-        auto json_obj = json::parse(obj.get<std::string>());
-        for (const auto & kv : json_obj.items()) {
-          items.push_back(Value::array({kv.key(), kv.value()}));
-        }
-      } else if (!obj.is_null()) {
-        for (auto & key : obj.keys()) {
-          items.push_back(Value::array({key, obj.at(key)}));
-        }
+      if (!obj.is_object()) {
+        throw std::runtime_error("Can only get item pairs from a mapping");
+      }
+      for (auto & key : obj.keys()) {
+        items.push_back(Value::array({key, obj.at(key)}));
       }
     }
     return items;
@@ -2763,6 +2795,9 @@ inline std::shared_ptr<Context> Context::builtins() {
       auto & items = args.at("items");
       if (!items.is_array()) throw std::runtime_error("object is not iterable");
       return items;
+  }));
+  globals.set("in", simple_function("in", { "item", "items" }, [](const std::shared_ptr<Context> &, Value & args) -> Value {
+      return in(args.at("item"), args.at("items"));
   }));
   globals.set("unique", simple_function("unique", { "items" }, [](const std::shared_ptr<Context> &, Value & args) -> Value {
       auto & items = args.at("items");

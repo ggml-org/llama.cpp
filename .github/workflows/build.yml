@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64
           evict-old-files: 1d
@@ -104,7 +104,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-x64
           evict-old-files: 1d
@@ -144,7 +144,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-arm64-webgpu
           evict-old-files: 1d
@@ -159,31 +159,15 @@ jobs:
       - name: Dawn Dependency
         id: dawn-depends
         run: |
-          ARTIFACTS_JSON=$(curl -s -L \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/google/dawn/actions/artifacts")
-          echo "Finding latest macos-latest-Release artifact..."
-          DOWNLOAD_URL=$(echo "$ARTIFACTS_JSON" | jq -r '.artifacts
-            | sort_by(.created_at)
-            | reverse
-            | map(select(.name | test("macos-latest-Release$")))
-            | .[0].archive_download_url')
-          if [ "$DOWNLOAD_URL" = "null" ] || [ -z "$DOWNLOAD_URL" ]; then
-            echo "No suitable Dawn artifact found!"
-            exit 1
-          fi
-          echo "Downloading from: $DOWNLOAD_URL"
-          curl -L \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -o artifact.zip "$DOWNLOAD_URL"
-          unzip artifact.zip
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-macos-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
           mkdir dawn
-          tar_file=$(find . -name '*.tar.gz' | head -n 1)
-          echo "Extracting: $tar_file"
-          tar -xvf "$tar_file" -C dawn --strip-components=1
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -215,7 +199,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-cpu-cmake
           evict-old-files: 1d
@@ -267,7 +251,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-sanitizer-${{ matrix.sanitizer }}
           evict-old-files: 1d
@@ -346,7 +330,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-latest-cmake-rpc
           evict-old-files: 1d
@@ -379,7 +363,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-vulkan
           evict-old-files: 1d
@@ -416,7 +400,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-webgpu
           evict-old-files: 1d
@@ -433,31 +417,15 @@ jobs:
         id: dawn-depends
         run: |
           sudo apt-get install -y libxrandr-dev libxinerama-dev libxcursor-dev mesa-common-dev libx11-xcb-dev libxi-dev
-          ARTIFACTS_JSON=$(curl -s -L \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/google/dawn/actions/artifacts")
-          echo "Finding latest ubuntu-latest-Release artifact..."
-          DOWNLOAD_URL=$(echo "$ARTIFACTS_JSON" | jq -r '.artifacts
-            | sort_by(.created_at)
-            | reverse
-            | map(select(.name | test("ubuntu-latest-Release$")))
-            | .[0].archive_download_url')
-          if [ "$DOWNLOAD_URL" = "null" ] || [ -z "$DOWNLOAD_URL" ]; then
-            echo "No suitable Dawn artifact found!"
-            exit 1
-          fi
-          echo "Downloading from: $DOWNLOAD_URL"
-          curl -L \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -o artifact.zip "$DOWNLOAD_URL"
-          unzip artifact.zip
+          DAWN_VERSION="v1.0.0"
+          DAWN_OWNER="reeselevine"
+          DAWN_REPO="dawn"
+          DAWN_ASSET_NAME="Dawn-a1a6b45cced25a3b7f4fb491e0ae70796cc7f22b-ubuntu-latest-Release.tar.gz"
+          echo "Fetching release asset from https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
+          curl -L -o artifact.tar.gz \
+            "https://github.com/${DAWN_OWNER}/${DAWN_REPO}/releases/download/${DAWN_VERSION}/${DAWN_ASSET_NAME}"
           mkdir dawn
-          tar_file=$(find . -name '*.tar.gz' | head -n 1)
-          echo "Extracting: $tar_file"
-          tar -xvf "$tar_file" -C dawn --strip-components=1
+          tar -xvf artifact.tar.gz -C dawn --strip-components=1
 
       - name: Build
         id: cmake_build
@@ -475,7 +443,7 @@ jobs:
 
   ubuntu-22-cmake-hip:
     runs-on: ubuntu-22.04
-    container: rocm/dev-ubuntu-22.04:6.0.2
+    container: rocm/dev-ubuntu-22.04:6.1.2
 
     steps:
       - name: Clone
@@ -489,7 +457,7 @@ jobs:
           sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-hip
           evict-old-files: 1d
@@ -503,19 +471,9 @@ jobs:
             -DGGML_HIP=ON
           cmake --build build --config Release -j $(nproc)
 
-      - name: Build with legacy HIP support
-        id: cmake_build_legacy_hip
-        run: |
-          cmake -B build2 -S . \
-            -DCMAKE_C_COMPILER=hipcc \
-            -DCMAKE_CXX_COMPILER=hipcc \
-            -DGGML_HIP_ROCWMMA_FATTN=ON \
-            -DGGML_HIP=ON
-          cmake --build build2 --config Release -j $(nproc)
-
   ubuntu-22-cmake-musa:
     runs-on: ubuntu-22.04
-    container: mthreads/musa:rc4.0.1-mudnn-devel-ubuntu22.04
+    container: mthreads/musa:rc4.2.0-devel-ubuntu22.04-amd64
 
     steps:
       - name: Clone
@@ -529,7 +487,7 @@ jobs:
           apt-get install -y build-essential git cmake libcurl4-openssl-dev
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-musa
           evict-old-files: 1d
@@ -574,7 +532,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl
           evict-old-files: 1d
@@ -622,7 +580,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ubuntu-22-cmake-sycl-fp16
           evict-old-files: 1d
@@ -653,7 +611,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-ios
           evict-old-files: 1d
@@ -690,7 +648,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-cmake-tvos
           evict-old-files: 1d
@@ -762,7 +720,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: macOS-latest-swift
           evict-old-files: 1d
@@ -808,7 +766,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-msys2
           variant: ccache
@@ -876,7 +834,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-${{ matrix.build }}
           variant: ccache
@@ -990,7 +948,7 @@ jobs:
               apt install -y cmake build-essential ninja-build libgomp1 git libcurl4-openssl-dev
 
         - name: ccache
-          uses: hendrikmuhs/ccache-action@v1.2.16
+          uses: ggml-org/ccache-action@v1.2.16
           with:
             key: ubuntu-latest-cmake-cuda
             evict-old-files: 1d
@@ -1019,7 +977,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-cuda-${{ matrix.cuda }}
           variant: ccache
@@ -1075,7 +1033,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: windows-latest-cmake-sycl
           variant: ccache
@@ -1112,7 +1070,8 @@ jobs:
           write-host "Downloading AMD HIP SDK Installer"
           Invoke-WebRequest -Uri "https://download.amd.com/developer/eula/rocm-hub/AMD-Software-PRO-Edition-24.Q3-WinSvr2022-For-HIP.exe" -OutFile "${env:RUNNER_TEMP}\rocm-install.exe"
           write-host "Installing AMD HIP SDK"
-          Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -Wait
+          $proc = Start-Process "${env:RUNNER_TEMP}\rocm-install.exe" -ArgumentList '-install' -NoNewWindow -PassThru
+          $proc.WaitForExit(600000)
           write-host "Completed AMD HIP SDK installation"
 
       - name: Verify ROCm
@@ -1121,7 +1080,7 @@ jobs:
           & 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' --version
 
       - name: Install ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: ${{ github.job }}
           evict-old-files: 1d
@@ -1154,6 +1113,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
 
       - name: Build
         id: cmake_build
@@ -1188,7 +1152,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2.16
+        uses: ggml-org/ccache-action@v1.2.16
         with:
           key: android-build
           evict-old-files: 1d

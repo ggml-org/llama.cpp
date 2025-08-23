@@ -6,7 +6,7 @@ server = ServerPreset.tinyllama2()
 
 TEST_API_KEY = "sk-this-is-the-secret-key"
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(autouse=True)
 def create_server():
     global server
     server = ServerPreset.tinyllama2()

@@ -23,6 +23,9 @@
 #define N_R0_Q8_0 4
 #define N_SG_Q8_0 2
 
+#define N_R0_MXFP4 2
+#define N_SG_MXFP4 2
+
 #define N_R0_Q2_K 4
 #define N_SG_Q2_K 2
 
@@ -128,6 +131,15 @@ typedef struct {
     uint64_t offs;
     uint64_t o1[8];
 } ggml_metal_kargs_bin;
+
+typedef struct {
+    int64_t ne0;
+    int64_t ne1;
+    size_t nb01;
+    size_t nb02;
+    size_t nb11;
+    size_t nb21;
+} ggml_metal_kargs_add_id;
 
 typedef struct {
     int32_t  ne00;
@@ -444,6 +456,8 @@ typedef struct{
     uint64_t nb1;
     int32_t  i00;
     int32_t  i10;
+    float    alpha;
+    float    limit;
 } ggml_metal_kargs_glu;
 
 typedef struct {
@@ -528,6 +542,7 @@ typedef struct {
     int64_t  n_group;
     int64_t  n_seq_tokens;
     int64_t  n_seqs;
+    int64_t  s_off;
     uint64_t nb01;
     uint64_t nb02;
     uint64_t nb03;

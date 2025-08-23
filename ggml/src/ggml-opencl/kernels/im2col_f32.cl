@@ -31,7 +31,7 @@ kernel void kernel_im2col_f32(
     src1 = (global float*)((global char*)src1 + offset1);
     dst = (global float*)((global char*)dst + offsetd);
 
-    long  ksize = OW * (KH > 1 ? KW : 1);
+    long  ksize = OW * KH;
     long  kx = i / ksize;
     long  kd = kx * ksize;
     long  ky = (i - kd) / OW;

@@ -253,6 +253,12 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot_type             = GGML_TYPE_Q8_1,
         .nrows                    = 1,
     },
+    [GGML_TYPE_MXFP4] = {
+        .from_float               = quantize_row_mxfp4,
+        .vec_dot                  = ggml_vec_dot_mxfp4_q8_0,
+        .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
     [GGML_TYPE_Q2_K] = {
         .from_float               = quantize_row_q2_K,
         .vec_dot                  = ggml_vec_dot_q2_K_q8_K,
@@ -1670,6 +1676,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_add(params, tensor);
             } break;
+        case GGML_OP_ADD_ID:
+            {
+                ggml_compute_forward_add_id(params, tensor);
+            } break;
         case GGML_OP_ADD1:
             {
                 ggml_compute_forward_add1(params, tensor);
@@ -1870,6 +1880,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_conv_2d(params, tensor);
             } break;
+        case GGML_OP_CONV_3D:
+            {
+                ggml_compute_forward_conv_3d(params, tensor);
+            } break;
         case GGML_OP_CONV_2D_DW:
             {
                 ggml_compute_forward_conv_2d_dw(params, tensor);
@@ -1924,7 +1938,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_FLASH_ATTN_EXT:
             {
-                ggml_compute_forward_flash_attn_ext(params, tensor->src[0], tensor->src[1], tensor->src[2], tensor->src[3], tensor);
+                ggml_compute_forward_flash_attn_ext(params, tensor);
             } break;
         case GGML_OP_FLASH_ATTN_BACK:
             {
@@ -2010,6 +2024,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_OPT_STEP_ADAMW:
             {
                 ggml_compute_forward_opt_step_adamw(params, tensor);
+            }
+            break;
+        case GGML_OP_OPT_STEP_SGD:
+            {
+                ggml_compute_forward_opt_step_sgd(params, tensor);
             }
             break;
         case GGML_OP_NONE:
@@ -2111,6 +2130,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_DUP:
         case GGML_OP_CONT:
         case GGML_OP_ADD:
+        case GGML_OP_ADD_ID:
         case GGML_OP_ADD1:
         case GGML_OP_ACC:
             {
@@ -2172,6 +2192,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
                 case GGML_GLU_OP_REGLU:
                 case GGML_GLU_OP_GEGLU:
                 case GGML_GLU_OP_SWIGLU:
+                case GGML_GLU_OP_SWIGLU_OAI:
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
                     {
@@ -2235,6 +2256,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_BACK:
         case GGML_OP_CONV_2D:
+        case GGML_OP_CONV_3D:
         case GGML_OP_CONV_2D_DW:
         case GGML_OP_CONV_TRANSPOSE_1D:
         case GGML_OP_CONV_TRANSPOSE_2D:
@@ -2313,6 +2335,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
         case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_OPT_STEP_SGD:
             {
                 n_tasks = n_threads;
             } break;
@@ -2673,6 +2696,7 @@ struct ggml_cplan ggml_graph_plan(
                         }
                     } break;
                 case GGML_OP_ADD:
+                case GGML_OP_ADD_ID:
                 case GGML_OP_ADD1:
                     {
                         if (ggml_is_quantized(node->src[0]->type)) {
@@ -2754,6 +2778,7 @@ struct ggml_cplan ggml_graph_plan(
                         }
                     } break;
                 case GGML_OP_CONV_2D:
+                case GGML_OP_CONV_3D:
                     {
                         cur = GGML_IM2COL_WORK_SIZE;
                     } break;
