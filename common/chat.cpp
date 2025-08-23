@@ -1352,8 +1352,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
     // There's no opening "<think>" tag, so we need to handle this differently
     
     // First, try to find the "</think>" tag that separates thinking from regular content
-    static const common_regex thinking_end_regex("</think>");
-    if (auto res = builder.try_find_regex(thinking_end_regex, std::string::npos, false)) {
+    if (auto res = builder.try_find_literal("</think>")) {
         // The prelude contains everything before the "</think>" tag
         auto stripped_reasoning = string_strip(res->prelude);
         
@@ -1361,7 +1360,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
             builder.add_reasoning_content(stripped_reasoning);
         }
         
-        // The parser position is already advanced past the "</think>" tag by try_find_regex
+        // The parser position is already advanced past the "</think>" tag by try_find_literal
         // The rest is regular content
         builder.add_content(builder.consume_rest());
     } else {
