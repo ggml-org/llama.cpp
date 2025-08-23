@@ -2858,6 +2858,7 @@ struct test_rms_norm_mul_add : public test_case {
     const std::array<int64_t, 4> ne;
     const float eps;
     const bool broadcast;
+    const bool multi_add; // test a sequence of adds feeding into rms_norm
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -2867,13 +2868,13 @@ struct test_rms_norm_mul_add : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne, eps, broadcast);
+        return VARS_TO_STR5(type, ne, eps, broadcast, multi_add);
     }
 
     test_rms_norm_mul_add(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne = {64, 5, 4, 3},
-            float eps = 1e-6f, bool broadcast = false)
-        : type(type), ne(ne), eps(eps), broadcast(broadcast) {}
+            float eps = 1e-6f, bool broadcast = false, bool multi_add = false)
+        : type(type), ne(ne), eps(eps), broadcast(broadcast), multi_add(multi_add) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         std::array<int64_t, 4> broadcast_dims = {ne[0]*2, ne[1]*3, ne[2]*3, ne[3]*4};
@@ -2891,6 +2892,9 @@ struct test_rms_norm_mul_add : public test_case {
 
         // Use a, b and c early, so we don't end up with an OP_NONE between rms_norm and mul
         a = ggml_add(ctx, ggml_add(ctx, a, b), c);
+        if (multi_add) {
+            a = ggml_add(ctx, ggml_add(ctx, a, b), c);
+        }
         ggml_tensor * out = ggml_add(ctx, ggml_mul(ctx, ggml_rms_norm(ctx, a, eps), b), c);
         ggml_set_name(out, "out");
 
@@ -5841,6 +5845,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (float eps : {0.0f, 1e-6f, 1e-4f, 1e-1f, 1.0f}) {
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps));
         test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {64, 5, 4, 3}, eps, true));
+    }
+    for (uint32_t n : {1, 511, 1025, 8192, 33*512}) {
+        for (bool multi_add : {false, true}) {
+            test_cases.emplace_back(new test_rms_norm_mul_add(GGML_TYPE_F32, {n, 1, 1, 1}, 1e-6f, false, multi_add));
+        }
     }
 
     test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, {64, 5, 4, 3}, 1e-12f));
