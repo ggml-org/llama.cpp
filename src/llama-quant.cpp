@@ -1535,7 +1535,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
 
     std::unordered_map<std::string, ggml_type> bpw_overrides = {};
     if (params->target_bpw != -1.0f) {
-        LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.3f bpw at lowest ppl - this opearation may take some time\n", __func__, params->target_bpw);
+        LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.3f bpw at lowest ppl - this operation may take some time\n", __func__, params->target_bpw);
         bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
     }
 
