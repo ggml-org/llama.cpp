@@ -7890,6 +7890,133 @@ class FalconH1Model(Mamba2Model):
         self.gguf_writer.add_rope_freq_base(self.find_hparam(["rope_theta"]))
 
 
+@ModelBase.register("NemotronHForCausalLM")
+class NemotronHModel(Mamba2Model):
+    """Nemotron-H is a hybrid SSM + Attention model with Mamba2 layers and attention layers"""
+    model_arch = gguf.MODEL_ARCH.NEMOTRON_H
+
+    def __init__(self, *args, **kwargs):
+        # Initialize the base Mamba2Model
+        super().__init__(*args, **kwargs)
+        
+        # Use Llama conversion for attention layers
+        self._transformer_model_class = LlamaModel
+        
+        # Nemotron-H specific parameters
+        self.n_group = self.find_hparam(["n_groups"])
+        self.d_inner = self.find_hparam(["mamba_num_heads"]) * self.find_hparam(["mamba_head_dim"])
+        self.d_head = self.find_hparam(["mamba_head_dim"])
+        
+        # Store hybrid pattern for layer type determination
+        self.hybrid_pattern = self.find_hparam(["hybrid_override_pattern"])
+        
+        # Initialize hybrid model attributes
+        self.has_attention = True
+
+    def set_gguf_parameters(self):
+        """Override to skip Mamba2 parameter validation that doesn't apply to hybrid architecture"""
+        d_conv  = self.find_hparam(["conv_kernel", "d_conv"],     optional=True) or 4
+        d_state = self.find_hparam(["state_size",  "d_state"],    optional=True) or 128
+        head_dim = self.find_hparam(["mamba_d_head", "head_dim"], optional=True) or 64
+        rms_norm_eps = self.find_hparam(["layer_norm_epsilon", "rms_norm_eps"], optional=True) or 1e-5
+        
+        # Skip the d_inner == 2 * d_model assertion for hybrid architectures
+        # Nemotron-H has a different inner dimension calculation based on mamba_num_heads * mamba_head_dim
+        
+        self.gguf_writer.add_context_length(2**20)  # arbitrary value; for those who use the default
+        self.gguf_writer.add_embedding_length(self.d_model)
+        self.gguf_writer.add_feed_forward_length(0)  # unused, but seemingly required when loading
+        self.gguf_writer.add_head_count(0)  # unused, but seemingly required when loading
+        self.gguf_writer.add_block_count(self.block_count)
+        self.gguf_writer.add_ssm_conv_kernel(d_conv)
+        self.gguf_writer.add_ssm_inner_size(self.d_inner)
+        self.gguf_writer.add_ssm_state_size(d_state)
+        self.gguf_writer.add_ssm_time_step_rank(self.d_inner // head_dim)
+        self.gguf_writer.add_ssm_group_count(self.n_group)
+        self.gguf_writer.add_layer_norm_rms_eps(rms_norm_eps)
+        self.gguf_writer.add_file_type(self.ftype)
+        self.has_mamba = True
+        self.has_mlp = True
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def modify_tensors(self, data_torch, name, bid):
+        # Custom tensor name mapping for Nemotron-H hybrid architecture
+        
+        # Handle token embeddings and output tensors
+        if "backbone.embeddings.weight" in name:
+            return [(self.map_tensor_name("token_embd.weight"), data_torch)]
+        elif "backbone.norm.weight" in name:
+            return [(self.map_tensor_name("output_norm.weight"), data_torch)]
+        elif "backbone.lm_head.weight" in name:
+            return [(self.map_tensor_name("output.weight"), data_torch)]
+        
+        # Handle layer-specific tensors
+        if "backbone.layers." in name and bid is not None:
+            # Extract the actual layer component name
+            parts = name.split(".")
+            if len(parts) >= 4:
+                layer_component = ".".join(parts[3:])  # Everything after "backbone.layers.X"
+                
+                # Detect layer type based on tensor names and map accordingly
+                if layer_component == "norm.weight":
+                    # Layer norm (not mixer norm) - all layers use attn_norm in llama.cpp
+                    new_name = f"blk.{bid}.attn_norm.weight"
+                elif any(x in layer_component for x in ["A_log", "D", "conv1d", "dt_bias", "in_proj", "mixer.norm", "out_proj"]):
+                    # Mamba layer tensors (note: mixer.norm, not just norm.weight)
+                    new_name = self._map_mamba_tensor(layer_component, bid)
+                    # Special handling for conv1d: reshape from 3D to 2D
+                    if "conv1d.weight" in layer_component and len(data_torch.shape) == 3:
+                        data_torch = data_torch.squeeze(1)  # Remove middle dimension: {4,1,12288} -> {4,12288}
+                elif any(x in layer_component for x in ["q_proj", "k_proj", "v_proj", "o_proj"]):
+                    # Attention layer tensors
+                    new_name = self._map_attention_tensor(layer_component, bid)
+                elif any(x in layer_component for x in ["down_proj", "up_proj"]):
+                    # MLP layer tensors
+                    new_name = self._map_mlp_tensor(layer_component, bid)
+                else:
+                    # Fallback to default mapping
+                    return super().modify_tensors(data_torch, name, bid)
+                
+                return [(new_name, data_torch)]
+        
+        # Default to parent processing
+        return super().modify_tensors(data_torch, name, bid)
+    
+    def _map_mamba_tensor(self, component, bid):
+        """Map Mamba layer tensor names"""
+        mapping = {
+            "mixer.A_log": f"blk.{bid}.ssm_a",  # No .weight suffix for ssm_a and ssm_d
+            "mixer.D": f"blk.{bid}.ssm_d",  # No .weight suffix for ssm_a and ssm_d
+            "mixer.conv1d.weight": f"blk.{bid}.ssm_conv1d.weight",
+            "mixer.conv1d.bias": f"blk.{bid}.ssm_conv1d.bias",
+            "mixer.dt_bias": f"blk.{bid}.ssm_dt.bias",
+            "mixer.in_proj.weight": f"blk.{bid}.ssm_in.weight",
+            "mixer.norm.weight": f"blk.{bid}.ssm_norm.weight",
+            "mixer.out_proj.weight": f"blk.{bid}.ssm_out.weight",
+        }
+        return mapping.get(component, f"blk.{bid}.{component}")
+    
+    def _map_attention_tensor(self, component, bid):
+        """Map attention layer tensor names to standard llama.cpp names"""
+        mapping = {
+            "mixer.q_proj.weight": f"blk.{bid}.wq.weight",
+            "mixer.k_proj.weight": f"blk.{bid}.wk.weight", 
+            "mixer.v_proj.weight": f"blk.{bid}.wv.weight",
+            "mixer.o_proj.weight": f"blk.{bid}.wo.weight",
+        }
+        return mapping.get(component, f"blk.{bid}.{component}")
+    
+    def _map_mlp_tensor(self, component, bid):
+        """Map MLP layer tensor names"""
+        mapping = {
+            "mixer.down_proj.weight": f"blk.{bid}.ffn_down.weight",
+            "mixer.up_proj.weight": f"blk.{bid}.ffn_up.weight",
+        }
+        return mapping.get(component, f"blk.{bid}.{component}")
+
+
 @ModelBase.register("HunYuanMoEV1ForCausalLM")
 class HunYuanMoEModel(TextModel):
     model_arch = gguf.MODEL_ARCH.HUNYUAN_MOE

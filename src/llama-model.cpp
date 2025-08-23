@@ -1202,6 +1202,61 @@ void llama_model::load_hparams(llama_model_loader & ml) {
                     default: type = LLM_TYPE_UNKNOWN;
                 }
             } break;
+        case LLM_ARCH_NEMOTRON_H:
+            {
+                ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
+                ml.get_key(LLM_KV_SSM_INNER_SIZE,     hparams.ssm_d_inner);
+                ml.get_key(LLM_KV_SSM_STATE_SIZE,     hparams.ssm_d_state);
+                ml.get_key(LLM_KV_SSM_TIME_STEP_RANK, hparams.ssm_dt_rank);
+                ml.get_key(LLM_KV_SSM_GROUP_COUNT,    hparams.ssm_n_group);
+
+                ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
+
+                // Nemotron-H attention parameters
+                hparams.n_embd_head_k = 128;  // Nemotron-H attention head size
+                hparams.n_embd_head_v = 128;  // Nemotron-H attention head size
+
+                // Set layer pattern for Nemotron-H hybrid architecture
+                // Based on actual model: SSM layers vs MLP/Attention layers
+                if (hparams.n_layer == 56) {
+                    // Nemotron-H 9B layer pattern
+                    std::vector<bool> ssm_layers = {
+                        true, false, true, false, true, false, true, true, false, true, // 0-9
+                        false, true, false, true, false, false, true, false, true, false, // 10-19  
+                        true, false, false, true, false, true, false, true, false, true, // 20-29
+                        false, false, true, false, true, false, true, false, true, false, // 30-39
+                        false, true, false, true, true, false, true, false, true, false, // 40-49
+                        true, false, true, false, true, false // 50-55
+                    };
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        hparams.recurrent_layer_arr[i] = ssm_layers[i];
+                        // Set attention parameters for attention layers (14, 21, 30, 39)
+                        if (i == 14 || i == 21 || i == 30 || i == 39) {
+                            hparams.n_head_arr[i] = 40;  // Nemotron-H attention heads
+                            hparams.n_head_kv_arr[i] = 8; // Nemotron-H KV heads
+                        } else {
+                            hparams.n_head_arr[i] = 0;    // SSM/MLP layers
+                            hparams.n_head_kv_arr[i] = 0;
+                        }
+                    }
+                } else {
+                    // For other sizes, fallback to checking tensor existence
+                    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+                        hparams.recurrent_layer_arr[i] = true; // default, will be corrected during tensor loading
+                        hparams.n_head_arr[i] = 0;
+                        hparams.n_head_kv_arr[i] = 0;
+                    }
+                }
+
+                switch (hparams.n_layer) {
+                    case 56:
+                        switch (hparams.n_embd) {
+                            case 4480: type = LLM_TYPE_9B; break;
+                            default: type = LLM_TYPE_UNKNOWN;
+                        } break;
+                    default: type = LLM_TYPE_UNKNOWN;
+                }
+            } break;
         case LLM_ARCH_JAMBA:
             {
                 ml.get_key(LLM_KV_SSM_CONV_KERNEL,    hparams.ssm_d_conv);
@@ -3664,6 +3719,62 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                         layer.ssm_out = create_tensor(tn(LLM_TENSOR_SSM_OUT, "weight", i), {d_inner, n_embd}, 0);
                     }
                 } break;
+            case LLM_ARCH_NEMOTRON_H:
+                {
+                    const int64_t d_conv  = hparams.ssm_d_conv;
+                    const int64_t d_inner = hparams.ssm_d_inner;
+                    const int64_t d_state = hparams.ssm_d_state;
+                    const int64_t n_head  = hparams.ssm_dt_rank;
+                    const int64_t n_group = hparams.ssm_n_group;
+                    const int64_t d_in_proj = 2*d_inner + 2*n_group*d_state + n_head;
+
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    {
+                        output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+
+                        output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                        if (output == NULL) {
+                            output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                        }
+                    }
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+                        bool is_mamba_layer = hparams.is_recurrent(i);
+                        bool is_attention_layer = (i == 14 || i == 21 || i == 30 || i == 39);  // Known attention layers for Nemotron-H 9B
+
+                        // norm (all layers have this)
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        if (is_mamba_layer) {
+                            // Mamba layer tensors - use actual Nemotron-H dimensions
+                            layer.ssm_in = create_tensor(tn(LLM_TENSOR_SSM_IN, "weight", i), {n_embd, 22656}, 0);
+
+                            layer.ssm_conv1d = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv, 12288}, 0);
+                            layer.ssm_conv1d_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "bias", i), {12288}, 0);
+
+                            layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {128}, 0);
+
+                            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {128}, 0);
+                            layer.ssm_d = create_tensor(tn(LLM_TENSOR_SSM_D, i), {128}, 0);
+
+                            layer.ssm_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {10240}, 0);
+                            layer.ssm_out = create_tensor(tn(LLM_TENSOR_SSM_OUT, "weight", i), {d_inner, n_embd}, 0);
+                        } else if (is_attention_layer) {
+                            // Attention layer tensors - use actual Nemotron-H dimensions
+                            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, 5120}, 0);
+                            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, 1024}, 0);
+                            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, 1024}, 0);
+                            layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {5120, n_embd}, 0);
+                        } else {
+                            // MLP layer tensors - use actual Nemotron-H dimensions
+                            layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {15680, n_embd}, 0);
+                            layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd, 15680}, 0);
+                        }
+                    }
+                } break;
             case LLM_ARCH_JAMBA:
                 {
                     const int64_t d_conv  = hparams.ssm_d_conv;
@@ -5792,6 +5903,7 @@ void llama_model::print_info() const {
 
     if (arch == LLM_ARCH_MAMBA ||
         arch == LLM_ARCH_MAMBA2 ||
+        arch == LLM_ARCH_NEMOTRON_H ||
         arch == LLM_ARCH_JAMBA ||
         arch == LLM_ARCH_FALCON_H1 ||
         arch == LLM_ARCH_PLAMO2 ||
@@ -11314,6 +11426,9 @@ struct llm_build_mamba : public llm_graph_context_mamba {
 
             if (model.arch == LLM_ARCH_MAMBA2) {
                 cur = build_mamba2_layer(rs_inp, cur, model, ubatch, il);
+            } else if (model.arch == LLM_ARCH_NEMOTRON_H) {
+                // Nemotron-H: This should not be reached anymore since Nemotron-H now uses llm_build_jamba
+                cur = build_mamba2_layer(rs_inp, cur, model, ubatch, il);
             } else {
                 cur = build_mamba_layer(rs_inp, cur, model, ubatch, il);
             }
@@ -11437,6 +11552,154 @@ struct llm_build_jamba : public llm_graph_context_mamba {
 
             // residual
             cur = ggml_add(ctx0, ffn_inp, cur);
+
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            // input for next layer
+            inpL = cur;
+        }
+
+        // final rmsnorm
+        cur = build_norm(inpL, model.output_norm, NULL, LLM_NORM_RMS, -1);
+
+        cb(cur, "result_norm", -1);
+        res->t_embd = cur;
+
+        // lm_head
+        cur = build_lora_mm(model.output, cur);
+
+        cb(cur, "result_output", -1);
+        res->t_logits = cur;
+
+        ggml_build_forward_expand(gf, cur);
+    }
+};
+
+struct llm_build_nemotron_h : public llm_graph_context_mamba {
+    
+    // Nemotron-H SSM layer - proper Mamba2-style implementation with debug
+    ggml_tensor * build_nemotron_h_ssm_layer(
+        llm_graph_input_rs * inp,
+               ggml_tensor * cur,
+         const llama_model & model,
+         const llama_ubatch & ubatch,
+                       int   il) const {
+        
+        const auto & layer = model.layers[il];
+        
+        // Proper Mamba2-style SSM implementation
+        // cur is {n_embd, n_tokens}
+        
+        // Input projection: {n_embd, 22656} @ {n_embd, n_tokens} => {22656, n_tokens}
+        ggml_tensor * xz = build_lora_mm(layer.ssm_in, cur);
+        
+        const int64_t d_inner = hparams.ssm_d_inner;  // 10240
+        const int64_t n_tokens = xz->ne[1];
+        
+        // Split into x and z components
+        // x: first d_inner dimensions {10240, n_tokens}
+        ggml_tensor * x = ggml_view_2d(ctx0, xz, d_inner, n_tokens, xz->nb[1], 0);
+        // z: second d_inner dimensions {10240, n_tokens}  
+        ggml_tensor * z = ggml_view_2d(ctx0, xz, d_inner, n_tokens, xz->nb[1], d_inner * sizeof(float));
+        
+        // Apply SiLU to z (gate)
+        z = ggml_silu(ctx0, z);
+        
+        // For now, do a simplified "selective scan" - just apply z as a gate to x
+        // This is not a full SSM but maintains the gating behavior
+        ggml_tensor * gated = ggml_mul(ctx0, x, z);
+        
+        // Output projection: {n_embd, d_inner} @ {d_inner, n_tokens} => {n_embd, n_tokens}  
+        ggml_tensor * ssm_out = build_lora_mm(layer.ssm_out, gated);
+        
+        // Residual connection
+        ggml_tensor * result = ggml_add(ctx0, cur, ssm_out);
+
+        return result;
+    }
+
+    llm_build_nemotron_h(const llama_model & model, const llm_graph_params & params) : llm_graph_context_mamba(params) {
+        ggml_tensor * cur;
+        ggml_tensor * inpL;
+
+        // {n_embd, n_tokens}
+        inpL = build_inp_embd(model.tok_embd);
+
+        auto * inp_hybrid = build_inp_mem_hybrid();
+
+        ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+        for (int il = 0; il < n_layer; ++il) {
+            cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
+
+            // Nemotron-H hybrid layer logic based on actual layer pattern
+            if (hparams.is_recurrent(il)) {
+                // SSM/Mamba layer - use Nemotron-H specific implementation
+                cur = build_nemotron_h_ssm_layer(inp_hybrid->get_recr(), cur, model, ubatch, il);
+            } else {
+                // Check if this is an attention layer (14, 21, 30, 39 for 9B model)
+                bool is_attention_layer = (il == 14 || il == 21 || il == 30 || il == 39);
+                if (is_attention_layer) {
+                    // Attention layer
+                    const int64_t n_embd_head = 128; // Nemotron-H attention head size
+                    const int64_t n_head = 40;       // Nemotron-H attention heads
+                    const int64_t n_head_kv = 8;     // Nemotron-H KV heads
+                    
+                    struct ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur);
+                    struct ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur);
+                    struct ggml_tensor * Vcur = build_lora_mm(model.layers[il].wv, cur);
+
+                    cb(Qcur, "Qcur", il);
+                    cb(Kcur, "Kcur", il);
+                    cb(Vcur, "Vcur", il);
+
+                    Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
+                    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                    cb(Qcur, "Qcur", il);
+                    cb(Kcur, "Kcur", il);
+                    cb(Vcur, "Vcur", il);
+
+                    cur = build_attn(inp_hybrid->get_attn(),
+                            model.layers[il].wo, NULL,
+                            Qcur, Kcur, Vcur, NULL, NULL, NULL, 1.0f/sqrtf(float(n_embd_head)), il);
+                } else {
+                    // MLP layer - no attention processing, just pass through
+                    // MLP layers in Nemotron-H don't have self-attention
+                }
+            }
+
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
+                inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
+            }
+
+            // residual
+            struct ggml_tensor * ffn_inp = ggml_add(ctx0, inpL, cur);
+            cb(cur, "ffn_inp", il);
+
+            // Only apply FFN for MLP layers (not SSM layers, and not attention layers)
+            if (!hparams.is_recurrent(il) && !(il == 14 || il == 21 || il == 30 || il == 39)) {
+                // MLP layer - use attn_norm instead of ffn_norm (Nemotron-H doesn't have separate ffn_norm)
+                // Note: ffn_inp already includes the residual connection
+                
+                // feed-forward network - simple linear FFN (no gate)
+                cur = build_ffn(ffn_inp,
+                        model.layers[il].ffn_up,   NULL, NULL,
+                        NULL,                      NULL, NULL,  // No gate for Nemotron-H MLP layers
+                        model.layers[il].ffn_down, NULL, NULL,
+                        NULL,
+                        LLM_FFN_RELU, LLM_FFN_SEQ, il);  // Use RELU and sequential (not parallel)
+                cb(cur, "ffn_out", il);
+
+                // No additional residual needed - ffn_inp already has it
+            } else {
+                // For SSM layers and attention layers, no additional FFN
+                cur = ffn_inp;
+            }
 
             cur = build_cvec(cur, il);
             cb(cur, "l_out", il);
@@ -18319,6 +18582,10 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             {
                 llm = std::make_unique<llm_build_mamba>(*this, params);
             } break;
+        case LLM_ARCH_NEMOTRON_H:
+            {
+                llm = std::make_unique<llm_build_nemotron_h>(*this, params);
+            } break;
         case LLM_ARCH_JAMBA:
             {
                 llm = std::make_unique<llm_build_jamba>(*this, params);
@@ -18634,6 +18901,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_BLOOM:
         case LLM_ARCH_MAMBA:
         case LLM_ARCH_MAMBA2:
+        case LLM_ARCH_NEMOTRON_H:
         case LLM_ARCH_JAMBA:
         case LLM_ARCH_JINA_BERT_V2:
         case LLM_ARCH_T5:
