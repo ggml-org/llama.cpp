@@ -1322,22 +1322,8 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
         {"thinking", inputs.enable_thinking},
     };
 
-    // For DeepSeek V3.1, we need to set prefix on assistant messages to trigger <think> generation
-    json adjusted_messages = inputs.messages;
-    if (inputs.enable_thinking) {
-        adjusted_messages = json::array();
-        for (const auto & msg : inputs.messages) {
-            auto adjusted_msg = msg;
-            // Set prefix on assistant messages to trigger <think> generation
-            if (msg.is_object() && msg.contains("role") && msg["role"] == "assistant") {
-                adjusted_msg["prefix"] = "<think>";
-            }
-            adjusted_messages.push_back(adjusted_msg);
-        }
-    }
-
     auto prompt = apply(tmpl, inputs, 
-                       /* messages_override= */ adjusted_messages, 
+                       /* messages_override= */ inputs.messages,
                        /* tools_override= */ std::nullopt, 
                        additional_context);
     data.prompt = prompt;
@@ -1392,7 +1378,7 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
         builder.add_content(builder.consume_rest());
     } else {
         // If no "</think>" tag found, treat everything as regular content
-        builder.add_content(builder.consume_rest());
+        builder.add_reasoning_content(builder.consume_rest());
     }
 }
 
