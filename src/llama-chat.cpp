@@ -761,7 +761,7 @@ int32_t llm_chat_apply_template(
             ss << "<seed:bos>" << role << "\n" << message->content << "<seed:eos>";
         }
         if (add_ass) {
-            ss << "<seed:bos>assistant";
+            ss << "<seed:bos>assistant\n";
         }
     } else {
         // template not supported
