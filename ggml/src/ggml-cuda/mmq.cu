@@ -41,7 +41,7 @@ static __global__ void mmq_ids_helper(
                 ids_dst_shared[it_compact]  = it*n_expert_used + iex_used;
             }
 
-            if (warp_reduce_any(iex_used != -1)) {
+            if (warp_reduce_any<warp_size>(iex_used != -1)) {
                 it_compact++;
             }
         }
@@ -80,7 +80,7 @@ static __global__ void mmq_ids_helper(
             it_compact += __shfl_sync(0xFFFFFFFF, it_compact_add_lower + it_compact_add_self, warp_size - 1, warp_size);
         }
     }
-    nex_prev = warp_reduce_sum(nex_prev);
+    nex_prev = warp_reduce_sum<warp_size>(nex_prev);
 
     for (int it = threadIdx.x; it < it_compact; it += warp_size) {
         ids_src1[nex_prev + it] = ids_src1_shared[it];

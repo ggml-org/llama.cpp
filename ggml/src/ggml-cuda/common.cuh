@@ -420,12 +420,9 @@ static __device__ __forceinline__ half2 warp_reduce_sum(half2 a) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_all(int x) {
-#ifndef GGML_USE_HIP
-    if (width == WARP_SIZE) {
+    if (width == ggml_cuda_get_physical_warp_size()) {
         return __all_sync(0xffffffff, x);
-    } else
-#endif // GGML_USE_HIP
-    {
+    } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
             x = __shfl_xor_sync(0xffffffff, x, offset, width) && x;
@@ -436,12 +433,9 @@ static __device__ __forceinline__ int warp_reduce_all(int x) {
 
 template<int width = WARP_SIZE>
 static __device__ __forceinline__ int warp_reduce_any(int x) {
-#ifndef GGML_USE_HIP
-    if (width == WARP_SIZE) {
+    if (width == ggml_cuda_get_physical_warp_size()) {
         return __any_sync(0xffffffff, x);
-    } else
-#endif // GGML_USE_HIP
-    {
+    } else {
 #pragma unroll
         for (int offset = width/2; offset > 0; offset >>= 1) {
             x = __shfl_xor_sync(0xffffffff, x, offset, width) || x;
