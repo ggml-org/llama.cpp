@@ -1319,6 +1319,13 @@ static common_chat_params common_chat_params_init_deepseek_v3_1(const common_cha
     auto prompt = apply(tmpl, inputs);
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+    if (string_ends_with(data.prompt, "<think>\n")) {
+        if (!inputs.enable_thinking) {
+            data.prompt += "</think>";
+        } else {
+            data.thinking_forced_open = true;
+        }
+    }
     return data;
 }
 
