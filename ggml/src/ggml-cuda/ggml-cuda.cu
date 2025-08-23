@@ -3436,7 +3436,6 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_ADD1:
         case GGML_OP_SUB:
         case GGML_OP_MUL:
-        case GGML_OP_DIV:
         case GGML_OP_SCALE:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
@@ -3445,6 +3444,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CLAMP:
         case GGML_OP_LOG:
             return true;
+        case GGML_OP_DIV:
+            {
+                struct ggml_tensor * a = op->src[0];
+                struct ggml_tensor * b = op->src[1];
+                return a && b && a->type != GGML_TYPE_I32 && b->type != GGML_TYPE_I32;
+            } break;
         case GGML_OP_SSM_SCAN: {
             if (op->src[3]->ne[0] == 1) {
                 // Mamba2

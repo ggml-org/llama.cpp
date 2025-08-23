@@ -2608,11 +2608,19 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 }
             }
         case GGML_OP_MUL:
-        case GGML_OP_DIV:
         case GGML_OP_SUB:
             return (op->src[0]->type == op->src[1]->type) &&
                    (op->src[0]->type == op->type) &&
                    (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
+        case GGML_OP_DIV:
+            {
+                struct ggml_tensor * a = op->src[0];
+                struct ggml_tensor * b = op->src[1];
+                return (a && b) &&
+                       (a->type == b->type) &&
+                       (a->type == op->type) &&
+                       (a->type == GGML_TYPE_F32 || a->type == GGML_TYPE_F16);
+            } break;
         case GGML_OP_ADD_ID:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_UNARY:

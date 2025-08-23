@@ -924,6 +924,16 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    GGML_API struct ggml_tensor * ggml_div_scalar_i32(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+                          int32_t b);
+
+    GGML_API struct ggml_tensor * ggml_div_scalar_left_i32(
+            struct ggml_context * ctx,
+                          int32_t a,
+            struct ggml_tensor  * b);
+
     GGML_API struct ggml_tensor * ggml_sqr(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);

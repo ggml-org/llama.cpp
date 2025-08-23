@@ -2417,7 +2417,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--cpu-moe", "-cmoe"},
         "keep all Mixture of Experts (MoE) weights in the CPU",
         [](common_params & params) {
-            params.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_exps", ggml_backend_cpu_buffer_type()});
+            params.tensor_buft_overrides.push_back({"\\.ffn_(up|down|gate)_(ch|)exps", ggml_backend_cpu_buffer_type()});
         }
     ).set_env("LLAMA_ARG_CPU_MOE"));
     add_opt(common_arg(
@@ -2430,7 +2430,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             for (int i = 0; i < value; ++i) {
                 // keep strings alive and avoid leaking memory by storing them in a static vector
                 static std::list<std::string> buft_overrides;
-                buft_overrides.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_exps", i));
+                buft_overrides.push_back(string_format("blk\\.%d\\.ffn_(up|down|gate)_(ch|)exps", i));
                 params.tensor_buft_overrides.push_back({buft_overrides.back().c_str(), ggml_backend_cpu_buffer_type()});
             }
         }

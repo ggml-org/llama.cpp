@@ -2174,6 +2174,36 @@ struct ggml_tensor * ggml_div_inplace(
     return ggml_div_impl(ctx, a, b, true);
 }
 
+struct ggml_tensor * ggml_div_scalar_i32(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+                      int32_t b) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    ggml_set_op_params_i32(result, 0, b);
+
+    result->op     = GGML_OP_DIV;
+    result->src[0] = a;
+    result->src[1] = NULL;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_div_scalar_left_i32(
+        struct ggml_context * ctx,
+                      int32_t a,
+        struct ggml_tensor  * b) {
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, b);
+
+    ggml_set_op_params_i32(result, 0, a);
+
+    result->op     = GGML_OP_DIV;
+    result->src[0] = NULL;
+    result->src[1] = b;
+
+    return result;
+}
+
 // ggml_sqr
 
 static struct ggml_tensor * ggml_sqr_impl(

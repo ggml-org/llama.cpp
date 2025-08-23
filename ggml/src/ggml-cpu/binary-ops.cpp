@@ -115,13 +115,50 @@ static void apply_binary_op(const ggml_compute_params * params, ggml_tensor * ds
     }
 }
 
+static void apply_scalar_div_op(const ggml_compute_params * params, ggml_tensor * dst) {
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+    const ggml_tensor * src  = src0 ? src0 : src1;
+    const int32_t scalar = ggml_get_op_params_i32(dst, 0);
+
+    GGML_ASSERT(ggml_are_same_shape(src, dst));
+
+    GGML_TENSOR_BINARY_OP_LOCALS
+
+    const auto [ir0, ir1] = get_thread_range(params, src);
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i03 = ir/(ne02*ne01);
+        const int64_t i02 = (ir - i03*ne02*ne01)/ne01;
+        const int64_t i01 = (ir - i03*ne02*ne01 - i02*ne01);
+
+        int32_t       * dst_ptr = (int32_t  *)      ((char *)       dst->data + i03*nb3  + i02*nb2  + i01*nb1 );
+        const int32_t * src_ptr = (const int32_t *) ((const char *) src->data + i03*nb03 + i02*nb02 + i01*nb01);
+
+        for (int i = 0; i < ne00; i++) {
+            dst_ptr[i] = src0 ? src_ptr[i] / scalar : scalar / src_ptr[i];
+        }
+    }
+}
+
 // TODO: Use the 'traits' lookup table (for type conversion fns), instead of a mass of 'if' conditions with long templates
 template <float (*op)(float, float)>
 static void binary_op(const ggml_compute_params * params, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    /*  */ if (src0->type == GGML_TYPE_F32  && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) { // all f32
+    /*  */ if (!src0 || !src1) { // scalar
+        if (dst->type == GGML_TYPE_I32) {
+            if (op == op_div) {
+                apply_scalar_div_op(params, dst);
+            } else {
+                GGML_ABORT("%s: unsupported op\n", __func__);
+            }
+        } else {
+            GGML_ABORT("%s: unsupported types: dst: %s, src0: %s, src1: %s\n", __func__,
+                ggml_type_name(dst->type), ggml_type_name(src0->type), ggml_type_name(src1->type));
+        }
+    } else if (src0->type == GGML_TYPE_F32  && src1->type == GGML_TYPE_F32  && dst->type == GGML_TYPE_F32) { // all f32
         apply_binary_op<op, float, float, float>(params, dst);
     } else if (src0->type == GGML_TYPE_F16  && src1->type == GGML_TYPE_F16  && dst->type == GGML_TYPE_F16) { // all f16
         apply_binary_op<op, ggml_fp16_t, ggml_fp16_t, ggml_fp16_t>(params, dst);

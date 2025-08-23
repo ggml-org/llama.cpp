@@ -879,13 +879,24 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         selection_probs = logits;
     }
 
+    if (arch == LLM_ARCH_GROVEMOE) {
+        selection_probs = ggml_sigmoid(ctx0, logits); // [n_expert, n_tokens]
+        cb(selection_probs, "ffn_moe_probs_biased", il);
+    }
+
     // select experts
     ggml_tensor * selected_experts = ggml_top_k(ctx0, selection_probs, n_expert_used); // [n_expert_used, n_tokens]
     cb(selected_experts->src[0], "ffn_moe_argsort", il);
     cb(selected_experts, "ffn_moe_topk", il);
 
-    ggml_tensor * weights = ggml_get_rows(ctx0,
-            ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens), selected_experts); // [1, n_expert_used, n_tokens]
+    if (arch == LLM_ARCH_GROVEMOE && n_expert != hparams.n_expert) {
+        selected_experts = ggml_div_scalar_i32(ctx0, selected_experts, hparams.n_group_experts);
+        probs = ggml_reshape_3d(ctx0, probs, 1, hparams.n_expert, n_tokens);
+    } else {
+        probs = ggml_reshape_3d(ctx0, probs, 1, n_expert, n_tokens);
+    }
+
+    ggml_tensor * weights = ggml_get_rows(ctx0, probs, selected_experts); // [1, n_expert_used, n_tokens]
     cb(weights, "ffn_moe_weights", il);
 
     if (gating_op == LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX_WEIGHT) {
