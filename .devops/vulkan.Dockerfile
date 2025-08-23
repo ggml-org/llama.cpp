@@ -2,14 +2,30 @@ ARG UBUNTU_VERSION=24.04
 
 FROM ubuntu:$UBUNTU_VERSION AS build
 
-# Install build tools
-RUN apt update && apt install -y git build-essential cmake wget
+# Ref: https://vulkan.lunarg.com/doc/sdk/latest/linux/getting_started.html
 
-# Install Vulkan SDK and cURL
-RUN wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | apt-key add - && \
-    wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list https://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list && \
-    apt update -y && \
-    apt-get install -y vulkan-sdk libcurl4-openssl-dev curl
+# Install build tools
+RUN apt update && apt install -y git build-essential cmake wget xz-utils
+
+# Install Vulkan SDK
+ARG VULKAN_VERSION=1.4.321.1
+RUN ARCH=$(uname -m) && \
+    wget -qO /tmp/vulkan-sdk.tar.xz https://sdk.lunarg.com/sdk/download/${VULKAN_VERSION}/linux/vulkan-sdk-linux-${ARCH}-${VULKAN_VERSION}.tar.xz && \
+    mkdir -p /opt/vulkan && \
+    tar -xf /tmp/vulkan-sdk.tar.xz -C /tmp --strip-components=1 && \
+    mv /tmp/${ARCH}/* /opt/vulkan/ && \
+    rm -rf /tmp/*
+
+# Install cURL and Vulkan SDK dependencies
+RUN apt install -y libcurl4-openssl-dev curl \
+    libxcb-xinput0 libxcb-xinerama0 libxcb-cursor-dev
+
+# Set environment variables
+ENV VULKAN_SDK=/opt/vulkan
+ENV PATH=$VULKAN_SDK/bin:$PATH
+ENV LD_LIBRARY_PATH=$VULKAN_SDK/lib:$LD_LIBRARY_PATH
+ENV CMAKE_PREFIX_PATH=$VULKAN_SDK:$CMAKE_PREFIX_PATH
+ENV PKG_CONFIG_PATH=$VULKAN_SDK/lib/pkgconfig:$PKG_CONFIG_PATH
 
 # Build it
 WORKDIR /app
