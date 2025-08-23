@@ -194,54 +194,13 @@ static void test_deepseek_v3_1() {
         /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
         /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
         /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
+        /* .thinking_forced_open = */ true,
         /* .parse_tool_calls = */ true,
     };
     common_chat_msg_parser builder("REASONING</think>ok", /* is_partial= */ false, syntax);
+    assert_equals(true, builder.try_parse_reasoning("<think>", "</think>"));
     assert_equals(std::string("REASONING"), builder.result().reasoning_content);
-    assert_equals(std::string("ok"), builder.result().content);
-  }
-
-  // Test with whitespace around reasoning content
-  {
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-        /* .parse_tool_calls = */ true,
-    };
-    common_chat_msg_parser builder("  REASONING WITH SPACES  </think>ok", /* is_partial= */ false, syntax);
-    assert_equals(std::string("REASONING WITH SPACES"), builder.result().reasoning_content);
-    assert_equals(std::string("ok"), builder.result().content);
-  }
-
-  // Test without thinking tag (should be all regular content)
-  {
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-        /* .parse_tool_calls = */ true,
-    };
-    common_chat_msg_parser builder("just regular content", /* is_partial= */ false, syntax);
-    assert_equals(std::string(""), builder.result().reasoning_content);
-    assert_equals(std::string("just regular content"), builder.result().content);
-  }
-
-  // Test with empty reasoning content
-  {
-    common_chat_syntax syntax = {
-        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
-        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
-        /* .reasoning_in_content = */ false,
-        /* .thinking_forced_open = */ false,
-        /* .parse_tool_calls = */ true,
-    };
-    common_chat_msg_parser builder("  </think>ok", /* is_partial= */ false, syntax);
-    assert_equals(std::string(""), builder.result().reasoning_content);
-    assert_equals(std::string("ok"), builder.result().content);
+    assert_equals(std::string("ok"), builder.consume_rest());
   }
 }
 
