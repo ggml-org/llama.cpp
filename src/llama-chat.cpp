@@ -758,7 +758,7 @@ int32_t llm_chat_apply_template(
     } else if (tmpl == LLM_CHAT_TEMPLATE_SEED_OSS) {
         for (auto message: chat) {
             std::string role(message->role);
-            ss << "<seed:bos>" << role << "\n" << message->content << "<seed:eos>";
+            ss << "<seed:bos>" << role << "\n" << (role == "assistant" ? trim(message->content) : message->content) << "<seed:eos>";
         }
         if (add_ass) {
             ss << "<seed:bos>assistant\n";
