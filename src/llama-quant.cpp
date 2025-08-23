@@ -888,7 +888,9 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     }
                 }
 
-                constexpr float bias_lambda = 1.75f;
+                // abias_lambda djusts the trade-off between systematic bias (introduced by block‑wise scaling) and MSE
+                // larger value favours quantisation types that produce a smaller bias even if the MSE is slightly larger
+                constexpr float bias_lambda = 1.5f;
                 constexpr double epsilon = 1e-12;
                 double err_num = weighted_mse;
                 if (activations && bias_lambda != 0.0f) {
@@ -1024,7 +1026,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Build list of candidate types first (compatible ones)
         const ggml_type * base_arr = is_iq(params->ftype) ? iq_quants : k_quants;
-        const size_t base_sz = is_iq(params->ftype) ? sizeof(iq_quants) / sizeof(iq_quants[0]) : sizeof(k_quants) / sizeof(k_quants[0]);
+        const size_t base_sz = is_iq(params->ftype) ? std::size(iq_quants) : std::size(k_quants);
 
         size_t max_row_sz = 0;
         const bool has_valid_imatrix = !values_sample.empty() && values_sample.size() == (size_t)ne2 * (size_t)n_per_row;
