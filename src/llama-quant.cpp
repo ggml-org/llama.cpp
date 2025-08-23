@@ -1023,21 +1023,20 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t total_sampled_rows = f32_sample.size() / n_per_row;
 
         // Build list of candidate types first (compatible ones)
-        std::vector<ggml_type> quant_candidates;
-        if (is_iq(params->ftype)) {
-            quant_candidates.assign(std::begin(iq_quants), std::end(iq_quants));
-        } else {
-            quant_candidates.assign(std::begin(k_quants), std::end(k_quants));
-        }
+        const ggml_type * base_arr = is_iq(params->ftype) ? iq_quants : k_quants;
+        const size_t base_sz = is_iq(params->ftype) ? sizeof(iq_quants) / sizeof(iq_quants[0]) : sizeof(k_quants) / sizeof(k_quants[0]);
 
-        // Compute maximum row size among compatible candidates (to size quantized_buffer once)
         size_t max_row_sz = 0;
         const bool has_valid_imatrix = !values_sample.empty() && values_sample.size() == (size_t)ne2 * (size_t)n_per_row;
+
         std::vector<ggml_type> compatible_candidates;
-        compatible_candidates.reserve(quant_candidates.size());
-        for (ggml_type ts_type : quant_candidates) {
+        compatible_candidates.reserve(base_sz);
+
+        for (size_t i = 0; i < base_sz; ++i) {
+            ggml_type ts_type = base_arr[i];
             if (is_iq(ts_type) && !has_valid_imatrix) {
-                LLAMA_LOG_WARN("%s: skipping %s quantization for %s, no or mismatched imatrix provided\n", __func__, ggml_type_name(ts_type) , name.c_str());
+                LLAMA_LOG_WARN("%s: skipping %s quantization for %s, no or mismatched imatrix provided\n",
+                    __func__, ggml_type_name(ts_type), name.c_str());
                 continue;
             }
             ggml_type tt = make_compatible(t, ts_type);
