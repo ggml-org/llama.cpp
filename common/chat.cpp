@@ -1316,7 +1316,30 @@ static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_
 
 static common_chat_params common_chat_params_init_deepseek_v3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
     common_chat_params data;
-    auto prompt = apply(tmpl, inputs);
+
+    // Pass thinking context for DeepSeek V3.1 template
+    json additional_context = {
+        {"thinking", inputs.enable_thinking},
+    };
+
+    // For DeepSeek V3.1, we need to set prefix on assistant messages to trigger <think> generation
+    json adjusted_messages = inputs.messages;
+    if (inputs.enable_thinking) {
+        adjusted_messages = json::array();
+        for (const auto & msg : inputs.messages) {
+            auto adjusted_msg = msg;
+            // Set prefix on assistant messages to trigger <think> generation
+            if (msg.is_object() && msg.contains("role") && msg["role"] == "assistant") {
+                adjusted_msg["prefix"] = "<think>";
+            }
+            adjusted_messages.push_back(adjusted_msg);
+        }
+    }
+
+    auto prompt = apply(tmpl, inputs, 
+                       /* messages_override= */ adjusted_messages, 
+                       /* tools_override= */ std::nullopt, 
+                       additional_context);
     data.prompt = prompt;
     data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
     if (string_ends_with(data.prompt, "<think>\n")) {
