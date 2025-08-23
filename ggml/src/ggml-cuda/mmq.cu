@@ -100,6 +100,22 @@ static __global__ void mmq_ids_helper(
     expert_bounds[gridDim.x] = nex_prev + it_compact;
 }
 
+template <int n_expert_used_template>
+static void launch_mmq_ids_helper(
+        const int32_t * __restrict__ ids, int32_t * __restrict__ ids_src1, int32_t * __restrict__ ids_dst, int32_t * __restrict__ expert_bounds,
+        const int n_experts, const int n_tokens, const int n_expert_used_var, const int nchannels_y, const int si1, const int sis1, cudaStream_t stream) {
+    const int id = ggml_cuda_get_device();
+    const int warp_size = ggml_cuda_info().devices[id].warp_size;
+    const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
+    CUDA_SET_SHARED_MEMORY_LIMIT(mmq_ids_helper<n_expert_used_template>, smpbo);
+
+    const dim3 num_blocks(n_experts, 1, 1);
+    const dim3 block_size(warp_size, 1, 1);
+    const size_t nbytes_shared = 2*n_tokens*sizeof(int);
+    mmq_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>
+        (ids, ids_src1, ids_dst, expert_bounds, n_tokens, n_expert_used_var, nchannels_y, si1, sis1);
+}
+
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     switch (args.type_x) {
         case GGML_TYPE_Q4_0:
@@ -174,9 +190,7 @@ void ggml_cuda_mul_mat_q(
     GGML_TENSOR_BINARY_OP_LOCALS;
 
     cudaStream_t stream = ctx.stream();
-    const int id = ggml_cuda_get_device();
-    const int cc = ggml_cuda_info().devices[id].cc;
-    const int warp_size = ggml_cuda_info().devices[id].warp_size;
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
     const size_t ts_src0 = ggml_type_size(src0->type);
     const size_t ts_src1 = ggml_type_size(src1->type);
@@ -258,46 +272,37 @@ void ggml_cuda_mul_mat_q(
         const int si1  = ids->nb[1] / ggml_element_size(ids);
         const int sis1 = nb12 / nb11;
 
-        const dim3 num_blocks(ne02, 1, 1);
-        const dim3 block_size(warp_size, 1, 1);
-        const size_t nbytes_shared = 2*ne12*sizeof(int);
         switch (n_expert_used) {
             case  2:
-                mmq_ids_helper< 2><<<num_blocks, block_size, nbytes_shared, stream>>>
-                    ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-                    ne12, n_expert_used, ne11, si1, sis1);
+                launch_mmq_ids_helper< 2> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case  4:
-                mmq_ids_helper< 4><<<num_blocks, block_size, nbytes_shared, stream>>>
-                    ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-                    ne12, n_expert_used, ne11, si1, sis1);
+                launch_mmq_ids_helper< 4> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case  6:
-                mmq_ids_helper< 6><<<num_blocks, block_size, nbytes_shared, stream>>>
-                    ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-                    ne12, n_expert_used, ne11, si1, sis1);
+                launch_mmq_ids_helper< 6> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case  8:
-                mmq_ids_helper< 8><<<num_blocks, block_size, nbytes_shared, stream>>>
-                    ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-                    ne12, n_expert_used, ne11, si1, sis1);
+                launch_mmq_ids_helper< 8> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case 16:
-                mmq_ids_helper<16><<<num_blocks, block_size, nbytes_shared, stream>>>
-                    ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-                    ne12, n_expert_used, ne11, si1, sis1);
+                launch_mmq_ids_helper<16> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             case 32:
-                mmq_ids_helper<32><<<num_blocks, block_size, nbytes_shared, stream>>>
-                    ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-                    ne12, n_expert_used, ne11, si1, sis1);
+                launch_mmq_ids_helper<32> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
             default:
-                mmq_ids_helper<0><<<num_blocks, block_size, nbytes_shared, stream>>>
-                    ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
-                    ne12, n_expert_used, ne11, si1, sis1);
+                launch_mmq_ids_helper< 0> ((const int32_t *) ids->data, ids_src1.get(), ids_dst.get(), expert_bounds.get(),
+                    ne02, ne12, n_expert_used, ne11, si1, sis1, stream);
                 break;
         }
+        CUDA_CHECK(cudaGetLastError());
     }
 
     const size_t nbytes_src1_q8_1 = ne12*n_expert_used*ne10_padded * sizeof(block_q8_1)/QK8_1 +
