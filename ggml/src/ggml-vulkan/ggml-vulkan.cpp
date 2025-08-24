@@ -11446,10 +11446,34 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
 
     vk::PhysicalDeviceMemoryProperties memprops = vkdev.getMemoryProperties();
 
-    for (const vk::MemoryHeap& heap : memprops.memoryHeaps) {
+    std::vector<vk::ExtensionProperties> extensionProperties = vkdev.enumerateDeviceExtensionProperties();
+    vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
+    vk::PhysicalDeviceMemoryProperties2 memprops2 = {};
+    bool supports_membudget_extension = false;
+
+    for (const auto& ext : extensionProperties) {
+        if (std::string(ext.extensionName.data()) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) {
+            supports_membudget_extension = true;
+            break;
+        }
+    }
+
+    if (supports_membudget_extension) {
+        memprops2.pNext = &budgetprops;
+        vkdev.getMemoryProperties2(&memprops2);
+    }
+
+    for (uint32_t i = 0; i < memprops.memoryHeapCount; ++i) {
+        const vk::MemoryHeap& heap = memprops.memoryHeaps[i];
+
         if (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
             *total = heap.size;
-            *free = heap.size;
+
+            if (supports_membudget_extension && i < budgetprops.heapUsage.size()) {
+                *free = *total - budgetprops.heapUsage[i];
+            } else {
+                *free = heap.size;
+            }
             break;
         }
     }
