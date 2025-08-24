@@ -3906,22 +3906,6 @@ static int ggml_metal_encode_node(
                         default: break;
                     }
 
-                    const int64_t neh10 = ne10; // n_embd
-                    const int64_t neh11 = ne21; // n_tokens
-                    const int64_t neh12 = ne02; // n_expert
-
-                    const uint64_t nbh10 = ggml_type_size(GGML_TYPE_F16);
-                    const uint64_t nbh11 = nbh10*neh10;
-                    const uint64_t nbh12 = nbh11*neh11;
-                    const uint64_t nbh13 = nbh12*neh12;
-
-                    const size_t s_src1 = ggml_type_size(GGML_TYPE_F16)*neh10*neh11*neh12;
-                    id<MTLBuffer> h_src1 = ggml_metal_mem_pool_alloc(mem_pool, s_src1);
-                    if (!h_src1) {
-                        GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_src1);
-                        return 0;
-                    }
-
                     // tokens per expert
                     const size_t s_tpe = ggml_type_size(GGML_TYPE_I32)*ne02;
                     id<MTLBuffer> h_tpe = ggml_metal_mem_pool_alloc(mem_pool, s_tpe);
@@ -3944,12 +3928,11 @@ static int ggml_metal_encode_node(
 
                         ggml_metal_kargs_mul_mm_id_map0 args = {
                             ne10,
-                            ne11,  // n_expert_used (bcast)
+                            ne11, // n_expert_used (bcast)
                             nb11,
                             nb12,
-                            neh11, // n_tokens
-                            nbh11,
-                            ne20,  // n_expert_used
+                            ne21, // n_tokens
+                            ne20, // n_expert_used
                             nb21,
                         };
 
@@ -3959,11 +3942,9 @@ static int ggml_metal_encode_node(
 
                         [encoder setComputePipelineState:pipeline];
                         [encoder setBytes:&args    length:sizeof(args) atIndex:0];
-                        [encoder setBuffer:id_src1 offset:offs_src1    atIndex:1];
-                        [encoder setBuffer:id_src2 offset:offs_src2    atIndex:2];
-                        [encoder setBuffer: h_src1 offset:0            atIndex:3];
-                        [encoder setBuffer: h_tpe  offset:0            atIndex:4];
-                        [encoder setBuffer: h_ids  offset:0            atIndex:5];
+                        [encoder setBuffer:id_src2 offset:offs_src2    atIndex:1];
+                        [encoder setBuffer: h_tpe  offset:0            atIndex:2];
+                        [encoder setBuffer: h_ids  offset:0            atIndex:3];
 
                         [encoder dispatchThreadgroups:MTLSizeMake(ne02, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
                     }
@@ -4004,13 +3985,13 @@ static int ggml_metal_encode_node(
                             /*.nb01  =*/ nb01,
                             /*.nb02  =*/ nb02,
                             /*.nb03  =*/ nb03,
+                            /*.ne11  =*/ ne11, // n_expert_used (bcast)
+                            /*.nb10  =*/ nb10,
+                            /*.nb11  =*/ nb11,
+                            /*.nb12  =*/ nb12,
+                            /*.nb13  =*/ nb13,
                             /*.ne20  =*/ ne20, // n_expert_used
                             /*.ne21  =*/ ne21, // n_tokens
-                            /*.neh12 =*/ neh12,
-                            /*.nbh10 =*/ nbh10,
-                            /*.nbh11 =*/ nbh11,
-                            /*.nbh12 =*/ nbh12,
-                            /*.nbh13 =*/ nbh13,
                             /*.ne0   =*/ ne0,
                             /*.ne1   =*/ ne1,
                             /*.r2    =*/ r2,
@@ -4020,7 +4001,7 @@ static int ggml_metal_encode_node(
                         [encoder setComputePipelineState:pipeline];
                         [encoder setBytes:&args    length:sizeof(args) atIndex:0];
                         [encoder setBuffer:id_src0 offset:offs_src0    atIndex:1];
-                        [encoder setBuffer: h_src1 offset:0            atIndex:2];
+                        [encoder setBuffer:id_src1 offset:offs_src1    atIndex:2];
                         [encoder setBuffer: h_tpe  offset:0            atIndex:3];
                         [encoder setBuffer: h_ids  offset:0            atIndex:4];
                         [encoder setBuffer:id_dst  offset:offs_dst     atIndex:5];

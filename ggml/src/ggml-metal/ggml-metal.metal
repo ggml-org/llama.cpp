@@ -7494,9 +7494,7 @@ kernel void kernel_mul_mm(
 template<typename T4>
 kernel void kernel_mul_mm_id_map0(
         constant ggml_metal_kargs_mul_mm_id_map0 & args,
-        device  const char * src1,
         device  const char * src2,
-        device        char * hsrc1,
         device        char * htpe,
         device        char * hids,
         uint3   tgpig[[threadgroup_position_in_grid]],
@@ -7508,7 +7506,7 @@ kernel void kernel_mul_mm_id_map0(
 
     device int32_t * ids_i32 = (device int32_t *) (hids);
 
-    for (int i21 = 0; i21 < args.neh11; i21++) { // n_tokens
+    for (int i21 = 0; i21 < args.ne21; i21++) { // n_tokens
         device const int32_t * src2_i32 = (device const int32_t *) (src2 + i21*args.nb21);
 
         for (int i20 = 0; i20 < args.ne20; i20++) { // n_expert_used
@@ -7516,16 +7514,8 @@ kernel void kernel_mul_mm_id_map0(
                 continue;
             }
 
-            device const float4 *  src1_f32x4 = (device const float4 *) ( src1 + i21*args.nb12 + (i20%args.ne11)*args.nb11);
-            device       T4     * hsrc1_tx4   = (device       T4     *) (hsrc1 + (ide*args.neh11 + n_all)*args.nbh11);
-
-            for (int64_t i00 = tpitg.x; i00 < args.ne10/4; i00 += ntg.x) {
-                hsrc1_tx4[i00] = (T4) (src1_f32x4[i00]);
-            }
-
             if (tpitg.x == 0) {
-                //ids_i32[i21*args.ne20 + i20] = ide*args.neh11 + n_all;
-                ids_i32[ide*args.neh11 + n_all] = i21*args.ne20 + i20;
+                ids_i32[ide*args.ne21 + n_all] = i21*args.ne20 + i20;
             }
 
             ++n_all;
@@ -7563,6 +7553,7 @@ kernel void kernel_mul_mm_id(
     const int im = tgpig.z; // expert
 
     device const int32_t * tpe_i32 = (device const int32_t *) (htpe);
+    device const int32_t * ids_i32 = (device const int32_t *) (hids);
 
     const int neh1 = tpe_i32[im];
 
@@ -7588,20 +7579,23 @@ kernel void kernel_mul_mm_id(
 
     short il = (tiitg % THREAD_PER_ROW);
 
-    const int i12 = im%args.neh12;
-    const int i13 = im/args.neh12;
+    const int id = ids_i32[im*args.ne21 + r1*BLOCK_SIZE_N + thread_col];
 
-    const uint64_t offset0 = (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+    const int i11 = (id % args.ne20) % args.ne11;
+    const int i12 = (id / args.ne20);
+    const int i13 = 0;
+
+    const uint64_t offset0 = im*args.nb02 + i13*args.nb03;
     const short    offset1 = il/nl;
 
     device const block_q * x = (device const block_q *)(src0
         + args.nb01*(r0*BLOCK_SIZE_M + thread_row) + offset0) + offset1;
 
-    device const half   * y = (device const half   *)(src1
-        + args.nbh13*i13
-        + args.nbh12*i12
-        + args.nbh11*(r1*BLOCK_SIZE_N + thread_col)
-        + args.nbh10*(BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
+    device const float   * y = (device const float   *)(src1
+        + args.nb13*i13
+        + args.nb12*i12
+        + args.nb11*i11
+        + args.nb10*(BLOCK_SIZE_K / THREAD_PER_COL * (tiitg % THREAD_PER_COL)));
 
     for (int loop_k = 0; loop_k < args.ne00; loop_k += BLOCK_SIZE_K) {
         // load data and store to threadgroup memory
@@ -7617,7 +7611,7 @@ kernel void kernel_mul_mm_id(
             +                     (tiitg/THREAD_PER_ROW)%8  + (i&7)*8) = temp_a[i/4][i%4];
         }
 
-        *(threadgroup half2x4 *)(sb + 32*8*(tiitg%THREAD_PER_COL) + 8*(tiitg/THREAD_PER_COL)) = *((device half2x4 *) y);
+        *(threadgroup half2x4 *)(sb + 32*8*(tiitg%THREAD_PER_COL) + 8*(tiitg/THREAD_PER_COL)) = (half2x4)(*((device float2x4 *) y));
 
         il = (il + 2 < nl) ? il + 2 : il % 2;
         x  = (il < 2) ? x + (2 + nl - 1)/nl : x;
@@ -7663,13 +7657,11 @@ kernel void kernel_mul_mm_id(
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     if (sgitg == 0) {
-        device const int32_t * ids_i32 = (device const int32_t *) (hids);
-
         for (int j = tiitg; j < n_cols; j += BLOCK_SIZE_N) {
             const int id = ids_i32[im*args.ne21 + r1*BLOCK_SIZE_N + j];
 
-            const int idt = id / args.ne20;
             const int ide = id % args.ne20;
+            const int idt = id / args.ne20;
 
             device float  * D  = (device float  *) dst + (r0*BLOCK_SIZE_M) + ide*args.ne0 + idt*args.ne1*args.ne0;
             device float4 * D4 = (device float4 *) D;
