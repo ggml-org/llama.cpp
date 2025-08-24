@@ -458,6 +458,7 @@ LazyModel: TypeAlias = 'dict[str, LazyTensor]'
 
 ModelFormat: TypeAlias = Literal['ggml', 'torch', 'safetensors', 'none']
 
+
 @dataclass
 class ModelPlus:
     model: LazyModel
@@ -810,6 +811,8 @@ class OutputFile:
                 self.gguf.add_license_name(metadata.license_name)
             if metadata.license_link is not None:
                 self.gguf.add_license_link(metadata.license_link)
+            if metadata.license_content is not None:
+                self.gguf.add_license_content(metadata.license_content)
 
             if metadata.url is not None:
                 self.gguf.add_url(metadata.url)
