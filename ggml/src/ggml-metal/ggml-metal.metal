@@ -7505,7 +7505,7 @@ kernel void kernel_mul_mm(
     }
 }
 
-template<typename T4>
+template<short ne20> // n_expert_used
 kernel void kernel_mul_mm_id_map0(
         constant ggml_metal_kargs_mul_mm_id_map0 & args,
         device  const char * src2,
@@ -7518,31 +7518,38 @@ kernel void kernel_mul_mm_id_map0(
 
     uint32_t n_all = 0;
 
-    device int32_t * ids_i32 = (device int32_t *) (hids);
+    device int32_t * ids_i32 = (device int32_t *) hids + ide*args.ne21;
 
     for (int i21 = 0; i21 < args.ne21; i21 += ntg) { // n_tokens
-        {
+        if (i21 + tpitg < args.ne21) {
             device const int32_t * src2_i32 = (device const int32_t *) (src2 + (i21 + tpitg)*args.nb21);
 
-            threadgroup uint16_t * sids = (threadgroup uint16_t *) shmem + tpitg*args.ne20;
+            threadgroup uint16_t * sids = (threadgroup uint16_t *) shmem + tpitg*ne20;
 
-            for (int i20 = 0; i20 < args.ne20 && i21 + tpitg < args.ne21; i20++) {
+            #pragma unroll(ne20)
+            for (short i20 = 0; i20 < ne20; i20++) {
                 sids[i20] = src2_i32[i20];
             }
         }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        for (int t = 0; t < ntg && i21 + t < args.ne21; t++) {
-            threadgroup uint16_t * sids = (threadgroup uint16_t *) shmem + t*args.ne20;
-
-            for (int i20 = 0; i20 < args.ne20; i20++) {
-                if (sids[i20] == ide) {
-                    ids_i32[ide*args.ne21 + n_all] = (i21 + t)*args.ne20 + i20;
-                    ++n_all;
-                    break;
-                }
+        for (short t = 0; t < ntg; t++) {
+            if (i21 + t >= args.ne21) {
+                break;
             }
+
+            threadgroup const uint16_t * sids = (threadgroup const uint16_t *) shmem + t*ne20;
+
+            short sel = 0;
+            #pragma unroll(ne20)
+            for (short i20 = 0; i20 < ne20; i20++) {
+                sel += (sids[i20] == ide)*(i20 + 1);
+            }
+
+            ids_i32[n_all] = (i21 + t)*ne20 + sel - 1;
+
+            n_all += sel > 0;
         }
 
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -7552,9 +7559,14 @@ kernel void kernel_mul_mm_id_map0(
     tpe_u32[ide] = n_all;
 }
 
-typedef decltype(kernel_mul_mm_id_map0<half4>) kernel_mul_mm_id_map0_t;
+typedef decltype(kernel_mul_mm_id_map0<1>) kernel_mul_mm_id_map0_t;
 
-template [[host_name("kernel_mul_mm_id_map0_f16")]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<half4>;
+template [[host_name("kernel_mul_mm_id_map0_f16_ne20_1" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<1>;
+template [[host_name("kernel_mul_mm_id_map0_f16_ne20_2" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<2>;
+template [[host_name("kernel_mul_mm_id_map0_f16_ne20_4" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<4>;
+template [[host_name("kernel_mul_mm_id_map0_f16_ne20_6" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<6>;
+template [[host_name("kernel_mul_mm_id_map0_f16_ne20_8" )]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<8>;
+template [[host_name("kernel_mul_mm_id_map0_f16_ne20_16")]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<16>;
 
 template<typename T, typename T4x4, typename simdgroup_T8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread T4x4 &)>
 kernel void kernel_mul_mm_id(
@@ -7580,7 +7592,7 @@ kernel void kernel_mul_mm_id(
     device const uint32_t * tpe_u32 = (device const uint32_t *) (htpe);
     device const int32_t  * ids_i32 = (device const int32_t  *) (hids);
 
-    const uint32_t neh1 = tpe_u32[im];
+    const int32_t neh1 = tpe_u32[im];
 
     if (r1*BLOCK_SIZE_N >= neh1) {
         return;
