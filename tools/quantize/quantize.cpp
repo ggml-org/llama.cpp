@@ -399,12 +399,7 @@ static int prepare_imatrix(const std::string & imatrix_file,
         values_data = std::move(tmp_values);
         activations_data = std::move(tmp_activations);
     }
-    if (!values_data.empty()) {
-        printf("%s: have %d importance matrix value entries\n", __func__, int(values_data.size()));
-    }
-    if (!activations_data.empty()) {
-        printf("%s: have %d importance matrix activation entries\n", __func__, int(activations_data.size()));
-    }
+
     return m_last_call;
 }
 

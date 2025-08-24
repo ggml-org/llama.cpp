@@ -132,7 +132,6 @@ static std::string remap_imatrix (const std::string & orig_name, const std::map<
 
         for (const auto & p : mapped) {
             if (p.second == blk) {
-                LLAMA_LOG_DEBUG("(blk.%d imatrix) ", p.first);
                 return new_name.replace(match.position(1), match.length(1), std::to_string(p.first));
             }
         }
@@ -1257,7 +1256,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
     // Build the override map
     std::unordered_map<std::string, ggml_type> overrides;
-    LLAMA_LOG_INFO("%s: - estimated tensor quantization mix to achieve %.4f bpw at lowest ppl\n", __func__, target_bpw);
+    LLAMA_LOG_INFO("%s: - estimated tensor quantization mix:\n", __func__);
     for (const auto & ti : all) {
         LLAMA_LOG_INFO("\t%s: %45s - \t%8s, \t%1.4f bpw,\terror: %.4f\n",
             __func__, ggml_get_name(ti.w->tensor), ggml_type_name(ti.candidate[ti.choice].type), ti.candidate[ti.choice].bpw, ti.candidate[ti.choice].error);
@@ -1352,7 +1351,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (params->imatrix) {
         values_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->imatrix);
         if (values_data) {
-            LLAMA_LOG_INFO("================================ Have weights data with %d entries\n",int(values_data->size()));
+            LLAMA_LOG_INFO("================================ Have weights data with %d entries",int(values_data->size()));
             qs.has_imatrix = true;
             // check imatrix for nans or infs
             for (const auto & kv : *values_data) {
@@ -1367,7 +1366,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     if (params->activations) {
         activations_data = static_cast<const std::unordered_map<std::string, std::vector<float>>*>(params->activations);
         if (activations_data) {
-            LLAMA_LOG_INFO("================================ Have activations data with %d entries\n",int(activations_data->size()));
+            LLAMA_LOG_INFO(" and %d activations",int(activations_data->size()));
             qs.has_activations = true;
             // check activations for nans or infs
             for (const auto & kv : *activations_data) {
@@ -1379,6 +1378,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             }
         }
     }
+    LLAMA_LOG_INFO("\n");
 
     gguf_context_ptr ctx_out { gguf_init_empty() };
 
@@ -1655,12 +1655,16 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (!params->pure && ggml_is_quantized(default_type)) {
                 int fallback = qs.n_fallback;
                 new_type = llama_tensor_get_type(qs, new_type, tensor, ftype);
-                // get bpw override
-                const auto override = bpw_overrides.find(name);
-                if (override != bpw_overrides.end() && override->second != new_type) {
-                    LLAMA_LOG_DEBUG("(bpw overriding %s) ", ggml_type_name(new_type));
-                    new_type = override->second;
+
+                // get quantization type overrides targeting a given bits per weight budget
+                if (params->target_bpw != -1.0f && !bpw_overrides.empty()) {
+                    const auto override = bpw_overrides.find(name);
+                    if (override != bpw_overrides.end() && override->second != new_type) {
+                        LLAMA_LOG_DEBUG("(bpw override %s) ", ggml_type_name(new_type));
+                        new_type = override->second;
+                    }
                 }
+
                 // unless the user specifies a type, and the tensor shape will not require fallback quantisation
                 if (params->tensor_types && qs.n_fallback - fallback == 0) {
                     const std::vector<tensor_quantization> & tensor_types = *static_cast<const std::vector<tensor_quantization> *>(params->tensor_types);
@@ -1668,7 +1672,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                     for (const auto & [tname, qtype] : tensor_types) {
                         if (std::regex pattern(tname); std::regex_search(tensor_name, pattern)) {
                             if  (qtype != new_type) {
-                                LLAMA_LOG_DEBUG("(type overriding %s) ", ggml_type_name(new_type));
+                                LLAMA_LOG_DEBUG("(type override %s) ", ggml_type_name(new_type));
                                 new_type = qtype; // if two or more types are specified for the same tensor, the last match wins
                             }
                         }
@@ -1699,7 +1703,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             if (values_data) {
                 auto it = values_data->find(remap_imatrix(tensor->name, mapped));
                 if (it == values_data->end()) {
-                    LLAMA_LOG_INFO("\n====== %s: did not find weights for %s\n", __func__, tensor->name);
+                    LLAMA_LOG_INFO("\n====== %s: did not find weights for %s, ", __func__, tensor->name);
                 } else {
                     if (it->second.size() == (size_t)tensor->ne[0]*tensor->ne[2]) {
                         imatrix = it->second.data();
