@@ -151,6 +151,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [x] [Bunny](https://github.com/BAAI-DCAI/Bunny)
 - [x] [GLM-EDGE](https://huggingface.co/models?search=glm-edge)
 - [x] [Qwen2-VL](https://huggingface.co/collections/Qwen/qwen2-vl-66cee7455501d7126940800d)
+- [x] [LFM2-VL](https://huggingface.co/collections/LiquidAI/lfm2-vl-68963bbc84a610f7638d5ffa)
 
 </details>
 

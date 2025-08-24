@@ -1361,6 +1361,26 @@ static common_chat_params common_chat_params_init_gpt_oss(const common_chat_temp
         "<|end|>",
     };
 
+    if (!inputs.json_schema.is_null()) {
+        data.grammar_lazy = false;
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            auto schema = inputs.json_schema;
+            builder.resolve_refs(schema);
+
+            auto not_end = builder.add_rule("not-end",
+                "[^<] | \"<\" [^|] | \"<|\" [^e] | \"<|e\" [^n] | \"<|en\" [^d] | \"<|end\" [^|] | \"<|end|\" [^>]");
+            auto analysis = builder.add_rule("analysis",
+                "\"<|channel|>analysis<|message|>\" ( " + not_end + " )* \"<|end|>\"");
+            auto constraint = builder.add_rule("constraint", "\"<|constrain|>\"? [a-zA-Z0-9_-]+");
+            auto final = builder.add_rule("final",
+                "\"<|channel|>final\" ( \" \" " + constraint + " )? \"<|message|>\" " +
+                builder.add_schema("response", schema)
+            );
+
+            builder.add_rule("root", "( " + analysis + " \"<|start|>assistant\" )? " + final);
+        });
+    }
+
     if (inputs.tools.is_array() && !inputs.tools.empty()) {
         data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
@@ -2121,7 +2141,7 @@ static common_chat_params common_chat_templates_apply_jinja(
     }
 
     // GPT-OSS
-    if (src.find("<|channel|>") != std::string::npos && params.json_schema.is_null()) {
+    if (src.find("<|channel|>") != std::string::npos) {
         return common_chat_params_init_gpt_oss(tmpl, params);
     }
 

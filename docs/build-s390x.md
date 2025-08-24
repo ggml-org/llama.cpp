@@ -265,8 +265,9 @@ IBM VXE/VXE2 SIMD acceleration depends on the BLAS implementation. It is strongl
 | BF16       | 🚫          | 🚫   | ❓   | ❓    |
 | Q4_0       | ✅          | ✅   | ❓   | ❓    |
 | Q4_1       | ✅          | ✅   | ❓   | ❓    |
-| Q5_0       | 🚫          | 🚫   | ❓   | ❓    |
-| Q5_1       | 🚫          | 🚫   | ❓   | ❓    |
+| MXFP4      | 🚫          | 🚫   | ❓   | ❓    |
+| Q5_0       | ✅          | ✅   | ❓   | ❓    |
+| Q5_1       | ✅          | ✅   | ❓   | ❓    |
 | Q8_0       | ✅          | ✅   | ❓   | ❓    |
 | Q2_K       | 🚫          | 🚫   | ❓   | ❓    |
 | Q3_K       | ✅          | ✅   | ❓   | ❓    |
@@ -291,4 +292,4 @@ IBM VXE/VXE2 SIMD acceleration depends on the BLAS implementation. It is strongl
 -   🚫 - acceleration unavailable, will still run using scalar implementation
 -   ❓ - acceleration unknown, please contribute if you can test it yourself
 
-Last Updated by **Aaron Teo (aaron.teo1@ibm.com)** on July 31, 2025.
+Last Updated by **Aaron Teo (aaron.teo1@ibm.com)** on Aug 22, 2025.
