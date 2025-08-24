@@ -119,12 +119,15 @@
     const audioButton = document.querySelector('.audio-button');
     await expect(audioButton).toHaveAttribute('data-disabled');
 
+    // Fix for dropdown menu side effect
+    const body = document.querySelector('body');
+    if (body) body.style.pointerEvents = 'all';
+
     console.log('✅ Vision modality: Images enabled, Audio/Recording disabled');
   }}
 />
 
-
-<!-- <Story
+<Story
   name="AudioModality"
   args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]' }}
   play={async ({ canvas, userEvent }) => {
@@ -150,9 +153,13 @@
     const audioButton = document.querySelector('.audio-button');
     await expect(audioButton).not.toHaveAttribute('data-disabled');
 
+    // Fix for dropdown menu side effect
+    const body = document.querySelector('body');
+    if (body) body.style.pointerEvents = 'all';
+
     console.log('✅ Audio modality: Audio/Recording enabled, Images disabled');
   }}
-/> -->
+/>
 
 <Story
   name="FileAttachments"
