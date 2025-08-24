@@ -6,6 +6,7 @@
 | Homebrew    |         | ✅   | ✅   |
 | MacPorts    |         | ✅   |      |
 | Nix         |         | ✅   | ✅   |
+| Apt         |         |      | ✅   |
 
 ## Winget (Windows)
 
@@ -48,3 +49,11 @@ nix-env --file '<nixpkgs>' --install --attr llama-cpp
 For non-flake enabled installs.
 
 This expression is automatically updated within the [nixpkgs repo](https://github.com/NixOS/nixpkgs/blob/nixos-24.05/pkgs/by-name/ll/llama-cpp/package.nix#L164).
+
+## Apt (Debian Linux, Ubuntu...)
+
+```sh
+sudo apt install llama.cpp
+```
+
+See also: https://packages.debian.org/sid/llama.cpp
