@@ -498,7 +498,7 @@ class ChatStore {
 					this.activeMessages.slice(0, -1), // Exclude the just-added empty assistant message
 					assistantMessage,
 					undefined,
-					(error: Error) => {
+					() => {
 						// Restore original content on error
 						const editedMessageIndex = this.activeMessages.findIndex(
 							(m: DatabaseMessage) => m.id === messageId
@@ -615,6 +615,20 @@ class ChatStore {
 		}
 	}
 
+	async deleteMessage(messageId: string): Promise<void> {
+		try {
+			await DatabaseService.deleteMessage(messageId);
+
+			// Remove message from active messages
+			this.activeMessages = this.activeMessages.filter((m) => m.id !== messageId);
+
+			// Update conversation timestamp
+			this.updateConversationTimestamp();
+		} catch (error) {
+			console.error('Failed to delete message:', error);
+		}
+	}
+
 	clearActiveConversation() {
 		this.activeConversation = null;
 		this.activeMessages = [];
@@ -641,6 +655,7 @@ export const updateMessage = chatStore.updateMessage.bind(chatStore);
 export const regenerateMessage = chatStore.regenerateMessage.bind(chatStore);
 export const updateConversationName = chatStore.updateConversationName.bind(chatStore);
 export const deleteConversation = chatStore.deleteConversation.bind(chatStore);
+export const deleteMessage = chatStore.deleteMessage.bind(chatStore);
 export const clearActiveConversation = chatStore.clearActiveConversation.bind(chatStore);
 export const gracefulStop = chatStore.gracefulStop.bind(chatStore);
 export const clearMaxContextError = chatStore.clearMaxContextError.bind(chatStore);

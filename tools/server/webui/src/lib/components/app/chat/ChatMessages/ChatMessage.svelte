@@ -1,9 +1,20 @@
 <script lang="ts">
-	import { Edit, Copy, RefreshCw, Check, X } from '@lucide/svelte';
+	import { Edit, Copy, RefreshCw, Check, X, Trash2 } from '@lucide/svelte';
 	import { Card } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { ChatAttachmentsList, ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
+	import {
+		AlertDialog,
+		AlertDialogAction,
+		AlertDialogCancel,
+		AlertDialogContent,
+		AlertDialogDescription,
+		AlertDialogFooter,
+		AlertDialogHeader,
+		AlertDialogTitle,
+		AlertDialogTrigger
+	} from '$lib/components/ui/alert-dialog';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
 	import { isLoading } from '$lib/stores/chat.svelte';
@@ -17,6 +28,7 @@
 		onCopy?: (message: DatabaseMessage) => void;
 		onRegenerate?: (message: DatabaseMessage) => void;
 		onUpdateMessage?: (message: DatabaseMessage, newContent: string) => void;
+		onDelete?: (message: DatabaseMessage) => void;
 	}
 
 	let {
@@ -25,12 +37,14 @@
 		onEdit,
 		onCopy,
 		onRegenerate,
-		onUpdateMessage
+		onUpdateMessage,
+		onDelete
 	}: Props = $props();
 
 	let isEditing = $state(false);
 	let editedContent = $state(message.content);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
+	let showDeleteDialog = $state(false);
 
 	const processingState = useProcessingState();
 
@@ -100,6 +114,15 @@
 			onUpdateMessage?.(message, editedContent.trim());
 		}
 		isEditing = false;
+	}
+
+	function handleDelete() {
+		showDeleteDialog = true;
+	}
+
+	function handleConfirmDelete() {
+		onDelete?.(message);
+		showDeleteDialog = false;
 	}
 
 	$effect(() => {
@@ -261,6 +284,18 @@
 				</TooltipContent>
 			</Tooltip>
 		{/if}
+
+		<Tooltip>
+			<TooltipTrigger>
+				<Button variant="ghost" size="sm" class="h-6 w-6 p-0 hover:bg-destructive/10 hover:text-destructive" onclick={handleDelete}>
+					<Trash2 class="h-3 w-3 text-destructive" />
+				</Button>
+			</TooltipTrigger>
+
+			<TooltipContent>
+				<p>Delete</p>
+			</TooltipContent>
+		</Tooltip>
 	</div>
 
 	{#if messageContent.trim().length > 0}
@@ -278,6 +313,23 @@
 		</div>
 	{/if}
 {/snippet}
+
+<AlertDialog bind:open={showDeleteDialog}>
+	<AlertDialogContent>
+		<AlertDialogHeader>
+			<AlertDialogTitle>Delete Message</AlertDialogTitle>
+			<AlertDialogDescription>
+				Are you sure you want to delete this message? This action cannot be undone.
+			</AlertDialogDescription>
+		</AlertDialogHeader>
+		<AlertDialogFooter>
+			<AlertDialogCancel>Cancel</AlertDialogCancel>
+			<AlertDialogAction onclick={handleConfirmDelete} class="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+				Delete
+			</AlertDialogAction>
+		</AlertDialogFooter>
+	</AlertDialogContent>
+</AlertDialog>
 
 <style>
 	.processing-container {

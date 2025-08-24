@@ -1,7 +1,8 @@
 <script lang="ts">
 	import {
 		updateMessage,
-		regenerateMessage
+		regenerateMessage,
+		deleteMessage
 	} from '$lib/stores/chat.svelte';
 	import { ChatMessage } from '$lib/components/app';
 
@@ -23,6 +24,9 @@
 			}}
 			onRegenerate={async (msg) => {
 				await regenerateMessage(msg.id);	
+			}}
+			onDelete={async (msg) => {
+				await deleteMessage(msg.id);
 			}}
 		/>
 	{/each}
