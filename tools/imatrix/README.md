@@ -92,7 +92,7 @@ For current versions of `llama-imatrix`, the `--show-statistics` option has two 
 * **H Norm**: Shannon Entropy normalized over log₂(N). Defined as $H Norm=\frac{-\sum_{i=1}^N p_i \log_2 p_i}{log_2 N}$. Used to determine how well a prompt "exercises" the model's capabilities.
 * **H** *(legacy mode)* / **ECS** *(preferred)*: If legacy, Shannon Entropy defined as $H = -\sum_{i=1}^N p_i \log_2 p_i$. If preferred, *Euclidean-Cosine Score* defined as $ECS = K \cdot e^{-\alpha a} \cdot |b|^{\gamma}$ where `a = L₂ Norm`, `b = Cosine Similarity`, `α = 0.01`, `γ = 10` between this tensor’s elements and those of the previous layer. Higher score means more similarity and lower change.
 * **ZD**: % of elements whose Z-score is > 1.0 in magnitude (an indicator of outliers), as described in _3.1 Layer Importance Scores_ of [Layer-Wise Quantization](https://arxiv.org/abs/2406.17415)
-* **CosSim**: Cosine Similarity between this tensor’s elements and those of the previous layer.
+* **CosSim**: Cosine Similarity of the mean activations between this tensor’s elements and those of the previous layer.
 
 #### Per layer
 
@@ -100,7 +100,7 @@ Aggregated metrics per block/layer:
 
 * **Σ(Act²)** *(legacy mode)* / **L₂ Norm** *(preferred)*: If in legacy mode, the sum of squared activations (sum of Act²) for the layer's concatenated tensors. In preferred mode, the Euclidean Distance (L₂ Norm) between this layer's average concatenated tensor activations the previous layer.
 * **ZD**: % of this layer's concatenated tensors' elements with |Z| > 1.
-* **CosSim**: Cosine Similarity between this layer's concatenated tensors' elements compared and the previous layer’s.
+* **CosSim**: Cosine Similarity of the mean activations between this layer's concatenated tensors' elements compared and the previous layer’s.
 * **ECS** *(preferred only)*: Euclidean-Cosine Score applied to the layer.
 
 More information is available in https://github.com/ggml-org/llama.cpp/pull/14891
