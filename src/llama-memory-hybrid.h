@@ -18,31 +18,27 @@
 
 class llama_memory_hybrid : public llama_memory_i {
 public:
-
-    // this callback is used to filter out layers that should not be included in the cache
-    using layer_filter_cb = std::function<bool(int32_t il)>;
-
     llama_memory_hybrid(
         const llama_model & model,
                             /* attn */
-                ggml_type    type_k,
-                ggml_type    type_v,
-                     bool    v_trans,
-                 uint32_t    kv_size,
-                 uint32_t    n_pad,
-                 uint32_t    n_swa,
-           llama_swa_type    swa_type,
-                             /* recurrent */
-                ggml_type    type_r,
-                ggml_type    type_s,
-                 uint32_t    rs_size,
-                             /* common */
-                 uint32_t    n_seq_max,
-                     bool    offload,
-                     bool    unified,
-                             /* layer filters */
-          layer_filter_cb && filter_attn = nullptr,
-          layer_filter_cb && filter_recr = nullptr);
+                ggml_type   type_k,
+                ggml_type   type_v,
+                     bool   v_trans,
+                 uint32_t   kv_size,
+                 uint32_t   n_pad,
+                 uint32_t   n_swa,
+           llama_swa_type   swa_type,
+                            /* recurrent */
+                ggml_type   type_r,
+                ggml_type   type_s,
+                 uint32_t   rs_size,
+                            /* common */
+                 uint32_t   n_seq_max,
+                     bool   offload,
+                     bool   unified,
+                            /* layer filters */
+    const layer_filter_cb & filter_attn = nullptr,
+    const layer_filter_cb & filter_recr = nullptr);
 
     ~llama_memory_hybrid() = default;
 
