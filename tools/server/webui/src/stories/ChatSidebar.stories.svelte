@@ -59,7 +59,7 @@
 		}, 0));
 	}}
 >
-	<div class="bg-background h-screen w-[18rem]">
+	<div class="bg-background h-screen w-72 flex-column h-full">
 
 		<ChatSidebar />
 	</div>
@@ -78,22 +78,15 @@
 		
 		const searchTrigger = screen.getByText('Search conversations');
 		userEvent.click(searchTrigger);
-
-		// canvas = within(canvasElement);
-
-		// const searchInput = canvas.getAllByPlaceholderText('Search conversations...');
-		
-		console.log(canvasElement);
-
-		// await expect(canvas.getByRole('textbox')).toBeInTheDocument();
 	}}
 >
-	<div class="bg-background h-screen w-[18rem]">
+	<div class="bg-background h-screen w-72 flex-column h-full">
 		<ChatSidebar />
 	</div>
 </Story>
 
-<Story 
+<Story
+	asChild
 	name="Empty"
 	play={async ({ canvas }) => {
 		// Mock empty conversations store
@@ -101,7 +94,7 @@
 		chatStore.conversations = [];
 	}}
 >
-	<div class="bg-background h-screen w-80 border-r">
+	<div class="bg-background h-screen w-72 flex-column h-full">
 		<ChatSidebar />
 	</div>
 </Story>

@@ -89,7 +89,7 @@
 
 				{#if filteredConversations.length === 0}
 					<div class="px-2 py-4 text-center">
-						<p class="text-muted-foreground text-sm">
+						<p class="text-muted-foreground text-sm p-4 mb-4">
 							{searchQuery.length > 0
 								? 'No results found'
 								: isSearchModeActive
