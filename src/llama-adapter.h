@@ -67,6 +67,9 @@ struct llama_adapter_lora {
 
     float alpha;
 
+    // gguf metadata
+    std::unordered_map<std::string, std::string> gguf_kv;
+
     llama_adapter_lora() = default;
     ~llama_adapter_lora() = default;
 
