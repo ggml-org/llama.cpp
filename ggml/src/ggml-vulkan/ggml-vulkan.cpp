@@ -115,6 +115,8 @@ struct vk_pipeline_struct {
     uint32_t parameter_count;
     std::array<uint32_t, 3> wg_denoms;
     uint32_t align;
+    // true if fields have been set by ggml_vk_create_pipeline
+    bool initialized {};
     // set to true to request the pipeline is compiled after the dryrun
     bool needed {};
     // set to true when the shader has been compiled
@@ -227,21 +229,6 @@ enum vk_device_architecture {
     NVIDIA_PRE_TURING,
 };
 
-// HSK x HSV
-enum FaHeadSizes {
-    FA_HEAD_SIZE_64,
-    FA_HEAD_SIZE_80,
-    FA_HEAD_SIZE_96,
-    FA_HEAD_SIZE_112,
-    FA_HEAD_SIZE_128,
-    FA_HEAD_SIZE_192,
-    FA_HEAD_SIZE_192_128,
-    FA_HEAD_SIZE_256,
-    FA_HEAD_SIZE_576_512,
-    FA_HEAD_SIZE_UNSUPPORTED,
-    FA_HEAD_SIZE_COUNT = FA_HEAD_SIZE_UNSUPPORTED,
-};
-
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
     vk::PhysicalDeviceProperties props = device.getProperties();
 
@@ -349,6 +336,28 @@ enum dmmv_wg_sizes {
     DMMV_WG_SIZE_SUBGROUP,
     DMMV_WG_SIZE_LARGE,
     DMMV_WG_SIZE_COUNT,
+};
+
+enum FaCodePath {
+    FA_SCALAR,
+    FA_COOPMAT1,
+    FA_COOPMAT2,
+};
+
+struct vk_fa_pipeline_state {
+    vk_fa_pipeline_state(uint32_t HSK, uint32_t HSV, bool small_rows, FaCodePath path, bool aligned, bool f32acc)
+        : HSK(HSK), HSV(HSV), small_rows(small_rows), path(path), aligned(aligned), f32acc(f32acc) {}
+
+    uint32_t HSK, HSV;
+    bool small_rows;
+    FaCodePath path;
+    bool aligned;
+    bool f32acc;
+
+    bool operator<(const vk_fa_pipeline_state &b) const {
+        return std::tie(HSK, HSV, small_rows, path, aligned, f32acc) <
+               std::tie(b.HSK, b.HSV, b.small_rows, b.path, b.aligned, b.f32acc);
+    }
 };
 
 static constexpr uint32_t num_argsort_pipelines = 11;
@@ -541,16 +550,11 @@ struct vk_device_struct {
     vk_pipeline pipeline_conv2d_dw_whcn_f32, pipeline_conv2d_dw_whcn_f16_f32;
     vk_pipeline pipeline_conv2d_dw_cwhn_f32, pipeline_conv2d_dw_cwhn_f16_f32;
 
-    // [2][2][2] is for {f16acc,f32acc}x{large,small_rows}x{unaligned, aligned}
-    vk_pipeline pipeline_flash_attn_f32_f16_cm2[GGML_TYPE_COUNT][FA_HEAD_SIZE_COUNT][2][2][2];
-
-    vk_pipeline pipeline_flash_attn_f32_f16_cm1[GGML_TYPE_COUNT][FA_HEAD_SIZE_COUNT][2][2][2];
-
-    vk_pipeline pipeline_flash_attn_f32_f16[GGML_TYPE_COUNT][FA_HEAD_SIZE_COUNT][2][2][2];
+    std::map<vk_fa_pipeline_state, vk_pipeline> pipeline_flash_attn_f32_f16[GGML_TYPE_COUNT];
 
     vk_pipeline pipeline_flash_attn_split_k_reduce;
 
-    std::unordered_map<std::string, vk_pipeline_ref> pipelines;
+    std::vector<vk_pipeline_ref> all_pipelines;
 
     std::vector<std::tuple<void*, size_t, vk_buffer>> pinned_memory;
 
@@ -581,15 +585,15 @@ struct vk_device_struct {
         compute_queue.cmd_pool.destroy(device);
         transfer_queue.cmd_pool.destroy(device);
 
-        for (auto& pipeline : pipelines) {
-            if (pipeline.second.expired()) {
+        for (auto& pipeline : all_pipelines) {
+            if (pipeline.expired()) {
                 continue;
             }
 
-            vk_pipeline pl = pipeline.second.lock();
+            vk_pipeline pl = pipeline.lock();
             ggml_vk_destroy_pipeline(device, pl);
         }
-        pipelines.clear();
+        all_pipelines.clear();
 
         device.destroyDescriptorSetLayout(dsl);
 
@@ -1499,7 +1503,7 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
 
     {
         std::lock_guard<std::recursive_mutex> guard(device->mutex);
-        device->pipelines.insert({ pipeline->name, pipeline });
+        device->all_pipelines.push_back(pipeline);
     }
 
     {
@@ -1974,47 +1978,12 @@ static void ggml_vk_wait_events(vk_context& ctx, std::vector<vk::Event>&& events
     );
 }
 
-enum FaCodePath {
-    FA_SCALAR,
-    FA_COOPMAT1,
-    FA_COOPMAT2,
-};
-
-static FaHeadSizes fa_get_head_sizes(uint32_t hsk, uint32_t hsv) {
-    if (hsk != 192 && hsk != 576 && hsk != hsv) {
-        return FA_HEAD_SIZE_UNSUPPORTED;
-    }
-    switch (hsk) {
-    case 64: return FA_HEAD_SIZE_64;
-    case 80: return FA_HEAD_SIZE_80;
-    case 96: return FA_HEAD_SIZE_96;
-    case 112: return FA_HEAD_SIZE_112;
-    case 128: return FA_HEAD_SIZE_128;
-    case 192:
-        if (hsv == 192) {
-            return FA_HEAD_SIZE_192;
-        } else if (hsv == 128) {
-            return FA_HEAD_SIZE_192_128;
-        } else {
-            return FA_HEAD_SIZE_UNSUPPORTED;
-        }
-    case 256: return FA_HEAD_SIZE_256;
-    case 576:
-        if (hsv == 512) {
-            return FA_HEAD_SIZE_576_512;
-        } else {
-            return FA_HEAD_SIZE_UNSUPPORTED;
-        }
-    default: return FA_HEAD_SIZE_UNSUPPORTED;
-    }
-}
-
 // number of rows/cols for flash attention shader
 static constexpr uint32_t flash_attention_num_small_rows = 32;
 static constexpr uint32_t scalar_flash_attention_num_small_rows = 1;
 
 static uint32_t get_fa_scalar_num_large_rows(uint32_t hsv) {
-    if (hsv >= 512) {
+    if (hsv >= 192) {
         return 2;
     } else {
         return 8;
@@ -2044,7 +2013,13 @@ static std::array<uint32_t, 2> fa_rows_cols(FaCodePath path, uint32_t hsk, uint3
         if (small_rows) {
             return {scalar_flash_attention_num_small_rows, 64};
         } else {
-            return {get_fa_scalar_num_large_rows(hsv), 32};
+            if ((hsv | hsk) & 8) {
+                // HSV/HSK not being a multiple of 16 makes D_split smaller, which makes cols_per_iter
+                // larger, and Bc needs to be >= cols_per_thread. 64 is large enough, 32 is not.
+                return {get_fa_scalar_num_large_rows(hsv), 64};
+            } else {
+                return {get_fa_scalar_num_large_rows(hsv), 32};
+            }
         }
     }
 
@@ -2062,14 +2037,18 @@ static std::array<uint32_t, 2> fa_rows_cols(FaCodePath path, uint32_t hsk, uint3
     }
 
     // small cols to reduce register count
-    if (ggml_is_quantized(type) || hsk >= 256) {
-        if (hsk >= 512) {
+    if (ggml_is_quantized(type) || hsk >= 256 || hsv >= 256) {
+        if (hsk >= 512 || hsv >= 512) {
             return {32, 32};
         } else {
             return {64, 32};
         }
     }
     return {64, 64};
+}
+
+static uint32_t fa_align(FaCodePath path, uint32_t hsk, uint32_t hsv, ggml_type type, bool small_rows) {
+    return fa_rows_cols(path, hsk, hsv, 0, type, small_rows)[1];
 }
 
 static bool ggml_vk_matmul_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
@@ -2337,11 +2316,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
 
         if (!pipeline) {
             pipeline = std::make_shared<vk_pipeline_struct>();
+        }
+        if (!pipeline->initialized) {
             pipeline->name = name;
             pipeline->parameter_count = parameter_count;
             pipeline->push_constant_size = push_constant_size;
             pipeline->wg_denoms = wg_denoms;
             pipeline->align = align;
+            pipeline->initialized = true;
         }
 
         if (!pipeline->needed || pipeline->compiled) {
@@ -2387,26 +2369,30 @@ static void ggml_vk_load_shaders(vk_device& device) {
         return {wg_size, rows_cols[0], rows_cols[1], hsk, hsv, clamp, D_split};
     };
 
-#define CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, HSK, HSV, HEAD_SIZES) \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][0][0][0], "flash_attn_f32_f16_" #HEAD_SIZES "_f16acc"         #NAMELC #SUFFIX,           flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,1,TYPE,false), fa_spec_constants(FAPATH, HSK,HSV,1,TYPE,false), 1,                                            true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][0][0][1], "flash_attn_f32_f16_" #HEAD_SIZES "_aligned_f16acc" #NAMELC #SUFFIX,           flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,0,TYPE,false), fa_spec_constants(FAPATH, HSK,HSV,0,TYPE,false), fa_rows_cols(FAPATH,HSK,HSV,0,TYPE,false)[1], true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][1][0][0], "flash_attn_f32_f16_" #HEAD_SIZES "_f32acc"         #NAMELC #SUFFIX,           flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _len,         flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _data,         "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,1,TYPE,false), fa_spec_constants(FAPATH, HSK,HSV,1,TYPE,false), 1,                                            true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][1][0][1], "flash_attn_f32_f16_" #HEAD_SIZES "_aligned_f32acc" #NAMELC #SUFFIX,           flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _len,         flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _data,         "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,0,TYPE,false), fa_spec_constants(FAPATH, HSK,HSV,0,TYPE,false), fa_rows_cols(FAPATH,HSK,HSV,0,TYPE,false)[1], true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][0][1][0], "flash_attn_f32_f16_" #HEAD_SIZES "_f16acc_smallrows"         #NAMELC #SUFFIX, flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,1,TYPE,true), fa_spec_constants(FAPATH, HSK,HSV,1,TYPE,true),   1,                                            true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][0][1][1], "flash_attn_f32_f16_" #HEAD_SIZES "_aligned_f16acc_smallrows" #NAMELC #SUFFIX, flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,0,TYPE,true), fa_spec_constants(FAPATH, HSK,HSV,0,TYPE,true),   fa_rows_cols(FAPATH,HSK,HSV,0,TYPE,true)[1],  true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][1][1][0], "flash_attn_f32_f16_" #HEAD_SIZES "_f32acc_smallrows"         #NAMELC #SUFFIX, flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _len,         flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _data,         "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,1,TYPE,true), fa_spec_constants(FAPATH, HSK,HSV,1,TYPE,true),   1,                                            true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-        ggml_vk_create_pipeline(device, device->pipeline_flash_attn_f32_f16 ## SUFFIX[TYPE][FA_HEAD_SIZE_##HEAD_SIZES][1][1][1], "flash_attn_f32_f16_" #HEAD_SIZES "_aligned_f32acc_smallrows" #NAMELC #SUFFIX, flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _len,         flash_attn_f32_f16_ ## NAMELC ##     SUFFIX ## _data,         "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,0,TYPE,true), fa_spec_constants(FAPATH, HSK,HSV,0,TYPE,true),   fa_rows_cols(FAPATH,HSK,HSV,0,TYPE,true)[1],  true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
-
 #define CREATE_FA(TYPE, NAMELC, FAPATH, SUFFIX) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 64, 64, 64) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 80, 80, 80) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 96, 96, 96) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 112, 112, 112) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 128, 128, 128) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 192, 192, 192) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 192, 128, 192_128) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 256, 256, 256) \
-        CREATE_FA2(TYPE, NAMELC, FAPATH, SUFFIX, 576, 512, 576_512)
+        for (auto &fa : device->pipeline_flash_attn_f32_f16[TYPE]) { \
+            uint32_t HSK = fa.first.HSK; \
+            uint32_t HSV = fa.first.HSV; \
+            bool small_rows = fa.first.small_rows; \
+            FaCodePath path = fa.first.path; \
+            bool aligned = fa.first.aligned; \
+            bool f32acc = fa.first.f32acc; \
+            if (path == FAPATH) { \
+                if (aligned) { \
+                    if (f32acc) { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_aligned_f32acc" #NAMELC, flash_attn_f32_f16_ ## NAMELC ##            SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ##            SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,0,TYPE,small_rows), fa_spec_constants(FAPATH, HSK,HSV,0,TYPE,small_rows), fa_align(FAPATH,HSK,HSV,TYPE,small_rows), true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
+                    } else { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_aligned_f16acc" #NAMELC, flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,0,TYPE,small_rows), fa_spec_constants(FAPATH, HSK,HSV,0,TYPE,small_rows), fa_align(FAPATH,HSK,HSV,TYPE,small_rows), true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
+                    } \
+                } else { \
+                    if (f32acc) { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_f32acc"         #NAMELC, flash_attn_f32_f16_ ## NAMELC ##            SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ##            SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,1,TYPE,small_rows), fa_spec_constants(FAPATH, HSK,HSV,1,TYPE,small_rows), 1,                                        true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
+                    } else { \
+                        ggml_vk_create_pipeline(device, fa.second, "flash_attn_f32_f16_f16acc"         #NAMELC, flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _len,  flash_attn_f32_f16_ ## NAMELC ## _f16acc ## SUFFIX ## _data,  "main", 6, sizeof(vk_flash_attn_push_constants), fa_wg_denoms(FAPATH, HSK,HSV,1,TYPE,small_rows), fa_spec_constants(FAPATH, HSK,HSV,1,TYPE,small_rows), 1,                                        true, FAPATH==FA_COOPMAT1, (FAPATH==FA_COOPMAT1 ? 32 : 0));     \
+                    } \
+                } \
+            } \
+        }
 
     CREATE_FA(GGML_TYPE_F16, f16, FA_SCALAR, )
     CREATE_FA(GGML_TYPE_Q4_0, q4_0, FA_SCALAR, )
@@ -2429,7 +2415,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
         CREATE_FA(GGML_TYPE_IQ4_NL, iq4_nl, FA_COOPMAT2, _cm2)
     }
 #endif
-#undef CREATE_FA2
 #undef CREATE_FA
 
 #if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
@@ -6731,18 +6716,21 @@ static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, co
     const uint32_t Br = coopmat1_flash_attention_num_large_rows;
     const uint32_t Bc = scalar_flash_attention_Bc;
 
+    const uint32_t hsk_pad = ROUNDUP_POW2(hsk, 16);
+
     const uint32_t acctype = f32acc ? 4 : 2;
     const uint32_t f16vec4 = 8;
 
     const uint32_t tmpsh = wg_size * sizeof(float);
     const uint32_t tmpshv4 = wg_size * 4 * acctype;
 
-    const uint32_t Qf = Br * (hsk / 4 + 2) * f16vec4;
+    const uint32_t qstride = hsk_pad / 4 + 2;
+    const uint32_t Qf = Br * qstride * f16vec4;
 
     const uint32_t sfshstride = (hsk <= 128) ? (Br + 8) : Br;
     const uint32_t sfsh = Bc * sfshstride * acctype;
 
-    const uint32_t kshstride = hsk / 4 + 2;
+    const uint32_t kshstride = hsk_pad / 4 + 2;
     const uint32_t ksh = Bc * kshstride * f16vec4;
 
     const uint32_t slope = Br * sizeof(float);
@@ -6853,7 +6841,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         workgroups_y /= N;
     }
 
-    vk_pipeline *pipelines;
     bool small_rows = N <= get_fa_num_small_rows(path);
 
     // coopmat1 does not actually support "small rows" (it needs 16 rows).
@@ -6873,37 +6860,36 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         small_rows = true;
     }
 
-    bool f32acc = path == FA_SCALAR || dst->op_params[3] == GGML_PREC_F32;
-
-    FaHeadSizes head_sizes = fa_get_head_sizes(k->ne[0], v->ne[0]);
-
-    switch (path) {
-    case FA_SCALAR:
-        pipelines = &ctx->device->pipeline_flash_attn_f32_f16[k->type][head_sizes][f32acc][small_rows][0];
-        break;
-    case FA_COOPMAT1:
-        pipelines = &ctx->device->pipeline_flash_attn_f32_f16_cm1[k->type][head_sizes][f32acc][small_rows][0];
-        break;
-    case FA_COOPMAT2:
-        pipelines = &ctx->device->pipeline_flash_attn_f32_f16_cm2[k->type][head_sizes][f32acc][small_rows][0];
-        break;
-    default:
-        GGML_ASSERT(0);
-    }
-    assert(pipelines);
-
     const uint32_t q_stride = (uint32_t)(nbq1 / ggml_type_size(q->type));
     const uint32_t k_stride = (uint32_t)(nbk1 / ggml_type_size(k->type));
     const uint32_t v_stride = (uint32_t)(nbv1 / ggml_type_size(v->type));
 
-    bool aligned = (KV % pipelines[1]->align) == 0 &&
+    uint32_t alignment = fa_align(path, HSK, HSV, k->type, small_rows);
+    bool aligned = (KV % alignment) == 0 &&
                    // the "aligned" shader variant will forcibly align strides, for performance
                    (q_stride & 7) == 0 && (k_stride & 7) == 0 && (v_stride & 7) == 0;
 
+    // Need to use the coopmat2 variant that clamps loads when HSK/HSV aren't sufficiently aligned.
+    if (((HSK | HSV) % 16) != 0 && path == FA_COOPMAT2) {
+        aligned = false;
+    }
     // mask dim1 is padded to 64, we rely on this to avoid clamping mask loads
     GGML_ASSERT((nem1 % GGML_KQ_MASK_PAD) == 0);
 
-    vk_pipeline pipeline = pipelines[aligned];
+    bool f32acc = path == FA_SCALAR || dst->op_params[3] == GGML_PREC_F32;
+
+    vk_fa_pipeline_state fa_pipeline_state(HSK, HSV, small_rows, path, aligned, f32acc);
+
+    vk_pipeline pipeline = nullptr;
+
+    auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16[k->type];
+    auto it = pipelines.find(fa_pipeline_state);
+    if (it != pipelines.end()) {
+        pipeline = it->second;
+    } else {
+        pipelines[fa_pipeline_state] = pipeline = std::make_shared<vk_pipeline_struct>();
+    }
+
     assert(pipeline);
 
     uint32_t split_kv = KV;
@@ -6919,7 +6905,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         if (split_k > 1) {
             // Try to evenly split KV into split_k chunks, but it needs to be a multiple
             // of "align", so recompute split_k based on that.
-            split_kv = ROUNDUP_POW2(std::max(1u, KV / split_k), pipelines[1]->align);
+            split_kv = ROUNDUP_POW2(std::max(1u, KV / split_k), alignment);
             split_k = CEIL_DIV(KV, split_kv);
             workgroups_x = split_k;
         }
@@ -11629,8 +11615,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
                 auto device = ggml_vk_get_device(ctx->device);
                 bool coopmat2 = device->coopmat2;
-                FaHeadSizes head_sizes = fa_get_head_sizes(op->src[1]->ne[0], op->src[2]->ne[0]);
-                if (head_sizes == FA_HEAD_SIZE_UNSUPPORTED) {
+                uint32_t HSK = op->src[1]->ne[0];
+                uint32_t HSV = op->src[2]->ne[0];
+                if ((HSK % 8) != 0 || (HSV % 8) != 0) {
                     return false;
                 }
                 if (op->src[4] && op->src[4]->type != GGML_TYPE_F32) {
@@ -11853,14 +11840,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Op is disabled for Apple because it segfaults at pipeline create time on MoltenVK
                 ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
                 const vk_device& device = ggml_vk_get_device(ctx->device);
-                bool is_Apple = ggml_vk_get_device(ctx->device)->vendor_id == VK_VENDOR_ID_APPLE;
                 // Channel-contiguous format is not supported yet.
                 return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                     op->src[1]->type == GGML_TYPE_F32 &&
                     op->type == GGML_TYPE_F32 &&
                     ggml_is_contiguous(op->src[0]) &&
                     ggml_is_contiguous(op->src[1]) &&
-                    ggml_is_contiguous(op)) && !is_Apple;
+                    ggml_is_contiguous(op));
             }
         default:
             return false;
