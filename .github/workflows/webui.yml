@@ -8,6 +8,7 @@ on:
 
 jobs:
     setup:
+        name: Setup environment
         permissions:
             contents: read
 
@@ -40,6 +41,7 @@ jobs:
 
     check:
         needs: setup
+        name: Run type checking and linting
         permissions:
             contents: read
 
@@ -68,6 +70,7 @@ jobs:
 
     build:
         needs: check
+        name: Build application
         permissions:
             contents: read
 
@@ -96,6 +99,7 @@ jobs:
 
     storybook:
         needs: build
+        name: Run Storybook tests
         permissions:
             contents: read
 
