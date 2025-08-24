@@ -11853,14 +11853,13 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 // Op is disabled for Apple because it segfaults at pipeline create time on MoltenVK
                 ggml_backend_vk_device_context * ctx = (ggml_backend_vk_device_context *)dev->context;
                 const vk_device& device = ggml_vk_get_device(ctx->device);
-                bool is_Apple = ggml_vk_get_device(ctx->device)->vendor_id == VK_VENDOR_ID_APPLE;
                 // Channel-contiguous format is not supported yet.
                 return ((op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16) &&
                     op->src[1]->type == GGML_TYPE_F32 &&
                     op->type == GGML_TYPE_F32 &&
                     ggml_is_contiguous(op->src[0]) &&
                     ggml_is_contiguous(op->src[1]) &&
-                    ggml_is_contiguous(op)) && !is_Apple;
+                    ggml_is_contiguous(op));
             }
         default:
             return false;
