@@ -379,6 +379,10 @@ struct ggml_backend_cann_context {
     cann_task_queue task_queue;
     bool async_mode;
     bool support_set_rows;
+    void* f32_zero_cache = nullptr;
+    void* f32_one_cache = nullptr;
+    int64_t f32_zero_cache_element = 0;
+    int64_t f32_one_cache_element = 0;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 

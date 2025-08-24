@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <memory>
+#include <functional>
 
 struct llama_ubatch;
 
@@ -64,6 +65,13 @@ using llama_memory_context_ptr = std::unique_ptr<llama_memory_context_i>;
 // general concept of LLM memory
 // the KV cache is a type of LLM memory, but there can be other types
 struct llama_memory_i {
+    // this callback is used to filter out layers that should not be included in the cache
+    using layer_filter_cb = std::function<bool(int32_t il)>;
+
+    // this callback is used to specify which layers should reuse memory from other layers
+    // return negative value to indicate that the layer il should not reuse memory
+    using layer_reuse_cb = std::function<int32_t(int32_t il)>;
+
     virtual ~llama_memory_i() = default;
 
     // split the input batch into a set of ubatches and verify that they can fit into the cache
@@ -77,7 +85,7 @@ struct llama_memory_i {
     // simulate full cache, used for allocating worst-case compute buffers
     virtual llama_memory_context_ptr init_full() = 0;
 
-    // prepare for any pending memory updates, such as shifts, defrags, etc.
+    // prepare for any pending memory updates, such as shifts, copies, etc.
     // status == LLAMA_MEMORY_STATUS_NO_UPDATE if there is nothing to update
     virtual llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) = 0;
 
