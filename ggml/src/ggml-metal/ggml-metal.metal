@@ -7543,6 +7543,7 @@ kernel void kernel_mul_mm_id(
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
         ushort tiitg[[thread_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
         ushort sgitg[[simdgroup_index_in_threadgroup]]) {
 
     threadgroup T    * sa = (threadgroup T    *)(shmem);
@@ -7648,36 +7649,36 @@ kernel void kernel_mul_mm_id(
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
+
     threadgroup float * temp_str = ((threadgroup float *) shmem) \
                                  + 32*(sgitg&1) + (16*(sgitg >> 1))*BLOCK_SIZE_M;
+
     for (short i = 0; i < 8; i++) {
         simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*BLOCK_SIZE_M*(i/4), BLOCK_SIZE_M);
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    if (sgitg == 0) {
-        for (int j = tiitg; j < n_cols; j += BLOCK_SIZE_N) {
-            const int id = ids_i32[im*args.ne21 + r1*BLOCK_SIZE_N + j];
+    for (int j = sgitg; j < n_cols; j += 4) {
+        const int id = ids_i32[im*args.ne21 + r1*BLOCK_SIZE_N + j];
 
-            const int ide = id % args.ne20;
-            const int idt = id / args.ne20;
+        const int ide = id % args.ne20;
+        const int idt = id / args.ne20;
 
-            device float  * D  = (device float  *) dst + (r0*BLOCK_SIZE_M) + ide*args.ne0 + idt*args.ne1*args.ne0;
-            device float4 * D4 = (device float4 *) D;
+        device float  * D  = (device float  *) dst + (r0*BLOCK_SIZE_M) + ide*args.ne0 + idt*args.ne1*args.ne0;
+        device float4 * D4 = (device float4 *) D;
 
-            threadgroup float  * C  = temp_str + (j*BLOCK_SIZE_M);
-            threadgroup float4 * C4 = (threadgroup float4 *) C;
+        threadgroup float  * C  = (threadgroup float  *) shmem + (j*BLOCK_SIZE_M);
+        threadgroup float4 * C4 = (threadgroup float4 *) C;
 
-            int i = 0;
-            for (; i < n_rows/4; i++) {
-                *(D4 + i) = *(C4 + i);
-            }
+        int i = tiisg;
+        for (; i < n_rows/4; i += 32) {
+            *(D4 + i) = *(C4 + i);
+        }
 
-            i *= 4;
-            for (; i < n_rows; i++) {
-                *(D + i) = *(C + i);
-            }
+        i = (4*(n_rows/4)) + tiisg;
+        for (; i < n_rows; i += 32) {
+            *(D + i) = *(C + i);
         }
     }
 }
