@@ -132,6 +132,7 @@ static void launch_mmq_ids_helper(
     const dim3 num_blocks(n_experts, 1, 1);
     const dim3 block_size(warp_size, 1, 1);
     const size_t nbytes_shared = n_tokens*sizeof(mmq_ids_helper_store);
+    GGML_ASSERT(nbytes_shared <= smpbo);
     mmq_ids_helper<n_expert_used_template><<<num_blocks, block_size, nbytes_shared, stream>>>
         (ids, ids_src1, ids_dst, expert_bounds, n_tokens, n_expert_used_var, nchannels_y, si1, sis1);
 }
