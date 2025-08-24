@@ -2071,7 +2071,7 @@ static void purge_healing_marker(json & json_obj, const std::string & healing_ma
         if (json_obj.contains(healing_marker)) {
             json_obj.erase(healing_marker);
         }
-        
+
         // Remove healing marker if it's a value
         for (auto it = json_obj.begin(); it != json_obj.end();) {
             if (it.value().is_string() && it.value() == healing_marker) {
