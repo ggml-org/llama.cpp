@@ -1525,9 +1525,18 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     }
 
     std::unordered_map<std::string, ggml_type> bpw_overrides = {};
-    if (params->target_bpw != -1.0f) {
-        LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.3f bpw at lowest ppl - this operation may take some time\n", __func__, params->target_bpw);
-        bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
+    if (params->target_bpw != -1.0f && !params->only_copy) {
+        if (params->imatrix) {
+            if (params->activations) {
+                LLAMA_LOG_INFO("%s: imatrix with activations provided, target bpw quantization will be more accurate\n", __func__);
+            } else {
+                LLAMA_LOG_WARN("%s: imatrix without activations provided, target bpw quantization will be less accurate\n", __func__);
+            }
+            LLAMA_LOG_INFO("%s: computing tensor quantization mix to achieve %.4f bpw\n", __func__, params->target_bpw);
+            bpw_overrides = target_bpw_type(ml, read_data, model, tensors, mapped, values_data, activations_data, params, nthread);
+        } else {
+            LLAMA_LOG_WARN("%s: no imatrix provided, target bpw will not apply\n", __func__);
+        }
     }
 
     int cur_split = -1;
