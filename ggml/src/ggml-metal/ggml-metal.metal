@@ -7514,18 +7514,14 @@ kernel void kernel_mul_mm_id_map0(
                 continue;
             }
 
-            if (tpitg.x == 0) {
-                ids_i32[ide*args.ne21 + n_all] = i21*args.ne20 + i20;
-            }
+            ids_i32[ide*args.ne21 + n_all] = i21*args.ne20 + i20;
 
             ++n_all;
         }
     }
 
-    if (tpitg.x == 0) {
-        device int32_t * tpe_i32 = (device int32_t *) (htpe);
-        tpe_i32[ide] = n_all;
-    }
+    device int32_t * tpe_i32 = (device int32_t *) (htpe);
+    tpe_i32[ide] = n_all;
 }
 
 typedef decltype(kernel_mul_mm_id_map0<half4>) kernel_mul_mm_id_map0_t;

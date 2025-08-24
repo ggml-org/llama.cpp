@@ -3924,8 +3924,6 @@ static int ggml_metal_encode_node(
                     }
 
                     {
-                        const int nth = MIN(1024, ne10/4);
-
                         ggml_metal_kargs_mul_mm_id_map0 args = {
                             ne10,
                             ne11, // n_expert_used (bcast)
@@ -3946,7 +3944,7 @@ static int ggml_metal_encode_node(
                         [encoder setBuffer: h_tpe  offset:0            atIndex:2];
                         [encoder setBuffer: h_ids  offset:0            atIndex:3];
 
-                        [encoder dispatchThreadgroups:MTLSizeMake(ne02, 1, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
+                        [encoder dispatchThreadgroups:MTLSizeMake(ne02, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
                     }
 
                     {
