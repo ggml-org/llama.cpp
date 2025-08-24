@@ -347,13 +347,15 @@ typedef struct {
     uint64_t nb01;
     uint64_t nb02;
     uint64_t nb03;
+    int32_t  ne20;
+    int32_t  ne21;
     int32_t  neh12;
     uint64_t nbh10;
     uint64_t nbh11;
     uint64_t nbh12;
     uint64_t nbh13;
-    int32_t  neh0;
-    int32_t  neh1;
+    int32_t  ne0;
+    int32_t  ne1;
     int16_t  r2;
     int16_t  r3;
 } ggml_metal_kargs_mul_mm_id;

@@ -7517,14 +7517,15 @@ kernel void kernel_mul_mm_id_map0(
             }
 
             device const float4 *  src1_f32x4 = (device const float4 *) ( src1 + i21*args.nb12 + (i20%args.ne11)*args.nb11);
-            device       T4     * hsrc1_f32x4 = (device       T4     *) (hsrc1 + (ide*args.neh11 + n_all)*args.nbh11);
+            device       T4     * hsrc1_tx4   = (device       T4     *) (hsrc1 + (ide*args.neh11 + n_all)*args.nbh11);
 
             for (int64_t i00 = tpitg.x; i00 < args.ne10/4; i00 += ntg.x) {
-                hsrc1_f32x4[i00] = (T4) (src1_f32x4[i00]);
+                hsrc1_tx4[i00] = (T4) (src1_f32x4[i00]);
             }
 
             if (tpitg.x == 0) {
-                ids_i32[i21*args.ne20 + i20] = ide*args.neh11 + n_all;
+                //ids_i32[i21*args.ne20 + i20] = ide*args.neh11 + n_all;
+                ids_i32[ide*args.neh11 + n_all] = i21*args.ne20 + i20;
             }
 
             ++n_all;
@@ -7541,43 +7542,13 @@ typedef decltype(kernel_mul_mm_id_map0<half4>) kernel_mul_mm_id_map0_t;
 
 template [[host_name("kernel_mul_mm_id_map0_f16")]] kernel kernel_mul_mm_id_map0_t kernel_mul_mm_id_map0<half4>;
 
-template<typename T>
-kernel void kernel_mul_mm_id_map1(
-        constant ggml_metal_kargs_mul_mm_id_map1 & args,
-        device  const char * hdst,
-        device  const char * hids,
-        device        char * dst,
-        uint3   tgpig[[threadgroup_position_in_grid]],
-        ushort3 tpitg[[thread_position_in_threadgroup]],
-        ushort3   ntg[[threads_per_threadgroup]]) {
-    const int i20 = tgpig[0]; // used expert
-    const int i21 = tgpig[1]; // token
-
-    device const int32_t * ids_i32    = (device const int32_t *) (hids);
-    device       float4  * dst_f32x4  = (device       float4  *) (dst + i20*args.nb1 + i21*args.nb2);
-
-    const int id = ids_i32[i21*args.ne20 + i20];
-
-    const int ide = id / args.neh1;
-    const int idt = id % args.neh1;
-
-    device const float4 * hdst_f32x4 = (device const float4 *) (hdst + idt*args.nbh1 + ide*args.nbh2);
-
-    for (int64_t i0 = tpitg.x; i0 < args.neh0/4; i0 += ntg.x) {
-        dst_f32x4[i0] = hdst_f32x4[i0];
-    }
-}
-
-typedef decltype(kernel_mul_mm_id_map1<float>) kernel_mul_mm_id_map1_t;
-
-template [[host_name("kernel_mul_mm_id_map1_f32")]] kernel kernel_mul_mm_id_map1_t kernel_mul_mm_id_map1<float>;
-
 template<typename T, typename T4x4, typename simdgroup_T8x8, typename block_q, short nl, void (*dequantize_func)(device const block_q *, short, thread T4x4 &)>
 kernel void kernel_mul_mm_id(
         constant ggml_metal_kargs_mul_mm_id & args,
         device const char * src0,
         device const char * src1,
-        device const char * tpe,
+        device const char * htpe,
+        device const char * hids,
         device       char * dst,
         threadgroup  char * shmem [[threadgroup(0)]],
         uint3  tgpig[[threadgroup_position_in_grid]],
@@ -7589,9 +7560,9 @@ kernel void kernel_mul_mm_id(
 
     const int r0 = tgpig.y;
     const int r1 = tgpig.x;
-    const int im = tgpig.z;
+    const int im = tgpig.z; // expert
 
-    device const int32_t * tpe_i32 = (device const int32_t *) (tpe);
+    device const int32_t * tpe_i32 = (device const int32_t *) (htpe);
 
     const int neh1 = tpe_i32[im];
 
@@ -7600,8 +7571,8 @@ kernel void kernel_mul_mm_id(
     }
 
     // if this block is of 64x32 shape or smaller
-    const short n_rows = (args.neh0 - r0*BLOCK_SIZE_M < BLOCK_SIZE_M) ? (args.neh0 - r0*BLOCK_SIZE_M) : BLOCK_SIZE_M;
-    const short n_cols = (     neh1 - r1*BLOCK_SIZE_N < BLOCK_SIZE_N) ? (     neh1 - r1*BLOCK_SIZE_N) : BLOCK_SIZE_N;
+    const short n_rows = (args.ne0 - r0*BLOCK_SIZE_M < BLOCK_SIZE_M) ? (args.ne0 - r0*BLOCK_SIZE_M) : BLOCK_SIZE_M;
+    const short n_cols = (    neh1 - r1*BLOCK_SIZE_N < BLOCK_SIZE_N) ? (    neh1 - r1*BLOCK_SIZE_N) : BLOCK_SIZE_N;
 
     // a thread shouldn't load data outside of the matrix
     const short thread_row = ((short)tiitg/THREAD_PER_ROW) < n_rows ? ((short)tiitg/THREAD_PER_ROW) : n_rows - 1;
@@ -7682,42 +7653,38 @@ kernel void kernel_mul_mm_id(
         }
     }
 
-    if ((r0 + 1) * BLOCK_SIZE_M <= args.neh0 && (r1 + 1) * BLOCK_SIZE_N <= neh1) {
-        device float * C = (device float *) dst +
-            (BLOCK_SIZE_M * r0 + 32*(sgitg &  1)) + \
-            (BLOCK_SIZE_N * r1 + 16*(sgitg >> 1)) * args.neh0 + im*args.neh1*args.neh0;
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+    threadgroup float * temp_str = ((threadgroup float *) shmem) \
+                                 + 32*(sgitg&1) + (16*(sgitg >> 1))*BLOCK_SIZE_M;
+    for (short i = 0; i < 8; i++) {
+        simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*BLOCK_SIZE_M*(i/4), BLOCK_SIZE_M);
+    }
 
-        for (short i = 0; i < 8; i++) {
-            simdgroup_store(mc[i], C + 8 * (i%4) + 8 * args.neh0 * (i/4), args.neh0);
-        }
-    } else {
-        // block is smaller than 64x32, we should avoid writing data outside of the matrix
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        threadgroup float * temp_str = ((threadgroup float *) shmem) \
-                                     + 32*(sgitg&1) + (16*(sgitg >> 1))*BLOCK_SIZE_M;
-        for (short i = 0; i < 8; i++) {
-            simdgroup_store(mc[i], temp_str + 8*(i%4) + 8*BLOCK_SIZE_M*(i/4), BLOCK_SIZE_M);
-        }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if (sgitg == 0) {
+        device const int32_t * ids_i32 = (device const int32_t *) (hids);
 
-        if (sgitg == 0) {
-            for (int j = tiitg; j < n_cols; j += BLOCK_SIZE_N) {
-                device float  * D  = (device float  *) dst + (r0*BLOCK_SIZE_M) + (r1*BLOCK_SIZE_N + j)*args.neh0 + im*args.neh1*args.neh0;
-                device float4 * D4 = (device float4 *) D;
+        for (int j = tiitg; j < n_cols; j += BLOCK_SIZE_N) {
+            const int id = ids_i32[im*args.ne21 + r1*BLOCK_SIZE_N + j];
 
-                threadgroup float  * C  = temp_str + (j*BLOCK_SIZE_M);
-                threadgroup float4 * C4 = (threadgroup float4 *) C;
+            const int idt = id / args.ne20;
+            const int ide = id % args.ne20;
 
-                int i = 0;
-                for (; i < n_rows/4; i++) {
-                    *(D4 + i) = *(C4 + i);
-                }
+            device float  * D  = (device float  *) dst + (r0*BLOCK_SIZE_M) + ide*args.ne0 + idt*args.ne1*args.ne0;
+            device float4 * D4 = (device float4 *) D;
 
-                i *= 4;
-                for (; i < n_rows; i++) {
-                    *(D + i) = *(C + i);
-                }
+            threadgroup float  * C  = temp_str + (j*BLOCK_SIZE_M);
+            threadgroup float4 * C4 = (threadgroup float4 *) C;
+
+            int i = 0;
+            for (; i < n_rows/4; i++) {
+                *(D4 + i) = *(C4 + i);
+            }
+
+            i *= 4;
+            for (; i < n_rows; i++) {
+                *(D + i) = *(C + i);
             }
         }
     }

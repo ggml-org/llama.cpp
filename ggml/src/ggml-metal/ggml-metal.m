@@ -399,7 +399,6 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_MUL_MM_IQ4_NL_F32,
     GGML_METAL_KERNEL_TYPE_MUL_MM_IQ4_XS_F32,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16,
-    GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP1_F32,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F32_F16,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F16_F16,
     GGML_METAL_KERNEL_TYPE_MUL_MM_ID_BF16_F16,
@@ -1429,7 +1428,6 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_IQ4_NL_F32,               mul_mm_iq4_nl_f32,               has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_IQ4_XS_F32,               mul_mm_iq4_xs_f32,               has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16,              mul_mm_id_map0_f16,              has_simdgroup_mm);
-        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP1_F32,              mul_mm_id_map1_f32,              has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F32_F16,               mul_mm_id_f32_f16,               has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_F16_F16,               mul_mm_id_f16_f16,               has_simdgroup_mm);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MM_ID_BF16_F16,              mul_mm_id_bf16_f16,              has_simdgroup_mm && use_bfloat);
@@ -3924,22 +3922,6 @@ static int ggml_metal_encode_node(
                         return 0;
                     }
 
-                    const int64_t neh0 = ne0;
-                    const int64_t neh1 = ne21;
-                    const int64_t neh2 = ne02;
-
-                    const uint64_t nbh0 = ggml_type_size(GGML_TYPE_F32);
-                    const uint64_t nbh1 = nbh0*neh0;
-                    const uint64_t nbh2 = nbh1*neh1;
-                  //const uint64_t nbh3 = nbh2*neh2;
-
-                    const size_t s_dst = ggml_type_size(GGML_TYPE_F32)*neh0*neh1*neh2;
-                    id<MTLBuffer> h_dst = ggml_metal_mem_pool_alloc(mem_pool, s_dst);
-                    if (!h_dst) {
-                        GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_dst);
-                        return 0;
-                    }
-
                     // tokens per expert
                     const size_t s_tpe = ggml_type_size(GGML_TYPE_I32)*ne02;
                     id<MTLBuffer> h_tpe = ggml_metal_mem_pool_alloc(mem_pool, s_tpe);
@@ -3949,8 +3931,8 @@ static int ggml_metal_encode_node(
                     }
 
                     // id map
-                    // [n_expert_used, n_tokens]
-                    const size_t s_ids = ggml_type_size(GGML_TYPE_I32)*ne20*ne21;
+                    // [n_tokens, n_expert]
+                    const size_t s_ids = ggml_type_size(GGML_TYPE_I32)*ne21*ne02;
                     id<MTLBuffer> h_ids = ggml_metal_mem_pool_alloc(mem_pool, s_ids);
                     if (!h_ids) {
                         GGML_LOG_ERROR("%s: failed to allocate buffer from memory pool, size = %zu\n", __func__, s_ids);
@@ -4022,13 +4004,15 @@ static int ggml_metal_encode_node(
                             /*.nb01  =*/ nb01,
                             /*.nb02  =*/ nb02,
                             /*.nb03  =*/ nb03,
+                            /*.ne20  =*/ ne20, // n_expert_used
+                            /*.ne21  =*/ ne21, // n_tokens
                             /*.neh12 =*/ neh12,
                             /*.nbh10 =*/ nbh10,
                             /*.nbh11 =*/ nbh11,
                             /*.nbh12 =*/ nbh12,
                             /*.nbh13 =*/ nbh13,
-                            /*.neh0  =*/ neh0,
-                            /*.neh1  =*/ neh1,
+                            /*.ne0   =*/ ne0,
+                            /*.ne1   =*/ ne1,
                             /*.r2    =*/ r2,
                             /*.r3    =*/ r3,
                         };
@@ -4038,39 +4022,11 @@ static int ggml_metal_encode_node(
                         [encoder setBuffer:id_src0 offset:offs_src0    atIndex:1];
                         [encoder setBuffer: h_src1 offset:0            atIndex:2];
                         [encoder setBuffer: h_tpe  offset:0            atIndex:3];
-                        [encoder setBuffer: h_dst  offset:0            atIndex:4];
+                        [encoder setBuffer: h_ids  offset:0            atIndex:4];
+                        [encoder setBuffer:id_dst  offset:offs_dst     atIndex:5];
 
                         [encoder setThreadgroupMemoryLength:8192 atIndex:0];
                         [encoder dispatchThreadgroups:MTLSizeMake((ne21 + 31)/32, (ne01 + 63)/64, ne02) threadsPerThreadgroup:MTLSizeMake(128, 1, 1)];
-                    }
-
-                    {
-                        GGML_ASSERT(ne0 % 4 == 0);
-
-                        const int nth = MIN(1024, ne0/4);
-
-                        ggml_metal_kargs_mul_mm_id_map1 args = {
-                            ne20, // n_expert_used
-                            neh0,
-                            neh1,
-                            nbh1,
-                            nbh2,
-                            ne0,
-                            nb1,
-                            nb2,
-                        };
-
-                        id<MTLComputePipelineState> pipeline = nil;
-
-                        pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP1_F32].pipeline;
-
-                        [encoder setComputePipelineState:pipeline];
-                        [encoder setBytes:&args   length:sizeof(args) atIndex:0];
-                        [encoder setBuffer: h_dst offset:0            atIndex:1];
-                        [encoder setBuffer: h_ids offset:0            atIndex:2];
-                        [encoder setBuffer:id_dst offset:offs_dst     atIndex:3];
-
-                        [encoder dispatchThreadgroups:MTLSizeMake(ne20, ne21, 1) threadsPerThreadgroup:MTLSizeMake(nth, 1, 1)];
                     }
                 } else {
                     id<MTLComputePipelineState> pipeline = nil;
