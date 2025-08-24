@@ -2096,7 +2096,7 @@ static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
     static const common_regex tool_call_begin_regex("<seed:tool_call>");
     static const common_regex tool_call_end_regex("</seed:tool_call>");
     static const common_regex function_regex("<function=([^>]+)>");
-    static const common_regex close_function_regex("</function>");
+    static const common_regex param_regex("<parameter=([^>]+)>");
 
     while (auto tool_res = builder.try_find_regex(tool_call_begin_regex)) {
         builder.consume_spaces();  // Consume whitespace after <seed:tool_call>
@@ -2107,7 +2107,6 @@ static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
 
             // Parse Seed-OSS parameters <parameter=name>value</parameter>
             json args = json::object();
-            static const common_regex param_regex("<parameter=([^>]+)>");
             // Parse all parameters
             while (auto param_res = builder.try_find_regex(param_regex, std::string::npos, false)) {
                 // again, ignore noise around parameters
@@ -2128,40 +2127,28 @@ static void common_chat_parse_seed_oss(common_chat_msg_parser & builder) {
                         args[param_name] = param;
                     }
                 } else {
-                    try {
-                        if (auto param_res = builder.try_consume_json()) {
-                            auto json_obj = param_res->json;
-                            purge_healing_marker(json_obj, builder.healing_marker());
-                            if (!json_obj.is_null()) {
-                                args[param_name] = json_obj;
-                            }
-                        } else {
-                            auto rest = builder.consume_rest();
-                            args[param_name] = rest;
-                        }
-                    } catch (json::exception &) {
-                        auto rest = builder.consume_rest();
-                        args[param_name] = rest;
-                    }
-                    builder.add_tool_call(function_name, "", args.dump());
                     throw common_chat_msg_partial_exception("Incomplete tool parameter");
                 }
-            }            
+            }
             // Look for closing function tag
             auto end_func = builder.try_find_literal("</function>");
             if (end_func) {
                 builder.move_to(end_func->groups[0].end);
                 builder.consume_spaces();  // Consume whitespace after </function>
 
-                // Add the tool call with parsed arguments
-                if (!builder.add_tool_call(function_name, "", args.dump())) {
+                // Add the tool call with parsed arguments, but only if we REALLY got the literal
+                auto eaten_fragment = builder.input().substr(end_func->groups[0].begin, end_func->groups[0].end);
+                auto funlen = std::string("</function>").length();
+                if (eaten_fragment.length() >= funlen && eaten_fragment.substr(0, funlen) == std::string("</function>")) {
+                    if (!builder.add_tool_call(function_name, "", args.dump())) {
+                        throw common_chat_msg_partial_exception("Incomplete tool call");
+                    }
+                } else {
                     throw common_chat_msg_partial_exception("Incomplete tool call");
                 }
             } else {
-                builder.add_tool_call(function_name, "", args.dump()); // add partial tool parse
                 throw common_chat_msg_partial_exception("Incomplete tool call");
             }
-
             // Look for closing tool call tag
             if (auto end_tool = builder.try_find_regex(tool_call_end_regex, std::string::npos, false)) {
                 builder.move_to(end_tool->groups[0].end);
@@ -2228,8 +2215,8 @@ static common_chat_params common_chat_params_init_seed_oss(  const common_chat_t
                 std::string param_rules;
                 if (parameters.contains("properties")) {
                     for (const auto & [key, value] : parameters.at("properties").items()) {
-                        param_rules += "<parameter=" + key + ">" + builder.add_schema(name + "-arg-" + key, value) +
-                                       "</parameter>";
+                        param_rules += "\"<parameter=" + key + ">\"" + builder.add_schema(name + "-arg-" + key, value) +
+                                       "\"</parameter>\"";
                     }
                 }
 

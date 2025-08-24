@@ -1623,7 +1623,13 @@ static void test_template_output_parsers() {
     }
     {
         // Seed-OSS format tests
-        printf("[%s] Seed-OSS format tests\n", __func__);
+        auto tmpls = read_templates("models/templates/ByteDance-Seed-OSS.jinja");
+        std::vector<std::string> end_tokens{ "<seed:eos>" };
+
+        assert_equals(COMMON_CHAT_FORMAT_SEED_OSS, common_chat_templates_apply(tmpls.get(), inputs_no_tools).format);
+        assert_equals(COMMON_CHAT_FORMAT_SEED_OSS, common_chat_templates_apply(tmpls.get(), inputs_tools).format);
+
+        test_templates(tmpls.get(), end_tokens, message_assist, tools, "Hello, world!\nWhat's up?", /* expect_grammar_triggered= */ false);
 
         // Test simple reasoning content
         assert_msg_equals(
@@ -1689,6 +1695,21 @@ static void test_template_output_parsers() {
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
                 }));
 
+        // Test deltas: the number of tool calls in partial parses should never decrease
+        std::string tool_msg = "<seed:tool_call>\n"
+            "<function=fun>\n"
+            "<parameter=smth>[1, 2, 3]</parameter>\n"
+            "</function>";
+        std::size_t previousToolCalls = 0;
+        for (std::size_t i = std::string("<seed:tool_call>").length(); i < tool_msg.length() - 1; i++) {
+            auto partial = tool_msg.substr(0, i);
+            auto partial_res = common_chat_parse(partial, true, { COMMON_CHAT_FORMAT_SEED_OSS, COMMON_REASONING_FORMAT_DEEPSEEK });
+            if (partial_res.tool_calls.size() < previousToolCalls) {
+                throw std::runtime_error("Tool call size decreased on partial: " + partial + " from " + std::to_string(previousToolCalls) + " to " + std::to_string(partial_res.tool_calls.size()));
+            }
+            previousToolCalls = partial_res.tool_calls.size();
+        }
+
         // Test multiple parameters in tool call
         common_chat_msg msg_multi_param;
         msg_multi_param.role = "assistant";
@@ -1705,9 +1726,9 @@ static void test_template_output_parsers() {
                 /* is_partial= */ false,
                 {COMMON_CHAT_FORMAT_SEED_OSS}));
 
-        // Test partial parsing for incomplete tool call
+        // Test partial parsing for incomplete tool call - don't actually add the call until parsing parameters is done
         assert_msg_equals(
-            simple_assist_msg("", "", "calculate_sum", "{\"numbers\": [1]}"),
+            simple_assist_msg("", ""),
             common_chat_parse(
                 "<seed:tool_call>\n"
                 "<function=calculate_sum>\n"
