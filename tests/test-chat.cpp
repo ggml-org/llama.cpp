@@ -1621,6 +1621,119 @@ static void test_template_output_parsers() {
                     /* .reasoning_format = */ COMMON_REASONING_FORMAT_AUTO,
                 }));
     }
+    {
+        // Seed-OSS format tests
+        printf("[%s] Seed-OSS format tests\n", __func__);
+
+        // Test simple reasoning content
+        assert_msg_equals(
+            simple_assist_msg("Hello, world!", "I'm thinking about the answer"),
+            common_chat_parse(
+                "<seed:think>I'm thinking about the answer</seed:think>Hello, world!",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test budget reflection tags
+        common_chat_msg msg_budget_reflect;
+        msg_budget_reflect.role = "assistant";
+        msg_budget_reflect.content = "<seed:cot_budget_reflect>Token usage: 45/1000\nI should continue thinking to find the best solution.</seed:cot_budget_reflect>I need to calculate this step by step.";
+        msg_budget_reflect.reasoning_content = "Token usage: 45/1000\nI should continue thinking to find the best solution.";
+        assert_msg_equals(
+            msg_budget_reflect,
+            common_chat_parse(
+                "<seed:think>Token usage: 45/1000\nI should continue thinking to find the best solution.</seed:think>"
+                "<seed:cot_budget_reflect>Token usage: 45/1000\nI should continue thinking to find the best solution.</seed:cot_budget_reflect>"
+                "I need to calculate this step by step.",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test tool calls with Seed-OSS format
+        common_chat_msg msg_tool_call;
+        msg_tool_call.role = "assistant";
+        msg_tool_call.tool_calls.push_back({"calculate_sum", "{\"numbers\": [1, 2, 3]}", ""});
+        assert_msg_equals(
+            msg_tool_call,
+            common_chat_parse(
+                "<seed:tool_call>\n"
+                "<function=calculate_sum>\n"
+                "<parameter=numbers>[1, 2, 3]</parameter>\n"
+                "</function>\n"
+                "</seed:tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_SEED_OSS}));
+
+        // Test reasoning + tool call combination
+        common_chat_msg msg_reasoning_tool;
+        msg_reasoning_tool.role = "assistant";
+        msg_reasoning_tool.content = "";
+        msg_reasoning_tool.reasoning_content = "I need to calculate the sum of these numbers";
+        msg_reasoning_tool.tool_calls.push_back({"calculate_sum", "{\"numbers\": [1, 2, 3]}", ""});
+        assert_msg_equals(
+            msg_reasoning_tool,
+            common_chat_parse(
+                "<seed:think>I need to calculate the sum of these numbers</seed:think>"
+                "<seed:tool_call>\n"
+                "<function=calculate_sum>\n"
+                "<parameter=numbers>[1, 2, 3]</parameter>\n"
+                "</function>\n"
+                "</seed:tool_call>",
+                /* is_partial= */ false,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test multiple parameters in tool call
+        common_chat_msg msg_multi_param;
+        msg_multi_param.role = "assistant";
+        msg_multi_param.tool_calls.push_back({"process_data", "{\"input\": \"test\", \"format\": \"json\"}", ""});
+        assert_msg_equals(
+            msg_multi_param,
+            common_chat_parse(
+                "<seed:tool_call>\n"
+                "<function=process_data>\n"
+                "<parameter=input>test</parameter>\n"
+                "<parameter=format>json</parameter>\n"
+                "</function>\n"
+                "</seed:tool_call>",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_SEED_OSS}));
+
+        // Test partial parsing for incomplete tool call
+        assert_msg_equals(
+            simple_assist_msg("", "", "calculate_sum", "{\"numbers\": [1]}"),
+            common_chat_parse(
+                "<seed:tool_call>\n"
+                "<function=calculate_sum>\n"
+                "<parameter=numbers>[1,\n",
+                /* is_partial= */ true,
+                {COMMON_CHAT_FORMAT_SEED_OSS}));
+
+        // Test incomplete reasoning tag
+        assert_msg_equals(
+            simple_assist_msg("", "I was thinking"),
+            common_chat_parse(
+                "<seed:think>I was thinking",
+                /* is_partial= */ true,
+                {
+                    /* .format = */ COMMON_CHAT_FORMAT_SEED_OSS,
+                    /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+                }));
+
+        // Test content without reasoning
+        assert_msg_equals(
+            simple_assist_msg("This is a simple response without reasoning."),
+            common_chat_parse(
+                "This is a simple response without reasoning.",
+                /* is_partial= */ false,
+                {COMMON_CHAT_FORMAT_SEED_OSS}));
+    }
 }
 
 static void test_msg_diffs_compute() {
