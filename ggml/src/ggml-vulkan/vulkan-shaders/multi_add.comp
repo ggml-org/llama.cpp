@@ -23,8 +23,11 @@ layout (push_constant) uniform parameter2
     uint rms_partials;
 } p;
 
-layout (binding = 0) readonly buffer A {A_TYPE data_a[];} a[];
-layout (binding = 0) writeonly buffer D {D_TYPE data_d[];} d[];
+// Workaround for MoltenVK Bug, see https://github.com/ggml-org/llama.cpp/issues/15498
+// layout (binding = 0) readonly buffer A {A_TYPE data_a[];} a[];
+// layout (binding = 0) writeonly buffer D {D_TYPE data_d[];} d[];
+layout (binding = 0) buffer A {A_TYPE data_a[];} a[];
+layout (binding = 0) buffer D {D_TYPE data_d[];} d[];
 
 layout (binding = 0, std430) buffer PartialBuf {float partial_sums[];} partials[];
 
