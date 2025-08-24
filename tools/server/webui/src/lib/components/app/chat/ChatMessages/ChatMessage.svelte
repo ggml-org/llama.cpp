@@ -20,6 +20,7 @@
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { fade } from 'svelte/transition';
+	import { inputClasses } from '$lib/constants/input-classes';
 
 	interface Props {
 		class?: string;
@@ -146,7 +147,7 @@
 					bind:this={textareaElement}
 					bind:value={editedContent}
 					onkeydown={handleEditKeydown}
-					class="border-primary bg-foreground/3 dark:bg-muted text-foreground border-1 focus:ring-ring min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-offset-2"
+					class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {inputClasses}"
 					placeholder="Edit your message..."
 				></textarea>
 
