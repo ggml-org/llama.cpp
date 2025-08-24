@@ -1356,28 +1356,18 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
 }
 
 static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
-    // DeepSeek V3.1 outputs reasoning content followed by "</think>" and then regular content
-    // There's no opening "<think>" tag, so we need to handle this differently
-    
-    // First, try to find the "</think>" tag that separates thinking from regular content
-    static const common_regex thinking_end_regex("</think>");
-    if (auto res = builder.try_find_regex(thinking_end_regex, std::string::npos, false)) {
-        // The prelude contains everything before the "</think>" tag
-        auto stripped_reasoning = string_strip(res->prelude);
-        
-        if (!stripped_reasoning.empty()) {
-            builder.add_reasoning_content(stripped_reasoning);
-        }
-        
-        // The parser position is already advanced past the "</think>" tag by try_find_regex
-        // The rest is regular content
+    // DeepSeek V3.1 outputs reasoning content between "<think>" and "</think>" tags, followed by regular content
+    // First try to parse using the standard reasoning parsing method
+    if (builder.try_parse_reasoning("<think>", "</think>")) {
+        // If reasoning was parsed successfully, the remaining content is regular content
         builder.add_content(builder.consume_rest());
     } else {
+        // If no reasoning tags found, check if we should treat everything as reasoning
         if (builder.syntax().thinking_forced_open) {
-            // If no "</think>" tag found, treat everything as reasoning content
+            // If thinking is forced open but no tags found, treat everything as reasoning
             builder.add_reasoning_content(builder.consume_rest());
         } else {
-            // If no "</think>" tag found, treat everything as regular content
+            // Otherwise, treat everything as regular content
             builder.add_content(builder.consume_rest());
         }
     }
