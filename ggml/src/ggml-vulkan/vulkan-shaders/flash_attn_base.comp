@@ -9,6 +9,10 @@ layout (constant_id = 4) const uint32_t HSV = 32;
 layout (constant_id = 5) const uint32_t Clamp = 0;
 layout (constant_id = 6) const uint32_t D_split = 16;
 
+// Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
+const uint32_t HSK_pad = (HSK + 15) & ~15;
+const uint32_t HSV_pad = (HSV + 15) & ~15;
+
 layout (push_constant) uniform parameter {
     uint32_t N;
     uint32_t KV;
