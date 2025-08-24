@@ -3950,7 +3950,7 @@ static int ggml_metal_encode_node(
                         [encoder setBuffer:id_src2 offset:offs_src2    atIndex:1];
                         [encoder setBuffer: h_tpe  offset:0            atIndex:2];
                         [encoder setBuffer: h_ids  offset:0            atIndex:3];
-                        [encoder setThreadgroupMemoryLength:ne02*ne20*sizeof(uint16_t) atIndex:0];
+                        [encoder setThreadgroupMemoryLength:smem atIndex:0];
 
                         [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(ne02, 1, 1)];
                     }
