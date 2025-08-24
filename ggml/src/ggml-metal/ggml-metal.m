@@ -3925,6 +3925,7 @@ static int ggml_metal_encode_node(
 
                     {
                         ggml_metal_kargs_mul_mm_id_map0 args = {
+                            ne02,
                             ne10,
                             ne11, // n_expert_used (bcast)
                             nb11,
@@ -3938,13 +3939,20 @@ static int ggml_metal_encode_node(
 
                         pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_ID_MAP0_F16].pipeline;
 
+                        GGML_ASSERT(ne02 <= (int) pipeline.maxTotalThreadsPerThreadgroup);
+
+                        const size_t smem = ne02*ne20*sizeof(uint16_t);
+
+                        GGML_ASSERT(smem <= device.maxThreadgroupMemoryLength);
+
                         [encoder setComputePipelineState:pipeline];
                         [encoder setBytes:&args    length:sizeof(args) atIndex:0];
                         [encoder setBuffer:id_src2 offset:offs_src2    atIndex:1];
                         [encoder setBuffer: h_tpe  offset:0            atIndex:2];
                         [encoder setBuffer: h_ids  offset:0            atIndex:3];
+                        [encoder setThreadgroupMemoryLength:ne02*ne20*sizeof(uint16_t) atIndex:0];
 
-                        [encoder dispatchThreadgroups:MTLSizeMake(ne02, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                        [encoder dispatchThreadgroups:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(ne02, 1, 1)];
                     }
 
                     {
