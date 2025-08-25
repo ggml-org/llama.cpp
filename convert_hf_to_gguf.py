@@ -7982,15 +7982,21 @@ class NemotronHModel(Mamba2Model):
                     # Special handling for conv1d: reshape from 3D to 2D
                     if "conv1d.weight" in layer_component and len(data_torch.shape) == 3:
                         data_torch = data_torch.squeeze(1)  # Remove middle dimension: {4,1,12288} -> {4,12288}
-                    # A_log -> A = -exp(A_log) and reshape from [128,1,1,1] to [1,128]
+                    # A_log -> A = -exp(A_log) and ensure [1,128] shape for llama.cpp
                     if layer_component.endswith("A_log"):
                         data_torch = -torch.exp(data_torch)
-                        if len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
-                            data_torch = data_torch.reshape(1, data_torch.shape[0])  # [128,1,1,1] -> [1,128]
-                    # D tensor also needs reshaping from [128,1,1,1] to [1,128]
+                        # Ensure 2D shape [1, d_state] for llama.cpp compatibility
+                        if len(data_torch.shape) == 1:
+                            data_torch = data_torch.unsqueeze(-1)  # [128] -> [128,1] -> store as [1,128] in GGUF
+                        elif len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
+                            data_torch = data_torch.reshape(data_torch.shape[0], 1)  # [128,1,1,1] -> [128,1]
+                    # D tensor also needs reshaping to [1,128] for llama.cpp  
                     if layer_component.endswith("D"):
-                        if len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
-                            data_torch = data_torch.reshape(1, data_torch.shape[0])  # [128,1,1,1] -> [1,128]
+                        # Ensure 2D shape [1, d_state] for llama.cpp compatibility
+                        if len(data_torch.shape) == 1:
+                            data_torch = data_torch.unsqueeze(-1)  # [128] -> [128,1] -> store as [1,128] in GGUF
+                        elif len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
+                            data_torch = data_torch.reshape(data_torch.shape[0], 1)  # [128,1,1,1] -> [128,1]
                     # Grouped RMSNorm reshape to [actual_size/n_group, n_group]
                     if layer_component == "mixer.norm.weight":
                         actual_size = data_torch.numel()

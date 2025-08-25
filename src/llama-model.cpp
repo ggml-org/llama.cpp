@@ -3798,10 +3798,14 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {1, d_state}, 0);
                             layer.ssm_d = create_tensor(tn(LLM_TENSOR_SSM_D, i), {1, d_state}, 0);
 
-                            // grouped RMSNorm for the SSM inner stream
-                            layer.ssm_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {d_inner / n_group, n_group}, 0);
-                            // out_proj back to model dim
-                            layer.ssm_out  = create_tensor(tn(LLM_TENSOR_SSM_OUT, "weight", i), {d_inner, n_embd}, 0);
+                            // grouped RMSNorm for the SSM inner stream (actual tensor size is 10240 not d_inner)
+                            // Nemotron-H norm tensor: 10240 elements reshaped to [1280, 8]
+                            const int64_t norm_elements_per_group = 1280;  // 10240 / 8
+                            layer.ssm_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {norm_elements_per_group, n_group}, 0);
+                            // out_proj back to model dim (actual tensor is [4480, 10240] not [15680, 4480])
+                            // Nemotron-H out_proj: 10240 -> 4480 (not d_inner -> n_embd)
+                            const int64_t out_proj_input_dim = 10240;  // Actual SSM output dim
+                            layer.ssm_out  = create_tensor(tn(LLM_TENSOR_SSM_OUT, "weight", i), {out_proj_input_dim, n_embd}, 0);
                         } else if (is_attention_layer) {
                             // Attention layer tensors - compute from heads and head dim
                             const int64_t n_head_i    = 40; // q heads
