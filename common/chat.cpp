@@ -1416,10 +1416,11 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
                 return;
             }
 
+            // <｜tool▁call▁begin｜>NAME<｜tool▁sep｜>JSON<｜tool▁call▁end｜>
+            static const common_regex function_regex("<｜tool▁call▁begin｜>([^\\n<]+)<｜tool▁sep｜>");
+            static const common_regex close_regex("<｜tool▁call▁end｜>");
             static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
             static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
-            static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?function<｜tool▁sep｜>([^\n]+)\n```json\n");
-            static const common_regex close_regex("```[\\s\\r\\n]*<｜tool▁call▁end｜>");
             LOG_DBG("%s: parse_tool_calls\n", __func__);
 
             parse_json_tool_calls(
