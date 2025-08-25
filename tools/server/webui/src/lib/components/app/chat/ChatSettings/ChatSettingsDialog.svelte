@@ -1,12 +1,12 @@
 <script lang="ts">
-	import { Settings, Filter, Hand, MessageSquare, Plus, Beaker } from '@lucide/svelte';
+	import { Settings, Filter, AlertTriangle, Brain, Cog } from '@lucide/svelte';
 	import { ChatSettingsFooter, ChatSettingsSection } from '$lib/components/app';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { SETTING_CONFIG_DEFAULT } from '$lib/constants/settings-config';
+	import { SETTING_CONFIG_DEFAULT, SETTING_CONFIG_INFO } from '$lib/constants/settings-config';
 	import {
 		config,
 		updateMultipleConfig,
@@ -32,8 +32,38 @@
 	const defaultConfig = SETTING_CONFIG_DEFAULT;
 
 	function handleSave() {
-		updateMultipleConfig(localConfig);
+		// Validate custom JSON if provided
+		if (localConfig.custom && typeof localConfig.custom === 'string' && localConfig.custom.trim()) {
+			try {
+				JSON.parse(localConfig.custom);
+			} catch (error) {
+				alert('Invalid JSON in custom parameters. Please check the format and try again.');
+				return;
+			}
+		}
 
+		// Convert numeric strings to numbers for numeric fields
+		const processedConfig = { ...localConfig };
+		const numericFields = [
+			'temperature', 'top_k', 'top_p', 'min_p', 'max_tokens', 'pasteLongTextToFileLen',
+			'dynatemp_range', 'dynatemp_exponent', 'typical_p', 'xtc_probability', 'xtc_threshold',
+			'repeat_last_n', 'repeat_penalty', 'presence_penalty', 'frequency_penalty',
+			'dry_multiplier', 'dry_base', 'dry_allowed_length', 'dry_penalty_last_n'
+		];
+
+		for (const field of numericFields) {
+			if (processedConfig[field] !== undefined && processedConfig[field] !== '') {
+				const numValue = Number(processedConfig[field]);
+				if (!isNaN(numValue)) {
+					processedConfig[field] = numValue;
+				} else {
+					alert(`Invalid numeric value for ${field}. Please enter a valid number.`);
+					return;
+				}
+			}
+		}
+
+		updateMultipleConfig(processedConfig);
 		onOpenChange?.(false);
 	}
 
@@ -64,77 +94,170 @@
 					label: 'System Message (will be disabled if left empty)',
 					type: 'textarea'
 				},
-				{ key: 'temperature', label: 'Temperature', type: 'input' },
-				{ key: 'top_k', label: 'Top K', type: 'input' },
-				{ key: 'top_p', label: 'Top P', type: 'input' },
-				{ key: 'min_p', label: 'Min P', type: 'input' },
-				{ key: 'max_tokens', label: 'Max Tokens', type: 'input' },
-				{ key: 'pasteLongTextToFileLen', label: 'Paste length to file', type: 'input' },
-				{ key: 'pdfAsImage', label: 'Parse PDF as image instead of text', type: 'checkbox' }
+				{
+					key: 'showTokensPerSecond',
+					label: 'Show tokens per second',
+					type: 'checkbox'
+				},
+				{
+					key: 'pasteLongTextToFileLen',
+					label: 'Paste long text to file length',
+					type: 'input'
+				},
+				{
+					key: 'pdfAsImage',
+					label: 'Parse PDF as image',
+					type: 'checkbox'
+				}
 			]
 		},
 		{
 			title: 'Samplers',
 			icon: Filter,
 			fields: [
-				{ key: 'samplers', label: 'Samplers queue', type: 'input' },
-				{ key: 'dynatemp_range', label: 'Dynamic Temperature Range', type: 'input' },
-				{ key: 'dynatemp_exponent', label: 'Dynamic Temperature Exponent', type: 'input' },
-				{ key: 'typical_p', label: 'Typical P', type: 'input' },
-				{ key: 'xtc_probability', label: 'XTC Probability', type: 'input' },
-				{ key: 'xtc_threshold', label: 'XTC Threshold', type: 'input' }
+				{
+					key: 'samplers',
+					label: 'Samplers',
+					type: 'input'
+				}
 			]
 		},
 		{
 			title: 'Penalties',
-			icon: Hand,
+			icon: AlertTriangle,
 			fields: [
-				{ key: 'repeat_last_n', label: 'Repeat Last N', type: 'input' },
-				{ key: 'repeat_penalty', label: 'Repeat Penalty', type: 'input' },
-				{ key: 'presence_penalty', label: 'Presence Penalty', type: 'input' },
-				{ key: 'frequency_penalty', label: 'Frequency Penalty', type: 'input' },
-				{ key: 'dry_multiplier', label: 'DRY Multiplier', type: 'input' },
-				{ key: 'dry_base', label: 'DRY Base', type: 'input' },
-				{ key: 'dry_allowed_length', label: 'DRY Allowed Length', type: 'input' },
-				{ key: 'dry_penalty_last_n', label: 'DRY Penalty Last N', type: 'input' }
+				{
+					key: 'repeat_last_n',
+					label: 'Repeat last N',
+					type: 'input'
+				},
+				{
+					key: 'repeat_penalty',
+					label: 'Repeat penalty',
+					type: 'input'
+				},
+				{
+					key: 'presence_penalty',
+					label: 'Presence penalty',
+					type: 'input'
+				},
+				{
+					key: 'frequency_penalty',
+					label: 'Frequency penalty',
+					type: 'input'
+				},
+				{
+					key: 'dry_multiplier',
+					label: 'DRY multiplier',
+					type: 'input'
+				},
+				{
+					key: 'dry_base',
+					label: 'DRY base',
+					type: 'input'
+				},
+				{
+					key: 'dry_allowed_length',
+					label: 'DRY allowed length',
+					type: 'input'
+				},
+				{
+					key: 'dry_penalty_last_n',
+					label: 'DRY penalty last N',
+					type: 'input'
+				}
 			]
 		},
 		{
 			title: 'Reasoning',
-			icon: MessageSquare,
+			icon: Brain,
 			fields: [
 				{
 					key: 'showThoughtInProgress',
-					label: 'Expand thought process by default when generating messages',
+					label: 'Show thought in progress',
 					type: 'checkbox'
 				},
 				{
 					key: 'excludeThoughtOnReq',
-					label: 'Exclude thought process when sending requests to API (Recommended for DeepSeek-R1)',
+					label: 'Exclude thought on request',
 					type: 'checkbox'
 				}
 			]
 		},
 		{
 			title: 'Advanced',
-			icon: Plus,
-			fields: [
-				{ key: 'showTokensPerSecond', label: 'Show tokens per second', type: 'checkbox' },
-				{ key: 'custom', label: 'Custom parameters (JSON format)', type: 'textarea' }
-			]
-		},
-		{
-			title: 'Experimental',
-			icon: Beaker,
+			icon: Cog,
 			fields: [
 				{
-					key: 'pyInterpreterEnabled',
-					label: 'Enable Python interpreter',
-					type: 'checkbox',
-					help: 'This feature uses Pyodide to run Python code inside a Markdown code block. You will see a "Run" button on the code block, near the "Copy" button.'
+					key: 'temperature',
+					label: 'Temperature',
+					type: 'input'
+				},
+				{
+					key: 'dynatemp_range',
+					label: 'Dynamic temperature range',
+					type: 'input'
+				},
+				{
+					key: 'dynatemp_exponent',
+					label: 'Dynamic temperature exponent',
+					type: 'input'
+				},
+				{
+					key: 'top_k',
+					label: 'Top K',
+					type: 'input'
+				},
+				{
+					key: 'top_p',
+					label: 'Top P',
+					type: 'input'
+				},
+				{
+					key: 'min_p',
+					label: 'Min P',
+					type: 'input'
+				},
+				{
+					key: 'xtc_probability',
+					label: 'XTC probability',
+					type: 'input'
+				},
+				{
+					key: 'xtc_threshold',
+					label: 'XTC threshold',
+					type: 'input'
+				},
+				{
+					key: 'typical_p',
+					label: 'Typical P',
+					type: 'input'
+				},
+				{
+					key: 'max_tokens',
+					label: 'Max tokens',
+					type: 'input'
+				},
+				{
+					key: 'custom',
+					label: 'Custom JSON',
+					type: 'textarea'
 				}
 			]
 		}
+		// TODO: Experimental features section will be implemented after initial release
+		// This includes Python interpreter (Pyodide integration) and other experimental features
+		// {
+		// 	title: 'Experimental',
+		// 	icon: Beaker,
+		// 	fields: [
+		// 		{
+		// 			key: 'pyInterpreterEnabled',
+		// 			label: 'Enable Python interpreter',
+		// 			type: 'checkbox'
+		// 		}
+		// 	]
+		// }
 	];
 
 	let currentSection = $derived(
@@ -166,6 +289,7 @@
 
 			<ScrollArea class="flex-1">
 				<div class="space-y-6 p-6">
+
 					<ChatSettingsSection title={currentSection.title} icon={currentSection.icon}>
 						{#each currentSection.fields as field}
 							<div class="space-y-2">
@@ -182,9 +306,9 @@
 										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
 										class="max-w-md"
 									/>
-									{#if field.help}
+									{#if field.help || SETTING_CONFIG_INFO[field.key]}
 										<p class="text-muted-foreground mt-1 text-xs">
-											{field.help}
+											{field.help || SETTING_CONFIG_INFO[field.key]}
 										</p>
 									{/if}
 								{:else if field.type === 'textarea'}
@@ -200,9 +324,9 @@
 										placeholder={`Default: ${defaultConfig[field.key] || 'none'}`}
 										class="min-h-[100px] max-w-2xl"
 									/>
-									{#if field.help}
+									{#if field.help || SETTING_CONFIG_INFO[field.key]}
 										<p class="text-muted-foreground mt-1 text-xs">
-											{field.help}
+											{field.help || SETTING_CONFIG_INFO[field.key]}
 										</p>
 									{/if}
 								{:else if field.type === 'checkbox'}
@@ -225,9 +349,9 @@
 												{field.label}
 											</label>
 
-											{#if field.help}
+											{#if field.help || SETTING_CONFIG_INFO[field.key]}
 												<p class="text-muted-foreground text-xs">
-													{field.help}
+													{field.help || SETTING_CONFIG_INFO[field.key]}
 												</p>
 											{:else if field.key === 'pdfAsImage' && !supportsVision()}
 												<p class="text-muted-foreground text-xs">
