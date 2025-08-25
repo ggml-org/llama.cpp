@@ -24,12 +24,6 @@ if (CUDAToolkit_FOUND)
         #     for best performance and to also build real architectures for the most commonly used GPUs.
         if (GGML_NATIVE AND CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.6" AND CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
             set(CMAKE_CUDA_ARCHITECTURES "native")
-        elseif(GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
-            else()
-                set(CMAKE_CUDA_ARCHITECTURES "60-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real")
-            endif()
         else()
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
                 set(CMAKE_CUDA_ARCHITECTURES "50-virtual;61-virtual;70-virtual;75-virtual;80-virtual;86-real;89-real")
@@ -91,10 +85,6 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_NO_FA)
     endif()
 
-    if (GGML_CUDA_F16 OR GGML_CUDA_DMMV_F16)
-        add_compile_definitions(GGML_CUDA_F16)
-    endif()
-
     if (GGML_CUDA_NO_PEER_COPY)
         add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
     endif()
@@ -119,6 +109,10 @@ if (CUDAToolkit_FOUND)
     set(CUDA_CXX_FLAGS "")
 
     set(CUDA_FLAGS -use_fast_math -extended-lambda)
+
+    if (GGML_CUDA_DEBUG)
+        list(APPEND CUDA_FLAGS -lineinfo)
+    endif()
 
     if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
         # Options are:

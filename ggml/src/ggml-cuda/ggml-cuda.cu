@@ -28,6 +28,7 @@
 #include "ggml-cuda/mmvq.cuh"
 #include "ggml-cuda/norm.cuh"
 #include "ggml-cuda/opt-step-adamw.cuh"
+#include "ggml-cuda/opt-step-sgd.cuh"
 #include "ggml-cuda/out-prod.cuh"
 #include "ggml-cuda/pad.cuh"
 #include "ggml-cuda/pool2d.cuh"
@@ -48,6 +49,7 @@
 #include "ggml-cuda/wkv.cuh"
 #include "ggml-cuda/gla.cuh"
 #include "ggml-cuda/set-rows.cuh"
+#include "ggml-cuda/pad_reflect_1d.cuh"
 #include "ggml.h"
 
 #include <algorithm>
@@ -180,30 +182,6 @@ static int ggml_cuda_parse_id(char devName[]) {
 #endif // defined(GGML_USE_HIP)
 
 static ggml_cuda_device_info ggml_cuda_init() {
-#if defined(GGML_USE_HIP)
-    // Workaround for a rocBLAS bug when using multiple graphics cards:
-    // https://github.com/ROCmSoftwarePlatform/rocBLAS/issues/1346
-    {
-        int major_version = 0;
-        size_t version_length = 0;
-        if (rocblas_get_version_string_size(&version_length) == rocblas_status_success) {
-            std::vector<char> version(version_length+1, '\0');
-            if (rocblas_get_version_string(version.data(), version.size()) == rocblas_status_success) {
-                version.resize(::strlen(version.data()));
-                int parsed_value = 0;
-                if (std::from_chars(version.data(), version.data() + version.size(), parsed_value).ec == std::errc()) {
-                    major_version = parsed_value;
-                }
-            }
-        }
-        if (major_version < 4) {
-            GGML_LOG_DEBUG(GGML_CUDA_NAME " calling rocblas_initialize as a workaround for a rocBLAS bug\n");
-            rocblas_initialize();
-            CUDA_CHECK(cudaDeviceSynchronize());
-        }
-    }
-#endif
-
     ggml_cuda_device_info info = {};
 
     cudaError_t err = cudaGetDeviceCount(&info.device_count);
@@ -1351,9 +1329,7 @@ static void ggml_cuda_op_mul_mat_cublas(
                     &beta,  dst_dd_i,    ldc));
     }
 
-    GGML_UNUSED(dst);
-    GGML_UNUSED(src1_ddq_i);
-    GGML_UNUSED(src1_padded_row_size);
+    GGML_UNUSED_VARS(dst, src1_ddq_i, src1_padded_row_size);
 }
 
 static void ggml_cuda_set_peer_access(const int n_tokens, int main_device) {
@@ -2377,6 +2353,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
         case GGML_OP_PAD:
             ggml_cuda_op_pad(ctx, dst);
             break;
+        case GGML_OP_PAD_REFLECT_1D:
+            ggml_cuda_op_pad_reflect_1d(ctx, dst);
+            break;
         case GGML_OP_ARANGE:
             ggml_cuda_op_arange(ctx, dst);
             break;
@@ -2502,6 +2481,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_OPT_STEP_ADAMW:
             ggml_cuda_opt_step_adamw(ctx, dst);
+            break;
+        case GGML_OP_OPT_STEP_SGD:
+            ggml_cuda_opt_step_sgd(ctx, dst);
             break;
         default:
             return false;
@@ -3503,15 +3485,16 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_CONV_TRANSPOSE_2D:
         case GGML_OP_POOL_2D:
         case GGML_OP_SUM:
-        case GGML_OP_SUM_ROWS:
-        case GGML_OP_MEAN:
         case GGML_OP_ARGSORT:
         case GGML_OP_ACC:
             return true;
+        case GGML_OP_SUM_ROWS:
+        case GGML_OP_MEAN:
         case GGML_OP_GROUP_NORM:
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_UPSCALE:
         case GGML_OP_PAD:
+        case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_ARANGE:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:
@@ -3519,47 +3502,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_RWKV_WKV7:
             return true;
-        case GGML_OP_FLASH_ATTN_EXT: {
-#ifndef FLASH_ATTN_AVAILABLE
-            return false;
-#endif // FLASH_ATTN_AVAILABLE
-            if (op->src[1]->ne[0] != op->src[2]->ne[0]) {
-                const int cc = ggml_cuda_info().devices[dev_ctx->device].cc;
-                if (!turing_mma_available(cc)) {
-                    return false;
-                }
-                const int gqa_ratio = op->src[0]->ne[2] / op->src[1]->ne[2];
-                return op->src[1]->ne[0] == 576 && op->src[2]->ne[0] == 512 && op->src[3] && gqa_ratio % 16 == 0;
-            }
-            // TODO: more general-purpose attention sink support [TAG_ATTN_SINKS]
-            if (op->src[4] && !fp16_mma_available(ggml_cuda_info().devices[dev_ctx->device].cc)
-                    && op->src[0]->ne[0] != 64 && op->src[0]->ne[0] != 128) {
-                return false;
-            }
-            if (op->src[0]->ne[0] == 192) {
-                return false;
-            }
-            if (op->src[1]->type == GGML_TYPE_BF16 || op->src[2]->type == GGML_TYPE_BF16) {
-                return false;
-            }
-            if (op->src[0]->ne[0] ==  64 && op->src[1]->type == GGML_TYPE_F16) {
-                return true;
-            }
-            if (op->src[0]->ne[0] == 128) {
-                return true;
-            }
-            if (op->src[0]->ne[0] == 256 && op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16) {
-                return true;
-            }
-            if (op->src[3] && op->src[3]->ne[2] != 1) {
-                return false;
-            }
-            return fp16_mma_available(ggml_cuda_info().devices[dev_ctx->device].cc) &&
-                op->src[1]->type == GGML_TYPE_F16 && op->src[2]->type == GGML_TYPE_F16;
-        }
+        case GGML_OP_FLASH_ATTN_EXT:
+            return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
         case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_OPT_STEP_SGD:
             return true;
         default:
             return false;
@@ -3689,10 +3637,6 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t 
 
     #ifdef GGML_CUDA_NO_PEER_COPY
         features.push_back({ "NO_PEER_COPY", "1" });
-    #endif
-
-    #ifdef GGML_CUDA_F16
-        features.push_back({ "F16", "1" });
     #endif
 
     #ifdef GGML_CUDA_USE_GRAPHS

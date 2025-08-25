@@ -64,8 +64,6 @@ extern "C" {
 
     typedef struct llama_memory_i * llama_memory_t;
 
-    struct llama_kv_cache; // DEPRECATED (use llama_memory instead)
-
     typedef int32_t llama_pos;
     typedef int32_t llama_token;
     typedef int32_t llama_seq_id;
@@ -314,7 +312,7 @@ extern "C" {
         float    yarn_beta_fast;   // YaRN low correction dim
         float    yarn_beta_slow;   // YaRN high correction dim
         uint32_t yarn_orig_ctx;    // YaRN original context size
-        float    defrag_thold;     // defragment the KV cache if holes/size > thold, <= 0 disabled (default)
+        float    defrag_thold;     // [DEPRECATED] defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
@@ -468,8 +466,6 @@ extern "C" {
     LLAMA_API const struct llama_model * llama_get_model   (const struct llama_context * ctx);
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
     LLAMA_API  enum llama_pooling_type   llama_pooling_type(const struct llama_context * ctx); // TODO: rename to llama_get_pooling_type
-
-    DEPRECATED(LLAMA_API struct llama_kv_cache * llama_get_kv_self(struct llama_context * ctx), "use llama_get_memory instead");
 
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
@@ -668,111 +664,6 @@ extern "C" {
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
     //
-    // KV cache for self-attention (TODO: deprecate in favor of llama_memory)
-    //
-
-    // Returns the number of tokens in the KV cache (slow, use only for debug)
-    // If a KV cell has multiple sequences assigned to it, it will be counted multiple times
-    DEPRECATED(LLAMA_API int32_t llama_kv_self_n_tokens(const struct llama_context * ctx),
-               "Use llama_kv_self_seq_pos_max() and llama_kv_self_seq_pos_min() instead (https://github.com/ggml-org/llama.cpp/issues/13793)");
-
-    // Returns the number of used KV cells (i.e. have at least one sequence assigned to them)
-    DEPRECATED(LLAMA_API int32_t llama_kv_self_used_cells(const struct llama_context * ctx),
-               "Use llama_kv_self_seq_pos_max() and llama_kv_self_seq_pos_min() instead (https://github.com/ggml-org/llama.cpp/issues/13793)");
-
-    // Clear the KV cache - both cell info is erased and KV data is zeroed
-    DEPRECATED(LLAMA_API void llama_kv_self_clear(
-                struct llama_context * ctx),
-            "Use llama_memory_clear() instead");
-
-    // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)
-    // Returns false if a partial sequence cannot be removed. Removing a whole sequence never fails
-    // seq_id < 0 : match any sequence
-    // p0 < 0     : [0,  p1]
-    // p1 < 0     : [p0, inf)
-    DEPRECATED(LLAMA_API bool llama_kv_self_seq_rm(
-            struct llama_context * ctx,
-                    llama_seq_id   seq_id,
-                       llama_pos   p0,
-                       llama_pos   p1),
-            "Use llama_memory_seq_rm() instead");
-
-    // Copy all tokens that belong to the specified sequence to another sequence
-    // Note that this does not allocate extra KV cache memory - it simply assigns the tokens to the new sequence
-    // p0 < 0 : [0,  p1]
-    // p1 < 0 : [p0, inf)
-    DEPRECATED(LLAMA_API void llama_kv_self_seq_cp(
-            struct llama_context * ctx,
-                    llama_seq_id   seq_id_src,
-                    llama_seq_id   seq_id_dst,
-                       llama_pos   p0,
-                       llama_pos   p1),
-            "Use llama_memory_seq_cp() instead");
-
-    // Removes all tokens that do not belong to the specified sequence
-    DEPRECATED(LLAMA_API void llama_kv_self_seq_keep(
-            struct llama_context * ctx,
-                    llama_seq_id   seq_id),
-            "Use llama_memory_seq_keep() instead");
-
-    // Adds relative position "delta" to all tokens that belong to the specified sequence and have positions in [p0, p1)
-    // If the KV cache is RoPEd, the KV data is updated accordingly:
-    //   - lazily on next llama_decode()
-    // p0 < 0 : [0,  p1]
-    // p1 < 0 : [p0, inf)
-    DEPRECATED(LLAMA_API void llama_kv_self_seq_add(
-            struct llama_context * ctx,
-                    llama_seq_id   seq_id,
-                       llama_pos   p0,
-                       llama_pos   p1,
-                       llama_pos   delta),
-            "Use llama_memory_seq_add() instead");
-
-    // Integer division of the positions by factor of `d > 1`
-    // If the KV cache is RoPEd, the KV data is updated accordingly:
-    //   - lazily on next llama_decode()
-    // p0 < 0 : [0,  p1]
-    // p1 < 0 : [p0, inf)
-    DEPRECATED(LLAMA_API void llama_kv_self_seq_div(
-            struct llama_context * ctx,
-                    llama_seq_id   seq_id,
-                       llama_pos   p0,
-                       llama_pos   p1,
-                             int   d),
-            "Use llama_memory_seq_div() instead");
-
-    // Returns the smallest position present in the KV cache for the specified sequence
-    // This is typically non-zero only for SWA caches
-    // Note that all positions in the range [pos_min, pos_max] are guaranteed to be present in the KV cache
-    // Return -1 if the sequence is empty
-    DEPRECATED(LLAMA_API llama_pos llama_kv_self_seq_pos_min(
-            struct llama_context * ctx,
-                    llama_seq_id   seq_id),
-            "Use llama_memory_seq_pos_min() instead");
-
-    // Returns the largest position present in the KV cache for the specified sequence
-    // Note that all positions in the range [pos_min, pos_max] are guaranteed to be present in the KV cache
-    // Return -1 if the sequence is empty
-    DEPRECATED(LLAMA_API llama_pos llama_kv_self_seq_pos_max(
-            struct llama_context * ctx,
-                    llama_seq_id   seq_id),
-            "Use llama_memory_seq_pos_max() instead");
-
-    // Defragment the KV cache
-    // This will be applied:
-    //   - lazily on next llama_decode()
-    DEPRECATED(LLAMA_API void llama_kv_self_defrag(struct llama_context * ctx),
-            "simply remove this call, the context will automatically decide when to do a defragmentation based on 'defrag_thold'");
-
-    // Check if the context supports KV cache shifting
-    DEPRECATED(LLAMA_API bool llama_kv_self_can_shift(const struct llama_context * ctx),
-            "use llama_memory_can_shift() instead");
-
-    // Apply the KV cache updates (such as K-shifts, defragmentation, etc.)
-    DEPRECATED(LLAMA_API void llama_kv_self_update(struct llama_context * ctx),
-            "simply remove this call, updates are applied lazily on the next llama_decode()");
-
-    //
     // State / sessions
     //
 
@@ -869,6 +760,29 @@ extern "C" {
                      llama_token * tokens_out,
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
+
+#define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
+
+    typedef uint32_t llama_state_seq_flags;
+
+    LLAMA_API size_t llama_state_seq_get_size_ext(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id,
+           llama_state_seq_flags   flags);
+
+    LLAMA_API size_t llama_state_seq_get_data_ext(
+            struct llama_context * ctx,
+                         uint8_t * dst,
+                          size_t   size,
+                    llama_seq_id   seq_id,
+           llama_state_seq_flags   flags);
+
+    LLAMA_API size_t llama_state_seq_set_data_ext(
+            struct llama_context * ctx,
+                   const uint8_t * src,
+                          size_t   size,
+                    llama_seq_id   dest_seq_id,
+           llama_state_seq_flags   flags);
 
     //
     // Decoding
@@ -1437,6 +1351,8 @@ extern "C" {
 
         ggml_opt_get_optimizer_params get_opt_pars; // callback for calculating optimizer parameters
         void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
+
+        enum ggml_opt_optimizer_type optimizer_type;
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
