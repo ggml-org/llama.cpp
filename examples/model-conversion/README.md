@@ -285,12 +285,20 @@ For the following targets a `HF_TOKEN` environment variable is required.
 This will create a new model repsository on Hugging Face with the specified
 model name.
 ```console
-(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev"
+(venv) $ make hf-create-model MODEL_NAME='TestModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
 Repository ID:  danbev/TestModel-GGUF
 Repository created: https://huggingface.co/danbev/TestModel-GGUF
 ```
 Note that we append a `-GGUF` suffix to the model name to ensure a consistent
 naming convention for GGUF models.
+
+An embedding model can be created using the following command:
+```console
+(venv) $ make hf-create-model-embedding MODEL_NAME='TestEmbeddingModel' NAMESPACE="danbev" ORIGINAL_BASE_MODEL="some-base-model"
+```
+The only difference is that the model card for an embedding model will be different
+with regards to the llama-server command and also how to access/call the embedding
+endpoint.
 
 ### Upload a GGUF model to model repository
 The following target uploads a model to an existing Hugging Face model repository.
