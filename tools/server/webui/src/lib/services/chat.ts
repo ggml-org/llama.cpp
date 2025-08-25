@@ -40,14 +40,19 @@ export class ChatService {
 
 		// Build base request body with system message injection
 		const processedMessages = this.injectSystemMessage(messages);
+		const currentConfig = config();
+		
 		const requestBody: ApiChatCompletionRequest = {
 			messages: processedMessages.map((msg: ApiChatMessageData) => ({
 				role: msg.role,
 				content: msg.content
 			})),
-			reasoning_format: 'auto',
 			stream
 		};
+
+		if (!currentConfig.excludeThoughtOnReq) {
+			requestBody.reasoning_format = 'auto';
+		}
 
 		// Add generation parameters if provided
 		if (temperature !== undefined) requestBody.temperature = temperature;
