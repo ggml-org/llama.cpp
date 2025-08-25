@@ -34,6 +34,7 @@ args = parser.parse_args()
 repo_id = f"{args.namespace}/{args.model_name}-GGUF"
 print("Repository ID: ", repo_id)
 
+repo_url = None
 if not args.dry_run:
     repo_url = api.create_repo(
         repo_id=repo_id,
@@ -71,7 +72,7 @@ if not args.no_card:
         else:
             print("Failed to create model card.")
 
-if not args.dry_run:
+if not args.dry_run and repo_url:
     print(f"Repository created: {repo_url}")
 
 
