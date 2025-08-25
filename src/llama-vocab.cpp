@@ -1816,7 +1816,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 LLAMA_LOG_WARN("%s: ************************************        \n", __func__);
                 LLAMA_LOG_WARN("%s:                                             \n", __func__);
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-            } else if (tokenizer_pre == "default" || tokenizer_pre == "modern-bert") {
+            } else if (tokenizer_pre == "default" || tokenizer_pre == "modern-bert") /* need to fix modern-bert pre tokenizer */ {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             } else if (
                     tokenizer_pre == "llama3"   ||
