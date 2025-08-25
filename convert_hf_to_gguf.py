@@ -2684,12 +2684,73 @@ class BitnetModel(TextModel):
         yield (new_name, data_torch)
 
 
-@ModelBase.register("GrokForCausalLM")
+@ModelBase.register("GrokForCausalLM", "Grok1ForCausalLM")
 class GrokModel(TextModel):
     model_arch = gguf.MODEL_ARCH.GROK
 
     def set_vocab(self):
-        self._set_vocab_sentencepiece()
+        if (self.dir_model / 'tokenizer.model').is_file():
+            self._set_vocab_sentencepiece()
+            return
+
+        tokenizer_path = self.dir_model / 'tokenizer.tok.json'
+        with open(tokenizer_path, "r", encoding="utf-8") as f:
+            tokenizer = json.load(f)
+
+        vocab_size = tokenizer["vocab_size"]
+        tokens: list[str] = [f"[PAD{i}]" for i in range(vocab_size)]
+        scores: list[float] = [-10000.0] * vocab_size
+        toktypes: list[int] = [gguf.TokenType.UNUSED] * vocab_size
+
+        def decode_grok_token(token: dict, toktype: gguf.TokenType) -> tuple[gguf.TokenType, int, str]:
+            tokid: int = token["token"]
+            tokb: list[int] = token["bytes"]
+            if tokb == [32]:
+                tokb = [0xe2, 0x96, 0x81]
+            if len(tokb) == 1:
+                return gguf.TokenType.BYTE, tokid, "<0x{:02X}>".format(tokb[0])
+            else:
+                try:
+                    tokc = bytes(tokb).decode("utf-8").replace(" ", "▁")
+                except Exception:
+                    tokc = None
+                if tokc is None or not all(tokb):
+                    # Incomplete UTF-8 sequence or \0 bytes, escape it
+                    # probably doesn't tokenize correctly, but at least won't crash
+                    tokc = repr(bytes(tokb))[2:-1]
+                return toktype, tokid, tokc
+
+        for token in tokenizer["special_tokens"]:
+            toktype, tokid, tokc = decode_grok_token(token, gguf.TokenType.CONTROL)
+            tokens[tokid] = tokc
+            toktypes[tokid] = toktype
+            scores[tokid] = 0.0
+
+        score = -0.0
+        for token in tokenizer["regular_tokens"]:
+            toktype, tokid, tokc = decode_grok_token(token, gguf.TokenType.NORMAL)
+            tokens[tokid] = tokc
+            toktypes[tokid] = toktype
+            if toktype == gguf.TokenType.BYTE:
+                scores[tokid] = 0.0
+            else:
+                scores[tokid] = score
+                score -= 1.0
+
+        self.gguf_writer.add_tokenizer_model("llama")
+        self.gguf_writer.add_tokenizer_pre("default")
+        self.gguf_writer.add_token_list(tokens)
+        self.gguf_writer.add_token_scores(scores)
+        self.gguf_writer.add_token_types(toktypes)
+
+        self.gguf_writer.add_add_bos_token(False)
+
+        special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
+        special_vocab.special_token_ids["pad"] = 0
+        special_vocab.special_token_ids["sep"] = 1
+        special_vocab.special_token_ids["eos"] = 2
+        special_vocab.chat_template = "{% for message in messages %}{% if message['role'] == 'user' %}{{ 'Human: ' + message['content'].strip() + '<|separator|>\n\n' }}{% elif message['role'] == 'system' %}{{ 'System: ' + message['content'].strip() + '<|separator|>\n\n' }}{% elif message['role'] == 'assistant' %}{{ 'Assistant: '  + message['content'] + '<|separator|>\n\n' }}{% endif %}{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
+        special_vocab.add_to_gguf(self.gguf_writer)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2697,11 +2758,23 @@ class GrokModel(TextModel):
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
+        self.gguf_writer.add_attn_logit_softcapping(self.hparams.get("attn_logit_softcapping", 30.0))
+        self.gguf_writer.add_router_logit_softcapping(self.hparams.get("router_logit_softcapping", 30.0))
+        if (final_logit_softcap := self.hparams.get("final_logit_softcapping")):
+            self.gguf_writer.add_final_logit_softcapping(final_logit_softcap)
+
+        if (rope_dim := self.hparams.get("head_dim")) is None:
+            rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
+
+        self.gguf_writer.add_attn_output_scale(self.hparams.get("attn_output_multiplier", rope_dim**-0.5))
+        self.gguf_writer.add_embedding_scale(self.hparams["embedding_multiplier_scale"])
+        self.gguf_writer.add_logit_scale(self.hparams["output_multiplier_scale"])
+
     _experts: list[dict[str, Tensor]] | None = None
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         # process the experts separately
-        if name.find(".moe.") != -1:
+        if name.find(".moe.") != -1 or name.find(".block_sparse_moe.") != -1:
             n_experts = self.hparams["num_local_experts"]
 
             assert bid is not None
@@ -2715,17 +2788,19 @@ class GrokModel(TextModel):
                 tensors: list[tuple[str, Tensor]] = []
 
                 # merge the experts into a single 3d tensor
-                for wid in ["linear", "linear_1", "linear_v"]:
+                for wid in [("linear", "w1"), ("linear_1", "w2"), ("linear_v", "w3")]:
                     datas: list[Tensor] = []
 
                     for xid in range(n_experts):
-                        ename = f"transformer.decoder_layer.{bid}.moe.{xid}.{wid}.weight"
+                        ename = f"transformer.decoder_layer.{bid}.moe.{xid}.{wid[0]}.weight"
+                        if ename not in self._experts[bid]:
+                            ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid[1]}.weight"
                         datas.append(self._experts[bid][ename])
                         del self._experts[bid][ename]
 
                     data_torch = torch.stack(datas, dim=0)
 
-                    merged_name = f"transformer.decoder_layer.{bid}.moe.{wid}.weight"
+                    merged_name = f"transformer.decoder_layer.{bid}.moe.{wid[0]}.weight"
 
                     new_name = self.map_tensor_name(merged_name)
 
