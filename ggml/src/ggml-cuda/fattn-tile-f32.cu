@@ -38,17 +38,15 @@ static __global__ void flash_attn_tile_ext_f32(
     return;
 #endif // FP16_MMA_AVAILABLE
     if (use_logit_softcap && !(D == 128 || D == 256)) {
-        GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask); GGML_UNUSED(sinks);
-        GGML_UNUSED(dst); GGML_UNUSED(dst_meta);
-        GGML_UNUSED(scale); GGML_UNUSED(max_bias); GGML_UNUSED(m0); GGML_UNUSED(m1);
-        GGML_UNUSED(n_head_log2); GGML_UNUSED(logit_softcap);
-        GGML_UNUSED(ne00); GGML_UNUSED(ne01); GGML_UNUSED(ne02); GGML_UNUSED(ne03);
-        GGML_UNUSED(nb01); GGML_UNUSED(nb02); GGML_UNUSED(nb03);
-        GGML_UNUSED(ne10); GGML_UNUSED(ne11); GGML_UNUSED(ne12); GGML_UNUSED(ne13);
-        GGML_UNUSED(nb11); GGML_UNUSED(nb12); GGML_UNUSED(nb13);
-        GGML_UNUSED(nb21); GGML_UNUSED(nb22); GGML_UNUSED(nb23);
-        GGML_UNUSED(ne31); GGML_UNUSED(ne32); GGML_UNUSED(ne33);
-        GGML_UNUSED(nb31); GGML_UNUSED(nb32); GGML_UNUSED(nb33);
+        GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
+            max_bias, m0, m1, n_head_log2, logit_softcap,
+            ne00, ne01, ne02, ne03,
+                  nb01, nb02, nb03,
+            ne10, ne11, ne12, ne13,
+                  nb11, nb12, nb13,
+                  nb21, nb22, nb23,
+                  ne31, ne32, ne33,
+                  nb31, nb32, nb33);
         NO_DEVICE_CODE;
         return;
     }
@@ -60,10 +58,11 @@ static __global__ void flash_attn_tile_ext_f32(
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
-    const float2 * Q_f2  = (const float2 *) (Q    + nb03* sequence         + nb02* head              + nb01*ic0);
-    const half2  * K_h2  = (const half2  *) (K    + nb13* sequence         + nb12*(head / gqa_ratio));
-    const half2  * V_h2  = (const half2  *) (V    + nb13* sequence         + nb12*(head / gqa_ratio)); // K and V have same shape
-    const half   * maskh = (const half   *) (mask + nb33*(sequence % ne33)                           + nb31*ic0);
+    const float2 * Q_f2   = (const float2 *) (Q    + nb03* sequence         + nb02* head              + nb01*ic0);
+    const half2  * K_h2   = (const half2  *) (K    + nb13* sequence         + nb12*(head / gqa_ratio));
+    const half2  * V_h2   = (const half2  *) (V    + nb13* sequence         + nb12*(head / gqa_ratio)); // K and V have same shape
+    const half   * maskh  = (const half   *) (mask  + nb33*(sequence % ne33)                          + nb31*ic0);
+    const float  * sinksf = (const float  *) (sinks);
 
     const int stride_KV2 = nb11 / sizeof(half2);
 
@@ -252,6 +251,33 @@ static __global__ void flash_attn_tile_ext_f32(
         __syncthreads();
     }
 
+
+    //Attention sink: adjust running max and sum once per head
+    if (sinksf && blockIdx.y == 0) {
+        const float sink = sinksf[head];
+
+#pragma unroll
+        for (int j0 = 0; j0 < ncols; j0 += nwarps) {
+            float kqmax_new_j = fmaxf(kqmax[j0/nwarps], sink);
+            kqmax_new_j = warp_reduce_max(kqmax_new_j);
+
+            const float KQ_max_scale = expf(kqmax[j0/nwarps] - kqmax_new_j);
+            kqmax[j0/nwarps] = kqmax_new_j;
+
+            const float val = expf(sink - kqmax[j0/nwarps]);
+            kqsum[j0/nwarps] = kqsum[j0/nwarps] * KQ_max_scale;
+            if (threadIdx.x == 0) {
+                kqsum[j0/nwarps] += val;
+            }
+
+#pragma unroll
+            for (int i0 = 0; i0 < D/2; i0 += WARP_SIZE) {
+                VKQ[j0/nwarps][i0/WARP_SIZE].x *= KQ_max_scale;
+                VKQ[j0/nwarps][i0/WARP_SIZE].y *= KQ_max_scale;
+            }
+        }
+    }
+
     float2 * dst2 = (float2 *) dst;
 
 #pragma unroll
@@ -284,17 +310,15 @@ static __global__ void flash_attn_tile_ext_f32(
         }
     }
 #else
-    GGML_UNUSED(Q); GGML_UNUSED(K); GGML_UNUSED(V); GGML_UNUSED(mask);
-    GGML_UNUSED(dst); GGML_UNUSED(dst_meta);
-    GGML_UNUSED(scale); GGML_UNUSED(max_bias); GGML_UNUSED(m0); GGML_UNUSED(m1);
-    GGML_UNUSED(n_head_log2); GGML_UNUSED(logit_softcap);
-    GGML_UNUSED(ne00); GGML_UNUSED(ne01); GGML_UNUSED(ne02); GGML_UNUSED(ne03);
-    GGML_UNUSED(nb01); GGML_UNUSED(nb02); GGML_UNUSED(nb03);
-    GGML_UNUSED(ne10); GGML_UNUSED(ne11); GGML_UNUSED(ne12); GGML_UNUSED(ne13);
-    GGML_UNUSED(nb11); GGML_UNUSED(nb12); GGML_UNUSED(nb13);
-    GGML_UNUSED(nb21); GGML_UNUSED(nb22); GGML_UNUSED(nb23);
-    GGML_UNUSED(ne31); GGML_UNUSED(ne32); GGML_UNUSED(ne33);
-    GGML_UNUSED(nb31); GGML_UNUSED(nb32); GGML_UNUSED(nb33);
+    GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
+        max_bias, m0, m1, n_head_log2, logit_softcap,
+        ne00, ne01, ne02, ne03,
+              nb01, nb02, nb03,
+        ne10, ne11, ne12, ne13,
+              nb11, nb12, nb13,
+              nb21, nb22, nb23,
+              ne31, ne32, ne33,
+              nb31, nb32, nb33);
     NO_DEVICE_CODE;
 #endif // FLASH_ATTN_AVAILABLE
 }

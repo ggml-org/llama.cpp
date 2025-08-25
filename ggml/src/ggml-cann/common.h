@@ -375,6 +375,16 @@ struct ggml_backend_cann_context {
     cann_task_queue task_queue;
     bool async_mode;
     bool support_set_rows;
+    // Rope Cache
+    void* rope_init_ptr = nullptr;
+    void* rope_sin_ptr = nullptr;
+    void* rope_cos_ptr = nullptr;
+    int64_t max_prompt_length = 0;
+    // Constant Pool
+    void* f32_zero_cache = nullptr;
+    void* f32_one_cache = nullptr;
+    int64_t f32_zero_cache_element = 0;
+    int64_t f32_one_cache_element = 0;
 
     aclrtStream streams[GGML_CANN_MAX_STREAMS] = {nullptr}; /**< Array of streams for the device. */
 
@@ -413,6 +423,21 @@ struct ggml_backend_cann_context {
             if (streams[i] != nullptr) {
                 ACL_CHECK(aclrtDestroyStream(streams[i]));
             }
+        }
+        if(rope_init_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(rope_init_ptr));
+        }
+        if(rope_sin_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(rope_sin_ptr));
+        }
+        if(rope_cos_ptr != nullptr) {
+            ACL_CHECK(aclrtFree(rope_cos_ptr));
+        }
+        if(f32_zero_cache != nullptr) {
+            ACL_CHECK(aclrtFree(f32_zero_cache));
+        }
+        if(f32_one_cache != nullptr) {
+            ACL_CHECK(aclrtFree(f32_one_cache));
         }
     }
 

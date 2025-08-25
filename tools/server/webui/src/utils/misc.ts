@@ -130,7 +130,10 @@ export function filterThoughtFromMsgs(messages: APIMessage[]) {
       role: msg.role,
       content:
         msg.role === 'assistant'
-          ? contentStr.split('</think>').at(-1)!.trim()
+          ? contentStr
+              .split(/<\/think>|<\|end\|>/)
+              .at(-1)!
+              .trim()
           : contentStr,
     } as APIMessage;
   });
