@@ -689,6 +689,7 @@ static void parse_json_tool_calls(
                 : function_regex
                     ? builder.try_find_regex(*function_regex, from)
                     : std::nullopt;
+
             if (res) {
                 std::string name;
                 if (get_function_name) {
@@ -703,7 +704,8 @@ static void parse_json_tool_calls(
                     from = res->groups[0].begin + 1;
                     continue;
                 }
-                from = std::string::npos;
+                builder.move_to(res->groups[0].end);
+                from = builder.pos();
 
                 auto maybe_raw_python = name == "python" && allow_raw_python;
                 if (builder.input()[builder.pos()] == '{' || !maybe_raw_python) {
@@ -712,8 +714,10 @@ static void parse_json_tool_calls(
                             throw common_chat_msg_partial_exception("incomplete tool call");
                         }
                         builder.consume_regex(close_regex);
+                        from = builder.pos(); // continue after this call
+                        continue;
                     }
-                    continue;
+                    throw common_chat_msg_partial_exception("incomplete tool call");
                 }
                 if (maybe_raw_python) {
                     auto arguments = wrap_code_as_arguments(builder, builder.consume_rest());
@@ -727,6 +731,8 @@ static void parse_json_tool_calls(
             break;
         }
         if (block_close) {
+            // ensure we’re right after the last call header/close
+            if (from != std::string::npos) builder.move_to(from);
             builder.consume_regex(*block_close);
         }
         builder.consume_spaces();
@@ -734,12 +740,16 @@ static void parse_json_tool_calls(
     };
     if (block_open) {
         if (auto res = builder.try_find_regex(*block_open)) {
+            builder.move_to(res->groups[0].end); // consume opener
             parse_tool_calls();
+            return;
         } else {
             builder.add_content(builder.consume_rest());
+            return;
         }
     } else {
         parse_tool_calls();
+        return;
     }
 }
 
@@ -1417,8 +1427,9 @@ static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
             }
 
             // <｜tool▁call▁begin｜>NAME<｜tool▁sep｜>JSON<｜tool▁call▁end｜>
-            static const common_regex function_regex("<｜tool▁call▁begin｜>([^\\n<]+)<｜tool▁sep｜>");
-            static const common_regex close_regex("<｜tool▁call▁end｜>");
+            static const common_regex function_regex("(?:<｜tool▁call▁begin｜>)?(?:function<｜tool▁sep｜>)?([^\\n<]+)(?:\\n```json\\n|<｜tool▁sep｜>)");
+
+            static const common_regex close_regex("(?:[\\n]*```[\\s\\r\\n]*)?<｜tool▁call▁end｜>");
             static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
             static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
             LOG_DBG("%s: parse_tool_calls\n", __func__);
