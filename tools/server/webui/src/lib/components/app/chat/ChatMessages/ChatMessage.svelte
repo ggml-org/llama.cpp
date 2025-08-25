@@ -4,6 +4,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { ChatAttachmentsList, ChatMessageThinkingBlock, MarkdownContent } from '$lib/components/app';
 	import { Tooltip, TooltipContent, TooltipTrigger } from '$lib/components/ui/tooltip';
+	import MessageBranchingControls from './MessageBranchingControls.svelte';
+	import type { MessageSiblingInfo } from '$lib/utils/branching';
 	import {
 		AlertDialog,
 		AlertDialogAction,
@@ -12,11 +14,11 @@
 		AlertDialogDescription,
 		AlertDialogFooter,
 		AlertDialogHeader,
-		AlertDialogTitle,
-		AlertDialogTrigger
+		AlertDialogTitle
 	} from '$lib/components/ui/alert-dialog';
 	import { copyToClipboard } from '$lib/utils/copy';
 	import { parseThinkingContent } from '$lib/utils/thinking';
+	import { getDeletionInfo } from '$lib/stores/chat.svelte';
 	import { isLoading } from '$lib/stores/chat.svelte';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { fade } from 'svelte/transition';
@@ -25,27 +27,30 @@
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		onEdit?: (message: DatabaseMessage) => void;
+		siblingInfo?: MessageSiblingInfo | null;
 		onCopy?: (message: DatabaseMessage) => void;
-		onRegenerate?: (message: DatabaseMessage) => void;
-		onUpdateMessage?: (message: DatabaseMessage, newContent: string) => void;
 		onDelete?: (message: DatabaseMessage) => void;
+		onNavigateToSibling?: (siblingId: string) => void;
+		onEditWithBranching?: (message: DatabaseMessage, newContent: string) => void;
+		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
 	}
 
 	let {
 		class: className = '',
 		message,
-		onEdit,
+		siblingInfo = null,
 		onCopy,
-		onRegenerate,
-		onUpdateMessage,
-		onDelete
+		onDelete,
+		onNavigateToSibling,
+		onEditWithBranching,
+		onRegenerateWithBranching
 	}: Props = $props();
 
-	let isEditing = $state(false);
-	let editedContent = $state(message.content);
-	let textareaElement: HTMLTextAreaElement | undefined = $state();
 	let showDeleteDialog = $state(false);
+	let editedContent = $state(message.content);
+	let isEditing = $state(false);
+	let deletionInfo = $state<{ totalCount: number; userMessages: number; assistantMessages: number; messageTypes: string[] } | null>(null);
+	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
 	const processingState = useProcessingState();
 
@@ -93,7 +98,6 @@
 				);
 			}
 		}, 0);
-		onEdit?.(message);
 	}
 
 	function handleEditKeydown(event: KeyboardEvent) {
@@ -107,17 +111,18 @@
 	}
 
 	function handleRegenerate() {
-		onRegenerate?.(message);
+		onRegenerateWithBranching?.(message);
 	}
 
 	function handleSaveEdit() {
 		if (editedContent.trim() !== message.content) {
-			onUpdateMessage?.(message, editedContent.trim());
+			onEditWithBranching?.(message, editedContent.trim());
 		}
 		isEditing = false;
 	}
 
-	function handleDelete() {
+	async function handleDelete() {
+		deletionInfo = await getDeletionInfo(message.id);
 		showDeleteDialog = true;
 	}
 
@@ -187,9 +192,9 @@
 				</Card>
 			{/if}
 
-			<div class="relative flex h-6 items-center">
-				{@render messageActions({ role: 'user' })}
-			</div>
+			{#if message.timestamp}
+				{@render timestampAndActions({ role: 'user', justify: 'end', actionsPosition: 'right' })}
+			{/if}
 		{/if}
 	</div>
 {:else}
@@ -233,9 +238,7 @@
 		{/if}
 
 		{#if message.timestamp}
-			<div class="relative mt-2 flex h-6 items-center">
-				{@render messageActions({ role: 'assistant' })}
-			</div>
+			{@render timestampAndActions({ role: 'assistant', justify: 'start', actionsPosition: 'left' })}
 		{/if}
 	</div>
 {/if}
@@ -244,75 +247,52 @@
 	<div
 		class="pointer-events-none inset-0 flex items-center gap-1 opacity-0 transition-all duration-150 group-hover:pointer-events-auto group-hover:opacity-100"
 	>
-		<Tooltip>
-			<TooltipTrigger>
-				<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={handleCopy}>
-					<Copy class="h-3 w-3" />
-				</Button>
-			</TooltipTrigger>
-
-			<TooltipContent>
-				<p>Copy</p>
-			</TooltipContent>
-		</Tooltip>
+		{@render actionButton({ icon: Copy, tooltip: 'Copy', onclick: handleCopy })}
+		
 		{#if config?.role === 'user'}
-			<Tooltip>
-				<TooltipTrigger>
-					<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={handleEdit}>
-						<Edit class="h-3 w-3" />
-					</Button>
-				</TooltipTrigger>
-
-				<TooltipContent>
-					<p>Edit</p>
-				</TooltipContent>
-			</Tooltip>
+			{@render actionButton({ icon: Edit, tooltip: 'Edit', onclick: handleEdit })}
 		{:else if config?.role === 'assistant'}
-			<Tooltip>
-				<TooltipTrigger>
-					<Button
-						variant="ghost"
-						size="sm"
-						class="h-6 w-6 p-0"
-						onclick={handleRegenerate}
-					>
-						<RefreshCw class="h-3 w-3" />
-					</Button>
-				</TooltipTrigger>
-
-				<TooltipContent>
-					<p>Regenerate</p>
-				</TooltipContent>
-			</Tooltip>
+			{@render actionButton({ icon: RefreshCw, tooltip: 'Regenerate', onclick: handleRegenerate })}
 		{/if}
-
-		<Tooltip>
-			<TooltipTrigger>
-				<Button variant="ghost" size="sm" class="h-6 w-6 p-0 hover:bg-destructive/10 hover:text-destructive" onclick={handleDelete}>
-					<Trash2 class="h-3 w-3 text-destructive" />
-				</Button>
-			</TooltipTrigger>
-
-			<TooltipContent>
-				<p>Delete</p>
-			</TooltipContent>
-		</Tooltip>
+		
+		{@render actionButton({ icon: Trash2, tooltip: 'Delete', onclick: handleDelete })}
 	</div>
+{/snippet}
 
-	{#if messageContent.trim().length > 0}
-		<div
-			class="{config?.role === 'user'
-				? 'right-0'
-				: 'left-0'} text-muted-foreground absolute text-xs transition-all duration-150 group-hover:pointer-events-none group-hover:opacity-0"
-		>
-			{message.timestamp
-				? new Date(message.timestamp).toLocaleTimeString(undefined, {
-						hour: '2-digit',
-						minute: '2-digit'
-					})
-				: ''}
+{#snippet actionButton(config: { icon: any; tooltip: string; onclick: () => void })}
+	<Tooltip>
+		<TooltipTrigger>
+			<Button variant="ghost" size="sm" class="h-6 w-6 p-0" onclick={config.onclick}>
+				{@const IconComponent = config.icon}
+				<IconComponent class="h-3 w-3" />
+			</Button>
+		</TooltipTrigger>
+
+		<TooltipContent>
+			<p>{config.tooltip}</p>
+		</TooltipContent>
+	</Tooltip>
+{/snippet}
+
+{#snippet timestampAndActions(config: { role: ChatRole; justify: 'start' | 'end'; actionsPosition: 'left' | 'right' })}
+	<div class="relative {config.justify === 'start' ? 'mt-2' : ''} flex h-6 items-center justify-{config.justify}">
+		<div class="flex items-center text-xs text-muted-foreground group-hover:opacity-0 transition-opacity">
+			{new Date(message.timestamp).toLocaleTimeString(undefined, {
+				hour: '2-digit',
+				minute: '2-digit'
+			})}
 		</div>
-	{/if}
+
+		<div class="absolute {config.actionsPosition}-0 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+			{#if siblingInfo && siblingInfo.totalSiblings > 1}
+				<MessageBranchingControls 
+					{siblingInfo} 
+					{onNavigateToSibling}
+				/>
+			{/if}
+			{@render messageActions({ role: config.role })}
+		</div>
+	</div>
 {/snippet}
 
 <AlertDialog bind:open={showDeleteDialog}>
@@ -320,13 +300,39 @@
 		<AlertDialogHeader>
 			<AlertDialogTitle>Delete Message</AlertDialogTitle>
 			<AlertDialogDescription>
-				Are you sure you want to delete this message? This action cannot be undone.
+				{#if deletionInfo && deletionInfo.totalCount > 1}
+					<div class="space-y-2">
+						<p>This will delete <strong>{deletionInfo.totalCount} messages</strong> including:</p>
+
+						<ul class="list-disc list-inside text-sm space-y-1 ml-4">
+							{#if deletionInfo.userMessages > 0}
+								<li>{deletionInfo.userMessages} user message{deletionInfo.userMessages > 1 ? 's' : ''}</li>
+							{/if}
+
+							{#if deletionInfo.assistantMessages > 0}
+								<li>{deletionInfo.assistantMessages} assistant response{deletionInfo.assistantMessages > 1 ? 's' : ''}</li>
+							{/if}
+						</ul>
+
+						<p class="text-sm text-muted-foreground mt-2">
+							All messages in this branch and their responses will be permanently removed. This action cannot be undone.
+						</p>
+					</div>
+				{:else}
+					Are you sure you want to delete this message? This action cannot be undone.
+				{/if}
 			</AlertDialogDescription>
 		</AlertDialogHeader>
+
 		<AlertDialogFooter>
 			<AlertDialogCancel>Cancel</AlertDialogCancel>
+
 			<AlertDialogAction onclick={handleConfirmDelete} class="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-				Delete
+				{#if deletionInfo && deletionInfo.totalCount > 1}
+					Delete {deletionInfo.totalCount} Messages
+				{:else}
+					Delete
+				{/if}
 			</AlertDialogAction>
 		</AlertDialogFooter>
 	</AlertDialogContent>
