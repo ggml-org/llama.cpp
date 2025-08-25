@@ -608,11 +608,23 @@ export class ChatService {
 		
 		// If no system message is configured, return messages as-is
 		if (!systemMessage) {
+			console.log('No system message configured, returning original messages');
 			return messages;
 		}
 		
 		// Check if first message is already a system message
 		if (messages.length > 0 && messages[0].role === 'system') {
+			// If the existing system message doesn't match current config, replace it
+			if (messages[0].content !== systemMessage) {
+				console.log('System message changed, replacing existing one');
+				const updatedMessages = [...messages];
+				updatedMessages[0] = {
+					role: 'system',
+					content: systemMessage
+				};
+				return updatedMessages;
+			}
+			
 			return messages;
 		}
 		
