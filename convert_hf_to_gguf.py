@@ -3159,7 +3159,7 @@ class LLaDAModel(TextModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
-@ModelBase.register("Ernie4_5_ForCausalLM")
+@ModelBase.register("Ernie4_5_ForCausalLM", "Ernie4_5ForCausalLM")
 class Ernie4_5Model(TextModel):
     model_arch = gguf.MODEL_ARCH.ERNIE4_5
 
