@@ -4786,14 +4786,16 @@ kernel void kernel_flash_attn_ext_vec(
         device const char * mask,
         device const char * sinks,
         device       char * dst,
+        constant uint16_t & nwg,
         threadgroup  half * shmem_f16 [[threadgroup(0)]],
         uint3   tgpig[[threadgroup_position_in_grid]],
         ushort3   ntg[[threads_per_threadgroup]],
         ushort  tiisg[[thread_index_in_simdgroup]],
         ushort  sgitg[[simdgroup_index_in_threadgroup]]) {
     const short nsg = ntg.y; // number of simdgroups
+    const short iwg = tgpig[2]%nwg;
 
-    const int iq3 = tgpig[2];
+    const int iq3 = tgpig[2]/nwg;
     const int iq2 = tgpig[1];
     const int iq1 = tgpig[0];
 
@@ -4872,7 +4874,7 @@ kernel void kernel_flash_attn_ext_vec(
 
         // loop over the KV cache
         // each simdgroup handles blocks of Q rows and C columns
-        for (int ic0 = 0; ic0 < args.ne11; ic0 += C*nsg) {
+        for (int ic0 = (int) iwg*C*nsg; ic0 < args.ne11; ic0 += (int) nwg*C*nsg) {
             const int ic = ic0 + C*sgitg;
             if (ic >= args.ne11) {
                 break;
@@ -5002,7 +5004,7 @@ kernel void kernel_flash_attn_ext_vec(
             }
         }
 
-        if (sinks != q && sgitg == 0) {
+        if (sinks != q && sgitg == 0 && iwg == 0) {
             const float m = M;
             const float s = tiisg == 0 ? ((device const float *) sinks)[iq2] : -FLT_MAX/2;
 
@@ -5111,14 +5113,23 @@ kernel void kernel_flash_attn_ext_vec(
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
-    device float4 * dst4 = (device float4 *) dst;
-
     // final rescale with 1/S and store to global memory
     if (sgitg == 0) {
-        const float S = ss[0];
+        device float  * dst1 = (device float  *) dst + (((uint64_t)args.ne3*args.ne2*args.ne1)*DV)*nwg;
+        device float4 * dst4 = (device float4 *) dst;
 
+        const float S = nwg == 1 ? 1.0f/ss[0] : 1.0f;
+
+        const uint64_t rid = (uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)iq1*args.ne1;
+
+        // interleave the workgroup data
         for (short i = tiisg; i < DV4; i += NW) {
-            dst4[((uint64_t)iq3*args.ne2*args.ne1 + iq2 + (uint64_t)iq1*args.ne1)*DV4 + i] = (float4) sr4[i]/S;
+            dst4[(rid*DV4 + i)*nwg + iwg] = (float4) sr4[i]*S;
+        }
+
+        if (nwg > 1 && tiisg == 0) {
+            dst1[(rid*2)*nwg + 2*iwg + 0] = ss[0];
+            dst1[(rid*2)*nwg + 2*iwg + 1] = ss[1];
         }
     }
 }
@@ -5217,6 +5228,42 @@ template [[host_name("kernel_flash_attn_ext_vec_q5_1_hk576_hv512")]] kernel flas
 template [[host_name("kernel_flash_attn_ext_vec_q8_0_hk576_hv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, block_q8_0, 8, dequantize_q8_0_t4, block_q8_0,  8, dequantize_q8_0_t4, 576, 512, 2>;
 
 #undef FA_TYPES
+
+kernel void kernel_flash_attn_ext_reduce(
+        constant ggml_metal_kargs_flash_attn_ext_reduce & args,
+        device  const char * htmp,
+        device        char * dst,
+        uint   tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    const uint64_t rid = tgpig;
+
+    const short nwg = 32;
+    const short iwg = tiisg;
+    const short DV  = args.ne20;
+    const short DV4 = DV/4;
+
+    device const float4 * htmp4 = (device const float4 *) htmp + rid*DV4*nwg;
+    device const float  * ss    = (device const float  *) htmp + (uint64_t)args.ne3*args.ne2*args.ne1*DV*nwg;
+    device       float4 * dst4  = (device       float4 *) dst  + rid*DV4;
+
+    float S = ss[(rid*2)*nwg + 2*iwg + 0];
+    float M = ss[(rid*2)*nwg + 2*iwg + 1];
+
+    const float m = simd_max(M);
+
+    const float ms = exp(M - m);
+
+    S = 1.0f/simd_sum(S*ms);
+
+    for (short i = sgitg; i < DV4; i += nwg) {
+        const float4 v = simd_sum(htmp4[i*nwg + iwg]*ms);
+
+        if (iwg == 0) {
+            dst4[i] = v*S;
+        }
+    }
+}
 
 template<typename T>
 kernel void kernel_set(
