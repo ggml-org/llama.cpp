@@ -1837,7 +1837,7 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
                 }
                 else
                 {
-                    thinking_grammar_logic = "thinking-start thinking-content thinking-end ";
+                    thinking_grammar_logic = "(thinking-start thinking-content thinking-end)? ";
                 }
             }
 
