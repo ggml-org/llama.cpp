@@ -1824,20 +1824,20 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
                 "( \"```\\n\" | \"```json\\n\" | \"```xml\\n\" ) space " + wrappable_tool_call + " space \"```\" space ");
             auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
 
-            builder.add_rule("thinking_start", "\"<think>\"");
-            builder.add_rule("thinking_content", "[^\\x00]*");
-            builder.add_rule("thinking_end", "\"</think>\" space");
+            builder.add_rule("thinking-start", "\"<think>\"");
+            builder.add_rule("thinking-content", "[^\\x00]*");
+            builder.add_rule("thinking-end", "\"</think>\" space");
 
             //thinking grammar logic depending on if thinking_forced_open was to true (so already opened (and maybe closed)) and if thinking is even allowed
             std::string thinking_grammar_logic = ""; // thinking tag was closed or not supported/wanted
             if (extra_context["enable_thinking"]) {
                 if (data.thinking_forced_open) {
                     //thinking tag was already opened by used so we don't need to add it again
-                    thinking_grammar_logic = "thinking_content thinking_end ";
+                    thinking_grammar_logic = "thinking-content thinking-end ";
                 }
                 else
                 {
-                    thinking_grammar_logic = "thinking_start thinking_content thinking_end ";
+                    thinking_grammar_logic = "thinking-start thinking-content thinking-end ";
                 }
             }
 
