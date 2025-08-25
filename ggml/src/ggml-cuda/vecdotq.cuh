@@ -29,6 +29,47 @@ static __device__ __forceinline__ int get_int_b4(const void * x, const int & i32
 }
 
 static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, const int8_t * table) {
+#if defined(GGML_USE_HIP)
+    // Load the 16-byte table into four 32-bit unsigned integers.
+    const uint32_t *values = (const uint32_t *)table;
+
+    const uint32_t q_even = q4;
+    const uint32_t q_odd  = (q4 >> 4);
+
+    // Perform lookups in the lower half of the table (indices 0-7).
+    uint32_t v_even_low = __builtin_amdgcn_perm(values[1], values[0], q_even & 0x07070707);
+    uint32_t v_odd_low = __builtin_amdgcn_perm(values[1], values[0], q_odd & 0x07070707);
+
+    // Perform lookups in the upper half of the table (indices 8-15).
+    uint32_t v_even_high = __builtin_amdgcn_perm(values[3], values[2], q_even & 0x07070707);
+    uint32_t v_odd_high = __builtin_amdgcn_perm(values[3], values[2], q_odd & 0x07070707);
+
+    // Select between the low and high results based on the MSB of each index nibble.
+    uint32_t mask_even = 0x03020100 | ((q_even & 0x08080808) >> 1);
+    uint32_t res_x = __builtin_amdgcn_perm(v_even_high, v_even_low, mask_even);
+    uint32_t mask_odd = 0x03020100 | ((q_odd & 0x08080808) >> 1);
+    uint32_t res_y = __builtin_amdgcn_perm(v_odd_high, v_odd_low, mask_odd);
+
+    return make_int2(res_x, res_y);
+#elif defined(__CUDA_ARCH__)
+    uint32_t v1, v2, v3, v4, mask;
+    const uint32_t *values = (const uint32_t *)table;
+
+    mask = (0x32103210 | ((q4 & 0x88888888) >> 1));
+    // Perform lookups in the lower half of the table (indices 0-7).
+    v1 = __byte_perm(values[0], values[1], q4);
+    // Perform lookups in the upper half of the table (indices 8-15).
+    v2 = __byte_perm(values[2], values[3], q4);
+    // Select between the low and high results based on the MSB of each index nibble.
+    v3 = __byte_perm(v1, v2, mask);
+    // Same for the upper part of q4.
+    v1 = __byte_perm(values[0], values[1], q4 >> 16);
+    v2 = __byte_perm(values[2], values[3], q4 >> 16);
+    v4 = __byte_perm(v1, v2, mask >> 16);
+    
+    // Mix the results to get the final int2.
+    return make_int2(__byte_perm(v3, v4, 0x6420), __byte_perm(v3, v4, 0x7531));
+#else
     const int      q0_32  = (q4 >> 0) & 0x0F0F0F0F;
     const int8_t * q0_8   = (const int8_t *) &q0_32;
     const char4    val0_8 = make_char4(
@@ -40,6 +81,7 @@ static __device__ __forceinline__ int2 get_int_from_table_16(const int & q4, con
         table[q1_8[0]], table[q1_8[1]], table[q1_8[2]], table[q1_8[3]]);
 
     return make_int2(*((const int *) &val0_8), *((const int *) &val1_8));
+#endif
 }
 
 // VDR = vec dot ratio, how many contiguous integers each thread processes when the vec dot kernel is called
