@@ -176,6 +176,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_IM2COL
     {}, // GGML_OP_IM2COL_BACK
     {}, // GGML_OP_CONV_2D
+    {}, // GGML_OP_CONV_3D
     {}, // GGML_OP_CONV_2D_DW
     {}, // GGML_OP_CONV_TRANSPOSE_2D
     {}, // GGML_OP_POOL_1D
@@ -214,6 +215,7 @@ constexpr const qnn_op_caps_t kOpCaps[] = {
     {}, // GGML_OP_CROSS_ENTROPY_LOSS
     {}, // GGML_OP_CROSS_ENTROPY_LOSS_BACK
     {}, // GGML_OP_OPT_STEP_ADAMW
+    {}, // GGML_OP_OPT_STEP_SGD
     {}, // GGML_OP_GLU
 
     // ggml_unary_op
@@ -355,6 +357,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_IM2COL
     nullptr,  // GGML_OP_IM2COL_BACK
     nullptr,  // GGML_OP_CONV_2D
+    nullptr,  // GGML_OP_CONV_3D
     nullptr,  // GGML_OP_CONV_2D_DW
     nullptr,  // GGML_OP_CONV_TRANSPOSE_2D
     nullptr,  // GGML_OP_POOL_1D
@@ -392,6 +395,7 @@ constexpr const op_constructor_t kOpConstructors[] = {
     nullptr,  // GGML_OP_CROSS_ENTROPY_LOSS
     nullptr,  // GGML_OP_CROSS_ENTROPY_LOSS_BACK
     nullptr,  // GGML_OP_OPT_STEP_ADAMW
+    nullptr,  // GGML_OP_OPT_STEP_SGD
     nullptr,  // GGML_OP_GLU
 
     // ggml_unary_op

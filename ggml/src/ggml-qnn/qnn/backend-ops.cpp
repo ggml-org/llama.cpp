@@ -121,6 +121,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_IM2COL
     false,  // GGML_OP_IM2COL_BACK
     false,  // GGML_OP_CONV_2D
+    false,  // GGML_OP_CONV_3D
     false,  // GGML_OP_CONV_2D_DW
     false,  // GGML_OP_CONV_TRANSPOSE_2D
     false,  // GGML_OP_POOL_1D
@@ -158,6 +159,7 @@ constexpr const bool kQnnSupportedOps[] = {
     false,  // GGML_OP_CROSS_ENTROPY_LOSS
     false,  // GGML_OP_CROSS_ENTROPY_LOSS_BACK
     false,  // GGML_OP_OPT_STEP_ADAMW
+    false,  // GGML_OP_OPT_STEP_SGD
     false,  // GGML_OP_GLU
 
     // ggml_unary_op
