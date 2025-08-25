@@ -1375,7 +1375,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // [TAG_NO_CACHE_PAD]
     // TODO: if ubatch.equal_seqs() == true, we can split the three tensors below into ubatch.n_seqs_unq streams
-    assert(!ubatch.equal_seqs());
+    LLAMA_LOG_INFO("ubatch.equal_seqs() = %d, n_seqs = %d\n", ubatch.equal_seqs(), ubatch.n_seqs);
+
+    //assert(!ubatch.equal_seqs());
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = k_cur;

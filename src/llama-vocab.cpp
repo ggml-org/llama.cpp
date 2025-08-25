@@ -1661,10 +1661,13 @@ private:
 void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
     struct gguf_context * ctx = ml.meta.get();
 
+    LLAMA_LOG_INFO("Determining Vocab Type\n");
     // determine vocab type
     {
         ml.get_key(LLM_KV_TOKENIZER_MODEL, tokenizer_model);
         ml.get_key(LLM_KV_TOKENIZER_PRE,   tokenizer_pre, false);
+        LLAMA_LOG_INFO("pre tokenizer model: %s\n", tokenizer_pre.c_str());
+        LLAMA_LOG_INFO("tokenizer model: %s\n", tokenizer_model.c_str());
 
         ml.get_key(LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT, n_token_types, false);
 
@@ -1813,7 +1816,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 LLAMA_LOG_WARN("%s: ************************************        \n", __func__);
                 LLAMA_LOG_WARN("%s:                                             \n", __func__);
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
-            } else if (tokenizer_pre == "default") {
+            } else if (tokenizer_pre == "default" || tokenizer_pre == "modern-bert") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_DEFAULT;
             } else if (
                     tokenizer_pre == "llama3"   ||
