@@ -154,14 +154,16 @@ int main(int argc, char ** argv) {
                         llama_memory_seq_cp(mem, 0, i, -1, -1);
                     }
 
-                    // run one dummy token to apply the memory copy
-                    common_batch_clear(batch);
-                    common_batch_add(batch, get_token_rand(), pp + 0, { 0 }, true);
-                    if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
-                        LOG_ERR("%s: llama_decode() failed\n", __func__);
-                        return 1;
+                    if (!params.kv_unified) {
+                        // run one dummy token to apply the memory copy
+                        common_batch_clear(batch);
+                        common_batch_add(batch, get_token_rand(), pp + 0, { 0 }, true);
+                        if (!decode_helper(ctx, batch, ctx_params.n_batch)) {
+                            LOG_ERR("%s: llama_decode() failed\n", __func__);
+                            return 1;
+                        }
+                        llama_memory_seq_rm(mem, 0, pp, -1);
                     }
-                    llama_memory_seq_rm(mem, 0, pp, -1);
                 }
 
                 const auto t_tg_start = ggml_time_us();
