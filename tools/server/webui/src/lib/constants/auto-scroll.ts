@@ -1,1 +1,2 @@
 export const AUTO_SCROLL_THRESHOLD = 200;
+export const AUTO_SCROLL_INTERVAL = 100;

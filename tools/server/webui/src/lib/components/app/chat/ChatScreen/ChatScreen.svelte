@@ -16,7 +16,7 @@
 	} from '$lib/stores/chat.svelte';
 	import { contextService } from '$lib/services/context';
 	import { fade, fly, slide } from 'svelte/transition';
-	import { AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
+	import { AUTO_SCROLL_INTERVAL,  AUTO_SCROLL_THRESHOLD } from '$lib/constants/auto-scroll';
 	import { navigating } from '$app/state';
 	import ChatScreenDragOverlay from './ChatScreenDragOverlay.svelte';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
@@ -209,7 +209,7 @@
 		// This solution is not ideal, but it works for now. But can be tricky for long conversations
 		// Eventually we might want to find a proper way to render the content scrolled down from the beginning
 		if (navigating.complete && chatScrollContainer) {
-			setTimeout(() => scrollChatToBottom('instant'), 100);
+			setTimeout(() => scrollChatToBottom('instant'), AUTO_SCROLL_INTERVAL);
 		}
 
 		if (navigating) {
@@ -219,7 +219,7 @@
 
 	$effect(() => {
 		if (isLoading() && autoScrollEnabled) {
-			scrollInterval = setInterval(scrollChatToBottom, 50);
+			scrollInterval = setInterval(scrollChatToBottom, AUTO_SCROLL_INTERVAL);
 		} else if (scrollInterval) {
 			clearInterval(scrollInterval);
 			scrollInterval = undefined;
