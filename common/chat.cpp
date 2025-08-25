@@ -1767,9 +1767,11 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
     }
 
     if (!inputs.tools.is_null()) {
-        auto supports_thinking = tmpl.source().find("<think>") != std::string::npos && data.thinking_forced_open == false;
+        auto supports_thinking = tmpl.source().find("<think>") != std::string::npos;
+        // you should not be able to call enable_thinking if <think> is not supported
+        GGML_ASSERT(!extra_context["enable_thinking"] || extra_context["enable_thinking"] == supports_thinking);
         // (content)?(<tool_call>{"name": "foo", "arguments": {"a": 1}}</tool_call>)*
-        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED || supports_thinking;
+        data.grammar_lazy = true;
         data.grammar = build_grammar([&](const common_grammar_builder & builder) {
             std::vector<std::string> tool_rules;
             std::vector<std::string> tool_call_alts;
@@ -1821,13 +1823,27 @@ static common_chat_params common_chat_params_init_hermes_2_pro(const common_chat
             tool_call_alts.push_back(
                 "( \"```\\n\" | \"```json\\n\" | \"```xml\\n\" ) space " + wrappable_tool_call + " space \"```\" space ");
             auto tool_call = builder.add_rule("tool_call", string_join(tool_call_alts, " | "));
-            if (supports_thinking) {
-                builder.add_rule("thinking", "\"<think>\" [^\\x00]* \"</think>\" space");
+
+            builder.add_rule("thinking_start", "\"<think>\"");
+            builder.add_rule("thinking_content", "[^\\x00]*");
+            builder.add_rule("thinking_end", "\"</think>\" space");
+
+            //thinking grammar logic depending on if thinking_forced_open was to true (so already opened (and maybe closed)) and if thinking is even allowed
+            std::string thinking_grammar_logic = ""; // thinking tag was closed or not supported/wanted
+            if (extra_context["enable_thinking"]) {
+                if (data.thinking_forced_open) {
+                    //thinking tag was already opened by used so we don't need to add it again
+                    thinking_grammar_logic = "thinking_content thinking_end ";
+                }
+                else
+                {
+                    thinking_grammar_logic = "thinking_start thinking_content thinking_end ";
+                }
             }
-            builder.add_rule("root",
-                std::string(supports_thinking ? "(thinking)? space " :
-                            data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
-                (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
+
+
+            builder.add_rule("root", thinking_grammar_logic + (inputs.parallel_tool_calls ? "(" + tool_call + ")+" : tool_call));
+
             // Trigger on some common known "good bad" outputs (only from the start and with a json that's about a specific argument name to avoid false positives)
             data.grammar_triggers.push_back({
                 COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
