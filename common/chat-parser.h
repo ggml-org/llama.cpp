@@ -8,6 +8,7 @@
 
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 class common_chat_msg_partial_exception : public std::runtime_error {
@@ -117,4 +118,45 @@ class common_chat_msg_parser {
     );
 
     void clear_tools();
+
+    // Error reporting for XML parser
+    enum class XmlParseErrorType {
+        NONE,
+        INPUT_TOO_LARGE,
+        TAG_NAME_TOO_LONG,
+        ATTRIBUTE_TOO_LONG,
+        TOO_MANY_PARAMETERS,
+        TOO_MANY_TOOLS,
+        INVALID_XML_STRUCTURE,
+        FUNCTION_NOT_FOUND,
+        INVALID_FUNCTION_NAME,
+        PARAMETER_CONVERSION_FAILED,
+        JSON_SERIALIZATION_FAILED
+    };
+
+    struct XmlParseError {
+        XmlParseErrorType type = XmlParseErrorType::NONE;
+        size_t position = 0;
+        std::string context;
+        std::string message;
+        
+        bool has_error() const { return type != XmlParseErrorType::NONE; }
+        void clear() {
+            type = XmlParseErrorType::NONE;
+            position = 0;
+            context.clear();
+            message.clear();
+        }
+    };
+
+    // Qwen3-Coder XML tool call parser with error reporting
+    bool parse_qwen3_xml_tool_call(const std::string & content, const std::vector<common_chat_tool> & tools);
+    bool parse_qwen3_xml_tool_call(const std::string & content, const std::vector<common_chat_tool> & tools, XmlParseError & error);
+    
+    // Get last parse error
+    const XmlParseError & get_last_xml_parse_error() const { return last_xml_error_; }
+
+private:
+    XmlParseError last_xml_error_;
 };
+
