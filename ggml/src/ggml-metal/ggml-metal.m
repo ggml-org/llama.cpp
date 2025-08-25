@@ -291,6 +291,10 @@ enum ggml_metal_kernel_type {
     GGML_METAL_KERNEL_TYPE_MUL_MV_Q5_1_F32,
     GGML_METAL_KERNEL_TYPE_MUL_MV_Q8_0_F32,
     GGML_METAL_KERNEL_TYPE_MUL_MV_MXFP4_F32,
+    GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_2,
+    GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_3,
+    GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_4,
+    GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_5,
     GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F16_F32_R1_2,
     GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F16_F32_R1_3,
     GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F16_F32_R1_4,
@@ -1325,6 +1329,10 @@ static struct ggml_backend_metal_context * ggml_metal_init(ggml_backend_dev_t de
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_Q5_1_F32,                 mul_mv_q5_1_f32,                 has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_Q8_0_F32,                 mul_mv_q8_0_f32,                 has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_MXFP4_F32,                mul_mv_mxfp4_f32,                has_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_2,         mul_mv_ext_f32_f32_r1_2,         has_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_3,         mul_mv_ext_f32_f32_r1_3,         has_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_4,         mul_mv_ext_f32_f32_r1_4,         has_simdgroup_reduction);
+        GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_5,         mul_mv_ext_f32_f32_r1_5,         has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F16_F32_R1_2,         mul_mv_ext_f16_f32_r1_2,         has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F16_F32_R1_3,         mul_mv_ext_f16_f32_r1_3,         has_simdgroup_reduction);
         GGML_METAL_ADD_KERNEL(GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F16_F32_R1_4,         mul_mv_ext_f16_f32_r1_4,         has_simdgroup_reduction);
@@ -3387,15 +3395,16 @@ static int ggml_metal_encode_node(
 
                 // find the break-even point where the matrix-matrix kernel becomes more efficient compared
                 // to the matrix-vector kernel
-                const int ne11_mm_min = 4;
+                const int ne11_mm_min = 8;
 
                 // first try to use small-batch mat-mv kernels
                 // these should be efficient for BS [2, ~8]
-                if (src1t == GGML_TYPE_F32 && (ne00%256 == 0) &&
+                if (src1t == GGML_TYPE_F32 && (ne00%128 == 0) &&
                     (
                      (
                       (
-                       src0t == GGML_TYPE_F16  || // TODO: helper function
+                       src0t == GGML_TYPE_F32  || // TODO: helper function
+                       src0t == GGML_TYPE_F16  ||
                        src0t == GGML_TYPE_Q4_0 ||
                        src0t == GGML_TYPE_Q4_1 ||
                        src0t == GGML_TYPE_Q5_0 ||
@@ -3423,7 +3432,17 @@ static int ggml_metal_encode_node(
                     //       values and there can be some tail effects when nsg is high. need to confirm this
                     //
                     const int nsg    = 2;                 // num simdgroups per threadgroup
-                    const int nxpsg  = ne11 < 3 ? 16 : 8; // num threads along row per simdgroup
+
+                    // num threads along row per simdgroup
+                    int nxpsg = 0;
+                    if (ne00 % 256 == 0 && ne11 < 3) {
+                        nxpsg = 16;
+                    } else if (ne00 % 128 == 0) {
+                        nxpsg = 8;
+                    } else {
+                        nxpsg = 4;
+                    }
+
                     const int nypsg  = 32/nxpsg;          // num threads along col per simdgroup (i.e. a simdgroup processes that many src0 rows at a time)
                     const int r0ptg  = nypsg*nsg;         // num src0 rows per threadgroup
                           int r1ptg  = 4;                 // num src1 rows per threadgroup
@@ -3446,6 +3465,14 @@ static int ggml_metal_encode_node(
                     id<MTLComputePipelineState> pipeline = nil;
 
                     switch (src0->type) {
+                        case GGML_TYPE_F32:
+                            switch (r1ptg) {
+                                case 2: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_2].pipeline; break;
+                                case 3: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_3].pipeline; break;
+                                case 4: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_4].pipeline; break;
+                                case 5: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F32_F32_R1_5].pipeline; break;
+                                default: GGML_ABORT("not implemented");
+                            } break;
                         case GGML_TYPE_F16:
                             switch (r1ptg) {
                                 case 2: pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MV_EXT_F16_F32_R1_2].pipeline; break;
@@ -3600,7 +3627,7 @@ static int ggml_metal_encode_node(
                         case GGML_TYPE_Q5_0:    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_Q5_0_F32   ].pipeline; break;
                         case GGML_TYPE_Q5_1:    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_Q5_1_F32   ].pipeline; break;
                         case GGML_TYPE_Q8_0:    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_Q8_0_F32   ].pipeline; break;
-                        case GGML_TYPE_MXFP4:    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_MXFP4_F32   ].pipeline; break;
+                        case GGML_TYPE_MXFP4:   pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_MXFP4_F32  ].pipeline; break;
                         case GGML_TYPE_Q2_K:    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_Q2_K_F32   ].pipeline; break;
                         case GGML_TYPE_Q3_K:    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_Q3_K_F32   ].pipeline; break;
                         case GGML_TYPE_Q4_K:    pipeline = ctx->kernels[GGML_METAL_KERNEL_TYPE_MUL_MM_Q4_K_F32   ].pipeline; break;
