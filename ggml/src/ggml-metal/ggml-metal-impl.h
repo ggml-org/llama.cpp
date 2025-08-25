@@ -320,26 +320,15 @@ typedef struct {
 } ggml_metal_kargs_mul_mv_ext;
 
 typedef struct {
+    int32_t  ne02;
     int32_t  ne10;
     int32_t  ne11;  // n_expert_used (bcast)
     uint64_t nb11;
     uint64_t nb12;
-    int32_t  neh11; // n_tokens
-    uint64_t nbh11;
+    int32_t  ne21; // n_tokens
     int32_t  ne20;  // n_expert_used
     uint64_t nb21;
 } ggml_metal_kargs_mul_mm_id_map0;
-
-typedef struct {
-    int32_t  ne20; // n_expert_used
-    int32_t  neh0;
-    int32_t  neh1;
-    uint64_t nbh1;
-    uint64_t nbh2;
-    int32_t  ne0;
-    uint64_t nb1;
-    uint64_t nb2;
-} ggml_metal_kargs_mul_mm_id_map1;
 
 typedef struct {
     int32_t  ne00;
@@ -347,13 +336,15 @@ typedef struct {
     uint64_t nb01;
     uint64_t nb02;
     uint64_t nb03;
-    int32_t  neh12;
-    uint64_t nbh10;
-    uint64_t nbh11;
-    uint64_t nbh12;
-    uint64_t nbh13;
-    int32_t  neh0;
-    int32_t  neh1;
+    int32_t  ne11;
+    uint64_t nb10;
+    uint64_t nb11;
+    uint64_t nb12;
+    uint64_t nb13;
+    int32_t  ne20;
+    int32_t  ne21;
+    int32_t  ne0;
+    int32_t  ne1;
     int16_t  r2;
     int16_t  r3;
 } ggml_metal_kargs_mul_mm_id;
