@@ -288,7 +288,14 @@
 {/snippet}
 
 <AlertDialog bind:open={showDeleteDialog}>
-	<AlertDialogContent>
+	<AlertDialogContent
+		onkeydown={(e) => {
+			if (e.key === 'Enter') {
+				e.preventDefault();
+				handleConfirmDelete();
+			}
+		}}
+	>
 		<AlertDialogHeader>
 			<AlertDialogTitle>Delete Message</AlertDialogTitle>
 			<AlertDialogDescription>

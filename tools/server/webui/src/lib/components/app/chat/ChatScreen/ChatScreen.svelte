@@ -320,7 +320,6 @@
 			</AlertDialog.Header>
 
 			<div class="space-y-4">
-				<!-- Generally unsupported files -->
 				{#if fileErrorData.generallyUnsupported.length > 0}
 					<div class="space-y-2">
 						<h4 class="text-destructive text-sm font-medium">Unsupported File Types</h4>
@@ -339,7 +338,6 @@
 					</div>
 				{/if}
 
-				<!-- Modality-restricted files -->
 				{#if fileErrorData.modalityUnsupported.length > 0}
 					<div class="space-y-2">
 						<h4 class="text-destructive text-sm font-medium">
@@ -361,7 +359,6 @@
 					</div>
 				{/if}
 
-				<!-- Supported file types -->
 				<div class="bg-muted/50 rounded-md p-3">
 					<h4 class="mb-2 text-sm font-medium">This model supports:</h4>
 					<p class="text-muted-foreground text-sm">
@@ -379,7 +376,6 @@
 	</AlertDialog.Portal>
 </AlertDialog.Root>
 
-<!-- Delete Chat Confirmation Dialog -->
 <AlertDialog.Root bind:open={showDeleteDialog}>
 	<AlertDialog.Portal>
 		<AlertDialog.Overlay />

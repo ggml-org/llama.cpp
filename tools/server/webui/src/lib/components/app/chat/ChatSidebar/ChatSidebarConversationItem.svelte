@@ -115,7 +115,15 @@
 		</DropdownMenu.Root>
 
 		<AlertDialog.Root bind:open={showDeleteDialog}>
-			<AlertDialog.Content>
+			<AlertDialog.Content
+				onkeydown={(e) => {
+					if (e.key === 'Enter') {
+						e.preventDefault();
+						handleConfirmDelete();
+						showDeleteDialog = false;
+					}
+				}}
+			>
 				<AlertDialog.Header>
 					<AlertDialog.Title>Delete Conversation</AlertDialog.Title>
 					<AlertDialog.Description>
