@@ -2202,6 +2202,8 @@ struct clip_model_loader {
                         hparams.minicpmv_query_num = 64;
                     } else if (hparams.minicpmv_version == 5) {
                         hparams.minicpmv_query_num = 64;
+                    } else if (hparams.minicpmv_version == 6) {
+                        hparams.minicpmv_query_num = 64;
                     } else {
                         hparams.minicpmv_query_num = 96;
                     }
@@ -3684,6 +3686,9 @@ int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * im
                         n_patches = 64;
                     } else if (params.minicpmv_version == 5) {
                         // MiniCPM-V 4.0
+                        n_patches = 64;
+                    } else if (params.minicpmv_version == 6) {
+                        // MiniCPM-V 4.5
                         n_patches = 64;
                     } else {
                         GGML_ABORT("Unknown minicpmv version");
