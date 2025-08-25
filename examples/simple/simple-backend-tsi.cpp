@@ -31,12 +31,15 @@ float test_input_1[GGML_TSAVORITE_KERNEL_TYPE_COUNT][NUM_ELEMENTS] = {
 	{1.1,  4.4,  10,  5,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
 	// SQRT Kernel
 	{1,  4,  9.6,  16,  25,  36,  49,  64,  81,  100, 121, 144, 169, 196, 225, 256, 289, 324, 361, 400, 441, 484, 529, 576, 625, 676, 729, 784, 841, 900, 961, 1024},
+	//SQR Kernel
+	{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
 	//NEG Kernel
 	{1.1,  -4.4,  10,  -5,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, -23, 24, 25, -26, 27, -28, 29, -30, 31, -32.6},
 	//ABS Kernel
 	{1.1,  -4.4,  10,  -5,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, -23, 24, 25, -26, 27, -28, 29, -30, 31, -32.6},
 	//SIN Kernel
 	{1.1,  4.4,  10,  5,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 20, 20, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32.6}
+	
 };
 float test_input_2[GGML_TSAVORITE_KERNEL_TYPE_COUNT][NUM_ELEMENTS] = {
 	//ADD KERNEL
@@ -69,12 +72,15 @@ float test_result[GGML_TSAVORITE_KERNEL_TYPE_COUNT][NUM_ELEMENTS] = {
 	{1.0, 2.0, 2, 0.5, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
 	//SQRT Kernel
 	{1,  2,  3.098387,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32},
+	//SQR Kernel
+	{1,  4,  9,  16,  25,  36,  49,  64,  81,  100, 121, 144, 169, 196, 225, 256, 289, 324, 361, 400, 441, 484, 529, 576, 625, 676, 729, 784, 841, 900, 961, 1024},
 	//NEG Kernel
 	{-1.1,  4.4,  -10,  5,  -5,  -6,  -7,  -8,  -9,  -10, -11, -12, -13, -14, -15, -16, -17, -18, -19, -20, -21, -22, 23, -24, -25, 26, -27, 28, -29, 30, -31, 32.6},
 	//ABS Kernel
 	{1.1,  4.4,  10,  5,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32.6},
 	//SIN Kernel
 	{0.891207,  -0.951602,  -0.544021,  -0.958924,  -0.958924,  -0.279416,  0.656987,  0.989358,  0.412118,  -0.544021, -0.999990, -0.536573, 0.420167, 0.990607, 0.650288, -0.287903, -0.961398, -0.750987, 0.149877, 0.912945, 0.912945, 0.912945, -0.846220, -0.905578, -0.132352, 0.762559, 0.956376, 0.270906, -0.663634, -0.988032, -0.404039, 0.926149}
+	
 };
 
 float test_input_scale_1[GGML_TSAVORITE_KERNEL_TYPE_COUNT][NUM_ELEMENTS_SCALE] = {
@@ -398,6 +404,9 @@ static struct ggml_cgraph * build_graph(const simple_model& model, enum ggml_tsa
 	    case GGML_TSAVORITE_KERNEL_TYPE_SQRT:
     		result = ggml_sqrt(ctx0, model.a);
 		break;
+	    case GGML_TSAVORITE_KERNEL_TYPE_SQR:
+    		result = ggml_sqr(ctx0, model.a);
+		break;
 	    case GGML_TSAVORITE_KERNEL_TYPE_NEG:
                 result = ggml_neg(ctx0, model.a);
 		break;
@@ -451,6 +460,8 @@ enum ggml_tsavorite_kernel_type convert_testcase_to_ops_type (const char *testCa
             return GGML_TSAVORITE_KERNEL_TYPE_DIV;
         else if (!strcmp(testCase,"sqrt"))
             return GGML_TSAVORITE_KERNEL_TYPE_SQRT;
+        else if (!strcmp(testCase,"sqr"))
+            return GGML_TSAVORITE_KERNEL_TYPE_SQR;
         else if (!strcmp(testCase,"neg"))
             return GGML_TSAVORITE_KERNEL_TYPE_NEG;
         else if (!strcmp(testCase,"abs"))
@@ -484,6 +495,7 @@ int main(int argc, char *argv[]) {
     	ops_type = convert_testcase_to_ops_type("add");
     }
     if (ops_type == GGML_TSAVORITE_KERNEL_TYPE_SQRT ||
+		    ops_type == GGML_TSAVORITE_KERNEL_TYPE_SQR ||
 		    ops_type == GGML_TSAVORITE_KERNEL_TYPE_NEG ||
 		    ops_type == GGML_TSAVORITE_KERNEL_TYPE_ABS ||
 		    ops_type == GGML_TSAVORITE_KERNEL_TYPE_SIN)

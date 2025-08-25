@@ -123,6 +123,7 @@ enum ggml_tsavorite_kernel_type {
   GGML_TSAVORITE_KERNEL_TYPE_MULT,
   GGML_TSAVORITE_KERNEL_TYPE_DIV,
   GGML_TSAVORITE_KERNEL_TYPE_SQRT,
+  GGML_TSAVORITE_KERNEL_TYPE_SQR,
   GGML_TSAVORITE_KERNEL_TYPE_NEG,
   GGML_TSAVORITE_KERNEL_TYPE_ABS,
   GGML_TSAVORITE_KERNEL_TYPE_SIN,
@@ -156,6 +157,7 @@ extern void _mlir_ciface_txe_sub_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_mult_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_div_host(void *a, void *b, void *res);
 extern void _mlir_ciface_txe_sqrt_host(void *a, void *res);
+extern void _mlir_ciface_txe_sqr_host(void *a, void *res);
 extern void _mlir_ciface_txe_neg_host(void *a, void *res);
 extern void _mlir_ciface_txe_abs_host(void *a, void *res);
 extern void _mlir_ciface_txe_sin_host(void *a, void *res);
