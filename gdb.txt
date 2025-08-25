@@ -1,0 +1,59 @@
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib/x86_64-linux-gnu/libthread_db.so.1".
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/liblber.so.2
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libbrotlidec.so.1
+warning: could not find '.gnu_debugaltlink' file for /lib/x86_64-linux-gnu/libbrotlicommon.so.1
+[New Thread 0x7fffbffff000 (LWP 111324)]
+[New Thread 0x7fffbdb83000 (LWP 111325)]
+[New Thread 0x7fffb1fff000 (LWP 111326)]
+[New Thread 0x7fffabfff000 (LWP 111327)]
+[New Thread 0x7fffaaffe000 (LWP 111328)]
+[New Thread 0x7fffa9ffd000 (LWP 111329)]
+[New Thread 0x7fffa3fff000 (LWP 111330)]
+[New Thread 0x7fffa2ffe000 (LWP 111331)]
+[New Thread 0x7fffa1ffd000 (LWP 111332)]
+[New Thread 0x7fffa0ffc000 (LWP 111333)]
+[New Thread 0x7fff9fffb000 (LWP 111334)]
+[New Thread 0x7fff9effa000 (LWP 111335)]
+[New Thread 0x7fff9dff9000 (LWP 111336)]
+[New Thread 0x7fff9cff8000 (LWP 111337)]
+[New Thread 0x7fff9bff7000 (LWP 111338)]
+[New Thread 0x7fff9aff6000 (LWP 111339)]
+[New Thread 0x7fff99ff5000 (LWP 111340)]
+[New Thread 0x7fff98ff4000 (LWP 111341)]
+[New Thread 0x7fff97ff3000 (LWP 111342)]
+[New Thread 0x7fff96ff2000 (LWP 111343)]
+[New Thread 0x7fff95ff1000 (LWP 111344)]
+[New Thread 0x7fff94ff0000 (LWP 111345)]
+[New Thread 0x7fff93fef000 (LWP 111346)]
+[New Thread 0x7fff92fee000 (LWP 111347)]
+[New Thread 0x7fff91fed000 (LWP 111348)]
+[New Thread 0x7fff90fec000 (LWP 111349)]
+[New Thread 0x7fff8ffeb000 (LWP 111350)]
+[New Thread 0x7fff8efea000 (LWP 111351)]
+[New Thread 0x7fff8dfe9000 (LWP 111352)]
+[New Thread 0x7fff8cfe8000 (LWP 111353)]
+[New Thread 0x7fff8bfe7000 (LWP 111354)]
+[New Thread 0x7fff8afe6000 (LWP 111355)]
+[New Thread 0x7fff89fe5000 (LWP 111356)]
+[New Thread 0x7fff88fe4000 (LWP 111357)]
+[New Thread 0x7fff87fe3000 (LWP 111358)]
+[New Thread 0x7fff86fe2000 (LWP 111359)]
+
+Thread 1 "llama-server" received signal SIGSEGV, Segmentation fault.
+0x00007ffff7b88f94 in ggml_backend_buffer_get_type () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libggml-base.so
+#0  0x00007ffff7b88f94 in ggml_backend_buffer_get_type () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libggml-base.so
+#1  0x00007ffff7b8902d in ggml_backend_buffer_is_host () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libggml-base.so
+#2  0x00007ffff7cc6875 in llm_graph_input_mem_hybrid::set_input(llama_ubatch const*) () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libllama.so
+#3  0x00007ffff7cc6940 in llm_graph_result::set_inputs(llama_ubatch const*) () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libllama.so
+#4  0x00007ffff7c9cb2d in llama_context::process_ubatch(llama_ubatch const&, llm_graph_type, llama_memory_context_i*, ggml_status&) () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libllama.so
+#5  0x00007ffff7ca295d in llama_context::decode(llama_batch const&) () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libllama.so
+#6  0x00007ffff7ca38af in llama_decode () from /home/weatherman/Development/Nemotron/llama.cpp/build/bin/libllama.so
+#7  0x0000555555617326 in server_context::update_slots() ()
+#8  0x00005555555de9ec in server_queue::start_loop() ()
+#9  0x00005555555a4e2e in main ()
+A debugging session is active.
+
+	Inferior 1 [process 111321] will be killed.
+
+Quit anyway? (y or n) [answered Y; input not from terminal]

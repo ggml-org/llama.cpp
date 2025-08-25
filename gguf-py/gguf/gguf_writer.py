@@ -1076,9 +1076,15 @@ class GGUFWriter:
             kv_data += self._pack("Q", len(encoded_val))
             kv_data += encoded_val
         elif vtype == GGUFValueType.ARRAY:
-
+            # Convert numpy arrays to lists for serialization
+            if hasattr(val, 'tolist'):
+                val = val.tolist()
+            
             if not isinstance(val, Sequence):
-                raise ValueError("Invalid GGUF metadata array, expecting sequence")
+                print(f"DEBUG: Failed metadata key type: {type(val)}")
+                print(f"DEBUG: Failed metadata value: {val}")
+                print(f"DEBUG: Caller info available in stack trace")
+                raise ValueError(f"Invalid GGUF metadata array, expecting sequence but got {type(val)}: {val}")
 
             if len(val) == 0:
                 raise ValueError("Invalid GGUF metadata array. Empty array")
