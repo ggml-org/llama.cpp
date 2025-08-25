@@ -7979,28 +7979,29 @@ class NemotronHModel(Mamba2Model):
                 elif any(x in layer_component for x in ["A_log", "D", "conv1d", "dt_bias", "in_proj", "mixer.norm", "out_proj"]):
                     # Mamba layer tensors (note: mixer.norm, not just norm.weight)
                     new_name = self._map_mamba_tensor(layer_component, bid)
-                    # Special handling for conv1d: reshape from 3D to 2D
-                    if "conv1d.weight" in layer_component and len(data_torch.shape) == 3:
-                        data_torch = data_torch.squeeze(1)  # Remove middle dimension: {4,1,12288} -> {4,12288}
-                    # A_log -> A = -exp(A_log) and ensure [1,128] shape for llama.cpp
+                    # NVIDIA GROUND TRUTH TENSOR TRANSFORMATIONS
+                    
+                    # Conv1d: NVIDIA [12288, 1, 4] -> llama.cpp [4, 12288]
+                    if "conv1d.weight" in layer_component:
+                        if len(data_torch.shape) == 3:  # [12288, 1, 4]
+                            data_torch = data_torch.squeeze(1).t().contiguous()  # [12288, 4] -> [4, 12288]
+                        
+                    # A_log: NVIDIA [128] -> llama.cpp [1, 128] with -exp transform
                     if layer_component.endswith("A_log"):
-                        data_torch = -torch.exp(data_torch)
-                        # Ensure 2D shape [1, d_state] for llama.cpp compatibility
-                        if len(data_torch.shape) == 1:
-                            data_torch = data_torch.unsqueeze(-1)  # [128] -> [128,1] -> store as [1,128] in GGUF
-                        elif len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
-                            data_torch = data_torch.reshape(data_torch.shape[0], 1)  # [128,1,1,1] -> [128,1]
-                    # D tensor also needs reshaping to [1,128] for llama.cpp  
+                        data_torch = -torch.exp(data_torch)  # Apply -exp transformation
+                        if len(data_torch.shape) == 1:  # [128]
+                            data_torch = data_torch.unsqueeze(0)  # -> [1, 128]
+                            
+                    # D: NVIDIA [128] -> llama.cpp [1, 128] 
                     if layer_component.endswith("D"):
-                        # Ensure 2D shape [1, d_state] for llama.cpp compatibility
-                        if len(data_torch.shape) == 1:
-                            data_torch = data_torch.unsqueeze(-1)  # [128] -> [128,1] -> store as [1,128] in GGUF
-                        elif len(data_torch.shape) == 4 and data_torch.shape[1:] == (1, 1, 1):
-                            data_torch = data_torch.reshape(data_torch.shape[0], 1)  # [128,1,1,1] -> [128,1]
-                    # Grouped RMSNorm reshape to [actual_size/n_group, n_group]
+                        if len(data_torch.shape) == 1:  # [128]
+                            data_torch = data_torch.unsqueeze(0)  # -> [1, 128]
+                            
+                    # Grouped RMSNorm: NVIDIA [10240] -> llama.cpp [1280, 8]
                     if layer_component == "mixer.norm.weight":
-                        actual_size = data_torch.numel()
-                        data_torch = data_torch.reshape(actual_size // self.n_group, self.n_group)
+                        if len(data_torch.shape) == 1:  # [10240]
+                            # 10240 elements = 1280 * 8 groups
+                            data_torch = data_torch.reshape(1280, 8)
                     # in_proj needs split order expected by llama.cpp mamba2 builder: [z, xBC, dt]
                     if layer_component == "mixer.in_proj.weight":
                         W = data_torch

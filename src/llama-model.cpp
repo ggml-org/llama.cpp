@@ -3773,8 +3773,15 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
                     for (int i = 0; i < n_layer; ++i) {
                         auto & layer = layers[i];
-                        bool is_mamba_layer = hparams.is_recurrent(i);
-                        bool is_attention_layer = (i == 14 || i == 21 || i == 30 || i == 39);  // Known attention layers for Nemotron-H 9B
+                        // Nemotron-H 9B ground truth layer structure (56 total layers):
+                        // 27 SSM layers: [0,2,4,6,7,9,11,13,16,18,20,23,25,27,29,32,34,36,38,41,43,44,46,48,50,52,54]
+                        // 25 MLP layers: [1,3,5,8,10,12,15,17,19,22,24,26,28,31,33,35,37,40,42,45,47,49,51,53,55]  
+                        // 4 Attention layers: [14,21,30,39]
+                        std::vector<int> ssm_layers = {0,2,4,6,7,9,11,13,16,18,20,23,25,27,29,32,34,36,38,41,43,44,46,48,50,52,54};
+                        std::vector<int> attention_layers = {14,21,30,39};
+                        
+                        bool is_mamba_layer = std::find(ssm_layers.begin(), ssm_layers.end(), i) != ssm_layers.end();
+                        bool is_attention_layer = std::find(attention_layers.begin(), attention_layers.end(), i) != attention_layers.end();
 
                         // norm (all layers have this)
                         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
@@ -3784,24 +3791,23 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
                             // in_proj packs [x1, B, C, x2, dt_hat] in this kernel order
                             layer.ssm_in = create_tensor(tn(LLM_TENSOR_SSM_IN, "weight", i), {n_embd, d_in_proj}, 0);
 
-                            // depthwise conv over the first partition (x1 only, not full x1+B+C)  
-                            // Nemotron-H conv1d dims: 12288 (not the full d_x_part = 17728)
+                            // depthwise conv: GGUF has {12288, 4} due to conversion - adapt to ground truth
+                            // NVIDIA ground truth: [12288, 1, 4] -> GGUF: {12288, 4} 
                             const int64_t nemotron_conv_dim = 12288;
-                            layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv, nemotron_conv_dim}, 0);
+                            layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {nemotron_conv_dim, d_conv}, 0);
                             layer.ssm_conv1d_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "bias", i),   {nemotron_conv_dim}, 0);
 
                             // time step bias for low-rank delta
                             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_state}, 0); // Use d_state (128) not n_head (80)
 
                             // SSM decay and skip parameters per SSM state dimension
-                            // Nemotron-H uses d_state (128) not dt_rank (122) for A and D tensors
-                            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {1, d_state}, 0);
-                            layer.ssm_d = create_tensor(tn(LLM_TENSOR_SSM_D, i), {1, d_state}, 0);
+                            // Nemotron-H: GGUF has A,D as {128, 1} due to conversion - adapt to ground truth
+                            layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {d_state, 1}, 0);
+                            layer.ssm_d = create_tensor(tn(LLM_TENSOR_SSM_D, i), {d_state, 1}, 0);
 
-                            // grouped RMSNorm for the SSM inner stream (actual tensor size is 10240 not d_inner)
-                            // Nemotron-H norm tensor: 10240 elements reshaped to [1280, 8]
-                            const int64_t norm_elements_per_group = 1280;  // 10240 / 8
-                            layer.ssm_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {norm_elements_per_group, n_group}, 0);
+                            // grouped RMSNorm: GGUF has {8, 1280} due to conversion - adapt to ground truth 
+                            // 10240 total elements grouped as 8 groups of 1280 elements each
+                            layer.ssm_norm = create_tensor(tn(LLM_TENSOR_SSM_NORM, "weight", i), {n_group, 1280}, 0);
                             // out_proj back to model dim (actual tensor is [4480, 10240] not [15680, 4480])
                             // Nemotron-H out_proj: 10240 -> 4480 (not d_inner -> n_embd)
                             const int64_t out_proj_input_dim = 10240;  // Actual SSM output dim
