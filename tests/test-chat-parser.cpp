@@ -204,6 +204,25 @@ static void test_deepseek_v3_1() {
   }
 }
 
+
+static void test_deepseek_v3_1_tool_calls() {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ true,
+        /* .parse_tool_calls = */ true,
+    };
+    const std::string input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+    common_chat_msg_parser builder(input, false, syntax);
+    assert_equals(1u, builder.result().tool_calls.size());
+    assert_equals(std::string("get_time"), builder.result().tool_calls[0].name);
+    // JSON arguments are dumped without spaces
+    assert_equals(std::string("{\"city\":\"Tokyo\"}"), builder.result().tool_calls[0].arguments);
+    assert_equals(std::string(""), builder.result().content);
+    assert_equals(std::string(""), builder.result().reasoning_content);
+}
+
 static void test_with_args(const std::string & input, const std::string & expected, bool parse_as_partial = true, bool is_partial = true) {
   common_chat_msg_parser builder(input, parse_as_partial, {});
   auto js = builder.try_consume_json_with_dumped_args({{"args"}}, {});
@@ -346,6 +365,8 @@ static void test_positions() {
 
     assert_throws([&]() { builder.finish(); });
     assert_equals<size_t>(0, builder.pos());
+
+    test_deepseek_v3_1_tool_calls();
 
     builder.move_to(builder.input().size());
     builder.finish();
