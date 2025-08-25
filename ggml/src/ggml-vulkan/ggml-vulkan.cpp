@@ -2183,7 +2183,7 @@ static void ggml_vk_load_shaders(vk_device& device) {
     const uint32_t mul_mat_subgroup_size_32 = std::max(mul_mat_subgroup_size, 32u);
 
     const bool subgroup_min_size_16 = (!device->subgroup_size_control && device->subgroup_size >= 16) ||
-                                      (device->subgroup_size_control && device->subgroup_min_size <= 16 && device->subgroup_max_size >= 16);
+                                      (device->subgroup_size_control && device->subgroup_max_size >= 16);
 
     // mulmat
     std::vector<uint32_t> l_warptile, m_warptile, s_warptile,
