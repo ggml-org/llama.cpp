@@ -204,8 +204,17 @@ static void test_deepseek_v3_1() {
   }
 }
 
+template<typename T>
+static void assert_equals(const char* label, const T& expected, const T& actual) {
+    if (!(expected == actual)) {
+        std::ostringstream oss; oss << label << "\nExpected: " << expected << "\nActual: " << actual;
+        throw std::runtime_error(oss.str());
+    }
+}
 
 static void test_deepseek_v3_1_tool_calls() {
+    // variant: happy path for when it works as the model card says it should
+    const char* variant = "simple";
     common_chat_syntax syntax = {
         /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
         /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
@@ -215,12 +224,24 @@ static void test_deepseek_v3_1_tool_calls() {
     };
     const std::string input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
     auto msg = common_chat_parse(input, false, syntax);
-    assert_equals(static_cast<std::size_t>(1), msg.tool_calls.size());
-    assert_equals(std::string("get_time"), msg.tool_calls[0].name);
+    assert_equals(variant, static_cast<std::size_t>(1), msg.tool_calls.size());
+    assert_equals(variant, std::string("get_time"), msg.tool_calls[0].name);
     // JSON arguments are dumped without spaces
-    assert_equals(std::string("{\"city\":\"Tokyo\"}"), msg.tool_calls[0].arguments);
-    assert_equals(std::string(""), msg.content);
-    assert_equals(std::string(""), msg.reasoning_content);
+    assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), msg.tool_calls[0].arguments);
+    assert_equals(variant, std::string(""), msg.content);
+    assert_equals(variant, std::string(""), msg.reasoning_content);
+
+    // variant: function + fenced JSON
+    {
+        const char* variant = "fenced";
+        const std::string in = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>function<｜tool▁sep｜>get_time\n```json\n{\"city\": \"Tokyo\"}\n```<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+        auto m = common_chat_parse(in, false, syntax);
+        assert_equals<std::size_t>(variant, 1, m.tool_calls.size());
+        assert_equals(variant, std::string("get_time"), m.tool_calls[0].name);
+        assert_equals(variant, std::string("{\"city\":\"Tokyo\"}"), m.tool_calls[0].arguments);
+        assert_equals(variant, std::string(""), m.content);
+        assert_equals(variant, std::string(""), m.reasoning_content);
+    }
 }
 
 static void test_with_args(const std::string & input, const std::string & expected, bool parse_as_partial = true, bool is_partial = true) {
@@ -366,8 +387,6 @@ static void test_positions() {
     assert_throws([&]() { builder.finish(); });
     assert_equals<size_t>(0, builder.pos());
 
-    test_deepseek_v3_1_tool_calls();
-
     builder.move_to(builder.input().size());
     builder.finish();
   }
@@ -387,6 +406,7 @@ int main() {
     test_reasoning();
     test_regex();
     test_deepseek_v3_1();
+    test_deepseek_v3_1_tool_calls();
     std::cout << "All tests passed!\n";
     return 0;
 }
