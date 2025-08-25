@@ -5,6 +5,7 @@
 	import { buttonVariants } from '$lib/components/ui/button/index.js';
 	import { Card } from '$lib/components/ui/card';
 	import { MarkdownContent } from '$lib/components/app';
+	import { config } from '$lib/stores/settings.svelte';
 
 	interface Props {
 		reasoningContent: string | null;
@@ -15,11 +16,12 @@
 
 	let { reasoningContent, isStreaming = false, hasRegularContent = false, class: className = '' }: Props = $props();
 
-	let isExpanded = $state(true);
+	const currentConfig = config();
+	
+	let isExpanded = $state(currentConfig.showThoughtInProgress);
 
-	// Auto-collapse when regular content starts (even while streaming)
 	$effect(() => {
-		if (hasRegularContent && reasoningContent) {
+		if (hasRegularContent && reasoningContent && currentConfig.showThoughtInProgress) {
 			isExpanded = false;
 		}
 	});
