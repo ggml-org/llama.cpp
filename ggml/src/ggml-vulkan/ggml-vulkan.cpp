@@ -11515,13 +11515,36 @@ void ggml_backend_vk_get_device_memory(int device, size_t * free, size_t * total
     GGML_ASSERT(device < (int) vk_instance.device_indices.size());
 
     vk::PhysicalDevice vkdev = vk_instance.instance.enumeratePhysicalDevices()[vk_instance.device_indices[device]];
-
     vk::PhysicalDeviceMemoryProperties memprops = vkdev.getMemoryProperties();
 
-    for (const vk::MemoryHeap& heap : memprops.memoryHeaps) {
+    std::vector<vk::ExtensionProperties> extensionprops = vkdev.enumerateDeviceExtensionProperties();
+    vk::PhysicalDeviceMemoryBudgetPropertiesEXT budgetprops;
+    vk::PhysicalDeviceMemoryProperties2 memprops2 = {};
+    bool membudget_extension_supported = false;
+
+    for (const auto & ext : extensionprops) {
+        if (std::string(ext.extensionName.data()) == VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) {
+            membudget_extension_supported = true;
+            break;
+        }
+    }
+
+    if (membudget_extension_supported) {
+        memprops2.pNext = &budgetprops;
+        vkdev.getMemoryProperties2(&memprops2);
+    }
+
+    for (uint32_t i = 0; i < memprops.memoryHeapCount; ++i) {
+        const vk::MemoryHeap & heap = memprops.memoryHeaps[i];
+
         if (heap.flags & vk::MemoryHeapFlagBits::eDeviceLocal) {
             *total = heap.size;
-            *free = heap.size;
+
+            if (membudget_extension_supported && i < budgetprops.heapUsage.size()) {
+                *free = *total - budgetprops.heapUsage[i];
+            } else {
+                *free = heap.size;
+            }
             break;
         }
     }
