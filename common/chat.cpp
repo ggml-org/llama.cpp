@@ -618,6 +618,7 @@ const char * common_chat_format_name(common_chat_format format) {
         case COMMON_CHAT_FORMAT_FIREFUNCTION_V2: return "FireFunction v2";
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2: return "Functionary v3.2";
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_1_LLAMA_3_1: return "Functionary v3.1 Llama 3.1";
+        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_1: return "DeepSeek V3.1";
         case COMMON_CHAT_FORMAT_HERMES_2_PRO: return "Hermes 2 Pro";
         case COMMON_CHAT_FORMAT_COMMAND_R7B: return "Command R7B";
         case COMMON_CHAT_FORMAT_GRANITE: return "Granite";
@@ -1312,6 +1313,67 @@ static common_chat_params common_chat_params_init_deepseek_r1(const common_chat_
     }
     return data;
 }
+
+static common_chat_params common_chat_params_init_deepseek_v3_1(const common_chat_template & tmpl, const struct templates_params & inputs) {
+    common_chat_params data;
+
+    // Pass thinking context for DeepSeek V3.1 template
+    json additional_context = {
+        {"thinking", inputs.enable_thinking},
+    };
+
+    auto prompt = apply(tmpl, inputs, 
+                       /* messages_override= */ inputs.messages,
+                       /* tools_override= */ std::nullopt, 
+                       additional_context);
+    data.prompt = prompt;
+    data.format = COMMON_CHAT_FORMAT_DEEPSEEK_V3_1;
+    if (inputs.enable_thinking) {
+        data.thinking_forced_open = true;
+    }
+    if (inputs.tools.is_array() && !inputs.tools.empty()) {
+        data.grammar_lazy = inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_REQUIRED && inputs.json_schema.is_null();
+        data.grammar = build_grammar([&](const common_grammar_builder & builder) {
+            std::vector<std::string> tool_rules;
+            foreach_function(inputs.tools, [&](const json & tool) {
+                const auto & function = tool.at("function");
+                std::string name = function.at("name");
+                auto parameters = function.at("parameters");
+                builder.resolve_refs(parameters);
+                tool_rules.push_back(builder.add_rule(name + "-call",
+                    "( \"<｜tool▁call▁begin｜>\" )? \"function<｜tool▁sep｜>" + name + "\\n"
+                    "```json\\n\" " + builder.add_schema(name + "-args", parameters) + " "
+                    "\"```<｜tool▁call▁end｜>\""));
+            });
+            // Distill Qwen 7B & 32B models seem confused re/ syntax of their tool call opening tag,
+            // so we accept common variants (then it's all constrained)
+            builder.add_rule("root",
+                std::string(data.thinking_forced_open ? "( \"</think>\" space )? " : "") +
+                "( \"<｜tool▁calls▁begin｜>\" | \"<｜tool_calls_begin｜>\" | \"<｜tool calls begin｜>\" | \"<｜tool\\\\_calls\\\\_begin｜>\" | \"<｜tool▁calls｜>\" ) "
+                "(" + string_join(tool_rules, " | ") + ")" + (inputs.parallel_tool_calls ? "*" : "") + " "
+                "\"<｜tool▁calls▁end｜>\""
+                " space");
+            data.grammar_triggers.push_back({
+                COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN_FULL,
+                // If thinking_forced_open, then we capture the </think> tag in the grammar,
+                // (important for required tool choice) and in the trigger's first capture (decides what is sent to the grammar)
+                std::string(data.thinking_forced_open ? "[\\s\\S]*?(</think>\\s*)" : "(?:<think>[\\s\\S]*?</think>\\s*)?") +
+                    "(<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)[\\s\\S]*"
+            });
+            data.preserved_tokens = {
+                "<think>",
+                "</think>",
+                "<｜tool▁calls▁begin｜>",
+                "<｜tool▁call▁begin｜>",
+                "<｜tool▁sep｜>",
+                "<｜tool▁call▁end｜>",
+                "<｜tool▁calls▁end｜>",
+            };
+        });
+    }
+    return data;
+}
+
 static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
     builder.try_parse_reasoning("<think>", "</think>");
     if (!builder.syntax().parse_tool_calls) {
@@ -1331,6 +1393,45 @@ static void common_chat_parse_deepseek_r1(common_chat_msg_parser & builder) {
         function_regex,
         close_regex,
         tool_calls_end);
+}
+
+static void common_chat_parse_deepseek_v3_1(common_chat_msg_parser & builder) {
+    // DeepSeek V3.1 outputs reasoning content between "<think>" and "</think>" tags, followed by regular content
+    // First try to parse using the standard reasoning parsing method
+    if (builder.try_parse_reasoning("<think>", "</think>")) {
+        // If reasoning was parsed successfully, the remaining content is regular content
+        LOG_DBG("%s: parsed reasoning, adding content\n", __func__);
+        builder.add_content(builder.consume_rest());
+    } else {
+        // If no reasoning tags found, check if we should treat everything as reasoning
+        if (builder.syntax().thinking_forced_open) {
+            // If thinking is forced open but no tags found, treat everything as reasoning
+            LOG_DBG("%s: thinking_forced_open, adding reasoning content\n", __func__);
+            builder.add_reasoning_content(builder.consume_rest());
+        } else {
+            // Tool calls are support in non-thinking mode
+            if (!builder.syntax().parse_tool_calls) {
+                LOG_DBG("%s: not parse_tool_calls\n", __func__);
+                builder.add_content(builder.consume_rest());
+                return;
+            }
+
+            // <｜tool▁call▁begin｜>NAME<｜tool▁sep｜>JSON<｜tool▁call▁end｜>
+            static const common_regex function_regex("<｜tool▁call▁begin｜>([^\\n<]+)<｜tool▁sep｜>");
+            static const common_regex close_regex("<｜tool▁call▁end｜>");
+            static const common_regex tool_calls_begin("(?:<｜tool▁calls▁begin｜>|<｜tool_calls_begin｜>|<｜tool calls begin｜>|<｜tool\\\\_calls\\\\_begin｜>|<｜tool▁calls｜>)");
+            static const common_regex tool_calls_end("<｜tool▁calls▁end｜>");
+            LOG_DBG("%s: parse_tool_calls\n", __func__);
+
+            parse_json_tool_calls(
+                builder,
+                /* block_open= */ tool_calls_begin,
+                /* function_regex_start_only= */ std::nullopt,
+                function_regex,
+                close_regex,
+                tool_calls_end);
+        }
+    }
 }
 
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template & tmpl, const struct templates_params & inputs) {
@@ -2120,6 +2221,12 @@ static common_chat_params common_chat_templates_apply_jinja(
         }
     }
 
+    // DeepSeek V3.1: detect based on specific patterns in the template
+    if (src.find("message['prefix'] is defined and message['prefix'] and thinking") != std::string::npos && 
+        params.json_schema.is_null()) {
+        return common_chat_params_init_deepseek_v3_1(tmpl, params);
+    }
+
     // DeepSeek R1: use handler in all cases except json schema (thinking / tools).
     if (src.find("<｜tool▁calls▁begin｜>") != std::string::npos && params.json_schema.is_null()) {
         return common_chat_params_init_deepseek_r1(tmpl, params);
@@ -2281,6 +2388,9 @@ static void common_chat_parse(common_chat_msg_parser & builder) {
             break;
         case COMMON_CHAT_FORMAT_DEEPSEEK_R1:
             common_chat_parse_deepseek_r1(builder);
+            break;
+        case COMMON_CHAT_FORMAT_DEEPSEEK_V3_1:
+            common_chat_parse_deepseek_v3_1(builder);
             break;
         case COMMON_CHAT_FORMAT_FUNCTIONARY_V3_2:
             common_chat_parse_functionary_v3_2(builder);

@@ -186,6 +186,43 @@ static void test(const std::string & input, bool is_partial, const std::vector<s
   assert_equals(is_partial, js->is_partial);
   assert_equals(expected, args_paths.size() == 1 && args_paths[0].empty() ? js->value.get<std::string>() : js->value.dump());
 }
+
+static void test_deepseek_v3_1() {
+  // Test DeepSeek V3.1 parsing - reasoning content followed by "</think>" and then regular content
+  {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ true,
+        /* .parse_tool_calls = */ true,
+    };
+    common_chat_msg_parser builder("REASONING</think>ok", /* is_partial= */ false, syntax);
+    assert_equals(true, builder.try_parse_reasoning("<think>", "</think>"));
+    assert_equals(std::string("REASONING"), builder.result().reasoning_content);
+    assert_equals(std::string("ok"), builder.consume_rest());
+  }
+}
+
+
+static void test_deepseek_v3_1_tool_calls() {
+    common_chat_syntax syntax = {
+        /* .format = */ COMMON_CHAT_FORMAT_DEEPSEEK_V3_1,
+        /* .reasoning_format = */ COMMON_REASONING_FORMAT_DEEPSEEK,
+        /* .reasoning_in_content = */ false,
+        /* .thinking_forced_open = */ false,
+        /* .parse_tool_calls = */ true,
+    };
+    const std::string input = "<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>get_time<｜tool▁sep｜>{\"city\": \"Tokyo\"}<｜tool▁call▁end｜><｜tool▁calls▁end｜>";
+    auto msg = common_chat_parse(input, false, syntax);
+    assert_equals(static_cast<std::size_t>(1), msg.tool_calls.size());
+    assert_equals(std::string("get_time"), msg.tool_calls[0].name);
+    // JSON arguments are dumped without spaces
+    assert_equals(std::string("{\"city\":\"Tokyo\"}"), msg.tool_calls[0].arguments);
+    assert_equals(std::string(""), msg.content);
+    assert_equals(std::string(""), msg.reasoning_content);
+}
+
 static void test_with_args(const std::string & input, const std::string & expected, bool parse_as_partial = true, bool is_partial = true) {
   common_chat_msg_parser builder(input, parse_as_partial, {});
   auto js = builder.try_consume_json_with_dumped_args({{"args"}}, {});
@@ -329,6 +366,8 @@ static void test_positions() {
     assert_throws([&]() { builder.finish(); });
     assert_equals<size_t>(0, builder.pos());
 
+    test_deepseek_v3_1_tool_calls();
+
     builder.move_to(builder.input().size());
     builder.finish();
   }
@@ -347,6 +386,7 @@ int main() {
     test_json_with_dumped_args();
     test_reasoning();
     test_regex();
+    test_deepseek_v3_1();
     std::cout << "All tests passed!\n";
     return 0;
 }
